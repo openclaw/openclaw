@@ -1,6 +1,9 @@
-import type { SessionTranscriptContextVersion } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
-import { serveWorkerTasks } from "openclaw/plugin-sdk/process-runtime";
+import type {
+  SessionTranscriptContextProjectionSource,
+  SessionTranscriptContextVersion,
+} from "openclaw/plugin-sdk/codex-session-transcript-runtime";
 import type { TranscriptTurnAdmission } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { serveWorkerTasks } from "openclaw/plugin-sdk/worker-task-server";
 import type { CodexHistoryReadResult } from "./src/app-server/history-rejection.js";
 import type { JsonValue } from "./src/app-server/protocol.js";
 import {
@@ -16,6 +19,7 @@ export type CodexHistoryWorkerInput = {
   target: ResolvedCodexHistoryTarget;
   sessionId: string;
   admission?: TranscriptTurnAdmission;
+  physicalSource?: SessionTranscriptContextProjectionSource["physicalSource"];
   evidence: SettledTurnMessages;
 };
 export type CodexHistoryWorkerResult = {
@@ -23,9 +27,7 @@ export type CodexHistoryWorkerResult = {
   version?: SessionTranscriptContextVersion;
 };
 
-export async function runCodexHistoryWorkerInput(
-  input: unknown,
-): Promise<CodexHistoryWorkerResult> {
+async function runCodexHistoryWorkerInput(input: unknown): Promise<CodexHistoryWorkerResult> {
   // SAFETY: The paired runtime constructs this request; the SQLite snapshot validates admission.
   const request = input as CodexHistoryWorkerInput;
   let version: SessionTranscriptContextVersion | undefined;
@@ -38,6 +40,7 @@ export async function runCodexHistoryWorkerInput(
     (messages) => projectVerifiedSettledCodexMessages(messages, request.evidence),
     request.admission,
     onSnapshot,
+    request.physicalSource,
   );
   return { result, version };
 }

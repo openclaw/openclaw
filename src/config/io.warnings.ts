@@ -9,21 +9,6 @@ import {
 import type { OpenClawConfig } from "./types.js";
 import { shouldWarnOnTouchedVersion } from "./version.js";
 
-export function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">): void {
-  if (!raw || typeof raw !== "object") {
-    return;
-  }
-  const gateway = (raw as Record<string, unknown>).gateway;
-  if (!gateway || typeof gateway !== "object") {
-    return;
-  }
-  if ("token" in (gateway as Record<string, unknown>)) {
-    logger.warn(
-      'Config uses "gateway.token". This key is ignored; use "gateway.auth.token" instead.',
-    );
-  }
-}
-
 export function logConfigWarningsOnce(params: {
   configPath: string;
   warnings: Array<{ path: string; message: string }>;
@@ -40,12 +25,11 @@ export function logConfigWarningsOnce(params: {
     )
     .join("; ");
   const fingerprint = hashConfigRaw(details);
-  if (loggedConfigWarningFingerprints.get(params.configPath) === fingerprint) {
-    setBoundedConfigIoWarningEntry(loggedConfigWarningFingerprints, params.configPath, fingerprint);
-    return;
-  }
+  const repeated = loggedConfigWarningFingerprints.get(params.configPath) === fingerprint;
   setBoundedConfigIoWarningEntry(loggedConfigWarningFingerprints, params.configPath, fingerprint);
-  params.logger.warn(`Config warnings: ${details}`);
+  if (!repeated) {
+    params.logger.warn(`Config warnings: ${details}`);
+  }
 }
 
 export function warnIfConfigFromFuture(

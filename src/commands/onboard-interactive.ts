@@ -1,5 +1,4 @@
 /**
- * Interactive onboarding command entrypoint.
  *
  * It wires the Clack prompter to the setup wizard and restores terminal state
  * on every exit path so canceled setup cannot leave stdin paused.

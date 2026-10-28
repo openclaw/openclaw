@@ -1,4 +1,3 @@
-/** POSIX shell option handling for mutable file operand detection. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseInlineOptionToken } from "./inline-option-token.js";
 import {
@@ -6,9 +5,11 @@ import {
   POSIX_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,
 } from "./shell-inline-command.js";
-import { POSIX_SHELL_WRAPPERS } from "./shell-wrapper-resolution.js";
+import {
+  POSIX_SHELL_WRAPPERS,
+  POSIX_SHELLS_WITH_PLUS_OPTIONS,
+} from "./shell-wrapper-resolution.js";
 
-const POSIX_SHELL_WRAPPER_SET: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
 const POSIX_SHELL_OPTIONS_WITH_VALUE = new Set([
   "--init-file",
   "--rcfile",
@@ -19,17 +20,6 @@ const POSIX_SHELL_OPTIONS_WITH_VALUE = new Set([
   "+o",
 ]);
 const POSIX_SHELL_CODE_LOADING_OPTIONS = new Set(["--init-file", "--rcfile", "--startup-script"]);
-const POSIX_SHELLS_WITH_PLUS_OPTIONS = new Set([
-  "ash",
-  "bash",
-  "dash",
-  "ksh",
-  "mksh",
-  "osh",
-  "sh",
-  "yash",
-  "zsh",
-]);
 
 function normalizeOptionFlag(token: string): string {
   return normalizeLowercaseStringOrEmpty(parseInlineOptionToken(token).name);
@@ -37,6 +27,15 @@ function normalizeOptionFlag(token: string): string {
 
 function isPosixShellOptionToken(token: string, supportsPlusOptions: boolean): boolean {
   return token.startsWith("-") || (supportsPlusOptions && token.startsWith("+"));
+}
+
+function isPosixShellStdinOption(token: string): boolean {
+  if (token === "--stdin") {
+    return true;
+  }
+  return (
+    token.startsWith("-") && !token.startsWith("--") && !token.includes("=") && token.includes("s")
+  );
 }
 
 export function resolvePosixShellScriptOperandIndex(
@@ -59,7 +58,7 @@ export function resolvePosixShellScriptOperandIndex(
     if (!token) {
       continue;
     }
-    if (token === "-" || (!afterDoubleDash && token === "-s")) {
+    if (token === "-" || (!afterDoubleDash && isPosixShellStdinOption(token))) {
       return null;
     }
     if (!afterDoubleDash && token === "--") {
@@ -83,17 +82,22 @@ export function resolvePosixShellScriptOperandIndex(
 }
 
 export function hasPosixShellCodeLoadingOption(argv: string[], executable: string): boolean {
-  if (!POSIX_SHELL_WRAPPER_SET.has(executable)) {
+  if (!POSIX_SHELL_WRAPPERS.has(executable)) {
     return false;
   }
-  for (const token of argv.slice(1)) {
-    if (token === "--") {
+  const supportsPlusOptions = POSIX_SHELLS_WITH_PLUS_OPTIONS.has(executable);
+  for (let i = 1; i < argv.length; i += 1) {
+    const token = argv[i]?.trim() ?? "";
+    if (!token) {
+      continue;
+    }
+    if (token === "--" || !isPosixShellOptionToken(token, supportsPlusOptions)) {
       return false;
     }
     if (POSIX_SHELL_CODE_LOADING_OPTIONS.has(normalizeOptionFlag(token))) {
       return true;
     }
-    if (token === "-s" || token === "--stdin") {
+    if (isPosixShellStdinOption(token)) {
       return true;
     }
     if (
@@ -103,6 +107,7 @@ export function hasPosixShellCodeLoadingOption(argv: string[], executable: strin
     ) {
       return true;
     }
+    i += advancePosixInlineOptionScan(token) - 1;
   }
   return false;
 }
@@ -112,7 +117,7 @@ export function hasPosixShellStartupEnvironment(params: {
   executable: string;
   env?: NodeJS.ProcessEnv;
 }): boolean {
-  if (!POSIX_SHELL_WRAPPER_SET.has(params.executable)) {
+  if (!POSIX_SHELL_WRAPPERS.has(params.executable)) {
     return false;
   }
   if (params.env?.BASH_ENV?.trim() || params.env?.ENV?.trim()) {

@@ -239,6 +239,7 @@ flow:
           args:
             - ref: env
             - ref: sessionKey
+            - includeCodeModeControl: true
         - set: finalMatches
           value:
             expr: "state.getSnapshot().messages.slice(startIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === conversationId && candidate.text.includes(config.finalMarker))"

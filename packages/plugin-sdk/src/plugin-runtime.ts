@@ -1,5 +1,3 @@
-// Public package facade for plugin runtime helpers.
-
 export {
   clearPluginCommands,
   clearPluginInteractiveHandlers,

@@ -49,6 +49,14 @@ export function resolveControlUiAuthToken(source: ControlUiAuthSource): string |
   return resolveControlUiAuthCandidates(source)[0] ?? null;
 }
 
+export function resolveControlUiAvatarAuth(source: ControlUiAuthSource) {
+  return {
+    authTokens: resolveControlUiAuthCandidates(source),
+    // A completed hello admits avatar reads even without a Bearer token.
+    authReady: Boolean(source.hello || source.settings?.token?.trim() || source.password?.trim()),
+  };
+}
+
 export async function fetchWithControlUiAuth(
   url: string,
   init: Omit<RequestInit, "headers" | "signal"> & {

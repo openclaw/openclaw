@@ -1,28 +1,13 @@
 /** Test bootstrap shim for Zalo runtime-secret surface coverage. */
 import { vi } from "vitest";
-import { loadChannelSecretContractApi } from "./channel-contract-api.js";
+import { createRuntimeChannelSecretRegistry } from "./runtime-channel-secret.test-support.js";
 
 /** Test-only bootstrap registry mock for Zalo secret surface tests. */
-const zaloSecrets = loadChannelSecretContractApi({ channelId: "zalo", config: {} });
-if (!zaloSecrets?.collectRuntimeConfigAssignments) {
-  throw new Error("Missing Zalo secret contract api");
-}
-const zaloAssignments = zaloSecrets.collectRuntimeConfigAssignments;
+const zaloRegistry = createRuntimeChannelSecretRegistry("zalo", "Zalo");
 
-// Use the real bundled Zalo secret contract while avoiding plugin bootstrap.
+// Keep the hoisted mock lazy while loading the real contract during module initialization.
+// mock-isolation: Use the real channel secret contract without loading plugin bootstrap state.
 vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
-  getBootstrapChannelPlugin: (id: string) =>
-    id === "zalo"
-      ? {
-          secrets: {
-            collectRuntimeConfigAssignments: zaloAssignments,
-          },
-        }
-      : undefined,
-  getBootstrapChannelSecrets: (id: string) =>
-    id === "zalo"
-      ? {
-          collectRuntimeConfigAssignments: zaloAssignments,
-        }
-      : undefined,
+  getBootstrapChannelPlugin: (id: string) => zaloRegistry.getBootstrapChannelPlugin(id),
+  getBootstrapChannelSecrets: (id: string) => zaloRegistry.getBootstrapChannelSecrets(id),
 }));

@@ -1,7 +1,11 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { z } from "zod";
 import { terminateCodexAppServerOrphan } from "./transport-process-containment.js";
 import {
@@ -10,6 +14,10 @@ import {
   readCodexAppServerProcessCommand,
   readCodexAppServerProcessSnapshot,
 } from "./transport-process-snapshot.js";
+
+const loadPluginStateStoreRuntime = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/plugin-state-store-runtime"),
+);
 
 // Startup tolerates transient host load; signal containment retains its shorter budget.
 const PROCESS_REGISTRATION_INSPECTION_MS = 10_000;
@@ -32,6 +40,11 @@ const childIdentity = processIdentity.extend({
 const registrationSchema = z.object({ parent: processIdentity, child: childIdentity }).strict();
 type ProcessRegistration = z.infer<typeof registrationSchema>;
 const registrationCleanup = new WeakMap<object, Promise<void>>();
+// Source and dist copies must not stop or resume the same orphan concurrently.
+const processReaper = resolveGlobalSingleton(
+  Symbol.for("openclaw.codexAppServerProcessReaper"),
+  () => new KeyedAsyncQueue(),
+);
 
 /** Join bookkeeping after the transport owner has observed physical exit. */
 export async function waitForCodexAppServerProcessRegistrationCleanup(
@@ -45,21 +58,33 @@ function fingerprintProcessCommand(command: string): string {
 }
 
 async function openProcessRegistrationStore() {
-  const { createPluginStateKeyedStore } =
-    await import("openclaw/plugin-sdk/plugin-state-store-runtime");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir() };
+  const { createPluginStateKeyedStore } = await loadPluginStateStoreRuntime();
   return createPluginStateKeyedStore<ProcessRegistration>("codex", {
     namespace: "app-server-processes",
     maxEntries: 512,
     // Expiration or eviction could forget a child that still owns a native turn.
     overflowPolicy: "reject-new",
+    env,
   });
 }
 
-async function reapRegisteredCodexAppServerOrphans(): Promise<void> {
+async function reapRegisteredCodexAppServerOrphans() {
   const store = await openProcessRegistrationStore();
-  const deadline = Date.now() + PROCESS_REGISTRATION_INSPECTION_MS;
-  for (const entry of await store.entries()) {
-    if (Date.now() >= deadline) {
+  // Reread each caller's store after prior cleanup settles; never cache success
+  // across registration changes or let a failed boot sweep poison a new turn.
+  await processReaper.enqueue("orphans", () => sweepRegisteredCodexAppServerOrphans(store));
+  return store;
+}
+
+async function sweepRegisteredCodexAppServerOrphans(
+  store: Awaited<ReturnType<typeof openProcessRegistrationStore>>,
+): Promise<void> {
+  // Loading durable registrations can include cold database-worker startup.
+  const entries = await store.entries();
+  const deadline = performance.now() + PROCESS_REGISTRATION_INSPECTION_MS;
+  for (const entry of entries) {
+    if (performance.now() >= deadline) {
       throw new Error("Codex orphan cleanup exceeded its startup budget. Retry to finish cleanup.");
     }
     const registration = registrationSchema.parse(entry.value);
@@ -140,19 +165,17 @@ export function createCodexAppServerProcessReaperService(): OpenClawPluginServic
 export async function prepareCodexAppServerProcessRegistration(): Promise<
   (child: ChildProcessWithoutNullStreams) => Promise<void>
 > {
-  if (process.platform === "win32") {
-    return async (child) => {
-      await once(child, "spawn");
-    };
-  }
-  await reapRegisteredCodexAppServerOrphans();
-  const store = await openProcessRegistrationStore();
+  const store =
+    process.platform === "win32" ? undefined : await reapRegisteredCodexAppServerOrphans();
   return async (child) => {
     await once(child, "spawn");
+    if (!store) {
+      return;
+    }
     if (!child.pid) {
       throw new ProcessInspectionError("unavailable");
     }
-    const deadline = Date.now() + PROCESS_REGISTRATION_INSPECTION_MS;
+    const deadline = performance.now() + PROCESS_REGISTRATION_INSPECTION_MS;
     const snapshot = await readCodexAppServerProcessSnapshot(deadline, [child.pid]);
     const parent = snapshot.find((row) => row.pid === process.pid);
     const spawned = snapshot.find((row) => row.pid === child.pid);

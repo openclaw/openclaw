@@ -1,15 +1,19 @@
-// Exa provider module implements model/runtime integration.
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import {
+  ProviderHttpError,
+  readProviderResponseErrorText,
+  redactProviderResponseErrorText,
+} from "openclaw/plugin-sdk/provider-http";
+import {
+  externalContentStamp,
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   mergeScopedSearchConfig,
   parseIsoDateRange,
   readCachedSearchPayload,
-  readConfiguredSecretString,
   readPositiveIntegerParam,
-  readProviderEnvValue,
+  readWebSearchApiKey,
   readStringParam,
   resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
@@ -22,8 +26,12 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
+  asOptionalObjectRecord,
+  asOptionalRecord,
+  isRecord,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const EXA_SEARCH_ENDPOINT = "https://api.exa.ai/search";
@@ -35,14 +43,6 @@ const EXA_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 // same way other bundled providers do (16 MiB) so a misbehaving or hostile
 // endpoint cannot stream an unbounded body into memory before we parse it.
 const EXA_SEARCH_JSON_MAX_BYTES = 16 * 1024 * 1024;
-
-type ExaConfig = {
-  apiKey?: string;
-  baseUrl?: string;
-};
-
-type ExaSearchType = (typeof EXA_SEARCH_TYPES)[number];
-type ExaFreshness = (typeof EXA_FRESHNESS_VALUES)[number];
 
 type ExaTextContentsOption = boolean | { maxCharacters?: number };
 type ExaHighlightsContentsOption =
@@ -61,116 +61,12 @@ type ExaContentsArgs = {
   summary?: ExaSummaryContentsOption;
 };
 
-type ExaSearchResult = {
-  title?: unknown;
-  url?: unknown;
-  publishedDate?: unknown;
-  highlights?: unknown;
-  highlightScores?: unknown;
-  summary?: unknown;
-  text?: unknown;
-};
-
-type ExaSearchResponse = {
-  results?: unknown;
-};
-
-async function readExaSearchResults(response: Response): Promise<ExaSearchResult[]> {
-  const bytes = await readResponseWithLimit(response, EXA_SEARCH_JSON_MAX_BYTES, {
-    onOverflow: ({ maxBytes: maxBytesLocal }) =>
-      new Error(`Exa API response exceeds ${maxBytesLocal} bytes`),
-  });
-  try {
-    return normalizeExaResults(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
-  } catch (cause) {
-    throw new Error("Exa API returned malformed JSON", { cause });
-  }
-}
-
-async function readExaErrorDetail(response: Response): Promise<string> {
-  return await readResponseTextLimited(response, EXA_ERROR_BODY_LIMIT_BYTES);
-}
-
-function normalizeExaFreshness(value: string | undefined): ExaFreshness | undefined {
-  const trimmed = normalizeOptionalLowercaseString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  return EXA_FRESHNESS_VALUES.includes(trimmed as ExaFreshness)
-    ? (trimmed as ExaFreshness)
-    : undefined;
-}
-
-function resolveExaConfig(searchConfig?: SearchConfigRecord): ExaConfig {
-  const exa = searchConfig?.exa;
-  return exa && typeof exa === "object" && !Array.isArray(exa) ? (exa as ExaConfig) : {};
-}
-
-function resolveExaApiKey(exa?: ExaConfig): string | undefined {
-  return (
-    readConfiguredSecretString(exa?.apiKey, "plugins.entries.exa.config.webSearch.apiKey") ??
-    readProviderEnvValue(["EXA_API_KEY"])
-  );
-}
-
-function invalidBaseUrlPayload(value: string) {
+function invalidBaseUrlPayload() {
   return {
     error: "invalid_base_url",
-    message: `plugins.entries.exa.config.webSearch.baseUrl must be a valid http(s) URL. Got: ${value}`,
+    message: "plugins.entries.exa.config.webSearch.baseUrl must be a valid http(s) URL.",
     docs: "https://docs.openclaw.ai/tools/exa-search",
   };
-}
-
-function resolveExaSearchEndpoint(
-  exa?: ExaConfig,
-): { endpoint: string } | { error: string; message: string; docs: string } {
-  const configured = normalizeOptionalString(exa?.baseUrl);
-  if (!configured) {
-    return { endpoint: EXA_SEARCH_ENDPOINT };
-  }
-
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(configured) && !/^https?:\/\//i.test(configured)) {
-    return invalidBaseUrlPayload(configured);
-  }
-  const candidate = /^https?:\/\//i.test(configured) ? configured : `https://${configured}`;
-  let parsed: URL;
-  try {
-    parsed = new URL(candidate);
-  } catch {
-    return invalidBaseUrlPayload(configured);
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return invalidBaseUrlPayload(configured);
-  }
-
-  const pathname = parsed.pathname.replace(/\/+$/, "");
-  parsed.pathname = pathname.endsWith("/search")
-    ? pathname
-    : `${pathname === "" ? "" : pathname}/search`;
-  parsed.hash = "";
-  return { endpoint: parsed.toString() };
-}
-
-function resolveExaDescription(result: ExaSearchResult): string {
-  const highlights = result.highlights;
-  if (Array.isArray(highlights)) {
-    const highlightText = highlights
-      .map((entry) => normalizeOptionalString(entry))
-      .filter((entry): entry is string => Boolean(entry))
-      .join("\n");
-    if (highlightText) {
-      return highlightText;
-    }
-  }
-  const summary = normalizeOptionalString(result.summary);
-  if (summary) {
-    return summary;
-  }
-  return normalizeOptionalString(result.text) ?? "";
-}
-
-function parsePositiveInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
 function invalidContentsPayload(message: string) {
@@ -179,229 +75,6 @@ function invalidContentsPayload(message: string) {
     message,
     docs: "https://docs.openclaw.ai/tools/web",
   };
-}
-
-function isErrorPayload(value: unknown): value is { error: string; message: string; docs: string } {
-  return Boolean(
-    value && typeof value === "object" && "error" in value && "message" in value && "docs" in value,
-  );
-}
-
-function resolveExaSearchCount(value: unknown, fallback: number): number {
-  const parsed = parseStrictPositiveInteger(value);
-  if (parsed === undefined) {
-    return fallback;
-  }
-  return Math.min(EXA_MAX_SEARCH_COUNT, parsed);
-}
-
-function parseExaContents(
-  rawContents: unknown,
-): { value?: ExaContentsArgs } | { error: string; message: string; docs: string } {
-  if (rawContents === undefined) {
-    return { value: undefined };
-  }
-  if (!rawContents || typeof rawContents !== "object" || Array.isArray(rawContents)) {
-    return invalidContentsPayload(
-      "contents must be an object with optional text, highlights, and summary fields.",
-    );
-  }
-
-  const raw = rawContents as Record<string, unknown>;
-  const allowedKeys = new Set(["text", "highlights", "summary"]);
-  for (const key of Object.keys(raw)) {
-    if (!allowedKeys.has(key)) {
-      return invalidContentsPayload(
-        `contents has unknown field "${key}". Only "text", "highlights", and "summary" are allowed.`,
-      );
-    }
-  }
-
-  const parsed: ExaContentsArgs = {};
-  const fieldsBySection: Record<string, readonly string[]> = {
-    text: ["maxCharacters"],
-    highlights: ["maxCharacters", "query", "numSentences", "highlightsPerUrl"],
-    summary: ["query"],
-  };
-
-  for (const section of ["text", "highlights", "summary"] as const) {
-    if (!(section in raw)) {
-      continue;
-    }
-    const value = raw[section];
-    if (typeof value === "boolean") {
-      parsed[section] = value;
-      continue;
-    }
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      return invalidContentsPayload(`contents.${section} must be a boolean or an object.`);
-    }
-
-    const option = value as Record<string, unknown>;
-    const fields = fieldsBySection[section] ?? [];
-    for (const key of Object.keys(option)) {
-      if (!fields.includes(key)) {
-        const allowed =
-          section === "highlights"
-            ? 'Allowed fields are "maxCharacters", "query", "numSentences", and "highlightsPerUrl".'
-            : `Only "${fields[0]}" is allowed.`;
-        return invalidContentsPayload(`contents.${section} has unknown field "${key}". ${allowed}`);
-      }
-    }
-
-    for (const field of fields) {
-      if (
-        field !== "query" &&
-        field in option &&
-        parsePositiveInteger(option[field]) === undefined
-      ) {
-        return invalidContentsPayload(`contents.${section}.${field} must be a positive integer.`);
-      }
-    }
-    if (section !== "text" && "query" in option && typeof option.query !== "string") {
-      return invalidContentsPayload(`contents.${section}.query must be a string.`);
-    }
-
-    const normalized: Record<string, unknown> = {};
-    for (const field of fields) {
-      if (field === "query") {
-        if (typeof option.query === "string") {
-          normalized.query = option.query;
-        }
-      } else if (parsePositiveInteger(option[field])) {
-        normalized[field] = parsePositiveInteger(option[field]);
-      }
-    }
-    Object.assign(parsed, { [section]: normalized });
-  }
-
-  return { value: parsed };
-}
-
-function normalizeExaResults(payload: unknown): ExaSearchResult[] {
-  if (!payload || typeof payload !== "object") {
-    return [];
-  }
-  const results = (payload as ExaSearchResponse).results;
-  if (!Array.isArray(results)) {
-    return [];
-  }
-  return results.filter((entry): entry is ExaSearchResult =>
-    Boolean(entry && typeof entry === "object" && !Array.isArray(entry)),
-  );
-}
-
-function resolveFreshnessStartDate(freshness: ExaFreshness): string {
-  const now = new Date();
-  if (freshness === "day") {
-    now.setUTCDate(now.getUTCDate() - 1);
-    return now.toISOString();
-  }
-  if (freshness === "week") {
-    now.setUTCDate(now.getUTCDate() - 7);
-    return now.toISOString();
-  }
-  if (freshness === "month") {
-    const currentDay = now.getUTCDate();
-    now.setUTCDate(1);
-    now.setUTCMonth(now.getUTCMonth() - 1);
-    const lastDayOfTargetMonth = new Date(
-      Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0),
-    ).getUTCDate();
-    now.setUTCDate(Math.min(currentDay, lastDayOfTargetMonth));
-    return now.toISOString();
-  }
-  now.setUTCFullYear(now.getUTCFullYear() - 1);
-  return now.toISOString();
-}
-
-async function runExaSearch(params: {
-  apiKey: string;
-  endpoint: string;
-  query: string;
-  count: number;
-  freshness?: ExaFreshness;
-  dateAfter?: string;
-  dateBefore?: string;
-  type: ExaSearchType;
-  contents?: ExaContentsArgs;
-  timeoutSeconds: number;
-  signal?: AbortSignal;
-}): Promise<ExaSearchResult[]> {
-  const body: Record<string, unknown> = {
-    query: params.query,
-    numResults: params.count,
-    type: params.type,
-    contents: params.contents ?? { highlights: true },
-  };
-
-  if (params.dateAfter) {
-    body.startPublishedDate = params.dateAfter;
-  } else if (params.freshness) {
-    body.startPublishedDate = resolveFreshnessStartDate(params.freshness);
-  }
-  if (params.dateBefore) {
-    body.endPublishedDate = params.dateBefore;
-  }
-
-  return withTrustedWebSearchEndpoint(
-    {
-      url: params.endpoint,
-      timeoutSeconds: params.timeoutSeconds,
-      signal: params.signal,
-      init: {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-          "x-api-key": params.apiKey,
-          "x-exa-integration": "openclaw",
-        },
-        body: JSON.stringify(body),
-      },
-    },
-    async (res) => {
-      if (!res.ok) {
-        const detail = await readExaErrorDetail(res);
-        throw new Error(`Exa API error (${res.status}): ${detail || res.statusText}`);
-      }
-      return readExaSearchResults(res);
-    },
-  );
-}
-
-function missingExaKeyPayload() {
-  return {
-    error: "missing_exa_api_key",
-    message:
-      "web_search (exa) needs an Exa API key. Set EXA_API_KEY in the Gateway environment, or configure plugins.entries.exa.config.webSearch.apiKey.",
-    docs: "https://docs.openclaw.ai/tools/web",
-  };
-}
-
-function buildExaCacheKey(params: {
-  endpoint: string;
-  type: ExaSearchType;
-  query: string;
-  count: number;
-  freshness?: ExaFreshness;
-  dateAfter?: string;
-  dateBefore?: string;
-  contents?: ExaContentsArgs;
-}): string {
-  const contents = params.contents ?? { highlights: true };
-
-  return buildSearchCacheKey([
-    "exa",
-    params.endpoint,
-    params.type,
-    params.query,
-    params.count,
-    params.freshness,
-    params.dateAfter,
-    params.dateBefore,
-    JSON.stringify(contents),
-  ]);
 }
 
 export async function executeExaWebSearchProviderTool(
@@ -414,32 +87,53 @@ export async function executeExaWebSearchProviderTool(
     "exa",
     resolveProviderWebSearchPluginConfig(ctx.config, "exa"),
   ) as SearchConfigRecord | undefined;
-  const params = args;
-  const exaConfig = resolveExaConfig(searchConfig);
-  const apiKey = resolveExaApiKey(exaConfig);
+  const exaConfig = asOptionalRecord(searchConfig?.exa);
+  const apiKey = readWebSearchApiKey(
+    exaConfig?.apiKey,
+    "plugins.entries.exa.config.webSearch.apiKey",
+    ["EXA_API_KEY"],
+  );
   if (!apiKey) {
-    return missingExaKeyPayload();
+    return {
+      error: "missing_exa_api_key",
+      message:
+        "web_search (exa) needs an Exa API key. Set EXA_API_KEY in the Gateway environment, or configure plugins.entries.exa.config.webSearch.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
   }
-  const endpointResult = resolveExaSearchEndpoint(exaConfig);
-  if ("error" in endpointResult) {
-    return endpointResult;
+  let endpoint = EXA_SEARCH_ENDPOINT;
+  const configured = normalizeOptionalString(exaConfig?.baseUrl);
+  if (configured) {
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(configured) && !/^https?:\/\//i.test(configured)) {
+      return invalidBaseUrlPayload();
+    }
+    const candidate = /^https?:\/\//i.test(configured) ? configured : `https://${configured}`;
+    let parsed: URL;
+    try {
+      parsed = new URL(candidate);
+    } catch {
+      return invalidBaseUrlPayload();
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return invalidBaseUrlPayload();
+    }
+    const pathname = parsed.pathname.replace(/\/+$/, "");
+    parsed.pathname = pathname.endsWith("/search") ? pathname : `${pathname}/search`;
+    parsed.hash = "";
+    endpoint = parsed.toString();
   }
-  const endpoint = endpointResult.endpoint;
 
-  const query = readStringParam(params, "query", { required: true });
-  const rawType = readStringParam(params, "type");
-  const type: ExaSearchType = EXA_SEARCH_TYPES.includes(rawType as ExaSearchType)
-    ? (rawType as ExaSearchType)
-    : "auto";
+  const query = readStringParam(args, "query", { required: true });
+  const rawType = readStringParam(args, "type");
+  const type = EXA_SEARCH_TYPES.find((candidate) => candidate === rawType) ?? "auto";
   const count =
-    readPositiveIntegerParam(params, "count", {
+    readPositiveIntegerParam(args, "count", {
       max: EXA_MAX_SEARCH_COUNT,
       message: `count must be an integer from 1 to ${EXA_MAX_SEARCH_COUNT}.`,
-    }) ??
-    searchConfig?.maxResults ??
-    undefined;
-  const rawFreshness = readStringParam(params, "freshness");
-  const freshness = normalizeExaFreshness(rawFreshness);
+    }) ?? searchConfig?.maxResults;
+  const rawFreshness = readStringParam(args, "freshness");
+  const normalizedFreshness = normalizeOptionalLowercaseString(rawFreshness);
+  const freshness = EXA_FRESHNESS_VALUES.find((value) => value === normalizedFreshness);
   if (rawFreshness && !freshness) {
     return {
       error: "invalid_freshness",
@@ -448,8 +142,8 @@ export async function executeExaWebSearchProviderTool(
     };
   }
 
-  const rawDateAfter = readStringParam(params, "date_after");
-  const rawDateBefore = readStringParam(params, "date_before");
+  const rawDateAfter = readStringParam(args, "date_after");
+  const rawDateBefore = readStringParam(args, "date_before");
   if (freshness && (rawDateAfter || rawDateBefore)) {
     return {
       error: "conflicting_time_filters",
@@ -470,26 +164,95 @@ export async function executeExaWebSearchProviderTool(
   }
   const { dateAfter, dateBefore } = parsedDateRange;
 
-  const parsedContents = parseExaContents(params.contents);
-  if (isErrorPayload(parsedContents)) {
-    return parsedContents;
+  const parsedContents: ExaContentsArgs = {};
+  const rawContents = args.contents;
+  if (rawContents !== undefined) {
+    if (!isRecord(rawContents)) {
+      return invalidContentsPayload(
+        "contents must be an object with optional text, highlights, and summary fields.",
+      );
+    }
+    const allowedKeys = new Set(["text", "highlights", "summary"]);
+    for (const key of Object.keys(rawContents)) {
+      if (!allowedKeys.has(key)) {
+        return invalidContentsPayload(
+          `contents has unknown field "${key}". Only "text", "highlights", and "summary" are allowed.`,
+        );
+      }
+    }
+    const fieldsBySection = {
+      text: ["maxCharacters"],
+      highlights: ["maxCharacters", "query", "numSentences", "highlightsPerUrl"],
+      summary: ["query"],
+    } as const;
+    for (const section of ["text", "highlights", "summary"] as const) {
+      if (!(section in rawContents)) {
+        continue;
+      }
+      const value = rawContents[section];
+      if (typeof value === "boolean") {
+        parsedContents[section] = value;
+        continue;
+      }
+      if (!isRecord(value)) {
+        return invalidContentsPayload(`contents.${section} must be a boolean or an object.`);
+      }
+      const option = value;
+      const fields: readonly string[] = fieldsBySection[section];
+      for (const key of Object.keys(option)) {
+        if (!fields.includes(key)) {
+          const allowed =
+            section === "highlights"
+              ? 'Allowed fields are "maxCharacters", "query", "numSentences", and "highlightsPerUrl".'
+              : `Only "${fields[0]}" is allowed.`;
+          return invalidContentsPayload(
+            `contents.${section} has unknown field "${key}". ${allowed}`,
+          );
+        }
+      }
+      for (const field of fields) {
+        if (
+          field !== "query" &&
+          field in option &&
+          !(
+            typeof option[field] === "number" &&
+            Number.isInteger(option[field]) &&
+            option[field] > 0
+          )
+        ) {
+          return invalidContentsPayload(`contents.${section}.${field} must be a positive integer.`);
+        }
+      }
+      if (section !== "text" && "query" in option && typeof option.query !== "string") {
+        return invalidContentsPayload(`contents.${section}.query must be a string.`);
+      }
+      const normalized: Record<string, unknown> = {};
+      for (const field of fields) {
+        if (field in option) {
+          normalized[field] = option[field];
+        }
+      }
+      Object.assign(parsedContents, { [section]: normalized });
+    }
   }
-  const contents =
-    parsedContents.value && Object.keys(parsedContents.value).length > 0
-      ? parsedContents.value
-      : undefined;
+  const contents = Object.keys(parsedContents).length > 0 ? parsedContents : undefined;
 
-  const resolvedCount = resolveExaSearchCount(count, DEFAULT_SEARCH_COUNT);
-  const cacheKey = buildExaCacheKey({
+  const resolvedCount = Math.min(
+    EXA_MAX_SEARCH_COUNT,
+    parseStrictPositiveInteger(count) ?? DEFAULT_SEARCH_COUNT,
+  );
+  const cacheKey = buildSearchCacheKey([
+    "exa",
+    sha256Hex(apiKey),
     endpoint,
     type,
     query,
-    count: resolvedCount,
+    resolvedCount,
     freshness,
     dateAfter,
     dateBefore,
-    contents,
-  });
+    JSON.stringify(contents ?? { highlights: true }),
+  ]);
   const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
   const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
@@ -497,19 +260,84 @@ export async function executeExaWebSearchProviderTool(
   }
 
   const start = Date.now();
-  const results = await runExaSearch({
-    apiKey,
-    endpoint,
+  const timeoutSeconds = resolveSearchTimeoutSeconds(searchConfig);
+  const body: Record<string, unknown> = {
     query,
-    count: resolvedCount,
-    freshness,
-    dateAfter,
-    dateBefore,
+    numResults: resolvedCount,
     type,
-    contents,
-    timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
-    signal,
-  });
+    contents: contents ?? { highlights: true },
+  };
+
+  if (dateAfter) {
+    body.startPublishedDate = dateAfter;
+  } else if (freshness) {
+    const now = new Date();
+    if (freshness === "day") {
+      now.setUTCDate(now.getUTCDate() - 1);
+    } else if (freshness === "week") {
+      now.setUTCDate(now.getUTCDate() - 7);
+    } else if (freshness === "month") {
+      const currentDay = now.getUTCDate();
+      now.setUTCDate(1);
+      now.setUTCMonth(now.getUTCMonth() - 1);
+      const lastDayOfTargetMonth = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0),
+      ).getUTCDate();
+      now.setUTCDate(Math.min(currentDay, lastDayOfTargetMonth));
+    } else {
+      now.setUTCFullYear(now.getUTCFullYear() - 1);
+    }
+    body.startPublishedDate = now.toISOString();
+  }
+  if (dateBefore) {
+    body.endPublishedDate = dateBefore;
+  }
+
+  const headers = {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    "x-api-key": apiKey,
+    "x-exa-integration": "openclaw",
+  };
+  const results = await withTrustedWebSearchEndpoint(
+    {
+      url: endpoint,
+      timeoutSeconds,
+      signal,
+      init: {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        const detail = await readProviderResponseErrorText(
+          res,
+          EXA_ERROR_BODY_LIMIT_BYTES,
+          headers,
+          signal,
+        );
+        throw new ProviderHttpError(
+          `Exa API error (${res.status}): ${detail || redactProviderResponseErrorText(res.statusText, headers)}`,
+          { status: res.status },
+        );
+      }
+      const bytes = await readResponseWithLimit(res, EXA_SEARCH_JSON_MAX_BYTES, {
+        onOverflow: ({ maxBytes: maxBytesLocal }) =>
+          new Error(`Exa API response exceeds ${maxBytesLocal} bytes`),
+      });
+      try {
+        const payload: unknown = JSON.parse(
+          new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+        );
+        const rows = asOptionalObjectRecord(payload)?.results;
+        return (Array.isArray(rows) ? rows.filter(isRecord) : []).slice(0, resolvedCount);
+      } catch (cause) {
+        throw new Error("Exa API returned malformed JSON", { cause });
+      }
+    },
+  );
 
   signal?.throwIfAborted();
   const payload = {
@@ -517,16 +345,15 @@ export async function executeExaWebSearchProviderTool(
     provider: "exa",
     count: results.length,
     tookMs: Date.now() - start,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: "exa",
-      wrapped: true,
-    },
+    externalContent: externalContentStamp("exa"),
     results: results.map((entry) => {
       const title = typeof entry.title === "string" ? entry.title : "";
       const url = typeof entry.url === "string" ? entry.url : "";
-      const description = resolveExaDescription(entry);
+      const description =
+        normalizeTrimmedStringList(entry.highlights).join("\n") ||
+        normalizeOptionalString(entry.summary) ||
+        normalizeOptionalString(entry.text) ||
+        "";
       const summary = normalizeOptionalString(entry.summary) ?? "";
       const highlightScores = Array.isArray(entry.highlightScores)
         ? entry.highlightScores.filter(

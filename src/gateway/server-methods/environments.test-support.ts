@@ -1,14 +1,37 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
+import { prepareDevicePairingBinding } from "../../infra/device-pairing-binding.js";
+import type {
+  DevicePairingBinding,
+  DevicePairingNodeSnapshot,
+} from "../../infra/device-pairing-read.types.js";
 import type { PairedDevice, PairedDeviceNodeSurface } from "../../infra/device-pairing.types.js";
+import type { collectNodeCatalogRuntimeState } from "../node-registry-private.js";
+import { NodeRegistry } from "../node-registry.js";
 import type {
   WorkerEnvironmentServiceContract,
   WorkerEnvironmentServiceRecord,
 } from "../worker-environments/service-contract.js";
 import type { WorkerEnvironmentRecord } from "../worker-environments/store.js";
+import type { GatewayClient } from "./client-types.js";
 import { environmentsHandlers } from "./environments.js";
 
-export type TestWorkerRecord = WorkerEnvironmentRecord & WorkerEnvironmentServiceRecord;
+export type TestWorkerRecord = WorkerEnvironmentServiceRecord & {
+  sshEndpoint: WorkerEnvironmentRecord["sshEndpoint"];
+};
+
+export function createDevicePairingNodeSnapshot(
+  paired: readonly PairedDevice[],
+): DevicePairingNodeSnapshot {
+  const bindings = new Map<string, DevicePairingBinding>();
+  for (const device of paired) {
+    const { binding } = prepareDevicePairingBinding(device.deviceId, device);
+    if (binding) {
+      bindings.set(device.deviceId, binding);
+    }
+  }
+  return { paired, bindings };
+}
 
 export function pairedNodeDevice(
   deviceId: string,
@@ -34,6 +57,45 @@ export type TestWorkerService = Omit<
   "startTunnel" | "stopTunnel"
 >;
 
+export function nodeCatalogState(): ReturnType<typeof collectNodeCatalogRuntimeState> {
+  return {
+    sessionHostNodeIds: new Set<string>(),
+    deviceFolderNodeIds: new Set<string>(),
+    issuesByNodeId: new Map(),
+    workerSlotsByNodeId: new Map(),
+    workerBundleByNodeId: new Map(),
+  };
+}
+
+export function pairedInventory() {
+  return createDevicePairingNodeSnapshot([
+    pairedNodeDevice("node-live", { commands: ["system.run"] }),
+    pairedNodeDevice("node-offline", {
+      displayName: "Offline Node",
+      caps: ["screen"],
+      commands: ["camera.snap"],
+    }),
+  ]);
+}
+
+export async function invokeEnvironment(
+  method: keyof typeof environmentsHandlers,
+  params: unknown,
+  context: object,
+  client: GatewayClient | { connect: { scopes: string[] } } | null = null,
+  hasCurrentClientAuthority?: () => boolean,
+) {
+  const respond = vi.fn();
+  await environmentsHandlers[method]?.({
+    params,
+    respond,
+    context,
+    client,
+    hasCurrentClientAuthority,
+  } as never);
+  return expectDefined(respond.mock.calls.at(0), "expected environments handler to respond");
+}
+
 export function mockContext(
   workerEnvironmentService?: TestWorkerService,
   reconcileActive: (environmentId?: string) => Promise<void> = vi.fn(async () => {}),
@@ -45,6 +107,7 @@ export function mockContext(
     {
       nodeId: "node-live",
       connId: "conn-live",
+      client: { invalidated: false },
       displayName: "Live Node",
       platform: "ios",
       caps: ["camera"],
@@ -54,12 +117,10 @@ export function mockContext(
   ],
 ) {
   return {
-    logGateway: {
-      warn: vi.fn(),
-    },
-    nodeRegistry: {
+    logGateway: { warn: vi.fn() },
+    nodeRegistry: Object.assign(new NodeRegistry(), {
       listConnectedForPairingStates: () => connectedNodes,
-    },
+    }),
     workerEnvironmentService,
     getRuntimeConfig: () => ({
       cloudWorkers: {
@@ -86,11 +147,9 @@ export function workerRecord(overrides: Partial<TestWorkerRecord> = {}): TestWor
     environmentId: "worker-1",
     providerId: "static-ssh",
     profileId: "development",
-    profileSnapshot: { settings: {} },
-    provisionOperationId: "provision:worker-1",
+    ownerEpoch: 1,
     leaseId: "lease-1",
     sharedHost: false,
-    desktop: null,
     sshEndpoint: {
       host: "worker.example.test",
       port: 22,
@@ -101,18 +160,22 @@ export function workerRecord(overrides: Partial<TestWorkerRecord> = {}): TestWor
     state: "ready",
     attachedSessionIds: [],
     createdAtMs: 1_000,
-    updatedAtMs: 1_000,
-    stateChangedAtMs: 1_000,
     idleSinceAtMs: null,
-    lastError: null,
+    destroyRequestedAtMs: null,
+    preparation: null,
     tunnelStatus: "stopped",
     desktopAvailable: false,
     desktopApps: [],
     ...overrides,
-  } as TestWorkerRecord;
+  };
 }
 
 export const workerService = (overrides: Partial<TestWorkerService> = {}) => ({
+  getDedicatedNodeLeaseSignal: vi.fn(() => undefined),
+  captureSessionAttachment: vi.fn(() => {
+    throw new Error("No conversation attachment fixture");
+  }),
+  readProviderDisplayId: vi.fn(() => undefined),
   getSessionAttachment: vi.fn(() => undefined),
   findSessionAttachment: vi.fn(() => undefined),
   getSessionAttachmentStatus: vi.fn(() => undefined),
@@ -129,6 +192,8 @@ export const workerService = (overrides: Partial<TestWorkerService> = {}) => ({
     throw new Error("No attached portal fixture");
   }),
   list: vi.fn(() => []),
+  readPreparedPoolSummary: vi.fn(() => ({ maxTotal: 4, reservedEnvironmentIds: [] })),
+  readReadyWorkerTarget: vi.fn(() => 1),
   get: vi.fn(() => undefined),
   inventoryVersion: vi.fn(() => 0),
   readMachineShape: () => undefined,
@@ -143,6 +208,7 @@ export const workerService = (overrides: Partial<TestWorkerService> = {}) => ({
     reused: false,
   })),
   destroy: vi.fn(async () => workerRecord({ state: "destroyed" })),
+  reclaim: vi.fn(async () => workerRecord({ state: "destroyed" })),
   destroyUnattached: vi.fn(async () => workerRecord({ state: "destroyed" })),
   observeDesktop: vi.fn(async ({ control }) => ({
     transport: "rfb" as const,
@@ -156,43 +222,26 @@ export const workerService = (overrides: Partial<TestWorkerService> = {}) => ({
 
 export async function callEnvironmentMethod(
   method:
-    | "environments.list"
-    | "environments.status"
-    | "environments.create"
-    | "environments.prepare"
-    | "environments.destroy"
-    | "worker.desktop.observe"
-    | "worker.desktop.launch",
+    | `environments.${"list" | "status" | "create" | "prepare" | "destroy"}`
+    | `worker.desktop.${"observe" | "launch"}`,
   params: unknown,
   options: {
     service?: TestWorkerService;
-    reconcileActive?: (environmentId?: string) => Promise<void>;
-    forceDestroyEnvironment?: (
-      environmentId: string,
-      onCleanupError?: (error: unknown) => void,
-    ) => Promise<TestWorkerRecord>;
+    reconcileActive?: Parameters<typeof mockContext>[1];
+    forceDestroyEnvironment?: Parameters<typeof mockContext>[2];
     connectedNodes?: unknown[];
+    scopes?: string[];
   } = {},
 ) {
-  const respond = vi.fn();
-  await environmentsHandlers[method]?.({
-    params: params as Record<string, unknown>,
-    respond,
-    context: mockContext(
+  return invokeEnvironment(
+    method,
+    params,
+    mockContext(
       options.service,
       options.reconcileActive,
       options.forceDestroyEnvironment,
       options.connectedNodes,
     ),
-  } as never);
-  return expectDefined(respond.mock.calls.at(0), "expected environments handler to respond");
-}
-
-export class FakeWorkerServiceError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-  }
+    options.scopes ? { connect: { scopes: options.scopes } } : null,
+  );
 }

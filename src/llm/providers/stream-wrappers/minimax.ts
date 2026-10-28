@@ -1,3 +1,4 @@
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { StreamFn } from "../../../agents/runtime/index.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
@@ -17,12 +18,6 @@ function isMinimaxAnthropicMessagesModel(model: { api?: unknown; provider?: unkn
 function isMinimaxM3Model(model: { id?: unknown }): boolean {
   const modelId = typeof model.id === "string" ? model.id.trim() : "";
   return /^MiniMax-M3(\b|[-.])/i.test(modelId);
-}
-
-function resolvePositiveMaxTokens(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
 }
 
 /** @deprecated MiniMax provider-owned stream helper; do not use from third-party plugins. */
@@ -68,7 +63,7 @@ export function createMinimaxThinkingDisabledWrapper(
         ) {
           // M3 uses adaptive thinking; restore the caller's output cap after budget expansion.
           payload.thinking = { type: "adaptive" };
-          const maxTokens = resolvePositiveMaxTokens(options?.maxTokens);
+          const maxTokens = floorPositiveFiniteNumber(options?.maxTokens);
           if (maxTokens !== undefined) {
             payload.max_tokens = maxTokens;
           }

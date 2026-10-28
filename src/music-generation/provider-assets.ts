@@ -1,4 +1,3 @@
-// Validates and normalizes provider asset attachments for music generation.
 import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import { maxBytesForKind } from "@openclaw/media-core/constants";
 import { extensionForMime } from "@openclaw/media-core/mime";
@@ -14,25 +13,8 @@ import {
 } from "../media-understanding/shared.js";
 import type { GeneratedMusicAsset } from "./types.js";
 
-type GeneratedMusicResponseHandle = {
-  response: Response;
-  release?: () => Promise<void>;
-  mimeType?: string;
-};
-
-type GeneratedMusicResponseFactory = (params: {
-  deadline: ProviderOperationDeadline;
-  timeoutMs: () => number;
-}) => Promise<GeneratedMusicResponseHandle>;
-
-/**
- * Asset extraction and download helpers for music generation providers.
- *
- * Providers may return audio as URLs, file objects, or base64 payloads; these
- * helpers normalize those shapes into bounded in-memory GeneratedMusicAsset values.
- */
 /** Candidate audio file returned by a provider before download. */
-export type GeneratedMusicFileCandidate = {
+type GeneratedMusicFileCandidate = {
   url: string;
   mimeType?: string;
   fileName?: string;
@@ -47,35 +29,6 @@ function normalizeSpecificAudioMimeType(value: unknown): string | undefined {
   return mimeType;
 }
 
-function pushGeneratedMusicFileCandidate(
-  candidates: GeneratedMusicFileCandidate[],
-  value: unknown,
-): void {
-  if (typeof value === "string") {
-    const url = normalizeOptionalString(value);
-    if (url) {
-      candidates.push({ url });
-    }
-    return;
-  }
-  if (!isRecord(value)) {
-    return;
-  }
-  const url = normalizeOptionalString(value.url);
-  if (!url) {
-    return;
-  }
-  candidates.push({
-    url,
-    ...(normalizeOptionalString(value.content_type)
-      ? { mimeType: normalizeOptionalString(value.content_type) }
-      : {}),
-    ...(normalizeOptionalString(value.file_name)
-      ? { fileName: normalizeOptionalString(value.file_name) }
-      : {}),
-  });
-}
-
 /** Extract URL/file candidates from common provider response keys. */
 export function extractGeneratedMusicFileCandidates(
   payload: unknown,
@@ -86,7 +39,28 @@ export function extractGeneratedMusicFileCandidates(
   }
   const candidates: GeneratedMusicFileCandidate[] = [];
   for (const key of keys) {
-    pushGeneratedMusicFileCandidate(candidates, payload[key]);
+    const value = payload[key];
+    if (typeof value === "string") {
+      const url = normalizeOptionalString(value);
+      if (url) {
+        candidates.push({ url });
+      }
+      continue;
+    }
+    if (!isRecord(value)) {
+      continue;
+    }
+    const url = normalizeOptionalString(value.url);
+    if (!url) {
+      continue;
+    }
+    const mimeType = normalizeOptionalString(value.content_type);
+    const fileName = normalizeOptionalString(value.file_name);
+    candidates.push({
+      url,
+      ...(mimeType ? { mimeType } : {}),
+      ...(fileName ? { fileName } : {}),
+    });
   }
   return candidates;
 }
@@ -121,7 +95,14 @@ export async function downloadGeneratedMusicAsset(params: {
   maxBytes?: number;
   validateBinaryResponse?: boolean;
   includeSourceUrl?: boolean;
-  fetchResponse?: GeneratedMusicResponseFactory;
+  fetchResponse?: (params: {
+    deadline: ProviderOperationDeadline;
+    timeoutMs: () => number;
+  }) => Promise<{
+    response: Response;
+    release?: () => Promise<void>;
+    mimeType?: string;
+  }>;
 }): Promise<GeneratedMusicAsset> {
   const deadline = createProviderOperationDeadline({
     timeoutMs: params.timeoutMs,

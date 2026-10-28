@@ -3,17 +3,23 @@ import type {
   SessionsResolveCandidate,
   SessionsResolveResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionVisibility,
+  SessionVisibilitySetResult,
+} from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 
 export type ControlUiSessionFixture = {
   key: string;
   sessionId?: string;
   updatedAt?: number;
-  contextTokens?: number | null;
+  contextTokens?: number;
   kind?: string;
   pinned?: boolean;
   pinnedAt?: number;
   archived?: boolean;
   archivedAt?: number;
+  spawnedCwd?: string;
+  lastMessagePreview?: string;
   [field: string]: unknown;
 };
 
@@ -29,40 +35,46 @@ export function createControlUiSessionRow(
     archivedAt === undefined
       ? (options?.pinnedAt ?? (options?.pinned ? updatedAt : undefined))
       : undefined;
-  return {
-    displayName: label,
-    hasActiveRun: false,
-    key,
-    sessionId: `session:${key}`,
-    label,
-    model: "gpt-5.5",
-    modelProvider: "openai",
-    status: "done",
-    totalTokens: 0,
-    updatedAt,
-    ...options,
-    contextTokens: options?.contextTokens ?? null,
-    kind: options?.kind ?? "direct",
-    pinned: pinnedAt !== undefined,
-    pinnedAt,
-    archived: archivedAt !== undefined,
-    archivedAt,
-  };
+  return Object.assign(
+    {
+      displayName: label,
+      hasActiveRun: false,
+      key,
+      sessionId: `session:${key}`,
+      label,
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      status: "done",
+      totalTokens: 0,
+      updatedAt,
+    },
+    options,
+    {
+      contextTokens: options?.contextTokens,
+      kind: options?.kind ?? "direct",
+      pinned: pinnedAt !== undefined,
+      pinnedAt,
+      archived: archivedAt !== undefined,
+      archivedAt,
+    },
+  );
 }
 
 export function createControlUiMockSessionRow(
   key: string,
   label: string,
   updatedAt: number,
-  options: { model?: string; modelProvider?: string } & Record<string, unknown> = {},
+  options?: { model?: string; modelProvider?: string } & Record<string, unknown>,
 ) {
-  const { model, modelProvider, ...extra } = options;
-  return createControlUiSessionRow(key, label, updatedAt, {
-    contextTokens: 200_000,
-    model: model ?? "gpt-5-mini",
-    modelProvider: modelProvider ?? "openai",
-    ...extra,
-  });
+  return createControlUiSessionRow(
+    key,
+    label,
+    updatedAt,
+    Object.assign({ contextTokens: 200_000 }, options, {
+      model: options?.model ?? "gpt-5-mini",
+      modelProvider: options?.modelProvider ?? "openai",
+    }),
+  );
 }
 
 export function createControlUiChatHistoryMessage(
@@ -129,6 +141,11 @@ export function createControlUiSessionFixtures(
     listed.add(key);
   }
   const read = (key: string) => ({ ...record(key).row });
+  // Match Gateway projection clocks so a cached descriptor cannot outrank a fresh list.
+  const sample = <T extends Record<string, unknown>>(row: T, now: number) => ({
+    ...row,
+    snapshotAt: row.snapshotAt ?? now,
+  });
   const patch = (key: string, fields: Record<string, unknown>) => {
     const value = record(key);
     const next = { ...value.row };
@@ -151,6 +168,7 @@ export function createControlUiSessionFixtures(
       "model",
       "thinkingLevel",
       "fastMode",
+      "cyberAccessProgram",
       "permissionMode",
       "label",
       "category",
@@ -162,7 +180,10 @@ export function createControlUiSessionFixtures(
       "toolOverrides",
     ]) {
       if (Object.hasOwn(fields, field)) {
-        set(field, fields[field]);
+        set(
+          field,
+          field === "cyberAccessProgram" && fields[field] === null ? undefined : fields[field],
+        );
       }
     }
     if (Object.hasOwn(fields, "model")) {
@@ -190,6 +211,27 @@ export function createControlUiSessionFixtures(
       );
       set("pinned", next.pinnedAt !== undefined);
     }
+    // Mirror the Gateway: archive and pin clear a snooze; null wakes; a new wake time restamps.
+    if (Object.hasOwn(fields, "snoozedUntil")) {
+      const snoozedUntil = fields.snoozedUntil;
+      if (typeof snoozedUntil === "number" && next.snoozedUntil !== snoozedUntil) {
+        set("snoozedUntil", snoozedUntil);
+        set("snoozedAt", ++timestamp);
+      } else if (snoozedUntil === null) {
+        set("snoozedUntil", undefined);
+        set("snoozedAt", undefined);
+      }
+    }
+    if (fields.archived === true || fields.pinned === true) {
+      set("snoozedUntil", undefined);
+      set("snoozedAt", undefined);
+    }
+    // Advance the fixture's synthetic timeline without making its later events stale.
+    const latestUpdatedAt = Math.max(
+      0,
+      ...[...records.values()].map(({ row }) => row.updatedAt ?? 0),
+    );
+    set("updatedAt", latestUpdatedAt + 1);
     value.row = next;
     for (const field of changed) {
       value.changed.add(field);
@@ -270,11 +312,18 @@ export function createControlUiSessionFixtures(
       value.changed.add(field);
     }
   };
-  const abortRuns = (inputKey: string, runId?: string, confirmedRunIds?: string[]) => {
+  const abortRuns = (
+    inputKey: string,
+    runId: string | undefined,
+    response: Record<string, unknown>,
+  ) => {
+    const confirmedRunIds = Array.isArray(response.runIds)
+      ? response.runIds.filter((id): id is string => typeof id === "string")
+      : undefined;
     const key = canonicalKey(inputKey);
     const value = confirmedRunIds?.length ? record(inputKey) : records.get(key);
     if (!value) {
-      return { aborted: false, runIds: [] as string[] };
+      return { ...response, aborted: false, runIds: [] as string[] };
     }
     const activeRunIds = Array.isArray(value.row.activeRunIds)
       ? value.row.activeRunIds.filter((id): id is string => typeof id === "string")
@@ -284,7 +333,7 @@ export function createControlUiSessionFixtures(
     const runIds = runId ? candidates.filter((id) => id === runId) : candidates;
     const aborted = runIds.length > 0 || (!runId && value.row.hasActiveRun === true);
     if (!aborted) {
-      return { aborted: false, runIds };
+      return { ...response, aborted: false, runIds };
     }
     const sequence = ++runEventSequence;
     for (const id of runIds) {
@@ -305,14 +354,111 @@ export function createControlUiSessionFixtures(
     for (const field of Object.keys(fields)) {
       value.changed.add(field);
     }
-    return { aborted, runIds };
+    return { ...response, aborted, runIds };
   };
-  const materialize = (key: string, fields: Partial<ControlUiSessionFixture>) => {
+  // sessions.abort settles the session and its controlled descendants; the Gateway
+  // computes activity at read time, so every later describe/list/history read is idle.
+  const settleSessionAbort = (inputKey: string, aborted: boolean) => {
+    const key = canonicalKey(inputKey);
+    const value = records.get(key);
+    if (!value) {
+      return;
+    }
+    const activeRunIds = Array.isArray(value.row.activeRunIds)
+      ? value.row.activeRunIds.filter((id): id is string => typeof id === "string")
+      : [];
+    if (
+      activeRunIds.length === 0 &&
+      value.row.hasActiveRun !== true &&
+      value.row.hasActiveSubagentRun !== true
+    ) {
+      return;
+    }
+    const sequence = ++runEventSequence;
+    for (const id of activeRunIds) {
+      runsFor(key).set(id, { status: "killed", acknowledged: true, sequence });
+    }
+    const fields = {
+      activeRunIds: [],
+      hasActiveRun: false,
+      hasActiveSubagentRun: false,
+      status: aborted ? "killed" : value.row.status === "running" ? "done" : value.row.status,
+      ...(aborted ? { abortedLastRun: true, lastRunError: undefined } : {}),
+      updatedAt: Math.max(Date.now(), (value.row.updatedAt ?? 0) + 1),
+    };
+    value.lastRunEventSequence = sequence;
+    value.row = { ...value.row, ...fields };
+    for (const field of Object.keys(fields)) {
+      value.changed.add(field);
+    }
+  };
+  // Abort receipts are lifecycle writes; a returned receipt replaces the chat.abort reply.
+  const commitAbort = (method: string, params: unknown, response: unknown) => {
+    if (!isRecord(params) || !isRecord(response)) {
+      return undefined;
+    }
+    if (
+      method === "chat.abort" &&
+      typeof params.sessionKey === "string" &&
+      response.aborted === true
+    ) {
+      const runId = typeof params.runId === "string" ? params.runId : undefined;
+      return abortRuns(params.sessionKey, runId, response);
+    }
+    if (
+      method === "sessions.abort" &&
+      typeof params.key === "string" &&
+      (response.status === "aborted" || response.status === "no-active-run")
+    ) {
+      // Like the Gateway, a run-scoped Stop settles only that run; only a
+      // session-wide Stop cascades to every run and controlled descendant.
+      if (typeof params.runId !== "string") {
+        settleSessionAbort(params.key, response.status === "aborted");
+      } else if (response.status === "aborted") {
+        abortRuns(params.key, params.runId, {});
+      }
+    }
+    return undefined;
+  };
+  const materializeResponse = (params: unknown, response: unknown) => {
+    if (!isRecord(response)) {
+      return;
+    }
+    const key =
+      typeof response.key === "string"
+        ? response.key
+        : typeof response.sessionKey === "string"
+          ? response.sessionKey
+          : "";
+    if (!key.trim()) {
+      return;
+    }
+    const label = isRecord(params) && typeof params.label === "string" ? params.label.trim() : "";
+    const runId =
+      response.runStarted === true && typeof response.runId === "string"
+        ? response.runId
+        : undefined;
     const value = record(key);
-    value.row = { ...value.row, ...fields, key: canonicalKey(key) };
+    value.row = {
+      ...value.row,
+      ...(isRecord(response.entry) ? response.entry : {}),
+      ...(typeof response.sessionId === "string" ? { sessionId: response.sessionId } : {}),
+      ...(label ? { displayName: label, label } : {}),
+      ...(!runId
+        ? {
+            hasActiveRun: response.runStarted === true,
+            status: response.runStarted === true ? "running" : "done",
+          }
+        : {}),
+      key: canonicalKey(key),
+    };
     listed.add(canonicalKey(key));
     materialized.add(canonicalKey(key));
     materializedSequence += 1;
+    if (runId) {
+      // Creation ACKs share send lifecycle ownership, including terminal-before-ACK ordering.
+      trackRun(key, runId, "running");
+    }
   };
   const list = (wireRows?: unknown[]) => {
     const rows = wireRows ?? [...listed].map(read);
@@ -357,6 +503,7 @@ export function createControlUiSessionFixtures(
         : isRecord(params) && params.archived === true
           ? "archived"
           : "active";
+    const now = Date.now();
     const projectedSessions = list(response.sessions).map((row) => {
       if (!isRecord(row)) {
         return row;
@@ -375,7 +522,7 @@ export function createControlUiSessionFixtures(
       } else {
         next.category = category;
       }
-      return next;
+      return sample(next, now);
     });
     const spawnedBy =
       isRecord(params) && typeof params.spawnedBy === "string" ? params.spawnedBy.trim() : "";
@@ -473,16 +620,82 @@ export function createControlUiSessionFixtures(
       ? { ok: true, ...only }
       : { ok: false, ...(matches.length ? { candidates: matches.slice(0, 10) } : {}) };
   };
+  // History publishes a full row replacement. An unseeded wire-only fixture
+  // has no canonical metadata to publish until its caller declares the row.
+  const sessionInfo = (key: string) =>
+    listed.has(canonicalKey(key)) ? sample(read(key), Date.now()) : undefined;
   return {
     read,
     resolve,
-    // History publishes a full row replacement. An unseeded wire-only fixture
-    // has no canonical metadata to publish until its caller declares the row.
-    sessionInfo: (key: string) => (listed.has(canonicalKey(key)) ? read(key) : undefined),
+    sessionInfo,
+    readResponse(
+      method: string,
+      params: unknown,
+      scenario: { sessionKey: string; allowedSessionVisibilities: readonly string[] },
+    ) {
+      if (method === "sessions.resolve") {
+        return resolve(isRecord(params) ? params : {});
+      }
+      if (
+        method !== "sessions.describe" &&
+        method !== "sessions.dispatch" &&
+        method !== "session.members.listEvidence"
+      ) {
+        return undefined;
+      }
+      const field = method === "session.members.listEvidence" ? "sessionKey" : "key";
+      const requestedKey = isRecord(params) ? params[field] : undefined;
+      const key = typeof requestedKey === "string" ? requestedKey : scenario.sessionKey;
+      if (method === "sessions.describe") {
+        return { session: sessionInfo(key) ?? null };
+      }
+      const row = read(key);
+      if (method === "sessions.dispatch") {
+        return {
+          ok: true,
+          key,
+          sessionId: row.sessionId,
+          placement: {
+            state: "active",
+            generation: 1,
+            createdAtMs: 1,
+            updatedAtMs: 2,
+            stateChangedAtMs: 2,
+            environmentId: "mock-worker",
+            activeOwnerEpoch: 1,
+            workerBundleHash: "a".repeat(64),
+            workspaceBaseManifestRef: "mock-manifest",
+            remoteWorkspaceDir: "/mock/workspace",
+          },
+        };
+      }
+      return {
+        sessionKey: row.key,
+        members: [],
+        identities: [],
+        role: row.sharingRole ?? "admin",
+        allowedVisibilities: scenario.allowedSessionVisibilities,
+      };
+    },
     patch,
-    abortRuns,
+    setVisibility(key: string, expectedSessionId: string, visibility: SessionVisibility) {
+      const canonical = canonicalKey(key);
+      const value = records.get(canonical);
+      if (!listed.has(canonical) || !value || value.row.sessionId !== expectedSessionId) {
+        return {
+          __mockError: {
+            code: "INVALID_REQUEST",
+            message: "session identity changed; refresh and retry",
+          },
+        };
+      }
+      value.row = { ...value.row, visibility };
+      value.changed.add("visibility");
+      return { ok: true, sessionKey: canonical, visibility } satisfies SessionVisibilitySetResult;
+    },
+    commitAbort,
     trackRun,
-    materialize,
+    materializeResponse,
     list,
     listResponse,
     materializedCount: () => materializedSequence,

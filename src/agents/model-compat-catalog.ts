@@ -6,21 +6,36 @@ type ModelTransportRoute = {
   baseUrl?: unknown;
 };
 
-function normalizeBaseUrl(value: unknown): string {
-  if (typeof value !== "string") {
-    return "";
+export function isVllmQwenThinkingCompat(
+  providerId: string,
+  compat?: { thinkingFormat?: unknown } | null,
+): boolean {
+  return (
+    providerId === "vllm" &&
+    (compat?.thinkingFormat === "qwen" || compat?.thinkingFormat === "qwen-chat-template")
+  );
+}
+
+export function normalizeModelTransportBaseUrl(api: string, baseUrl: string): string {
+  return api === "anthropic-messages" ? baseUrl.replace(/\/v1\/?$/, "") : baseUrl;
+}
+
+export function normalizeCatalogRouteBaseUrl(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
   }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
+  const url = URL.parse(value);
+  if (!url) {
+    return value.replace(/\/+$/u, "");
   }
-  try {
-    const url = new URL(trimmed);
-    url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
-    return url.toString();
-  } catch {
-    return trimmed.replace(/\/+$/u, "");
-  }
+  url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
+  return url.toString();
+}
+
+function normalizeBaseUrl(value: unknown, api: string): string {
+  return typeof value === "string"
+    ? (normalizeCatalogRouteBaseUrl(normalizeModelTransportBaseUrl(api, value.trim())) ?? "")
+    : "";
 }
 
 export function modelTransportRoutesMatch(
@@ -28,10 +43,11 @@ export function modelTransportRoutesMatch(
   configuredRoute: ModelTransportRoute,
 ): boolean {
   const catalogApi = normalizeApi(catalogRoute.api);
-  const catalogBaseUrl = normalizeBaseUrl(catalogRoute.baseUrl);
+  const configuredApi = normalizeApi(configuredRoute.api) || catalogApi;
+  const catalogBaseUrl = normalizeBaseUrl(catalogRoute.baseUrl, catalogApi);
   return (
-    (normalizeApi(configuredRoute.api) || catalogApi) === catalogApi &&
-    (normalizeBaseUrl(configuredRoute.baseUrl) || catalogBaseUrl) === catalogBaseUrl
+    configuredApi === catalogApi &&
+    (normalizeBaseUrl(configuredRoute.baseUrl, configuredApi) || catalogBaseUrl) === catalogBaseUrl
   );
 }
 
@@ -53,17 +69,43 @@ export function resolveUniqueCatalogModelRoute<T extends ModelTransportRoute>(
   return match;
 }
 
-/** Capabilities belong to the catalog route; config owns them only for a different/custom route. */
+/** Catalogs own route defaults; operator reasoning declarations take precedence. */
 export function resolveCatalogOwnedModelCompat(params: {
   catalogRoute?: ModelTransportRoute;
   catalogCompat?: ModelCompatConfig;
   configuredRoute?: ModelTransportRoute;
   configuredCompat?: ModelCompatConfig;
 }): ModelCompatConfig | undefined {
-  if (!params.catalogRoute) {
+  if (
+    !params.catalogRoute ||
+    !modelTransportRoutesMatch(params.catalogRoute, params.configuredRoute ?? {})
+  ) {
     return params.configuredCompat;
   }
-  return modelTransportRoutesMatch(params.catalogRoute, params.configuredRoute ?? {})
-    ? params.catalogCompat
-    : params.configuredCompat;
+  const configured = params.configuredCompat;
+  const efforts = configured?.supportedReasoningEfforts;
+  if (
+    efforts === undefined &&
+    configured?.supportsReasoningEffort === undefined &&
+    configured?.reasoningEffortMap === undefined
+  ) {
+    return params.catalogCompat;
+  }
+  return {
+    ...params.catalogCompat,
+    ...(efforts !== undefined
+      ? { supportedReasoningEfforts: efforts, supportsReasoningEffort: efforts.length > 0 }
+      : configured?.supportsReasoningEffort !== false &&
+          (Object.keys(configured?.reasoningEffortMap ?? {}).length > 0 ||
+            (configured?.supportsReasoningEffort === true &&
+              params.catalogCompat?.supportedReasoningEfforts?.length === 0))
+        ? { supportedReasoningEfforts: undefined, supportsReasoningEffort: true }
+        : {}),
+    ...(configured?.supportsReasoningEffort !== undefined
+      ? { supportsReasoningEffort: configured.supportsReasoningEffort }
+      : {}),
+    ...(configured?.reasoningEffortMap !== undefined
+      ? { reasoningEffortMap: configured.reasoningEffortMap }
+      : {}),
+  };
 }

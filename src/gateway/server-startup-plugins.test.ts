@@ -2,13 +2,20 @@
  * Gateway startup plugin bootstrap tests.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createInfoWarnErrorDebugLogger as createLog } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { createFixture } from "../plugins/plugin-generation-artifact.admission.test-support.js";
+import { capturePluginGenerationArtifact } from "../plugins/plugin-generation-artifact.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
+import { preparePluginNativeAdmissions } from "../plugins/plugin-native-admission-state.js";
+import * as sourceAdmissionStore from "../plugins/plugin-source-admission-store.js";
 import type { ProviderPolicySurface } from "../plugins/provider-policy-surface.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
@@ -16,6 +23,8 @@ import type { PluginRegistry } from "../plugins/registry-types.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { GatewayRequestHandler } from "./server-methods/types.js";
 
 const applyPluginAutoEnable = vi.hoisted(() =>
   vi.fn((params: { config: unknown }) => ({
@@ -24,7 +33,6 @@ const applyPluginAutoEnable = vi.hoisted(() =>
     autoEnabledReasons: {} as Record<string, string[]>,
   })),
 );
-const initSubagentRegistry = vi.hoisted(() => vi.fn());
 const getActivePluginRegistry = vi.hoisted(() => vi.fn<() => PluginRegistry | undefined>());
 const setActivePluginRegistry = vi.hoisted(() => vi.fn());
 const resolveProviderPolicySurfaceForOwner = vi.hoisted(() =>
@@ -55,6 +63,9 @@ const pluginManifestRegistry = vi.hoisted((): PluginManifestRegistry => ({
   ],
   diagnostics: [],
 }));
+const { makeEmptyPluginMetadataOwners } = await vi.hoisted(
+  () => import("../plugins/plugin-metadata-empty.test-support.js"),
+);
 const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
   const index: PluginMetadataSnapshot["index"] = {
     version: 1,
@@ -79,18 +90,7 @@ const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
     byPluginId: new Map(),
     normalizePluginId: (pluginId) => pluginId,
     declaredProviderOwners: new Map(),
-    owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-      providerAuthContributions: [],
-      modelIdNormalizationPolicies: new Map(),
-    },
+    owners: makeEmptyPluginMetadataOwners(),
     metrics: {
       registrySnapshotMs: 0,
       manifestRegistryMs: 0,
@@ -128,8 +128,11 @@ const runChannelPluginStartupMaintenance = vi.hoisted(() =>
 const listAmbientOnlyConfiguredChannelIds = vi.hoisted(() =>
   vi.fn((_params: unknown) => [] as string[]),
 );
-const runStartupSessionMigration = vi.hoisted(() => vi.fn(async (_params: unknown) => undefined));
+const runGatewaySessionStartupMaintenance = vi.hoisted(() =>
+  vi.fn(async (_params: unknown) => undefined),
+);
 const listLegacyPairingStoreFiles = vi.hoisted(() => vi.fn(async () => [] as string[]));
+const refreshPluginRegistryAfterConfigMutation = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => "/workspace",
   resolveDefaultAgentId: () => "default",
@@ -139,10 +142,6 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("../agents/workspace-state-dirs.js", () => ({
   assertConfiguredWorkspaceStateReady: () => {},
-}));
-
-vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({
-  initSubagentRegistry: () => initSubagentRegistry(),
 }));
 
 vi.mock("../channels/plugins/lifecycle-startup.js", () => ({
@@ -156,6 +155,10 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
 
 vi.mock("../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRootSync: (params: unknown) => resolveOpenClawPackageRootSync(params),
+}));
+
+vi.mock("../infra/device-pairing-node-desktop-migration.js", () => ({
+  migrateLegacyDesktopStreamOptOuts: async () => 0,
 }));
 
 vi.mock("../infra/pairing-files.js", () => ({
@@ -172,6 +175,11 @@ vi.mock("../plugins/plugin-lookup-table.js", () => ({
 }));
 
 vi.mock("../plugins/registry.js", () => import("../plugins/registry-empty.js"));
+
+vi.mock("../plugins/registry-refresh.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/registry-refresh.js")>()),
+  refreshPluginRegistryAfterConfigMutation,
+}));
 
 vi.mock("../plugins/provider-public-artifacts.js", () => ({
   resolveProviderPolicySurfaceForOwner,
@@ -191,18 +199,11 @@ vi.mock("./server-plugin-bootstrap.js", () => ({
   prepareGatewayPluginLoad,
 }));
 
+// mock-isolation: Maintenance composition uses a controlled session repair lifetime.
 vi.mock("./server-startup-session-migration.js", () => ({
-  runStartupSessionMigration: (params: unknown) => runStartupSessionMigration(params),
+  runGatewaySessionStartupMaintenance: (params: unknown) =>
+    runGatewaySessionStartupMaintenance(params),
 }));
-
-function createLog() {
-  return {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  };
-}
 
 function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: (value: T) => T): T {
   const call = mock.mock.calls.at(0);
@@ -239,71 +240,96 @@ async function prepareBootstrapWithRuntimeConfig(
   });
 }
 
-describe("runGatewayStartupMaintenance", () => {
+describe("runGatewayPostReadyStartupMaintenance", () => {
   beforeEach(() => {
     runChannelPluginStartupMaintenance.mockClear();
-    runStartupSessionMigration.mockClear();
+    runGatewaySessionStartupMaintenance.mockReset().mockResolvedValue(undefined);
     listLegacyPairingStoreFiles.mockReset().mockResolvedValue([]);
+    refreshPluginRegistryAfterConfigMutation.mockReset().mockResolvedValue(undefined);
   });
 
-  it("runs channel and session maintenance for a normal gateway", async () => {
+  it("joins admitted registry refresh when the Gateway closes during maintenance", async () => {
+    await withOpenClawTestState({ label: "startup-registry-maintenance" }, async () => {
+      const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
+      const started = createDeferred();
+      const release = createDeferred();
+      const controller = new AbortController();
+      refreshPluginRegistryAfterConfigMutation.mockImplementationOnce(async () => {
+        started.resolve();
+        await release.promise;
+      });
+      const log = createLog();
+      let settled = false;
+      const maintenance = runGatewayPostReadyStartupMaintenance({
+        getConfig: () => ({}),
+        getPluginRegistry: createEmptyPluginRegistry,
+        pluginMetadataSnapshot: { registrySource: "derived" },
+        databases: [],
+        signal: controller.signal,
+        log,
+      }).finally(() => {
+        settled = true;
+      });
+      try {
+        expect(
+          await Promise.race([
+            started.promise.then(() => "started"),
+            maintenance.then(() => "completed"),
+          ]),
+        ).toBe("started");
+        controller.abort(new Error("Gateway closing"));
+        await Promise.resolve();
+        expect(settled).toBe(false);
+      } finally {
+        release.resolve();
+        await maintenance;
+      }
+      expect(log.warn).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reports nested session repair failures while completing the other maintenance owners", async () => {
     const log = createLog();
-    const { runGatewayStartupMaintenance } = await import("./server-startup-plugins.js");
-
-    await runGatewayStartupMaintenance({
-      cfgAtStart: {},
-      startupRuntimeConfig: {},
-      minimalTestGateway: false,
+    const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
+    const cfg = slackConfig();
+    runGatewaySessionStartupMaintenance.mockRejectedValueOnce(
+      new Error("synthetic repair failure", {
+        cause: Object.assign(new Error("synthetic storage failure"), { code: "SQLITE_BUSY" }),
+      }),
+    );
+    listLegacyPairingStoreFiles.mockResolvedValueOnce(["synthetic-pairing.json"]);
+    await runGatewayPostReadyStartupMaintenance({
+      getConfig: () => cfg,
+      getPluginRegistry: createEmptyPluginRegistry,
+      databases: [],
+      signal: new AbortController().signal,
       log,
     });
-
-    expect(runChannelPluginStartupMaintenance).toHaveBeenCalledWith({
-      cfg: {},
-      env: process.env,
-      log,
-    });
-    expect(runStartupSessionMigration).toHaveBeenCalledWith({
-      cfg: {},
-      env: process.env,
-      log,
-    });
-    expect(log.warn).not.toHaveBeenCalled();
+    expect(runChannelPluginStartupMaintenance).toHaveBeenCalledWith({ cfg, env: process.env, log });
+    expect(log.warn).toHaveBeenCalledWith(
+      "Gateway post-ready sessions maintenance failed: synthetic repair failure | synthetic storage failure | SQLITE_BUSY",
+    );
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("synthetic-pairing.json"));
   });
 
-  it("skips maintenance for a minimal gateway without channel config", async () => {
-    const { runGatewayStartupMaintenance } = await import("./server-startup-plugins.js");
-
-    await runGatewayStartupMaintenance({
-      cfgAtStart: {},
-      startupRuntimeConfig: {},
-      minimalTestGateway: true,
-      log: createLog(),
+  it("does not start maintenance after its Gateway lifetime closes", async () => {
+    const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
+    const controller = new AbortController();
+    controller.abort();
+    const log = createLog();
+    await runGatewayPostReadyStartupMaintenance({
+      getConfig: () => ({}),
+      getPluginRegistry: createEmptyPluginRegistry,
+      pluginMetadataSnapshot: { registrySource: "derived" },
+      databases: [],
+      signal: controller.signal,
+      log,
     });
-
     expect(runChannelPluginStartupMaintenance).not.toHaveBeenCalled();
-    expect(runStartupSessionMigration).not.toHaveBeenCalled();
+    expect(runGatewaySessionStartupMaintenance).not.toHaveBeenCalled();
     expect(listLegacyPairingStoreFiles).not.toHaveBeenCalled();
-  });
-
-  it("runs only channel maintenance for a minimal gateway with recovered channel config", async () => {
-    const log = createLog();
-    const recoveredConfig = slackConfig();
-    const { runGatewayStartupMaintenance } = await import("./server-startup-plugins.js");
-
-    await runGatewayStartupMaintenance({
-      cfgAtStart: {},
-      startupRuntimeConfig: recoveredConfig,
-      minimalTestGateway: true,
-      log,
-    });
-
-    expect(runChannelPluginStartupMaintenance).toHaveBeenCalledWith({
-      cfg: recoveredConfig,
-      env: process.env,
-      log,
-    });
-    expect(runStartupSessionMigration).not.toHaveBeenCalled();
-    expect(listLegacyPairingStoreFiles).not.toHaveBeenCalled();
+    expect(refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
+    expect(log.warn).not.toHaveBeenCalled();
   });
 });
 
@@ -312,7 +338,6 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     getActivePluginRegistry.mockReset();
     setActivePluginRegistry.mockClear();
     applyPluginAutoEnable.mockClear();
-    initSubagentRegistry.mockClear();
     prepareGatewayPluginLoad.mockClear();
     listAmbientOnlyConfiguredChannelIds.mockClear().mockReturnValue([]);
     loadPluginLookUpTable.mockClear().mockReturnValue({
@@ -326,24 +351,15 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     });
     resolveOpenClawPackageRootSync.mockClear().mockReturnValue("/package");
     runChannelPluginStartupMaintenance.mockClear();
-    runStartupSessionMigration.mockClear();
+    runGatewaySessionStartupMaintenance.mockClear();
     listLegacyPairingStoreFiles.mockReset().mockResolvedValue([]);
   });
   it("does not run startup maintenance", async () => {
     await prepareBootstrapWithRuntimeConfig({});
 
     expect(runChannelPluginStartupMaintenance).not.toHaveBeenCalled();
-    expect(runStartupSessionMigration).not.toHaveBeenCalled();
+    expect(runGatewaySessionStartupMaintenance).not.toHaveBeenCalled();
     expect(listLegacyPairingStoreFiles).not.toHaveBeenCalled();
-  });
-
-  it("hydrates the subagent registry before plugin bootstrap", async () => {
-    await prepareBootstrapWithRuntimeConfig({});
-
-    expect(initSubagentRegistry).toHaveBeenCalledOnce();
-    expect(initSubagentRegistry.mock.invocationCallOrder[0]).toBeLessThan(
-      loadPluginLookUpTable.mock.invocationCallOrder[0]!,
-    );
   });
 
   it("derives startup activation from source config instead of runtime plugin defaults", async () => {
@@ -453,7 +469,7 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
       const { capturePluginRegistryLifecycleEpoch, markPluginRegistryActive } =
         await import("../plugins/registry-lifecycle.js");
       const ambientRegistry = createEmptyPluginRegistry();
-      ambientRegistry.gatewayHandlers.fixture = vi.fn();
+      ambientRegistry.gatewayHandlers.fixture = vi.fn<GatewayRequestHandler>();
       markPluginRegistryActive(ambientRegistry);
       const ambientEpoch = capturePluginRegistryLifecycleEpoch(ambientRegistry);
       getActivePluginRegistry.mockReturnValue(ambientRegistry);
@@ -555,6 +571,69 @@ describe("loadGatewayStartupPluginRuntime", () => {
       resolvedConfig: params.cfg,
       retireGatewayRuntimeBindings: vi.fn(),
     }));
+  });
+
+  it("returns admitted plugins while native receipt persistence remains owned by cache cleanup", async () => {
+    await withOpenClawTestState({ label: "startup-native-receipt" }, async (state) => {
+      const fixture = createFixture(state.path("installed"), true);
+      await writePersistedInstalledPluginIndex(fixture.index, { stateDir: state.stateDir });
+      const cache = createPluginCache();
+      const publication = createDeferred();
+      let publicationStarted = false;
+      let publicationFinished = false;
+      const createPublisher = sourceAdmissionStore.createPluginSourceAdmissionPublisher;
+      const publisher = vi
+        .spyOn(sourceAdmissionStore, "createPluginSourceAdmissionPublisher")
+        .mockImplementation((options) => {
+          const publish = createPublisher(options);
+          return publish
+            ? async (receipt) => {
+                publicationStarted = true;
+                await publication.promise;
+                const accepted = await publish(receipt);
+                publicationFinished = true;
+                return accepted;
+              }
+            : undefined;
+        });
+      preparePluginNativeAdmissions(fixture.index, cache);
+      const artifact = withPluginCache(cache, () => capturePluginGenerationArtifact(fixture.root));
+      const { loadGatewayStartupPluginRuntime } = await import("./server-startup-plugins.js");
+      let retirement: ReturnType<typeof retirePluginCache> | undefined;
+      try {
+        expect(publicationStarted).toBe(true);
+        vi.useFakeTimers();
+        let loaded: Awaited<ReturnType<typeof loadGatewayStartupPluginRuntime>> | undefined;
+        const startup = withPluginCache(cache, () =>
+          loadGatewayStartupPluginRuntime({
+            cfg: {},
+            log: createLog(),
+            baseMethods: ["ping"],
+            startupPluginIds: ["fixture"],
+          }),
+        ).then((result) => {
+          loaded = result;
+        });
+        await vi.runAllTimersAsync();
+        expect(loaded?.gatewayMethods).toEqual(["ping"]);
+        expect(publicationFinished).toBe(false);
+        await startup;
+        const retired = vi.fn();
+        retirement = retirePluginCache(cache).finally(retired);
+        await vi.runAllTimersAsync();
+        expect(retired).not.toHaveBeenCalled();
+        vi.useRealTimers();
+        publication.resolve();
+        await retirement;
+        expect(publicationFinished).toBe(true);
+      } finally {
+        vi.useRealTimers();
+        publication.resolve();
+        publisher.mockRestore();
+        await artifact.disposeAsync();
+        await (retirement ?? retirePluginCache(cache));
+      }
+    });
   });
 
   it.each(["valid", "invalid", "invalid with failed cleanup"] as const)(
@@ -680,7 +759,7 @@ describe("loadGatewayStartupPluginRuntime", () => {
     );
   });
 
-  it.each(["registered owner", "ready", "inspection failed", "inspection stalled"] as const)(
+  it.each(["ready", "inspection failed", "inspection stalled"] as const)(
     "reports registered memory provider setup per active agent without blocking startup: %s",
     async (outcome) => {
       const log = createLog();
@@ -767,13 +846,9 @@ describe("loadGatewayStartupPluginRuntime", () => {
         agentId: "helper",
         provider: "local",
       });
-      if (outcome === "registered owner") {
-        expect(resolveProviderPolicySurfaceForOwner).toHaveBeenCalledExactlyOnceWith(
-          registeredOwner,
-        );
-        expect(disabledPolicy.inspectEmbeddingProviderSetup).not.toHaveBeenCalled();
-      }
-      if (outcome === "registered owner" || outcome === "inspection stalled") {
+      expect(resolveProviderPolicySurfaceForOwner).toHaveBeenCalledExactlyOnceWith(registeredOwner);
+      expect(disabledPolicy.inspectEmbeddingProviderSetup).not.toHaveBeenCalled();
+      if (outcome === "inspection stalled") {
         await vi.waitFor(() =>
           expect(log.warn).toHaveBeenCalledWith(
             expect.stringMatching(/helper.*degraded.*llama-server.*models --agent helper/s),
@@ -793,177 +868,57 @@ describe("loadGatewayStartupPluginRuntime", () => {
 });
 
 describe("warnUnregisteredConfiguredMemoryEmbeddingProviders", () => {
-  function registry(providerIds: string[], options: { embeddingProviderIds?: string[] } = {}) {
-    return {
-      embeddingProviders: [...providerIds, ...(options.embeddingProviderIds ?? [])].map((id) => ({
-        provider: { id },
-      })),
-    } as never;
+  async function warnFor(config: OpenClawConfig, providerIds: string[]) {
+    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
+      await import("./server-startup-plugins.js");
+    const log = createLog();
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config,
+      pluginRegistry: {
+        embeddingProviders: providerIds.map((id) => ({ provider: { id } })),
+      } as never,
+      log,
+    });
+    return log;
   }
 
-  it("warns when a configured memory embedding provider is not registered", async () => {
-    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
-      await import("./server-startup-plugins.js");
-    const log = createLog();
-    warnUnregisteredConfiguredMemoryEmbeddingProviders({
-      config: {
-        memory: { search: { provider: "openai" } },
-
-        agents: { defaults: {} },
-      } as OpenClawConfig,
-      pluginRegistry: registry([]),
-      log,
-    });
-    expect(log.warn).toHaveBeenCalledTimes(1);
-    expect(String(log.warn.mock.calls[0]?.[0])).toContain('memory.search.provider="openai"');
-  });
-
-  it("does not warn when the configured memory embedding provider is registered", async () => {
-    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
-      await import("./server-startup-plugins.js");
-    const log = createLog();
-    warnUnregisteredConfiguredMemoryEmbeddingProviders({
-      config: {
-        memory: { search: { provider: "openai" } },
-
-        agents: { defaults: {} },
-      } as OpenClawConfig,
-      pluginRegistry: registry(["openai"]),
-      log,
-    });
-    expect(log.warn).not.toHaveBeenCalled();
-  });
-
   it("warns when a configured memory embedding fallback is not registered", async () => {
-    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
-      await import("./server-startup-plugins.js");
-    const log = createLog();
-    warnUnregisteredConfiguredMemoryEmbeddingProviders({
-      config: {
+    const log = await warnFor(
+      {
         memory: { search: { provider: "openai", fallback: "ollama" } },
-
         agents: { defaults: {} },
       } as OpenClawConfig,
-      pluginRegistry: registry(["openai"]),
-      log,
-    });
+      ["openai"],
+    );
     expect(log.warn).toHaveBeenCalledTimes(1);
     expect(String(log.warn.mock.calls[0]?.[0])).toContain('memory.search.fallback="ollama"');
   });
 
   it("does not warn when the configured memory embedding fallback is registered", async () => {
-    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
-      await import("./server-startup-plugins.js");
-    const log = createLog();
-    warnUnregisteredConfiguredMemoryEmbeddingProviders({
-      config: {
+    const log = await warnFor(
+      {
         memory: { search: { provider: "openai", fallback: "ollama" } },
-
         agents: { defaults: {} },
       } as OpenClawConfig,
-      pluginRegistry: registry(["openai", "ollama"]),
-      log,
-    });
-    expect(log.warn).not.toHaveBeenCalled();
-  });
-
-  it("does not warn when a generic embedding provider can serve configured memory search", async () => {
-    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
-      await import("./server-startup-plugins.js");
-    const log = createLog();
-    warnUnregisteredConfiguredMemoryEmbeddingProviders({
-      config: {
-        memory: { search: { provider: "generic-embed" } },
-
-        agents: { defaults: {} },
-      } as OpenClawConfig,
-      pluginRegistry: registry([], { embeddingProviderIds: ["generic-embed"] }),
-      log,
-    });
+      ["openai", "ollama"],
+    );
     expect(log.warn).not.toHaveBeenCalled();
   });
 
   it("does not warn for core generic memory embedding providers", async () => {
-    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
-      await import("./server-startup-plugins.js");
-    const log = createLog();
-    warnUnregisteredConfiguredMemoryEmbeddingProviders({
-      config: {
+    const log = await warnFor(
+      {
         memory: { search: { provider: "openai-compatible" } },
-
         agents: { defaults: {} },
       } as OpenClawConfig,
-      pluginRegistry: registry([]),
-      log,
-    });
+      [],
+    );
     expect(log.warn).not.toHaveBeenCalled();
   });
 
-  it("does not warn for custom providers backed by core generic embeddings", async () => {
-    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
-      await import("./server-startup-plugins.js");
-    const log = createLog();
-    warnUnregisteredConfiguredMemoryEmbeddingProviders({
-      config: {
-        memory: { search: { provider: "tenant-embeddings" } },
-
-        agents: { defaults: {} },
-        models: {
-          providers: {
-            "tenant-embeddings": {
-              api: "openai-responses",
-              baseUrl: "http://127.0.0.1:11434/v1",
-              models: [],
-            },
-          },
-        },
-      } as OpenClawConfig,
-      pluginRegistry: registry([]),
-      log,
-    });
-    expect(log.warn).not.toHaveBeenCalled();
-  });
-
-  it("does not warn for memory embedding fallbacks when primary provider is fts-only", async () => {
-    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
-      await import("./server-startup-plugins.js");
-    const log = createLog();
-    warnUnregisteredConfiguredMemoryEmbeddingProviders({
-      config: {
-        memory: { search: { provider: "none", fallback: "openai" } },
-
-        agents: { defaults: {} },
-      } as OpenClawConfig,
-      pluginRegistry: registry([]),
-      log,
-    });
-    expect(log.warn).not.toHaveBeenCalled();
-  });
-
-  it("does not warn for memory embedding providers when the memory slot is disabled", async () => {
-    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
-      await import("./server-startup-plugins.js");
-    const log = createLog();
-    warnUnregisteredConfiguredMemoryEmbeddingProviders({
-      config: {
-        memory: { search: { provider: "openai", fallback: "ollama" } },
-
-        agents: { defaults: {} },
-        plugins: { slots: { memory: "none" } },
-      } as OpenClawConfig,
-      pluginRegistry: registry([]),
-      log,
-    });
-    expect(log.warn).not.toHaveBeenCalled();
-  });
-
-  function customOllamaConfig(source: "provider" | "fallback" = "provider"): OpenClawConfig {
-    const memorySearch =
-      source === "provider"
-        ? { provider: "ollama-5080" }
-        : { provider: "openai", fallback: "ollama-5080" };
+  function customOllamaConfig(): OpenClawConfig {
     return {
-      memory: { search: memorySearch },
+      memory: { search: { provider: "openai", fallback: "ollama-5080" } },
       models: {
         providers: {
           "ollama-5080": {
@@ -976,93 +931,14 @@ describe("warnUnregisteredConfiguredMemoryEmbeddingProviders", () => {
     } as OpenClawConfig;
   }
 
-  it.each([
-    ["provider", "memorySearch.provider"] as const,
-    ["fallback", "memorySearch.fallback"] as const,
-  ])(
-    "does not warn for custom %s entries whose api-owner plugin is registered",
-    async (source, _path) => {
-      const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
-        await import("./server-startup-plugins.js");
-      const log = createLog();
-      warnUnregisteredConfiguredMemoryEmbeddingProviders({
-        config: customOllamaConfig(source),
-        pluginRegistry: registry(["openai", "ollama"]),
-        log,
-      });
-      expect(log.warn).not.toHaveBeenCalled();
-    },
-  );
-
-  it("warns for custom providers whose api-owner plugin is not registered", async () => {
-    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
-      await import("./server-startup-plugins.js");
-    const log = createLog();
-    warnUnregisteredConfiguredMemoryEmbeddingProviders({
-      config: customOllamaConfig(),
-      pluginRegistry: registry([]),
-      log,
-    });
-    expect(log.warn).toHaveBeenCalledTimes(1);
-    expect(String(log.warn.mock.calls[0]?.[0])).toContain('memory.search.provider="ollama-5080"');
+  it("does not warn for custom fallback entries whose api-owner plugin is registered", async () => {
+    const log = await warnFor(customOllamaConfig(), ["openai", "ollama"]);
+    expect(log.warn).not.toHaveBeenCalled();
   });
 
   it("warns for custom fallbacks whose api-owner plugin is not registered", async () => {
-    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
-      await import("./server-startup-plugins.js");
-    const log = createLog();
-    warnUnregisteredConfiguredMemoryEmbeddingProviders({
-      config: customOllamaConfig("fallback"),
-      pluginRegistry: registry(["openai"]),
-      log,
-    });
+    const log = await warnFor(customOllamaConfig(), ["openai"]);
     expect(log.warn).toHaveBeenCalledTimes(1);
     expect(String(log.warn.mock.calls[0]?.[0])).toContain('memory.search.fallback="ollama-5080"');
-  });
-
-  it("warns for local memory search when the llama.cpp provider is not registered", async () => {
-    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
-      await import("./server-startup-plugins.js");
-    const log = createLog();
-    warnUnregisteredConfiguredMemoryEmbeddingProviders({
-      config: {
-        memory: { search: { provider: "local", fallback: "auto" } },
-
-        agents: {
-          defaults: {},
-          list: [
-            {
-              id: "muted",
-              memory: { search: { enabled: false, provider: "openai", fallback: "ollama" } },
-            },
-          ],
-        },
-      } as OpenClawConfig,
-      pluginRegistry: registry([]),
-      log,
-    });
-    expect(log.warn).toHaveBeenCalledTimes(1);
-    expect(String(log.warn.mock.calls[0]?.[0])).toContain('memory.search.provider="local"');
-  });
-
-  it("does not warn for disabled memory search providers", async () => {
-    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
-      await import("./server-startup-plugins.js");
-    const log = createLog();
-    warnUnregisteredConfiguredMemoryEmbeddingProviders({
-      config: {
-        agents: {
-          list: [
-            {
-              id: "muted",
-              memory: { search: { enabled: false, provider: "openai", fallback: "ollama" } },
-            },
-          ],
-        },
-      } as OpenClawConfig,
-      pluginRegistry: registry([]),
-      log,
-    });
-    expect(log.warn).not.toHaveBeenCalled();
   });
 });

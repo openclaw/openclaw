@@ -21,12 +21,28 @@ const enDesktop = {
     pictureInPictureUnavailable:
       "Picture-in-Picture requires a supported browser and a secure connection",
     pickerTitle: "Desktop sources",
+    availableDesktops: "Available desktops",
     thisMachine: "This machine",
     refresh: "Refresh",
     refreshing: "Refreshing…",
     loading: "Loading desktop sources…",
     empty: "No desktop-capable sources are available.",
     sourceUnavailable: "The requested desktop is unavailable. Retry when the machine is ready.",
+    hostDesktopOff:
+      "Desktop access is not enabled on the Gateway host. This panel shares the Gateway host's screen, not the screen of the device running this browser.",
+    hostDesktopEnableHint:
+      "Enable desktop access to view and control the Gateway host in OpenClaw.",
+    hostScreenSharingSetupHint:
+      "On the Gateway host Mac, open System Settings → General → Sharing. Turn on Screen Sharing, or allow the Gateway host account to Observe and Control in Remote Management, then check again.",
+    hostDesktopServerSetupHint:
+      "Set up a password-protected VNC server on the Gateway host, or configure a managed desktop on Linux, then check again.",
+    hostScreenSharingAccount:
+      "Screen Sharing signs in with a macOS user account on the Gateway host. A sign-in prompt follows after you enable access.",
+    hostDesktopServerAccount:
+      "The desktop server on the Gateway host uses its own password. A sign-in prompt may follow after you enable access.",
+    screenSharingNetwork:
+      "Screen Sharing may also be reachable from other devices on your network.",
+    desktopServerNetwork: "The desktop server may be reachable from other devices on your network.",
     macLocked:
       "This Mac is locked. Sign in through Screen Sharing or on the Mac to use computer control.",
     macLockStateUnknown:
@@ -36,16 +52,46 @@ const enDesktop = {
     starting: "Starting your machine…",
     preparing: "Preparing the desktop…",
     takeControl: "Take control",
+    clickToTakeControl: "Click to take control",
+    takingControl: "Taking control…",
+    switchingToViewing: "Switching to view only…",
+    controlling: "Controlling",
+    connectionLost: "Connection lost",
+    connectionError: "Could not connect",
+    inventoryError: "Could not load desktops",
+    credentialsTitle: "Connect to desktop",
+    emptyTitle: "No desktop available",
+    backToViewing: "Back to viewing",
+    connected: "Connected",
+    gatewayHost: "Gateway host",
+    moreActions: "Desktop actions",
+    expandPanel: "Expand panel",
+    collapsePanel: "Collapse panel",
     switchToViewOnly: "Switch to view only",
     viewOnly: "View only",
     control: "Control",
-    agentInputPaused:
-      "You control this desktop. Agent input is paused until you switch to view only.",
+    audio: {
+      unavailable: "Audio unavailable",
+      setupUnavailable:
+        "Desktop audio setup is unavailable. Ask the operator to check that pulseaudio and pulseaudio-utils are installed, then restart the managed desktop.",
+      reconnect: "Reconnect desktop for audio",
+      connecting: "Connecting desktop audio…",
+      unmute: "Unmute desktop audio",
+      mute: "Mute desktop audio",
+      blocked:
+        "Audio playback was blocked. Allow sound for this site, then click Unmute desktop audio again.",
+      unsupported:
+        "Desktop audio requires a browser with Web Audio support. Try a current browser.",
+      failed: "Desktop audio disconnected or could not start. Reconnect the desktop to try again.",
+    },
     keyboard: "Keyboard",
     keyboardInput: "Remote desktop keyboard input",
     touchControls: "Remote desktop controls",
     fit: "Fit",
+    fitHeight: "Fit height",
+    fitWidth: "Fit width",
     actual: "Actual",
+    actualSizeLabel: "Actual size",
     match: "Match",
     sizing: "Desktop size",
     matchRequirement: "Match requires a VNC server that supports desktop resizing.",
@@ -56,12 +102,14 @@ const enDesktop = {
     reconnect: en.desktop.reconnect,
     passwordPrompt: "Enter the VNC password for this machine.",
     passwordLabel: "VNC password",
-    accountPrompt: "Enter a macOS account to authenticate Screen Sharing.",
+    accountPrompt:
+      "Enter a macOS account allowed in System Settings → General → Sharing. Remote Management also requires Observe/Control permissions.",
     usernameLabel: "macOS username",
     accountPasswordLabel: "macOS password",
     controlTaken: "Another operator took control",
     controlTakenBy: "{operator} took control",
     disconnected: "Desktop disconnected: {reason}",
+    disconnectedClean: "Desktop disconnected",
     closeCode: "connection closed with code {code}",
     unknownReason: "unknown reason",
     errors: {

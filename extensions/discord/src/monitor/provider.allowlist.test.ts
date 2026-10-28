@@ -1,221 +1,176 @@
-// Discord tests cover provider.allowlist plugin behavior.
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { DiscordGuildEntry } from "openclaw/plugin-sdk/config-contracts";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as resolveChannelsModule from "../resolve-channels.js";
-import * as resolveUsersModule from "../resolve-users.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  getDiscordChannelPolicyBinding,
+  findDiscordGuildPolicyKey,
+  setDiscordPolicyBindings,
+} from "../channel-policy-state.js";
+import { resolveDiscordGroupToolPolicy } from "../group-policy.js";
+import * as channels from "../resolve-channels.js";
+import * as users from "../resolve-users.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
 
-describe("resolveDiscordAllowlistConfig", () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-    vi.spyOn(resolveChannelsModule, "resolveDiscordChannelAllowlist").mockResolvedValue([]);
-    vi.spyOn(resolveUsersModule, "resolveDiscordUserAllowlist").mockImplementation(
-      async (params: { entries: string[] }) =>
-        params.entries.map((entry) => {
-          switch (entry) {
-            case "Alice":
-              return { input: entry, resolved: true, id: "111" };
-            case "Bob":
-              return { input: entry, resolved: true, id: "222" };
-            case "Carol":
-              return { input: entry, resolved: false };
-            case "387":
-              return { input: entry, resolved: true, id: "387", name: "Peter" };
-            default:
-              return { input: entry, resolved: true, id: entry };
-          }
-        }),
-    );
-  });
+const denyExec = { deny: ["exec"] };
+const allowExec = { allow: ["exec"] };
+const allowRead = { allow: ["read"] };
+function resolvedChannel(input: string, channelName = "general", channelId = "246") {
+  return { input, resolved: true, guildId: "145", guildName: "Ops", channelId, channelName };
+}
 
-  it("applies numeric guild and channel policy without directory resolution", async () => {
-    const guildEntries = {
-      "111": { users: ["333"], channels: { "222": { allow: true } } },
-      "444": { users: ["555"] },
-    };
-    const result = await resolveDiscordAllowlistConfig({
-      token: "synthetic-token",
-      guildEntries,
-      allowFrom: [],
-      discordConfig: {},
-      fetcher: vi.fn(),
-      runtime: createNonExitingRuntimeEnv(),
-    });
-    expect(result.guildEntries).toEqual(guildEntries);
-    expect(resolveChannelsModule.resolveDiscordChannelAllowlist).not.toHaveBeenCalled();
-  });
-
-  it("canonicalizes resolved user names to ids in runtime config", async () => {
-    const runtime = createNonExitingRuntimeEnv();
-    const result = await resolveDiscordAllowlistConfig({
-      token: "token",
-      allowFrom: ["Alice", "111", "*"],
-      guildEntries: {
-        "*": {
-          users: ["Bob", "999"],
-          channels: {
-            "*": {
-              users: ["Carol", "888"],
-            },
-          },
-        },
-      },
-      fetcher: vi.fn() as unknown as typeof fetch,
-      runtime,
-      discordConfig: { dangerouslyAllowNameMatching: true } as DiscordAccountConfig,
-    });
-
-    expect(result.allowFrom).toEqual(["111", "*"]);
-    expect(result.guildEntries?.["*"]?.users).toEqual(["222", "999"]);
-    expect(result.guildEntries?.["*"]?.channels?.["*"]?.users).toEqual(["Carol", "888"]);
-    expect(resolveUsersModule.resolveDiscordUserAllowlist).toHaveBeenCalledTimes(2);
-  });
-
-  it("logs discord name metadata for resolved and unresolved allowlist entries", async () => {
-    vi.spyOn(resolveChannelsModule, "resolveDiscordChannelAllowlist").mockResolvedValueOnce([
-      {
-        input: "145/c404",
-        resolved: false,
-        guildId: "145",
-        guildName: "Ops",
-        channelName: "missing-room",
-      },
-    ]);
-    const runtime = createNonExitingRuntimeEnv();
-
-    await resolveDiscordAllowlistConfig({
-      token: "token",
-      allowFrom: ["387"],
-      guildEntries: {
-        "145": {
-          channels: {
-            c404: {},
-          },
-        },
-      },
-      fetcher: vi.fn() as unknown as typeof fetch,
-      runtime,
-      discordConfig: { dangerouslyAllowNameMatching: true } as DiscordAccountConfig,
-    });
-
-    const logs = (runtime.log as ReturnType<typeof vi.fn>).mock.calls
-      .map(([line]) => String(line))
-      .join("\n");
-    expect(logs).toContain(
-      "discord channels unresolved: 145/c404 (guild:Ops; channel:missing-room)",
-    );
-    expect(logs).toContain("discord users resolved: 387→Peter");
-    expect(logs).not.toContain("(id:387)");
-  });
-
-  it("groups resolved discord channel aliases under one target line", async () => {
-    vi.spyOn(resolveChannelsModule, "resolveDiscordChannelAllowlist").mockResolvedValueOnce([
-      {
-        input: "friends-of-the-crustacean/1464953333713473657",
-        resolved: true,
-        guildId: "1456350064065904867",
-        guildName: "Friends of the Crustacean 🦞🤝",
-        channelId: "1464953333713473657",
-        channelName: "dev",
-      },
-    ]);
-
-    const runtime = createNonExitingRuntimeEnv();
-
-    const result = await resolveDiscordAllowlistConfig({
-      token: "token",
-      allowFrom: [],
-      guildEntries: {
-        "1456350064065904867": {
-          channels: {
-            "1464953333713473657": {},
-            "1456744319972282449": {},
-          },
-        },
-        "friends-of-the-crustacean": {
-          channels: {
-            "1464953333713473657": {},
-          },
-        },
-      },
-      fetcher: vi.fn() as unknown as typeof fetch,
-      runtime,
-      discordConfig: {} as DiscordAccountConfig,
-    });
-
-    const logs = (runtime.log as ReturnType<typeof vi.fn>).mock.calls
-      .map(([line]) => String(line))
-      .join("\n");
-    expect(logs.match(/1456350064065904867\/1464953333713473657/g)?.length).toBe(1);
-    expect(logs).toContain("aliases:friends-of-the-crustacean/1464953333713473657");
-    expect(result.guildEntries?.["1456350064065904867"]?.channels).toEqual({
-      "1464953333713473657": {},
-      "1456744319972282449": {},
-    });
-  });
-
-  it("keeps user allowlist names unresolved unless name matching is enabled", async () => {
-    const runtime = createNonExitingRuntimeEnv();
-    const result = await resolveDiscordAllowlistConfig({
-      token: "token",
-      allowFrom: ["Alice", "111", "*"],
-      guildEntries: {
-        "*": {
-          users: ["Bob", "999"],
-          channels: {
-            "*": {
-              users: ["Carol", "888"],
-            },
-          },
-        },
-      },
-      fetcher: vi.fn() as unknown as typeof fetch,
-      runtime,
-      discordConfig: {} as DiscordAccountConfig,
-    });
-
-    expect(result.allowFrom).toEqual(["Alice", "111", "*"]);
-    expect(result.guildEntries?.["*"]?.users).toEqual(["Bob", "999"]);
-    expect(result.guildEntries?.["*"]?.channels?.["*"]?.users).toEqual(["Carol", "888"]);
-    expect(resolveUsersModule.resolveDiscordUserAllowlist).not.toHaveBeenCalled();
-  });
-
-  it("still resolves guild and channel ids when name matching is disabled", async () => {
-    vi.spyOn(resolveChannelsModule, "resolveDiscordChannelAllowlist").mockResolvedValueOnce([
-      {
-        input: "ops/general",
-        resolved: true,
-        guildId: "145",
-        guildName: "Ops",
-        channelId: "246",
-        channelName: "general",
-      },
-    ]);
-    const runtime = createNonExitingRuntimeEnv();
-
-    const result = await resolveDiscordAllowlistConfig({
-      token: "token",
-      allowFrom: ["Alice"],
-      guildEntries: {
-        ops: {
-          users: ["Bob"],
-          channels: {
-            general: {
-              users: ["Carol"],
-            },
-          },
-        },
-      },
-      fetcher: vi.fn() as unknown as typeof fetch,
-      runtime,
-      discordConfig: {} as DiscordAccountConfig,
-    });
-
-    expect(result.allowFrom).toEqual(["Alice"]);
-    expect(result.guildEntries?.["145"]?.channels?.["246"]?.users).toEqual(["Carol"]);
-    expect(result.guildEntries?.ops?.users).toEqual(["Bob"]);
-    expect(resolveChannelsModule.resolveDiscordChannelAllowlist).toHaveBeenCalledTimes(1);
-    expect(resolveUsersModule.resolveDiscordUserAllowlist).not.toHaveBeenCalled();
-  });
+afterEach(() => {
+  setDiscordPolicyBindings("default", []);
+  setDiscordPolicyBindings("work", []);
 });
+beforeEach(() => {
+  vi.restoreAllMocks();
+  vi.spyOn(channels, "resolveDiscordChannelAllowlist").mockResolvedValue([]);
+  const identities: Record<string, { resolved: boolean; id?: string; name?: string }> = {
+    Alice: { resolved: true, id: "111" },
+    Bob: { resolved: true, id: "222" },
+    Carol: { resolved: false },
+    "387": { resolved: true, id: "387", name: "Peter" },
+  };
+  vi.spyOn(users, "resolveDiscordUserAllowlist").mockImplementation(async ({ entries }) =>
+    entries.map((input) => ({ input, ...(identities[input] ?? { resolved: true, id: input }) })),
+  );
+});
+
+function resolve(overrides: Partial<Parameters<typeof resolveDiscordAllowlistConfig>[0]>) {
+  return resolveDiscordAllowlistConfig({
+    accountId: "default",
+    token: "synthetic-token",
+    allowFrom: [],
+    guildEntries: {},
+    discordConfig: {},
+    fetcher: vi.fn(),
+    runtime: createNonExitingRuntimeEnv(),
+    ...overrides,
+  });
+}
+
+it("uses numeric policies without resolving user names unless explicitly enabled", async () => {
+  const guildEntries = {
+    "111": {
+      users: ["Bob", "333"],
+      channels: { "222": { users: ["Carol", "888"], allow: true } },
+    },
+    "444": { users: ["555"] },
+  };
+  const result = await resolve({ guildEntries, allowFrom: ["Alice", "111", "*"] });
+  expect(result).toEqual({ guildEntries, allowFrom: ["Alice", "111", "*"] });
+  expect(channels.resolveDiscordChannelAllowlist).not.toHaveBeenCalled();
+  expect(users.resolveDiscordUserAllowlist).not.toHaveBeenCalled();
+});
+
+it("canonicalizes permitted names while preserving unresolved entries and numeric channel policy", async () => {
+  vi.mocked(channels.resolveDiscordChannelAllowlist).mockResolvedValueOnce([
+    resolvedChannel("ops/246", "dev"),
+    {
+      input: "145/missing",
+      resolved: false,
+      guildId: "145",
+      guildName: "Ops",
+      channelName: "missing-room",
+    },
+  ]);
+  const runtime = createNonExitingRuntimeEnv();
+  const result = await resolve({
+    runtime,
+    discordConfig: { dangerouslyAllowNameMatching: true },
+    allowFrom: ["Alice", "111", "*", "387"],
+    guildEntries: {
+      "*": { users: ["Bob", "999"], channels: { "*": { users: ["Carol", "888"] } } },
+      "145": { channels: { "246": {}, "999": {}, missing: {} } },
+      ops: { channels: { "246": {} } },
+    },
+  });
+  expect(result).toMatchObject({
+    allowFrom: ["111", "*", "387"],
+    guildEntries: {
+      "*": { users: ["222", "999"], channels: { "*": { users: ["Carol", "888"] } } },
+    },
+  });
+  expect(result.guildEntries?.["145"]?.channels).toEqual({ "246": {}, "999": {}, missing: {} });
+  const logs = vi.mocked(runtime.log).mock.calls.flat().join("\n");
+  expect(logs).toContain("discord channels unresolved: 145/missing");
+});
+
+it.each(["unresolved", "failed", "removed"])(
+  "replaces previous channel bindings when a policy resolution is %s",
+  async (outcome) => {
+    setDiscordPolicyBindings(
+      "work",
+      [{ guildKey: "145", channelKey: "ops", channelId: "246" }],
+      new Map([["145", "ops"]]),
+    );
+    if (outcome === "failed") {
+      vi.mocked(channels.resolveDiscordChannelAllowlist).mockRejectedValueOnce(
+        new Error("synthetic lookup failure"),
+      );
+    } else {
+      vi.mocked(channels.resolveDiscordChannelAllowlist).mockResolvedValueOnce([
+        { input: "145/ops", resolved: false, guildId: "145" },
+      ]);
+    }
+
+    await resolve({
+      accountId: "work",
+      guildEntries: outcome === "removed" ? {} : { "145": { channels: { ops: {} } } },
+    });
+
+    expect(getDiscordChannelPolicyBinding("work", "145", "ops")).toBeUndefined();
+    expect(findDiscordGuildPolicyKey("work", "145")).toBeUndefined();
+  },
+);
+
+it.each(["general", "246", undefined])(
+  "resolves channel %s and tool policy without enabling user name matching",
+  async (channelKey) => {
+    const guilds = {
+      ops: {
+        users: ["Bob"],
+        tools: channelKey ? allowExec : denyExec,
+        channels: channelKey ? { [channelKey]: { users: ["Carol"], tools: denyExec } } : undefined,
+      },
+    };
+    vi.mocked(channels.resolveDiscordChannelAllowlist).mockResolvedValueOnce([
+      {
+        ...resolvedChannel(channelKey ? `ops/${channelKey}` : "ops"),
+        channelId: channelKey ? "246" : undefined,
+        channelName: channelKey ? "general" : undefined,
+      },
+    ]);
+    const resolved = await resolve({ guildEntries: guilds, allowFrom: ["Alice"] });
+    expect(resolved).toMatchObject({
+      allowFrom: ["Alice"],
+      guildEntries: { ops: { users: ["Bob"] } },
+    });
+    expect(users.resolveDiscordUserAllowlist).not.toHaveBeenCalled();
+    if (channelKey) {
+      expect(resolved.guildEntries?.["145"]?.channels?.["246"]?.users).toEqual(["Carol"]);
+      expect(getDiscordChannelPolicyBinding("default", "ops", channelKey)).toBe(
+        channelKey === "246" ? undefined : "246",
+      );
+      expect(getDiscordChannelPolicyBinding("work", "ops", channelKey)).toBeUndefined();
+    }
+    const admittedGuild = resolved.guildEntries?.["145"];
+    expect(channelKey ? admittedGuild?.channels?.["246"]?.tools : admittedGuild?.tools).toEqual(
+      denyExec,
+    );
+    expect(findDiscordGuildPolicyKey("work", "145")).toBeUndefined();
+    const context = {
+      accountId: "default",
+      groupSpace: "145",
+      groupId: "246",
+      groupChannel: "general",
+    };
+    const toolPolicy = (entries: Record<string, DiscordGuildEntry>) =>
+      resolveDiscordGroupToolPolicy({
+        ...context,
+        cfg: { channels: { discord: { guilds: entries } } },
+      });
+    expect(toolPolicy({ "*": { tools: allowExec }, ...guilds })).toEqual(denyExec);
+    expect(toolPolicy({ ...guilds, "145": { tools: allowRead } })).toEqual(allowRead);
+  },
+);

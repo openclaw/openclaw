@@ -1,5 +1,6 @@
-import { existsSync } from "node:fs";
 import path from "node:path";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import type { Selectable } from "kysely";
 import { normalizeAgentDirRegistryPath } from "../agents/agent-dir-registry.js";
 import {
   executeSqliteQuerySync,
@@ -7,21 +8,77 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { resolveAgentCreationClaimAgentId } from "./agent-creation-claim.js";
 import { getAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
-import { deleteAgentProvenanceForAgent, ensureAgentProvenanceSchema } from "./agent-provenance.js";
+import { hasClawDeletionOwnership } from "./agent-deletion-journal-authority.worker.js";
+import { agentDeletionJournalPublication } from "./agent-deletion-journal-publication.js";
+import { resolveAgentDeletionRecoveryHolds } from "./agent-deletion-journal-recovery.js";
+import {
+  getAgentDeletionDiscovery,
+  publishAgentDeletionJournalStatus,
+  updateAgentDeletionDiscovery,
+} from "./agent-deletion-journal-status.js";
+import {
+  parseAgentDeletionDatabasePaths,
+  readRetainedAgentDeletionsFromDatabase,
+} from "./agent-deletion-journal.read.js";
+import type {
+  AgentDeletionJournalCleanupPath,
+  AgentDeletionJournalDisposition,
+  AgentDeletionJournalEntry,
+  AgentDeletionJournalInput,
+  AgentDeletionJournalPurpose,
+} from "./agent-deletion-journal.types.js";
+import { deleteAgentProvenanceForAgent } from "./agent-provenance.js";
 import type {
   OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
-import { ensureAgentDeletionJournalSchema } from "./openclaw-state-db-schema-additive.js";
-import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import {
-  resolveOpenClawRegisteredAgentDatabasePath,
-  resolveOpenClawStateSqlitePath,
-} from "./openclaw-state-db.paths.js";
+  assertAgentDeletionJournalAvailable,
+  ensureAgentDeletionJournalPhaseSchema,
+} from "./openclaw-state-db-schema-additive.js";
+import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
+import { resolveOpenClawRegisteredAgentDatabasePath } from "./openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+
+export type {
+  AgentDeletionJournalCleanupPath,
+  AgentDeletionJournalEntry,
+  AgentDeletionJournalInput,
+} from "./agent-deletion-journal.types.js";
+
+function prepareDeletionDiscovery(database: OpenClawStateDatabase) {
+  return (
+    getAgentDeletionDiscovery(database.db) ??
+    readRetainedAgentDeletionsFromDatabase(database.db, database.path, "runtime-discovery")
+  );
+}
+
+function publishDeletingAgent(
+  database: OpenClawStateDatabase,
+  discovery: AgentDeletionJournalDisposition,
+  entry: AgentDeletionJournalEntry,
+) {
+  updateAgentDeletionDiscovery(database.db, discovery, entry.agentId, () => ({
+    agentId: entry.agentId,
+    agentDir: entry.agentDir,
+    databasePaths: [path.join(entry.agentDir, "openclaw-agent.sqlite"), ...entry.databasePaths],
+    cleanupCompleted: false,
+  }));
+  agentDeletionJournalPublication.stagePostimages(database.db, [
+    {
+      agentId: entry.agentId,
+      operationId: entry.operationId,
+      cleanupCompleted: entry.cleanupCompleted,
+    },
+  ]);
+}
 
 type AgentDeletionDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -33,85 +90,72 @@ type AgentDeletionPathFenceSnapshot = {
   claimPath: string;
   fenceAgentId?: string;
   targetPaths: string[];
-  entries: Array<{
-    agentId: string;
-    operationId: string;
-    agentDir: string;
-    workspaceDir: string;
-    sessionsDir: string;
-    cleanupCompleted: boolean;
-    canonicalPaths: string[];
-    databasePaths: Array<{ path: string; canonicalPath: string }>;
-    cleanupPaths: Array<AgentDeletionJournalCleanupPath & { fencePath: string }>;
-  }>;
+  env: NodeJS.ProcessEnv;
+  purpose: AgentDeletionJournalPurpose;
 };
 
-export type AgentDeletionJournalCleanupPath = {
-  path: string;
-  canonicalPath: string;
-  parentPath: string;
-  kind: "target" | "symlink";
-  sourcePaths: string[];
-  dev: number | null;
-  ino: number | null;
-  coversDescendants: boolean;
-  done: boolean;
-  note?: string;
-};
+/** Deletion ownership refusal is distinct from an unhealthy native database. */
+export class AgentDatabaseDeletionRefusedError extends Error {}
 
 function assertAgentDeletionIdentityClaimAllowed(
   claimAgentId: string,
   deletedAgentId: string | undefined,
 ): void {
   if (deletedAgentId && normalizeAgentId(claimAgentId) === normalizeAgentId(deletedAgentId)) {
-    throw new Error(
+    throw new AgentDatabaseDeletionRefusedError(
       `OpenClaw agent database is unavailable while agent ${normalizeAgentId(deletedAgentId)} is deleted.`,
     );
   }
 }
 
-export type AgentDeletionJournalEntry = {
-  agentId: string;
-  operationId: string;
-  agentDir: string;
-  workspaceDir: string;
-  sessionsDir: string;
-  databasePaths: string[];
-  cleanupPaths: AgentDeletionJournalCleanupPath[];
-  createdAt: number;
-  cleanupCompleted: boolean;
-  deleteFiles: boolean;
-};
-
-function readAgentDeletionPathFenceRows(database: OpenClawStateDatabase["db"]) {
-  const db = getNodeSqliteKysely<AgentDeletionDatabase>(database);
-  return executeSqliteQuerySync(
-    database,
-    db
-      .selectFrom("agent_deletion_journal")
-      .select([
-        "agent_id",
-        "operation_id",
-        "agent_dir",
-        "workspace_dir",
-        "sessions_dir",
-        "database_paths_json",
-        "cleanup_paths_json",
-        "cleanup_completed",
-      ]),
-  ).rows;
+function readAgentDeletionPathFenceRows(
+  database: OpenClawStateDatabase["db"],
+  purpose: AgentDeletionJournalPurpose = "runtime",
+  agentId?: string,
+) {
+  if (purpose === "maintenance") {
+    assertAgentDeletionJournalAvailable(database);
+  }
+  try {
+    const db = getNodeSqliteKysely<AgentDeletionDatabase>(database);
+    let known = true;
+    let query = db.selectFrom("agent_deletion_journal").selectAll();
+    if (agentId !== undefined) {
+      query = query.where("agent_id", "=", normalizeAgentId(agentId));
+    }
+    const rows = executeSqliteQuerySync(database, query).rows.map((row) => {
+      let databasePaths: string[] = [];
+      let cleanupPaths: AgentDeletionJournalCleanupPath[] = [];
+      try {
+        databasePaths = parseAgentDeletionDatabasePaths(row.database_paths_json);
+        cleanupPaths = parseCleanupPaths(row.cleanup_paths_json);
+      } catch (error) {
+        if (purpose === "maintenance") {
+          throw error;
+        }
+        known = false;
+      }
+      return Object.assign(row, { databasePaths, cleanupPaths });
+    });
+    return { known, rows };
+  } catch (error) {
+    if (purpose === "maintenance" || isSqliteCorruptionError(error)) {
+      throw error;
+    }
+    // Unknown history is a runtime fact; only Doctor may reconstruct it or hold repairs.
+    return { known: false, rows: [] };
+  }
 }
 
 export function prepareAgentDeletionPathFence(
   claim: { agentId: string; path: string; fenceAgentId?: string },
   options: OpenClawStateDatabaseOptions = {},
+  purpose: AgentDeletionJournalPurpose = claim.fenceAgentId ? "maintenance" : "runtime",
 ): AgentDeletionPathFenceSnapshot {
-  const rows = runOpenClawStateWriteTransaction((database) => {
-    ensureAgentDeletionJournalSchema(database.db);
-    return readAgentDeletionPathFenceRows(database.db);
-  }, options);
   const env = options.env ?? process.env;
   return {
+    env,
+    purpose,
     claimAgentId: normalizeAgentId(claim.agentId),
     claimPath: path.resolve(claim.path),
     ...(claim.fenceAgentId ? { fenceAgentId: normalizeAgentId(claim.fenceAgentId) } : {}),
@@ -122,26 +166,6 @@ export function prepareAgentDeletionPathFence(
     targetPaths: resolveSqliteDatabaseFilePaths(claim.path).map((filePath) =>
       normalizeAgentDirRegistryPath(filePath, env),
     ),
-    entries: rows.map((row) => ({
-      agentId: row.agent_id,
-      operationId: row.operation_id,
-      agentDir: row.agent_dir,
-      workspaceDir: row.workspace_dir,
-      sessionsDir: row.sessions_dir,
-      cleanupCompleted: row.cleanup_completed === 1,
-      canonicalPaths: [row.agent_dir, row.workspace_dir, row.sessions_dir].map((entryPath) =>
-        normalizeAgentDirRegistryPath(entryPath, env),
-      ),
-      databasePaths: parseDatabasePaths(row.database_paths_json).map((databasePath) => ({
-        path: databasePath,
-        canonicalPath: normalizeAgentDirRegistryPath(databasePath, env),
-      })),
-      cleanupPaths: parseCleanupPaths(row.cleanup_paths_json).map((cleanupPath) =>
-        Object.assign({}, cleanupPath, {
-          fencePath: normalizeAgentDirRegistryPath(cleanupPath.canonicalPath, env),
-        }),
-      ),
-    })),
   };
 }
 
@@ -151,42 +175,9 @@ export function assertAgentDeletionPathFence(
   snapshot: AgentDeletionPathFenceSnapshot,
 ): void {
   const database = state.db;
-  ensureAgentDeletionJournalSchema(database);
-  const journalRows = readAgentDeletionPathFenceRows(database);
-  const snapshotJournal = snapshot.entries
-    .map((entry) =>
-      [
-        entry.agentId,
-        entry.operationId,
-        entry.agentDir,
-        entry.workspaceDir,
-        entry.sessionsDir,
-        JSON.stringify(entry.databasePaths.map((candidate) => candidate.path)),
-        JSON.stringify(
-          entry.cleanupPaths.map(({ fencePath: _fencePath, ...candidate }) => ({
-            ...candidate,
-          })),
-        ),
-        entry.cleanupCompleted ? 1 : 0,
-      ].join("\0"),
-    )
-    .toSorted();
-  const currentJournal = journalRows
-    .map((row) =>
-      [
-        row.agent_id,
-        row.operation_id,
-        row.agent_dir,
-        row.workspace_dir,
-        row.sessions_dir,
-        row.database_paths_json,
-        row.cleanup_paths_json,
-        row.cleanup_completed,
-      ].join("\0"),
-    )
-    .toSorted();
-  if (snapshotJournal.join("\n") !== currentJournal.join("\n")) {
-    throw new Error("Agent deletion journal changed while preparing a database claim.");
+  const { rows: journalRows, known } = readAgentDeletionPathFenceRows(database, snapshot.purpose);
+  if (!known && journalRows.length === 0) {
+    return;
   }
   // Existing foreign leases remain blockers even inside the deletion's cleanup scope.
   const cleanup = snapshot.fenceAgentId
@@ -196,6 +187,7 @@ export function assertAgentDeletionPathFence(
         path: snapshot.claimPath,
         statePath: state.path,
       });
+  cleanup?.assertCurrent();
   const cleanupAgentId = cleanup?.assertJournal(
     state.path,
     journalRows.map((row) => ({
@@ -204,6 +196,10 @@ export function assertAgentDeletionPathFence(
       cleanupCompleted: row.cleanup_completed === 1,
     })),
   );
+  // Creation may open the identity it is recreating beneath that identity's completed record.
+  const creationAgentId = snapshot.fenceAgentId
+    ? undefined
+    : resolveAgentCreationClaimAgentId(snapshot.claimAgentId, state.path);
   for (const row of journalRows) {
     if (snapshot.fenceAgentId && snapshot.fenceAgentId !== row.agent_id) {
       continue;
@@ -211,39 +207,33 @@ export function assertAgentDeletionPathFence(
     if (row.agent_id === cleanupAgentId) {
       continue;
     }
+    if (row.cleanup_completed === 1 && row.agent_id === creationAgentId) {
+      continue;
+    }
+    // Ingress is closed by run admission; its existing owners still need writable settlement.
+    if (
+      row.phase === "draining" &&
+      row.cleanup_completed !== 1 &&
+      row.agent_id === snapshot.claimAgentId &&
+      !snapshot.fenceAgentId
+    ) {
+      continue;
+    }
     assertAgentDeletionIdentityClaimAllowed(snapshot.claimAgentId, row.agent_id);
     if (row.cleanup_completed === 1) {
       continue;
     }
-    // Filesystem canonicalization stays outside the SQLite write transaction; the exact journal
-    // row is revalidated here so a concurrent deletion can only make the claim fail closed.
-    const entry = snapshot.entries.find(
-      (candidate) =>
-        candidate.agentId === row.agent_id &&
-        candidate.operationId === row.operation_id &&
-        candidate.agentDir === row.agent_dir &&
-        candidate.workspaceDir === row.workspace_dir &&
-        candidate.sessionsDir === row.sessions_dir &&
-        JSON.stringify(candidate.databasePaths.map((databasePath) => databasePath.path)) ===
-          row.database_paths_json &&
-        JSON.stringify(
-          candidate.cleanupPaths.map(({ fencePath: _fencePath, ...cleanupPath }) => ({
-            ...cleanupPath,
-          })),
-        ) === row.cleanup_paths_json,
-    );
-    if (!entry) {
-      throw new Error("Agent deletion journal changed while preparing a database claim.");
-    }
+    // Check current ownership at the claim; unrelated deletion progress does not invalidate it.
     const fences = [
-      ...entry.canonicalPaths.map((canonicalPath, index) => ({
-        canonicalPath,
-        path: [entry.agentDir, entry.workspaceDir, entry.sessionsDir][index],
-      })),
-      ...entry.databasePaths,
-      ...entry.cleanupPaths.map((cleanupPath) => ({
+      ...[row.agent_dir, row.workspace_dir, row.sessions_dir, ...row.databasePaths].map(
+        (pathname) => ({
+          path: pathname,
+          canonicalPath: normalizeAgentDirRegistryPath(pathname, snapshot.env),
+        }),
+      ),
+      ...row.cleanupPaths.map((cleanupPath) => ({
         path: cleanupPath.path,
-        canonicalPath: cleanupPath.fencePath,
+        canonicalPath: normalizeAgentDirRegistryPath(cleanupPath.canonicalPath, snapshot.env),
       })),
     ];
     for (const fence of fences) {
@@ -252,7 +242,7 @@ export function assertAgentDeletionPathFence(
           targetPath === fence.canonicalPath || isPathInside(fence.canonicalPath, targetPath),
       );
       if (blockedPath) {
-        throw new Error(
+        throw new AgentDatabaseDeletionRefusedError(
           `OpenClaw agent database ${blockedPath} is unavailable while agent ${row.agent_id} deletion owns ${fence.path}.`,
         );
       }
@@ -260,68 +250,51 @@ export function assertAgentDeletionPathFence(
   }
 }
 
-function fromRow(row: {
-  agent_id: string;
-  operation_id: string;
-  agent_dir: string;
-  workspace_dir: string;
-  sessions_dir: string;
-  database_paths_json: string;
-  cleanup_paths_json: string;
-  created_at: number;
-  cleanup_completed: number;
-  delete_files: number;
-}): AgentDeletionJournalEntry {
+function fromRow(
+  row: Selectable<AgentDeletionDatabase["agent_deletion_journal"]> & {
+    databasePaths?: string[];
+    cleanupPaths?: AgentDeletionJournalCleanupPath[];
+  },
+): AgentDeletionJournalEntry {
+  if (row.phase != null && row.phase !== "draining" && row.phase !== "retiring") {
+    throw new Error("Invalid agent deletion journal phase.");
+  }
   return {
     agentId: row.agent_id,
     operationId: row.operation_id,
+    phase: row.phase === "draining" ? "draining" : "retiring",
     agentDir: row.agent_dir,
     workspaceDir: row.workspace_dir,
     sessionsDir: row.sessions_dir,
-    databasePaths: parseDatabasePaths(row.database_paths_json),
-    cleanupPaths: parseCleanupPaths(row.cleanup_paths_json),
+    databasePaths: row.databasePaths ?? parseAgentDeletionDatabasePaths(row.database_paths_json),
+    cleanupPaths: row.cleanupPaths ?? parseCleanupPaths(row.cleanup_paths_json),
     createdAt: row.created_at,
     cleanupCompleted: row.cleanup_completed === 1,
     deleteFiles: row.delete_files === 1,
   };
 }
 
-function parseDatabasePaths(value: string): string[] {
-  const parsed: unknown = JSON.parse(value);
-  if (
-    !Array.isArray(parsed) ||
-    !parsed.every((entry): entry is string => typeof entry === "string")
-  ) {
-    throw new Error("Invalid agent deletion database path journal.");
-  }
-  return parsed;
-}
-
-function parseCleanupPaths(value: string): AgentDeletionJournalCleanupPath[] {
+export function parseCleanupPaths(value: string): AgentDeletionJournalCleanupPath[] {
   const parsed: unknown = JSON.parse(value);
   if (
     !Array.isArray(parsed) ||
     !parsed.every(
       (entry): entry is AgentDeletionJournalCleanupPath =>
-        typeof entry === "object" &&
-        entry !== null &&
-        typeof (entry as { path?: unknown }).path === "string" &&
-        typeof (entry as { canonicalPath?: unknown }).canonicalPath === "string" &&
-        typeof (entry as { parentPath?: unknown }).parentPath === "string" &&
-        ((entry as { kind?: unknown }).kind === "target" ||
-          (entry as { kind?: unknown }).kind === "symlink") &&
-        ((entry as { dev?: unknown }).dev === null ||
-          typeof (entry as { dev?: unknown }).dev === "number") &&
-        ((entry as { ino?: unknown }).ino === null ||
-          typeof (entry as { ino?: unknown }).ino === "number") &&
-        typeof (entry as { coversDescendants?: unknown }).coversDescendants === "boolean" &&
-        typeof (entry as { done?: unknown }).done === "boolean" &&
-        ((entry as { note?: unknown }).note === undefined ||
-          typeof (entry as { note?: unknown }).note === "string") &&
-        Array.isArray((entry as { sourcePaths?: unknown }).sourcePaths) &&
-        (entry as { sourcePaths: unknown[] }).sourcePaths.every(
-          (sourcePath) => typeof sourcePath === "string",
-        ),
+        isRecord(entry) &&
+        typeof entry.path === "string" &&
+        typeof entry.canonicalPath === "string" &&
+        typeof entry.parentPath === "string" &&
+        (entry.kind === "target" || entry.kind === "symlink") &&
+        (entry.dev === null ||
+          (typeof entry.dev === "number" && Number.isInteger(entry.dev)) ||
+          (typeof entry.dev === "string" && /^(0|-?[1-9][0-9]*)$/u.test(entry.dev))) &&
+        (entry.ino === null ||
+          (typeof entry.ino === "number" && Number.isInteger(entry.ino)) ||
+          (typeof entry.ino === "string" && /^(0|-?[1-9][0-9]*)$/u.test(entry.ino))) &&
+        typeof entry.coversDescendants === "boolean" &&
+        typeof entry.done === "boolean" &&
+        (entry.note === undefined || typeof entry.note === "string") &&
+        isStringArray(entry.sourcePaths),
     )
   ) {
     throw new Error("Invalid agent deletion cleanup path journal.");
@@ -331,182 +304,213 @@ function parseCleanupPaths(value: string): AgentDeletionJournalCleanupPath[] {
 
 /** Read the journal through an already validated shared-state connection. */
 export function readAgentDeletionJournalInDatabase(
-  database: OpenClawStateDatabase,
+  database: Pick<OpenClawStateDatabase, "db">,
   agentId: string,
+  purpose: AgentDeletionJournalPurpose = "maintenance",
 ): AgentDeletionJournalEntry | undefined {
-  ensureAgentDeletionJournalSchema(database.db);
-  const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("agent_deletion_journal")
-      .selectAll()
-      .where("agent_id", "=", normalizeAgentId(agentId)),
-  );
+  const row = readAgentDeletionPathFenceRows(database.db, purpose, agentId).rows[0];
   return row ? fromRow(row) : undefined;
 }
 
-export function readAgentDeletionJournal(
-  agentId: string,
-  options: OpenClawStateDatabaseOptions = {},
-): AgentDeletionJournalEntry | undefined {
-  const databasePath = path.resolve(
-    options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env),
-  );
-  if (!existsSync(databasePath)) {
-    return undefined;
+export function listPendingAgentDeletionJournalsInDatabase(
+  database: Pick<OpenClawStateDatabase, "db">,
+): { entries: AgentDeletionJournalEntry[]; manualClawAgentIds: string[] } {
+  const entries: AgentDeletionJournalEntry[] = [];
+  const manualClawAgentIds: string[] = [];
+  for (const row of readAgentDeletionPathFenceRows(database.db).rows) {
+    if (row.cleanup_completed === 1) {
+      continue;
+    }
+    if (row.phase == null && hasClawDeletionOwnership(database, row.agent_id)) {
+      manualClawAgentIds.push(row.agent_id);
+    } else {
+      entries.push(fromRow(row));
+    }
   }
-  return runOpenClawStateWriteTransaction(
-    (database) => readAgentDeletionJournalInDatabase(database, agentId),
-    options,
-  );
+  return { entries, manualClawAgentIds };
 }
 
-export function beginAgentDeletionJournal(
-  entry: Omit<
-    AgentDeletionJournalEntry,
-    "createdAt" | "cleanupCompleted" | "databasePaths" | "cleanupPaths"
-  > & {
-    databasePaths?: string[];
-    cleanupPaths?: AgentDeletionJournalCleanupPath[];
-  },
-  options: OpenClawStateDatabaseOptions = {},
-): AgentDeletionJournalEntry {
+export function beginAgentDeletionJournalInDatabase(
+  database: OpenClawStateDatabase,
+  entry: AgentDeletionJournalInput,
+  preserveDeleteFiles = false,
+  recoveryOperationId?: string,
+): { entry: AgentDeletionJournalEntry; previousEntry?: AgentDeletionJournalEntry } {
   const normalized = {
     ...entry,
+    phase: entry.phase ?? "retiring",
     agentId: normalizeAgentId(entry.agentId),
     databasePaths: [
       ...new Set((entry.databasePaths ?? []).map((entryPath) => path.resolve(entryPath))),
     ],
     cleanupPaths: entry.cleanupPaths ?? [],
   };
-  let persisted: AgentDeletionJournalEntry | undefined;
-  ensureAgentProvenanceSchema(options);
-  runOpenClawStateWriteTransaction((database) => {
-    ensureAgentDeletionJournalSchema(database.db);
-    const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
-    const existing = executeSqliteQueryTakeFirstSync(
+  sessionChanges.emit({ all: true, scope: "stores" }, database.db);
+  ensureAgentDeletionJournalPhaseSchema(database.db);
+  const discovery = prepareDeletionDiscovery(database);
+  const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
+  const existing = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db.selectFrom("agent_deletion_journal").selectAll().where("agent_id", "=", normalized.agentId),
+  );
+  if (recoveryOperationId !== undefined) {
+    if (
+      !existing ||
+      existing.operation_id !== recoveryOperationId ||
+      existing.cleanup_completed !== 0
+    ) {
+      throw new Error(`Agent ${normalized.agentId} deletion changed before recovery.`);
+    }
+    if (existing.phase == null && hasClawDeletionOwnership(database, normalized.agentId)) {
+      throw new Error(`Agent ${normalized.agentId} deletion requires its Claw removal owner.`);
+    }
+  }
+  const registeredDatabasePaths = executeSqliteQuerySync(
+    database.db,
+    db.selectFrom("agent_databases").select("path").where("agent_id", "=", normalized.agentId),
+  ).rows.flatMap((row) =>
+    resolveSqliteDatabaseFilePaths(
+      resolveOpenClawRegisteredAgentDatabasePath(database.path, row.path),
+    ),
+  );
+  const previous = existing && fromRow(existing);
+  if (preserveDeleteFiles && previous) {
+    normalized.deleteFiles = previous.deleteFiles;
+  }
+  const databasePaths = [
+    ...new Set(
+      [
+        ...(previous?.databasePaths ?? []),
+        ...normalized.databasePaths,
+        ...registeredDatabasePaths,
+      ].map((entryPath) => path.resolve(entryPath)),
+    ),
+  ];
+  const cleanupPaths = previous?.cleanupPaths ?? normalized.cleanupPaths;
+  if (previous) {
+    executeSqliteQuerySync(
       database.db,
       db
-        .selectFrom("agent_deletion_journal")
-        .selectAll()
+        .updateTable("agent_deletion_journal")
+        .set({
+          operation_id: normalized.operationId,
+          database_paths_json: JSON.stringify(databasePaths),
+          cleanup_paths_json: JSON.stringify(cleanupPaths),
+          cleanup_completed: 0,
+          delete_files: normalized.deleteFiles ? 1 : 0,
+        })
         .where("agent_id", "=", normalized.agentId),
     );
-    const registeredDatabasePaths = executeSqliteQuerySync(
-      database.db,
-      db.selectFrom("agent_databases").select("path").where("agent_id", "=", normalized.agentId),
-    ).rows.flatMap((row) =>
-      resolveSqliteDatabaseFilePaths(
-        resolveOpenClawRegisteredAgentDatabasePath(database.path, row.path),
-      ),
-    );
-    const databasePaths = [
-      ...new Set(
-        [
-          ...(existing ? fromRow(existing).databasePaths : []),
-          ...normalized.databasePaths,
-          ...registeredDatabasePaths,
-        ].map((entryPath) => path.resolve(entryPath)),
-      ),
-    ];
-    const cleanupPaths = existing ? fromRow(existing).cleanupPaths : normalized.cleanupPaths;
-    if (existing) {
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .updateTable("agent_deletion_journal")
-          .set({
-            operation_id: normalized.operationId,
-            database_paths_json: JSON.stringify(databasePaths),
-            cleanup_paths_json: JSON.stringify(cleanupPaths),
-            cleanup_completed: 0,
-            delete_files: normalized.deleteFiles ? 1 : 0,
-          })
-          .where("agent_id", "=", normalized.agentId),
-      );
-      persisted = {
-        ...fromRow(existing),
+    publishAgentDeletionJournalStatus(database.db, normalized.agentId, "pending");
+    const result = {
+      previousEntry: previous,
+      entry: {
+        ...previous,
         operationId: normalized.operationId,
         databasePaths,
         cleanupPaths,
         cleanupCompleted: false,
         deleteFiles: normalized.deleteFiles,
-      };
-      return;
-    }
-    const createdAt = Date.now();
-    executeSqliteQuerySync(
-      database.db,
-      db.insertInto("agent_deletion_journal").values({
-        agent_id: normalized.agentId,
-        operation_id: normalized.operationId,
-        agent_dir: normalized.agentDir,
-        workspace_dir: normalized.workspaceDir,
-        sessions_dir: normalized.sessionsDir,
-        database_paths_json: JSON.stringify(databasePaths),
-        cleanup_paths_json: JSON.stringify(cleanupPaths),
-        created_at: createdAt,
-        cleanup_completed: 0,
-        delete_files: normalized.deleteFiles ? 1 : 0,
-      }),
-    );
-    persisted = { ...normalized, databasePaths, cleanupPaths, createdAt, cleanupCompleted: false };
-  }, options);
-  if (!persisted) {
-    throw new Error(`Failed to record deletion journal for agent ${normalized.agentId}.`);
+      },
+    };
+    publishDeletingAgent(database, discovery, result.entry);
+    return result;
   }
-  return persisted;
+  const createdAt = Date.now();
+  executeSqliteQuerySync(
+    database.db,
+    db.insertInto("agent_deletion_journal").values({
+      agent_id: normalized.agentId,
+      operation_id: normalized.operationId,
+      phase: entry.phase ?? null,
+      agent_dir: normalized.agentDir,
+      workspace_dir: normalized.workspaceDir,
+      sessions_dir: normalized.sessionsDir,
+      database_paths_json: JSON.stringify(databasePaths),
+      cleanup_paths_json: JSON.stringify(cleanupPaths),
+      created_at: createdAt,
+      cleanup_completed: 0,
+      delete_files: normalized.deleteFiles ? 1 : 0,
+    }),
+  );
+  publishAgentDeletionJournalStatus(database.db, normalized.agentId, "pending");
+  const result = {
+    entry: { ...normalized, databasePaths, cleanupPaths, createdAt, cleanupCompleted: false },
+  };
+  publishDeletingAgent(database, discovery, result.entry);
+  return result;
 }
 
-export function updateAgentDeletionJournalCleanupPaths(
+export function updateAgentDeletionJournalPathsInDatabase(
+  database: OpenClawStateDatabase,
   agentId: string,
   operationId: string,
-  cleanupPaths: readonly AgentDeletionJournalCleanupPath[],
-  options: OpenClawStateDatabaseOptions = {},
+  ...change:
+    | [column: "cleanup_paths_json", paths: readonly AgentDeletionJournalCleanupPath[]]
+    | [column: "database_paths_json", paths: readonly string[]]
 ): boolean {
-  const id = normalizeAgentId(agentId);
-  let updated = false;
-  runOpenClawStateWriteTransaction((database) => {
-    ensureAgentDeletionJournalSchema(database.db);
-    const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
-    const result = executeSqliteQuerySync(
-      database.db,
-      db
-        .updateTable("agent_deletion_journal")
-        .set({ cleanup_paths_json: JSON.stringify(cleanupPaths) })
-        .where("agent_id", "=", id)
-        .where("operation_id", "=", operationId)
-        .where("cleanup_completed", "=", 0),
-    );
-    updated = Number(result.numAffectedRows ?? 0) > 0;
-  }, options);
+  const [column, paths] = change;
+  const discovery = prepareDeletionDiscovery(database);
+  assertAgentDeletionJournalAvailable(database.db);
+  const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
+  const result = executeSqliteQuerySync(
+    database.db,
+    db
+      .updateTable("agent_deletion_journal")
+      .set({ [column]: JSON.stringify(paths) })
+      .where("agent_id", "=", agentId)
+      .where("operation_id", "=", operationId)
+      .where("cleanup_completed", "=", 0),
+  );
+  const updated = Number(result.numAffectedRows ?? 0) > 0;
+  if (updated) {
+    if (column === "database_paths_json") {
+      updateAgentDeletionDiscovery(
+        database.db,
+        discovery,
+        agentId,
+        (entry) =>
+          entry && {
+            ...entry,
+            databasePaths: [path.join(entry.agentDir, "openclaw-agent.sqlite"), ...paths],
+          },
+      );
+    }
+    sessionChanges.emit({ all: true, scope: "stores" }, database.db);
+  }
   return updated;
 }
 
-export function updateAgentDeletionJournalDatabasePaths(
+/** Revoke an attempt while retaining its pending cleanup fence for a later owner. */
+export function handoffAgentDeletionJournalInDatabase(
+  database: OpenClawStateDatabase,
   agentId: string,
   operationId: string,
-  databasePaths: readonly string[],
-  options: OpenClawStateDatabaseOptions = {},
+  retryOperationId: string,
 ): boolean {
-  const id = normalizeAgentId(agentId);
-  const normalizedPaths = [...new Set(databasePaths.map((entryPath) => path.resolve(entryPath)))];
-  let updated = false;
-  runOpenClawStateWriteTransaction((database) => {
-    ensureAgentDeletionJournalSchema(database.db);
-    const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
-    const result = executeSqliteQuerySync(
-      database.db,
-      db
-        .updateTable("agent_deletion_journal")
-        .set({ database_paths_json: JSON.stringify(normalizedPaths) })
-        .where("agent_id", "=", id)
-        .where("operation_id", "=", operationId)
-        .where("cleanup_completed", "=", 0),
-    );
-    updated = Number(result.numAffectedRows ?? 0) > 0;
-  }, options);
-  return updated;
+  assertAgentDeletionJournalAvailable(database.db);
+  const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
+  const result = executeSqliteQuerySync(
+    database.db,
+    db
+      .updateTable("agent_deletion_journal")
+      .set({ operation_id: retryOperationId })
+      .where("agent_id", "=", normalizeAgentId(agentId))
+      .where("operation_id", "=", operationId)
+      .where("cleanup_completed", "=", 0),
+  );
+  const handedOff = result.numAffectedRows === 1n;
+  if (handedOff) {
+    agentDeletionJournalPublication.stagePostimages(database.db, [
+      {
+        agentId: normalizeAgentId(agentId),
+        operationId: retryOperationId,
+        cleanupCompleted: false,
+      },
+    ]);
+    sessionChanges.emit({ all: true, scope: "stores" }, database.db);
+  }
+  return handedOff;
 }
 
 /** Complete a deletion journal inside a caller-owned shared-state transaction. */
@@ -516,66 +520,120 @@ export function completeAgentDeletionJournalInDatabase(
   operationId: string,
 ): boolean {
   const id = normalizeAgentId(agentId);
-  ensureAgentDeletionJournalSchema(database.db);
+  ensureAgentDeletionJournalPhaseSchema(database.db);
+  const discovery = prepareDeletionDiscovery(database);
   const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
-  const result = executeSqliteQuerySync(
+  const completed = executeSqliteQueryTakeFirstSync(
     database.db,
     db
       .updateTable("agent_deletion_journal")
       .set({ cleanup_completed: 1 })
       .where("agent_id", "=", id)
-      .where("operation_id", "=", operationId),
+      .where("operation_id", "=", operationId)
+      .where((eb) => eb.or([eb("phase", "is", null), eb("phase", "=", "retiring")]))
+      .returning(["database_paths_json", "delete_files"]),
   );
-  const completed = Number(result.numAffectedRows ?? 0) > 0;
   // The journal already fences authority. Keep creation history through refusals and
   // partial cleanup, and remove it only when this exact deletion owner completes.
   if (completed) {
+    updateAgentDeletionDiscovery(database.db, discovery, id, (entry) =>
+      completed.delete_files === 1 ? undefined : entry && { ...entry, cleanupCompleted: true },
+    );
+    publishAgentDeletionJournalStatus(database.db, id, "complete");
+    agentDeletionJournalPublication.stagePostimages(database.db, [
+      {
+        agentId: id,
+        operationId,
+        cleanupCompleted: true,
+      },
+    ]);
+    resolveAgentDeletionRecoveryHolds(
+      database,
+      id,
+      parseAgentDeletionDatabasePaths(completed.database_paths_json),
+    );
     deleteAgentProvenanceForAgent(database.db, id);
+    sessionChanges.emit({ all: true, scope: "stores" }, database.db);
   }
-  return completed;
+  return completed !== undefined;
 }
 
-export function removeAgentDeletionJournal(
+/** The caller owns journal authority, transaction admission, and committed publication. */
+export function deleteAgentDeletionJournalInDatabase(
+  database: OpenClawStateDatabase,
   agentId: string,
   operationId: string,
-  options: OpenClawStateDatabaseOptions = {},
+  completedOnly: boolean,
 ): boolean {
+  const discovery = prepareDeletionDiscovery(database);
   const id = normalizeAgentId(agentId);
-  let removed = false;
-  runOpenClawStateWriteTransaction((database) => {
-    ensureAgentDeletionJournalSchema(database.db);
-    const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
-    const result = executeSqliteQuerySync(
-      database.db,
-      db
-        .deleteFrom("agent_deletion_journal")
-        .where("agent_id", "=", id)
-        .where("operation_id", "=", operationId),
-    );
-    removed = Number(result.numAffectedRows ?? 0) > 0;
-  }, options);
+  assertAgentDeletionJournalAvailable(database.db);
+  const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
+  const query = db
+    .deleteFrom("agent_deletion_journal")
+    .where("agent_id", "=", id)
+    .where("operation_id", "=", operationId);
+  const result = executeSqliteQuerySync(
+    database.db,
+    completedOnly ? query.where("cleanup_completed", "=", 1) : query,
+  );
+  const removed = Number(result.numAffectedRows ?? 0) > 0;
+  if (removed) {
+    updateAgentDeletionDiscovery(database.db, discovery, id, () => undefined);
+    publishAgentDeletionJournalStatus(database.db, id, "absent");
+    agentDeletionJournalPublication.stageDeletions(database.db, [id]);
+    sessionChanges.emit({ all: true, scope: "stores" }, database.db);
+  }
   return removed;
 }
 
-export function claimCompletedAgentDeletionJournal(
+/** Read current journal facts through the captured physical shared-state worker. */
+export async function readAgentDeletionJournalAsync(
   agentId: string,
-  operationId: string,
   options: OpenClawStateDatabaseOptions = {},
-): boolean {
-  const id = normalizeAgentId(agentId);
-  let removed = false;
-  runOpenClawStateWriteTransaction((database) => {
-    ensureAgentDeletionJournalSchema(database.db);
-    const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
-    const result = executeSqliteQuerySync(
-      database.db,
-      db
-        .deleteFrom("agent_deletion_journal")
-        .where("agent_id", "=", id)
-        .where("operation_id", "=", operationId)
-        .where("cleanup_completed", "=", 1),
-    );
-    removed = Number(result.numAffectedRows ?? 0) > 0;
-  }, options);
-  return removed;
+): Promise<AgentDeletionJournalEntry | undefined> {
+  const context = captureOpenClawStateWorkerContext({
+    ...options,
+    path: options.database?.path ?? options.path,
+  });
+  const { runOpenClawStateWorkerOperation } = await import("./openclaw-state-worker-store.js");
+  const result = await runOpenClawStateWorkerOperation(
+    context,
+    (scope) =>
+      scope.execute({ type: "agentDeletion.read", input: { agentId: normalizeAgentId(agentId) } }),
+    { existingOnly: true },
+  );
+  context.admission.assertCurrent();
+  return result;
+}
+
+/** Committed-state read; deletion owners recheck pending entries under write authority. */
+export async function listPendingAgentDeletionJournalsAsync(
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<ReturnType<typeof listPendingAgentDeletionJournalsInDatabase>> {
+  const reply = await executeExistingOpenClawStateRead(
+    options,
+    { type: "agentRecovery.pendingDeletions", input: undefined },
+    { current: true },
+  );
+  return {
+    entries: reply?.entries ?? [],
+    manualClawAgentIds: reply?.manualClawAgentIds ?? [],
+  };
+}
+
+/** Administrative safety check; the caller retains its own deletion/monitor authority. */
+export async function assertNoAgentDatabaseLeasesAsync(
+  agentId: string,
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<void> {
+  const context = captureOpenClawStateWorkerContext({
+    ...options,
+    path: options.database?.path ?? options.path,
+  });
+  const { executeOpenClawStateWorker } = await import("./openclaw-state-worker-store.js");
+  await executeOpenClawStateWorker(context, {
+    type: "agentDeletion.assertNoDatabaseLeasesUnowned",
+    input: { agentId: normalizeAgentId(agentId) },
+  });
 }

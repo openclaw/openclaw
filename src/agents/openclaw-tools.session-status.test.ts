@@ -1,23 +1,20 @@
-// Verifies session status output across scoped stores, tasks, and runtime hooks.
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionStoreEntryCore } from "../config/sessions/store-entry.js";
 import { mergeSessionEntry, type SessionEntry } from "../config/sessions/types.js";
-import {
-  clearInternalHooks,
-  registerInternalHook,
-  type InternalHookEvent,
-} from "../hooks/internal-hooks.js";
+import { clearInternalHooks } from "../hooks/internal-hooks.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
-import type { TaskRecord } from "../tasks/task-registry.types.js";
-import { buildTaskStatusSnapshot } from "../tasks/task-status.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { compactToolOutputHint } from "./tool-schema-hints.js";
+import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
+import {
+  createMockConfig,
+  expectSpawnedSessionLookupCalls,
+  fixedStoreConfig,
+} from "./openclaw-tools.session-status.test-support.js";
 
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
@@ -25,21 +22,6 @@ const callGatewayMock = vi.fn();
 const agentToolGatewayCallMock = vi.fn();
 const buildStatusMessageMock = vi.hoisted(() =>
   vi.fn((_params?: unknown) => "OpenClaw\n🧠 Model: GPT-5.4"),
-);
-const resolveQueueSettingsMock = vi.hoisted(() =>
-  vi.fn((_params?: unknown) => ({ mode: "interrupt" })),
-);
-const listTasksForRelatedSessionKeyForOwnerMock = vi.hoisted(() =>
-  vi.fn(
-    (_params: { relatedSessionKey: string; callerOwnerKey: string }) =>
-      [] as Array<Record<string, unknown>>,
-  ),
-);
-const resolveEnvApiKeyMock = vi.hoisted(() =>
-  vi.fn((_provider?: string, _env?: NodeJS.ProcessEnv) => null),
-);
-const resolveUsableCustomProviderApiKeyMock = vi.hoisted(() =>
-  vi.fn((_params?: { provider?: string }) => null as { apiKey: string; source: string } | null),
 );
 const getSessionStateVersionMock = vi.hoisted(() =>
   vi.fn((_sessionKey: string, _agentId: string) => 0),
@@ -58,58 +40,7 @@ const emptyPluginMetadataSnapshot = {
 };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-const createMockConfig = () => ({
-  session: { mainKey: "main", scope: "per-sender" },
-  agents: {
-    defaults: {
-      model: { primary: "openai/gpt-5.4" },
-      models: {},
-    },
-  },
-  tools: {
-    agentToAgent: { enabled: false },
-  },
-});
-
 let mockConfig: Record<string, unknown> = createMockConfig();
-const TASK_STATUS_SNAPSHOT_NOW = 1_000_000_000_000;
-
-function createScopedSessionStores() {
-  // Two stores simulate per-agent session files selected by scoped status lookups.
-  return new Map<string, Record<string, unknown>>([
-    [
-      "/tmp/main/sessions.json",
-      {
-        "agent:main:main": { sessionId: "s-main", updatedAt: 10 },
-      },
-    ],
-    [
-      "/tmp/support/sessions.json",
-      {
-        main: { sessionId: "s-support", updatedAt: 20 },
-      },
-    ],
-  ]);
-}
-
-function installScopedSessionStores(syncUpdates = false) {
-  // Tests choose whether session-store writes should mutate the backing map.
-  const stores = createScopedSessionStores();
-  loadSessionStoreMock.mockClear();
-  updateSessionStoreMock.mockClear();
-  callGatewayMock.mockClear();
-  loadSessionStoreMock.mockImplementation((storePath: string) => stores.get(storePath) ?? {});
-  if (syncUpdates) {
-    updateSessionStoreMock.mockImplementation(
-      (storePath: string, store: Record<string, unknown>) => {
-        if (storePath) {
-          stores.set(storePath, store);
-        }
-      },
-    );
-  }
-  return stores;
-}
 
 function createSessionsModuleMock() {
   const resolveMockStorePath = (_store: string | undefined, opts?: { agentId?: string }) =>
@@ -153,6 +84,13 @@ function createSessionsModuleMock() {
     }) => {
       const storePath = resolveMockStorePath(scope.cfg.session?.store, { agentId: scope.agentId });
       const store = loadSessionStoreMock(storePath) as Record<string, SessionEntry>;
+      const target = (key: string, entry: SessionEntry, persisted: boolean, sessionKey = key) => ({
+        agentId: scope.agentId,
+        candidateKey: key,
+        entry: cloneEntry(entry),
+        persisted,
+        sessionKey,
+      });
       const candidates = [...new Set(scope.candidateKeys.map((key) => key.trim()))];
       for (const candidateKey of candidates) {
         if (!candidateKey) {
@@ -162,44 +100,14 @@ function createSessionsModuleMock() {
         if (!resolved.existing) {
           continue;
         }
-        return {
-          agentId: scope.agentId,
-          candidateKey,
-          entry: cloneEntry(resolved.existing),
-          persisted: true,
-          sessionKey: resolved.normalizedKey,
-        };
+        return target(candidateKey, resolved.existing, true, resolved.normalizedKey);
       }
       const fallbackKey = scope.fallback?.sessionKey.trim();
       return fallbackKey && scope.fallback
-        ? {
-            agentId: scope.agentId,
-            candidateKey: fallbackKey,
-            entry: cloneEntry(scope.fallback.entry),
-            persisted: false,
-            sessionKey: fallbackKey,
-          }
+        ? target(fallbackKey, scope.fallback.entry, false)
         : null;
     },
     resolveSessionStorePathCore: resolveMockStorePath,
-  };
-}
-
-function createGatewayCallModuleMock() {
-  return {
-    callGateway: (opts: unknown) => callGatewayMock(opts),
-  };
-}
-
-function createInProcessGatewayModuleMock() {
-  return {
-    callAgentToolGatewayRequest: (opts: unknown) => agentToolGatewayCallMock(opts),
-  };
-}
-
-function createConfigModuleMock() {
-  return {
-    getRuntimeConfig: () => mockConfig,
   };
 }
 
@@ -229,105 +137,36 @@ function createModelCatalogModuleMock() {
   };
 }
 
-function createAuthProfilesModuleMock() {
-  return {
-    ensureAuthProfileStore: () => ({ profiles: {} }),
-    resolveAuthProfileDisplayLabel: () => undefined,
-    resolveAuthProfileOrder: () => [],
-  };
-}
-
-function createModelAuthModuleMock() {
-  return {
-    resolveEnvApiKey: resolveEnvApiKeyMock,
-    resolveUsableCustomProviderApiKey: resolveUsableCustomProviderApiKeyMock,
-    resolveModelAuthMode: () => "api-key",
-  };
-}
-
-function createProviderUsageModuleMock() {
-  return {
-    resolveUsageProviderId: () => undefined,
-    loadProviderUsageSummary: async () => ({
-      updatedAt: Date.now(),
-      providers: [],
-    }),
-  };
-}
-
-function formatPrimaryModelLabel(provider: string | undefined, model: string): string {
-  return provider ? `${provider}/${model}` : model;
-}
-
-function formatStatusLines(primary: string, taskLineOverride: string | undefined): string {
-  return taskLineOverride
-    ? `OpenClaw\n🧠 Model: ${primary}\n${taskLineOverride}`
-    : `OpenClaw\n🧠 Model: ${primary}`;
-}
-
 function createCommandsStatusRuntimeModuleMock() {
-  // Status text mock keeps model/task/session routing observable in one place.
   return {
-    buildStatusText: async (params: {
-      sessionKey: string;
-      sessionEntry: SessionEntry;
-      statusChannel: string;
-      provider?: string;
-      model: string;
-      thinkingCatalog?: Array<{ provider: string; id: string; contextWindow?: number }>;
-      workspaceDir?: string;
-      primaryModelLabelOverride?: string;
-      includeTranscriptUsage?: boolean;
-      taskLineOverride?: string;
-      resolveDefaultThinkingLevel?: () => unknown;
-    }) => {
-      resolveQueueSettingsMock({
-        channel: params.statusChannel,
-        sessionEntry: params.sessionEntry,
-      });
-      const parsed = params.sessionKey.startsWith("agent:") ? params.sessionKey.split(":") : null;
-      const agentId = parsed?.[1] || "main";
-      const configuredAgent = Array.isArray(
-        (mockConfig as { agents?: { list?: Array<Record<string, unknown>> } }).agents?.list,
-      )
-        ? (mockConfig as { agents?: { list?: Array<Record<string, unknown>> } }).agents?.list?.find(
-            (entry) => entry.id === agentId,
-          )
-        : undefined;
+    buildStatusText: async (
+      params: Parameters<typeof import("../status/status-text.js").buildStatusText>[0],
+    ) => {
       const primary =
-        params.primaryModelLabelOverride ?? formatPrimaryModelLabel(params.provider, params.model);
-      const customAuth = params.provider
-        ? resolveUsableCustomProviderApiKeyMock({ provider: params.provider })
-        : null;
-      const envAuth =
-        !customAuth && params.provider ? resolveEnvApiKeyMock(params.provider, process.env) : null;
-      const modelAuth = customAuth
-        ? `api-key (${customAuth.source})`
-        : envAuth
-          ? "api-key (env)"
-          : undefined;
-      buildStatusMessageMock({
-        agentId,
-        agent: {
-          model: { primary },
-          thinkingDefault:
-            configuredAgent?.thinkingDefault ?? (await params.resolveDefaultThinkingLevel?.()),
-        },
-        sessionEntry: params.sessionEntry,
-        modelAuth,
-        thinkingCatalog: params.thinkingCatalog,
-        includeTranscriptUsage: params.includeTranscriptUsage,
-        workspaceDir: params.workspaceDir,
-      });
-      return formatStatusLines(primary, params.taskLineOverride);
+        params.primaryModelLabelOverride ??
+        (params.provider ? `${params.provider}/${params.model}` : params.model);
+      await params.resolveDefaultThinkingLevel?.();
+      buildStatusMessageMock(params);
+      return `OpenClaw\n🧠 Model: ${primary}`;
     },
   };
 }
 
+// mock-isolation: Session status reads and mutations use the suite's in-memory session entries.
 vi.mock("../config/sessions.js", createSessionsModuleMock);
-vi.mock("../gateway/call.js", createGatewayCallModuleMock);
-vi.mock("./tools/in-process-gateway.js", createInProcessGatewayModuleMock);
-vi.mock("../config/config.js", createConfigModuleMock);
+vi.mock("../config/sessions/session-accessor.entry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-accessor.entry.js")>()),
+  resolveSessionEntryCandidateTargetForRuntime:
+    createSessionsModuleMock().resolveSessionEntryCandidateTarget,
+}));
+// mock-isolation: Gateway requests are observed without connecting to an operator Gateway.
+vi.mock("../gateway/call.js", () => ({ callGateway: (opts: unknown) => callGatewayMock(opts) }));
+vi.mock("./tools/in-process-gateway.js", () => ({
+  callAgentToolGatewayRequest: (opts: unknown) => agentToolGatewayCallMock(opts),
+  hasGatewayToolRoutingContext: () => false,
+}));
+// mock-isolation: Each scenario supplies its own runtime config instead of reading host state.
+vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => mockConfig }));
 vi.mock("../agents/prepared-model-catalog.js", createModelCatalogModuleMock);
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
@@ -353,29 +192,32 @@ vi.mock("../plugins/provider-thinking.js", () => ({
 vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProvidersCore: () => [],
 }));
-vi.mock("../agents/auth-profiles.js", createAuthProfilesModuleMock);
-vi.mock("../agents/model-auth.js", createModelAuthModuleMock);
-vi.mock("../infra/provider-usage.js", createProviderUsageModuleMock);
+// mock-isolation: Auth profiles are synthetic labels; host credentials must not be discovered.
+vi.mock("../agents/auth-profiles.js", () => ({
+  ensureAuthProfileStore: () => ({ profiles: {} }),
+  resolveAuthProfileDisplayLabel: () => undefined,
+  resolveAuthProfileOrder: () => [],
+}));
+// mock-isolation: Session status uses fixture auth labels without discovering host keys or accounts.
+vi.mock("../agents/model-auth.js", () => ({
+  resolveEnvApiKey: () => null,
+  resolveUsableCustomProviderApiKey: () => null,
+  resolveModelAuthModeAsync: () => "api-key",
+}));
+// mock-isolation: Provider usage is a fixed empty response without remote quota requests.
+vi.mock("../infra/provider-usage.js", () => ({
+  resolveUsageProviderId: () => undefined,
+  loadProviderUsageSummary: async () => ({ updatedAt: Date.now(), providers: [] }),
+}));
+// mock-isolation: Observe status rendering inputs without loading unrelated status providers.
 vi.mock("../status/status-text.js", createCommandsStatusRuntimeModuleMock);
 vi.mock("../auto-reply/group-activation.js", () => ({
   normalizeGroupActivation: (value: unknown) => value ?? "always",
 }));
+// mock-isolation: Session status observes fixed queue metrics without opening live queues.
 vi.mock("../auto-reply/reply/queue.js", () => ({
   getFollowupQueueDepth: () => 0,
-  resolveQueueSettings: resolveQueueSettingsMock,
-}));
-vi.mock("../tasks/task-owner-access.js", () => ({
-  listTasksForRelatedSessionKeyForOwner: (params: {
-    relatedSessionKey: string;
-    callerOwnerKey: string;
-  }) => listTasksForRelatedSessionKeyForOwnerMock(params),
-  buildTaskStatusSnapshotForRelatedSessionKeyForOwner: (params: {
-    relatedSessionKey: string;
-    callerOwnerKey: string;
-  }) =>
-    buildTaskStatusSnapshot(listTasksForRelatedSessionKeyForOwnerMock(params) as TaskRecord[], {
-      now: TASK_STATUS_SNAPSHOT_NOW,
-    }),
+  resolveQueueSettings: () => ({ mode: "interrupt" }),
 }));
 vi.mock("../sessions/session-state-events.js", () => ({
   getSessionStateVersion: (sessionKey: string, agentId: string) =>
@@ -391,17 +233,8 @@ vi.mock("../sessions/session-state-events.js", () => ({
 let createSessionStatusTool: typeof import("./tools/session-status-tool.js").createSessionStatusTool;
 
 beforeAll(async () => {
+  await prepareSharedAuthStoreOwnership();
   ({ createSessionStatusTool } = await import("./tools/session-status-tool.js"));
-  resetSessionStore({
-    "agent:main:spawned": {
-      sessionId: "spawned-status-warmup",
-      updatedAt: 1,
-      spawnedWorkspaceDir: "/tmp/openclaw-spawned-workspace",
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-6",
-    },
-  });
-  await getSessionStatusTool("agent:main:spawned").execute("warm-spawned-workspace-status", {});
 });
 
 function resetSessionStore(inputStore: Record<string, SessionEntry>) {
@@ -412,19 +245,11 @@ function resetSessionStore(inputStore: Record<string, SessionEntry>) {
     ]),
   ) as Record<string, SessionEntry>;
   buildStatusMessageMock.mockClear();
-  resolveQueueSettingsMock.mockClear();
-  resolveQueueSettingsMock.mockReturnValue({ mode: "interrupt" });
-  resolveEnvApiKeyMock.mockReset();
-  resolveEnvApiKeyMock.mockReturnValue(null);
-  resolveUsableCustomProviderApiKeyMock.mockReset();
-  resolveUsableCustomProviderApiKeyMock.mockReturnValue(null);
   loadSessionStoreMock.mockClear();
   updateSessionStoreMock.mockClear();
   callGatewayMock.mockClear();
   agentToolGatewayCallMock.mockReset();
   agentToolGatewayCallMock.mockImplementation((opts: unknown) => callGatewayMock(opts));
-  listTasksForRelatedSessionKeyForOwnerMock.mockClear();
-  listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([]);
   getSessionStateVersionMock.mockReset();
   getSessionStateVersionMock.mockReturnValue(0);
   listSessionStateEventsSinceMock.mockReset();
@@ -438,31 +263,24 @@ function resetSessionStore(inputStore: Record<string, SessionEntry>) {
   callGatewayMock.mockImplementation(async (opts: unknown) => {
     const request = opts as { method?: string; params?: Record<string, unknown> };
     if (request.method === "sessions.resolve") {
-      const key = typeof request.params?.key === "string" ? request.params.key.trim() : "";
+      const param = (key: string) => {
+        const value = request.params?.[key];
+        return typeof value === "string" ? value.trim() : "";
+      };
+      const key = param("key");
+      const spawnedBy = param("spawnedBy");
+      const owned = (entry: SessionEntry) =>
+        !spawnedBy || entry.spawnedBy === spawnedBy || entry.parentSessionKey === spawnedBy;
       if (key && store[key]) {
-        const spawnedBy =
-          typeof request.params?.spawnedBy === "string" ? request.params.spawnedBy.trim() : "";
-        const entry = store[key];
-        if (!spawnedBy || entry.spawnedBy === spawnedBy || entry.parentSessionKey === spawnedBy) {
-          return { key };
-        }
-        return {};
+        return owned(store[key]) ? { key } : {};
       }
-      const sessionId =
-        typeof request.params?.sessionId === "string" ? request.params.sessionId.trim() : "";
+      const sessionId = param("sessionId");
       if (!sessionId) {
         return {};
       }
-      const spawnedBy =
-        typeof request.params?.spawnedBy === "string" ? request.params.spawnedBy.trim() : "";
-      const matches = Object.entries(store).filter((entry): entry is [string, SessionEntry] => {
-        return (
-          entry[1].sessionId === sessionId &&
-          (!spawnedBy ||
-            entry[1].spawnedBy === spawnedBy ||
-            entry[1].parentSessionKey === spawnedBy)
-        );
-      });
+      const matches = Object.entries(store).filter(
+        ([, entry]) => entry.sessionId === sessionId && owned(entry),
+      );
       return { key: resolvePreferredSessionKeyForSessionIdMatches(matches, sessionId) };
     }
     if (request.method === "sessions.list") {
@@ -474,17 +292,21 @@ function resetSessionStore(inputStore: Record<string, SessionEntry>) {
 }
 
 function installSandboxedSessionStatusConfig() {
+  installVisibility("all", { sessionToolsVisibility: "spawned" });
+}
+
+function installVisibility(
+  visibility: "self" | "tree" | "agent" | "all",
+  sandbox?: { sessionToolsVisibility: "spawned" },
+) {
   mockConfig = {
     session: { mainKey: "main", scope: "per-sender" },
-    tools: {
-      sessions: { visibility: "all" },
-      agentToAgent: { enabled: true, allow: ["*"] },
-    },
+    tools: { sessions: { visibility }, agentToAgent: { enabled: true, allow: ["*"] } },
     agents: {
       defaults: {
         model: { primary: "openai/gpt-5.4" },
         models: {},
-        sandbox: { sessionToolsVisibility: "spawned" },
+        ...(sandbox ? { sandbox } : {}),
       },
     },
   };
@@ -492,22 +314,13 @@ function installSandboxedSessionStatusConfig() {
 
 function installSameAgentVisibility(visibility: "self" | "tree" | "agent") {
   resetSessionStore({
-    "agent:main:main": {
-      sessionId: "s-parent",
-      updatedAt: 10,
+    "agent:main:main": fixtureSession("s-parent", {
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet-4-6",
-    },
-    "agent:main:subagent:child": { sessionId: "s-child", updatedAt: 20 },
+    }),
+    "agent:main:subagent:child": fixtureSession("s-child", { updatedAt: 20 }),
   });
-  mockConfig = {
-    session: { mainKey: "main", scope: "per-sender" },
-    tools: {
-      sessions: { visibility },
-      agentToAgent: { enabled: true, allow: ["*"] },
-    },
-    agents: { defaults: { model: { primary: "openai/gpt-5.4" }, models: {} } },
-  };
+  installVisibility(visibility);
 }
 
 function mockSpawnedSessionList(
@@ -536,233 +349,122 @@ function mockSpawnedSessionList(
   });
 }
 
-function expectSpawnedSessionLookupCalls(spawnedBy: string, targetKeys: string[]) {
-  expect(callGatewayMock).toHaveBeenCalledTimes(targetKeys.length);
-  for (const [index, key] of targetKeys.entries()) {
-    expect(callGatewayMock).toHaveBeenNthCalledWith(index + 1, {
-      method: "sessions.resolve",
-      params: { agentId: "main", allowMissing: true, key, spawnedBy },
-    });
-  }
+function savedSession(key = "main") {
+  const store = updateSessionStoreMock.mock.calls.at(-1)?.[1] as Record<string, SessionEntry>;
+  return expectDefined(store[key], `saved session ${key}`);
 }
 
-function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
-
-function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected mock call ${callIndex}`);
-  }
-  return call[argIndex];
-}
-
-function latestMockCallArg(mock: ReturnType<typeof vi.fn>, argIndex = 0) {
-  return mockCallArg(mock, mock.mock.calls.length - 1, argIndex);
+function expectNoStoreAccess() {
+  expect(loadSessionStoreMock).not.toHaveBeenCalled();
+  expect(updateSessionStoreMock).not.toHaveBeenCalled();
 }
 
 function getSessionStatusTool(
   agentSessionKey = "main",
-  options?: { sandboxed?: boolean; activeModelProvider?: string; activeModelId?: string },
+  options?: Omit<
+    NonNullable<Parameters<typeof createSessionStatusTool>[0]>,
+    "agentSessionKey" | "config"
+  >,
 ) {
-  const tool = createSessionStatusTool({
-    agentSessionKey,
-    sandboxed: options?.sandboxed,
-    activeModelProvider: options?.activeModelProvider,
-    activeModelId: options?.activeModelId,
-    config: mockConfig as never,
-  });
-  expect(tool.name).toBe("session_status");
-  return tool;
+  return createSessionStatusTool({ ...options, agentSessionKey, config: mockConfig as never });
 }
 
-async function renderTaskStatus(tasks: Array<Record<string, unknown>>, callId: string) {
-  resetSessionStore({
-    "agent:main:main": { sessionId: "sess-main", updatedAt: Date.now() },
-  });
-  listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue(tasks);
-  const result = await createSessionStatusTool({ agentSessionKey: "agent:main:main" }).execute(
-    callId,
-    {
-      sessionKey: "agent:main:main",
-    },
-  );
-  return (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+function fixtureSession(sessionId: string, fields: Partial<SessionEntry> = {}): SessionEntry {
+  return { sessionId, updatedAt: 10, ...fields };
 }
+
+function status(
+  params: Record<string, unknown> = {},
+  requester = "main",
+  options?: Parameters<typeof getSessionStatusTool>[1],
+) {
+  return getSessionStatusTool(requester, options).execute("status", params);
+}
+
+function runSessionTool(persisted = true, thinking = false, treeVisibility = false) {
+  resetSessionStore({
+    [liveKey]: fixtureSession("s-tg-direct", {
+      updatedAt: 5,
+      status: "done",
+      ...(thinking ? { thinkingLevel: "off" } : {}),
+    }),
+    ...(persisted
+      ? { [mainKey]: fixtureSession("s-main", thinking ? { thinkingLevel: "high" } : {}) }
+      : {}),
+  });
+  if (treeVisibility) {
+    mockConfig = { ...mockConfig, tools: { sessions: { visibility: "tree" } } };
+  }
+  return getSessionStatusTool(liveKey, { runSessionKey: mainKey });
+}
+
+const mainKey = "agent:main:main";
+const childKey = "agent:main:subagent:child";
+const liveKey = "agent:main:telegram:default:direct:1234";
+const channelKey = "agent:main:scope:scopy:direct:scopy";
 
 describe("session_status tool", () => {
   beforeEach(() => {
-    buildStatusMessageMock.mockClear();
     clearInternalHooks();
+    buildStatusMessageMock.mockClear();
   });
 
-  it("returns a status card for the current session", async () => {
+  it("resets the fixed-store model, ignoring the active model and preserving compatible auth", async () => {
+    const authPin = {
+      authProfileOverride: "session-status-team:prod",
+      authProfileOverrideSource: "user" as const,
+      authProfileOverrideCompactionCount: 2,
+    };
     resetSessionStore({
-      main: {
-        sessionId: "s1",
-        updatedAt: 10,
-      },
-    });
-
-    const tool = getSessionStatusTool();
-
-    const result = await tool.execute("call1", {});
-    const details = result.details as { ok?: boolean; statusText?: string };
-    expect(details.ok).toBe(true);
-    expect(details.statusText).toContain("OpenClaw");
-    expect(details.statusText).toContain("🧠 Model:");
-    expect(details.statusText).not.toContain("OAuth/token status");
-    expect(tool.outputSchema).toBeDefined();
-    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
-    expect(mockCallArg(buildStatusMessageMock)).toMatchObject({
-      thinkingCatalog: expect.arrayContaining([
-        expect.objectContaining({
-          provider: "openai",
-          id: "gpt-5.4",
-          contextWindow: 400_000,
-        }),
-      ]),
-    });
-    // The full contract exceeds the compact hint budget; never promote a truncated shape.
-    expect(compactToolOutputHint(tool.outputSchema)).toBeUndefined();
-  });
-
-  it.each([false, true])(
-    "reports the fixed-store owner for a bare current session (reset: %s)",
-    async (reset) => {
-      resetSessionStore({
-        global: {
-          sessionId: "ops-global",
-          updatedAt: 10,
-          providerOverride: "anthropic",
-          modelOverride: "claude-sonnet-4-6",
-        },
-      });
-      mockConfig = {
-        session: { mainKey: "main", scope: "global", store: "/tmp/shared-sessions.sqlite" },
-        agents: {
-          ownership: "explicit",
-          defaults: {
-            model: { primary: "openai/gpt-5.4" },
-            models: {},
-            sessionStore: { agentId: "ops" },
-          },
-          entries: { ops: {}, research: {} },
-        },
-        tools: { agentToAgent: { enabled: false } },
-      };
-
-      const tool = createSessionStatusTool({
-        agentSessionKey: "global",
-        config: mockConfig as never,
-      });
-      const result = await tool.execute("owned-global", reset ? { model: "default" } : {});
-
-      expect(result.details).toMatchObject({
-        ok: true,
-        sessionKey: "global",
-        agentId: "ops",
-        changedModel: reset,
-      });
-      expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
-      expect(getSessionStateVersionMock).toHaveBeenCalledWith("global", "ops");
-    },
-  );
-
-  it("does not treat another agent's fixed-store bare key as self", async () => {
-    resetSessionStore({
-      global: {
-        sessionId: "ops-global",
-        updatedAt: 10,
-      },
+      global: fixtureSession("ops-global", {
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        ...authPin,
+      }),
     });
     mockConfig = {
-      session: { mainKey: "main", scope: "global", store: "/tmp/shared-sessions.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: {
-          model: { primary: "openai/gpt-5.4" },
-          models: {},
-          sessionStore: { agentId: "ops" },
-        },
-        entries: { ops: {}, research: {} },
-      },
-      tools: { agentToAgent: { enabled: false } },
+      ...fixedStoreConfig(),
+      auth: { profiles: { "session-status-team:prod": { provider: "openai", mode: "api_key" } } },
     };
-
-    const tool = createSessionStatusTool({
-      agentSessionKey: "agent:research:main",
-      requesterAgentIdOverride: "research",
-      config: mockConfig as never,
+    const tool = getSessionStatusTool("global", {
+      activeModelProvider: "openai",
+      activeModelId: "gpt-5.2",
     });
-
-    await expect(tool.execute("foreign-global", { sessionKey: "global" })).rejects.toThrow(
-      "Agent-to-agent status is disabled",
-    );
+    const result = await tool.execute("owned-global", { model: "default" });
+    expect(result.details).toMatchObject({
+      ok: true,
+      sessionKey: "global",
+      agentId: "ops",
+      changedModel: true,
+      model: "gpt-5.4",
+      modelOverride: null,
+    });
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    expect(getSessionStateVersionMock).toHaveBeenCalledWith("global", "ops");
+    expect(savedSession("global")).toMatchObject(authPin);
   });
 
-  it("returns read-only state changes and the signal-log head", async () => {
+  it("does not treat another agent's fixed-store bare key as self", async () => {
+    resetSessionStore({ global: fixtureSession("ops-global") });
+    mockConfig = fixedStoreConfig();
+
+    await expect(
+      status({ sessionKey: "global" }, "agent:research:main", {
+        requesterAgentIdOverride: "research",
+      }),
+    ).rejects.toThrow("Agent-to-agent status is disabled");
+  });
+
+  it("returns sanitized group state changes from main under tree visibility", async () => {
+    const groupKey = "agent:main:telegram:group:unspawned";
     resetSessionStore({
-      main: {
-        sessionId: "s1",
-        updatedAt: 10,
-      },
+      [mainKey]: fixtureSession("s-main"),
+      [groupKey]: fixtureSession("s1", { chatType: "group", updatedAt: 20 }),
     });
-    getSessionStateVersionMock.mockReturnValue(12);
-    listSessionStateEventsSinceMock.mockReturnValue({
-      events: [
-        {
-          sequence: 11,
-          sessionKey: "main",
-          sessionId: "s1",
-          agentId: "main",
-          kind: "run_failed",
-          actorType: "agent",
-          actorId: "worker-1",
-          runId: "run-11",
-          occurredAt: 90,
-          summary: "child run timed out",
-          payload: {
-            outcome: "timeout",
-            channel: "codex",
-            turns: 2,
-            catalogId: "internal-catalog",
-            nested: { drop: true },
-          },
-        },
-        {
-          sequence: 12,
-          sessionKey: "main",
-          sessionId: "s1",
-          agentId: "main",
-          kind: "upstream_missing",
-          actorType: "system",
-          occurredAt: 100,
-          summary: "upstream missing via codex",
-          payload: { channel: "codex", catalogId: "internal-catalog", nested: { drop: true } },
-        },
-      ],
-      truncated: false,
-      earliestAvailableSequence: 11,
-      historyGap: true,
-    });
-
-    const tool = getSessionStatusTool();
-    const result = await tool.execute("call-state", { changesSince: 3 });
-    const details = result.details as Record<string, unknown>;
-    const text = (result.content?.[0] as { text?: string } | undefined)?.text ?? "";
-
-    expect(getSessionStateVersionMock).toHaveBeenCalledWith("main", "main");
-    expect(listSessionStateEventsSinceMock).toHaveBeenCalledWith("main", "main", 3, 200);
-    expect(details.stateVersion).toBe(12);
+    mockConfig = {
+      ...createMockConfig(),
+      tools: { sessions: { visibility: "tree" }, agentToAgent: { enabled: false } },
+    };
     const expectedStateChanges = {
       events: [
         {
@@ -788,17 +490,33 @@ describe("session_status tool", () => {
       earliestAvailableSequence: 11,
       historyGap: true,
     };
-    expect(details.stateChanges).toEqual(expectedStateChanges);
+    getSessionStateVersionMock.mockReturnValue(12);
+    listSessionStateEventsSinceMock.mockReturnValue({
+      ...expectedStateChanges,
+      events: expectedStateChanges.events.map((event) => ({
+        ...event,
+        sessionKey: groupKey,
+        sessionId: "s1",
+        agentId: "main",
+        payload: { ...event.payload, catalogId: "internal-catalog", nested: { drop: true } },
+      })),
+    });
+
+    const tool = getSessionStatusTool(mainKey);
+    const result = await tool.execute("call-state", { sessionKey: groupKey, changesSince: 3 });
+    const text = (result.content?.[0] as { text?: string } | undefined)?.text ?? "";
+    expect(getSessionStateVersionMock).toHaveBeenCalledWith(groupKey, "main");
+    expect(listSessionStateEventsSinceMock).toHaveBeenCalledWith(groupKey, "main", 3, 200);
+    expect(result.details).toMatchObject({
+      ok: true,
+      sessionKey: groupKey,
+      stateVersion: 12,
+      statusText: text,
+    });
+    expect((result.details as Record<string, unknown>).stateChanges).toEqual(expectedStateChanges);
     expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
-    expect(details.statusText).toBe(text);
-    const stateChangesMarker = "Session state changes:\n```json\n";
-    const stateChangesStart = text.indexOf(stateChangesMarker);
-    expect(stateChangesStart).toBeGreaterThanOrEqual(0);
-    const stateChangesJsonStart = stateChangesStart + stateChangesMarker.length;
-    const stateChangesJsonEnd = text.indexOf("\n```", stateChangesJsonStart);
-    expect(stateChangesJsonEnd).toBeGreaterThan(stateChangesJsonStart);
-    const visibleStateChangesText = text.slice(stateChangesJsonStart, stateChangesJsonEnd);
-    expect(JSON.parse(visibleStateChangesText)).toEqual({
+    const stateJson = text.match(/Session state changes:\n```json\n([\s\S]*?)\n```/)?.[1];
+    expect(JSON.parse(expectDefined(stateJson, "visible state changes"))).toEqual({
       stateVersion: 12,
       stateChanges: expectedStateChanges,
     });
@@ -810,764 +528,300 @@ describe("session_status tool", () => {
       '"nested"',
       "internal-catalog",
     ]) {
-      expect(visibleStateChangesText).not.toContain(omittedField);
-      expect(String(details.statusText)).not.toContain(omittedField);
+      expect(text).not.toContain(omittedField);
     }
   });
 
-  it("returns same-agent group changesSince from main under tree visibility", async () => {
-    const groupSessionKey = "agent:main:telegram:group:unspawned";
-    resetSessionStore({
-      "agent:main:main": { sessionId: "s-main", updatedAt: 10 },
-      [groupSessionKey]: {
-        sessionId: "s-group",
-        updatedAt: 20,
-        chatType: "group",
+  it("reports session capabilities from the Gateway tool inventory on request", async () => {
+    resetSessionStore({ main: fixtureSession("s1") });
+    agentToolGatewayCallMock.mockImplementation((opts: { method?: string }) =>
+      opts.method === "tools.effective"
+        ? Promise.resolve({
+            agentId: "main",
+            profile: "coding",
+            groups: [
+              {
+                id: "core",
+                label: "Built-in tools",
+                source: "core",
+                tools: [
+                  {
+                    id: "exec",
+                    label: "Exec",
+                    description: "",
+                    rawDescription: "",
+                    source: "core",
+                  },
+                ],
+              },
+            ],
+            toolAccess: {
+              checked: "live-session",
+              profiles: [],
+              tools: [{ id: "exec", status: "available", reasons: [] }],
+            },
+          })
+        : callGatewayMock(opts),
+    );
+
+    const tool = getSessionStatusTool();
+    const plain = await tool.execute("call-plain", {});
+    expect((plain.details as Record<string, unknown>).capabilities).toBeUndefined();
+    expect(agentToolGatewayCallMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "tools.effective" }),
+    );
+
+    const result = await tool.execute("call-capabilities", { capabilities: true });
+    const text = (result.content?.[0] as { text?: string } | undefined)?.text ?? "";
+    expect(agentToolGatewayCallMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "tools.effective",
+        params: { agentId: "main", sessionKey: "main" },
+      }),
+    );
+    expect(result.details).toMatchObject({
+      capabilities: {
+        checked: "live-session",
+        available: ["exec"],
+        unavailable: [],
       },
     });
-    mockConfig = {
-      ...createMockConfig(),
-      tools: {
-        sessions: { visibility: "tree" },
-        agentToAgent: { enabled: false },
-      },
-    };
-    getSessionStateVersionMock.mockReturnValue(9);
-    listSessionStateEventsSinceMock.mockReturnValue({
-      events: [
-        { sequence: 9, kind: "human_direct_message", summary: "human message via telegram" },
-      ],
-      truncated: false,
-      earliestAvailableSequence: 9,
-      historyGap: false,
-    });
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    expect(text).toContain("Capabilities (this session only");
+  });
 
-    const result = await getSessionStatusTool("agent:main:main").execute("call-group-state", {
-      sessionKey: groupSessionKey,
-      changesSince: 4,
-    });
+  it("keeps status usable when the capability inventory cannot be read", async () => {
+    resetSessionStore({ main: fixtureSession("s1") });
+    agentToolGatewayCallMock.mockImplementation((opts: { method?: string }) =>
+      opts.method === "tools.effective"
+        ? Promise.reject(new Error("missing scope: operator.read"))
+        : callGatewayMock(opts),
+    );
 
-    expect(listSessionStateEventsSinceMock).toHaveBeenCalledWith(groupSessionKey, "main", 4, 200);
+    const tool = getSessionStatusTool();
+    const result = await tool.execute("call-capabilities-error", { capabilities: true });
+    const text = (result.content?.[0] as { text?: string } | undefined)?.text ?? "";
     expect(result.details).toMatchObject({
       ok: true,
-      sessionKey: groupSessionKey,
-      stateVersion: 9,
+      capabilities: { checked: "unavailable", error: "missing scope: operator.read" },
     });
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    expect(text).toContain("not evidence that OpenClaw lacks a capability");
   });
 
-  it("enables transcript usage fallback for session_status", async () => {
+  it("resolves whitespace-decorated current to the webchat requester (#89773, #89800)", async () => {
     resetSessionStore({
-      main: {
-        sessionId: "s1",
-        updatedAt: 10,
+      main: fixtureSession("s-fallback-main", { updatedAt: 5, thinkingLevel: "high" }),
+      "agent:admin:main": fixtureSession("s-admin-main", { thinkingLevel: "low" }),
+    });
+
+    const result = await status({ sessionKey: " current " }, "agent:admin:main", {
+      activeDeliveryContext: {
+        channel: "webchat",
+        to: "control-ui-conversation",
       },
     });
 
-    const tool = getSessionStatusTool();
+    expect(result.details).toMatchObject({ ok: true, sessionKey: "agent:admin:main" });
 
-    await tool.execute("call-transcript-usage", {});
-
-    expectRecordFields(mockCallArg(buildStatusMessageMock), { includeTranscriptUsage: true });
-  });
-
-  it("passes spawned workspace to session_status auth labels", async () => {
-    resetSessionStore({
-      "agent:main:spawned": {
-        sessionId: "spawned-status",
-        updatedAt: 10,
-        spawnedWorkspaceDir: "/tmp/openclaw-spawned-workspace",
-        providerOverride: "anthropic",
-        modelOverride: "claude-opus-4-6",
-      },
+    expect(buildStatusMessageMock.mock.calls[0]?.[0]).toMatchObject({
+      sessionEntry: { sessionId: "s-admin-main", thinkingLevel: "low" },
     });
-
-    const tool = getSessionStatusTool("agent:main:spawned");
-
-    await tool.execute("call-spawned-workspace-status", {});
-
-    expectRecordFields(mockCallArg(buildStatusMessageMock), {
-      workspaceDir: "/tmp/openclaw-spawned-workspace",
-    });
-  });
-
-  it("errors for unknown session keys", async () => {
-    resetSessionStore({
-      main: { sessionId: "s1", updatedAt: 10 },
-    });
-
-    const tool = getSessionStatusTool();
-
-    await expect(tool.execute("call2", { sessionKey: "nope" })).rejects.toThrow(
-      "Unknown sessionId",
-    );
-    expect(updateSessionStoreMock).not.toHaveBeenCalled();
-  });
-
-  it("resolves sessionKey=current to the requester session", async () => {
-    resetSessionStore({
-      main: {
-        sessionId: "s1",
-        updatedAt: 10,
-      },
-    });
-
-    const tool = getSessionStatusTool();
-
-    const result = await tool.execute("call-current", { sessionKey: "current" });
-    const details = result.details as { ok?: boolean; sessionKey?: string };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("main");
-  });
-
-  it("resolves sessionKey=current to the requester agent session", async () => {
-    installScopedSessionStores();
-
-    const tool = getSessionStatusTool("agent:support:main");
-
-    // "current" resolves to the support agent's own session via the "main" alias.
-    const result = await tool.execute("call-current-child", { sessionKey: "current" });
-    const details = result.details as { ok?: boolean; sessionKey?: string };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("agent:support:main");
   });
 
   it.each([
+    { name: "implicit thinking (#82669)", persisted: true, thinking: true, tree: false },
     {
-      name: "resolves webchat sessionKey=current to the full requester main key (#89773)",
-      sessionKey: "current",
-      callId: "call-current-webchat-main",
+      name: "explicit current under tree visibility (#76708)",
+      persisted: true,
+      thinking: false,
+      tree: true,
     },
-    {
-      name: "resolves whitespace-decorated webchat sessionKey=current to the full requester main key (#89800)",
-      sessionKey: " current ",
-      callId: "call-current-webchat-main-spaced",
-    },
-  ])("$name", async ({ sessionKey, callId }) => {
-    resetSessionStore({
-      main: {
-        sessionId: "s-fallback-main",
-        updatedAt: 5,
-        thinkingLevel: "high",
-      },
-      "agent:admin:main": {
-        sessionId: "s-admin-main",
-        updatedAt: 10,
-        thinkingLevel: "low",
-      },
+    { name: "unpersisted semantic current", persisted: false, thinking: false, tree: false },
+  ])("resolves the live run for $name", async ({ persisted, thinking, tree }) => {
+    const result = await runSessionTool(persisted, thinking, tree).execute(
+      "current",
+      thinking ? {} : { sessionKey: "current" },
+    );
+    expect(result.details).toMatchObject({
+      ok: true,
+      sessionKey: mainKey,
+      ...(!persisted ? { statusText: expect.stringContaining("OpenClaw") } : {}),
     });
-
-    const tool = createSessionStatusTool({
-      agentSessionKey: "agent:admin:main",
-      activeDeliveryContext: {
-        channel: "webchat",
-        to: "control-ui-conversation",
-      },
-      config: mockConfig as never,
-    });
-
-    const result = await tool.execute(callId, { sessionKey });
-    const details = result.details as { ok?: boolean; sessionKey?: string };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("agent:admin:main");
-
-    const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
-    expectRecordFields(statusArg.sessionEntry, {
-      sessionId: "s-admin-main",
-      thinkingLevel: "low",
-    });
-  });
-
-  it("synthesizes webchat sessionKey=current from the full requester main key (#89773)", async () => {
-    resetSessionStore({});
-
-    const tool = createSessionStatusTool({
-      agentSessionKey: "agent:admin:main",
-      activeDeliveryContext: {
-        channel: "webchat",
-        to: "control-ui-conversation",
-      },
-      config: mockConfig as never,
-    });
-
-    const result = await tool.execute("call-current-webchat-main-unpersisted", {
-      sessionKey: "current",
-    });
-    const details = result.details as { ok?: boolean; sessionKey?: string; statusText?: string };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("agent:admin:main");
-    expect(details.statusText).toContain("OpenClaw");
-  });
-
-  it("uses runSessionKey thinking level for implicit no-arg status lookups (#82669)", async () => {
-    resetSessionStore({
-      "agent:main:telegram:default:direct:1234": {
-        sessionId: "s-tg-direct",
-        updatedAt: 5,
-        status: "done",
-        thinkingLevel: "off",
-      },
-      "agent:main:main": {
-        sessionId: "s-main",
-        updatedAt: 10,
-        status: "running",
-        thinkingLevel: "high",
-      },
-    });
-
-    const tool = createSessionStatusTool({
-      agentSessionKey: "agent:main:telegram:default:direct:1234",
-      runSessionKey: "agent:main:main",
-      config: mockConfig as never,
-    });
-
-    const result = await tool.execute("call-implicit-run-session-thinking", {});
-    const details = result.details as { ok?: boolean; sessionKey?: string };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("agent:main:main");
-
-    const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
-    const sessionEntry = statusArg.sessionEntry as SessionEntry;
-    expect(sessionEntry.thinkingLevel).toBe("high");
-  });
-
-  it("resolves sessionKey=current to runSessionKey under explicit tree visibility (#76708)", async () => {
-    resetSessionStore({
-      "agent:main:telegram:default:direct:1234": {
-        sessionId: "s-tg-direct",
-        updatedAt: 5,
-        status: "done",
-      },
-      "agent:main:main": {
-        sessionId: "s-main",
-        updatedAt: 10,
-        status: "running",
-      },
-    });
-
-    mockConfig = { ...mockConfig, tools: { sessions: { visibility: "tree" } } };
-
-    // Explicit tree visibility protects the semantic-current alias. The tool uses
-    // the Telegram key as agentSessionKey and the live run key as runSessionKey.
-    // semantic-current must be treated as self for visibility purposes.
-    const tool = createSessionStatusTool({
-      agentSessionKey: "agent:main:telegram:default:direct:1234",
-      runSessionKey: "agent:main:main",
-      config: mockConfig as never,
-    });
-
-    const result = await tool.execute("call-current-run-session", { sessionKey: "current" });
-    const details = result.details as { ok?: boolean; sessionKey?: string };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("agent:main:main");
-  });
-
-  it("synthesizes semantic current from runSessionKey when the live run is not persisted yet", async () => {
-    resetSessionStore({
-      "agent:main:telegram:default:direct:1234": {
-        sessionId: "s-tg-direct",
-        updatedAt: 5,
-        status: "done",
-      },
-    });
-
-    const tool = createSessionStatusTool({
-      agentSessionKey: "agent:main:telegram:default:direct:1234",
-      runSessionKey: "agent:main:main",
-      config: mockConfig as never,
-    });
-
-    const result = await tool.execute("call-current-unpersisted-run", { sessionKey: "current" });
-    const details = result.details as { ok?: boolean; sessionKey?: string; statusText?: string };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("agent:main:main");
-    expect(details.statusText).toContain("OpenClaw");
+    if (thinking) {
+      expect(buildStatusMessageMock.mock.calls[0]?.[0]).toMatchObject({
+        sessionEntry: { thinkingLevel: "high" },
+      });
+    }
   });
 
   it("reports origin, active, and persisted delivery route metadata for semantic current", async () => {
     const sessionKey = "agent:main:discord:channel:1489550370136129537";
-    resetSessionStore({
-      [sessionKey]: {
-        sessionId: "s-discord-origin-webchat-active",
-        updatedAt: 10,
-        delivery: normalizeSessionDeliveryState({
-          origin: { provider: "discord", accountId: "bot-primary" },
-          context: {
-            channel: "discord",
-            to: "channel:1489550370136129537",
-            accountId: "bot-primary",
-            threadId: "thread-origin",
-          },
-        }),
-      },
-    });
-
-    const tool = createSessionStatusTool({
-      agentSessionKey: sessionKey,
-      runSessionKey: sessionKey,
-      activeDeliveryContext: {
-        channel: "webchat",
-        to: "control-ui-conversation",
-        accountId: "browser",
-        threadId: "webchat-thread",
-      },
-      config: mockConfig as never,
-    });
-
-    const result = await tool.execute("call-current-route-context", { sessionKey: "current" });
-    const details = result.details as {
-      ok?: boolean;
-      sessionKey?: string;
-      statusText?: string;
-      origin?: { provider?: string; accountId?: string };
-      active?: { channel?: string; to?: string; accountId?: string; threadId?: string };
-      deliveryContext?: {
-        channel?: string;
-        to?: string;
-        accountId?: string;
-        threadId?: string;
-      };
-    };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe(sessionKey);
-    expect(details.origin).toEqual({
-      provider: "discord",
+    const origin = { provider: "discord", accountId: "bot-primary" };
+    const delivery = {
+      channel: "discord",
+      to: "channel:1489550370136129537",
       accountId: "bot-primary",
       threadId: "thread-origin",
-    });
-    expect(details.active).toEqual({
+    };
+    const active = {
       channel: "webchat",
       to: "control-ui-conversation",
       accountId: "browser",
       threadId: "webchat-thread",
+    };
+    resetSessionStore({
+      [sessionKey]: fixtureSession("s-discord-origin-webchat-active", {
+        delivery: normalizeSessionDeliveryState({ origin, context: delivery }),
+      }),
     });
-    expect(details.deliveryContext).toEqual({
-      channel: "discord",
-      to: "channel:1489550370136129537",
-      accountId: "bot-primary",
-      threadId: "thread-origin",
+    const result = await status({ sessionKey: "current" }, sessionKey, {
+      runSessionKey: sessionKey,
+      activeDeliveryContext: active,
     });
+    expect(result.details).toEqual(
+      expect.objectContaining({
+        ok: true,
+        sessionKey,
+        origin: { ...origin, threadId: "thread-origin" },
+        active,
+        deliveryContext: delivery,
+        statusText: expect.stringContaining('"active"'),
+      }),
+    );
     const text =
       result.content.find((item): item is { type: "text"; text: string } => item.type === "text")
         ?.text ?? "";
-    expect(text).toContain("Route context:");
-    expect(text).toContain('"origin"');
-    expect(text).toContain('"active"');
-    expect(text).toContain('"deliveryContext"');
-    expect(details.statusText).toContain('"active"');
-  });
-
-  it("does not report an active route for explicit non-live session lookups", async () => {
-    const currentKey = "agent:main:main";
-    const targetKey = "agent:main:discord:channel:1489550370136129537";
-    resetSessionStore({
-      [currentKey]: {
-        sessionId: "s-main",
-        updatedAt: 5,
-      },
-      [targetKey]: {
-        sessionId: "s-target",
-        updatedAt: 10,
-        delivery: normalizeSessionDeliveryState({
-          context: {
-            channel: "discord",
-            to: "channel:1489550370136129537",
-          },
-        }),
-      },
-    });
-    mockConfig = {
-      ...mockConfig,
-      tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true, allow: ["*"] } },
-    };
-
-    const tool = createSessionStatusTool({
-      agentSessionKey: currentKey,
-      runSessionKey: currentKey,
-      activeDeliveryContext: {
-        channel: "webchat",
-        to: "control-ui-conversation",
-      },
-      config: mockConfig as never,
-    });
-
-    const result = await tool.execute("call-explicit-non-live-route-context", {
-      sessionKey: targetKey,
-    });
-    const details = result.details as {
-      origin?: { provider?: string };
-      active?: { channel?: string };
-      deliveryContext?: { channel?: string; to?: string };
-    };
-    expect(details.origin).toEqual({ provider: "discord" });
-    expect(details.active).toBeUndefined();
-    expect(details.deliveryContext).toEqual({
-      channel: "discord",
-      to: "channel:1489550370136129537",
-    });
+    for (const marker of ["Route context:", '"origin"', '"active"', '"deliveryContext"']) {
+      expect(text).toContain(marker);
+    }
   });
 
   it("does not report an active route for an explicit stale policy-key lookup", async () => {
-    const policyKey = "agent:main:telegram:default:direct:1234";
-    const runKey = "agent:main:main";
     resetSessionStore({
-      [policyKey]: {
-        sessionId: "s-policy",
+      [liveKey]: fixtureSession("s-policy", {
         updatedAt: 5,
         delivery: normalizeSessionDeliveryState({
-          context: {
-            channel: "telegram",
-            to: "telegram:direct:1234",
-          },
+          context: { channel: "telegram", to: "telegram:direct:1234" },
         }),
-      },
-      [runKey]: {
-        sessionId: "s-run",
-        updatedAt: 10,
-      },
+      }),
+      [mainKey]: fixtureSession("s-run"),
     });
 
-    const tool = createSessionStatusTool({
-      agentSessionKey: policyKey,
-      runSessionKey: runKey,
+    const result = await status({ sessionKey: liveKey }, liveKey, {
+      runSessionKey: mainKey,
       activeDeliveryContext: {
         channel: "webchat",
         to: "control-ui-conversation",
       },
-      config: mockConfig as never,
     });
 
-    const result = await tool.execute("call-explicit-stale-policy-key-route-context", {
-      sessionKey: policyKey,
-    });
-    const details = result.details as {
-      sessionKey?: string;
-      active?: { channel?: string };
-      deliveryContext?: { channel?: string; to?: string };
-    };
-    expect(details.sessionKey).toBe(policyKey);
-    expect(details.active).toBeUndefined();
-    expect(details.deliveryContext).toEqual({
-      channel: "telegram",
-      to: "telegram:direct:1234",
-    });
+    expect(result.details).toEqual(
+      expect.objectContaining({
+        sessionKey: liveKey,
+        deliveryContext: { channel: "telegram", to: "telegram:direct:1234" },
+      }),
+    );
+    expect(result.details).not.toHaveProperty("active");
   });
 
   it("rejects explicit cross-session key under tree visibility even when it equals runSessionKey (#76708)", async () => {
-    resetSessionStore({
-      "agent:main:telegram:default:direct:1234": {
-        sessionId: "s-tg-direct",
-        updatedAt: 5,
-        status: "done",
-      },
-      "agent:main:main": {
-        sessionId: "s-main",
-        updatedAt: 10,
-        status: "running",
-      },
-    });
+    const tool = runSessionTool(true, false, true);
 
-    mockConfig = { ...mockConfig, tools: { sessions: { visibility: "tree" } } };
-
-    // Same setup but with an explicit key — should NOT bypass visibility.
-    const tool = createSessionStatusTool({
-      agentSessionKey: "agent:main:telegram:default:direct:1234",
-      runSessionKey: "agent:main:main",
-      config: mockConfig as never,
-    });
-
-    await expect(
-      tool.execute("call-explicit-key", { sessionKey: "agent:main:main" }),
-    ).rejects.toThrow(/visibility is restricted/);
-  });
-
-  it("treats the TUI client label as the current requester session", async () => {
-    resetSessionStore({
-      "agent:main:main": {
-        sessionId: "s-main",
-        updatedAt: 10,
-      },
-    });
-
-    const tool = getSessionStatusTool("agent:main:main");
-
-    const result = await tool.execute("call-tui-label", { sessionKey: "openclaw-tui" });
-    const details = result.details as { ok?: boolean; sessionKey?: string };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("agent:main:main");
+    await expect(tool.execute("call-explicit-key", { sessionKey: mainKey })).rejects.toThrow(
+      /visibility is restricted/,
+    );
   });
 
   it("falls back from implicit default-account direct policy keys to persisted direct sessions", async () => {
     resetSessionStore({
-      "agent:main:telegram:direct:1053274893": {
-        sessionId: "s-direct",
-        updatedAt: 10,
-      },
+      "agent:main:telegram:direct:1053274893": fixtureSession("s-direct"),
     });
 
-    const tool = getSessionStatusTool("agent:main:telegram:default:direct:1053274893");
-
-    const result = await tool.execute("call-default-direct", {});
-    const details = result.details as { ok?: boolean; sessionKey?: string };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("agent:main:telegram:direct:1053274893");
-  });
-
-  it("falls back from implicit default-account direct policy keys to main sessions", async () => {
-    resetSessionStore({
-      "agent:main:main": {
-        sessionId: "s-main",
-        updatedAt: 10,
-      },
+    const result = await status({}, "agent:main:telegram:default:direct:1053274893");
+    expect(result.details).toMatchObject({
+      ok: true,
+      sessionKey: "agent:main:telegram:direct:1053274893",
     });
-
-    const tool = getSessionStatusTool("agent:main:telegram:default:direct:1053274893");
-
-    const result = await tool.execute("call-default-direct-main", {});
-    const details = result.details as { ok?: boolean; sessionKey?: string };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("agent:main:main");
   });
 
   it("keeps explicit default-account direct session lookups strict", async () => {
-    resetSessionStore({
-      "agent:main:main": {
-        sessionId: "s-main",
-        updatedAt: 10,
-      },
-    });
+    resetSessionStore({ [mainKey]: fixtureSession("s-main") });
 
-    const tool = getSessionStatusTool("agent:main:telegram:default:direct:1053274893");
-
-    await expect(
-      tool.execute("call-default-direct-explicit", {
-        sessionKey: "agent:main:telegram:default:direct:1053274893",
-      }),
-    ).rejects.toThrow("Unknown sessionKey: agent:main:telegram:default:direct:1053274893");
+    const key = "agent:main:telegram:default:direct:1053274893";
+    await expect(status({ sessionKey: key }, key)).rejects.toThrow(
+      "Unknown sessionKey: agent:main:telegram:default:direct:1053274893",
+    );
   });
 
-  it("prefers a literal current session key in session_status", async () => {
-    resetSessionStore({
-      main: {
-        sessionId: "s-main",
-        updatedAt: 10,
-      },
-      "agent:main:current": {
-        sessionId: "s-current",
-        updatedAt: 20,
-      },
-    });
-
-    const tool = getSessionStatusTool();
-
-    const result = await tool.execute("call-current-literal-key", { sessionKey: "current" });
-    const details = result.details as { ok?: boolean; sessionKey?: string };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("agent:main:current");
-  });
-
-  it("does not apply the active run model to a literal current session key", async () => {
-    resetSessionStore({
-      main: {
-        sessionId: "s-main",
-        updatedAt: 10,
-      },
-      "agent:main:current": {
-        sessionId: "s-current",
-        updatedAt: 20,
-        providerOverride: "anthropic",
-        modelOverride: "claude-sonnet-4-6",
-      },
-    });
-
-    const tool = getSessionStatusTool("main", {
-      activeModelProvider: "openai",
-      activeModelId: "gpt-5.2",
-    });
-
-    const result = await tool.execute("call-current-literal-key-active-model", {
-      sessionKey: "current",
-    });
-    const details = result.details as { ok?: boolean; sessionKey?: string };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("agent:main:current");
-
-    const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
-    expectRecordFields(statusArg.sessionEntry, {
-      providerOverride: "anthropic",
-      modelOverride: "claude-sonnet-4-6",
-    });
-    const agent = statusArg.agent as Record<string, unknown>;
-    const model = agent.model as Record<string, unknown>;
-    expect(model.primary).not.toBe("openai/gpt-5.2");
-  });
-
-  it("resolves sessionKey=current for a channel-plugin requester via implicit fallback", async () => {
-    resetSessionStore({});
-
-    const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy");
-
-    const result = await tool.execute("call-current-channel-plugin", { sessionKey: "current" });
-    const details = result.details as { ok?: boolean; sessionKey?: string; statusText?: string };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
-    expect(details.statusText).toContain("OpenClaw");
-    expect(details.statusText).toContain("🧠 Model:");
-  });
+  it.each([false, true])(
+    "applies the active run model only to semantic current (literal=%s)",
+    async (literal) => {
+      const key = literal ? "agent:main:current" : channelKey;
+      const overrides = { providerOverride: "anthropic", modelOverride: "claude-sonnet-4-6" };
+      resetSessionStore({
+        ...(literal ? { main: fixtureSession("s-main") } : {}),
+        [key]: fixtureSession("s-current", { ...overrides, updatedAt: literal ? 20 : 10 }),
+      });
+      const result = await getSessionStatusTool(literal ? "main" : key, {
+        activeModelProvider: "openai",
+        activeModelId: "gpt-5.2",
+      }).execute("current-model", { sessionKey: "current" });
+      const statusArg = buildStatusMessageMock.mock.calls[0]?.[0] as {
+        sessionEntry: SessionEntry;
+        primaryModelLabelOverride: string;
+      };
+      if (literal) {
+        expect(result.details).toMatchObject({ ok: true, sessionKey: key });
+        expect(statusArg).toMatchObject({ sessionEntry: overrides });
+        expect(statusArg.primaryModelLabelOverride).not.toBe("openai/gpt-5.2");
+      } else {
+        expect(statusArg.sessionEntry.providerOverride).toBeUndefined();
+        expect(statusArg.sessionEntry.modelOverride).toBeUndefined();
+        expect(statusArg.primaryModelLabelOverride).toBe("openai/gpt-5.2");
+      }
+    },
+  );
 
   it("resolves sandboxed sessionKey=current to the requester when no run session override exists", async () => {
     resetSessionStore({});
 
-    const tool = getSessionStatusTool("agent:main:telegram:group:-5096326138", {
-      sandboxed: true,
+    const result = await status(
+      { sessionKey: "current" },
+      "agent:main:telegram:group:-5096326138",
+      { sandboxed: true },
+    );
+    expect(result.details).toMatchObject({
+      ok: true,
+      sessionKey: "agent:main:telegram:group:-5096326138",
+      statusText: expect.stringContaining("OpenClaw"),
     });
-
-    const result = await tool.execute("call-current-sandboxed-channel", {
-      sessionKey: "current",
-    });
-    const details = result.details as { ok?: boolean; sessionKey?: string; statusText?: string };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("agent:main:telegram:group:-5096326138");
-    expect(details.statusText).toContain("OpenClaw");
-    expect(details.statusText).toContain("🧠 Model:");
-    expect(
-      callGatewayMock.mock.calls.some(([arg]) => {
-        const request = arg as { method?: string; params?: { key?: string } };
-        return request.method === "sessions.resolve" && request.params?.key === "current";
+    expect(result.details).toMatchObject({ statusText: expect.stringContaining("🧠 Model:") });
+    expect(callGatewayMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.resolve",
+        params: expect.objectContaining({ key: "current" }),
       }),
-    ).toBe(false);
-  });
-
-  it("resolves the default session_status lookup for a channel-plugin requester via implicit fallback", async () => {
-    resetSessionStore({});
-
-    const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy");
-
-    const result = await tool.execute("call-current-channel-plugin-default", {});
-    const details = result.details as { ok?: boolean; sessionKey?: string; statusText?: string };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
-    expect(details.statusText).toContain("OpenClaw");
-    expect(details.statusText).toContain("🧠 Model:");
-  });
-
-  it("renders the active run model for semantic current lookups", async () => {
-    resetSessionStore({
-      "agent:main:scope:scopy:direct:scopy": {
-        sessionId: "current-active-model",
-        updatedAt: 10,
-      },
-    });
-
-    const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy", {
-      activeModelProvider: "openai",
-      activeModelId: "gpt-5.2",
-    });
-
-    await tool.execute("call-current-active-model", { sessionKey: "current" });
-
-    const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
-    const agent = statusArg.agent as Record<string, unknown>;
-    expectRecordFields(agent.model, { primary: "openai/gpt-5.2" });
-  });
-
-  it("renders the active run model for omitted sessionKey lookups", async () => {
-    resetSessionStore({
-      "agent:main:scope:scopy:direct:scopy": {
-        sessionId: "implicit-current-active-model",
-        updatedAt: 10,
-      },
-    });
-
-    const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy", {
-      activeModelProvider: "openai",
-      activeModelId: "gpt-5.2",
-    });
-
-    await tool.execute("call-implicit-current-active-model", {});
-
-    const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
-    const agent = statusArg.agent as Record<string, unknown>;
-    expectRecordFields(agent.model, { primary: "openai/gpt-5.2" });
-  });
-
-  it("renders the active run model for current lookups with persisted overrides", async () => {
-    resetSessionStore({
-      "agent:main:scope:scopy:direct:scopy": {
-        sessionId: "current-active-model-with-override",
-        updatedAt: 10,
-        providerOverride: "anthropic",
-        modelOverride: "claude-sonnet-4-6",
-      },
-    });
-
-    const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy", {
-      activeModelProvider: "openai",
-      activeModelId: "gpt-5.2",
-    });
-
-    await tool.execute("call-current-active-model-with-override", { sessionKey: "current" });
-
-    const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
-    const sessionEntry = statusArg.sessionEntry as Record<string, unknown>;
-    expect(sessionEntry.providerOverride).toBeUndefined();
-    expect(sessionEntry.modelOverride).toBeUndefined();
-    const agent = statusArg.agent as Record<string, unknown>;
-    expectRecordFields(agent.model, { primary: "openai/gpt-5.2" });
-  });
-
-  it("does not reuse the active run model after a semantic current reset", async () => {
-    resetSessionStore({
-      "agent:main:scope:scopy:direct:scopy": {
-        sessionId: "current-reset-model",
-        updatedAt: 10,
-        providerOverride: "openai",
-        modelOverride: "gpt-5.2",
-      },
-    });
-
-    const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy", {
-      activeModelProvider: "openai",
-      activeModelId: "gpt-5.2",
-    });
-
-    await tool.execute("call-current-reset-model", {
-      sessionKey: "current",
-      model: "default",
-    });
-
-    const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
-    const agent = statusArg.agent as Record<string, unknown>;
-    expectRecordFields(agent.model, { primary: "openai/gpt-5.4" });
+    );
   });
 
   it("materializes a valid persisted session entry when implicit current fallback mutates model state", async () => {
     resetSessionStore({});
 
-    const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy");
-
-    const result = await tool.execute("call-current-channel-plugin-model", {
-      sessionKey: "current",
-      model: "anthropic/claude-sonnet-4-6",
-    });
-    const details = result.details as {
-      ok?: boolean;
-      sessionKey?: string;
-      model?: string;
-      modelProvider?: string;
-      modelOverride?: string | null;
-    };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
-    expect(details.model).toBe("claude-sonnet-4-6");
-    expect(details.modelProvider).toBe("anthropic");
-    expect(details.modelOverride).toBe("anthropic/claude-sonnet-4-6");
-    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
-    const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
-    const saved = expectDefined(
-      savedStore["agent:main:scope:scopy:direct:scopy"],
-      'savedStore["agent:main:scope:scopy:direct:scopy"] test invariant',
+    const result = await status(
+      { sessionKey: "current", model: "anthropic/claude-sonnet-4-6" },
+      channelKey,
     );
-    expectRecordFields(saved, {
+    expect(result.details).toMatchObject({
+      ok: true,
+      sessionKey: channelKey,
+      model: "claude-sonnet-4-6",
+      modelProvider: "anthropic",
+      modelOverride: "anthropic/claude-sonnet-4-6",
+    });
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
+    const saved = savedSession(channelKey);
+    expect(saved).toMatchObject({
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet-4-6",
       liveModelSwitchPending: true,
@@ -1575,94 +829,19 @@ describe("session_status tool", () => {
     expect(saved.sessionId).toMatch(UUID_RE);
   });
 
-  it("preserves an existing canonical main row when implicit fallback mutates model state", async () => {
-    resetSessionStore({
-      main: {
-        sessionId: "legacy-main-session",
-        updatedAt: 10,
-        label: "Legacy Main",
-        delivery: { kind: "none" },
-      },
-    });
-
-    const tool = getSessionStatusTool("agent:main:main");
-
-    const result = await tool.execute("call-legacy-main-fallback-model", {
-      model: "anthropic/claude-sonnet-4-6",
-    });
-    const details = result.details as {
-      ok?: boolean;
-      sessionKey?: string;
-      modelOverride?: string | null;
-    };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("main");
-    expect(details.modelOverride).toBe("anthropic/claude-sonnet-4-6");
-    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
-    const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
-    expect(savedStore.main).toMatchObject({
-      sessionId: "legacy-main-session",
-      label: "Legacy Main",
-      delivery: { kind: "none" },
-      providerOverride: "anthropic",
-      modelOverride: "claude-sonnet-4-6",
-      liveModelSwitchPending: true,
-    });
-  });
-
-  it("fires session:patch when session_status changes the persisted session model", async () => {
-    const events: InternalHookEvent[] = [];
-    registerInternalHook("session:patch", async (event) => {
-      events.push(event);
-    });
-    resetSessionStore({
-      main: {
-        sessionId: "s1",
-        updatedAt: 10,
-      },
-    });
-
-    const tool = getSessionStatusTool();
-
-    await tool.execute("call-session-status-model-hook", {
-      model: "anthropic/claude-sonnet-4-6",
-    });
-
-    await vi.waitFor(() => expect(events).toHaveLength(1));
-    const event = expectDefined(events[0], "events[0] test invariant");
-    expect(event.type).toBe("session");
-    expect(event.action).toBe("patch");
-    expect(event.sessionKey).toBe("main");
-    const context = event.context;
-    expect(context.patch).toMatchObject({
-      key: "main",
-      model: "anthropic/claude-sonnet-4-6",
-    });
-    expect(context.sessionEntry).toMatchObject({
-      providerOverride: "anthropic",
-      modelOverride: "claude-sonnet-4-6",
-      liveModelSwitchPending: true,
-    });
-  });
-
   it("rejects model changes for model-locked sessions", async () => {
     const store: Record<string, SessionEntry> = {
-      main: {
-        sessionId: "s1",
-        updatedAt: 10,
+      main: fixtureSession("s1", {
         providerOverride: "openai",
         modelOverride: "gpt-5.4",
         modelSelectionLocked: true,
-      },
+      }),
     };
     resetSessionStore(store);
 
-    const tool = getSessionStatusTool();
-    await expect(
-      tool.execute("call-session-status-model-locked", {
-        model: "anthropic/claude-sonnet-4-6",
-      }),
-    ).rejects.toThrow(MODEL_SELECTION_LOCKED_MESSAGE);
+    await expect(status({ model: "anthropic/claude-sonnet-4-6" })).rejects.toThrow(
+      MODEL_SELECTION_LOCKED_MESSAGE,
+    );
 
     expect(updateSessionStoreMock).not.toHaveBeenCalled();
     expect(store.main).toMatchObject({
@@ -1672,530 +851,27 @@ describe("session_status tool", () => {
     });
   });
 
-  it("materializes a valid persisted session entry when the default implicit current fallback mutates model state", async () => {
-    resetSessionStore({});
-
-    const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy");
-
-    const result = await tool.execute("call-current-channel-plugin-default-model", {
-      model: "anthropic/claude-sonnet-4-6",
-    });
-    const details = result.details as { ok?: boolean; sessionKey?: string };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
-    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
-    const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
-    const saved = expectDefined(
-      savedStore["agent:main:scope:scopy:direct:scopy"],
-      'savedStore["agent:main:scope:scopy:direct:scopy"] test invariant',
-    );
-    expectRecordFields(saved, {
-      providerOverride: "anthropic",
-      modelOverride: "claude-sonnet-4-6",
-      liveModelSwitchPending: true,
-    });
-    expect(saved.sessionId).toMatch(UUID_RE);
-  });
-
-  it("does not synthesize a current fallback for unknown non-literal session keys", async () => {
-    resetSessionStore({});
-
-    const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy");
-
-    await expect(
-      tool.execute("call-current-non-literal", { sessionKey: "definitely-not-current" }),
-    ).rejects.toThrow("Unknown sessionId: definitely-not-current");
-  });
-
-  it("includes background task context in session_status output", async () => {
-    const text = await renderTaskStatus(
-      [
-        {
-          taskId: "task-1",
-          runtime: "acp",
-          requesterSessionKey: "agent:main:main",
-          task: "Summarize inbox backlog",
-          status: "running",
-          deliveryStatus: "pending",
-          notifyPolicy: "done_only",
-          createdAt: Date.now() - 5_000,
-          progressSummary: "Indexing the latest threads",
-        },
-      ],
-      "tc-1",
-    );
-
-    expect(text).toContain("📌 Tasks: 1 active");
-    expect(text).toContain("acp");
-    expect(text).toContain("Summarize inbox backlog");
-    expect(text).toContain("Indexing the latest threads");
-  });
-
-  it("hides stale completed task rows from session_status output", async () => {
-    const text = await renderTaskStatus(
-      [
-        {
-          taskId: "task-stale",
-          runtime: "cron",
-          requesterSessionKey: "agent:main:main",
-          task: "stale completed task",
-          status: "succeeded",
-          deliveryStatus: "delivered",
-          notifyPolicy: "done_only",
-          createdAt: Date.now() - 15 * 60_000,
-          terminalSummary: "finished long ago",
-        },
-        {
-          taskId: "task-live",
-          runtime: "subagent",
-          requesterSessionKey: "agent:main:main",
-          task: "live task",
-          status: "running",
-          deliveryStatus: "pending",
-          notifyPolicy: "done_only",
-          createdAt: Date.now() - 5_000,
-          progressSummary: "still working",
-        },
-      ],
-      "tc-stale",
-    );
-
-    expect(text).toContain("📌 Tasks: 1 active");
-    expect(text).toContain("live task");
-    expect(text).not.toContain("stale completed task");
-    expect(text).not.toContain("finished long ago");
-  });
-
-  it("shows blocked completion outcomes in session_status output", async () => {
-    const text = await renderTaskStatus(
-      [
-        {
-          taskId: "task-blocked",
-          runtime: "cron",
-          requesterSessionKey: "agent:main:main",
-          task: "blocked task",
-          status: "succeeded",
-          terminalOutcome: "blocked",
-          notifyPolicy: "done_only",
-          createdAt: Date.now() - 5_000,
-          terminalSummary: "Additional input required.",
-        },
-      ],
-      "tc-blocked",
-    );
-
-    expect(text).toContain("📌 Tasks: 1 recent failure · blocked");
-    expect(text).toContain("blocked task");
-    expect(text).toContain("Additional input required.");
-  });
-
-  it("truncates long task titles and details in session_status output", async () => {
-    const text = await renderTaskStatus(
-      [
-        {
-          taskId: "task-long",
-          runtime: "subagent",
-          requesterSessionKey: "agent:main:main",
-          task: "This is a deliberately long task prompt that should never be emitted in full by session_status because it can include internal instructions and file paths that are not appropriate for user-visible task summaries.",
-          status: "running",
-          deliveryStatus: "pending",
-          notifyPolicy: "done_only",
-          createdAt: Date.now() - 5_000,
-          progressSummary:
-            "This progress detail is also intentionally long so the session_status tool proves it truncates verbose task context instead of dumping a long internal update into the tool response.",
-        },
-      ],
-      "tc-truncated",
-    );
-
-    expect(text).toContain(
-      "This is a deliberately long task prompt that should never be emitted in full by…",
-    );
-    expect(text).toContain(
-      "This progress detail is also intentionally long so the session_status tool proves it truncates verbose task context ins…",
-    );
-    expect(text).not.toContain("internal instructions and file paths");
-    expect(text).not.toContain("dumping a long internal update");
-  });
-
-  it("prefers failure context over newer success context in session_status output", async () => {
-    const text = await renderTaskStatus(
-      [
-        {
-          taskId: "task-failed",
-          runtime: "cron",
-          requesterSessionKey: "agent:main:main",
-          task: "failing task",
-          status: "failed",
-          deliveryStatus: "pending",
-          notifyPolicy: "done_only",
-          createdAt: Date.now() - 60_000,
-          endedAt: Date.now() - 30_000,
-          error: "permission denied",
-        },
-        {
-          taskId: "task-succeeded",
-          runtime: "subagent",
-          requesterSessionKey: "agent:main:main",
-          task: "successful task",
-          status: "succeeded",
-          deliveryStatus: "delivered",
-          notifyPolicy: "done_only",
-          createdAt: Date.now() - 10_000,
-          endedAt: Date.now(),
-          terminalSummary: "all done",
-        },
-      ],
-      "tc-failed-priority",
-    );
-
-    expect(text).toContain("📌 Tasks: 1 recent failure");
-    expect(text).toContain("failing task");
-    expect(text).toContain("permission denied");
-    expect(text).not.toContain("successful task");
-    expect(text).not.toContain("all done");
-  });
-
-  it("resolves current as the requester alias before a colliding session id", async () => {
-    resetSessionStore({
-      main: {
-        sessionId: "s-main",
-        updatedAt: 10,
-      },
-      "agent:main:other": {
-        sessionId: "current",
-        updatedAt: 20,
-      },
-    });
-    mockConfig = {
-      session: { mainKey: "main", scope: "per-sender" },
-      tools: {
-        sessions: { visibility: "all" },
-        agentToAgent: { enabled: true, allow: ["*"] },
-      },
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.4" },
-          models: {},
-        },
-      },
-    };
-
-    const tool = getSessionStatusTool();
-
-    const result = await tool.execute("call-current-literal-id", { sessionKey: "current" });
-    const details = result.details as { ok?: boolean; sessionKey?: string };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("main");
-  });
-
-  it("keeps sessionKey=current bound to the requester subagent session", async () => {
-    resetSessionStore({
-      "agent:main:main": {
-        sessionId: "s-parent",
-        updatedAt: 10,
-      },
-      "agent:main:subagent:child": {
-        sessionId: "s-child",
-        updatedAt: 20,
-        providerOverride: "openai",
-        modelOverride: "gpt-5.4",
-      },
-    });
-
-    const tool = getSessionStatusTool("agent:main:subagent:child");
-
-    const result = await tool.execute("call-current-subagent", {
-      sessionKey: "current",
-      model: "anthropic/claude-sonnet-4-6",
-    });
-    const details = result.details as { ok?: boolean; sessionKey?: string };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("agent:main:subagent:child");
-    expect(mockCallArg(updateSessionStoreMock)).toBe("/tmp/main/sessions.json");
-    const savedStore = mockCallArg(updateSessionStoreMock, 0, 1) as Record<string, unknown>;
-    expectRecordFields(savedStore["agent:main:subagent:child"], {
-      liveModelSwitchPending: true,
-      modelOverride: "claude-sonnet-4-6",
-    });
-  });
-
-  it("uses the runtime session model as the selected card model when no override is set", async () => {
-    resetSessionStore({
-      main: {
-        sessionId: "runtime-model",
-        updatedAt: 10,
-        modelProvider: "anthropic",
-        model: "claude-opus-4-6",
-      },
-    });
-
-    const tool = getSessionStatusTool();
-
-    await tool.execute("call-runtime-model", {});
-
-    const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
-    const agent = statusArg.agent as Record<string, unknown>;
-    expectRecordFields(agent.model, { primary: "anthropic/claude-opus-4-6" });
-  });
-
-  it("infers configured custom providers for runtime-only models in session_status", async () => {
-    resetSessionStore({
-      main: {
-        sessionId: "runtime-custom-provider",
-        updatedAt: 10,
-        model: "qwen-max",
-      },
-    });
-    mockConfig = {
-      session: { mainKey: "main", scope: "per-sender" },
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.4" },
-          models: {},
-        },
-      },
-      models: {
-        providers: {
-          "qwen-dashscope": {
-            apiKey: "DASHSCOPE_API_KEY",
-            models: [{ id: "qwen-max" }],
-          },
-        },
-      },
-      tools: {
-        agentToAgent: { enabled: false },
-      },
-    };
-    resolveUsableCustomProviderApiKeyMock.mockImplementation((params) =>
-      params?.provider === "qwen-dashscope" ? { apiKey: "sk-test", source: "models.json" } : null,
-    );
-
-    const tool = getSessionStatusTool();
-
-    await tool.execute("call-runtime-custom-provider", {});
-
-    const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
-    const agent = statusArg.agent as Record<string, unknown>;
-    expectRecordFields(agent.model, { primary: "qwen-dashscope/qwen-max" });
-    expect(statusArg.modelAuth).toBe("api-key (models.json)");
-  });
-
   it("preserves an unknown runtime provider in the selected status card model", async () => {
     resetSessionStore({
-      main: {
-        sessionId: "legacy-runtime-model",
-        updatedAt: 10,
-        model: "legacy-runtime-model",
-      },
+      main: fixtureSession("legacy-runtime-model", { model: "legacy-runtime-model" }),
     });
 
-    const tool = getSessionStatusTool();
+    await status();
 
-    await tool.execute("call-legacy-runtime-model", {});
-
-    const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
-    const agent = statusArg.agent as Record<string, unknown>;
-    expectRecordFields(agent.model, { primary: "legacy-runtime-model" });
-    expectRecordFields(statusArg.sessionEntry, {
-      model: "legacy-runtime-model",
-      providerOverride: "",
+    expect(buildStatusMessageMock.mock.calls[0]?.[0]).toMatchObject({
+      primaryModelLabelOverride: "legacy-runtime-model",
+      sessionEntry: { model: "legacy-runtime-model", providerOverride: "" },
     });
-    expect(statusArg.modelAuth).toBeUndefined();
-  });
-
-  it("passes per-agent thinkingDefault through to the status card", async () => {
-    resetSessionStore({
-      "agent:kira:main": {
-        sessionId: "agent-thinking",
-        updatedAt: 10,
-      },
-    });
-    const savedConfig = mockConfig;
-    try {
-      mockConfig = {
-        session: { mainKey: "main", scope: "per-sender" },
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.4" },
-            models: {},
-          },
-          list: [
-            {
-              id: "kira",
-              model: "openai/gpt-5.4",
-              thinkingDefault: "xhigh",
-            },
-          ],
-        },
-        tools: {
-          agentToAgent: { enabled: false },
-        },
-      };
-
-      const tool = getSessionStatusTool("agent:kira:main");
-
-      await tool.execute("call-agent-thinking", {});
-
-      const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
-      expect(statusArg.agentId).toBe("kira");
-      expectRecordFields(statusArg.agent, { thinkingDefault: "xhigh" });
-    } finally {
-      mockConfig = savedConfig;
-    }
-  });
-
-  it("uses the implicit model thinking default when no config default is set", async () => {
-    resetSessionStore({
-      "agent:kira:main": {
-        sessionId: "agent-thinking-implicit",
-        updatedAt: 10,
-      },
-    });
-    const savedConfig = mockConfig;
-    try {
-      mockConfig = {
-        session: { mainKey: "main", scope: "per-sender" },
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.4" },
-            models: {},
-          },
-          list: [
-            {
-              id: "kira",
-              model: "openai/gpt-5.4",
-            },
-          ],
-        },
-        tools: {
-          agentToAgent: { enabled: false },
-        },
-      };
-
-      const tool = getSessionStatusTool("agent:kira:main");
-
-      await tool.execute("call-agent-thinking-implicit", {});
-
-      const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
-      expect(statusArg.agentId).toBe("kira");
-      expectRecordFields(statusArg.agent, { thinkingDefault: "medium" });
-    } finally {
-      mockConfig = savedConfig;
-    }
-  });
-
-  it("hydrates runtime catalog metadata for status when configured model metadata omits reasoning", async () => {
-    resetSessionStore({
-      "agent:kira:main": {
-        sessionId: "agent-thinking-runtime-hydration",
-        updatedAt: 10,
-      },
-    });
-    const savedConfig = mockConfig;
-    try {
-      mockConfig = {
-        session: { mainKey: "main", scope: "per-sender" },
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.4" },
-            models: {},
-          },
-          list: [
-            {
-              id: "kira",
-              model: "openai/gpt-5.4",
-            },
-          ],
-        },
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              models: [{ id: "gpt-5.4", name: "GPT-5.4" }],
-            },
-          },
-        },
-        tools: {
-          agentToAgent: { enabled: false },
-        },
-      };
-
-      const tool = getSessionStatusTool("agent:kira:main");
-
-      await tool.execute("call-agent-thinking-runtime-hydration", {});
-
-      const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
-      expect(statusArg.agentId).toBe("kira");
-      expectRecordFields(statusArg.agent, { thinkingDefault: "medium" });
-    } finally {
-      mockConfig = savedConfig;
-    }
-  });
-
-  it("uses canonical delivery state when resolving queue settings", async () => {
-    resetSessionStore({
-      main: {
-        sessionId: "status-origin-provider",
-        updatedAt: 10,
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "quietchat", to: "quietchat:status" },
-          origin: { provider: "quietchat" },
-        }),
-      },
-    });
-
-    const tool = getSessionStatusTool();
-
-    await tool.execute("call-origin-provider", {});
-
-    const queueArg = mockCallArg(resolveQueueSettingsMock) as Record<string, unknown>;
-    expect(queueArg.channel).toBe("quietchat");
-    expect(queueArg.sessionEntry).toMatchObject({
-      delivery: { kind: "external", origin: { provider: "quietchat" } },
-    });
-  });
-
-  it("resolves sessionId inputs", async () => {
-    const sessionId = "sess-main";
-    resetSessionStore({
-      "agent:main:main": {
-        sessionId,
-        updatedAt: 10,
-      },
-    });
-
-    const tool = getSessionStatusTool();
-
-    const result = await tool.execute("call3", { sessionKey: sessionId });
-    const details = result.details as { ok?: boolean; sessionKey?: string };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("agent:main:main");
   });
 
   it("defers fixed-store ownership until a requester-owned sessionId resolves", async () => {
     const sessionId = "research-session-id";
     resetSessionStore({
-      "agent:research:incident": {
-        sessionId,
-        updatedAt: 10,
-      },
+      "agent:research:incident": fixtureSession(sessionId),
     });
     mockConfig = {
-      session: { mainKey: "main", scope: "global", store: "/tmp/shared-sessions.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: {
-          model: { primary: "openai/gpt-5.4" },
-          models: {},
-          sessionStore: { agentId: "ops" },
-        },
-        entries: { ops: {}, research: {} },
-      },
-      tools: {
-        agentToAgent: { enabled: false },
-        sessions: { visibility: "all" },
-      },
+      ...fixedStoreConfig(),
+      tools: { agentToAgent: { enabled: false }, sessions: { visibility: "all" } },
     };
     callGatewayMock.mockImplementation(async (requestValue: unknown) => {
       const request = requestValue as { method?: string; params?: Record<string, unknown> };
@@ -2209,532 +885,108 @@ describe("session_status tool", () => {
       return {};
     });
 
-    const result = await createSessionStatusTool({
-      agentSessionKey: "agent:research:requester",
+    const result = await status({ sessionKey: sessionId }, "agent:research:requester", {
       requesterAgentIdOverride: "research",
-      config: mockConfig as never,
-    }).execute("research-session-id", { sessionKey: sessionId });
+    });
 
     expect(result.details).toMatchObject({ ok: true, sessionKey: "agent:research:incident" });
   });
 
-  it("resolves duplicate sessionId inputs deterministically", async () => {
-    resetSessionStore({
-      "agent:main:main": {
-        sessionId: "current",
-        updatedAt: 10,
-      },
-      "agent:main:other": {
-        sessionId: "run-dup",
-        updatedAt: 999,
-      },
-      "agent:main:acp:run-dup": {
-        sessionId: "run-dup",
-        updatedAt: 100,
-      },
-    });
-    mockConfig = {
-      session: { mainKey: "main", scope: "per-sender" },
-      tools: {
-        sessions: { visibility: "all" },
-        agentToAgent: { enabled: true, allow: ["*"] },
-      },
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.4" },
-          models: {},
-        },
-      },
-    };
-
-    const tool = getSessionStatusTool();
-
-    const result = await tool.execute("call-dup", { sessionKey: "run-dup" });
-    const details = result.details as { ok?: boolean; sessionKey?: string };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("agent:main:acp:run-dup");
-  });
-
-  it("uses non-standard session keys without sessionId resolution", async () => {
-    resetSessionStore({
-      "temp:slug-generator": {
-        sessionId: "sess-temp",
-        updatedAt: 10,
-      },
-    });
-
-    const tool = getSessionStatusTool();
-
-    const result = await tool.execute("call4", { sessionKey: "temp:slug-generator" });
-    const details = result.details as { ok?: boolean; sessionKey?: string };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("temp:slug-generator");
-  });
-
-  it("blocks cross-agent session_status when agent-to-agent access is disabled", async () => {
-    resetSessionStore({
-      "agent:other:main": {
-        sessionId: "s2",
-        updatedAt: 10,
-      },
-    });
-
-    const tool = getSessionStatusTool("agent:main:main");
-
-    await expect(tool.execute("call5", { sessionKey: "agent:other:main" })).rejects.toThrow(
-      "Agent-to-agent status is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent access.",
-    );
-  });
-
-  it("returns another agent's session status by default with no tools configuration", async () => {
-    resetSessionStore({
-      "agent:other:main": {
-        sessionId: "s2",
-        updatedAt: 10,
-      },
-    });
-    mockConfig = {
-      session: { mainKey: "main", scope: "per-sender" },
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.4" },
-          models: {},
-        },
-      },
-    };
-
-    const tool = getSessionStatusTool("agent:main:main");
-
-    const result = await tool.execute("call5-default", { sessionKey: "agent:other:main" });
-    expect((result.details as { ok?: boolean }).ok).toBe(true);
-  });
-
-  it.each([
-    {
-      name: "blocks unsandboxed same-agent session_status outside self visibility",
-      sessionKey: "agent:main:main",
-      callId: "call-self-visibility",
-      checksStoreLookup: true,
-    },
-    {
-      name: "blocks unsandboxed same-agent bare main session_status outside self visibility",
-      sessionKey: "main",
-      callId: "call-self-visibility-bare-main",
-      checksStoreLookup: false,
-    },
-  ])("$name", async (row) => {
+  it("blocks same-agent status outside self visibility before reading or mutating", async () => {
     installSameAgentVisibility("self");
-
-    const tool = getSessionStatusTool("agent:main:subagent:child");
-
-    await expect(
-      tool.execute(row.callId, {
-        sessionKey: row.sessionKey,
-        model: "default",
-      }),
-    ).rejects.toThrow(
+    await expect(status({ sessionKey: mainKey, model: "default" }, childKey)).rejects.toThrow(
       "Session status visibility is restricted to the current session (tools.sessions.visibility=self).",
     );
-
-    if (row.checksStoreLookup) {
-      expect(loadSessionStoreMock).not.toHaveBeenCalled();
-    }
-    expect(updateSessionStoreMock).not.toHaveBeenCalled();
+    expectNoStoreAccess();
   });
 
-  it("blocks unsandboxed same-agent session_status outside tree visibility before mutation", async () => {
-    installSameAgentVisibility("tree");
-    mockSpawnedSessionList(() => []);
-
-    const tool = getSessionStatusTool("agent:main:subagent:child");
-
-    await expect(
-      tool.execute("call-tree-visibility", {
-        sessionKey: "agent:main:main",
-        model: "default",
-      }),
-    ).rejects.toThrow(
-      "Session status visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
-    );
-
-    expect(loadSessionStoreMock).not.toHaveBeenCalled();
-    expect(updateSessionStoreMock).not.toHaveBeenCalled();
-    expect(callGatewayMock).toHaveBeenCalledTimes(1);
-    expect(callGatewayMock).toHaveBeenCalledWith({
-      method: "sessions.resolve",
-      params: {
-        agentId: "main",
-        allowMissing: true,
-        key: "agent:main:main",
-        spawnedBy: "agent:main:subagent:child",
-      },
-    });
-  });
-
-  it("allows unsandboxed same-agent session_status under agent visibility", async () => {
-    installSameAgentVisibility("agent");
-
-    const tool = getSessionStatusTool("agent:main:subagent:child");
-
-    const result = await tool.execute("call-agent-visibility", {
-      sessionKey: "agent:main:main",
-      model: "default",
-    });
-    const details = result.details as { ok?: boolean; sessionKey?: string };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("agent:main:main");
-    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("blocks explicit incognito session_status before opening its store", async () => {
-    const incognitoSessionKey = "agent:main:dashboard:incognito-private";
-    resetSessionStore({
-      "agent:main:main": { sessionId: "s-main", updatedAt: 10 },
-      [incognitoSessionKey]: {
-        sessionId: "s-incognito",
-        updatedAt: 20,
-        incognito: true,
-      },
-    });
-    mockConfig = {
-      session: { mainKey: "main", scope: "per-sender" },
-      tools: {
-        sessions: { visibility: "agent" },
-        agentToAgent: { enabled: true, allow: ["*"] },
-      },
-      agents: { defaults: { model: { primary: "openai/gpt-5.4" }, models: {} } },
-    };
-
-    const tool = getSessionStatusTool("agent:main:main");
-
-    await expect(
-      tool.execute("call-incognito-status", {
-        sessionKey: incognitoSessionKey,
-        model: "default",
-      }),
-    ).rejects.toThrow(`Session not visible from session tools: ${incognitoSessionKey}`);
-
-    expect(loadSessionStoreMock).not.toHaveBeenCalled();
-    expect(updateSessionStoreMock).not.toHaveBeenCalled();
-    expect(callGatewayMock).not.toHaveBeenCalled();
-    expect(buildStatusMessageMock).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    "blocks incognito status before opening its store (implicit=%s)",
+    async (implicit) => {
+      const requesterSessionKey = implicit ? liveKey : mainKey;
+      const incognitoSessionKey = `agent:main:dashboard:incognito-${implicit ? "live-run" : "private"}`;
+      resetSessionStore({
+        [requesterSessionKey]: fixtureSession("s-requester"),
+        [incognitoSessionKey]: fixtureSession("s-incognito", { updatedAt: 20, incognito: true }),
+      });
+      installVisibility("agent");
+      await expect(
+        status(
+          implicit ? {} : { sessionKey: incognitoSessionKey, model: "default" },
+          requesterSessionKey,
+          implicit ? { runSessionKey: incognitoSessionKey } : {},
+        ),
+      ).rejects.toThrow(`Session not visible from session tools: ${incognitoSessionKey}`);
+      expectNoStoreAccess();
+      expect(callGatewayMock).not.toHaveBeenCalled();
+      expect(buildStatusMessageMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
-    { label: "semantic current", args: { sessionKey: "current" } },
-    { label: "implicit no-arg", args: {} },
-  ])("blocks $label incognito live-run status before opening its store", async ({ args }) => {
-    const requesterSessionKey = "agent:main:telegram:default:direct:1234";
-    const incognitoSessionKey = "agent:main:dashboard:incognito-live-run";
+    ["main", mainKey, "Session status visibility is restricted to the current session tree"],
+    ["s-other", "agent:other:main", "Session status visibility is restricted."],
+    ["s-parent", mainKey, "Session status visibility is restricted to the current session tree"],
+  ])("blocks sandboxed child access to %s", async (sessionId, targetKey, expectedError) => {
     resetSessionStore({
-      [requesterSessionKey]: { sessionId: "s-requester", updatedAt: 10 },
-      [incognitoSessionKey]: {
-        sessionId: "s-incognito-live-run",
-        updatedAt: 20,
-        incognito: true,
-      },
-    });
-    mockConfig = {
-      session: { mainKey: "main", scope: "per-sender" },
-      tools: {
-        sessions: { visibility: "agent" },
-        agentToAgent: { enabled: true, allow: ["*"] },
-      },
-      agents: { defaults: { model: { primary: "openai/gpt-5.4" }, models: {} } },
-    };
-
-    const tool = createSessionStatusTool({
-      agentSessionKey: requesterSessionKey,
-      runSessionKey: incognitoSessionKey,
-      config: mockConfig as never,
-    });
-
-    await expect(
-      tool.execute(`call-incognito-${args.sessionKey ?? "implicit"}`, args),
-    ).rejects.toThrow(`Session not visible from session tools: ${incognitoSessionKey}`);
-
-    expect(loadSessionStoreMock).not.toHaveBeenCalled();
-    expect(updateSessionStoreMock).not.toHaveBeenCalled();
-    expect(callGatewayMock).not.toHaveBeenCalled();
-    expect(buildStatusMessageMock).not.toHaveBeenCalled();
-  });
-
-  it("blocks unsandboxed sessionId session_status outside tree visibility before mutation", async () => {
-    installSameAgentVisibility("tree");
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: Record<string, unknown> };
-      if (request.method === "sessions.resolve") {
-        if (request.params?.sessionId === "s-parent") {
-          return { key: "agent:main:main" };
-        }
-        return {};
-      }
-      if (request.method === "sessions.list") {
-        return { sessions: [] };
-      }
-      return {};
-    });
-
-    const tool = getSessionStatusTool("agent:main:subagent:child");
-
-    await expect(
-      tool.execute("call-tree-session-id-visibility", {
-        sessionKey: "s-parent",
-        model: "default",
-      }),
-    ).rejects.toThrow(
-      "Session status visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
-    );
-
-    expect(updateSessionStoreMock).not.toHaveBeenCalled();
-  });
-
-  it("blocks sandboxed child session_status access outside its tree before store lookup", async () => {
-    resetSessionStore({
-      "agent:main:subagent:child": {
-        sessionId: "s-child",
-        updatedAt: 20,
-      },
-      "agent:main:main": {
-        sessionId: "s-parent",
-        updatedAt: 10,
-      },
-    });
-    installSandboxedSessionStatusConfig();
-    mockSpawnedSessionList(() => []);
-
-    const tool = getSessionStatusTool("agent:main:subagent:child", {
-      sandboxed: true,
-    });
-    const expectedError = "Session status visibility is restricted to the current session tree";
-
-    await expect(
-      tool.execute("call6", {
-        sessionKey: "agent:main:main",
-        model: "anthropic/claude-sonnet-4-6",
-      }),
-    ).rejects.toThrow(expectedError);
-
-    await expect(
-      tool.execute("call7", {
-        sessionKey: "agent:main:subagent:missing",
-      }),
-    ).rejects.toThrow(expectedError);
-
-    expect(loadSessionStoreMock).not.toHaveBeenCalled();
-    expect(updateSessionStoreMock).not.toHaveBeenCalled();
-    expectSpawnedSessionLookupCalls("agent:main:subagent:child", [
-      "agent:main:main",
-      "agent:main:subagent:missing",
-    ]);
-  });
-
-  it("blocks sandboxed child bare main session_status access outside its tree", async () => {
-    resetSessionStore({
-      "agent:main:subagent:child": {
-        sessionId: "s-child",
-        updatedAt: 20,
-      },
-      "agent:main:main": {
-        sessionId: "s-parent",
-        updatedAt: 10,
+      [childKey]: fixtureSession("s-child", { updatedAt: 20 }),
+      [mainKey]: fixtureSession("s-parent", {
         providerOverride: "anthropic",
         modelOverride: "claude-sonnet-4-6",
-      },
-    });
-    installSandboxedSessionStatusConfig();
-    mockSpawnedSessionList(() => []);
-
-    const tool = getSessionStatusTool("agent:main:subagent:child", {
-      sandboxed: true,
-    });
-    const expectedError = "Session status visibility is restricted to the current session tree";
-
-    await expect(
-      tool.execute("call6-bare-main", {
-        sessionKey: "main",
-        model: "default",
       }),
-    ).rejects.toThrow(expectedError);
-
-    expect(updateSessionStoreMock).not.toHaveBeenCalled();
-    expect(callGatewayMock).toHaveBeenCalledTimes(1);
-    expect(callGatewayMock).toHaveBeenCalledWith({
-      method: "sessions.resolve",
-      params: {
-        agentId: "main",
-        allowMissing: true,
-        key: "main",
-        spawnedBy: "agent:main:subagent:child",
-      },
-    });
-  });
-
-  it.each([
-    {
-      name: "blocks sandboxed child session_status access to another agent sessionId before store lookup",
-      sessionId: "s-other",
-      callId: "call6-session-id",
-      expectedError: "Session status visibility is restricted.",
-      checksOwnership: false,
-    },
-    {
-      name: "blocks sandboxed child session_status parent sessionId access outside its tree",
-      sessionId: "s-parent",
-      callId: "call7-parent-session-id",
-      expectedError: "Session status visibility is restricted to the current session tree",
-      checksOwnership: true,
-    },
-  ])("$name", async ({ sessionId, callId, expectedError, checksOwnership }) => {
-    resetSessionStore({
-      "agent:main:subagent:child": {
-        sessionId: "s-child",
-        updatedAt: 20,
-      },
-      "agent:main:main": {
-        sessionId: "s-parent",
-        updatedAt: 10,
-      },
       ...(sessionId === "s-other"
-        ? { "agent:other:main": { sessionId: "s-other", updatedAt: 30 } }
+        ? { "agent:other:main": fixtureSession("s-other", { updatedAt: 30 }) }
         : {}),
     });
     installSandboxedSessionStatusConfig();
     mockSpawnedSessionList(
       () => [],
-      (value) =>
-        value === sessionId
-          ? sessionId === "s-other"
-            ? "agent:other:main"
-            : "agent:main:main"
-          : undefined,
+      (value) => (value === sessionId ? targetKey : undefined),
     );
-
-    const tool = getSessionStatusTool("agent:main:subagent:child", {
-      sandboxed: true,
-    });
-
     await expect(
-      tool.execute(callId, {
-        sessionKey: sessionId,
-      }),
+      status(
+        { sessionKey: sessionId, ...(sessionId === "main" ? { model: "default" } : {}) },
+        childKey,
+        { sandboxed: true },
+      ),
     ).rejects.toThrow(expectedError);
-
-    expect(loadSessionStoreMock).not.toHaveBeenCalled();
-    expect(updateSessionStoreMock).not.toHaveBeenCalled();
-    expect(callGatewayMock).toHaveBeenCalledTimes(checksOwnership ? 3 : 2);
-    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
-      method: "sessions.resolve",
-      params: {
-        agentId: "main",
-        key: sessionId,
-        spawnedBy: undefined,
-      },
-    });
-    expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
-      method: "sessions.resolve",
-      params: {
-        agentId: undefined,
-        sessionId,
-        spawnedBy: undefined,
-        includeGlobal: true,
-        includeUnknown: true,
-      },
-    });
-    if (checksOwnership) {
-      expect(callGatewayMock).toHaveBeenNthCalledWith(3, {
-        method: "sessions.resolve",
-        params: {
-          agentId: "main",
-          allowMissing: true,
-          key: "agent:main:main",
-          spawnedBy: "agent:main:subagent:child",
-        },
-      });
+    if (sessionId === "main") {
+      expect(updateSessionStoreMock).not.toHaveBeenCalled();
+      expect(callGatewayMock).toHaveBeenCalledTimes(1);
+      expectSpawnedSessionLookupCalls(callGatewayMock, childKey, ["main"]);
+    } else {
+      expectNoStoreAccess();
     }
   });
 
   it("keeps legacy main requester keys for sandboxed session tree checks", async () => {
     resetSessionStore({
-      "agent:main:main": {
-        sessionId: "s-main",
-        updatedAt: 10,
-      },
-      "agent:main:subagent:child": {
-        sessionId: "s-child",
-        updatedAt: 20,
-      },
+      [mainKey]: fixtureSession("s-main"),
+      [childKey]: fixtureSession("s-child", { updatedAt: 20 }),
     });
     installSandboxedSessionStatusConfig();
-    mockSpawnedSessionList((spawnedBy) =>
-      spawnedBy === "main" ? [{ key: "agent:main:subagent:child" }] : [],
-    );
+    mockSpawnedSessionList((spawnedBy) => (spawnedBy === "main" ? [{ key: childKey }] : []));
 
-    const tool = getSessionStatusTool("main", {
-      sandboxed: true,
-    });
+    const tool = getSessionStatusTool("main", { sandboxed: true });
 
     const mainResult = await tool.execute("call8", {});
-    const mainDetails = mainResult.details as { ok?: boolean; sessionKey?: string };
-    expect(mainDetails.ok).toBe(true);
-    expect(mainDetails.sessionKey).toBe("agent:main:main");
+    expect(mainResult.details).toMatchObject({ ok: true, sessionKey: mainKey });
 
     const childResult = await tool.execute("call9", {
-      sessionKey: "agent:main:subagent:child",
+      sessionKey: childKey,
     });
-    const childDetails = childResult.details as { ok?: boolean; sessionKey?: string };
-    expect(childDetails.ok).toBe(true);
-    expect(childDetails.sessionKey).toBe("agent:main:subagent:child");
+    expect(childResult.details).toMatchObject({ ok: true, sessionKey: childKey });
 
-    expectSpawnedSessionLookupCalls("main", ["agent:main:subagent:child"]);
-  });
-
-  it("scopes bare session keys to the requester agent", async () => {
-    installScopedSessionStores(true);
-
-    const tool = getSessionStatusTool("agent:support:main");
-
-    const result = await tool.execute("call6", { sessionKey: "main" });
-    const details = result.details as { ok?: boolean; sessionKey?: string };
-    expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("main");
-  });
-
-  it("resets per-session model override via model=default", async () => {
-    resetSessionStore({
-      main: {
-        sessionId: "s1",
-        updatedAt: 10,
-        providerOverride: "anthropic",
-        modelOverride: "claude-sonnet-4-6",
-        authProfileOverride: "p1",
-      },
-    });
-
-    const tool = getSessionStatusTool();
-
-    const result = await tool.execute("call3", { model: "default" });
-    const details = result.details as { modelOverride?: string | null };
-    expect(details.modelOverride).toBeNull();
-    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
-    const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, unknown>;
-    const saved = savedStore.main as Record<string, unknown>;
-    expect(saved.providerOverride).toBeUndefined();
-    expect(saved.modelOverride).toBeUndefined();
-    expect(saved.modelOverrideSource).toBe("default");
-    expect(saved.authProfileOverride).toBeUndefined();
-    expect(saved.liveModelSwitchPending).toBe(true);
+    expectSpawnedSessionLookupCalls(callGatewayMock, "main", [childKey]);
   });
 
   it("rejects a colliding provider-wildcard model change without writing the session", async () => {
     resetSessionStore({
-      main: {
-        sessionId: "s1",
-        updatedAt: 10,
+      main: fixtureSession("s1", {
         providerOverride: "custom/team",
         modelOverride: "Reader",
         modelOverrideSource: "user",
-      },
+      }),
     });
     mockConfig = {
       ...createMockConfig(),
@@ -2747,87 +999,16 @@ describe("session_status tool", () => {
       },
     };
 
-    await expect(
-      getSessionStatusTool().execute("literal-denied", { model: "Reader" }),
-    ).rejects.toThrow('Model "custom/team/Reader" is not allowed.');
+    await expect(status({ model: "Reader" })).rejects.toThrow(
+      'Model "custom/team/Reader" is not allowed.',
+    );
     expect(updateSessionStoreMock).not.toHaveBeenCalled();
 
-    await getSessionStatusTool().execute("literal-allowed", { model: "custom/team/Reader" });
-    const saved = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
-    expect(saved.main).toMatchObject({
+    await status({ model: "custom/team/Reader" });
+    expect(savedSession()).toMatchObject({
       providerOverride: "custom",
       modelOverride: "team/Reader",
       modelOverrideSource: "user",
     });
   });
-
-  it("resolves a model alias configured only on the target agent", async () => {
-    resetSessionStore({
-      main: { sessionId: "s1", updatedAt: 10 },
-    });
-    mockConfig = {
-      ...createMockConfig(),
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.4" },
-          models: { "openai/gpt-5.4": { alias: "global" } },
-          modelPolicy: { allow: ["anthropic/claude-sonnet-4-6"] },
-        },
-        entries: {
-          main: {
-            models: {
-              "anthropic/claude-sonnet-4-6": { alias: "agent-sonnet" },
-            },
-          },
-        },
-      },
-    };
-
-    const result = await getSessionStatusTool().execute("agent-alias", {
-      model: "agent-sonnet",
-    });
-
-    expect(result.details).toMatchObject({
-      modelOverride: "anthropic/claude-sonnet-4-6",
-      modelProvider: "anthropic",
-    });
-  });
-
-  it("preserves a compatible auth profile when changing the session model", async () => {
-    let persistedStore: Record<string, SessionEntry> | undefined;
-    resetSessionStore({
-      main: {
-        sessionId: "s1",
-        updatedAt: 10,
-        providerOverride: "openai",
-        modelOverride: "gpt-4o",
-        authProfileOverride: "session-status-team:prod",
-        authProfileOverrideSource: "user",
-        authProfileOverrideCompactionCount: 2,
-      },
-    });
-    mockConfig = {
-      ...createMockConfig(),
-      auth: {
-        profiles: { "session-status-team:prod": { provider: "openai", mode: "api_key" } },
-      },
-    };
-    updateSessionStoreMock.mockImplementation(
-      (_storePath: string, store: Record<string, SessionEntry>) => {
-        persistedStore = structuredClone(store);
-      },
-    );
-
-    const result = await getSessionStatusTool().execute("call4", { model: "openai/gpt-5.4" });
-
-    expect(result.details).toMatchObject({ modelOverride: null });
-    const saved = persistedStore?.main;
-    if (!saved) {
-      throw new Error("Expected session_status to persist the selected model");
-    }
-    expect(saved.authProfileOverride).toBe("session-status-team:prod");
-    expect(saved.authProfileOverrideSource).toBe("user");
-    expect(saved.authProfileOverrideCompactionCount).toBe(2);
-  });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,7 +1,28 @@
 openclaw-board-view {
   display: block;
+  position: relative;
   min-width: 0;
   width: 100%;
+}
+
+/* Scroll owner for the board face. Widget/tab menus stay usable because
+   native popovers render them in the top layer, so this overflow cannot clip them.
+   Inline padding lives on .board-view below: macOS overlay scrollbars render
+   inside the scroll container's padding and would float away from the edge. */
+.board-document__content > openclaw-board-view,
+.board-session-surface__board > openclaw-board-view {
+  display: block;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 12px 0 16px;
+}
+
+.board-document__content .board-view,
+.board-session-surface__board .board-view {
+  padding-inline: 16px;
 }
 
 .board-view {
@@ -22,6 +43,10 @@ openclaw-board-view {
   padding: 9px 12px;
 }
 
+.board-view--loading {
+  pointer-events: none;
+}
+
 .board-tabs {
   align-items: center;
   border-bottom: 1px solid var(--board-line);
@@ -30,20 +55,11 @@ openclaw-board-view {
 }
 
 .board-tabs__track {
-  --track-width: 0;
-  display: block;
+  display: flex;
   flex: 1 1 auto;
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
-}
-
-.board-tabs__track::part(nav) {
-  display: flex;
-}
-
-.board-tabs__track::part(body) {
-  display: none;
 }
 
 .board-tabs__track::-webkit-scrollbar {
@@ -51,13 +67,16 @@ openclaw-board-view {
 }
 
 .board-tabs__tab {
+  align-items: center;
+  background: transparent;
+  border: 0;
   color: var(--muted);
+  display: inline-flex;
   flex: 0 0 auto;
-}
-
-.board-tabs__tab::part(base) {
   border-bottom: 2px solid transparent;
+  font-family: inherit;
   font-size: 12.5px;
+  font-weight: var(--control-ui-font-weight-normal);
   min-height: 38px;
   padding: 0 13px;
   transition:
@@ -66,18 +85,18 @@ openclaw-board-view {
     color 120ms ease;
 }
 
-.board-tabs__tab:hover::part(base),
-.board-tabs__tab:focus-visible::part(base) {
+.board-tabs__tab:hover,
+.board-tabs__tab:focus-visible {
   background: color-mix(in srgb, var(--text) 6%, transparent);
   color: var(--text);
 }
 
-.board-tabs__tab--active::part(base) {
+.board-tabs__tab--active {
   border-bottom-color: var(--accent);
   color: var(--text);
 }
 
-.board-tabs__tab--drop::part(base) {
+.board-tabs__tab--drop {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 70%, transparent);
 }
@@ -112,17 +131,22 @@ openclaw-board-view {
   color: var(--text);
 }
 
-.board-tabs__overflow::part(menu),
-.board-widget__menu::part(menu) {
+.board-tabs__overflow-panel,
+.board-widget__menu-panel {
+  --oc-overlay-distance: 0px;
+
   min-width: 190px;
-  padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
 }
 
-.board-tabs__overflow-item {
+.board-widget__menu-panel {
+  --oc-overlay-max-height: 100dvh;
+}
+
+.board-tabs__overflow .board-tabs__overflow-item {
+  line-height: inherit;
   min-width: 180px;
 }
 
@@ -192,6 +216,10 @@ openclaw-board-widget-cell {
   opacity: 0.88;
   transform: scale(0.995);
   z-index: 8;
+}
+
+.board-widget__chrome {
+  display: contents;
 }
 
 .board-widget__bar {
@@ -276,8 +304,13 @@ openclaw-board-widget-cell {
   padding: 5px 9px;
 }
 
-.board-widget__menu wa-dropdown-item {
+.board-widget__menu .oc-menu-item {
   font-size: 11px;
+  min-height: var(--menu-item-height);
+}
+
+.board-widget__menu .oc-menu-item__check {
+  color: inherit;
 }
 
 .board-widget__menu-separator {
@@ -285,7 +318,8 @@ openclaw-board-widget-cell {
   margin: 5px 3px;
 }
 
-.board-widget__menu-danger {
+.board-widget__menu-danger,
+.board-widget__menu .board-widget__menu-danger {
   color: var(--danger);
 }
 
@@ -310,6 +344,14 @@ openclaw-board-widget-cell {
   overflow: auto;
 }
 
+/* Fixed grid tracks already reserve the report viewport. Keep distant charts
+   out of layout until they approach the board's scrollport. */
+.board-widget__body--fixed-report {
+  contain: strict;
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 0px;
+}
+
 .board-widget__body--scrollable .board-widget__grant {
   box-sizing: border-box;
   height: auto;
@@ -327,6 +369,26 @@ openclaw-board-widget-cell {
   display: none;
 }
 
+.board-widget__frame-pane,
+.board-widget__mcp-app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.board-view--loading .board-widget__frame-pane > .board-widget__frame {
+  z-index: 3;
+}
+
+.board-widget__frame-pane > .board-widget__frame {
+  /* Paint over the placeholder without waiting for host readiness. */
+  background: transparent;
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
 .board-widget__frame {
   background: var(--board-surface);
   border: 0;
@@ -336,30 +398,40 @@ openclaw-board-widget-cell {
 }
 
 .board-widget__plugin-loading,
-.board-widget__disabled-plugin {
+.board-widget__disabled-plugin,
+.board-widget__app-loading,
+.board-widget__stale,
+.board-widget__grant,
+.board-widget__error {
   align-content: center;
-  color: var(--muted);
   display: grid;
-  font-size: 11px;
-  gap: 10px;
   justify-items: center;
+  text-align: center;
+}
+
+.board-widget__plugin-loading,
+.board-widget__disabled-plugin,
+.board-widget__app-loading,
+.board-widget__stale {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.board-widget__plugin-loading,
+.board-widget__disabled-plugin {
+  gap: 10px;
   margin: 0;
   min-height: 100%;
   padding: 14px;
-  text-align: center;
 }
 
 .board-widget__disabled-plugin strong {
   color: var(--text);
 }
 
-.board-widget__mcp-app {
-  display: grid;
-  min-height: 100%;
-}
-
 .board-widget__mcp-app > .board-widget__grant {
   border-bottom: 1px solid var(--board-line);
+  flex: 0 0 auto;
   height: auto;
   max-height: 112px;
   min-height: 0;
@@ -368,25 +440,21 @@ openclaw-board-widget-cell {
 }
 
 .board-widget__mcp-app-view {
-  display: block;
-  min-height: 160px;
+  flex: 1 1 0;
+  min-height: 0;
   width: 100%;
 }
 
 .board-widget__app-loading,
 .board-widget__stale {
-  align-content: center;
-  color: var(--muted);
-  display: grid;
-  font-size: 11px;
   gap: 8px;
-  justify-items: center;
   min-height: 160px;
   padding: 16px;
-  text-align: center;
 }
 
-.board-widget__stale strong {
+.board-widget__stale strong,
+.board-widget__grant strong,
+.board-widget__error strong {
   color: var(--text);
   font-size: 13px;
 }
@@ -418,13 +486,20 @@ openclaw-board-widget-cell {
 }
 
 @media (hover: hover) and (pointer: fine) {
-  /* Focus keeps keyboard actions reachable; menu-open and dragging keep chrome
-     pinned when interaction leaves the card bounds. Inline-size containment
-     lets the pill drop to its minimal form on narrow cards; grid tracks set
-     the card's width, so containment changes no layout. */
+  /* Keep responsive chrome's query container separate from report content.
+     WebKit otherwise recalculates every report descendant on board resize. */
   .board-widget {
-    container-type: inline-size;
     grid-template-rows: minmax(0, 1fr);
+    isolation: isolate;
+  }
+
+  .board-widget__chrome {
+    container-type: inline-size;
+    display: block;
+    inset: 0;
+    pointer-events: none;
+    position: absolute;
+    z-index: 5;
   }
 
   /* Fine pointers center a compact overlay; coarse pointers keep the base 38px
@@ -442,6 +517,7 @@ openclaw-board-widget-cell {
     max-width: calc(100% - 176px);
     opacity: 0;
     padding: 0 5px;
+    pointer-events: auto;
     position: absolute;
     top: 7px;
     transform: translateX(-50%);
@@ -513,8 +589,9 @@ openclaw-board-widget-cell {
   .board-widget:focus-within .board-widget__resize-handle,
   .board-widget--dragging .board-widget__bar,
   .board-widget--dragging .board-widget__resize-handle,
-  .board-widget:has(.board-widget__menu[open]) .board-widget__bar,
-  .board-widget:has(.board-widget__menu[open]) .board-widget__resize-handle {
+  .board-widget:has(.board-widget__menu-trigger[aria-expanded="true"]) .board-widget__bar,
+  .board-widget:has(.board-widget__menu-trigger[aria-expanded="true"])
+    .board-widget__resize-handle {
     opacity: 1;
     transition-delay: 0s;
     visibility: visible;
@@ -540,7 +617,7 @@ openclaw-board-widget-cell {
   .board-widget:hover .board-widget__grant-dot,
   .board-widget:focus-within .board-widget__grant-dot,
   .board-widget--dragging .board-widget__grant-dot,
-  .board-widget:has(.board-widget__menu[open]) .board-widget__grant-dot {
+  .board-widget:has(.board-widget__menu-trigger[aria-expanded="true"]) .board-widget__grant-dot {
     opacity: 0;
   }
 
@@ -556,7 +633,7 @@ openclaw-board-widget-cell {
 
   .board-widget--frameless:hover,
   .board-widget--frameless:focus-within,
-  .board-widget--frameless:has(.board-widget__menu[open]) {
+  .board-widget--frameless:has(.board-widget__menu-trigger[aria-expanded="true"]) {
     border-color: var(--board-line);
   }
 
@@ -596,9 +673,14 @@ openclaw-board-widget-cell {
   padding-left: 16px;
 }
 
-/* A lone full-width widget becomes the focused dashboard's page. Keep the
-   regular grid sizing, subtracting only the shell removed from auto heights. */
-:is(.sidebar-region--expanded, .sidebar-region:not(.sidebar-region--open), .board-document__content)
+/* A lone full-width widget stays a page when its main region shares space with
+   Chat. Side dashboards keep their regular grid sizing and widget chrome. */
+:is(
+    .sidebar-region--expanded,
+    .sidebar-region:not(.sidebar-region--open),
+    .sidebar-region [data-region="main"],
+    .board-document__content
+  )
   openclaw-board-view:has(> .board-view--single-full-width) {
   padding: 0;
 
@@ -617,10 +699,6 @@ openclaw-board-widget-cell {
     border-radius: 0;
     box-shadow: none;
 
-    &.board-widget--card {
-      --board-widget-height-trim: calc(2px + var(--widget-frame-inset) * 2);
-    }
-
     &:focus-visible {
       outline: 2px solid var(--accent);
       outline-offset: -2px;
@@ -628,7 +706,6 @@ openclaw-board-widget-cell {
 
     .board-widget__body {
       border-radius: 0;
-      padding: 0;
     }
   }
 
@@ -658,19 +735,9 @@ openclaw-board-widget-cell {
 
 .board-widget__grant,
 .board-widget__error {
-  align-content: center;
-  display: grid;
   gap: 7px;
   height: 100%;
-  justify-items: center;
   padding: 16px;
-  text-align: center;
-}
-
-.board-widget__grant strong,
-.board-widget__error strong {
-  color: var(--text);
-  font-size: 13px;
 }
 
 .board-widget__grant > span,

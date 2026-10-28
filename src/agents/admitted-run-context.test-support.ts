@@ -1,12 +1,17 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
 import type { AdmittedRunContext, PreparedAgentRunAdmission } from "./admitted-run-context.js";
-import { createOperationalRunInstanceRef } from "./admitted-run-context.js";
+import { createOperationalRunInstanceRef } from "./operational-run-instance.js";
 
 const diagnosticFixtureContexts = new WeakSet<AdmittedRunContext>();
 
 /** Explicit no-audit carrier for fixtures that enter below the admission owner. */
 export function createTestAdmittedRunContext(runId: string): AdmittedRunContext {
-  const context = Object.freeze({ operationalRunInstance: createOperationalRunInstanceRef(runId) });
+  const context = Object.freeze(
+    prepareGatewayContextBindingOwner({
+      operationalRunInstance: createOperationalRunInstanceRef(runId),
+    }),
+  );
   diagnosticFixtureContexts.add(context);
   return context;
 }

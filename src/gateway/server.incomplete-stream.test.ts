@@ -1,14 +1,22 @@
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { expect, it } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+  readRequestText,
+} from "../../test/helpers/gateway-integration-fixtures.js";
+import {
+  createOpenClawTestInstance,
+  type OpenClawTestInstance,
+} from "../../test/helpers/openclaw-test-instance.js";
+import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
+import { stateDirGatewayFixtureEntrypoint } from "../cli/cli-entrypoint.test-support.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const cases = [
   "started-text",
   "sealed-text",
@@ -23,55 +31,20 @@ type ChatMessage = {
   role: string;
   stopReason?: string;
   content: unknown;
+  openclawRunError?: { runId: string; summary: string };
 };
 
 it(
   "chat.send reports incomplete streams and executes only completed tool turns",
   { timeout: 240_000 },
-  async () => {
-    const root = tempDirs.make("openclaw-stream-completion-");
-    const workspace = path.join(root, "workspace");
-    const state = path.join(root, "state");
-    const plugins = path.join(root, "plugins");
-    await Promise.all([workspace, state, plugins].map((dir) => fs.mkdir(dir)));
-    const agentDir = path.join(state, "agents", "main", "agent");
-    await fs.mkdir(agentDir, { recursive: true });
-    // Isolate terminal stream handling from the separate provider recovery policy.
-    await fs.writeFile(
-      path.join(agentDir, "settings.json"),
-      JSON.stringify({ retry: { provider: { maxRetries: 0 } } }),
-    );
-    const fixture = path.join(workspace, "fixture.txt");
-    await fs.writeFile(fixture, "COMPLETE_TOOL_READ_MARKER");
-    const configPath = path.join(state, "openclaw.json");
-    const env = {
-      OPENCLAW_STATE_DIR: state,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_GATEWAY_TOKEN: "stream-completion-fixture",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_BUNDLED_PLUGINS_DIR: plugins,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    };
-    const snapshot = captureEnv(Object.keys(env));
-    for (const [key, value] of Object.entries(env)) {
-      setTestEnvValue(key, value);
-    }
+  async (context) => {
+    let fixture = "";
     let scenario: Scenario = "started-text";
     let requests: unknown[] = [];
     const events: unknown[] = [];
     const provider = createServer((request, response) => {
-      let body = "";
-      request.setEncoding("utf8");
-      request.on("data", (chunk) => {
-        body += chunk;
-      });
-      request.on("end", () => {
-        const payload: unknown = JSON.parse(body);
+      void (async () => {
+        const payload: unknown = JSON.parse(await readRequestText(request));
         requests.push({ method: request.method, url: request.url, payload });
         const tool =
           scenario.endsWith("tool") && (scenario !== "compatible-tool" || requests.length === 1);
@@ -90,22 +63,19 @@ it(
             },
           },
         ];
-        frames.push({
-          type: "content_block_start",
-          index: 0,
+        const block = (type: string, fields = {}) => frames.push({ type, index: 0, ...fields });
+        block("content_block_start", {
           content_block: tool
             ? { type: "tool_use", id: "call_read_fixture", name: "read", input: {} }
             : { type: "text", text: "" },
         });
-        frames.push({
-          type: "content_block_delta",
-          index: 0,
+        block("content_block_delta", {
           delta: tool
             ? { type: "input_json_delta", partial_json: JSON.stringify({ path: fixture }) }
             : { type: "text_delta", text: complete ? "COMPLETE_REPLY_MARKER" : "Partial answer" },
         });
         if (!scenario.startsWith("started")) {
-          frames.push({ type: "content_block_stop", index: 0 });
+          block("content_block_stop");
         }
         if (complete) {
           frames.push({
@@ -119,134 +89,156 @@ it(
         }
         response.writeHead(200, { "content-type": "text/event-stream" });
         response.end(frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join(""));
-      });
+      })().catch((error: unknown) => response.writeHead(500).end(String(error)));
     });
-    let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-    try {
-      await new Promise<void>((resolve) => {
-        provider.listen(0, "127.0.0.1", resolve);
-      });
-      const address = provider.address();
-      if (!address || typeof address === "string") {
-        throw new Error("loopback provider did not bind");
-      }
-      gateway = await startGatewayWithClient({
-        cfg: {
+    let gateway: OpenClawTestInstance | undefined;
+    let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+    await runQaGatewayTestFixture(
+      context,
+      async ({ signal, verifyCleanup }) => {
+        // Reuse the prepared native Gateway instead of transforming its graph again in Vitest.
+        gateway = await createOpenClawTestInstance({
+          name: "stream-completion",
+          entrypoint: resolveRuntimeWorkerArgv(
+            resolveRuntimeWorkerUrl(stateDirGatewayFixtureEntrypoint),
+          ),
+          gatewayCommandPrefix: [process.execPath],
+          gatewayToken: "stream-completion-fixture",
+          signal,
+          verifyCleanup,
+          env: {
+            OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          },
+        });
+        gateway.state.applyEnv();
+        gateway.env.OPENCLAW_GATEWAY_PORT = String(gateway.port);
+        gateway.env.OPENCLAW_TEST_GATEWAY_TOKEN = gateway.gatewayToken;
+        const workspace = gateway.state.workspaceDir;
+        const agentDir = gateway.state.agentDir("main");
+        await fs.mkdir(agentDir, { recursive: true });
+        // Isolate terminal stream handling from the separate provider recovery policy.
+        await fs.writeFile(
+          path.join(agentDir, "settings.json"),
+          JSON.stringify({ retry: { provider: { maxRetries: 0 } } }),
+        );
+        fixture = path.join(workspace, "fixture.txt");
+        await fs.writeFile(fixture, "COMPLETE_TOOL_READ_MARKER");
+        const baseUrl = await listenLoopback(provider);
+        await gateway.state.writeConfig({
           agents: {
             defaults: {
               workspace,
               skipBootstrap: true,
               model: { primary: "stream-fixture/stream-fixture" },
             },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           models: {
             mode: "replace",
             providers: {
               "stream-fixture": {
-                baseUrl: `http://127.0.0.1:${address.port}`,
+                baseUrl,
                 apiKey: "local-fixture-key",
                 api: "anthropic-messages",
                 models: [
-                  {
-                    id: "stream-fixture",
+                  modelDefinition("stream-fixture", {
                     name: "Stream fixture",
                     api: "anthropic-messages",
                     reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                     contextWindow: 200_000,
                     maxTokens: 4096,
-                  },
+                  }),
                 ],
               },
             },
           },
-          gateway: { auth: { mode: "token", token: env.OPENCLAW_GATEWAY_TOKEN } },
-        },
-        configPath,
-        token: env.OPENCLAW_GATEWAY_TOKEN,
-        onEvent: (event) => {
-          events.push(event);
-        },
-      });
-      for (scenario of cases) {
-        requests = [];
-        events.length = 0;
-        const sessionKey = `agent:main:stream-${scenario}`;
-        const started = await gateway.client.request<{ runId: string; status: string }>(
-          "chat.send",
-          {
+          gateway: { auth: { mode: "token", token: gateway.gatewayToken } },
+        });
+        await gateway.startGateway();
+        client = await connectGatewayClient({
+          url: gateway.url,
+          token: gateway.gatewayToken,
+          signal,
+          verifyCleanup,
+          onEvent: (event) => {
+            events.push(event);
+          },
+        });
+        const request = <T>(method: string, params: unknown, timeoutMs?: number) =>
+          client!.request<T>(method, params, { signal, timeoutMs });
+        for (scenario of cases) {
+          requests = [];
+          events.length = 0;
+          const sessionKey = `agent:main:stream-${scenario}`;
+          const started = await request<{ runId: string; status: string }>("chat.send", {
             sessionKey,
             message: "Read fixture.txt and report the result.",
             deliver: false,
             idempotencyKey: `stream-${scenario}`,
-          },
-        );
-        expect(started.status).toBe("started");
-        const waited = await gateway.client.request<{ status: string }>(
-          "agent.wait",
-          { runId: started.runId, timeoutMs: 60_000 },
-          { timeoutMs: 65_000 },
-        );
-        expect(waited.status, scenario).not.toBe("timeout");
-        const history = await gateway.client.request<{ messages: ChatMessage[] }>("chat.history", {
-          sessionKey,
-          limit: 30,
-        });
-        const assistant = history.messages.findLast((message) => message.role === "assistant");
-        const toolResults = history.messages.filter((message) => message.role === "toolResult");
-        console.log(
-          JSON.stringify({
-            scenario,
-            status: waited.status,
-            stopReason: assistant?.stopReason,
-            requests: requests.length,
-            toolResults: toolResults.length,
-            content: assistant?.content,
-          }),
-        );
-        if (scenario.startsWith("started") || scenario.startsWith("sealed")) {
-          expect.soft(waited.status, scenario).toBe("error");
-          expect.soft(assistant?.stopReason, scenario).toBe("error");
-          expect.soft(toolResults, scenario).toHaveLength(0);
-          expect.soft(events, scenario).toContainEqual(
+          });
+          expect(started.status).toBe("started");
+          const waited = await request<{ status: string }>(
+            "agent.wait",
+            { runId: started.runId, timeoutMs: 60_000 },
+            65_000,
+          );
+          expect(waited.status, scenario).not.toBe("timeout");
+          const history = await request<{ messages: ChatMessage[] }>("chat.history", {
+            sessionKey,
+            limit: 30,
+          });
+          const assistant = history.messages.findLast((message) => message.role === "assistant");
+          const toolResults = history.messages.filter((message) => message.role === "toolResult");
+          const chatEvent = (state: string) =>
             expect.objectContaining({
               event: "chat",
-              payload: expect.objectContaining({ runId: started.runId, state: "error" }),
-            }),
-          );
-          expect.soft(events, scenario).not.toContainEqual(
-            expect.objectContaining({
-              event: "chat",
-              payload: expect.objectContaining({ runId: started.runId, state: "final" }),
-            }),
-          );
-        } else {
-          expect.soft(waited.status, scenario).toBe("ok");
-          expect
-            .soft(JSON.stringify(assistant?.content), scenario)
-            .toContain("COMPLETE_REPLY_MARKER");
-          expect.soft(requests, scenario).toHaveLength(scenario === "compatible-tool" ? 2 : 1);
-          expect.soft(toolResults, scenario).toHaveLength(scenario === "compatible-tool" ? 1 : 0);
-          if (scenario === "compatible-tool") {
-            expect.soft(JSON.stringify(requests[1])).toContain("COMPLETE_TOOL_READ_MARKER");
+              payload: expect.objectContaining({ runId: started.runId, state }),
+            });
+          if (scenario.startsWith("started") || scenario.startsWith("sealed")) {
+            expect.soft(waited.status, scenario).toBe("error");
+            const errors = history.messages.filter(
+              (message) => message.openclawRunError?.runId === started.runId,
+            );
+            expect.soft(errors, scenario).toEqual([
+              expect.objectContaining({
+                role: "custom",
+                openclawRunError: { runId: started.runId, summary: expect.stringMatching(/\S/) },
+              }),
+            ]);
+            if (scenario.endsWith("text")) {
+              expect.soft(JSON.stringify(assistant?.content), scenario).toContain("Partial answer");
+            }
+            expect.soft(toolResults, scenario).toHaveLength(0);
+            expect.soft(events, scenario).toContainEqual(chatEvent("error"));
+            expect.soft(events, scenario).not.toContainEqual(chatEvent("final"));
+          } else {
+            expect.soft(waited.status, scenario).toBe("ok");
+            expect
+              .soft(JSON.stringify(assistant?.content), scenario)
+              .toContain("COMPLETE_REPLY_MARKER");
+            expect.soft(requests, scenario).toHaveLength(scenario === "compatible-tool" ? 2 : 1);
+            expect.soft(toolResults, scenario).toHaveLength(scenario === "compatible-tool" ? 1 : 0);
+            if (scenario === "compatible-tool") {
+              expect.soft(JSON.stringify(requests[1])).toContain("COMPLETE_TOOL_READ_MARKER");
+            }
           }
         }
-      }
-    } finally {
-      if (gateway) {
-        await disconnectGatewayClient(gateway.client);
-        await gateway.server.close();
-      }
-      provider.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        provider.close((error) => (error ? reject(error) : resolve()));
-      });
-      snapshot.restore();
-      clearRuntimeConfigSnapshot();
-      clearConfigCache();
-      clearSessionStoreCacheForTest();
-    }
+      },
+      async () => {
+        if (client) {
+          await disconnectGatewayClient(client);
+        }
+      },
+      async () => {
+        await gateway?.cleanup();
+      },
+      async () => {
+        if (!provider.listening) {
+          return;
+        }
+        await closeHttpServer(provider);
+      },
+    );
   },
 );

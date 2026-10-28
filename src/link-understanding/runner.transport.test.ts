@@ -1,25 +1,31 @@
+import { existsSync } from "node:fs";
 import { createServer, type RequestListener } from "node:http";
-import type { AddressInfo, Socket } from "node:net";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setTimeout as delay } from "node:timers/promises";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createDeferredCore as deferred } from "../shared/deferred.js";
 import { isPidAlive } from "../shared/pid-alive.js";
-import { killPidIfAlive, waitForPidFile, waitForPidToExit } from "../test-utils/process-tree.js";
+import { killPidIfAlive, readPidFile } from "../test-utils/process-tree.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { applyLinkUnderstanding } from "./apply.js";
-import { runLinkUnderstanding } from "./runner.js";
 
 const mocks = vi.hoisted(() => ({
   bodyCancel: vi.fn(),
   releaseAfterCancel: vi.fn(),
-  runCommandWithTimeout: vi.fn(),
 }));
-
-vi.mock("../infra/net/fetch-guard.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
-    "../infra/net/fetch-guard.js",
-  );
+vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/net/fetch-guard.js")>();
   return {
     ...actual,
     fetchWithSsrFGuard: async (params: Parameters<typeof actual.fetchWithSsrFGuard>[0]) => {
@@ -32,10 +38,7 @@ vi.mock("../infra/net/fetch-guard.js", async () => {
       const body = result.response.body;
       if (body) {
         const cancel = body.cancel.bind(body);
-        vi.spyOn(body, "cancel").mockImplementation(async (reason?: unknown) => {
-          mocks.bodyCancel(reason);
-          await cancel(reason);
-        });
+        vi.spyOn(body, "cancel").mockImplementation(mocks.bodyCancel.mockImplementation(cancel));
       }
       const release = result.release;
       result.release = async () => {
@@ -47,253 +50,144 @@ vi.mock("../infra/net/fetch-guard.js", async () => {
   };
 });
 
-vi.mock("../process/exec.js", async () => {
-  const actual = await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
-  return {
-    ...actual,
-    runCommandWithTimeout: mocks.runCommandWithTimeout.mockImplementation(
-      actual.runCommandWithTimeout,
-    ),
-  };
-});
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
-async function within<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
-}
-
-async function withServer(handler: RequestListener, run: (base: string) => Promise<void>) {
-  const sockets = new Set<Socket>();
+async function serve(handler: RequestListener) {
   const server = createServer(handler);
-  server.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.once("close", () => sockets.delete(socket));
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  try {
-    await run(`http://loopback.test:${(server.address() as AddressInfo).port}`);
-  } finally {
-    for (const socket of sockets) {
-      socket.destroy();
-    }
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
+  const base = await listenLoopback(server);
+  onTestFinished(() => closeHttpServer(server));
+  return base.replace("127.0.0.1", "loopback.test");
 }
 
-function config(args: string[], timeoutSeconds = 10): OpenClawConfig {
-  return {
-    tools: {
-      links: { models: [{ command: process.execPath, args, timeoutSeconds: 10 }], timeoutSeconds },
-    },
-  };
+const echoStdin = ["-e", "process.stdin.pipe(process.stdout)"];
+function startLink(Body: string, args = echoStdin, timeoutSeconds = 10) {
+  const ctx: MsgContext = { Body };
+  const original = { ...ctx };
+  const controller = new AbortController();
+  const models = [{ command: process.execPath, args, timeoutSeconds: 10 }];
+  const cfg: OpenClawConfig = { tools: { links: { models, timeoutSeconds, maxLinks: 3 } } };
+  const result = applyLinkUnderstanding({ ctx, cfg, signal: controller.signal });
+  return { ctx, original, controller, result };
 }
 
-beforeEach(() => {
-  vi.clearAllMocks();
-});
+beforeEach(vi.clearAllMocks);
 
-describe("runLinkUnderstanding transport cleanup", () => {
-  it("cancels a non-OK response body before releasing its guarded transport", async () => {
-    const sockets = new Set<Socket>();
-    const requestSocketClosed = deferred();
-    const server = createServer((request, response) => {
-      request.socket.once("close", requestSocketClosed.resolve);
-      response.writeHead(500, {
-        "content-length": "1000000",
-        "content-type": "text/plain",
-      });
-      // Leave the declared body unfinished so cleanup must actively cancel it.
-      response.write("error");
-    });
-    server.on("connection", (socket) => {
-      sockets.add(socket);
-      socket.once("close", () => sockets.delete(socket));
-    });
-
-    try {
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const port = (server.address() as AddressInfo).port;
-      const url = `http://loopback.test:${port}/error`;
-
-      const resultPromise = runLinkUnderstanding({
-        cfg: {
-          tools: {
-            links: {
-              enabled: true,
-              models: [{ type: "cli", command: "summarize" }],
-            },
-          },
-        } as OpenClawConfig,
-        ctx: { Body: `see ${url}` } as MsgContext,
-      });
-
-      const result = await within(resultPromise, 1000, "link understanding did not finish");
-      expect(result).toEqual([]);
-      await within(requestSocketClosed.promise, 1000, "loopback socket stayed open");
-
-      expect(mocks.bodyCancel).toHaveBeenCalledOnce();
-      expect(mocks.releaseAfterCancel).toHaveBeenCalledWith(true);
-      expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
-    } finally {
-      for (const socket of sockets) {
-        socket.destroy();
-      }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+it("cancels a non-OK response body before releasing its guarded transport", async (t) => {
+  const requestSocketClosed = deferred();
+  const base = await serve((request, response) => {
+    request.socket.once("close", requestSocketClosed.resolve);
+    response.writeHead(500, { "content-length": "1000000", "content-type": "text/plain" });
+    // Leave the declared body unfinished so cleanup must actively cancel it.
+    response.write("error");
   });
+  const { ctx, original, result } = startLink(`see ${base}/error`);
+  await withinTest(result, t.signal);
+  expect(ctx).toEqual(original);
+  await withinTest(requestSocketClosed.promise, t.signal);
+  expect(mocks.bodyCancel).toHaveBeenCalledOnce();
+  expect(mocks.releaseAfterCancel).toHaveBeenCalledWith(true);
 });
 
-it("cancels a streaming response and preserves the unmodified inbound context", async () => {
+it.each(["cancel", "timeout"])("handles %s during a streaming response", async (mode) => {
   const requestStarted = deferred();
   const socketClosed = deferred();
   const requests: string[] = [];
-  await withServer(
-    (req, res) => {
-      requests.push(req.url ?? "");
-      req.socket.once("close", socketClosed.resolve);
-      res.writeHead(200, { "content-type": "text/plain" });
-      res.write("partial page");
-      requestStarted.resolve();
-    },
-    async (base) => {
-      const controller = new AbortController();
-      const ctx: MsgContext = { Body: `${base}/first ${base}/second` };
-      const original = { ...ctx };
-      const result = applyLinkUnderstanding({
-        cfg: config(["-e", "throw new Error('processor must not start')"]),
-        ctx,
-        signal: controller.signal,
-      });
-      const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
-      await requestStarted.promise;
-      controller.abort(new Error("operator stopped the reply"));
-      await rejected;
-      await socketClosed.promise;
-      expect(ctx).toEqual(original);
-      expect(requests).toEqual(["/first"]);
-    },
+  const base = await serve((req, res) => {
+    requests.push(req.url ?? "");
+    res.writeHead(200, { "content-type": "text/plain" });
+    if (req.url === "/second") {
+      res.end("complete page");
+      return;
+    }
+    req.socket.once("close", socketClosed.resolve);
+    res.write("partial page");
+    requestStarted.resolve();
+  });
+  const { ctx, original, controller, result } = startLink(
+    `${base}/first ${base}/second`,
+    mode === "cancel" ? ["-e", "throw new Error('processor must not start')"] : undefined,
+    mode === "cancel" ? 10 : 0.5,
   );
+  if (mode === "cancel") {
+    const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
+    await requestStarted.promise;
+    controller.abort(new Error("operator stopped the reply"));
+    await rejected;
+    expect(ctx).toEqual(original);
+    expect(requests).toEqual(["/first"]);
+  } else {
+    await result;
+    expect(ctx.LinkUnderstanding).toEqual(["complete page"]);
+  }
+  await socketClosed.promise;
 });
 
-it("skips a timed-out streaming link and processes the next link", async () => {
-  await withServer(
-    (req, res) => {
-      res.writeHead(200, { "content-type": "text/plain" });
-      if (req.url === "/slow") {
-        res.write("unfinished");
-      } else {
-        res.end("complete page");
-      }
-    },
-    async (base) => {
-      const ctx: MsgContext = { Body: `${base}/slow ${base}/good` };
-      await applyLinkUnderstanding({
-        cfg: config(["-e", "process.stdin.pipe(process.stdout)"], 0.5),
-        ctx,
-        signal: new AbortController().signal,
-      });
-      expect(ctx.LinkUnderstanding).toEqual(["complete page"]);
-    },
-  );
-});
-
-it("fetches only bare URLs from messages that also contain titled markdown links", async () => {
+it("dedupes and limits bare URLs while ignoring Markdown citations", async () => {
   const requests: string[] = [];
-  await withServer(
-    (req, res) => {
-      const requestPath = req.url ?? "";
-      requests.push(requestPath);
-      res.end(requestPath);
-    },
-    async (base) => {
-      const firstBare = `${base}/bare-one`;
-      const secondBare = `${base}/bare-two`;
-      const ctx: MsgContext = {
-        Body: [
-          `[quoted](${base}/quoted "Docs")`,
-          `[parenthesized](${base}/parenthesized (Docs))`,
-          `[escaped](${base}/escaped "A \\"quoted\\" title")`,
-          firstBare,
-          `[angle](<${base}/angle> 'Docs')`,
-          secondBare,
-        ].join(" "),
-      };
-
-      await applyLinkUnderstanding({
-        cfg: config(["-e", "process.stdin.pipe(process.stdout)"]),
-        ctx,
-      });
-
-      expect(requests).toEqual(["/bare-one", "/bare-two"]);
-      expect(ctx.LinkUnderstanding).toEqual(["/bare-one", "/bare-two"]);
-    },
+  const base = await serve((req, res) => {
+    const requestPath = req.url ?? "";
+    requests.push(requestPath);
+    res.end(requestPath);
+  });
+  const { ctx, result } = startLink(
+    [
+      `[quoted](${base}/quoted "Docs")`,
+      `${base}/bare-one`,
+      `${base}/bare-one`,
+      `[angle](<${base}/angle> 'Docs')`,
+      `[nested [label]](${base}/nested)`,
+      `[multiline](${base}/multiline "one\ntwo")`,
+      `[escaped](${base}/escaped "t\\")`,
+      `${base}/bare-two`,
+      `${base}/over-limit`,
+    ].join(" "),
   );
+  await result;
+  expect(requests).toEqual(["/bare-one", "/escaped", "/bare-two"]);
+  expect(ctx.LinkUnderstanding).toEqual(["/bare-one", "/escaped", "/bare-two"]);
 });
 
-it("stops processor descendants after caller cancellation", async () => {
+it("stops processor descendants after caller cancellation", async (t) => {
+  const receipts = await openFixtureReceiptChannel();
+  onTestFinished(() => receipts.close());
   await withTempDir("openclaw-link-cancel-", async (dir) => {
     const pidPath = path.join(dir, "worker.pid");
-    const workerSource = "setInterval(() => {}, 1000); process.send('ready')";
     const wrapperSource = [
-      "const { spawn } = require('node:child_process')",
-      "const { writeFileSync } = require('node:fs')",
-      `const worker = spawn(process.execPath, ['-e', ${JSON.stringify(workerSource)}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] })`,
-      `worker.once('message', () => writeFileSync(${JSON.stringify(pidPath)}, String(worker.pid)))`,
+      fixtureReceiptClientSource(receipts.endpoint),
+      "import { spawn } from 'node:child_process'",
+      "import { writeFileSync } from 'node:fs'",
+      "const worker = spawn(process.execPath, ['-e', \"setInterval(() => {}, 1000); process.send('ready')\"], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] })",
+      `worker.once('message', () => { writeFileSync(${JSON.stringify(pidPath)}, String(worker.pid)); sendReceipt(${JSON.stringify(pidPath)}, 'ready'); })`,
       "process.stdin.resume()",
     ].join(";");
-    await withServer(
-      (_req, res) => res.end("page body"),
-      async (base) => {
-        const controller = new AbortController();
-        const ctx: MsgContext = { Body: `${base}/page` };
-        const original = { ...ctx };
-        let workerPid: number | undefined;
-        const result = applyLinkUnderstanding({
-          cfg: config(["-e", wrapperSource]),
-          ctx,
-          signal: controller.signal,
-        });
-        const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
-        try {
-          workerPid = await waitForPidFile(pidPath);
-          expect(isPidAlive(workerPid)).toBe(true);
-          controller.abort();
-          await rejected;
-          expect(ctx).toEqual(original);
-          expect(await waitForPidToExit(workerPid, 500)).toBe(true);
-        } finally {
-          controller.abort();
-          killPidIfAlive(workerPid);
-          await rejected;
+    const base = await serve((_req, res) => res.end("page body"));
+    let workerPid: number | undefined;
+    const { ctx, original, controller, result } = startLink(`${base}/page`, [
+      "--input-type=module",
+      "-e",
+      wrapperSource,
+    ]);
+    const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
+    try {
+      // IPC readiness is recorded before the socket receipt, which can arrive after settlement.
+      const settled = result.catch((error: unknown) => {
+        if (!existsSync(pidPath)) {
+          throw error;
         }
-      },
-    );
+      });
+      await withinTest(Promise.race([receipts.waitFor(pidPath, "ready"), settled]), t.signal);
+      workerPid = await readPidFile(pidPath);
+      expect(isPidAlive(workerPid)).toBe(true);
+      controller.abort();
+      await withinTest(rejected, t.signal);
+      expect(ctx).toEqual(original);
+      // Caller rejection does not expose the adopted worker's native reap event.
+      while (isPidAlive(workerPid)) {
+        await delay(25, undefined, { signal: t.signal });
+      }
+      expect(isPidAlive(workerPid)).toBe(false);
+    } finally {
+      controller.abort();
+      killPidIfAlive(workerPid);
+      await rejected;
+    }
   });
 });

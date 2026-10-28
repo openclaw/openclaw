@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "CLI reference for `openclaw update` (updates, repair, and recovery cleanup)"
 read_when:
   - You want to update a source checkout safely
@@ -16,11 +17,68 @@ If you installed via **npm/pnpm/bun** (global install, no git metadata),
 updates go through the package-manager flow described in
 [Updating](/install/updating).
 
+Update checks, candidate rehearsal, activation Doctor, and verification inherit
+the managed Gateway's Node heap controls from its effective service command and
+`NODE_OPTIONS`. Command-line heap controls take precedence. An empty service
+`NODE_OPTIONS` preserves heap controls supplied by the invoking shell while still
+clearing inherited preload and debugger flags. This requires the fix in the
+installed updater; an older updater cannot inherit it from the candidate it stages.
+
+On Windows, update checks the Gateway Scheduled Task's principal and run level
+before staging or changing state. A per-user `LeastPrivilege` task for the current
+account can be updated from a non-elevated terminal, including a UAC-filtered
+administrator's terminal. A task for another account (including SYSTEM), a task
+that requires highest privileges, or a genuine Task Scheduler query denial needs
+an **elevated terminal** (Run as administrator), even if the Gateway is stopped.
+Unresolved or group principals defer to native permission checks. Task lookup has its
+own 60-second cold-start limit, and each `schtasks` command has a 15-second limit;
+a stalled operation names the check or command instead of using the update's full
+timeout.
+
+If Task Scheduler denies disabling autostart during update preparation, OpenClaw
+reports `windows-task-elevation-required` with the same elevated-terminal and
+manual-update guidance. A definite denial leaves the task unchanged, so no
+autostart restoration is attempted; the disable guard remains required before
+swapping the installation.
+
+Service-definition refresh recognizes Windows account aliases that resolve to the
+same SID. A different or unresolved account remains protected from automatic repair.
+
+If service inspection is unavailable, package updates refuse before replacement
+when a live Gateway lock identifies the same installation. On Windows, a live lock
+PID is enough when its command-line package identity cannot be read.
+The public reason is `gateway-stop-unverified`. Stop the Gateway through Task
+Scheduler, its original terminal, or `openclaw gateway stop`, then rerun
+`openclaw update`. Updates without a live lock still continue on all platforms.
+This admission check requires an updated installed updater.
+
+For a global npm installation, OpenClaw prints a short manual alternative
+(`npm i -g openclaw@<target> --allow-scripts=openclaw`, then
+`openclaw doctor --fix`, then `openclaw gateway restart`); it does not run it
+automatically. Follow the complete
+[manual update procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+with the intended release as the target, and run the service commands from an
+elevated terminal if Task Scheduler denies access. Per-user Startup-folder installations do not require
+elevation for this check. An older installed updater keeps its previous behavior
+until replaced; use the elevated or manual path for that first upgrade.
+
+Installations owned by a system package manager skip OpenClaw-managed updates
+before npm staging or Gateway shutdown. If ownership inspection fails, the
+update continues with a warning; only a confirmed ownership match skips replacement.
+A missing package-manager executable is reported as unavailable, without database
+recovery instructions. For pacman (including Arch-based distributions), update
+with `sudo pacman -Syu` or your AUR helper. For FreeBSD,
+use the owning pkg or Ports deployment. Then run `openclaw doctor --fix` and restart
+the Gateway through its service owner; see
+[System-package and image-based installs](/install/updating/update-methods#system-package-and-image-based-installs).
+Older updaters must receive this fix through that system package manager first;
+a candidate cannot repair an updater that fails before staging it.
+
 Custom npm prefixes such as `~/.npm-global` are recognized from npm's configured
 prefix and the installed OpenClaw launcher. A prefix configured in `~/.npmrc`
 does not need a matching `NPM_CONFIG_PREFIX` environment variable. If no owner
 can be identified, the CLI includes the inspected package, prefix, and launcher
-paths and the package-manager probe results in its guidance.
+paths and the package-manager check results in its guidance.
 Installation inspection also reports the root, Git metadata, `node_modules`
 layout, and service unit target (or why it was not inspected). An unrecognized
 root skips target preflight and gives commands to locate the owning installation.
@@ -39,6 +97,14 @@ history and include it in JSON as `run.origin.nextAction`. With `--json`, a fres
 profile emits the guidance to stderr and does not create a state database for a
 skipped update. These non-outcomes do not run rollback verification or offer an
 update failure report.
+
+After durable success, updates automatically retire eligible superseded recovery
+copies through the state owner, retaining the current update's rollback generation.
+A failed update that stopped before repair or activation does the same and also
+retires its own original-state capture, since nothing it captured changed.
+Cleanup warnings never fail or roll back the successful update. Manual
+`openclaw update cleanup` remains available for inspection and retry; see
+[recovery retirement](/cli/update/repair-and-recovery#update-cleanup).
 
 ## Usage
 
@@ -63,10 +129,27 @@ openclaw --update
 `openclaw --update` rewrites to `openclaw update` (useful for shells and
 launcher scripts).
 
-Invalid or unreadable configuration reports `invalid-config` before database
-schema inspection. The diagnostic identifies invalid fields and recommends
+Invalid configuration reports `invalid-config` before database schema inspection.
+An unreadable configuration file or failed configuration loading step instead
+reports `config-read-failed`, with a recognized filesystem error code when available.
+An ownership refusal during loading includes the `gateway-ownership-unverified`
+failure fact and points to `openclaw gateway recover-lock` for inspection. Active
+maintenance instead reports `gateway-maintenance-busy` with wait or stop guidance.
+Neither diagnostic includes the recorded holder's private details.
+For supported package targets, the candidate makes that
+decision after private staging; see [Candidate-owned admission](#candidate-owned-admission).
+The local diagnostic identifies invalid fields and recommends
 `openclaw doctor --fix`, followed by correcting any remaining errors. A dry run
 keeps this guidance in its JSON `notes` without changing the configuration.
+Public failure reports retain the rejected schema area, such as `gateway.*`,
+while hiding operator-defined keys and rejected values. Admission still runs
+when the selected package version matches the installed version; the no-op
+decision follows validation of the selected artifact and live installation.
+When switching channels, Doctor can prepare a read-only projection of supported
+legacy fields for database checks. Each projection stays bound to its original
+config bytes and include files. If the managed service uses another profile,
+caller and service projections remain separate; inspecting the caller does not
+rewrite its configuration.
 Guided recovery recognizes the saved config failure after a later successful
 update and still verifies the installed runtime and Gateway readiness.
 
@@ -76,6 +159,8 @@ update or dry run replaces the latest history, run `openclaw update status --jso
 and inspect `lastRun.origin.nextAction` and `lastRun.target` for the recorded
 reason and target. A candidate release cannot repair an installed updater that
 refuses before staging it; correct the configuration before retrying.
+
+Updaters without the admission fix first shipped in 2026.7.2-beta.5 (including 2026.6.34–2026.6.35 and the 2026.7.33–2026.7.35 extended-stable line) also refuse before staging with `plugins.load.paths: plugin path not found`; restore a missing custom plugin directory or remove its configured path before retrying. `openclaw doctor --fix` can repair recognized bundled-path aliases and preserves unrelated custom paths.
 
 Update admission recognizes orphan `task_delivery_state` rows whose parent tasks
 are missing as repairable. When it can acquire Doctor's ownership fences, it runs
@@ -98,6 +183,13 @@ command cleanup before handing off ownership or reporting completion. If cleanup
 cannot confirm that work stopped, the updater retains any acquired ownership and
 recovery artifacts and skips automatic service compensation and repair. Inspect
 `openclaw update status` and resolve the pending execution before retrying.
+Repair settles only native commands belonging to its Doctor. Another Doctor's
+retained command is recorded as foreign custody with its Doctor PID, without
+making the completed Doctor unsettled. Installation replacement remains blocked
+while any live command claim exists.
+If retaining a spawned command's custody fails, Doctor keeps its process identity
+and stops the command before settling its reservation. A reservation without a
+recorded identity still blocks recovery; repeating repair cannot prove it stopped.
 A verified rollback does not automatically start triage: the previous generation
 is running again, and the report keeps the failing check as the reason.
 An interactive update offers the diagnose/report menu with **Exit** selected by
@@ -105,18 +197,67 @@ default. Declining or cancelling preserves the failed update's nonzero exit
 status. JSON, non-interactive, `--yes`, and managed-service handoff invocations do
 not prompt after rollback.
 
+Update completion prints the terminal outcome and a local Markdown report path before exiting, including unexpected failures. Failed runs keep rollback-facing diagnostic JSON within the released 8 KiB limit. That file links a separate artifact containing every individually bounded Doctor finding; the Markdown report also retains the complete inventory. JSON output includes `reportPath`; a report-write failure prints a warning and preserves the update outcome.
+
+When another process holds the state database writer, the update driver gives
+its worker-backed phase and progress writes up to two minutes to acquire the
+writer. This extended wait ends when the transaction starts; Gateway and other
+callers retain the normal five-second budget.
+Progress-only receipts wait at most one second, then warn and continue
+without claiming a saved receipt. Required writes report actionable contention
+if their budget expires. This fix must be present in the installed updater to
+protect the next update it runs.
+
+Exit always waits for accepted state operations, pending database opens, and live
+worker references to settle. After settlement, retained-worker native close and
+thread termination have a ten-second reporting grace period. Expiry records a
+warning and continues waiting for actual native retirement; it does not abandon
+workers or force process exit. The retained runtime stays owned until retirement
+settles, then remains available for later cleanup. The command's recorded outcome
+is preserved. This protection belongs to the installed updater: installing a
+release with the fix enables it for the next update that release performs.
+
+The executable CLI retains its shared-state and worker cleanup code before an
+update can replace those files. Older installed development builds can finish an
+update successfully and then exit with `ERR_MODULE_NOT_FOUND` during CLI cleanup.
+Check `openclaw update status` with the newly installed CLI to distinguish that
+exit failure from the recorded update outcome; the installed driver needs the fix
+before it performs its next update.
+
+Newer packages retain the published 2026.10.1 updater's cleanup entrypoints,
+including its original pending-disposer queue, so that first upgrade can finish
+normally. This compatibility covers the published package, not arbitrary
+development-build filenames.
+
+Updating from inside the installation keeps captured paths anchored to the
+invoking directory while the package is replaced. The updater keeps a valid
+working directory for background workers and restores the original directory
+when it still exists. This protection also belongs to the installed updater;
+a new candidate cannot change the working directory of an older driver.
+
+When a Dashboard update fails while the Gateway handles the request, the Gateway
+logs a warning with the public reason and a safe error summary. Successful and
+intentional no-op update logs are unchanged. This only affects Gateway logging,
+not the installed updater, rollback, or the Dashboard RPC response.
+
 After a final interactive update failure, **Diagnose update failure** and
 **Report update failure** are separate choices. Reporting first shows the exact
 sanitized issue body and defaults confirmation to **No**. After confirmation,
 OpenClaw checks the GitHub CLI's active `github.com` account with a silent,
 read-only request before issue creation. Fallback and pending outcomes retain the
 sanitized report locally; a confirmed issue keeps only its durable issue URL.
-If the CLI is missing or that check cannot confirm authentication, OpenClaw
-provides a prefilled issue link without starting issue creation. If the exact
-report exceeds the browser URL limit, OpenClaw keeps the sanitized body locally
-and returns to the action menu, where reporting can be chosen and confirmed
-again. A report preparation or submission
-error also returns to that menu; Diagnose runs only when selected explicitly.
+If the CLI is missing, authentication is unavailable, or GitHub rejects the
+upload, OpenClaw keeps the sanitized report locally and returns to the previous
+action menu. Fix the problem, then choose **Report update failure** and confirm
+again to retry the same report, or choose **Report in browser** to review and
+submit it with your browser's GitHub account. The browser choice is available
+when the prepared report fits a prefilled link and no uncertain upload is pending;
+it does not require the GitHub CLI. Completed update and Doctor checks are not
+rerun. Preparation or submission errors also return to the menu. An uncertain
+upload stays pending: **Check report status** looks for the existing issue without
+creating another one, and no browser handoff is offered.
+Successful submission, explicit exit, and cancellation retain their normal
+behavior; Diagnose runs only when selected explicitly.
 In the Control UI, an interrupted
 pre-create preparation becomes retryable after its local reservation expires.
 After an uncertain creation result, OpenClaw checks for an issue matching the
@@ -129,10 +270,545 @@ submit a report.
 For admitted updates, unexpected exceptions retain a bounded, redacted error identity and source location
 in update history, along with the operation reached and the installation and target
 facts resolved so far. Failure reports include the initiating action and the owner's
-recorded rollback outcome. A failure during installation or target resolution keeps
+recorded rollback outcome. Failed steps use stable identifiers such as
+`candidate-state-snapshot`, `candidate-doctor-lint`, and `post-install-verify` in
+the report body and issue title; command arguments and private paths remain redacted.
+Snapshot errors identify the active database, execution approvals, or plugin phase.
+Snapshot watchdog failures also retain the last progress event, its age, and the
+last database's page count, copied bytes, and copy time in saved stderr and
+`openclaw update status`. The watchdog's byte estimate describes the total snapshot
+input, including plugins; it is not the size of the database active at timeout.
+Phase-only progress, such as plugin inventory after the shared database copy,
+replaces the active phase without losing the last database's copy counters.
+Schema inspection failures put recognized worker error codes and causes before private
+source context, including causes after warning lines, so they survive redaction. Saved
+diagnostic lines omit a path and its trailing text, including quoted paths whose filenames
+may themselves contain spaces or quotes.
+A completed database snapshot does not establish that later plugin paths are readable;
+inspect the source path and filesystem error named by the failing phase.
+A failure during installation or target resolution keeps
 that resolution step visible. Older updater processes cannot recover details they
 already discarded; a report generated by newer code only includes facts that were
 recorded by the updater that handled the failure.
+
+Managed updates preserve a completed child's refusal reason and failure details
+in update history, even when its notification has already been consumed. Settings
+→ Updates reads those same recorded facts. For `update-recovery-pending`, inspect
+the retained activation's diagnostic and follow its exact recovery command; the
+original recovery owner still decides whether repair or retirement is safe.
+A child that produces no usable result is reported as
+`managed-service-handoff-failed`. A refusal before service parking leaves the
+serving Gateway untouched.
+
+Npm install failures record a recognized error code (or `unknown`) and a sanitized
+excerpt of `npm ERR!` / `npm error` lines in update history and the reviewed report.
+The existing history format retains at most five lines of 200 UTF-8 bytes each;
+permission guidance reserves one of those entries. Home paths, credentials, and
+authenticated registry URLs are redacted before the excerpt is recorded.
+For `EACCES` or `EPERM`, check `npm prefix -g` and run the update as the installing
+account with write access to that prefix. For `ENOSPC`, free space on the prefix
+and npm cache volumes. For `E404` or `ETARGET`, check the configured registry and
+the requested version or tag. The generated report includes the applicable next
+step. An already-running older updater cannot gain this diagnostic capture from
+its candidate package.
+
+On Windows, a temporarily locked live package can prevent the updater from renaming
+it into its backup location. The updater retries `EPERM`, `EBUSY`, and `EACCES`
+with bounded backoff (16 attempts and up to 57.75 seconds of waiting), recording
+each retry as a warning. If the rename still fails, the failure names both paths
+and leaves the installed package in place. Close processes holding that installation
+and check its permissions before retrying. This protection belongs to the installed
+updater; a newer candidate cannot add it to an older updater already running.
+
+## Immutable release installations
+
+An explicitly adopted Linux installation can prepare and activate sealed releases with
+`openclaw update`. Its root contains `releases/<full-commit-sha>` and a `current`
+symlink selecting the running generation. A matching directory layout alone does
+not grant update ownership.
+
+Preparation resolves official `main` once, or accepts an exact
+`--sha <40-hex-commit>`, builds off-path, verifies and seals the candidate, and
+records its preparation. Preparation failure leaves the serving generation in
+place; an already-current target skips the build. Default update builds include
+the Plugin SDK declarations required by the sealed generation's package exports.
+Existing adoption records remain preparation-only. Native activation requires explicit
+`adopt-immutable --enable-activation` consent recorded in the installation's
+control database. No `openclaw.json` option enables it. `--no-restart` keeps an
+enabled installation preparation-only for that invocation.
+
+Preparation reuses Git objects from the verified current release while fetching
+official `main`, so the network transfer contains only missing objects. A failed
+fetch retries once in the same staging repository, with a separate five-minute
+budget per attempt. Interrupted pack transfers restart the missing pack, not the
+installed history. Before building, preparation copies the reused objects into
+its own store; the prepared release retains independent Git objects.
+
+When a separate build account and toolchain are adopted, immutable preparation uses them.
+The build account must differ from the runtime account, have no supplementary
+groups, and match the recorded numeric identity. The updater runs dependency
+installation and builds in a restricted systemd service with a private home,
+temporary directory, memory limit, and task limit. Its environment excludes the
+runtime account's credentials and its filesystem view protects runtime state,
+service definitions, and existing releases. The updater waits for the entire
+build cgroup to stop before copying and sealing the new generation as root.
+
+Build storage admission and the runtime account's write/quota probe run
+separately. A failed admission, installation, build, or process-settlement check
+leaves the existing service and `current` pointer unchanged. Uncertain process
+settlement retains the build scratch for inspection. Installations without an
+adopted build identity use a non-root operator account in the same private staging
+area and restricted systemd service. A non-root caller uses its own account and
+toolchain search path. A root updater resolves the installation's non-root service
+account or recorded directory owner and uses the verified service toolchain path.
+It never runs candidate dependency installation or build scripts as root. If no
+non-root owner can be resolved, preparation refuses before changing the installation;
+run `openclaw update` as the service user or provision the isolated build account.
+
+At account selection, each fallback build warns that the isolated build account is
+missing and names the account, UID, and GID it will use. The sealed
+`dist/build-info.json` records `immutableBuild` with `builtBy: "operator"`,
+`isolation: "none"`, `account`, `uid`, and `gid`; status and Doctor report these
+recorded facts. The build uses a clean environment and private home and temporary
+directories. Exact-SHA verification, process settlement, materialization, and
+sealing still apply. Malformed or unreadable build-account descriptors refuse
+preparation rather than silently selecting the fallback.
+
+Build-account provisioning remains staged and has no supported CLI command or
+`openclaw.json` setting yet. Updates can use the non-root fallback; this section will carry
+provisioning instructions when that workflow becomes available.
+
+`--drain-timeout <seconds>` sets the immutable drain budget independently of
+`--timeout`, which retains the canary/readiness phase budget. The default drain
+budget comes from the existing restart deferral policy (300 seconds). Drain
+completes immediately when ready; after its budget,
+the native suspension owner can interrupt ordinary work while preserving
+unresolved write custody. For a 30-second drain, use `--drain-timeout 30`.
+The flag is rejected on mutable installations.
+After native service inspection, the updater asks the Gateway to commit shutdown
+under the original suspension. An expired or resumed suspension refuses that
+handoff. Once committed, the host owns one-way shutdown; resume and lease expiry
+cannot reopen admission while native stop waits for dispatch.
+The stable launcher reads the same activation record before starting a Gateway.
+Stop and pointer-publication phases block supervisor replacements from admitting
+work; the native owner explicitly authorizes startup after publication.
+
+When enabled, the native updater drains through the Gateway suspension owner,
+stops the old service, publishes `current` under a fenced activation record,
+starts the selected generation, and verifies its process, build, authenticated
+health, core HTTP readiness, and plugins. Channel-only outages remain named
+warnings while `/readyz` retains its actual HTTP status. Build and install work stay outside
+cutover. Startup responses with `status: "starting"`, including agent database
+inspection, keep the readiness wait open within its bounded budget. An
+inconclusive check retains the recovery record; it does not establish failure.
+Candidate-authored additive startup config migrations require matching config
+audit evidence and preserved policy. Other config or state identity changes
+refuse completion.
+
+Load slows updates; it does not establish an activation failure. For deployments
+using the bundled managed-release controller, acceptance waits for agent database
+admission, critical startup sidecars, and a responsive main thread before running
+the isolated model marker. The configurable verification budget defaults to ten
+minutes. A marker dispatch timeout can retry the same idempotency key within that
+budget after the selected Gateway proves readiness, responsiveness, and unchanged
+process identity. Rollback acceptance uses the same patience. A crash, wrong build
+or identity, corruption, wrong marker reply, failed health checks, or readiness
+that never settles before the budget expires remains a real failure.
+
+Verified activation retires the operation record. A real activation failure may
+restore the sealed predecessor when the protected state remains compatible;
+rollback retains a resumable record. This slice does not rewind migrated
+databases or collect release directories. It supports matching database schema
+contracts only; incompatible migration requirements refuse activation before
+drain. Canary rehearsal boots the candidate against isolated copies before
+cutover, preserving input that the candidate itself must migrate at startup.
+It does not pre-repair that input with Doctor. No live Doctor or optional NOCOW
+rewrite runs inside this activation.
+After live readiness, the updater repeats that startup-only canary against a
+fresh private copy while the selected Gateway serves, then verifies the same
+live PID and boot once more before completing activation. This is canary proof;
+it does not dispatch a model marker turn.
+JSON distinguishes preparation
+(`prepared`) from activation (`succeeded`, `rolled-back`, `pending`, or `error`).
+`pending`, `rolled-back`, and `error` return a nonzero exit status.
+
+`openclaw update --dry-run` reports the immutable target without adoption,
+preparation, or publication. `openclaw update status` includes the current and
+prepared generation identities and activation enablement. Its immutable receipt
+fields are also available under `update.immutable` in `--json`:
+
+- `prepared` identifies a sealed candidate, not an accepted activation.
+- `activation` identifies retained recovery: operation ID, phase, previous and
+  candidate SHA, optional `failure`, and the exact `recoveryCommand` using the
+  recorded external Node and retained helper. Known failure reason codes are
+  shown; other stored error text is replaced with `details-withheld`.
+- `lastActivation` is historical verification: operation ID, `outcome`,
+  `selectedSha`, and `verifiedAtMs`. Text status labels `succeeded` as **accepted**
+  and `rolled-back` as **restored**; restored availability is not candidate success.
+  Its optional `gateway` contains the verified `version`, `buildId`, `pid`, and
+  `bootId`. Older receipts without these fields remain readable.
+
+These facts come from the installation record, so a fresh CLI observer can read
+them after the updater exits. They do not probe the current process or grant
+activation authority. A retained `activation` remains pending recovery even when
+`lastActivation` records restored availability or an older accepted update.
+
+Immutable preparation does not switch stored channels and rejects package targets such as `--tag`. `--sha` is available only
+for adopted immutable installations. Gateway `update.run` still requires the
+root installation owner to run the CLI outside the Gateway service cgroup; it
+does not elevate chat requests. `update repair` directs immutable recovery to
+`update recover`.
+
+Before an immutable activation stops the serving Gateway, the updater prewarms
+the candidate's Node compile cache as the service account at its final release
+path. This imports the Gateway graph without starting a server. The existing
+build-ID cache namespace and disabled-cache setting still apply; a failed
+prewarm is advisory and ordinary cold startup remains available. Candidate
+rehearsal keeps its separate, cache-disabled environment. Mutable package
+updates do not prewarm: staging paths change during activation, and compiling
+again at the final path would add work during downtime.
+
+Immutable status and dry-run also explain migration coverage. JSON exposes
+`immutableCoverage` in status and `coverage` in dry-run. The report inventories
+default, configured external, and registered agent stores, including absent paths
+and the registry's original path aliases. It reports declared plugin migration
+resources and warnings for undeclared resources. External paths are identified;
+their presence does not establish candidate migration support.
+
+For an already-prepared target, inspection compares the current package, candidate
+package, and preparation receipt schema contracts and shows each store's schema
+version against that target. A crossing such as agent schema 24 → 25 names the
+reason immutable activation refuses it before drain. An unprepared SHA has
+**unknown** target coverage: inspection does not fetch, build, or boot it. Matching
+schema versions are not physical-schema, backup, migration, or activation readiness
+proof; plugin migration coverage remains unknown.
+
+Live inventory uses the adopted service's effective environment and configuration.
+If those cannot be read, the report retains the available preparation facts and
+explains the inventory gap. Run inspection as the installation owner for complete
+service visibility. Database inspection preserves live SQLite artifacts using
+private scratch copies, which are disposed afterward; large stores can make this
+read-only inspection expensive. It does not migrate data, write configuration,
+enable activation, or stop the serving Gateway.
+
+The serving Gateway must support committed suspension handoff. A new CLI cannot
+add that capability to an older running process. For the first native activation,
+have the existing installation owner prepare and activate one bridge release
+containing this feature. Keep its adoption preparation-only during that bridge.
+After the bridge is healthy and the previous updater has settled and stopped
+scheduling, enable native activation from the serving release:
+
+```bash
+sudo /usr/bin/node /opt/example/current/dist/index.js update adopt-immutable \
+  --root /opt/example \
+  --service example.service \
+  --account openclaw \
+  --state-dir /var/lib/example \
+  --config /etc/example/openclaw.json \
+  --runtime /usr/bin/node \
+  --previous-updater-stopped \
+  --enable-activation
+```
+
+Run adoption as root only after the previous updater has settled and stopped
+scheduling. The acknowledgement does not stop another updater for you. Adoption
+verifies the existing systemd unit, fixed nonroot service account, explicit
+effective state/configuration paths and optional `--profile`, external Node
+executable, and sealed current generation before recording ownership. Existing
+systemd environment files are read through the native service reader. Services
+with a different filesystem root, dynamic accounts, or command-line profile
+overrides are not supported. Native activation requires cgroup v2 so the updater
+can verify that the old service and its descendants have stopped. Adoption never
+edits or restarts the service. Omit
+`--enable-activation` to adopt for preparation only. To enable an earlier
+preparation-only adoption, rerun the original adoption command with the flag;
+the installation and service identities must still match.
+For a preparation-only adoption whose existing owner activated the bridge,
+explicit enablement reconciles the selected generation after verifying both
+sealed generations and the live bridge process. It retains the predecessor and
+preserves all other installation bindings. The exact packaged v1 launcher is
+backed up and upgraded atomically; a custom or modified launcher is preserved and
+refused. An already-enabled record never accepts an external pointer change.
+
+Prepare and activate the next reviewed generation as root, outside the service
+cgroup. It must differ from the bridge release to exercise a native cutover:
+
+```bash
+sudo /usr/bin/node /opt/example/current/dist/index.js update --sha <candidate-sha> --no-restart
+sudo /usr/bin/node /opt/example/current/dist/index.js update --sha <candidate-sha> --drain-timeout 30
+sudo /usr/bin/node /opt/example/current/dist/index.js update recover --root /opt/example
+```
+
+Before drain, activation prepares one independently sealed copy of its invoking
+runtime per source SHA under the installation-sibling control directory's
+`recovery-<sha>` path. Its `recovery.mjs` launcher uses the adopted external Node
+and the same native recovery owner. It remains executable without the candidate
+or a private deployment checkout. There is no runtime copy or build during
+cutover.
+
+`update recover --root <installation-root>` reconciles retained pointer and
+service effects before continuing. It verifies a healthy selected candidate or
+restored predecessor and retires the record without another restart. Run it
+from either retained immutable-capable generation if `current` needs recovery.
+Pending and rolled-back results also print an exact `Recovery:` command and
+include `recoveryCommand` in JSON. Use that independent helper when a release
+directory is unavailable; preserve its control directory and sealed runtime.
+`--timeout <seconds>` bounds readiness observation; `--json` returns the result
+and receipt lines without mixing prose into stdout. Recovery also accepts
+`--drain-timeout`; it applies only if an unhealthy service must be stopped.
+Healthy recovery never drains or restarts the serving process. Preserve the record and
+retained releases while recovery is pending.
+If recovery retries a stopped candidate and confirms another startup failure,
+it uses the same protected predecessor rollback as activation. A candidate still
+starting or an inconclusive check remains pending.
+If the updater is interrupted after shutdown commits, the Gateway still completes
+its shutdown. Keep the independent recovery command available: recovery observes
+whether the supervisor restarted the predecessor or the service is stopped
+before taking another action. A lost handoff reply never authorizes a blind
+native stop or a fallback to the older reversible handoff.
+
+After an updater crash, recovery can repair a hot SQLite rollback journal in
+the installation control or its native executor lease. It first validates a
+private recovered copy and acquires current ownership before allowing SQLite to
+repair the source. Ordinary update and status reads do not perform that repair.
+Repairing preparation-only metadata never enables activation.
+
+The [immutable update design](/reference/team-immutable-update-design#three-proposed-prs)
+records the preparation, activation, and recovery contracts. Existing
+published updaters need explicit adoption after installing an immutable-capable
+release; candidate code cannot change the behavior of an older installed updater.
+
+## Candidate-owned admission
+
+For package-manager updates, `openclaw update` privately stages the selected
+package once, then lets that candidate decide whether the live installation can
+be updated. Registry targets and explicit artifacts such as `--tag ./openclaw.tgz`
+use the same flow. The stage is reused for verification, canary rehearsal, and
+activation; a refusal or pre-mutation failure removes it and leaves the installed
+package and serving Gateway in place. After admission and package verification,
+a matching installed version and artifact build identity remain a no-op unless
+the update needs to replace the installation method or a separate serving root.
+The temporary candidate is removed without activating it.
+
+When replacement is needed, the updater retains its running worker files before
+changing the installed package. Ordinary files use hard links, with a copy
+fallback when linking is unavailable. If a linked file's identity changes, its
+size, mode, and content must match the inventory. A mismatch discards that runtime
+as a rollback source and logs the path and failed check; the update continues
+without using the unverified tree. Writes through the same inode remain best effort.
+
+SQLite read-only workers use that retained generation through post-install
+verification, even after the package manager removes the previous package path.
+The updater joins those workers before returning. It records completed runtime
+projections for cleanup by the next eligible update or `openclaw doctor --fix`,
+so recursive deletion does not delay command exit after the final result.
+Cleanup keeps projections while another OpenClaw process may still use them.
+Already-installed older updaters, including 2026.9.6, still run their original
+worker-launch code; installing a corrected candidate cannot repair that first hop.
+
+Source updates retain a retired workspace dependency link when only its ignored `node_modules` directory remains.
+An older installed updater that fails at `updater-runtime-retention` needs this correction in its running code before retrying; a newer candidate cannot repair that earlier step.
+
+Installed updaters up to 2026.10.7 and the 2026.10.10 betas retain their runtime in the update process
+and, after any second without a completed entry, rescan the whole retained tree
+to measure progress. On a busy or slow disk, `updater-runtime-retention` can take
+several minutes for a global install of about 45,000 files while still advancing;
+let it finish instead of interrupting the update. Newer updaters retain in a
+private worker bounded by the update deadline. The candidate does not take part in
+this step, so a newer target cannot speed it up.
+
+Runtime retention excludes updater-owned package backups in the global module
+directory, including backup symlinks to source checkouts. An older installed
+updater such as `2026.9.6` can still follow a retained
+`.openclaw.package-backup-*` link and refuse an update with a host-owned plugin-link
+error. Preserve that historical link outside the global module directory, keeping
+its resolved target unchanged, before retrying. Do not delete its source checkout
+or move backups belonging to an active or unresolved update.
+
+The installed updater reads the candidate's `package.json` before running its
+pending lifecycle scripts. `openclaw.updateAdmissionProtocol: 1` advertises the
+internal admission command. Reading this marker does not execute candidate code.
+Managed-service preflight still runs in the installed updater before the
+candidate admission process starts.
+
+The same release metadata can declare
+`openclaw.databaseEngines: ["sqlite", "postgres"]`. This optional field does not
+change `updateAdmissionProtocol: 1` or its comparison rules. An absent field means
+`["sqlite"]`. When physical anchors show that any installed store uses PostgreSQL,
+the installed driver checks the selected package or Git target for `postgres`
+before mutation. A target that lacks it is refused with `database-engine-preflight`:
+reverse-port to SQLite with the current compatible binary before updating, or
+stay on the current version. See [Database engines](/reference/database-engines).
+SQLite-only installations keep the existing admission path and do not require
+the field. Candidate admission cannot override this installed-driver protection.
+
+Targets also declare supported PostgreSQL families in
+`openclaw.postgresFamilies`. Mixed installations and explicit family overrides
+require the candidate's existing admission checks to accept the complete family
+selection before mutation; `databaseEngines: ["postgres"]` alone is insufficient.
+Preflight uses the effective shared-state engine for registry and plugin facts,
+and each agent store's physical engine for its schema inspection, including
+retained stores and disabled plugins. Updates preserve the default and family
+overrides; they never implicitly port a family. `openclaw update --dry-run`
+previews the flow using installed checks; it does not stage a package or run
+candidate admission, so candidate family compatibility remains pending.
+
+| Owner                                | Checks and operations                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Candidate-owned (via `update admit`) | Config read/validation with the candidate schema (missing-path style problems that candidate Doctor preserves/handles are `admit` + warning), database schema preflight against the explicit installation root, plugin availability preflight. The Node engine comparison is informational (`ok` or `warn`) and cannot refuse admission. |
+| Installed-owned (unchanged)          | Run admission/ledger, executor lease, managed-service preflight (ownership/ancestry), Node runtime selection/provisioning, directory permissions, npm/pnpm lifecycle policy, staging/verify/canary/swap/post-core.                                                                                                                       |
+
+The candidate inspects the live installation read-only, using the same selected
+profile, state directory, configuration path, and environment. It does not
+acquire a lease, write history, run Doctor repairs, start a Gateway, or receive
+update execution authority. A missing custom `plugins.load.paths` entry can
+therefore produce an admission warning while preserving the configured path
+and plugin configuration bytes. Admission does not promise to repair that path.
+
+Legacy plugin configuration, such as Discord's nested `dm.policy` and
+`dm.allowFrom`, is admitted with a warning when the candidate's Doctor planner
+produces a fully valid configuration. Admission checks the projected database
+targets while preserving the original config and state bytes. The normal
+update-time Doctor still owns saving the repair, backups, and rollback.
+
+A valid `admit` verdict replaces only the candidate-owned checks it reports.
+Installed Node preflight always runs for package updates, including selection or
+private provisioning of a compatible runtime after an informational Node warning.
+A valid `refuse` verdict reports the candidate's reason and next action through
+the usual pre-mutation error and JSON output. History records the checks in a
+`candidate-admission` step. The installed updater continues to own the update
+after admission, including every mutation.
+
+If the marker is absent or invalid, the updater uses its installed admission
+checks and records `update-admission-unsupported-target`. If the candidate times
+out, crashes, or returns no valid protocol-1 verdict, it records
+`update-admission-fallback` and uses those same installed checks. When stdout is
+not one JSON document (`malformed-json`), the warning ends with a bounded,
+redacted excerpt of the first stdout line. These warnings
+are informational; the installed checks determine whether the update proceeds.
+Both warning steps retain their identity, status, and timestamps when history
+compacts at its 128-step or 16 KiB limit. Warning text can be compacted to fit
+that limit. This requires no migration and does not change admission decisions.
+
+Use `--admission installed` to force the installed checks. The default option is
+`--admission auto`; this option has no environment-variable form. `--dry-run` always
+uses installed checks and does not stage a package or invoke candidate admission.
+Git/source updates keep their existing flow.
+
+`openclaw update admit` is an internal command, hidden from help. The supervisor
+passes `--context <absolute-path>` to a private mode-0600 context file; this command
+path and required argument select admission child mode. The command emits
+one JSON document with `protocol`, `verdict`, `reasons`, `warnings`, and `facts`
+containing candidate/installed versions, the candidate's `nodeEngines` requirement
+when declared, and named check results. Console logs from admission and its
+private inspection workers go to stderr at every console level, so stdout carries
+only that document. Candidates up to 2026.10.7 and the 2026.10.10 betas wrote debug
+diagnostics to stdout when the console level was raised (for example
+`logging.consoleLevel: "debug"`), so their admission fell back with `malformed-json`
+to the installed checks. It exits `0`
+for admission, `3` for refusal, or `2` for an internal error without a valid
+verdict. It rejects inherited update authority variables with exit `2`, allowing
+the supervisor to fall back. It does not perform managed-service ancestry checks.
+The default admission budget is 120 seconds and follows the canary timeout
+budget resolution.
+
+Run JSON includes `run.admission` with `owner: "candidate"` or `"installed"`,
+and optional `protocol`, `candidateVersion`, `checks`, and `fallbackReason`.
+The ledger stores this metadata in its existing origin JSON;
+`run.origin.candidateAdmission` retains the bounded, redacted verdict, including
+all recorded reasons and warnings. Older history records can omit admission
+metadata.
+
+Admission metadata is diagnostic and can be omitted from history when recovery
+receipts use the full history budget.
+
+This handoff works only when the installed updater already supports it. An older
+updater that refuses before staging cannot use a newer candidate's judgment;
+follow the recovery guidance for that installed release first.
+
+## Database capture and recovery
+
+Candidate SQLite migrations use whole-database `quick_check`, full integrity
+checks of rewritten or re-indexed tables, and foreign-key checks by default.
+Use `openclaw update --full-integrity-check` for a full check of every table and
+index during migration. The default can miss index/table mismatches in untouched
+tables. An older installed updater keeps its own checks until candidate code
+runs and does not recognize the new flag. See
+[migration integrity checks](/install/updating#migration-integrity-checks).
+
+Updates preserve each store's physical engine. Before database mutation, the
+installed updater keeps the existing exact SQLite captures and captures each
+PostgreSQL store as an unsanitized SQLite export image plus its matching anchor
+and format-2 manifest. These private recovery captures preserve canonical data,
+transient rows, and allocation facts; ordinary sanitized user backups cannot
+replace them. Recovery receipts record the physical engine and store identity.
+
+PostgreSQL capture runs under the update's exclusive maintenance ownership.
+Rollback verifies the capture, restores a fresh owned PostgreSQL namespace, and
+publishes the matching anchor through the existing recovery owner. It retains the
+migrated namespace until recovery is confirmed. If state has changed since the
+capture or ownership or commit outcome is uncertain, automatic restore stops and
+retains both for recovery. Partial restoration keeps the Gateway stopped.
+SQLite capture and restore retain their existing behavior; updates never
+reverse-port or silently change engines. These protections must already exist in
+the installed updater: installing a candidate does not retrofit its parent driver.
+
+## Runtime retention failures
+
+Runtime retention is best effort once the updater has kept its own copy of the
+native recovery helper. When it then cannot retain the rest of its running
+runtime, for example because of a `host-owned-plugin-link`, a changed source
+file, or a failed retention worker, it logs the reason with "continuing update
+without a verified retained rollback runtime" and continues. It retains nothing
+else and leaves the installed runtime unchanged; native recovery and the
+existing rollback protections still apply. The update still stops before
+activation when no private storage outside the installation is available for
+that helper, when the retention worker's process cleanup cannot be confirmed,
+or on cancellation or a lost update lease. Updaters released before this change
+stopped at every retention failure, and the guidance below explains their
+recorded failures; it also explains a retention warning worth repairing.
+
+**Fix now:** `host-owned-plugin-link` means a dependency symlink reaches
+OpenClaw-owned files that the updater cannot safely retain as an independent
+plugin dependency. Retention protects the running updater and recovery workers
+when package replacement removes the old files.
+
+Inspect the link and target in the local failure output. Keep the source files
+and recovery backups. For a current installation, ask the plugin maintainer to
+replace the private host-file dependency with `openclaw/plugin-sdk/*` imports or
+a separately packaged dependency. If the link is unexpected, run
+`openclaw triage` with the same profile, service account, state, and configuration
+to diagnose its owner before moving or removing anything.
+
+Older installed updaters may instead encounter the historical package-backup or
+retired-workspace cases described above. The installed updater performs
+retention before replacement: selecting a corrected candidate cannot repair
+that first step. Only move an identified inactive historical backup link; do not
+move an active or unresolved update's backup or delete its source checkout.
+
+After repairing the link, retry the update. Use the report's verification and
+recovery results to determine whether the previous Gateway is still serving;
+a retention refusal alone does not establish service health or restoration.
+
+## Gateway recovery verification failures
+
+**Fix now:** a stopped service or failed readiness check means the update did not
+verify a serving Gateway. Check `openclaw gateway status --deep` using the same
+profile and account. The report identifies observed service status, version
+mismatches, readiness failures, and plugin diagnostics when available.
+A readiness deadline without those facts does not identify the startup cause.
+
+Channel connectivity or probe errors are warnings once the target version and
+build are serving and HTTP readiness is healthy. The update succeeds and package
+backup retention proceeds normally. Each warning names the channel; run
+`openclaw channels status --probe` or `openclaw health --json` to diagnose it.
+Channel warnings alone do not make restarting unsafe.
+
+Keep recovery backups and inspect the restart log printed by the updater.
+Follow its recovery instructions; if it says restarting is unsafe, keep the
+Gateway stopped and run `openclaw triage` to repair the installation. Do not
+restore code alone after state migration. If the report says the Gateway is
+still starting, check its progress instead of repeatedly restarting it.
 
 ## Automation and SSH
 
@@ -143,7 +819,7 @@ account and a non-interactive SSH command:
 ssh -T user@gateway-host 'openclaw update --yes' </dev/null
 ```
 
-Ensure `openclaw` resolves to the intended installation in that account's SSH
+Check that `openclaw` resolves to the intended installation in that account's SSH
 environment. Add the existing global `--profile <name>` before `update` when
 targeting a named profile.
 
@@ -176,7 +852,7 @@ restart/stop and detached restart or Windows Startup-folder fallbacks that canno
 retain this ownership. Ordinary user-invoked `openclaw gateway` commands keep their
 existing behavior.
 
-On Windows, capability probes stay alive until the updater finishes binding their
+On Windows, capability checks stay alive until the updater finishes binding their
 process identity. If Windows cannot supply a process creation timestamp, the
 updater retains the identity established by the live parent or uses the child's
 recorded launcher identity, with a warning in the run history and diagnostic logs.
@@ -184,44 +860,95 @@ A different observed identity still refuses the
 handoff. Scheduled Tasks using `InteractiveToken` remain supported; this does not
 require storing a task password.
 
-This target-CLI protection does not cover every Doctor or plugin child, the
-in-process service preparation before package mutation, or the separate
-deferred-install activation checks.
+This target-CLI protection does not cover every Doctor or plugin child or the
+in-process service preparation before package mutation.
+
+After Scheduled Task autostart has been suspended, cancelling before installation
+mutation restores it before exit, while retaining checks on the original update
+owner and task identity. This protection belongs to the installed updater;
+installing a release with the fix enables it for the next update that release
+performs.
 
 ## Options
 
-Post-core repair Doctor and `openclaw update finalize` run without a separate
-per-Doctor deadline unless the operator supplies `--timeout`. A fresh post-core
-process receives the operator choice separately from its internal step allowance.
+Post-core repair Doctor uses the supplied step allowance when `--timeout` is
+omitted. An explicit `--timeout` takes precedence, and the overall update budget
+still bounds the Doctor process. On expiry, the updater stops the worker tree
+before continuing through its existing maintenance-warning or recovery path.
 Older targets retain their existing allowance and deadline behavior.
 
 When `--timeout` is omitted, current CLI and RPC finalization do not add an aggregate
 activation deadline. Explicit operator limits and inherited activation allowances
 still apply; older or unrecognized handoffs retain their existing finite-deadline
-behavior. Independent install, build, plugin-operation, readiness, and cleanup
-bounds still apply. An explicit `--timeout <seconds>` limits each finalization phase
-and its child commands. Admission and config phases scale with shared SQLite state.
+behavior. Checks, ownership admission, readiness, recovery, and cleanup retain
+their own bounds. An explicit `--timeout <seconds>` supplies one overall budget from update admission
+through activation, readiness, and recovery, including native service commands.
+Expiry reports `update-activation-timeout` or pending recovery; it does not start
+another recovery phase. Outstanding writers retain ownership until they settle.
+
+Candidate checks compute an automatic allowance from the copied SQLite and
+plugin state. A shorter update deadline limits that allowance; the update report
+and history warn with both values because checks may time out early. Increase
+`--timeout` to allow more time. This warning comes from the installed updater and
+protects subsequent updates after installation.
+
+The same deadline cancels runtime-retention inventory, its file-hashing workers,
+and materialization before activation. Retention makes one attempt and stops if
+dependency discovery cannot make progress; it does not repeatedly copy a changing
+tree. If retention fails, the serving installation stays untouched. Retry after
+addressing the reported storage or dependency problem. This protection belongs
+to the installed updater, so selecting a newer candidate cannot fix an older
+updater that is already stuck in retention.
+
+After activation or rollback is verified, obsolete package and launcher backup
+trees share a five-minute cleanup budget. Expiry retains the remaining backups
+and records their paths as a warning without undoing the verified installation.
+Cleanup checks this budget between filesystem operations and waits for operations
+already in flight to settle, so stalled storage can extend the cleanup wait.
+Ownership and path-identity failures remain distinct from cleanup expiry.
+
+A later verified package activation also retires historical package backups
+captured before that update began. Symlink retirement removes only the link;
+source checkouts remain untouched. Failed updates and rollbacks preserve those
+historical backups, and separately retained database snapshots keep their own
+recovery lifetime.
+
+Optional Doctor inspections that have matching lint checks can run after the
+restarted Gateway is ready. The target Doctor reports the checks it actually
+deferred; the updater runs those checks against the updated installation and
+current configuration. Older update parents or targets keep these inspections
+inside Doctor. If the target does not provide a usable report, the updater records
+an advisory rather than claiming that the post-restart inspections completed.
+On the first upgrade from an older updater, that retained parent can still report
+its own post-restart inspection warning even though the target ran checks inline.
 
 Post-plugin config validation and readiness checks use the measured shared and
-agent database sizes after Doctor finishes, including WAL files. Serial plugin
-operations retain individual deadlines. When an aggregate activation budget is
-present, it uses the measured database sizes, observed candidate startup, plugin
-count, and the caller's step allowance. Migrated finalization preserves explicit or
-inherited allowances. Aggregate expiry reports `update-activation-timeout` and
+agent database sizes after Doctor finishes, including WAL files. Post-core plugin
+installation and update work have no default deadline when `--timeout` is omitted;
+explicit operator limits and older caller allowances still apply. An explicit `--timeout` remains the overall budget across these checks and migrated
+finalization. Older inherited activation allowances use measured database sizes,
+observed candidate startup, and plugin count. Aggregate expiry reports `update-activation-timeout` and
 retains ownership until writers settle; it does not authorize rollback or restart.
 Use `openclaw update status` and Doctor for recovery guidance.
 
-| Flag                                             | Description                                                                                                                                                                                                                                                                                                                                   |
-| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--no-restart`                                   | Skip restarting the Gateway service after a successful update. Package-manager updates that do restart verify the restarted service reports the expected version before the command succeeds.                                                                                                                                                 |
-| `--channel <stable\|extended-stable\|beta\|dev>` | Set the update channel and persist it after core update success. Extended-stable is package-only.                                                                                                                                                                                                                                             |
-| `--tag <dist-tag\|version\|spec>`                | Override the package target for this update only. It cannot be combined with an effective `extended-stable` channel, whose verified exact target is mandatory. Package installs reject the `main` shorthand; use `--channel dev` for the supported checkout and build flow. Other explicit package specs keep their package-manager behavior. |
-| `--dry-run`                                      | Preview planned actions (channel/tag/target/restart flow) without writing config, installing, syncing plugins, or restarting.                                                                                                                                                                                                                 |
-| `--json`                                         | Print machine-readable `UpdateRunResult` JSON. Includes `postUpdate.plugins.warnings` when a managed plugin needs repair, beta-channel plugin fallback details, and `postUpdate.plugins.integrityDrifts` when npm plugin artifact drift is detected during post-update sync.                                                                  |
-| `--timeout <seconds>`                            | Per-step timeout. Default `1800`.                                                                                                                                                                                                                                                                                                             |
-| `--yes`                                          | Skip confirmation prompts (for example downgrade confirmation).                                                                                                                                                                                                                                                                               |
-| `--reapply-local-overrides`                      | Replay trusted local packaged `dist` edits when the new package has the same baseline. Otherwise preserve them for manual recovery.                                                                                                                                                                                                           |
-| `--accept-capabilities`                          | Accept each plugin's reviewed capability changes during post-update sync. This acknowledges the exact staged capability surface; it does not disable capability checks or establish future trust.                                                                                                                                             |
+| Flag                                             | Description                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--no-restart`                                   | Skip the updater's managed restart and trailing Gateway readiness wait, including failure recovery; also applies with `--json`. A running package Gateway (npm/pnpm/bun global) restarts itself when it detects the replaced installation. Git checkouts retain operator-controlled restart behavior. Doctor still restores a service it stopped for maintenance. |
+| `--channel <stable\|extended-stable\|beta\|dev>` | Set the update channel and persist it after core update success. Extended-stable is package-only.                                                                                                                                                                                                                                                                 |
+| `--tag <dist-tag\|version\|spec>`                | Override the package target for this update only. It cannot be combined with an effective `extended-stable` channel, whose verified exact target is mandatory. Package installs reject the `main` shorthand; use `--channel dev` for the supported checkout and build flow. Other explicit package specs keep their package-manager behavior.                     |
+| `--dry-run`                                      | Preview planned actions (channel/tag/target/restart flow) without writing config, installing, syncing plugins, or restarting.                                                                                                                                                                                                                                     |
+| `--admission <auto\|installed>`                  | Choose candidate admission when supported (`auto`, the default), or force installed admission checks. This option has no environment-variable form. Dry runs always use installed checks.                                                                                                                                                                         |
+| `--json`                                         | Print machine-readable `UpdateRunResult` JSON. Includes `postUpdate.plugins.warnings` when a managed plugin needs repair, beta-channel plugin fallback details, and `postUpdate.plugins.integrityDrifts` when npm plugin artifact drift is detected during post-update sync.                                                                                      |
+| `--timeout <seconds>`                            | Optional overall update budget in seconds, shared by activation, readiness, recovery, and native service commands. Without it, package installation and deferred lifecycle scripts have no work deadline; candidate Doctor, checks, and recovery retain their step bounds.                                                                                        |
+| `--drain-timeout <seconds>`                      | Immutable installations only: override the drain budget before interruption, independently of canary/readiness deadlines. Also accepted by `update recover`; healthy recovery never stops the process.                                                                                                                                                            |
+| `--yes`                                          | Skip confirmation prompts (for example downgrade confirmation).                                                                                                                                                                                                                                                                                                   |
+| `--reapply-local-overrides`                      | Replay trusted local packaged `dist` edits when the new package has the same baseline. Otherwise preserve them for manual recovery.                                                                                                                                                                                                                               |
+| `--accept-capabilities`                          | Accept each plugin's reviewed capability changes during post-update sync. This acknowledges the exact staged capability surface; it does not disable capability checks or establish future trust.                                                                                                                                                                 |
+| `--full-integrity-check`                         | Request full SQLite integrity checks during candidate migrations, including Doctor subprocesses. Also accepted by `update repair` and `update wizard`.                                                                                                                                                                                                            |
+
+Invalid `--channel` values are quoted as JSON strings in diagnostics, including
+escaped quotes, newlines, and control characters. This applies to `update`,
+`update repair`, and `update finalize`, in both human and `--json` output.
 
 There is no `--verbose` flag. Use `--dry-run` to preview planned actions,
 `--json` for machine-readable results, and `openclaw update status --json`
@@ -229,17 +956,53 @@ for channel, availability, and the latest durable update report. Gateway console
 file log level (`logging.level: "debug"`/`"trace"`) are independent knobs; see
 [Gateway logging](/gateway/logging).
 
+For global package installs (npm, pnpm, or bun), `--no-restart` skips only the
+updater's managed restart. The running Gateway restarts itself when its watcher
+detects the replaced installation, because the old runtime can lose required
+chunks during the package swap. Before publication, the updater prints this
+warning and includes it in JSON update history. It checks the observed Gateway
+version and, when available, the expected build ID without waiting for startup.
+A same-version Gateway on a different build is not verified as the replacement.
+Unavailable readiness or an identity that has not switched yet leaves the package
+update successful with a warning. State
+verification blocked by another process or handed off to the newer schema is
+deferred to the candidate. Keep recovery backups and run `openclaw update status`
+and `openclaw doctor` after startup completes. Unrelated update failures retain
+their failure diagnostics.
+
+For Git checkouts and immutable preparation-only updates, `--no-restart` leaves
+activation to the operator. An in-use Git runtime is protected from replacement;
+the flag does not authorize overwriting files a running Gateway still needs.
+Restart through the installation's service owner when ready to activate it.
+After a successful update with changed plugins, the final report reminds you to
+restart to activate them, including when the core version also changed.
+
 Interactive updates show phase transitions, the current step, and elapsed time.
-The phases match the Control UI: requested, staging, validating, optional
-repairing, activating, restarting, verifying, and finished. When output is
-piped or captured in a log, progress prints without animation. `repairing` can
-follow failed candidate validation or failed post-activation verification when
-rollback is unsafe or has failed; successful repair returns to validation or
-verification. The Control UI shows this optional phase only after it starts.
+The phases match the Control UI: requested, staging, validating, activating,
+restarting, verifying, and finished. When output is piped or captured in a log,
+progress prints without animation and reports elapsed time every 30 seconds while
+a step is running. Updates, verification, and rollback do not
+require inference or model authentication. Model-auth findings remain warnings.
+Unattended updates (`--yes`, `--json`, or no TTY) never start a repair agent.
+After a failed outcome and update cleanup, they save triage diagnostics and print
+`openclaw triage --run --update-result <path>` for explicit opt-in repair. Managed
+handoffs and foreground `gateway run` startup failures also collect diagnostics
+only. Interactive updates retain the **Diagnose update failure** menu and consent
+prompt. Triage does not change the recorded update outcome. Reports from older updaters can still contain a `repairing` phase.
 Failed steps include the final diagnostics from both output streams; timeouts
 are labeled explicitly. The final report includes the outcome, recorded phase durations, failed steps,
 verification facts, and recovery guidance. `--json` keeps stdout machine-readable and does not
-print progress steps.
+print progress steps or run the progress observer. Progress observes committed
+ledger rows through a reusable read-only worker connection instead of repeatedly
+copying shared state. This applies to updates launched by the fixed updater; a
+published older updater keeps its own progress reader until it is replaced.
+State inspection and snapshot progress is advisory: a temporarily full progress
+pipe can omit an update without interrupting the underlying work. Other output
+errors still fail the affected operation and retain its diagnostic report.
+
+When no update is active, `openclaw update status` labels the saved outcome
+`Last recorded update` with the recorded start time, so historical results are
+distinct from current update activity.
 
 When switching from a dev checkout to a package, the updater replaces npm's
 install link and leaves the external checkout untouched. If activation fails,
@@ -250,7 +1013,17 @@ inspect the checkout and recovery report before restarting it.
 For a profile without a runtime database, an older npm target initializes its
 compatible state before the updater records history. The selected release's
 Doctor runs before activation, including when npm's install hooks already created
-the database. Existing databases retain their downgrade protections.
+the database. Existing databases retain their downgrade protections. When the
+updater can read shared state, target-release preflight also checks configured,
+retired, and registered custom agent stores and names every incompatible store
+before changing the installation or stopping the Gateway. State newer than the
+updater can read retains a single install-compatible-build or restore-backup refusal.
+
+During candidate validation, Doctor leaves bookkeeping-only version, wizard, and
+migration stamps out of the copied config so older updaters do not mistake them
+for required config repairs. Webhook completion without endpoint changes is
+recorded in the rehearsal state. Real config migrations still run; normal config
+writes after activation record the candidate's version and migration metadata.
 
 If database schema preflight cannot inspect the configured paths because the
 config is invalid, its refusal lists the config file and invalid fields. Run
@@ -326,7 +1099,7 @@ freshness or dependencies. Those checks run when you apply the update; use
 
 | Flag                    | Default | Description                                                  |
 | ----------------------- | ------- | ------------------------------------------------------------ |
-| `--timeout <seconds>`   | `1800`  | Timeout for each update step.                                |
+| `--timeout <seconds>`   | Unset   | Optional overall update budget in seconds.                   |
 | `--accept-capabilities` | `false` | Accept reviewed plugin capability changes during the update. |
 
 ## Detailed topics

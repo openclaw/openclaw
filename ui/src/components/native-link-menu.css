@@ -1,0 +1,27 @@
+.native-link-menu__panel {
+  --oc-overlay-distance: 0px;
+  --oc-overlay-max-width: 264px;
+
+  min-width: 224px;
+}
+
+.native-link-menu .session-menu__item {
+  min-height: var(--menu-item-height);
+  gap: 0;
+  padding: 0 8px;
+}
+
+.native-link-menu .session-menu__item[data-new-tab-action] {
+  cursor: pointer;
+}
+
+@supports (corner-shape: superellipse(1.5)) {
+  .native-link-menu {
+    --menu-radius: calc(10px * var(--openclaw-corner-radius-scale));
+    --menu-item-radius: calc(var(--menu-radius) - var(--menu-padding));
+  }
+
+  .native-link-menu__panel {
+    corner-shape: superellipse(1.5);
+  }
+}

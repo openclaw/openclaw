@@ -1,34 +1,19 @@
-export function textContent(text: string) {
-  return [{ type: "text" as const, text }];
-}
+import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 
-export function assistantTextMessage(text: string, seq: number) {
-  return {
-    role: "assistant" as const,
-    content: textContent(text),
-    __openclaw: { seq },
-  };
-}
+export const textContent = (text: string) => [{ type: "text" as const, text }];
 
-export function userTextMessage(text: string, seq: number) {
-  return {
-    role: "user" as const,
-    content: textContent(text),
-    __openclaw: { seq },
-  };
+export const assistantTextMessage = (text: string, seq: number) =>
+  sequencedText("assistant", text, seq);
+
+export const userTextMessage = (text: string, seq: number) => sequencedText("user", text, seq);
+
+function sequencedText<Role extends "assistant" | "user">(role: Role, text: string, seq: number) {
+  return { role, content: textContent(text), __openclaw: { seq } };
 }
 
 export function messageToolCall(id: string, message: string, args: Record<string, unknown> = {}) {
-  return {
-    type: "toolCall" as const,
-    id,
-    name: "message",
-    arguments: {
-      action: "send",
-      message,
-      ...args,
-    },
-  };
+  const input = { action: "send", message, ...args };
+  return { type: "toolCall" as const, id, name: "message", arguments: input };
 }
 
 export async function readSseEvent(
@@ -39,22 +24,17 @@ export async function readSseEvent(
   while (true) {
     const boundary = state.buffer.indexOf("\n\n");
     if (boundary >= 0) {
-      const rawEvent = state.buffer.slice(0, boundary);
+      const lines = state.buffer.slice(0, boundary).split("\n");
       state.buffer = state.buffer.slice(boundary + 2);
-      const lines = rawEvent.split("\n");
-      const event =
-        lines
-          .find((line) => line.startsWith("event:"))
-          ?.slice("event:".length)
-          .trim() ?? "message";
+      const eventLine = lines.find((line) => line.startsWith("event:"));
       const data = lines
         .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice("data:".length).trim())
+        .map((line) => line.slice(5).trim())
         .join("\n");
       if (!data) {
         continue;
       }
-      return { event, data: JSON.parse(data) };
+      return { event: eventLine?.slice(6).trim() ?? "message", data: JSON.parse(data) };
     }
     const chunk = await reader.read();
     if (chunk.done) {
@@ -62,4 +42,51 @@ export async function readSseEvent(
     }
     state.buffer += decoder.decode(chunk.value, { stream: true });
   }
+}
+
+export const createGatewayHistoryText = (
+  role: "user" | "assistant",
+  text: unknown,
+  timestamp: number,
+) => ({ role, content: [{ type: "text", text }], timestamp });
+
+export const createGatewayHistoryMessageToolCall = (
+  id: string,
+  args: Record<string, unknown>,
+  timestamp: number,
+) => ({
+  role: "assistant",
+  content: [{ type: "toolCall", id, name: "message", arguments: args }],
+  timestamp,
+});
+
+export const createGatewayHistoryMessageToolResult = (
+  id: string,
+  content: unknown,
+  timestamp: number,
+) => ({ role: "toolResult", toolName: "message", toolCallId: id, content, timestamp });
+
+export const createGatewayHistoryDeliveryMirror = (text: unknown, timestamp: number) => ({
+  role: "assistant",
+  provider: "openclaw",
+  model: "delivery-mirror",
+  content: [{ type: "text", text }],
+  timestamp,
+});
+
+export const hasGatewayHistoryMessageToolMirror = (message: unknown) =>
+  Boolean(
+    message &&
+    typeof message === "object" &&
+    (message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror,
+  );
+
+export function collectHistoryTextValues(historyMessages: unknown[]) {
+  return historyMessages
+    .map((message) => {
+      const text =
+        message && typeof message === "object" ? (message as { text?: unknown }).text : undefined;
+      return typeof text === "string" ? text : extractFirstTextBlock(message);
+    })
+    .filter((value): value is string => typeof value === "string");
 }

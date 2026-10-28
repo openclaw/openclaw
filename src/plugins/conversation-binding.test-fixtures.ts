@@ -58,3 +58,25 @@ export function createDiscordCodexBindRequest(
     binding: { summary },
   };
 }
+
+export function createTelegramCodexBindRequest(
+  conversationId: string,
+  threadId: string,
+  summary: string,
+  pluginRoot = "/plugins/codex-a",
+): Parameters<typeof import("./conversation-binding.js").requestPluginConversationBinding>[0] {
+  return {
+    pluginId: "codex",
+    pluginName: "Codex App Server",
+    pluginRoot,
+    requestedBySenderId: "user-1",
+    conversation: {
+      channel: "telegram",
+      accountId: "default",
+      conversationId,
+      parentConversationId: "-10099",
+      threadId,
+    },
+    binding: { summary },
+  };
+}

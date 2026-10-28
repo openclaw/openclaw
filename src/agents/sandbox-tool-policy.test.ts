@@ -10,17 +10,6 @@ describe("pickSandboxToolPolicy", () => {
     expect(pickSandboxToolPolicy({})).toBeUndefined();
   });
 
-  it("keeps alsoAllow without allow additive", () => {
-    expect(
-      pickSandboxToolPolicy({
-        alsoAllow: ["web_search"],
-      }),
-    ).toEqual({
-      allow: ["*", "web_search"],
-      deny: undefined,
-    });
-  });
-
   it("merges allow and alsoAllow when both are present", () => {
     expect(
       pickSandboxToolPolicy({

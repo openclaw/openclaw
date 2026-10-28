@@ -26,6 +26,9 @@ export function createEmbeddedRunContextRecoveryState() {
       if (event.kind === "compaction") {
         state.autoCompactionCount += 1;
         state.lastCompactionTokensAfter = tokens;
+      } else if (event.successful) {
+        state.overflowCompactionAttempts = 0;
+        state.toolResultTruncationAttempted = false;
       }
     },
     retainTimeoutRecoveryMarker(marker: EmbeddedRunTimeoutRecoveryMarker) {
@@ -35,6 +38,35 @@ export function createEmbeddedRunContextRecoveryState() {
       const marker = timeoutRecoveryMarker;
       timeoutRecoveryMarker = undefined;
       return marker ? restoreEmbeddedRunTimeoutAbandonment(marker) : false;
+    },
+    // Retained accounting callbacks must not share the loop's attempt/result closure.
+    beginAttempt(
+      signal: AbortSignal | undefined,
+      onBudget: ((budget: CompactionRequestBudget | undefined) => void) | undefined,
+    ) {
+      let acceptsRequestBudget = true;
+      const accounting = {
+        recordedCompactionCount: 0,
+        onCompactionRequestBudget: (budget: CompactionRequestBudget | undefined) => {
+          if (!acceptsRequestBudget || signal?.aborted) {
+            return;
+          }
+          state.compactionRequestBudget = budget;
+          onBudget?.(budget);
+        },
+        onContextAccountingEvent: (event: EmbeddedContextAccountingEvent) => {
+          if (event.kind === "compaction") {
+            accounting.recordedCompactionCount += 1;
+          }
+          state.observeContextAccounting(event);
+        },
+        close() {
+          acceptsRequestBudget = false;
+        },
+      };
+      state.compactionRequestBudget = undefined;
+      onBudget?.(undefined);
+      return accounting;
     },
   };
   return state;

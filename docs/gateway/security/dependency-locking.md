@@ -19,21 +19,25 @@ These projects do not inherit root pnpm overrides. The Vercel project uses appro
 
 ## Check dependency advisories
 
-The production audit pre-commit hook and ordinary CI's `security-fast` job remain zero-install, npm-only checks of the product production graph. They query npm bulk advisory data, not upstream repository advisories. A passing result is limited to that source and graph; it does not establish that dependencies are unaffected by all known vulnerabilities.
+Ordinary pull-request, push, and scheduled CI do not run the production dependency audit. The `security-fast` job runs it only for `workflow_dispatch` IDs beginning with `full-release-validation-` or `release-native-android-`. These release checks and the optional production audit pre-commit hook print audit findings and turn every audit failure into a warning with exit code 0, including unavailable or invalid advisory data. Dependency advisories never block CI, local commits, or release verification.
+
+The separate daily [Dependency Audit workflow](/ci/scheduled-workflows#dependency-audit) remains strict: findings, unavailable advisories, or invalid data can leave it red as a triage signal, but it is not a required PR check. Investigate that signal and follow up with a dependency bump on `main`. These zero-install checks query npm bulk advisory data for the product production graph, not upstream repository advisories. A passing result is limited to that source and graph; it does not establish that dependencies are unaffected by all known vulnerabilities.
 
 `pnpm deps:vuln:gate`, used by release dependency evidence, audits the target's product pnpm lock plus each release-tool lock whose package is present in that target. It checks npm advisory data and adds published security advisories from verified public GitHub repositories. Repository mappings come from the manifests for exact locked npm package versions, not a package's latest manifest. The gate verifies that each repository is public before requesting advisories with the explicit `state=published` filter. It does not scan private repositories or unpublished advisories.
 
-Within each lockfile, known malware and critical advisories block anywhere, and high advisories block in the production/runtime graph. Dev-only high advisories and moderate or lower non-malware advisories are reported without blocking. GitHub's `medium` severity maps to `moderate` in this policy. Upstream findings match the npm package identity and affected-version range against exact locked versions; only matches absent from the npm result for the corresponding lockfile and graph are added. Reports retain the source lockfile, so a release-tool finding does not imply product runtime exposure. Missing or invalid locks for declared dependency graphs fail the gate.
+Known malware is the only blocking class: a malware advisory anywhere in any audited lockfile fails the gate and stops publication, because it marks a compromised package rather than a vulnerability report. Vulnerability advisories of every severity, in every graph, are recorded without blocking: the gate prints each one as a GitHub Actions warning annotation, and the release dependency evidence summary lists them under "Non-blocking advisory findings". A newly published advisory never delays a release; fix it with a normal dependency bump on `main` after publication. GitHub's `medium` severity maps to `moderate` in these reports. Upstream findings match the npm package identity and affected-version range against exact locked versions; only matches absent from the npm result for the corresponding lockfile and graph are added. Reports retain the source lockfile, so a release-tool finding does not imply product runtime exposure. Missing or invalid locks for declared dependency graphs fail the gate.
 
 Release automation reuses its existing standard `GH_TOKEN` only for GitHub API requests, never for npm registry requests. Local runs without that token use anonymous GitHub requests and their rate limits. No new OpenClaw configuration or operator credential setup is required.
 
 ### Interpret coverage
 
-Release artifacts and the GitHub Actions step summary show npm coverage as `checked`, upstream coverage as `checked` or `partial`, mapped package-version counts, checked repository counts, coverage issues, and upstream-only findings. Findings identify their source as `npm-bulk` or `github-repository`; upstream findings also record matched locked versions. Even `checked` coverage is limited to these advisory sources, not comprehensive vulnerability clearance.
+Release artifacts and the GitHub Actions step summary show npm coverage as `checked`, upstream coverage as `checked` or `partial`, mapped package-version counts, checked repository counts, coverage issues, and upstream-only findings. Findings identify their source as `npm-bulk` or `github-repository`; upstream findings also record matched locked versions. Even `checked` coverage is limited to these advisory sources, not a guarantee that all vulnerabilities have been ruled out.
 
 The upstream scan has fixed bounds: 2,500 exact package versions, 4,000 HTTP requests, and five minutes per run. It uses four concurrent requests, up to five pages of 100 advisories per repository, and at most 10,000 advisories per run. Each response is limited to 2 MiB and each request to 15 seconds. It does not retry or reuse stale cached results.
 
-Missing or unsupported repository metadata, malformed affected-version ranges, exhausted request or pagination budgets, and request or rate-limit failures produce `partial` upstream coverage, not an unaffected result. Confirmed findings remain in the report and enter the same severity policy. Inspect the coverage issue subjects and reasons before interpreting a zero-finding result.
+Matching findings from each repository page reserve request capacity across all workers and are checked against GitHub's reviewed advisory ranges before that task continues discovery. This prevents later repository scans from consuming the budget needed to reconcile already-discovered findings. Missing reviewed evidence preserves the publisher's finding and records partial coverage.
+
+Missing or unsupported repository metadata, malformed affected-version ranges, exhausted request or pagination budgets, and request or rate-limit failures produce `partial` upstream coverage, not an unaffected result. Confirmed findings remain in the report under the same policy. Inspect the coverage issue subjects and reasons before interpreting a zero-finding result.
 
 ## Published package behavior
 
@@ -41,17 +45,25 @@ Published OpenClaw plugin packages bundle their runtime dependency files in the 
 
 Native-heavy plugins opt out of runtime dependency bundling because their dependency trees contain platform-specific or large native artifacts. Those plugins resolve dependencies at install time from exact-pinned direct dependencies. The root `openclaw` package also resolves dependencies at install time and does not bundle its full dependency tree.
 
+When preparing a package that carries bundled dependencies, OpenClaw also declares its hoisted optional platform packages as root `optionalDependencies`, using the validated npm dependency graph. This preserves platform filtering on npm 10 global installs, including installs with lifecycle scripts disabled, without removing the patched bundled runtimes.
+
 The bundled Anthropic plugin communicates directly with the separately installed `claude` executable. It does not depend on or copy the Claude Agent SDK into OpenClaw's package. The external ACPX plugin independently declares an ACP adapter that depends on the SDK; ACPX leaves those dependencies to installation from npm instead of bundling them into its published package.
 
 Neither path publishes a lockfile:
 
 - root and plugin tarballs contain neither `npm-shrinkwrap.json` nor `package-lock.json`;
 - `pnpm-lock.yaml` remains the reviewed source dependency graph;
-- npm package locks exist only transiently while OpenClaw validates package graphs or runs `npm ci` to assemble a bundled plugin.
+- npm package locks exist transiently while OpenClaw validates package graphs, assembles a bundled plugin with `npm ci`, or prepares a cloud worker runtime install. Cloud worker project locks travel separately from the runtime tarball; see [Worker setup and bundle installation](/gateway/cloud-workers/setup-and-bundle-installation).
+
+### Archive compression
+
+OpenClaw's runtime builds bundle `tar` so installed packages carry the same archive implementation as source builds. The pinned `minizlib` dependency is patched to let Node's zlib concatenate its output without temporarily replacing the global `Buffer.concat` function. This preserves gzip backup and artifact support in runtimes with read-only built-ins, and avoids a process-wide patch on Node and Bun.
+
+The `tar` patch selects its published unbundled entry points so its embedded copy of `minizlib` cannot bypass that repair. Remove both patches when an upstream release provides the same behavior; keep the runtime bundling until the published dependency also contains the fix.
 
 ## Validate npm dependency graphs
 
-The npm-lock checker generates `package-lock.json` in a temporary directory, applies workspace overrides, and rejects any generated registry version absent from `pnpm-lock.yaml`. It does not write a lockfile into the checkout.
+The npm-lock checker generates `package-lock.json` in a temporary directory, applies workspace overrides, and rejects any generated registry version absent from `pnpm-lock.yaml`. It preserves `optional` metadata and verifies that every declared `os`, `cpu`, and `libc` constraint matches the pnpm lock. It does not write a lockfile into the checkout.
 
 ```bash
 # Root and every publishable package

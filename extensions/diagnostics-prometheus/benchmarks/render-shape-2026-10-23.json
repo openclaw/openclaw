@@ -1,0 +1,1212 @@
+{
+  "histograms": [
+    {
+      "name": "openclaw_chat_send_phase_seconds",
+      "labelSets": 19,
+      "finiteBuckets": [
+        0.005,
+        0.01,
+        0.025,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0
+      ]
+    },
+    {
+      "name": "openclaw_control_ui_document_duration_seconds",
+      "labelSets": 7,
+      "finiteBuckets": [
+        0.005,
+        0.01,
+        0.025,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0
+      ]
+    },
+    {
+      "name": "openclaw_diff_stage_seconds",
+      "labelSets": 14,
+      "finiteBuckets": [
+        0.005,
+        0.01,
+        0.0125,
+        0.015,
+        0.02,
+        0.025,
+        0.03,
+        0.04,
+        0.05,
+        0.06,
+        0.08,
+        0.1,
+        0.125,
+        0.15,
+        0.2,
+        0.25,
+        0.3,
+        0.4,
+        0.5,
+        0.6,
+        0.8,
+        1.0,
+        1.25,
+        1.5,
+        2.0,
+        2.5,
+        3.0,
+        4.0,
+        5.0,
+        6.0,
+        8.0,
+        10.0,
+        12.5,
+        15.0,
+        20.0,
+        25.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0
+      ]
+    },
+    {
+      "name": "openclaw_gateway_event_loop_delay_max_seconds",
+      "labelSets": 1,
+      "finiteBuckets": [
+        0.005,
+        0.01,
+        0.025,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0
+      ]
+    },
+    {
+      "name": "openclaw_gateway_main_thread_stall_seconds",
+      "labelSets": 1,
+      "finiteBuckets": [
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0
+      ]
+    },
+    {
+      "name": "openclaw_gateway_rpc_admission_seconds",
+      "labelSets": 82,
+      "finiteBuckets": [
+        0.005,
+        0.01,
+        0.0125,
+        0.015,
+        0.02,
+        0.025,
+        0.03,
+        0.04,
+        0.05,
+        0.06,
+        0.08,
+        0.1,
+        0.125,
+        0.15,
+        0.2,
+        0.25,
+        0.3,
+        0.4,
+        0.5,
+        0.6,
+        0.8,
+        1.0,
+        1.25,
+        1.5,
+        2.0,
+        2.5,
+        3.0,
+        4.0,
+        5.0,
+        6.0,
+        8.0,
+        10.0,
+        12.5,
+        15.0,
+        20.0,
+        25.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0
+      ]
+    },
+    {
+      "name": "openclaw_gateway_rpc_first_response_seconds",
+      "labelSets": 82,
+      "finiteBuckets": [
+        0.005,
+        0.01,
+        0.0125,
+        0.015,
+        0.02,
+        0.025,
+        0.03,
+        0.04,
+        0.05,
+        0.06,
+        0.08,
+        0.1,
+        0.125,
+        0.15,
+        0.2,
+        0.25,
+        0.3,
+        0.4,
+        0.5,
+        0.6,
+        0.8,
+        1.0,
+        1.25,
+        1.5,
+        2.0,
+        2.5,
+        3.0,
+        4.0,
+        5.0,
+        6.0,
+        8.0,
+        10.0,
+        12.5,
+        15.0,
+        20.0,
+        25.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0
+      ]
+    },
+    {
+      "name": "openclaw_gateway_rpc_handler_heap_delta_bytes",
+      "labelSets": 52,
+      "finiteBuckets": [
+        -67108864.0,
+        -33554432.0,
+        -16777216.0,
+        -8388608.0,
+        -4194304.0,
+        -2097152.0,
+        -1048576.0,
+        -524288.0,
+        -262144.0,
+        -131072.0,
+        -65536.0,
+        -32768.0,
+        -16384.0,
+        -8192.0,
+        -4096.0,
+        -2048.0,
+        -1024.0,
+        0.0,
+        1024.0,
+        2048.0,
+        4096.0,
+        8192.0,
+        16384.0,
+        32768.0,
+        65536.0,
+        131072.0,
+        262144.0,
+        524288.0,
+        1048576.0,
+        2097152.0,
+        4194304.0,
+        8388608.0,
+        16777216.0,
+        33554432.0,
+        67108864.0
+      ]
+    },
+    {
+      "name": "openclaw_gateway_rpc_handler_seconds",
+      "labelSets": 82,
+      "finiteBuckets": [
+        0.005,
+        0.01,
+        0.0125,
+        0.015,
+        0.02,
+        0.025,
+        0.03,
+        0.04,
+        0.05,
+        0.06,
+        0.08,
+        0.1,
+        0.125,
+        0.15,
+        0.2,
+        0.25,
+        0.3,
+        0.4,
+        0.5,
+        0.6,
+        0.8,
+        1.0,
+        1.25,
+        1.5,
+        2.0,
+        2.5,
+        3.0,
+        4.0,
+        5.0,
+        6.0,
+        8.0,
+        10.0,
+        12.5,
+        15.0,
+        20.0,
+        25.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0
+      ]
+    },
+    {
+      "name": "openclaw_gateway_rpc_queue_wait_seconds",
+      "labelSets": 76,
+      "finiteBuckets": [
+        0.005,
+        0.01,
+        0.0125,
+        0.015,
+        0.02,
+        0.025,
+        0.03,
+        0.04,
+        0.05,
+        0.06,
+        0.08,
+        0.1,
+        0.125,
+        0.15,
+        0.2,
+        0.25,
+        0.3,
+        0.4,
+        0.5,
+        0.6,
+        0.8,
+        1.0,
+        1.25,
+        1.5,
+        2.0,
+        2.5,
+        3.0,
+        4.0,
+        5.0,
+        6.0,
+        8.0,
+        10.0,
+        12.5,
+        15.0,
+        20.0,
+        25.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0
+      ]
+    },
+    {
+      "name": "openclaw_gateway_rpc_response_bytes",
+      "labelSets": 82,
+      "finiteBuckets": [
+        1024.0,
+        2048.0,
+        4096.0,
+        8192.0,
+        16384.0,
+        32768.0,
+        65536.0,
+        131072.0,
+        262144.0,
+        524288.0,
+        1048576.0,
+        2097152.0,
+        4194304.0,
+        8388608.0,
+        16777216.0,
+        33554432.0,
+        67108864.0
+      ]
+    },
+    {
+      "name": "openclaw_gateway_rpc_stage_seconds",
+      "labelSets": 3,
+      "finiteBuckets": [
+        0.005,
+        0.01,
+        0.025,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0
+      ]
+    },
+    {
+      "name": "openclaw_gateway_rpc_stage_thread_cpu_seconds",
+      "labelSets": 2,
+      "finiteBuckets": [
+        0.005,
+        0.01,
+        0.025,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0
+      ]
+    },
+    {
+      "name": "openclaw_gc_duration_seconds",
+      "labelSets": 70,
+      "finiteBuckets": [
+        0.005,
+        0.01,
+        0.025,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0
+      ]
+    },
+    {
+      "name": "openclaw_gen_ai_client_token_usage",
+      "labelSets": 6,
+      "finiteBuckets": [
+        1.0,
+        4.0,
+        16.0,
+        64.0,
+        256.0,
+        1024.0,
+        4096.0,
+        16384.0,
+        65536.0,
+        262144.0,
+        1048576.0
+      ]
+    },
+    {
+      "name": "openclaw_harness_run_duration_seconds",
+      "labelSets": 3,
+      "finiteBuckets": [
+        0.005,
+        0.01,
+        0.025,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0,
+        900.0,
+        1800.0,
+        3600.0
+      ]
+    },
+    {
+      "name": "openclaw_memory_rss_bytes",
+      "labelSets": 1,
+      "finiteBuckets": [
+        1024.0,
+        4096.0,
+        16384.0,
+        65536.0,
+        262144.0,
+        1048576.0,
+        4194304.0,
+        16777216.0,
+        67108864.0,
+        268435456.0,
+        1073741824.0,
+        4294967296.0,
+        17179869184.0
+      ]
+    },
+    {
+      "name": "openclaw_message_delivery_duration_seconds",
+      "labelSets": 2,
+      "finiteBuckets": [
+        0.005,
+        0.01,
+        0.025,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0
+      ]
+    },
+    {
+      "name": "openclaw_message_dispatch_duration_seconds",
+      "labelSets": 3,
+      "finiteBuckets": [
+        0.005,
+        0.01,
+        0.025,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0,
+        900.0,
+        1800.0,
+        3600.0
+      ]
+    },
+    {
+      "name": "openclaw_message_processed_duration_seconds",
+      "labelSets": 3,
+      "finiteBuckets": [
+        0.005,
+        0.01,
+        0.025,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0
+      ]
+    },
+    {
+      "name": "openclaw_model_call_duration_seconds",
+      "labelSets": 5,
+      "finiteBuckets": [
+        0.005,
+        0.01,
+        0.025,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0,
+        900.0,
+        1800.0,
+        3600.0
+      ]
+    },
+    {
+      "name": "openclaw_model_usage_duration_seconds",
+      "labelSets": 4,
+      "finiteBuckets": [
+        0.005,
+        0.01,
+        0.025,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0
+      ]
+    },
+    {
+      "name": "openclaw_payload_large_bytes",
+      "labelSets": 1,
+      "finiteBuckets": [
+        1024.0,
+        4096.0,
+        16384.0,
+        65536.0,
+        262144.0,
+        1048576.0,
+        4194304.0,
+        16777216.0,
+        67108864.0,
+        268435456.0,
+        1073741824.0,
+        4294967296.0,
+        17179869184.0
+      ]
+    },
+    {
+      "name": "openclaw_queue_lane_wait_seconds",
+      "labelSets": 4,
+      "finiteBuckets": [
+        0.005,
+        0.01,
+        0.025,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0
+      ]
+    },
+    {
+      "name": "openclaw_run_duration_seconds",
+      "labelSets": 8,
+      "finiteBuckets": [
+        0.005,
+        0.01,
+        0.025,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0,
+        900.0,
+        1800.0,
+        3600.0
+      ]
+    },
+    {
+      "name": "openclaw_tool_execution_duration_seconds",
+      "labelSets": 36,
+      "finiteBuckets": [
+        0.005,
+        0.01,
+        0.025,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0
+      ]
+    },
+    {
+      "name": "openclaw_worker_queue_wait_seconds",
+      "labelSets": 141,
+      "finiteBuckets": [
+        0.005,
+        0.01,
+        0.025,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0
+      ]
+    },
+    {
+      "name": "openclaw_worker_request_phase_seconds",
+      "labelSets": 524,
+      "finiteBuckets": [
+        0.005,
+        0.01,
+        0.025,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0
+      ]
+    },
+    {
+      "name": "openclaw_worker_request_seconds",
+      "labelSets": 141,
+      "finiteBuckets": [
+        0.005,
+        0.01,
+        0.025,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0
+      ]
+    },
+    {
+      "name": "openclaw_worktree_preparation_seconds",
+      "labelSets": 7,
+      "finiteBuckets": [
+        0.005,
+        0.01,
+        0.025,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0
+      ]
+    }
+  ],
+  "scalars": [
+    {
+      "name": "openclaw_chat_history_requests_total",
+      "labelSets": 11,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_chat_history_response_bytes_total",
+      "labelSets": 11,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_child_process_spawn_total",
+      "labelSets": 33,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_code_mode_worker_heap_bytes",
+      "labelSets": 4,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_code_mode_worker_memory_bytes",
+      "labelSets": 4,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_cron_list_requests_total",
+      "labelSets": 3,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_diff_cache_misses_total",
+      "labelSets": 6,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_gateway_active_work",
+      "labelSets": 3,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_gateway_build_info",
+      "labelSets": 1,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_gateway_event_loop_observed_seconds_total",
+      "labelSets": 1,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_gateway_rpc_client_requests_total",
+      "labelSets": 90,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_gateway_rpc_handler_heap_delta_exclusive_total",
+      "labelSets": 52,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_gateway_rpc_outcomes_total",
+      "labelSets": 6,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_gateway_rpc_requests_total",
+      "labelSets": 82,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_gateway_ws_event_bytes_total",
+      "labelSets": 27,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_gateway_ws_event_frame_bytes",
+      "labelSets": 27,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_gateway_ws_event_wire_bytes_total",
+      "labelSets": 27,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_gateway_ws_events_total",
+      "labelSets": 27,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_gateway_ws_operator_connections",
+      "labelSets": 1,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_gateway_ws_presence_bytes_total",
+      "labelSets": 3,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_gateway_ws_presence_frames_total",
+      "labelSets": 3,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_gateway_ws_session_event_bytes_total",
+      "labelSets": 37,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_gateway_ws_session_event_frames_total",
+      "labelSets": 37,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_harness_run_total",
+      "labelSets": 3,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_heap_old_generation_after_gc_bytes",
+      "labelSets": 17,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_heap_old_generation_after_gc_ratio",
+      "labelSets": 17,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_heap_size_limit_bytes",
+      "labelSets": 23,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_heap_space_bytes",
+      "labelSets": 52,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_heap_used_ratio",
+      "labelSets": 23,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_memory_bytes",
+      "labelSets": 7,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_message_delivery_started_total",
+      "labelSets": 2,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_message_delivery_total",
+      "labelSets": 2,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_message_dispatch_completed_total",
+      "labelSets": 3,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_message_dispatch_started_total",
+      "labelSets": 2,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_message_processed_total",
+      "labelSets": 3,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_message_received_total",
+      "labelSets": 1,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_model_call_total",
+      "labelSets": 5,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_model_cost_usd_total",
+      "labelSets": 5,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_model_failover_total",
+      "labelSets": 3,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_model_tokens_total",
+      "labelSets": 28,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_models_list_requests_total",
+      "labelSets": 4,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_payload_large_total",
+      "labelSets": 1,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_process_anonymous_memory_bytes",
+      "labelSets": 2,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_queue_lane_size",
+      "labelSets": 4,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_run_completed_total",
+      "labelSets": 8,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_secret_egress_requests_total",
+      "labelSets": 3,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_session_event_rows_reset_total",
+      "labelSets": 1,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_session_event_rows_retained_bytes",
+      "labelSets": 1,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_session_event_rows_retained_entries",
+      "labelSets": 1,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_session_queue_depth",
+      "labelSets": 3,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_session_state_total",
+      "labelSets": 10,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_session_turn_created_total",
+      "labelSets": 2,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_sessions_active",
+      "labelSets": 2,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_sessions_list_base_misses_total",
+      "labelSets": 1,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_sessions_list_baseline_retirements_total",
+      "labelSets": 1,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_sessions_list_requests_total",
+      "labelSets": 9,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_sessions_list_response_bytes_total",
+      "labelSets": 25,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_sessions_list_retained_bytes",
+      "labelSets": 1,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_sessions_list_retained_refs",
+      "labelSets": 1,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_sessions_list_retained_views",
+      "labelSets": 1,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_skill_used_total",
+      "labelSets": 12,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_telemetry_exporter_total",
+      "labelSets": 1,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_tool_catalog_tools_total",
+      "labelSets": 1,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_tool_catalog_total",
+      "labelSets": 1,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_tool_execution_total",
+      "labelSets": 36,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_worker_array_buffers_bytes",
+      "labelSets": 16,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_worker_count",
+      "labelSets": 23,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_worker_external_bytes",
+      "labelSets": 22,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_worker_gc_collections_total",
+      "labelSets": 67,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_worker_gc_duration_seconds_total",
+      "labelSets": 67,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_worker_gc_reclaimed_bytes_total",
+      "labelSets": 67,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_worker_heap_sampled_count",
+      "labelSets": 23,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_worker_heap_space_used_bytes",
+      "labelSets": 208,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_worker_heap_used_bytes",
+      "labelSets": 22,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_worker_heap_used_high_water_bytes",
+      "labelSets": 27,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_worker_message_payload_bytes_total",
+      "labelSets": 18,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_worker_message_unmeasured_total",
+      "labelSets": 18,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_worker_messages_total",
+      "labelSets": 18,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_worker_queue_depth",
+      "labelSets": 23,
+      "type": "gauge"
+    },
+    {
+      "name": "openclaw_worker_retired_total",
+      "labelSets": 21,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_worker_started_total",
+      "labelSets": 29,
+      "type": "counter"
+    },
+    {
+      "name": "openclaw_worker_tasks_completed_total",
+      "labelSets": 27,
+      "type": "counter"
+    }
+  ]
+}

@@ -1,12 +1,11 @@
-import { setImmediate as nextTurn } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
 import { expect, test, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { runExclusiveSqliteTranscriptArchiveWorker } from "./session-accessor.sqlite-archive.js";
+import { runExclusiveSqliteTranscriptArchiveWorker as runArchive } from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationResult } from "./session-accessor.sqlite-lifecycle-types.js";
+import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import type * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
-import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation.js";
-import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite as runWrite } from "./session-accessor.sqlite-scope.js";
 import { runSqliteMutationWorkerRequest } from "./session-accessor.sqlite-worker-request.js";
 
 type WorkerOwner = Parameters<
@@ -14,7 +13,7 @@ type WorkerOwner = Parameters<
 >[0];
 const storage = vi.hoisted(() => ({
   run: vi.fn<WorkerOwner["run"]>(),
-  committed: false,
+  database: { db: { isTransaction: false } },
   release: vi.fn(),
 }));
 const options = {
@@ -34,7 +33,7 @@ vi.mock("../../state/openclaw-agent-db-readonly.js", async (importOriginal) => (
   ...(await importOriginal<typeof import("../../state/openclaw-agent-db-readonly.js")>()),
   retainOpenClawAgentDatabaseReadOnly: () => ({
     found: true,
-    database: { db: {} },
+    database: storage.database,
     claim: {
       identity: "synthetic-file",
       assertCurrent: () => {},
@@ -43,6 +42,18 @@ vi.mock("../../state/openclaw-agent-db-readonly.js", async (importOriginal) => (
     },
   }),
 }));
+vi.mock("../../state/openclaw-agent-db.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../state/openclaw-agent-db.js")>();
+  return {
+    ...actual,
+    getOpenClawAgentDatabaseIfOpen: (
+      request: Parameters<typeof actual.getOpenClawAgentDatabaseIfOpen>[0],
+    ) =>
+      request?.path === options.path
+        ? storage.database
+        : actual.getOpenClawAgentDatabaseIfOpen(request),
+  };
+});
 vi.mock("../../state/openclaw-agent-db-identity.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/openclaw-agent-db-identity.js")>()),
   readOpenClawAgentDatabaseIdentity: () => ({ filename: options.path }),
@@ -55,25 +66,16 @@ vi.mock("./session-accessor.sqlite-worker-request.js", async (importOriginal) =>
   ...(await importOriginal<typeof import("./session-accessor.sqlite-worker-request.js")>()),
   withSqliteMutationWorkerLifetime: async <T>(
     _options: unknown,
-    run: (request: { assertCurrent: () => void; commitGate: SharedArrayBuffer }) => Promise<T>,
+    run: (request: {
+      assertCurrent: () => void;
+      commitGate: SharedArrayBuffer;
+      signal: AbortSignal;
+    }) => Promise<T>,
   ) =>
     await run({
       assertCurrent: () => {},
       commitGate: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
-    }),
-}));
-vi.mock("./session-accessor.sqlite-reclamation-commit.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-accessor.sqlite-reclamation-commit.js")>()),
-  withSqliteReclamationAuthorization: async <T>(
-    _gate: SharedArrayBuffer,
-    _database: unknown,
-    assertCurrent: () => void,
-    run: (authorize: () => unknown[]) => Promise<T>,
-  ) =>
-    await run(() => {
-      assertCurrent();
-      storage.committed = true;
-      return [];
+      signal: new AbortController().signal,
     }),
 }));
 vi.mock("./session-accessor.sqlite-reclamation-worker.js", async () => {
@@ -85,72 +87,74 @@ vi.mock("./session-accessor.sqlite-reclamation-worker.js", async () => {
       _claim: unknown,
       run: (worker: Pick<WorkerOwner, "assertCurrent" | "run">) => Promise<T>,
       assertCurrent: () => void,
+      signal?: AbortSignal,
     ) =>
       await runInArchiveFifo(async () => {
         assertCurrent();
         return await run({ assertCurrent, run: storage.run });
-      }),
+      }, signal),
   };
 });
 
-test("maintenance finalization retains FIFO across preliminary admission without inverting archive ownership", async () => {
-  storage.committed = false;
-  storage.release.mockClear();
-  const validationGap = createDeferredCore();
+test("maintenance preparation yields to foreground writes and retains commit admission through publication", async () => {
+  const checkpoints = new Map(
+    ["preparation", "validation-gap", "commit-gap"].map((name) => [name, createDeferredCore()]),
+  );
   const archiveEntered = createDeferredCore();
   const releaseArchive = createDeferredCore();
   const admissions: number[] = [];
   const order: string[] = [];
+  const foreground = ["preceding-writer", "preparation-writer", "validation-writer"];
+  const writers: Promise<void>[] = [];
+  const write = (name: string) => {
+    const pending = runWrite(options, async () => void order.push(name), "session-entry.patch");
+    writers.push(pending);
+    return pending;
+  };
   const worker = new Worker(
     `const { parentPort } = require("node:worker_threads");
-     let released = false;
-     let continueRequested = false;
+     let admissions = 0;
      parentPort.on("message", (message) => {
        if (message.type === "start") {
-         parentPort.postMessage({ type: "admission-request", operationId: 1, admissionId: 1 });
-       } else if (message.type === "continue") {
-         continueRequested = true;
-         if (released) parentPort.postMessage({ type: "admission-request", operationId: 1, admissionId: 2 });
-       } else if (message.type === "admission" && message.admissionId === 1) {
-         parentPort.postMessage({ type: "admission-release", operationId: 1, admissionId: 1 });
+         parentPort.postMessage({ type: "preparation" });
+       } else if (message.type === "prepare" || message.type === "continue") {
+         parentPort.postMessage({ type: "admission-request", operationId: 1 });
+       } else if (message.type === "admission" && ++admissions === 1) {
+         parentPort.postMessage({ type: "admission-release", operationId: 1 });
          parentPort.postMessage({ type: "validation-gap" });
-         released = true;
-         if (continueRequested) parentPort.postMessage({ type: "admission-request", operationId: 1, admissionId: 2 });
-       } else if (message.type === "admission" && message.admissionId === 2) {
-         parentPort.postMessage({ type: "commit-request", operationId: 1 });
+       } else if (message.type === "admission") {
+         parentPort.postMessage({ type: "commit-gap" });
+       } else if (message.type === "settle") {
          parentPort.postMessage({ type: "reclaimed", operationId: 1, settled: true,
            result: { kind: "maintenance-finalize", value: {
-             archivedTranscripts: [], changedEntries: [], committedEntries: [] } } });
+             archivedTranscripts: [], committedEntryIndices: [] } } });
          parentPort.close();
        }
      });`,
     { eval: true, execArgv: [] },
   );
-  worker.on("message", (message) => {
-    if (message.type === "validation-gap") {
-      validationGap.resolve();
-    }
-  });
+  worker.on("message", (message) => checkpoints.get(message.type)?.resolve());
   storage.run.mockImplementation((params) =>
     runSqliteMutationWorkerRequest<SqliteSessionReclamationResult>({
       transport: { kind: "dedicated", channel: worker },
       operationId: 1,
       completion: "exit",
-      onCommitRequest: params.onCommitRequest,
-      withWriteAdmission: async (run, admission) => {
+      withWriteAdmission: async (run, admission, operation) => {
         admissions.push(admission.admissionId);
-        await params.withWriteAdmission(run, admission);
+        await params.withWriteAdmission(run, admission, operation);
       },
       dispatch: () => worker.postMessage({ type: "start" }, []),
     }),
   );
-  const earlierArchive = runExclusiveSqliteTranscriptArchiveWorker(async () => {
+  const earlierArchive = runArchive(async () => {
     archiveEntered.resolve();
     await releaseArchive.promise;
   });
   await archiveEntered.promise;
   const finalization = runSqliteSessionReclamation({
-    forceInProcess: false,
+    onWorkerResult: () => {
+      order.push("published");
+    },
     plan: {
       kind: "maintenance-finalize",
       agentId: "main",
@@ -159,48 +163,38 @@ test("maintenance finalization retains FIFO across preliminary admission without
       materializedPlans: [],
     },
   });
-  let precedingWriter: Promise<void> | undefined;
-  let laterWriter: Promise<void> | undefined;
-  let laterObservedCommit = false;
+  const settledFinalization = finalization.then(() => {
+    throw new Error("Finalization settled before its protocol checkpoint");
+  });
+  // Observe early failure while any protocol checkpoint is pending.
+  void settledFinalization.catch(() => {});
+  const waitFor = (checkpoint: string) =>
+    Promise.race([checkpoints.get(checkpoint)!.promise, settledFinalization]);
   try {
-    await nextTurn();
     // A preceding archive request can still acquire this store's writer.
-    let precedingWriterRan = false;
-    precedingWriter = runExclusiveSqliteSessionWrite(
-      options,
-      async () => {
-        precedingWriterRan = true;
-        order.push("preceding-writer");
-      },
-      "session-entry.patch",
-    );
-    await nextTurn();
-    expect(precedingWriterRan).toBe(true);
-    await precedingWriter;
+    await write("preceding-writer");
     releaseArchive.resolve();
     await earlierArchive;
-    await validationGap.promise;
-    laterWriter = runExclusiveSqliteSessionWrite(
-      options,
-      async () => {
-        laterObservedCommit = storage.committed;
-        order.push("later-writer");
-      },
-      "session-entry.patch",
-    );
-    await nextTurn();
-    expect(order).toEqual(["preceding-writer"]);
+    await waitFor("preparation");
+    void write("preparation-writer");
+    worker.postMessage({ type: "prepare" }, []);
+    await waitFor("validation-gap");
+    expect(order).toEqual(foreground.slice(0, 2));
+    void write("validation-writer");
     worker.postMessage({ type: "continue" }, []);
+    await waitFor("commit-gap");
+    expect(order).toEqual(foreground);
+    void write("later-writer");
+    worker.postMessage({ type: "settle" }, []);
     await expect(finalization).resolves.toMatchObject({ kind: "maintenance-finalize" });
-    await laterWriter;
+    await Promise.all(writers);
     expect(admissions).toEqual([1, 2]);
-    expect(laterObservedCommit).toBe(true);
-    expect(order).toEqual(["preceding-writer", "later-writer"]);
+    expect(order).toEqual([...foreground, "published", "later-writer"]);
     expect(storage.release).toHaveBeenCalledOnce();
   } finally {
     releaseArchive.resolve();
-    worker.postMessage({ type: "continue" }, []);
-    await Promise.allSettled([earlierArchive, precedingWriter, finalization, laterWriter]);
+    worker.postMessage({ type: "settle" }, []);
+    await Promise.allSettled([earlierArchive, finalization, ...writers]);
     await worker.terminate();
   }
 });

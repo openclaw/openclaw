@@ -35,7 +35,7 @@ export function createUpdateDoctorConfigWarningStep(
     ...new Set(changes.flatMap((change) => (change.kind === "key" ? [change.key] : []))),
   ].toSorted();
   return {
-    name: "Doctor config changes",
+    name: "doctor-config-changes",
     command: "report Doctor config changes",
     cwd: root,
     durationMs: 0,

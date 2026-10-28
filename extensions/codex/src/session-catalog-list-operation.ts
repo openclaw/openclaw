@@ -1,16 +1,28 @@
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
   SessionCatalogEntrySnapshot,
   SessionCatalogProvider,
 } from "openclaw/plugin-sdk/session-catalog";
 import { publishSessionCatalogHost } from "openclaw/plugin-sdk/session-catalog-paging";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
+import { withTimeout } from "./app-server/timeout.js";
 import { CodexCatalogLoadingError } from "./session-catalog-availability.js";
-import { currentCodexCatalogListDiagnostics } from "./session-catalog-diagnostics.js";
+import {
+  currentCodexCatalogListDiagnostics,
+  startCodexCatalogListTiming,
+} from "./session-catalog-diagnostics.js";
 import type { CodexCatalogHome } from "./session-catalog-homes.js";
+import { CODEX_CATALOG_HOST_RESPONSE_TIMEOUT_MS } from "./session-catalog-limits.js";
+import type { CatalogNode } from "./session-catalog-node-continue.js";
+import {
+  CodexCatalogNodeSnapshots,
+  createNodeHostPublication,
+} from "./session-catalog-node-snapshot.js";
 import {
   catalogError,
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
@@ -24,9 +36,20 @@ import type {
   CodexSessionCatalogHost,
   CodexSessionCatalogPage,
   CodexSessionCatalogParams,
-  CodexSessionCatalogResult,
 } from "./session-catalog-types.js";
 import { CodexCatalogVisiblePage } from "./session-catalog-visible-page.js";
+
+const loadCatalogAdoption = createLazyRuntimeModule(() => import("./session-catalog-adoption.js"));
+const loadSessionCatalog = createLazyRuntimeModule(async () => {
+  const { sessionCatalogAdoptedSourceKey } = await import("openclaw/plugin-sdk/session-catalog");
+  return { sessionCatalogAdoptedSourceKey };
+});
+const loadNodeAdoption = createLazyRuntimeModule(
+  () => import("./session-catalog-node-adoption.js"),
+);
+const loadNodeContinue = createLazyRuntimeModule(
+  () => import("./session-catalog-node-continue.js"),
+);
 
 type ListParams = {
   agentId?: string;
@@ -40,8 +63,9 @@ type ListParams = {
   waitUntil?: (completion: Promise<void>) => void;
   signal?: AbortSignal;
   sessionEntries?: SessionCatalogEntrySnapshot;
-  includeLocal?: boolean;
-  localHomes?: CodexCatalogHome[];
+  allowPartialResults?: boolean;
+  nodeSnapshots?: CodexCatalogNodeSnapshots;
+  localHomes: Array<CodexCatalogHome | undefined>;
 };
 
 type ListStep<THost> = { done: false } | { done: true; hosts: THost[] };
@@ -55,6 +79,8 @@ type LocalHost = {
   completion: ReturnType<typeof createDeferred<CodexSessionCatalogHost>>;
   value?: CodexSessionCatalogHost;
   active?: Promise<void>;
+  background?: boolean;
+  deadlineAt?: number;
 };
 
 type PreparedList = {
@@ -62,6 +88,29 @@ type PreparedList = {
   query: ReturnType<typeof readGatewayParams>;
   requestedHostIds?: Set<string>;
 };
+
+async function boundedHost(
+  pending: Promise<CodexSessionCatalogHost>,
+): Promise<CodexSessionCatalogHost | undefined> {
+  return await raceWithTimeout(pending, 250, () => undefined);
+}
+
+function measureNodeHost(
+  host: Promise<CodexSessionCatalogHost>,
+  diagnostics: ReturnType<typeof currentCodexCatalogListDiagnostics>,
+  started: number,
+): Promise<CodexSessionCatalogHost> {
+  // The node can outlive the list; retain diagnostics without the request's lexical context.
+  return diagnostics
+    ? host.finally(() => {
+        if (!diagnostics.closed) {
+          diagnostics.fields.pairedNodeSettled = (diagnostics.fields.pairedNodeSettled ?? 0) + 1;
+          diagnostics.fields.nodeWaitSumMs =
+            (diagnostics.fields.nodeWaitSumMs ?? 0) + performance.now() - started;
+        }
+      })
+    : host;
+}
 
 function hostFailure(
   source: CodexCatalogHome | undefined,
@@ -87,14 +136,10 @@ async function projectLocalHost(
   page: CodexSessionCatalogPage,
 ): Promise<CodexSessionCatalogHost> {
   params.signal?.throwIfAborted();
-  const { listAdoptedSessionEntries } = await import("./session-catalog-adoption.js");
-  const { sessionCatalogAdoptedSourceKey } = await import("openclaw/plugin-sdk/session-catalog");
+  const { listAdoptedSessionEntries } = await loadCatalogAdoption();
+  const { sessionCatalogAdoptedSourceKey } = await loadSessionCatalog();
   params.signal?.throwIfAborted();
-  const diagnostics = currentCodexCatalogListDiagnostics();
-  const started = diagnostics ? performance.now() : 0;
-  if (diagnostics) {
-    diagnostics.fields.adoptionCalls++;
-  }
+  const finishTiming = startCodexCatalogListTiming("adoptionSumMs", "adoptionCalls");
   let adopted: Awaited<ReturnType<typeof listAdoptedSessionEntries>>;
   try {
     adopted = await listAdoptedSessionEntries({
@@ -105,10 +150,7 @@ async function projectLocalHost(
       sessionEntries: params.sessionEntries,
     });
   } finally {
-    if (diagnostics && !diagnostics.closed) {
-      diagnostics.fields.adoptionSumMs =
-        (diagnostics.fields.adoptionSumMs ?? 0) + performance.now() - started;
-    }
+    finishTiming();
   }
   const hostId = source?.hostId ?? CODEX_LOCAL_SESSION_HOST_ID;
   const sourceHomeId = source?.sourceHomeId ?? CODEX_LOCAL_SESSION_HOST_ID;
@@ -141,20 +183,53 @@ function managedMarker(
     if (managed?.has(threadId)) {
       return;
     }
-    const diagnostics = currentCodexCatalogListDiagnostics();
-    const started = diagnostics ? performance.now() : 0;
-    if (diagnostics) {
-      diagnostics.fields.exclusionMarkCalls++;
-    }
+    const finishTiming = startCodexCatalogListTiming("exclusionMarkSumMs", "exclusionMarkCalls");
     try {
       await store.mark({ sourceHomeId, threadId, ...(rolloutPath ? { rolloutPath } : {}) });
     } finally {
-      if (diagnostics && !diagnostics.closed) {
-        diagnostics.fields.exclusionMarkSumMs =
-          (diagnostics.fields.exclusionMarkSumMs ?? 0) + performance.now() - started;
-      }
+      finishTiming();
     }
   };
+}
+
+async function readLocalHostPage(
+  params: ListParams,
+  agentId: string,
+  host: LocalHost,
+): Promise<CodexSessionCatalogHost | undefined> {
+  const remaining =
+    (host.deadlineAt ??= performance.now() + CODEX_CATALOG_HOST_RESPONSE_TIMEOUT_MS) -
+    performance.now();
+  if (remaining <= 0) {
+    throw new CodexCatalogLoadingError();
+  }
+  return await withTimeout(
+    host.page.next().then((step) => {
+      params.signal?.throwIfAborted();
+      return step.done ? projectLocalHost(params, agentId, host.source, step.page) : undefined;
+    }),
+    remaining,
+    "Codex session catalog host timed out. Retry shortly.",
+  );
+}
+
+async function finishLocalHost(
+  params: ListParams,
+  agentId: string,
+  host: LocalHost,
+): Promise<CodexSessionCatalogHost> {
+  try {
+    for (;;) {
+      const value = await readLocalHostPage(params, agentId, host);
+      if (value) {
+        return value;
+      }
+    }
+  } catch (error) {
+    return hostFailure(host.source, error);
+  } finally {
+    host.page.close();
+  }
 }
 
 function createNodePublicationTracker(
@@ -178,7 +253,8 @@ class CodexCatalogListDriver {
   private prepared: PreparedList | undefined;
   private locals: LocalHost[] = [];
   private nodeHosts: CodexSessionCatalogHost[] | undefined;
-  private nodeActive = false;
+  private nodeResults: Array<() => CodexSessionCatalogHost | undefined> = [];
+  private readonly nodeSnapshots: CodexCatalogNodeSnapshots;
   private nodeDiscoveryFailed = false;
   private readonly nodePublications = { pending: 0 };
   private nodesStarted = false;
@@ -191,6 +267,8 @@ class CodexCatalogListDriver {
 
   constructor(params: ListParams) {
     this.params = params;
+    this.nodeSnapshots = params.nodeSnapshots ?? new CodexCatalogNodeSnapshots();
+    this.nodeSnapshots.start(params.config);
   }
 
   private request(): ListParams {
@@ -215,14 +293,10 @@ class CodexCatalogListDriver {
     }).sessionAgentId;
     const query = readGatewayParams(params.query);
     const requestedHostIds = query.hostIds ? new Set(query.hostIds) : undefined;
-    const localSources =
-      params.localHomes?.filter(
-        (source) => !requestedHostIds || requestedHostIds.has(source.hostId),
-      ) ??
-      (params.includeLocal !== false &&
-      (!requestedHostIds || requestedHostIds.has(CODEX_LOCAL_SESSION_HOST_ID))
-        ? [undefined]
-        : []);
+    const localSources = params.localHomes.filter(
+      (source) =>
+        !requestedHostIds || requestedHostIds.has(source?.hostId ?? CODEX_LOCAL_SESSION_HOST_ID),
+    );
     const diagnostics = currentCodexCatalogListDiagnostics();
     if (diagnostics) {
       diagnostics.fields.localHostCount = localSources.length;
@@ -275,26 +349,32 @@ class CodexCatalogListDriver {
       !this.localFailed &&
       this.nodeHosts !== undefined &&
       !this.nodeDiscoveryFailed &&
-      !this.nodeActive &&
       this.nodePublications.pending === 0
     );
   }
 
   private async readHost(host: LocalHost): Promise<void> {
     const params = this.request();
+    if (params.allowPartialResults === true && params.onHost && params.waitUntil) {
+      // The registered publication owns completion after the foreground driver closes.
+      host.background = true;
+      const completion = finishLocalHost(params, this.selection().agentId, host);
+      void completion.then(host.completion.resolve, host.completion.reject);
+      host.value = (await boundedHost(completion)) ?? {
+        hostId: host.source?.hostId ?? CODEX_LOCAL_SESSION_HOST_ID,
+        label: host.source?.label ?? "Local Codex",
+        kind: "gateway",
+        connected: true,
+        pending: true,
+        sessions: [],
+      };
+      return;
+    }
     try {
-      const page = await host.page.next();
-      params.signal?.throwIfAborted();
-      if (page.done) {
-        host.value = await projectLocalHost(
-          params,
-          this.selection().agentId,
-          host.source,
-          page.page,
-        );
-      }
+      host.value = await readLocalHostPage(params, this.selection().agentId, host);
     } catch (error) {
       this.localFailed = true;
+      host.page.close();
       host.value = hostFailure(host.source, error);
     }
     if (host.value) {
@@ -334,10 +414,12 @@ class CodexCatalogListDriver {
     if (diagnostics) {
       diagnostics.fields.nodeRegistryCalls = 1;
     }
-    let nodes: Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"];
+    let nodes: CatalogNode[];
+    let inventory: CatalogNode[];
     try {
       try {
-        nodes = (await (params.listNodes?.() ?? params.runtime.nodes.list())).nodes
+        inventory = (await (params.listNodes?.() ?? params.runtime.nodes.list())).nodes;
+        nodes = inventory
           .filter(
             (node) =>
               node.gatewayLocal !== true &&
@@ -366,9 +448,9 @@ class CodexCatalogListDriver {
       return [host];
     }
     params.signal?.throwIfAborted();
-    const { listNodeAdoptedSessionEntries } = await import("./session-catalog-node-adoption.js");
-    const { compareNodeLabels, listPairedNode } =
-      await import("./session-catalog-node-continue.js");
+    this.nodeSnapshots.observe(inventory);
+    const { listNodeAdoptedSessionEntries, nodeAdoptedSourceKey } = await loadNodeAdoption();
+    const { compareNodeLabels, listPairedNode, nodeLabel } = await loadNodeContinue();
     params.signal?.throwIfAborted();
     const adopted = listNodeAdoptedSessionEntries({
       agentId,
@@ -381,7 +463,43 @@ class CodexCatalogListDriver {
       diagnostics.fields.pairedNodeSettled = 0;
     }
     const trackPublication = createNodePublicationTracker(this.nodePublications, params.waitUntil);
+    const partial =
+      params.allowPartialResults === true && Boolean(params.onHost && params.waitUntil);
     const pendingHosts = nodes.toSorted(compareNodeLabels).map((node) => {
+      const key = JSON.stringify([
+        agentId,
+        query.limitPerHost,
+        query.search,
+        query.cursors?.[`node:${node.nodeId}`],
+        node.displayName,
+        node.remoteIp,
+        node.caps,
+        node.commands,
+        node.invocableCommands,
+      ]);
+      const publication = this.nodeSnapshots.forNode(node, key);
+      const { project, publish, publishCached, readPublished } = createNodeHostPublication(
+        publication,
+        adopted,
+        nodeAdoptedSourceKey,
+        params.onHost,
+        params.signal,
+        partial,
+        trackPublication,
+      );
+      const cached = partial ? publication.read() : undefined;
+      let result: CodexSessionCatalogHost | undefined;
+      this.nodeResults.push(() => {
+        const latest = partial ? publication.read() : undefined;
+        if (latest) {
+          publishCached(latest);
+          return project(latest.host);
+        }
+        return partial ? (readPublished() ?? result) : result;
+      });
+      if (cached) {
+        publishCached(cached);
+      }
       const nodeStarted = diagnostics ? performance.now() : 0;
       if (diagnostics && !diagnostics.closed) {
         diagnostics.fields.pairedNodeCalls = (diagnostics.fields.pairedNodeCalls ?? 0) + 1;
@@ -391,22 +509,31 @@ class CodexCatalogListDriver {
         runtime: params.runtime,
         node,
         query,
-        adoptedSessions: adopted,
         terminalCapabilities: codexNodeTerminalCapability(node),
         waitUntil: trackPublication,
         signal: params.signal,
-        ...(params.onHost ? { onHost: params.onHost } : {}),
+        onHost: publish,
       });
-      return diagnostics
-        ? host.finally(() => {
-            if (!diagnostics.closed) {
-              diagnostics.fields.pairedNodeSettled =
-                (diagnostics.fields.pairedNodeSettled ?? 0) + 1;
-              diagnostics.fields.nodeWaitSumMs =
-                (diagnostics.fields.nodeWaitSumMs ?? 0) + performance.now() - nodeStarted;
-            }
-          })
-        : host;
+      const completion = measureNodeHost(host, diagnostics, nodeStarted);
+      if (cached) {
+        void completion.catch(() => undefined);
+        return Promise.resolve(project(cached.host));
+      }
+      return (partial ? boundedHost(completion) : completion).then((value) => {
+        result = value
+          ? project(value)
+          : {
+              hostId: `node:${node.nodeId}`,
+              label: nodeLabel(node),
+              kind: "node",
+              nodeId: node.nodeId,
+              connected: true,
+              pending: true,
+              ...codexNodeTerminalCapability(node),
+              sessions: [],
+            };
+        return result;
+      });
     });
     try {
       return await Promise.all(pendingHosts);
@@ -422,15 +549,13 @@ class CodexCatalogListDriver {
       return;
     }
     this.nodesStarted = true;
-    this.nodeActive = true;
     void this.readNodes().then(
       (hosts) => {
         this.nodeHosts = hosts;
-        this.nodeActive = false;
         this.checkpoint();
       },
       (error: unknown) => {
-        this.nodeActive = false;
+        this.nodeHosts = [];
         this.failure ??= { error };
         this.checkpoint();
       },
@@ -442,18 +567,28 @@ class CodexCatalogListDriver {
       return;
     }
     if (this.failure) {
-      if (!this.nodeActive) {
+      if (this.nodeHosts !== undefined) {
         this.step.reject(this.failure.error);
       }
     } else if (this.nodeHosts && this.locals.every((host) => host.value !== undefined)) {
-      this.complete = true;
-      this.step.resolve({
-        done: true,
-        hosts: [
-          ...this.locals.flatMap((host) => (host.value ? [host.value] : [])),
-          ...this.nodeHosts,
-        ],
-      });
+      try {
+        this.complete = true;
+        this.step.resolve({
+          done: true,
+          hosts: [
+            ...this.locals.flatMap((host) => (host.value ? [host.value] : [])),
+            ...(this.nodeResults.length
+              ? this.nodeResults.flatMap((read) => {
+                  const host = read();
+                  return host ? [host] : [];
+                })
+              : this.nodeHosts),
+          ],
+        });
+      } catch (error) {
+        this.failure ??= { error };
+        this.step.reject(error);
+      }
     } else if (this.canPause()) {
       this.step.resolve({ done: false });
     }
@@ -496,7 +631,9 @@ class CodexCatalogListDriver {
       new Error("Codex catalog list operation closed");
     this.params = undefined;
     for (const host of this.locals) {
-      host.page.close();
+      if (!host.background) {
+        host.page.close();
+      }
       if (!host.value) {
         host.completion.reject(reason);
       }
@@ -504,6 +641,7 @@ class CodexCatalogListDriver {
     this.locals = [];
     this.prepared = undefined;
     this.nodeHosts = undefined;
+    this.nodeResults = [];
     this.failure = undefined;
   }
 }
@@ -528,10 +666,4 @@ export async function runCatalogListInline<THost>(
   } finally {
     operation.close();
   }
-}
-
-export async function listCodexSessionCatalog(
-  params: ListParams,
-): Promise<CodexSessionCatalogResult> {
-  return { hosts: await runCatalogListInline(createCodexSessionCatalogListOperation(params)) };
 }

@@ -7,7 +7,7 @@ read_when:
   - "npm install -g fails with permissions or PATH issues"
 ---
 
-OpenClaw requires **Node 24.16+ or Node 26.1+** with a WAL-reset-safe linked SQLite library. **Node 26 is the recommended runtime** — it starts the Gateway noticeably faster and uses less memory than Node 24. The installer provisions Node 26 on macOS and the supported Node 24 LTS line on Linux when Node is missing; CI and release workflows also pin Node 24. On RPM-based Linux, the installer preserves a supported distro-owned Node package that links unsafe SQLite and uses a user-space Node runtime for OpenClaw instead. Node 22, 23, and 25 are unsupported. The [installer script](/install#recommended-installer-script) detects and installs Node automatically — use this page when you want to set up Node yourself (versions, PATH, global installs).
+OpenClaw requires **Node 24.22.1+ or Node 26.12.1+** with a WAL-reset-safe linked SQLite library. **Node 26 is the recommended runtime** — it starts the Gateway noticeably faster and uses less memory than Node 24. The installer provisions Node 26 on macOS and the supported Node 24 LTS line on Linux when Node is missing; CI and release workflows also pin Node 24. On RPM-based Linux, the installer preserves a supported distro-owned Node package that links unsafe SQLite and uses a user-space Node runtime for OpenClaw instead. Node 22, 23, and 25 are unsupported. The [installer script](/install#recommended-installer-script) detects and installs Node automatically — use this page when you want to set up Node yourself (versions, PATH, global installs).
 
 ## Check your version
 
@@ -15,7 +15,13 @@ OpenClaw requires **Node 24.16+ or Node 26.1+** with a WAL-reset-safe linked SQL
 node -v
 ```
 
-`v26.1.0` or newer is the recommended default. `v24.16.0` or newer 24.x is also supported and is the LTS line used by CI. Node 22, 23, 25, Node 24 before 24.16.0, and Node 26 before 26.1.0 are unsupported. If Node is missing or outside this range, pick an install method below.
+`v26.12.1` or newer is the recommended default. `v24.22.1` or newer 24.x is also supported and is the LTS line used by CI. These releases reject the keys compromised in the October 2026 eMudhra incident. Node 22, 23, 25, Node 24 before 24.22.1, and Node 26 before 26.12.1 are unsupported. If Node is missing or outside this range, pick an install method below.
+
+Node 27 is accepted, including well-formed development labels such as
+`v27.0.0-head` and `27.0.0-nightly20261018f88a1d25e9`. Prereleases on majors
+newer than Node 26 use their numeric version for installation and update checks;
+Node 24 and 26 prereleases remain unsupported. Development builds must pass the
+same SQLite safety checks as releases. Node 26 remains the recommended default.
 
 Upgrade Node before updating OpenClaw to avoid SQLite TEXT truncation. See [Node.js compatibility](/install/node-compatibility) for the SQLite safety floors and macOS/ARMv7 support limits.
 
@@ -27,13 +33,19 @@ recorded in the managed Gateway service, Node on PATH, then nvm, fnm, Volta, and
 Homebrew defaults. Each candidate must pass the same SQLite capability checks as
 normal startup. The first passing runtime retries the original command without
 prompting, including non-interactive Doctor commands launched by older updaters.
-Arguments, working directory, environment, standard streams, and exit status are
-preserved. Commands with an exact process-identity requirement cannot use this
-recovery.
+Arguments, working directory, standard streams, and exit status are preserved.
+The selected Node directory is prepended to the child process's PATH so package
+managers and lifecycle scripts use the compatible runtime too. Other environment
+settings, including `npm_config_node`, are preserved. Commands with an exact
+process-identity requirement cannot use this recovery.
 
 Runtime discovery uses the environment inherited when the CLI starts, before
 OpenClaw loads any `.env` file. Configure version-manager roots in your shell environment;
 workspace `.env` values cannot select a Node executable for recovery.
+
+On Windows, Node discovery accepts double-quoted absolute PATH directories such
+as `"C:\Program Files\nodejs"`, including a trailing semicolon. You do not need
+to remove those quotes to recover the CLI or discover Node when running under Bun.
 
 Home-relative service and version-manager paths expand `~` against inherited
 `HOME` or `USERPROFILE`. Service paths use that home even when `OPENCLAW_HOME`
@@ -45,12 +57,14 @@ current working directory, unless an absolute PATH entry explicitly names their
 directory. OpenClaw's own private recovery directory is also allowed, so cached
 runtime reuse and the installation offer work when you launch from your home
 directory. This exception does not extend to other in-home executables or manager
-roots. On Windows, the service reader honors recorded code pages and Unicode
-byte-order marks. If the current Node build cannot decode a service script safely,
+roots. The POSIX root directory (`/`), where launchd jobs and system services
+commonly start, is not treated as a workspace. Windows drive and share roots keep
+the workspace checks. On Windows, the service reader honors recorded code pages
+and Unicode byte-order marks. If the current Node build cannot decode a service script safely,
 OpenClaw prints the code page and continues searching other sources. Unsupported
 OEM pages such as CP850 are skipped rather than guessed. CP949 is also skipped:
 Node's ICU `euc-kr` decoder silently misdecodes UHC extension characters. Neither
-case probes the service executable; recovery continues with PATH and the other
+case checks the service executable; recovery continues with PATH and the other
 available runtime sources.
 
 If none is available and you are in an interactive terminal, the CLI offers:
@@ -63,7 +77,29 @@ Enter **Y** to download a compatible Node.js for OpenClaw and retry the same com
 
 Later CLI invocations reuse that runtime when the active Node.js is incompatible. A supported active Node.js still takes precedence. Enter **N**, press Enter, or cancel to leave your installation unchanged and see manual upgrade instructions.
 
-Automatic installation supports macOS, Windows, and glibc-based Linux on x64/ARM64. Alpine/musl and other architectures need manual installation. Non-interactive, CI, JSON, and `--yes` invocations never prompt or install Node.js. Commands that require an exact process identity, such as `hooks relay` and `webhooks gmail run`, also require a compatible Node.js on their existing execution path.
+Automatic installation supports macOS, Windows, and glibc-based Linux on x64/ARM64. Alpine/musl and other architectures need manual installation. Startup recovery in non-interactive, CI, JSON, and `--yes` invocations never prompts or installs Node.js. Commands that require an exact process identity, such as `hooks relay` and `webhooks gmail run`, also require a compatible Node.js on their existing execution path.
+
+### Node requirements during an update
+
+Once `openclaw update` starts, it checks the requested release's Node requirements
+before replacing the package. If the current runtime cannot run that release, the
+updater selects a compatible installed Node or quietly provisions a verified
+private runtime on the supported platforms above. This target-aware recovery also
+works with `--yes` and `--json`; it does not change system Node or shell settings.
+The installer starts only after the updater confirms that the original request
+and installation ownership are still current. A request revoked before that check
+does not install a private runtime.
+
+After a version-manager switch, a restarting update keeps the invoking OpenClaw
+installation as its target and rebinds its owned Gateway service to that
+installation. This also applies when the CLI package already matches the requested
+version. On Windows, or when the managed service definition cannot be changed or
+has operator overrides that cannot be restored, the updater keeps the existing
+service installation as its target instead; it does not rebind the
+service to the invoking CLI. A successful update on this fallback path does not
+align different CLI and Gateway installation prefixes. `--no-restart` also does not
+rebind the service.
+External schedulers and pinned crontab paths remain operator-managed.
 
 ## Install Node
 
@@ -130,11 +166,21 @@ fnm use 26
 ```
 
   <Warning>
-  Initialize your version manager in your shell startup file (`~/.zshrc` or `~/.bashrc`). If you skip this, `openclaw` may not be found in new terminal sessions because PATH won't include Node's bin directory.
+  Initialize your version manager in your shell startup file (`${ZDOTDIR:-$HOME}/.zshrc` for zsh or `~/.bashrc` for Bash). If you skip this, `openclaw` may not be found in new terminal sessions because PATH won't include Node's bin directory.
   </Warning>
 </Accordion>
 
 ## Troubleshooting
+
+### Homebrew upgrades while the Gateway is running
+
+If Homebrew removes the running Gateway's Node executable, command relays,
+their process-group anchors, and managed Codex JavaScript launchers use the
+formula's available stable Homebrew path for new launches without searching
+`PATH`. They keep using the original executable while it exists. Workers
+that share native modules or V8 messages, including the spawn broker, keep the
+exact runtime and report a restart action if it is gone. Restart the Gateway
+after upgrading Node to move the Gateway itself onto the new runtime.
 
 ### `openclaw: command not found`
 
@@ -157,7 +203,7 @@ This almost always means npm's global bin directory isn't on your PATH.
   <Step title="Add it to your shell startup file">
     <Tabs>
       <Tab title="macOS / Linux">
-        Add to `~/.zshrc` or `~/.bashrc`:
+        Add to `${ZDOTDIR:-$HOME}/.zshrc` for zsh or `~/.bashrc` for Bash:
 
         ```bash
         export PATH="$(npm prefix -g)/bin:$PATH"
@@ -183,7 +229,7 @@ npm config set prefix "$HOME/.npm-global"
 export PATH="$HOME/.npm-global/bin:$PATH"
 ```
 
-Add the `export PATH=...` line to your `~/.bashrc` or `~/.zshrc` to make it permanent.
+Add the `export PATH=...` line to `~/.bashrc` for Bash or `${ZDOTDIR:-$HOME}/.zshrc` for zsh to make it permanent.
 
 ## Related
 

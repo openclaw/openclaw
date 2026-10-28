@@ -46,46 +46,65 @@ async function clearReplacedMcpOAuth(mutation: {
   await clearMcpOAuthServer(identity);
 }
 
-async function withMcpOwnershipCoordination<T>(
-  params: { name: string; recordIndependentOwner?: boolean },
-  run: () => Promise<T>,
-): Promise<T> {
-  // Claw lifecycle callers already hold this non-reentrant lease.
+async function withMcpLifecycleCoordination<
+  T,
+  Params extends {
+    name: string;
+    skipLifecycleLease?: boolean;
+    assertCurrent?: () => void;
+    assertCurrentAsync?: () => Promise<void>;
+  },
+>(params: Params, run: (current: Params) => Promise<T>): Promise<T> {
+  // Claw Add already holds this non-reentrant lease.
   const name = params.name.trim();
-  if (!name || params.recordIndependentOwner === false) {
-    return run();
+  if (!name || params.skipLifecycleLease) {
+    return run(params);
   }
-  return withMcpLifecycleLease(name, {}, run);
+  return withMcpLifecycleLease(name, {}, (lease) => {
+    const assertCurrent = () => {
+      params.assertCurrent?.();
+      lease.assertCurrent();
+    };
+    return run({
+      ...params,
+      assertCurrent,
+      assertCurrentAsync: async () => {
+        await params.assertCurrentAsync?.();
+        await lease.assertOwned();
+        assertCurrent();
+      },
+    });
+  });
 }
 
 export function setConfiguredMcpServer(
   params: Parameters<typeof mcpConfigInternal.set>[0],
 ): ReturnType<typeof mcpConfigInternal.set> {
-  return withMcpOwnershipCoordination(params, () =>
-    mcpConfigInternal.set(params, clearReplacedMcpOAuth),
+  return withMcpLifecycleCoordination(params, (current) =>
+    mcpConfigInternal.set(current, clearReplacedMcpOAuth),
   );
 }
 
 export function unsetConfiguredMcpServer(
-  params: Parameters<typeof mcpConfigInternal.unset>[0] & { recordIndependentOwner?: boolean },
+  params: Parameters<typeof mcpConfigInternal.unset>[0] & { skipLifecycleLease?: boolean },
 ): ReturnType<typeof mcpConfigInternal.unset> {
-  return withMcpOwnershipCoordination(params, () =>
-    mcpConfigInternal.unset(params, clearReplacedMcpOAuth),
+  return withMcpLifecycleCoordination(params, (current) =>
+    mcpConfigInternal.unset(current, clearReplacedMcpOAuth),
   );
 }
 
 export function updateConfiguredMcpServer(
   params: Parameters<typeof mcpConfigInternal.update>[0],
 ): ReturnType<typeof mcpConfigInternal.update> {
-  return withMcpOwnershipCoordination(params, () =>
-    mcpConfigInternal.update(params, clearReplacedMcpOAuth),
+  return withMcpLifecycleCoordination(params, (current) =>
+    mcpConfigInternal.update(current, clearReplacedMcpOAuth),
   );
 }
 
 export function updateConfiguredMcpServerTools(
   params: Parameters<typeof mcpConfigInternal.updateTools>[0],
 ): ReturnType<typeof mcpConfigInternal.updateTools> {
-  return withMcpOwnershipCoordination(params, () =>
-    mcpConfigInternal.updateTools(params, clearReplacedMcpOAuth),
+  return withMcpLifecycleCoordination(params, (current) =>
+    mcpConfigInternal.updateTools(current, clearReplacedMcpOAuth),
   );
 }

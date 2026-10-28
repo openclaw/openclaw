@@ -31,8 +31,8 @@ Other common Linux launch failures:
   current host. Locks naming another hostname are preserved until you verify
   that the profile is no longer in use, including after a machine rename.
 - `Missing X server or $DISPLAY`: a visible browser was explicitly requested
-  on a host without a desktop session. Local managed profiles fall back to
-  headless mode on Linux when both `DISPLAY` and `WAYLAND_DISPLAY` are unset.
+  on a host without a desktop session. Local managed profiles use headless
+  mode by default, including when a desktop session is available.
   If you set `OPENCLAW_BROWSER_HEADLESS=0`, `browser.headless: false`, or
   `browser.profiles.<name>.headless: false`, remove that headed override, set
   `OPENCLAW_BROWSER_HEADLESS=1`, start `Xvfb`, run
@@ -125,7 +125,7 @@ curl -s http://127.0.0.1:18791/tabs
 | --------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | `browser.enabled`           | Enable browser control                                               | `true`                                                             |
 | `browser.executablePath`    | Path to a Chromium-based browser binary (Chrome/Brave/Edge/Chromium) | auto-detected (prefers the OS default browser when Chromium-based) |
-| `browser.headless`          | Run without GUI                                                      | `false`                                                            |
+| `browser.headless`          | Run without GUI                                                      | `true`                                                             |
 | `OPENCLAW_BROWSER_HEADLESS` | Per-process override for local managed browser headless mode         | unset                                                              |
 | `browser.noSandbox`         | Add `--no-sandbox` flag (needed for some Linux setups)               | `false`                                                            |
 | `browser.attachOnly`        | Do not launch a browser; only attach to an existing one              | `false`                                                            |

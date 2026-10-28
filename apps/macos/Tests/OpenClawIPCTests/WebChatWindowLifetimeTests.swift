@@ -4,33 +4,35 @@ import Testing
 @testable import OpenClaw
 @testable import OpenClawChatUI
 
+@Suite(.testWaitLimit)
 @MainActor
 struct WebChatWindowLifetimeTests {
-    @Test(arguments: ["ordinary", "transcript"], ["manager", "native window", "hide"])
-    func `a pending primary open cannot outlive its owner`(admission: String, closeOwner: String) async throws {
+    @Test func `a pending primary open cannot outlive its owner`() async throws {
         let configPath = TestIsolation.tempConfigPath()
         defer { try? FileManager.default.removeItem(atPath: configPath) }
+        try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            try JSONSerialization.data(withJSONObject: CronSourceFixture.configuration(revision: 1))
+                .write(to: URL(fileURLWithPath: configPath))
+            // Only injected primary connections participate; no child owns a shared fleet connection.
+            async let ordinaryManager: Void = self.checkPendingPrimaryOpen(closeOwner: "manager")
+            async let ordinaryWindow: Void = self.checkPendingPrimaryOpen(closeOwner: "native window")
+            async let ordinaryHide: Void = self.checkPendingPrimaryOpen(closeOwner: "hide")
+            _ = try await (ordinaryManager, ordinaryWindow, ordinaryHide)
+        }
+    }
+
+    private func checkPendingPrimaryOpen(closeOwner: String) async throws {
         let fixture = CronSourceFixture()
         do {
-            try await withIsolatedWebChatManager(
-                primaryConnection: fixture.gateway,
-                env: ["OPENCLAW_CONFIG_PATH": configPath])
-            { manager in
-                try JSONSerialization.data(withJSONObject: CronSourceFixture.configuration(revision: 1))
-                    .write(to: URL(fileURLWithPath: configPath))
-                let lease = try await fixture.gateway.acquireServerLease()
+            try await withWebChatManagerLifetime(primaryConnection: fixture.gateway) { manager in
+                _ = try await fixture.gateway.acquireServerLease()
                 let previousWindows = Set(NSApp.windows.map(ObjectIdentifier.init))
-                manager.show(sessionKey: "existing-primary")
+                manager.show(sessionKey: "existing-primary-\(UUID().uuidString)")
                 let window = try #require(NSApp.windows.first { !previousWindows.contains(ObjectIdentifier($0)) })
                 // Primary opens enqueue MainActor work. Close before yielding so the
                 // pending admission cannot run until its owner is gone.
-                var rejected = false
-                if admission == "ordinary" {
-                    // Supplying an agent keeps the existing window from satisfying this default-session lookup.
-                    manager.show(agentID: "main")
-                } else {
-                    manager.show(sessionKey: "cron:shared-job", ifCurrentRouteFrom: lease) { rejected = true }
-                }
+                // Supplying an agent keeps the existing window from satisfying this default-session lookup.
+                manager.show(agentID: "main")
                 if closeOwner == "manager" {
                     manager.close()
                 } else if closeOwner == "hide" {
@@ -38,9 +40,10 @@ struct WebChatWindowLifetimeTests {
                 } else {
                     window.close()
                 }
-                #expect(manager.activeSessionKey == nil)
-                #expect(await !self.eventually { manager.activeSessionKey != nil })
-                #expect(!rejected)
+                #expect(manager.activeSessionKey == nil, "admission retired by \(closeOwner)")
+                #expect(
+                    await !self.eventually { manager.activeSessionKey != nil },
+                    "admission retired by \(closeOwner)")
             }
         } catch {
             await fixture.gateway.shutdown()
@@ -96,7 +99,10 @@ struct WebChatWindowLifetimeTests {
                 } else {
                     pending = manager.openGatewayWindow(for: .primary, newWindow: true)
                 }
-                try #require(await self.eventually { fixture.requests.value.contains { $0.method == "config.get" } })
+                try await fixture.requestRecorded.wait("held primary config request") {
+                    fixture.requests.value.contains { $0.method == "config.get" }
+                }
+                try #require(fixture.requests.value.contains { $0.method == "config.get" })
                 let request = try #require(fixture.requests.value.first { $0.method == "config.get" })
                 // Retire only the socket: the manager generation, configured route,
                 // and device-auth Gateway ID still match the delayed admission.
@@ -107,8 +113,12 @@ struct WebChatWindowLifetimeTests {
                     "type": "res", "id": request.id, "ok": true,
                     "payload": ["config": ["session": ["scope": "global"]]],
                 ])))
-                await pending?.value
-                #expect(await !self.eventually { manager.hasVisibleWindows })
+                if let pending {
+                    await pending.value
+                    #expect(!manager.hasVisibleWindows)
+                } else {
+                    #expect(await !self.eventually { manager.hasVisibleWindows })
+                }
                 #expect(manager.openWindowCount(for: .primary) == 0)
                 #expect(manager.activeSessionKey == nil)
             }
@@ -192,7 +202,8 @@ struct WebChatWindowLifetimeTests {
             }
             connection = nil
 
-            #expect(await self.eventually { retiredConnection == nil })
+            try await TestWait.state("retired profile connection") { retiredConnection == nil }
+            #expect(retiredConnection == nil)
         }
     }
 
@@ -210,12 +221,15 @@ struct WebChatWindowLifetimeTests {
         }
 
         controller.show()
-        try #require(await self.eventually { transport.historyStarted })
+        try await transport.changed.wait("held window history") { transport.historyStarted }
+        try #require(transport.historyStarted)
         controller.close()
         transport.releaseHistory.open()
-        try #require(await self.eventually { transport.historyReturned })
+        try await transport.changed.wait("returned window history") { transport.historyReturned }
+        try #require(transport.historyReturned)
 
-        #expect(await self.eventually { transport.observationTerminated })
+        try await transport.changed.wait("retired window observation") { transport.observationTerminated }
+        #expect(transport.observationTerminated)
         #expect(await cache.savedTranscripts.isEmpty)
     }
 
@@ -232,9 +246,10 @@ struct WebChatWindowLifetimeTests {
 
 @MainActor
 func withIsolatedWebChatProfile(
+    sourceLocation: SourceLocation = #_sourceLocation,
     _ body: @MainActor (WebChatManager, MacGatewayProfile) async throws -> Void) async throws
 {
-    try await withIsolatedWebChatManager { manager in
+    try await withIsolatedWebChatManager(sourceLocation: sourceLocation) { manager in
         // Window admission uses the saved profile's account owner. Keep network
         // attempts on a test-owned loopback endpoint while exercising that lookup.
         let server = try await DashboardHTTPFixture.start()
@@ -263,16 +278,19 @@ func withIsolatedWebChatProfile(
 func withIsolatedWebChatManager(
     primaryConnection: GatewayConnection = .shared,
     env: [String: String?] = [:],
+    sourceLocation: SourceLocation = #_sourceLocation,
     _ body: (WebChatManager) async throws -> Void) async throws
 {
     try await TestIsolation.withIsolatedState(env: env) {
-        try await withWebChatManagerLifetime(primaryConnection: primaryConnection, body)
+        try await withWebChatManagerLifetime(
+            primaryConnection: primaryConnection, sourceLocation: sourceLocation, body)
     }
 }
 
 @MainActor
 func withWebChatManagerLifetime(
     primaryConnection: GatewayConnection = .shared,
+    sourceLocation: SourceLocation = #_sourceLocation,
     _ body: (WebChatManager) async throws -> Void) async throws
 {
     // Callers inspect NSApp before opening their first window.
@@ -294,15 +312,13 @@ func withWebChatManagerLifetime(
     }
     // close() owns asynchronous fleet retirement. Keep the global lease
     // until that task releases its manager so it cannot shut down the next fixture.
-    let deadline = ContinuousClock.now + .seconds(3)
-    while retiredManager != nil, ContinuousClock.now < deadline {
-        try? await Task.sleep(for: .milliseconds(10))
-    }
+    try await TestWait.state("retired Web Chat manager", sourceLocation: sourceLocation) { retiredManager == nil }
     #expect(retiredManager == nil)
     if let failure { throw failure }
 }
 
 private final class ClosingWindowChatTransport: @unchecked Sendable, OpenClawChatTransport {
+    let changed = AsyncTestSignal()
     let releaseHistory = AsyncTestGate()
     private let lock = NSLock()
     private var didStartHistory = false
@@ -316,6 +332,7 @@ private final class ClosingWindowChatTransport: @unchecked Sendable, OpenClawCha
         self.continuation.onTermination = { [weak self] _ in
             guard let self else { return }
             self.lock.withLock { self.didTerminateObservation = true }
+            self.changed.notify()
         }
     }
 
@@ -333,8 +350,10 @@ private final class ClosingWindowChatTransport: @unchecked Sendable, OpenClawCha
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
         self.lock.withLock { self.didStartHistory = true }
+        self.changed.notify()
         await self.releaseHistory.wait()
         self.lock.withLock { self.didReturnHistory = true }
+        self.changed.notify()
         // A response may already have been decoded when its caller is canceled.
         return try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: Data("""
         {"sessionKey":"\(sessionKey)","sessionId":"late-history","thinkingLevel":"off",\

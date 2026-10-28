@@ -17,7 +17,7 @@ import {
   replaceSensitiveValuesInRaw,
   shouldFallbackToStructuredRawRedaction,
 } from "./redact-snapshot.raw.js";
-import { isSecretRefShape, redactSecretRefId } from "./redact-snapshot.secret-ref.js";
+import { isSecretRefShape } from "./redact-snapshot.secret-ref.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
@@ -97,7 +97,7 @@ function isSecretRefWithProvider(
 // records are handled by the lookup, but arrays need two entries in
 // the Set, as their first lookup is done before the code knows it's
 // an array.
-function buildRedactionLookup(hints: ConfigUiHints): Set<string> {
+function buildRedactionLookup(hints: ConfigUiHints): ReadonlySet<string> | undefined {
   const result = new Set<string>();
 
   for (const [path, hint] of Object.entries(hints)) {
@@ -120,11 +120,16 @@ function buildRedactionLookup(hints: ConfigUiHints): Set<string> {
       result.add(joinedPath);
     }
   }
-  if (result.size !== 0) {
-    result.add("");
+  if (result.size === 0) {
+    return undefined;
   }
+  result.add("");
   return result;
 }
+
+// Schema hints are immutable once published and the Gateway reuses one response
+// per config, so request paths (Control UI bootstrap, config.get) share a lookup.
+const redactionLookups = new WeakMap<ConfigUiHints, ReadonlySet<string> | undefined>();
 
 type RedactionContext = {
   hints: ConfigUiHints | undefined;
@@ -133,8 +138,16 @@ type RedactionContext = {
 };
 
 function createRedactionContext(hints?: ConfigUiHints): RedactionContext {
-  const lookup = hints ? buildRedactionLookup(hints) : undefined;
-  return { hints, lookup: lookup?.has("") ? lookup : undefined, warnOnMissingOriginal: true };
+  let lookup: ReadonlySet<string> | undefined;
+  if (hints) {
+    if (redactionLookups.has(hints)) {
+      lookup = redactionLookups.get(hints);
+    } else {
+      lookup = buildRedactionLookup(hints);
+      redactionLookups.set(hints, lookup);
+    }
+  }
+  return { hints, lookup, warnOnMissingOriginal: true };
 }
 
 // Schema lookup coverage is prefix-scoped. After a path misses, heuristic detection must own the
@@ -143,7 +156,6 @@ function withoutRedactionLookup(context: RedactionContext): RedactionContext {
   return context.lookup ? { ...context, lookup: undefined } : context;
 }
 
-/** Deep-walk an object and replace values at sensitive paths with the redaction sentinel. */
 function redactObject<T>(obj: T, context: RedactionContext, values: string[] = []): T {
   return redactValue(obj, "", values, context) as T;
 }
@@ -201,12 +213,12 @@ function redactValue(
         if (context.hints?.[candidate]?.sensitive === true && !Array.isArray(value)) {
           const objectValue = asNonArrayRecord(value);
           if (isSecretRefShape(objectValue)) {
-            result[key] = redactSecretRefId({
-              value: objectValue,
-              values,
-              redactedSentinel: REDACTED_SENTINEL,
-              isConcreteSensitiveString,
-            });
+            const redacted = { ...objectValue };
+            if (isConcreteSensitiveString(objectValue.id)) {
+              values.push(objectValue.id);
+              redacted.id = REDACTED_SENTINEL;
+            }
+            result[key] = redacted;
           } else {
             collectSensitiveStrings(objectValue, values);
             result[key] = REDACTED_SENTINEL;
@@ -285,9 +297,10 @@ export function redactConfigObject<T>(value: T, uiHints?: ConfigUiHints): T {
 export function redactConfigSnapshot(
   snapshot: ConfigFileSnapshot,
   uiHints?: ConfigUiHints,
-): ConfigFileSnapshot {
+): Omit<ConfigFileSnapshot, "authoredConfig" | "sourceConfigBeforeMigrations"> {
   // Internal migration inputs can contain resolved secrets; never expose them in public snapshots.
   const {
+    authoredConfig: _authoredConfig,
     sourceConfigBeforeMigrations: _sourceConfigBeforeMigrations,
     pluginMetadataSnapshot: _pluginMetadataSnapshot,
     ...publicSnapshot
@@ -335,7 +348,6 @@ export function redactConfigSnapshot(
   ) {
     redactedRaw = null;
   }
-  // Also redact the resolved config (contains values after ${ENV} substitution)
   const redactedResolved = redactObject(snapshot.resolved, context);
   return {
     ...publicSnapshot,
@@ -392,17 +404,15 @@ function restoreRedactedValuesWithContext(
         humanReadableMessage: err.humanReadableMessage,
       };
     }
-    throw err; // some coding error, pass through
+    throw err;
   }
 }
 
 class RedactionError extends Error {
-  public readonly key: string;
   public readonly humanReadableMessage: string;
 
   constructor(key: string, humanReadableMessage?: string) {
     super("internal error class---should never escape");
-    this.key = key;
     this.humanReadableMessage =
       humanReadableMessage ??
       `Sentinel value "${REDACTED_SENTINEL}" in key ${key} is not valid as real data`;
@@ -482,7 +492,14 @@ function maybeRestoreSecretRefId(params: {
     );
   }
 
-  if (incomingObj.source !== originalObj.source || incomingObj.provider !== originalObj.provider) {
+  const restored = { ...incomingObj, id: originalObj.id };
+  // Unhinted secret objects also mask their identity fields during heuristic redaction.
+  if (incomingObj.source === REDACTED_SENTINEL && incomingObj.provider === REDACTED_SENTINEL) {
+    restored.source = originalObj.source;
+    restored.provider = originalObj.provider;
+  }
+
+  if (restored.source !== originalObj.source || restored.provider !== originalObj.provider) {
     // Changing source/provider while keeping a redacted id would silently bind the old secret id to
     // a different backend. Require an explicit id for that edit.
     throw new RedactionError(
@@ -491,7 +508,7 @@ function maybeRestoreSecretRefId(params: {
     );
   }
 
-  return { handled: true, value: { ...incomingObj, id: originalObj.id } };
+  return { handled: true, value: restored };
 }
 
 type RedactedArrayIdentity = {
@@ -535,45 +552,6 @@ function indexRedactedArrayItemsById(items: unknown[]): Map<string, RedactedArra
   return itemsById;
 }
 
-function mapRedactedArray(params: {
-  incoming: unknown[];
-  original: unknown;
-  path: string;
-  mapItem: (item: unknown, originalItem: unknown) => unknown;
-}): unknown[] {
-  const originalArray = Array.isArray(params.original) ? params.original : [];
-  if (params.incoming.length < originalArray.length) {
-    log.warn(`Redacted config array key ${params.path} has been truncated`);
-  }
-  const originalById = indexRedactedArrayItemsById(originalArray);
-  const incomingById = indexRedactedArrayItemsById(params.incoming);
-  const reservedOriginalIndexes = new Set<number>();
-  for (const [id, incomingIdentity] of incomingById) {
-    const originalIdentity = originalById.get(id);
-    if (incomingIdentity.count === 1 && originalIdentity?.count === 1) {
-      reservedOriginalIndexes.add(originalIdentity.index);
-    }
-  }
-  const hasUniqueOriginalIdentity = Array.from(originalById.values()).some(
-    (identity) => identity.count === 1,
-  );
-
-  return params.incoming.map((item, index) => {
-    const id = readRedactedArrayItemId(item);
-    const originalIdentity = id === undefined ? undefined : originalById.get(id);
-    const incomingIdentity = id === undefined ? undefined : incomingById.get(id);
-    if (incomingIdentity?.count === 1 && originalIdentity?.count === 1) {
-      return params.mapItem(item, originalIdentity.item);
-    }
-    if (incomingIdentity?.count === 1 && !originalIdentity && hasUniqueOriginalIdentity) {
-      return params.mapItem(item, undefined);
-    }
-    // Positional fallback must not reuse a secret already reserved for another identified entry.
-    const originalItem = reservedOriginalIndexes.has(index) ? undefined : originalArray[index];
-    return params.mapItem(item, originalItem);
-  });
-}
-
 function restoreRedactedValue(
   incoming: unknown,
   original: unknown,
@@ -590,14 +568,38 @@ function restoreRedactedValue(
     const fallbackContext = schemaMatched ? context : withoutRedactionLookup(context);
     const heuristicSensitive =
       !isExplicitlyNonSensitivePath(context.hints, [path]) && isSensitivePath(path);
-    return mapRedactedArray({
-      incoming,
-      original,
-      path,
-      mapItem: (item, originalItem) =>
-        item === REDACTED_SENTINEL && (schemaMatched || heuristicSensitive)
-          ? originalItem
-          : restoreRedactedValue(item, originalItem, path, fallbackContext),
+    const originalArray = Array.isArray(original) ? original : [];
+    if (incoming.length < originalArray.length) {
+      log.warn(`Redacted config array key ${path} has been truncated`);
+    }
+    const originalById = indexRedactedArrayItemsById(originalArray);
+    const incomingById = indexRedactedArrayItemsById(incoming);
+    const reservedOriginalIndexes = new Set<number>();
+    for (const [id, incomingIdentity] of incomingById) {
+      const originalIdentity = originalById.get(id);
+      if (incomingIdentity.count === 1 && originalIdentity?.count === 1) {
+        reservedOriginalIndexes.add(originalIdentity.index);
+      }
+    }
+    const hasUniqueOriginalIdentity = Array.from(originalById.values()).some(
+      (identity) => identity.count === 1,
+    );
+    return incoming.map((item, index) => {
+      const id = readRedactedArrayItemId(item);
+      const originalIdentity = id === undefined ? undefined : originalById.get(id);
+      const incomingIdentity = id === undefined ? undefined : incomingById.get(id);
+      let originalItem: unknown;
+      if (incomingIdentity?.count === 1 && originalIdentity?.count === 1) {
+        originalItem = originalIdentity.item;
+      } else if (
+        !(incomingIdentity?.count === 1 && !originalIdentity && hasUniqueOriginalIdentity)
+      ) {
+        // Positional fallback must not reuse a secret already reserved for another identified entry.
+        originalItem = reservedOriginalIndexes.has(index) ? undefined : originalArray[index];
+      }
+      return item === REDACTED_SENTINEL && (schemaMatched || heuristicSensitive)
+        ? originalItem
+        : restoreRedactedValue(item, originalItem, path, fallbackContext);
     });
   }
 

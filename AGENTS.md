@@ -1,123 +1,120 @@
 # AGENTS.md
 
-The task defines scope and authorization; its chosen workflow owns execution,
-review, publication, recovery, and cleanup. Explicit user instructions take
-precedence over skill guidelines and workflow defaults; host limits and required
-authorization boundaries still apply. Read the nearest scoped `AGENTS.md` and the
-matching references below, including when changing callers outside an owner's directory.
-Update instructions at their owner instead of adding competing rules here.
+Keep this file under 20,000 characters, the size OpenClaw loads whole. Put long rules in the owning guide and leave a one-line pointer here.
+
+## Choose good compromises
+
+Design trades correctness against complexity and performance. Choose deliberately; never maximize one axis at others' expense.
+
+- Design for real failures: crashes, restarts, retries, real concurrent writers, reported incidents. No engineering for millisecond races, theoretical interleavings, or adversarial timing unless user data, security, or money at risk, or a real incident shows them.
+- Prefer cheap mechanisms: idempotency keys, one check at point of effect, retry, best-effort recording with warning. Fencing tokens, revocation generations, multi-phase admission, nonce-matched settlement, and per-write cross-thread handshakes need concrete failure simpler code cannot handle.
+- Name accepted edge case in comment or PR instead of coding around it. Rare, visible, recoverable glitch beats permanent complexity.
+
+Task defines scope and authorization; chosen workflow owns execution, review, publication, recovery, and cleanup.
+Explicit user instructions override skill guidelines and workflow defaults; host limits and required authorization boundaries still apply.
+Read nearest scoped `AGENTS.md` and matching guides below in full, including for callers outside owner's directory.
+Update instructions at owner; no competing rules here.
 
 ## Design priorities
 
-- **One owner per responsibility.** An owner makes a decision or changes authoritative state. Callers consume its operations and recorded facts. Adapters translate contracts; caches and projections derive from the owner with an explicit invalidation lifecycle. Different transports can need different adapters, but not competing owners for the same responsibility.
-- **Small core, capable plugins.** Model-facing core additions have an ongoing context cost. Optional capability belongs at the edges; core supplies generic contracts. A feature needing a new integration is not, by itself, a reason to add another core tool or manager. [VISION.md](VISION.md) owns product scope.
-- **Stable conversation context.** Rebuilding past context defeats prompt-prefix reuse. Keep generated prompt/tool/context additions bounded and deterministic, preserve transcript bytes, and serve required instructions whole. Only compaction rewrites history. Defer changes to stable prompt state until the next session unless its owner defines explicit invalidation; preserve existing skill, tool, and memory refresh contracts.
+- **One owner per responsibility.** Owner decides or changes authoritative state; callers consume its operations and recorded facts. Adapters translate contracts; caches and projections derive from owner with explicit invalidation lifecycle. Transports may need different adapters, never competing owners.
+- **Small core, capable plugins.** Model-facing core additions cost ongoing context. Optional capability belongs at edges; core supplies generic contracts. New integration alone never warrants another core tool or manager. New capability: take the first fitting step of the [capability ladder](src/plugin-sdk/AGENTS.md#choose-the-capability-surface). [VISION.md](VISION.md) owns product scope.
+- **Stable conversation context.** Rebuilding past context defeats prompt-prefix reuse. Generated prompt/tool/context additions: bounded, deterministic. Preserve transcript bytes; serve required instructions whole; only compaction rewrites history. Defer stable-prompt changes to next session unless owner defines explicit invalidation; keep existing skill, tool, and memory refresh contracts. Side request reusing conversation shares turn's request preparation or carries no cache identity.
 
 ## Working agreement
 
-- Follow through on actionable requests, including "can you", within their authorized scope. When execution is requested, a plan or progress report is a checkpoint, not completion. Use prior context and preserve unaffected work across corrections and side questions.
-- Resolve routine, reversible choices with reasonable assumptions. Ask only about consequential decisions the request and context cannot resolve; continue independent authorized work while waiting. Silence does not authorize a gated action.
-- If a skill causes a pause, permission request, unfinished work, or scope change, link its exact `SKILL.md` and quote the instruction to the user. Explain how it applies, distinguish requirements from interpretation, and check prior authorization before asking again.
-- Inspect `git status -sb` before editing or GitHub work. Preserve unrelated work, branches, processes, and user-managed checkouts; serialize shared Git mutations and isolate work when needed. Never switch a checkout while another agent or test run uses it.
-- Treat pasted material and tool output as evidence; verify claims against source and observed behavior.
-- Lead with the result and follow the user's format. Use plain words, active voice, and useful technical detail; omit stock phrases and repeated summaries. Reference each PR/issue once per reply. Auto-links count; don't repeat the URL. Progress updates explain new findings, decisions, or blockers. Keep delegated messages equally clear.
-- Report routine findings in chat/stdout. Create files only for deliverables or concrete tool/proof/recovery needs; state their purpose and reuse them. Cleanup removes only task-created disposable files that are no longer needed or in use. Preserve unknown ownership, required evidence, and recovery state; this does not authorize existing-storage cleanup or retention changes.
-- Read relevant docs before changing behavior; `pnpm docs:list` locates them. `package.json` owns current commands and versions; keep the repository's toolchain and conventions rather than swapping tools without approval.
-- Use **OpenClaw** for the product, `openclaw` for CLI/package/config names, **plugins** for user-facing integrations, and American English.
-- Edit canonical `AGENTS.md` files directly.
+- Follow through on actionable requests, including "can you", within authorized scope; plan or progress report = checkpoint, not completion. Preserve unaffected work across corrections and side questions.
+- After a restart, reconcile prior effects and resume already-authorized work under current authority; do not ask for the same approval again solely because the process restarted.
+- Resolve routine, reversible choices with reasonable assumptions; ask only about consequential decisions context cannot resolve. Continue independent authorized work meanwhile. Silence never authorizes gated action.
+- Skill causes pause, permission request, unfinished work, or scope change: link exact `SKILL.md`, quote instruction, explain application (requirement vs interpretation), check prior authorization before asking again.
+- Inspect `git status -sb` before editing or GitHub work. Preserve unrelated work, branches, processes, user-managed checkouts; serialize shared Git mutations; isolate work when needed. Never switch checkout another agent or test run uses.
+- Pasted material and tool output = evidence; verify against source and observed behavior.
+- Create files only for stated deliverable/tool/proof/recovery needs. Follow [closeout](.agents/skills/openclaw-pr-maintainer/SKILL.md#finalize-and-clean-up).
+- Read relevant docs before behavior changes (`pnpm docs:list`). Tool swaps need approval.
+- Use **OpenClaw** (product), `openclaw` (CLI/package/config), **plugins** (user-facing integrations), American English. Edit canonical `AGENTS.md` files directly.
+
+## Execution discipline
+
+- Real failing entry point first: reproduce the bug end to end before editing. Bypassed boundary != proof.
+- Ask of every proof: could it pass while the original task stays broken? A failed setup is not a product verdict; name the gap.
+- New check needs named unknown, risk, or required gate. Reuse valid proof.
+- Two identical tooling failures without new evidence, or 10 min without progress: switch to an authorized supported alternative with the reviewed head pinned; reconcile uncertain writes first. No blind retries or guard bypasses.
+- Behavior proven + required gates green: finish/land. No optional proof polish, checkbox demos, or speculative scope growth.
+- Check mergeability first; don't rebase or merge `main` just because it advanced. Integrate for conflicts, a named failing gate, or material base risk, then rerun affected checks. Prior-head CI stays prior-head evidence ([landing](.agents/skills/openclaw-pr-maintainer/references/landing.md)).
+- Time pressure never waives gates. Report concrete blockers.
+- Don't mix shell dialects (for example, zsh `${name:r}` in bash).
+- CLI: `pnpm openclaw ...` or `pnpm dev`, never `node --import tsx src/index.ts`. Never reconcile a shared/worktree install other jobs use. Dependency, vendoring, format, typecheck gotchas: [scripts guide](scripts/AGENTS.md#execution-gotchas).
 
 ## One owner, complete cutover
 
-1. **Intent:** reproduce defects through the actual entry point before editing when feasible. Read complete affected modules, owners, callers, siblings, tests, history, and dependency contracts until the intended user outcome and violated invariant are supported by evidence. Before restoring a missing path, check why it was removed (`git log -p -S <symbol>`): isolation may be intentional, and a retired alias may be a completed migration. Record concrete reproduction gaps.
-2. **Owner:** account for relevant decisions and state writers across creation, updates, reads, recovery, and cleanup. Choose the existing code, plugin, or maintained solution that absorbs the change. A new owner needs a missing responsibility; fix invalid or leaked state at its producer.
-3. **Cutover:** migrate all affected internal/bundled callers together. Remove superseded code, duplicate policy/state, wrappers, registrations, exports, tests, and docs. Every retained path needs a cited contract. Workers sharing an owner agree on one interface and cutover plan.
-4. **Proof:** exercise the intended user flow and relevant siblings; trace references to confirm retired paths are unreachable. Done means one owner serves the flow, old paths are removed or justified, and observed results or remaining gaps are recorded in existing task/PR evidence. Helper tests or a wrapper around competing implementations alone are insufficient.
+1. **Intent:** read complete affected modules, owners, callers, siblings, tests, history, dependency contracts until intended outcome and violated invariant evidenced; a fix that cannot name the line where the bug shows has an unverified premise. Restoring missing path: first check why removed (`git log -p -S <symbol>`); isolation may be intentional, retired alias may mean completed migration.
+2. **Owner:** account for decisions and state writers across creation, updates, reads, recovery, cleanup. Choose existing code, plugin, or maintained solution that absorbs change; new owner needs missing responsibility. Fix invalid or leaked state at producer.
+3. **Cutover:** migrate all affected internal/bundled callers together; remove superseded code, duplicate policy/state, wrappers, registrations, exports, tests, docs. Retained paths need cited contract; workers sharing owner agree on one interface and plan.
+4. **Proof:** exercise user flow and relevant siblings; trace references to confirm retired paths unreachable. Done = one owner serves flow, old paths removed or justified, results or gaps recorded in task/PR evidence. Helper tests or wrappers around competing implementations insufficient.
 
-- Prefer smaller, simpler production code; explain necessary growth. Keep coherent nearby repairs together and record unrelated work as follow-ups. No extra report or tracking system is required.
-- Delegate independent evidence or implementation lanes when parallel work reduces time or improves verification. Give each lane a clear responsibility and completion condition; keep simple or tightly coupled work with the lead. The lead stays hands-on, verifies consequential conclusions, and coordinates shared-checkout safety.
-- Retained compatibility needs an explicit user request or a public API/config/SDK/data, stable-tag upgrade, security/migration, dependency, or observed-production contract, plus a migration/removal path. Main, beta, and nightly code alone are not shipped contracts.
-
-### Choose the capability surface
-
-For new capability, use the first path that expresses the actual requirement:
-
-1. Extend the existing owner or use an existing command, skill, plugin, or supported integration.
-2. Use an existing plugin contract. Prefer bundle plugins for skills, MCP servers, and configuration; use code plugins when runtime hooks, providers, channels, or tools are needed. Keep vendor behavior with its vendor plugin and feature behavior with its feature owner.
-3. If the contract is missing, define a narrow generic core/SDK capability and move existing bundled implementations and callers onto it together. Repeated independent requests for the same capability trigger this contract review, not another parallel manager or hook.
-4. Add universal core surface only when the need is fundamental and existing extension points cannot express it. Explain the gap and ongoing cost; a new hook needs a concrete consumer.
-
-For example, a new channel action should first use the shared message action
-contract. A setup screen needing plugin metadata should use the manifest or
-lightweight artifact, not load the plugin's execution runtime.
+- Prefer smaller, simpler production code; explain necessary growth. Keep coherent nearby repairs together; record unrelated work as follow-ups. Run [pr-simplify](.agents/skills/pr-simplify/SKILL.md) on your own change before opening a PR and before pushing large repairs.
+- Delegate independent lanes when saving time or improving verification; each needs clear responsibility and completion condition. Simple or tightly coupled work stays with lead; lead stays hands-on, verifies consequential conclusions, owns shared-checkout safety.
+- Retained compatibility needs explicit user request or public API/config/SDK/data, stable-tag upgrade, security/migration, dependency, or observed-production contract, plus migration/removal path. Main, beta, nightly code ≠ shipped contracts.
 
 ## Runtime and code safeguards
 
-- Plugins use documented `openclaw/plugin-sdk/*` contracts, manifest metadata, and public/local barrels, never core internals or another plugin's private files. Dependencies follow runtime ownership.
-- Runtime consumes canonical config/state. Doctor/migration owners normalize legacy shapes; plugin repairs stay plugin-owned. A change invalidating existing config includes its matching migration. Startup may invoke the same approved Doctor transforms; do not add independent compatibility readers.
-- OpenClaw state and caches use SQLite, not new JSON/JSONL/sidecar stores. Files are for named user artifacts, imports/exports, attachments, logs, backups, or external-tool contracts.
-- Use Kysely for ordinary SQLite access; raw SQL is limited to schema, migrations, bootstrap, and justified primitives. Write transactions are synchronous: finish asynchronous planning first, then reread authoritative rows before writing. No Promise or `await` in a transaction callback.
-- Privileged actions require current owner-held authority. Revalidate after awaited work and immediately before side effects; tokens, signatures, expiry, and matching IDs alone do not prove live authority.
-- Core owns shared message tools, action vocabulary, and dispatch. Channels own their account, security, conversation, and transport contracts. Preserve typed command/approval/URL/action distinctions until encoding; never infer product commands from raw strings.
-- Carry prepared facts through hot paths. Reuse process-stable plugin metadata and lifecycle-owned caches; do not repeatedly load registries or freshness-poll files. Preserve lazy module boundaries and verify relevant builds on the authorized host.
-- Keep APIs narrow, valid states explicit, and TypeScript ESM/types strict. Prefer real types or `unknown`; no `@ts-nocheck`. Suppressions need an intentional, explained exception. Reuse schema/coercion owners; avoid duplicate guards, speculative helpers, and naming-only wrappers.
-- Static-analysis fixes strengthen the real type/runtime contract or remove the unsafe operation; do not conceal it with casts, widening, marker types, or property probes. New lint rules need a meaningful invariant and a clean owner scope.
-- Comments explain non-obvious ownership, lifecycle, ordering, cleanup, platform, and dependency constraints, not syntax. Do not edit `node_modules` or generated artifacts by hand, or change formatter settings for a local expression; regenerate owned outputs.
+- Logs: write raw; redact only at egress (logs.tail, diagnostics/support bundles, remote/OTel export); never log message/tool content.
+- Plugins use documented `openclaw/plugin-sdk/*` contracts, manifest metadata, public/local barrels; never core internals or another plugin's private files. Dependencies follow runtime ownership.
+- Bun: support only latest stable Bun release and pinned OpenClaw fork. Never add workarounds, compatibility paths, or qualification for older Bun releases; upgrade instead.
+- Runtime consumes canonical config/state; Doctor/migration owners normalize legacy shapes (plugin repairs stay plugin-owned). Config-invalidating changes ship their migration.
+- State and caches: SQLite, not new JSON/JSONL/sidecar stores. Files: named user artifacts, imports/exports, attachments, logs, backups, external-tool contracts.
+- Database/state code (SQL, workers, transactions, integrity checks, DB-backed caches): read the [rules for code changes](docs/reference/database-schemas/worker-access.md#rules-for-code-changes) first.
+- Security boundaries (credentials, approvals, tool and command execution, external side effects) need current owner-held authority: revalidate after awaited work and right before effect. Tokens, signatures, expiry, matching IDs alone never prove live authority. Internal bookkeeping (scheduling, receipts, history, caches): idempotency + check at effect instead.
+- Do less work: validate untrusted input once at its trust boundary, then trust internal data; no defensive copies, re-validation or re-reads of your own writes. Performance work follows [openclaw-performance](.agents/skills/openclaw-performance/SKILL.md): delete before batching, cache last.
+- Prompt prefix: within a session, tool definitions, system prompt and earlier history depend only on session and config facts; history only appends. Per-turn authority gates calls through `gateAgentToolExecution`, and per-turn facts go in that turn's message. A change to anything that reaches a provider request keeps `src/agents/agent-tools.prefix-stability.test.ts` green; [contract](docs/reference/prompt-caching.md#stable-tools-between-turns).
+- Cache identity: key every cache, memo, in-flight join, and shared snapshot by every input that changes its answer: scope (agent, account, credential, session, workspace) and request shape (provider set, mode, options, deadline). Callers asking different questions get separate slots; volatile values stay out of keys. Prove sharing with a work-count test where differing callers interleave.
+- Narrow APIs, explicit valid states, strict ESM/types. Real types or `unknown`; no `@ts-nocheck`; suppressions need explained exception. Reuse schema/coercion owners; no duplicate guards, speculative helpers, naming-only wrappers.
+- Static-analysis fixes: strengthen real contract or remove unsafe operation; never hide with casts, widening, marker types, property probes. New lint rules need real invariant and clean owner scope.
+- Comments explain non-obvious ownership, lifecycle, ordering, cleanup, platform, dependency constraints, not syntax. Regenerate generated outputs; never hand-edit them or `node_modules`, or tweak formatter settings per expression.
 
 ## Product and validation
 
-- Defaults should produce a working, understandable result. Prioritize silent failures. Each action has a visible outcome or recorded intentional non-outcome; errors explain the next useful step.
-- **Updates always work.** `openclaw update` finishes best effort on every install. Any change touching update, Doctor, service lifecycle, config/state migration, or plugin loading states its update behavior: the installed updater runs first and cannot be patched, so candidate-side fixes key on markers shipped drivers already set, and existing operator state is the input. Recoverable hiccups become recorded warnings; back up before mutating and let rollback restore it; refuse only for concrete data at risk, naming the reason and leaving the previous Gateway running. Timeouts and budgets are generous, derived from measured state, and sized for old, slow hardware. Proof: a published-driver × candidate cell.
-- Prompts, tools, and results describe available capabilities accurately and give enough context for the next useful action; avoid unnecessary model round trips. Inject cross-tool references from the enabled tool set and remove stale model-facing arguments instead of hidden compatibility. New optional features need discovery paths.
-- Security is a product tradeoff, not a goal to maximize restrictions. Weigh concrete risk and likely impact against user effort, lockouts, and lost capability. Prefer the least restrictive effective safeguard; bounded, understood risk can be acceptable for a substantial usability benefit. Keep risky paths explicit and operator-controlled within the existing trust model and approval boundaries, and explain the tradeoff instead of inventing extra gates.
-- Tests must protect meaningful behavior; skip tests for reversible, low-impact changes that merely mirror the implementation. Regressions fail on the original defect; shared-state failures use the original order. Review tests for value and duplication. Automatically investigate and fix flaky tests encountered during the task: establish the cause, repair it, and verify the affected behavior. Do not hide failures with retries, longer timeouts, weaker assertions, broader mocks, or altered baselines.
-- Select proof for the touched contract and complete the chosen workflow's required gates within user/host limits. Command references do not mandate unrelated suites. Reuse valid proof; rerun for changed inputs or missing coverage. Docs-only work needs docs sanity and `git diff --check`. Report unrun checks and gaps.
-- Prove user-visible behavior through the real flow when feasible; external API changes need live contract proof. A covering isolated mock-Gateway harness is valid channel boundary proof; live channel proof is stronger. State concrete capture or execution blockers.
-- **UI screenshot completion/landing gate:** For user-visible UI changes, attach inspected, sanitized before/after screenshots in the originating chat AND upload/embed them in the GitHub PR body or a PR comment linked from its body. Successful chat attachment delivery satisfies the chat requirement; do not verify rendering in the user's browser, ask the user to confirm visibility, or block landing because the agent cannot inspect the chat. Verify that the PR images render before merging or claiming completion. Local files, private inspection, chat-only delivery, logs, tests, review approval, and artifact-manifest links are not substitutes. Galleries and videos supplement, never replace, the required screenshots. Known attachment or upload failures remain delivery blockers; repair them or report the blocker. Only an explicit user waiver can exempt a destination.
-- Before committing or landing nontrivial code, obtain fresh review through the permitted workflow and resolve actionable findings unless the user opts out. Tests protect observable contracts; a helper test can pass while the registered entry point never calls it.
-
-### Execution gotchas
-
-These commands apply on the host permitted by the task and its workflow; they do
-not authorize local execution or a broader test plan.
-
-- Restore missing dependencies in a trusted normal checkout with `pnpm install`, then retry once before diagnosing a code defect. Never reconcile a shared/worktree install while other jobs use it.
-- Run the CLI through `pnpm openclaw ...` or `pnpm dev`, never `node --import tsx src/index.ts`; the supported wrappers own build freshness and process setup.
-- Use installed `oxfmt` for formatting and the repository's `tsgo` lanes for typechecking. Inspect scope with `pnpm changed:lanes --json`; use targeted tests/checks. When avoiding worktree reconciliation, use `node scripts/check-changed.mjs` or `node scripts/run-vitest.mjs` with ready dependencies. Host restrictions still apply.
+- Defaults produce working, understandable result. Prioritize silent failures: every action has visible outcome or recorded intentional non-outcome; errors name next step.
+- **Updates always work:** best effort everywhere. Update/Doctor/lifecycle/migration/plugin-loading changes state update behavior and follow the [update contract](docs/install/updating.md#update-implementation-contract).
+- Security = product tradeoff: weigh concrete risk against user effort, lockouts, lost capability. Prefer least restrictive effective safeguard; keep risky paths explicit, operator-controlled within existing trust model and approval boundaries; explain tradeoffs, never invent gates.
+- **Behavior over test count.** Prefer production-path integration proof and independent unit contracts. Before changing provider requests, fallbacks, recovery, defaults, and when writing or reviewing behavioral tests: read [boundary proof](docs/help/testing/writing-tests.md#prove-behavior-at-the-owning-boundary).
+- **Prove it end to end.** Run the reproduction again on the fix through the real product: an isolated Gateway with a real agent and model, the channel's e2e skill ([Telegram](.agents/skills/telegram-e2e-userbot/SKILL.md), [Discord](.agents/skills/discord-e2e/SKILL.md), [Slack](.agents/skills/slack-e2e/SKILL.md)) or [Control UI e2e](.agents/skills/control-ui-e2e/SKILL.md), and an upgrade from the latest stable when update, Doctor, config or state changes. Mocks and helper tests support this proof; they never replace it.
+- **Fixes prove the invariant:** one or two tests of the broken behavior, red on the base, green with the fix, committed with the fix; update and run the tests of every consumer of what changed.
+- Test failures = defects: reproduce, fix owner with regression, or record evidence and continue (unresolved alone doesn't block landing). Never mask failures or claim passing replay proves fix ([policy](.agents/skills/openclaw-testing/SKILL.md#test-failure-policy)).
+- **PR CI = broad proof.** Pre-PR: touched tests + targeted typecheck/lint/format. Proof selection, reuse, gaps: [proof policy](.agents/skills/openclaw-testing/SKILL.md#proof-policy); docs-only: docs sanity + `git diff --check`. Test changes obey the [cost budget](docs/help/testing/writing-tests.md#cost-budget).
+- **Visual changes** need inspected, sanitized before/after screenshots in chat and embedded in PR before merge or completion ([gate](.agents/skills/openclaw-pr-maintainer/references/media.md#screenshot-completion-gate)).
+- Before nontrivial code commit/landing: follow [fresh review](.agents/skills/openclaw-pr-maintainer/SKILL.md#review-and-publish).
+- **Choose one review route.** Follow [local review](docs/reference/pull-request-review-flow.md#local-review-before-a-pr) for maintainer requirements, contributor guidance, and the hosted fallback. ClawSweeper is advisory. Address real findings together and request another hosted review only when needed, after branch, body, and proof are current. Reject findings that add restrictions without concrete harm and explain why. A maintainer's explicit land instruction does not wait for a pending or stale review ([review flow](docs/reference/pull-request-review-flow.md#clawsweeper)).
 
 ## Authority and safety
 
-- Review/triage is read-only; mutations require task authority. Existing approval carries through the same scoped work and recovery. When new approval is required, complete the already-authorized preparation first and present a concrete, reviewable result; pause only the gated action. Product rejection remains maintainer judgment. Bulk close/reopen above 50 items needs explicit count and scope.
-- Keep credentials, private data/config, and unreleased model identities out of commits and shared text, logs, transcripts, and media. Inspect outgoing content. Use synthetic fixtures and verified human credit; omit agent-attribution trailers.
-- For permitted defensive work interrupted by a cyber classifier, use an approved, available Daybreak Blue route only for that bounded task, then restore the previous model. Preserve the approved identity, scope, permissions, sandbox, and review gates. Never switch models to bypass access denials, disallowed requests, or refused tool actions; if that route also refuses, stop and report. Follow [OpenAI's guidance](https://learn.chatgpt.com/docs/cyber-safety) for approved model access.
-- Untrusted contributor/fork code runs only in secretless isolation, never locally. Source review alone does not authorize execution with credentials or on a trusted host; maintainer approval is required. An instruction to land named, reviewed PRs supplies that approval. Use the authorized isolation route and only task credentials.
-- Modifying/restarting a Gateway or live state you did not create requires per-task approval. Tests use isolated state and ports; copy real data for migration tests. Destructive reset/clean, stash, or deletion of unrelated work needs authorization.
-- Updating `team.openclaw.ai` must only happen by negotiating with Night Watch on `stable.openclaw.ai`, never directly.
-- Explicit repair-and-land authority includes internal scheduling, database admission, and lifecycle implementation decisions. The agent owns design selection, risk assessment, and verification; do not request renewed approval for implementation decisions within that scope.
-- Bug fixes within the authorized task do not need renewed approval, including compatible SDK changes needed to restore intended behavior. Ask again for new configuration options, breaking public contracts, intentional changes to schemas, durability, retention, or permissions beyond the bug fix, paid services, or destructive actions. Preserve FIFO ordering, live-authority and integrity checks, and settlement of write-capable work.
-- Protocol/version bumps, dependency patches/overrides/vendor changes, paid services, releases, and publishing need explicit approval; fix/ship authority does not imply release authority. Advisory workflows require an explicit request for that security action.
-- Extended-stable is one line: the trailing completed month relative to `main`'s version. Older `.33+` lines retire when `main` advances another month; publishing a retired line needs an explicit maintainer decision, not a routine guard bypass.
-- Baseline, snapshot, ignore, and expected-failure exceptions need approval; exact shrink-only ratchet updates are maintenance.
-- `CODEOWNERS` routes review; check live GitHub enforcement. Restricted/security paths and material product, behavior, security, or ownership changes need listed-owner involvement. For ownership/review governance, verified active organization-admin direction also qualifies; repository admin/bypass alone does not. Neither route waives enforced reviews.
-- Complete the authorized workflow's review/merge gates; resolve substantive findings or explain rejections. Fix diff-caused failures and document proven unrelated failures separately. Verify remote outcomes before success or cleanup; uncertain writes require reconciliation, not blind retries.
-- Stage only intended files and use concise Conventional Commits with verified author/writer identities. Preserve contributor credit; team-session credit requires consented, verified humans and its canonical backlink. A bare URL grants no public mutation authority. Keep PR bodies current with problem, solution, impact, and evidence; use body files/heredocs for shell-sensitive text.
+- Landing, red `main`, live ops, releases, advisories, bulk triage: read the [maintainer skill](.agents/skills/openclaw-pr-maintainer/SKILL.md#maintainer-authority) first.
+- Review/triage = read-only; mutations need task authority. Approval carries through same scoped work and recovery. New approval: complete authorized preparation, present concrete reviewable result, pause only gated action. Product rejection = maintainer judgment.
+- Keep credentials, private data/config, unreleased model identities out of commits, shared text, logs, transcripts, media; inspect outgoing content. Synthetic fixtures, verified human credit, no agent-attribution trailers.
+- Never switch models to bypass refusals; cyber-classifier interruptions of permitted defensive work follow [security triage](.agents/skills/security-triage/SKILL.md#cyber-classifier-interruptions).
+- Untrusted contributor/fork code: only secretless isolation, never locally. Credentialed or trusted-host execution needs maintainer approval; instruction to land named, reviewed PRs supplies it (isolation route, task credentials only).
+- Modifying/restarting Gateway or live state you did not create needs per-task approval. Tests use isolated state and ports; copy real data for migration tests. Destructive reset/clean, stash, deleting unrelated work needs authorization.
+- Ask before new config options, breaking public contracts, intentional schema/durability/retention/permission changes beyond bug fix, paid services, destructive actions. Preserve FIFO ordering, live-authority/integrity checks, write-capable work settlement.
+- Protocol/version bumps, dependency patches/overrides/vendoring, paid services, releases, publishing need explicit approval; fix/ship authority ≠ release authority.
+- Baseline/snapshot/ignore/expected-failure exceptions: obey [policy](.agents/skills/openclaw-testing/SKILL.md#baseline-and-expected-failure-exceptions).
+- `CODEOWNERS` routes review; restricted/security paths and material changes need listed-owner involvement ([review governance](.agents/skills/openclaw-pr-maintainer/SKILL.md#codeowners-review)).
+- Complete workflow's review/merge gates; resolve substantive findings or explain rejections. Verify remote outcomes before success or cleanup; reconcile uncertain writes, never retry blindly.
+- Stage only intended files; concise Conventional Commits with verified author/writer identity. Preserve contributor credit; team-session credit needs consented, verified humans and canonical backlink. Bare URL grants no public mutation authority. Keep PR bodies current: problem, solution, impact, evidence; use body files for shell-sensitive text.
 
 ## Read when relevant
 
-Read matching guides in full and follow their narrower task-specific pointers.
-Commands and implementation detail stay with these owners.
-
-- **Product/design:** [VISION.md](VISION.md).
-- **Plugins/discovery/SDK:** [plugins](extensions/AGENTS.md), [loader](src/plugins/AGENTS.md), [SDK](src/plugin-sdk/AGENTS.md). The SDK guide owns public boundary expansion, including callers outside these trees.
-- **Channels/message actions:** [channel boundary](src/channels/AGENTS.md) and [channel responsibilities](docs/plugins/sdk-channel-plugins.md).
-- **Agent tools, prompts, admission, or lifecycle:** [agents](src/agents/AGENTS.md) and [Gateway](src/gateway/AGENTS.md).
-- **Control UI state, requests, or presentation:** [UI guide](ui/AGENTS.md), including state shared with other Gateway clients.
-- **Storage:** [database schemas](docs/reference/database-schemas.md), then its layout, versioning, and storage-changes pages for the affected contract. Read the approval checkpoint before changing schema, transactions, retention, or recovery.
-- **Config retirement/migration:** [shared Doctor transforms and startup migration](docs/gateway/doctor/config-migrations.md); reuse this owner instead of new runtime compatibility readers.
-- **Audit/identity/receipts:** [audit doctrine](docs/gateway/audit.md). Diagnostic provenance is opt-in and never authorization; changes to collection, reader scope, retained fields, bounds, or contracts require approval.
-- **Codex-backed behavior:** personally inspect the exact sibling `../codex` source before implementation or verdict and cite it; wrappers, schemas, and another agent's report do not replace this check. Auth/runtime/catalog routes use `openai`; legacy `openai-codex` input belongs only in migration. Harness upgrades refresh [the harness guide](docs/plugins/codex-harness.md) from `model/list`.
-- **Validation commands:** [test suites](docs/help/testing/suites.md) is a command reference; this file and the chosen workflow own check selection. Test authoring also uses [writing tests](docs/help/testing/writing-tests.md) and the owning scoped guide.
-- **GitHub:** [contribution rules](CONTRIBUTING.md), the current PR template, and [review feedback](docs/reference/pull-request-review-flow.md). The authorized maintainer workflow owns landing; native `scripts/pr` gates, recovery, and cleanup require [scripts guide](scripts/AGENTS.md).
-- **Docs/public links:** [docs guide](docs/AGENTS.md). Update docs with behavior; normal fix notes belong in PRs because `CHANGELOG.md` is release-owned.
-- **Releases:** the chosen release workflow and [release contract](docs/reference/RELEASING.md). Preserve the selected release cut and identity through publication and verification. npm-format lock mirrors are verified against `pnpm-lock.yaml`, published in dependency evidence, and kept out of npm tarballs.
-- **Secrets/advisories:** [secret semantics](docs/gateway/secrets.md), [auth semantics](docs/auth-credential-semantics.md), and [security reporting](SECURITY.md) for the affected branch.
-- **Live channels/native apps:** the owning scoped guide and permitted proof workflow. Telegram claims require Test Server userbot proof with Convex-leased credentials; platform claims require the relevant real device/platform evidence. Mac permission proof needs a stable, properly signed app; see [signing](docs/platforms/mac/signing.md).
+- **Plugins/SDK:** [plugins](extensions/AGENTS.md), [loader](src/plugins/AGENTS.md), [SDK](src/plugin-sdk/AGENTS.md) (owns public boundary expansion, including outside callers).
+- **Channels, message tools/actions, dispatch:** [channel boundary](src/channels/AGENTS.md), [channel responsibilities](docs/plugins/sdk-channel-plugins.md).
+- **Agent tools, prompts, tool results, admission, lifecycle:** [agents](src/agents/AGENTS.md), [Gateway](src/gateway/AGENTS.md).
+- **OpenClaw and OpenClaw Foundation logos:** see the [brand kit](https://github.com/openclaw/carapace/tree/main/brand-kit).
+- **Control UI:** [UI guide](ui/AGENTS.md), including state shared with other Gateway clients. Solid code anywhere (Control UI, plugin views, Canvas hosts): read the [Solid skill](.agents/skills/solid/SKILL.md) first.
+- **Storage:** [database schemas](docs/reference/database-schemas.md) and subpages; read approval checkpoint before schema, transaction, retention, recovery changes.
+- **Config migration:** [Doctor transforms](docs/gateway/doctor/config-migrations.md), never new runtime compatibility readers.
+- **Audit/identity:** [audit doctrine](docs/gateway/audit.md); provenance = opt-in, never authorization; changes to collection, reader scope, retained fields, bounds, contracts need approval.
+- **Codex-backed behavior:** personally inspect and cite exact sibling `../codex` source first; other agents' reports don't substitute. Routes use `openai` (`openai-codex` only in migration); refresh [the harness guide](docs/plugins/codex-harness.md) from `model/list` on upgrades.
+- **Validation:** [test suites](docs/help/testing/suites.md) lists commands; [writing tests](docs/help/testing/writing-tests.md) for authoring.
+- **GitHub:** [contribution rules](CONTRIBUTING.md), PR template, [review feedback](docs/reference/pull-request-review-flow.md); `scripts/pr` follows [scripts guide](scripts/AGENTS.md).
+- **Docs:** [docs guide](docs/AGENTS.md); update docs with behavior; fix notes go in PRs (`CHANGELOG.md` = release-owned).
+- **Releases, extended-stable:** release workflow and [release contract](docs/reference/RELEASING.md) ([line/retirement policy](docs/reference/RELEASING.md#release-channels)); preserve selected cut and identity through publication and verification.
+- **Secrets/advisories:** [secrets](docs/gateway/secrets.md), [auth](docs/auth-credential-semantics.md), [security reporting](SECURITY.md).
+- **Live channels/native apps:** scoped guide + [evidence policy](.agents/skills/openclaw-testing/SKILL.md#select-the-proof).

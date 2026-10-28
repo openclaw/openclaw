@@ -1,115 +1,150 @@
-/**
- * Nested agent-step executor.
- *
- * Sends annotated inter-session messages through in-process or Gateway execution and reads the assistant reply.
- */
 import crypto from "node:crypto";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import type { TrustedAgentToolCaller } from "../../gateway/server-methods/client-types.js";
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { waitForAgentRunReply } from "../run-wait.js";
+import { captureGatewayToolCallerAssertion } from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
-  type AgentToolGatewayRequestCaller,
+  type AgentToolGatewayRequestCaller as GatewayCaller,
 } from "./in-process-gateway.js";
+import { readSessionCommunicationEndpoint } from "./sessions-send-communication-endpoint.js";
+import {
+  prepareSessionsSendCommunication,
+  type SessionSendReplyAdmission,
+} from "./sessions-send-communication.js";
+import type { AgentStepSession } from "./sessions-send-tool.types.js";
 
-type GatewayCaller = AgentToolGatewayRequestCaller;
-type AgentCommandRunner = typeof import("../../commands/agent.js").agentCommandFromIngress;
-
-const defaultAgentStepDeps = {
-  agentCommandFromIngress: (async (...args) => {
-    const { agentCommandFromIngress } = await import("../../commands/agent.js");
-    return await agentCommandFromIngress(...args);
-  }) as AgentCommandRunner,
-};
-
-let agentStepDeps: {
-  agentCommandFromIngress: AgentCommandRunner;
-} = defaultAgentStepDeps;
-
-function extractAgentCommandReply(
-  result: Awaited<ReturnType<AgentCommandRunner>>,
-): string | undefined {
-  const error = result?.meta.error;
-  // Plain incomplete-turn output is a control failure; trusted terminal tool presentations remain deliverable.
-  if (error?.kind === "incomplete_turn" && error.terminalPresentation !== true) {
-    return undefined;
-  }
-  const texts = result?.payloads
-    ?.map((payload) => payload.text)
-    .filter((text): text is string => Boolean(text?.trim()));
-  return texts?.length ? texts.join("\n\n") : undefined;
-}
-
-/** Sends one annotated message to a target session and returns the resulting assistant text. */
 export async function runAgentStep(params: {
   agentId?: string;
   sessionKey: string;
   message: string;
   extraSystemPrompt: string;
   timeoutMs: number;
-  channel?: string;
-  lane?: string;
-  transcriptMessage?: string;
   sourceAgentId?: string;
   sourceSessionKey?: string;
-  sourceChannel?: string;
   sourceTool?: string;
   sourceRole?: "subagent";
+  requester?: TrustedAgentToolCaller;
   callGateway?: GatewayCaller;
-}): Promise<string | undefined> {
+  deliveryContext?: DeliveryContext;
+  expectedSession?: AgentStepSession;
+  expectedSourceSession?: AgentStepSession;
+  replyAdmission?: SessionSendReplyAdmission;
+}): Promise<void> {
   const promptedAt = Date.now();
   const stepIdem = crypto.randomUUID();
   const inputProvenance = {
     kind: "inter_session" as const,
     sourceSessionKey: params.sourceSessionKey,
-    sourceChannel: params.sourceChannel,
     sourceTool: params.sourceTool ?? "sessions_send",
     ...(params.sourceRole ? { sourceRole: params.sourceRole } : {}),
   };
-  // Mark inter-session prompts so downstream transcripts can distinguish tool-routed text.
-  const message = annotateInterSessionPromptText(params.message, inputProvenance);
-  const lane = params.lane ?? resolveNestedAgentLaneForSession(params.sessionKey);
-  const channel = params.channel ?? INTERNAL_MESSAGE_CHANNEL;
   const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
-  if (params.transcriptMessage !== undefined) {
-    // Intentional direct in-process exception: the public agent schema rejects transcriptMessage.
-    // Keep announce bookkeeping off the wire without expanding the model-authored RPC surface.
-    const result = await agentStepDeps.agentCommandFromIngress({
-      message,
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      transcriptMessage: params.transcriptMessage,
-      sessionKey: params.sessionKey,
-      deliver: false,
-      sourceReplyDeliveryMode: "message_tool_only",
-      channel,
-      lane,
-      runId: stepIdem,
-      extraSystemPrompt: params.extraSystemPrompt,
+  const message = annotateInterSessionPromptText(params.message, inputProvenance);
+  let communication: Awaited<ReturnType<typeof prepareSessionsSendCommunication>> | undefined;
+  if (inputProvenance.sourceTool === "sessions_send") {
+    const { agentId, sourceAgentId, sourceSessionKey, expectedSession, expectedSourceSession } =
+      params;
+    if (
+      !agentId ||
+      !sourceAgentId ||
+      !sourceSessionKey ||
+      !expectedSession ||
+      !expectedSourceSession ||
+      !params.replyAdmission
+    ) {
+      throw new Error("Returned peer result requires its original source and target sessions.");
+    }
+    const config = getRuntimeConfig();
+    // Detached results retain the original operator's live continuation custody,
+    // not the completed tool's lifetime or authority reconstructed from metadata.
+    const operatorSource =
+      getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
+    const assertSourceCurrent = composeSessionSourceAssertion([
+      captureGatewayToolCallerAssertion(),
+      operatorSource?.assertCurrent,
+    ]);
+    const load = async (
+      endpointAgentId: string,
+      sessionKey: string,
+      expected: AgentStepSession,
+    ) => {
+      const endpoint = await readSessionCommunicationEndpoint({
+        config,
+        endpoint: { agentId: endpointAgentId, sessionKey, storePath: "" },
+        assertCurrent: assertSourceCurrent,
+      });
+      if (
+        endpoint.agentId !== endpointAgentId ||
+        endpoint.sessionKey !== sessionKey ||
+        endpoint.entry?.sessionId !== expected.sessionId ||
+        endpoint.entry.lifecycleRevision !== expected.lifecycleRevision ||
+        endpoint.entry.archivedAt !== undefined
+      ) {
+        throw new Error("Returned peer result session changed before admission.");
+      }
+      return endpoint;
+    };
+    const [source, target] = await Promise.all([
+      load(sourceAgentId, sourceSessionKey, expectedSourceSession),
+      load(agentId, params.sessionKey, expectedSession),
+    ]);
+    communication = await prepareSessionsSendCommunication({
+      config,
+      source,
+      target,
+      message: params.message,
+      dispatchMessage: message,
       inputProvenance,
-      allowModelOverride: false,
+      allowApproval: false,
+      acceptedReply: params.replyAdmission,
+      assertSourceCurrent,
+      signal: operatorSource?.signal,
+      callGateway: gatewayCall,
     });
-    return extractAgentCommandReply(result);
   }
-  const response = await gatewayCall({
-    method: "agent",
-    params: {
-      message,
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      sessionKey: params.sessionKey,
-      idempotencyKey: stepIdem,
-      deliver: false,
-      sourceReplyDeliveryMode: "message_tool_only",
-      channel,
-      lane,
-      extraSystemPrompt: params.extraSystemPrompt,
-      inputProvenance,
-    },
-    timeoutMs: 10_000,
-  });
+  let response: Record<string, unknown> | undefined;
+  const callGateway = communication?.callGateway ?? gatewayCall;
+  try {
+    response = await callGateway({
+      method: "agent",
+      // This is a returned result, not a new request to the peer. Consuming it
+      // must not require an acknowledgment or repeat an already delivered final.
+      replyExpectation: "optional",
+      agentToolCaller: params.requester,
+      params: {
+        message,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        sessionKey: params.sessionKey,
+        deliver: false,
+        sourceReplyDeliveryMode: "message_tool_only",
+        channel: params.deliveryContext?.channel ?? INTERNAL_MESSAGE_CHANNEL,
+        lane: resolveNestedAgentLaneForSession(params.sessionKey),
+        extraSystemPrompt: params.extraSystemPrompt,
+        inputProvenance,
+        idempotencyKey: stepIdem,
+        expectedExistingSessionId: params.expectedSession?.sessionId,
+        expectedExistingSessionLifecycleRevision: params.expectedSession
+          ? (params.expectedSession.lifecycleRevision ?? null)
+          : undefined,
+        accountId: params.deliveryContext?.accountId,
+        to: params.deliveryContext?.to,
+        threadId: stringifyRouteThreadId(params.deliveryContext?.threadId),
+      },
+      timeoutMs: 10_000,
+    });
+  } finally {
+    communication?.close();
+  }
 
   if (params.sourceAgentId && params.agentId) {
     recordSessionParticipantBestEffort({
@@ -123,8 +158,8 @@ export async function runAgentStep(params: {
     });
   }
 
-  const stepRunId = typeof response?.runId === "string" && response.runId ? response.runId : "";
-  const resolvedRunId = stepRunId || stepIdem;
+  const resolvedRunId =
+    typeof response?.runId === "string" && response.runId ? response.runId : stepIdem;
   const result = await waitForAgentRunReply({
     runId: resolvedRunId,
     timeoutMs: Math.min(params.timeoutMs, 60_000),
@@ -132,29 +167,6 @@ export async function runAgentStep(params: {
     untilTerminal: true,
   });
   if (result.status !== "ok") {
-    return undefined;
+    throw new Error(result.error ?? `Requester continuation ended with ${result.status}.`);
   }
-  return result.replyText;
-}
-
-/** Test-only dependency overrides for gateway and in-process command execution. */
-const testing = {
-  setDepsForTest(
-    overrides?: Partial<{
-      agentCommandFromIngress: AgentCommandRunner;
-    }>,
-  ) {
-    agentStepDeps = overrides
-      ? {
-          ...defaultAgentStepDeps,
-          ...overrides,
-        }
-      : defaultAgentStepDeps;
-  },
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.agentStepTestApi")] = {
-    testing,
-  };
 }

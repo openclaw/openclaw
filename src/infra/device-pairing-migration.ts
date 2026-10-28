@@ -6,15 +6,18 @@
 // imported device records. Pending requests (5 min TTL) and bootstrap tokens
 // (10 min TTL) are transients and are not imported; devices re-request and
 // setup codes are reissued.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preserveLegacyDesktopStreamOptOut } from "./device-pairing-node-desktop-migration.js";
 import { withPairedDeviceRecords, type PairedDevice } from "./device-pairing.js";
 import {
+  archiveLegacyPairingFile,
   coercePairingStateRecord,
   readJsonIfExists,
   resolvePairingPaths,
 } from "./pairing-files.js";
+import { canAccess } from "./path-existence.js";
 
 type LegacyDevicePairingMigrationResult = {
   imported: number;
@@ -65,21 +68,6 @@ function normalizeLegacyPairedDevice(
   return { device, omittedFields };
 }
 
-async function archiveLegacyFile(filePath: string): Promise<void> {
-  try {
-    await fs.rename(filePath, `${filePath}.migrated`);
-  } catch {
-    // Missing file or a racing second gateway process; nothing left to archive.
-  }
-}
-
-async function fileExists(filePath: string): Promise<boolean> {
-  return await fs.access(filePath).then(
-    () => true,
-    () => false,
-  );
-}
-
 /**
  * Import legacy devices/paired.json records into the SQLite pairing store,
  * then archive the legacy files. Existing SQLite records win over legacy rows
@@ -90,12 +78,13 @@ async function fileExists(filePath: string): Promise<boolean> {
  */
 export async function migrateLegacyDevicePairingStore(params?: {
   baseDir?: string;
+  cfg?: OpenClawConfig;
   log?: { info: (message: string) => void; warn: (message: string) => void };
 }): Promise<LegacyDevicePairingMigrationResult | null> {
   const { dir, pendingPath, pairedPath } = resolvePairingPaths(params?.baseDir, "devices");
   const bootstrapPath = path.join(dir, "bootstrap.json");
   const pairedRaw = await readJsonIfExists<unknown>(pairedPath);
-  const hasTransientFiles = (await fileExists(pendingPath)) || (await fileExists(bootstrapPath));
+  const hasTransientFiles = (await canAccess(pendingPath)) || (await canAccess(bootstrapPath));
   if (pairedRaw == null && !hasTransientFiles) {
     return null;
   }
@@ -123,7 +112,9 @@ export async function migrateLegacyDevicePairingStore(params?: {
           continue;
         }
         omittedInvalidFields += normalized.omittedFields;
-        pairedByDeviceId[deviceId] = { ...normalized.device, deviceId };
+        const device = { ...normalized.device, deviceId };
+        preserveLegacyDesktopStreamOptOut(device, params?.cfg ?? {}, Date.now());
+        pairedByDeviceId[deviceId] = device;
         imported += 1;
       }
       return { value: undefined, persist: imported > 0 };
@@ -142,9 +133,9 @@ export async function migrateLegacyDevicePairingStore(params?: {
   }
 
   await Promise.all([
-    archiveLegacyFile(pairedPath),
-    archiveLegacyFile(pendingPath),
-    archiveLegacyFile(bootstrapPath),
+    archiveLegacyPairingFile(pairedPath),
+    archiveLegacyPairingFile(pendingPath),
+    archiveLegacyPairingFile(bootstrapPath),
   ]);
   const result = { imported, skippedExisting };
   params?.log?.info(

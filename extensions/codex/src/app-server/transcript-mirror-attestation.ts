@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readCodexAsyncQuestions } from "./async-questions.js";
 import type { AttemptSettlementWarning } from "./attempt-terminal.js";
@@ -10,7 +10,7 @@ export type MirroredAgentMessage = Extract<
   AgentMessage,
   { role: "user" | "assistant" | "toolResult" }
 > &
-  Partial<Pick<CodexAsyncAssistantMessage, "openclawAsyncDelivery">>;
+  Partial<Pick<CodexAsyncAssistantMessage, "openclawAsyncDelivery">> & { display?: boolean };
 
 export function isMirroredAgentMessage(message: AgentMessage): message is MirroredAgentMessage {
   return message.role === "user" || message.role === "assistant" || message.role === "toolResult";
@@ -24,7 +24,11 @@ export function buildCodexMirrorDedupeIdentity(message: MirroredAgentMessage): s
   // Untagged callers dedupe role/content within their idempotency scope.
   // Volatile metadata must not change that identity on a reordered retry.
   const payload = JSON.stringify({ role: message.role, content: message.content });
-  return `${message.role}:${createHash("sha256").update(payload).digest("hex").slice(0, 16)}`;
+  return `${message.role}:${sha256Hex(payload).slice(0, 16)}`;
+}
+
+export function buildCodexMirrorIdempotencyKey(scope: string, identity: string): string {
+  return `${scope}:${identity}`;
 }
 
 const MIRROR_ORIGIN_META_KEY = "mirrorOrigin" as const;
@@ -53,10 +57,7 @@ export function attachCodexMirrorAttestation(
   sourceFingerprint?: string,
 ): AgentMessage {
   const existing = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
-  const baseMeta =
-    existing && typeof existing === "object" && !Array.isArray(existing)
-      ? (existing as Record<string, unknown>)
-      : {};
+  const baseMeta = asOptionalRecord(existing) ?? {};
   const attested: AgentMessage & { [CODEX_META_KEY]: Record<string, unknown> } = {
     ...message,
     [CODEX_META_KEY]: {
@@ -88,17 +89,9 @@ export function attachCodexMirrorRunId<T extends AgentMessage>(
   } as T; // SAFETY: AgentMessage variants permit provider metadata at runtime; preserve T.
 }
 
-export function hasCodexMirrorOrigin(message: AgentMessage): boolean {
-  const meta = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
-  return asOptionalRecord(meta)?.[MIRROR_ORIGIN_META_KEY] === CODEX_APP_SERVER_MIRROR_ORIGIN;
-}
-
 export function readCodexMirrorSourceFingerprint(message: AgentMessage): string | undefined {
   const meta = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
-  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
-    return undefined;
-  }
-  const value = (meta as Record<string, unknown>)[MIRROR_SOURCE_FINGERPRINT_META_KEY];
+  const value = asOptionalRecord(meta)?.[MIRROR_SOURCE_FINGERPRINT_META_KEY];
   return typeof value === "string" && value ? value : undefined;
 }
 
@@ -123,8 +116,5 @@ export function serializeCodexMirrorSourceEvidence(message: AgentMessage): strin
 }
 
 export function fingerprintCodexMirrorSourceMessage(message: MirroredAgentMessage): string {
-  return createHash("sha256")
-    .update(serializeCodexMirrorSourceEvidence(message))
-    .digest("hex")
-    .slice(0, 32);
+  return sha256Hex(serializeCodexMirrorSourceEvidence(message)).slice(0, 32);
 }

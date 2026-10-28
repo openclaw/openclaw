@@ -32,7 +32,6 @@ it.each(states)(
       rowDemandsVisibility(row),
       rowDemandsVisibility(row, RowVisibilityReason.ActiveRun),
       rowDemandsVisibility(row, RowVisibilityReason.Attention),
-      rowDemandsVisibility(row, RowVisibilityReason.Attention),
-    ]).toEqual([cap, runningDot, attention, attention]);
+    ]).toEqual([cap, runningDot, attention]);
   },
 );

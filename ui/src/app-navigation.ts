@@ -1,30 +1,28 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
-// Control UI app navigation defines sidebar and settings presentation metadata.
+import { parseSidebarSessionReference } from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.ts";
 import type { RouteId } from "./app-route-paths.ts";
 import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
 } from "./app/native-device-settings.ts";
-import type { IconName } from "./components/icons.ts";
-import { i18n, t } from "./i18n/index.ts";
+import type { IconName } from "./components/icon-data.ts";
+import { t } from "./i18n/index.ts";
 
 export type NavigationRouteId = RouteId;
 
 type NavigationPresentation = readonly [icon: IconName, titleKey: string, subtitleKey: string];
 
-// The sidebar shows a small user-customizable ordered zone; every other nav route
-// lives in the collapsed "More" section. Chat is reachable through the session
-// list and Settings/Docs live in the sidebar footer, so neither is listed here.
+// Pages derives its built-in catalog from these destinations. Personal rail
+// pins reference the catalog without changing its availability. Chat has the
+// Sessions view; Settings/Docs remain in the profile menu.
 // Skills and Skill Workshop are reached from the Plugins workspace, not sidebar items.
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
 // Workboard is plugin-owned and enters the zone through its Control UI descriptor.
 export const SIDEBAR_NAV_ROUTES = [
-  "agents-home",
+  "claws",
   "dashboards",
   "usage",
   "cron",
-  "tasks",
   "sessions",
   "systems",
   "activity",
@@ -36,26 +34,17 @@ export const SIDEBAR_NAV_ROUTES = [
 
 // Routes presented as tabs of the Plugins hub. The sidebar highlights the
 // Plugins entry for all of them, mirroring how config covers settings routes.
-const PLUGINS_HUB_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
-  "plugins",
-  "skills",
-  "skill-workshop",
-]);
-
 export function isPluginsHubRoute(routeId: NavigationRouteId): boolean {
-  return PLUGINS_HUB_ROUTES.has(routeId);
+  return routeId === "plugins" || routeId === "skills" || routeId === "skill-workshop";
 }
 
 // Worktrees renders as a tab of the Sessions hub; the sidebar highlights the
 // Sessions entry for both routes, mirroring the Plugins hub behavior.
-const SESSIONS_HUB_ROUTES: ReadonlySet<NavigationRouteId> = new Set(["sessions", "worktrees"]);
-
 export function isSessionsHubRoute(routeId: NavigationRouteId): boolean {
-  return SESSIONS_HUB_ROUTES.has(routeId);
+  return routeId === "sessions" || routeId === "worktrees";
 }
 
-export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
-export type PersistedSidebarRoute = SidebarNavRoute;
+export type PersistedSidebarRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
 
 function isPersistedSidebarRoute(value: unknown): value is PersistedSidebarRoute {
   return SIDEBAR_NAV_ROUTES.includes(value as PersistedSidebarRoute);
@@ -64,13 +53,11 @@ function isPersistedSidebarRoute(value: unknown): value is PersistedSidebarRoute
 export type SidebarZoneEntry =
   | { type: "route"; route: PersistedSidebarRoute }
   | { type: "plugin"; key: string }
-  | { type: "session"; key: string };
+  | { type: "session"; key: string; rail?: true }
+  | { type: "person"; profileId: string };
 
-// Keep the highest-value operational destinations visible on first use. Users
-// can still replace this route set through the customize menu.
-export const DEFAULT_SIDEBAR_ENTRIES = (
-  ["agents-home", "dashboards", "systems", "cron", "plugins"] as const
-).map((route) => serializeSidebarEntry({ type: "route", route }));
+// The rail starts clean; only user-added shortcuts occupy the pins region.
+export const DEFAULT_SIDEBAR_ENTRIES: string[] = [];
 
 /**
  * Parse the compact persisted representation used by browser and synced prefs.
@@ -86,8 +73,24 @@ export function parseSidebarEntry(value: unknown): SidebarZoneEntry | null {
     }
     return isPersistedSidebarRoute(route) ? { type: "route", route } : null;
   }
+  if (value.startsWith("person:")) {
+    const profileId = value.slice("person:".length).trim();
+    if (!profileId || /\s/u.test(profileId)) {
+      return null;
+    }
+    for (let index = 0; index < profileId.length; index += 1) {
+      if (profileId.charCodeAt(index) < 32) {
+        return null;
+      }
+    }
+    return { type: "person", profileId };
+  }
+  if (value.startsWith("session-rail:")) {
+    const key = parseSidebarSessionReference(value);
+    return key ? { type: "session", key, rail: true } : null;
+  }
   if (value.startsWith("session:")) {
-    const key = value.slice("session:".length).trim();
+    const key = parseSidebarSessionReference(value);
     return key ? { type: "session", key } : null;
   }
   if (value.startsWith("workboard:")) {
@@ -111,7 +114,24 @@ export function serializeSidebarEntry(entry: SidebarZoneEntry): string {
   if (entry.type === "route") {
     return `route:${entry.route}`;
   }
-  return entry.type === "plugin" ? `plugin:${entry.key}` : `session:${entry.key}`;
+  if (entry.type === "person") {
+    return `person:${entry.profileId}`;
+  }
+  return entry.type === "plugin"
+    ? `plugin:${entry.key}`
+    : `${entry.rail ? "session-rail" : "session"}:${entry.key}`;
+}
+
+/** Personal session pins render in the Sessions list's Pinned section, not the rail. */
+export function personalSessionPinKeys(entries: readonly string[]): Set<string> {
+  const keys = new Set<string>();
+  for (const value of entries) {
+    const entry = parseSidebarEntry(value);
+    if (entry?.type === "session" && !entry.rail) {
+      keys.add(entry.key);
+    }
+  }
+  return keys;
 }
 
 /**
@@ -136,16 +156,6 @@ export function normalizeSidebarEntries(value: unknown): string[] | null {
   return normalized;
 }
 
-export function sidebarMoreRoutes(entries: readonly string[]): SidebarNavRoute[] {
-  const visibleRoutes = new Set(
-    entries.flatMap((entry) => {
-      const parsed = parseSidebarEntry(entry);
-      return parsed?.type === "route" ? [parsed.route] : [];
-    }),
-  );
-  return SIDEBAR_NAV_ROUTES.filter((routeId) => !visibleRoutes.has(routeId));
-}
-
 type SettingsNavigationGroup = {
   /** i18n key for the group heading; null renders the group without a label. */
   labelKey: string | null;
@@ -159,41 +169,6 @@ export type SettingsSearchBlock = {
   search?: string;
   hash: string;
 };
-
-let settingsSearchSegmenterLocale = "";
-let settingsSearchSegmenter: Intl.Segmenter | null = null;
-
-function settingsSearchHasWordPrefix(value: string, query: string): boolean {
-  const locale = i18n.getLocale();
-  if (settingsSearchSegmenterLocale !== locale) {
-    settingsSearchSegmenterLocale = locale;
-    settingsSearchSegmenter =
-      typeof Intl !== "undefined" && "Segmenter" in Intl
-        ? new Intl.Segmenter(locale, { granularity: "word" })
-        : null;
-  }
-  if (!settingsSearchSegmenter) {
-    return value.split(/[^\p{L}\p{N}]+/u).some((word) => word.startsWith(query));
-  }
-  for (const segment of settingsSearchSegmenter.segment(value)) {
-    if (segment.isWordLike !== false && segment.segment.startsWith(query)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-export function settingsSearchTextMatches(value: string, query: string): boolean {
-  const candidate = normalizeLowercaseStringOrEmpty(value).normalize("NFC");
-  const normalizedQuery = normalizeLowercaseStringOrEmpty(query).normalize("NFC");
-  if (!normalizedQuery) {
-    return false;
-  }
-  if (normalizedQuery.length > 2) {
-    return candidate.includes(normalizedQuery);
-  }
-  return settingsSearchHasWordPrefix(candidate, normalizedQuery);
-}
 
 // Grouping feeds the full-page settings sidebar (settings-sidebar.ts). Ordered
 // by user attention: personal/look-and-feel first, system plumbing last.
@@ -211,6 +186,7 @@ const SETTINGS_NAVIGATION_GROUPS = [
     routes: [
       "agents",
       "model-providers",
+      "search",
       "plugin-settings",
       "skill-settings",
       "mcp",
@@ -238,6 +214,7 @@ const NON_ADMIN_SETTINGS_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
   "devices",
   "agents",
   "model-providers",
+  "search",
   "plugin-settings",
   "skill-settings",
   "memory",
@@ -253,8 +230,17 @@ export function isSettingsNavigationRouteVisible(
   canAdmin: boolean,
   nativeDeviceSettings: NativeDeviceSettingsCapability | null = null,
 ): boolean {
-  if (routeId === "device" || routeId === "device-permissions") {
+  if (routeId === "device") {
     return nativeDeviceSettings !== null;
+  }
+  if (routeId === "device-permissions") {
+    const snapshot = nativeDeviceSettings?.snapshot;
+    return Boolean(
+      snapshot &&
+      (snapshot.permissions.entries.length > 0 ||
+        snapshot.permissions.location ||
+        snapshot.capabilities?.activeComputerPresenceEnabled !== undefined),
+    );
   }
   if (routeId === "updates") {
     return canAdmin || nativeDeviceSettings !== null;
@@ -268,6 +254,9 @@ export function deviceSettingsGroupLabelKey(
   const device = snapshot?.device;
   if (device?.platform === "macos") {
     return "nav.settingsGroupDevice";
+  }
+  if (device?.platform === "linux" || device?.platform === "windows") {
+    return "nav.settingsGroupThisComputer";
   }
   if (device?.platform === "ios") {
     if (device.formFactor === "phone") {
@@ -299,17 +288,13 @@ export function visibleSettingsNavigationGroups(
 // Subpages with a visible owner keep that owner selected so users retain
 // location context while completing the nested flow.
 const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = [
+  // Legacy General redirects remain Settings-owned during router transitions.
+  "config",
   "ai-agents",
   "model-setup",
   "lobsterdex",
 ];
 export const SETTINGS_SEARCHABLE_SUBPAGE_ROUTES: readonly NavigationRouteId[] = ["ai-agents"];
-const SETTINGS_SUBPAGE_OWNER_ROUTES: Partial<
-  Readonly<Record<NavigationRouteId, NavigationRouteId>>
-> = {
-  "ai-agents": "agents",
-  "model-setup": "model-providers",
-};
 
 const SETTINGS_NAVIGATION_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
   ...SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes),
@@ -322,7 +307,7 @@ function navigationPresentation(icon: IconName, key: string): NavigationPresenta
 
 const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation> = {
   settings: ["settings", "nav.settings", "common.settingsSections"],
-  "agents-home": navigationPresentation("bot", "agentsHome"),
+  claws: navigationPresentation("bot", "claws"),
   agents: navigationPresentation("bot", "agents"),
   activity: navigationPresentation("activity", "activity"),
   meetings: navigationPresentation("book", "meetings"),
@@ -337,9 +322,8 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   systems: navigationPresentation("monitor", "systems"),
   usage: navigationPresentation("coins", "usage"),
   cron: navigationPresentation("calendarClock", "cron"),
-  tasks: navigationPresentation("listChecks", "tasks"),
-  skills: navigationPresentation("zap", "skills"),
-  "skill-settings": navigationPresentation("zap", "skills"),
+  skills: navigationPresentation("bookOpenText", "skills"),
+  "skill-settings": navigationPresentation("bookOpenText", "skills"),
   plugins: navigationPresentation("plug", "plugins"),
   "plugin-settings": navigationPresentation("plug", "plugins"),
   "skill-workshop": navigationPresentation("wrench", "skillWorkshop"),
@@ -360,6 +344,7 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   automation: navigationPresentation("terminal", "automation"),
   mcp: navigationPresentation("wrench", "mcp"),
   memory: navigationPresentation("book", "memory"),
+  search: navigationPresentation("search", "search"),
   talk: navigationPresentation("mic", "talk"),
   infrastructure: navigationPresentation("globe", "infrastructure"),
   labs: navigationPresentation("flaskConical", "labs"),
@@ -387,107 +372,33 @@ export function isSettingsTakeover(routeId: RouteId | undefined): boolean {
   return routeId !== undefined && isSettingsNavigationRoute(routeId);
 }
 
-export function settingsNavigationOwnerRoute(routeId: NavigationRouteId): NavigationRouteId {
-  return SETTINGS_SUBPAGE_OWNER_ROUTES[routeId] ?? routeId;
-}
-
 export function navigationIconForRoute(routeId: NavigationRouteId): IconName {
   return NAVIGATION_PRESENTATION[routeId]?.[0] ?? "folder";
 }
 
-export function scheduleRoutePreload<TRouteId extends string>(
-  timers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>,
-  routeId: TRouteId,
-  event: Event,
-  preload: ((routeId: TRouteId) => Promise<void> | void) | undefined,
-  disabled = false,
-  immediate = false,
-) {
-  if (disabled || !preload) {
-    return;
-  }
-  const target = event.currentTarget;
-  if (!target) {
-    return;
-  }
-  const start = () => {
-    timers.delete(target);
-    try {
-      void Promise.resolve(preload(routeId)).catch(() => undefined);
-    } catch {
-      // Preloading is opportunistic; navigation still handles real route errors.
-    }
-  };
-  if (immediate) {
-    cancelRoutePreload(timers, event);
-    start();
-    return;
-  }
-  if (!timers.has(target)) {
-    timers.set(target, globalThis.setTimeout(start, 50));
-  }
-}
-
-export function cancelRoutePreload(
-  timers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>,
-  event: Event,
-) {
-  const target = event.currentTarget;
-  if (!target) {
-    return;
-  }
-  const timer = timers.get(target);
-  if (timer !== undefined) {
-    globalThis.clearTimeout(timer);
-    timers.delete(target);
-  }
-}
-
-export function titleForRoute(routeId: NavigationRouteId): string {
+export function titleForRoute(routeId: NavigationRouteId, translate = t): string {
   const [, titleKey] = NAVIGATION_PRESENTATION[routeId];
-  return t(titleKey);
+  return translate(titleKey);
 }
 
-/** Window/tab title, markers leftmost because tabs truncate from the right.
- * A disconnected Gateway replaces the approval count (a stale queue is not
- * actionable) and carries the pending-outbox total; titles already ending in the brand
- * ("Ask OpenClaw") skip the suffix so it never reads "… OpenClaw — OpenClaw". */
+/** Window/tab title, attention leftmost because tabs truncate from the right.
+ * Titles already ending in the brand skip the suffix to avoid duplication. */
 export function formatDocumentTitle(options: {
   context: string;
   attentionCount?: number;
-  gatewayDisconnected?: boolean;
-  queuedCount?: number;
+  brandName?: string;
 }): string {
-  const base = options.context.endsWith("OpenClaw")
+  const brandName = options.brandName ?? "OpenClaw";
+  const base = options.context.endsWith(brandName)
     ? options.context
-    : `${options.context} — OpenClaw`;
-  if (options.gatewayDisconnected) {
-    const queued =
-      options.queuedCount && options.queuedCount > 0
-        ? ` · ${t("connection.queuedCount", { count: String(options.queuedCount) })}`
-        : "";
-    return `(${t("connection.disconnectedTitle")}${queued}) ${base}`;
-  }
+    : `${options.context} — ${brandName}`;
   if (options.attentionCount && options.attentionCount > 0) {
     return `(${options.attentionCount}) ${base}`;
   }
   return base;
 }
 
-export function settingsNavigationLabelForRoute(
-  routeId: NavigationRouteId,
-  snapshot?: NativeDeviceSettingsSnapshot | null,
-): string {
-  if (routeId === "device" && snapshot) {
-    return t(deviceSettingsGroupLabelKey(snapshot));
-  }
-  if (routeId === "custodian") {
-    return t("nav.askOpenClaw");
-  }
-  return titleForRoute(routeId);
-}
-
-export function subtitleForRoute(routeId: NavigationRouteId): string {
+export function subtitleForRoute(routeId: NavigationRouteId, translate = t): string {
   const subtitleKey = NAVIGATION_PRESENTATION[routeId][2];
-  return t(subtitleKey);
+  return translate(subtitleKey);
 }

@@ -44,6 +44,12 @@ jobs:
           # protected manifest so removing an entry revokes deletion authority.
           ref: refs/heads/main
 
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+          package-manager-cache: false
+
       - name: Validate exact retired key
         env:
           RETIRED_ARCHITECTURE: ${{ inputs.architecture }}

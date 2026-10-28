@@ -1,0 +1,20 @@
+[
+  {
+    "name": "ancestor bins before inherited PATH",
+    "bunVersion": "1.4.3",
+    "env": {},
+    "prefix": [
+      "/work/openclaw/node_modules/.bin",
+      "/work/node_modules/.bin",
+      "/node_modules/.bin"
+    ],
+    "suffix": []
+  },
+  {
+    "name": "ancestor bins after inherited PATH",
+    "bunVersion": "1.4.4",
+    "env": { "npm_config_local_prefix": "/work" },
+    "prefix": ["/work/openclaw/node_modules/.bin"],
+    "suffix": ["/work/node_modules/.bin", "/node_modules/.bin"]
+  }
+]

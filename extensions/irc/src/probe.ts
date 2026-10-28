@@ -1,15 +1,7 @@
-// Irc plugin module implements probe behavior.
 import { resolveIrcAccount } from "./accounts.js";
 import { connectIrcClient } from "./client.js";
 import { buildIrcConnectOptions } from "./connect-options.js";
 import type { CoreConfig, IrcProbe } from "./types.js";
-
-function formatError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  return typeof err === "string" ? err : JSON.stringify(err);
-}
 
 export async function probeIrc(
   cfg: CoreConfig,
@@ -48,7 +40,8 @@ export async function probeIrc(
   } catch (err) {
     return {
       ...base,
-      error: formatError(err),
+      error:
+        err instanceof Error ? err.message : typeof err === "string" ? err : JSON.stringify(err),
     };
   }
 }

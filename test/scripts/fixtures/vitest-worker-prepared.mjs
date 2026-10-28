@@ -10,22 +10,42 @@ export async function copyPreparedWorkerArtifacts(template, directory) {
   const targetUrl = pathToFileURL(directory).href;
   // The maintenance-service boundary embeds its generation URL. Rebind before sealing
   // the copy so no borrower reads through another generation's cleanup lifetime.
-  for (const name of Object.keys(manifest.outputs)) {
+  const directories = new Map();
+  const copyArtifact = async (name) => {
     const original = path.join(template, "dist", name);
-    const source = fs.readFileSync(original);
+    const source = await fs.promises.readFile(original);
     if (hashVitestWorkerArtifact(source) !== manifest.outputs[name]) {
       throw new Error(`Prepared compiler artifact changed: ${name}`);
     }
-    const output = /\.m?js$/u.test(name)
-      ? Buffer.from(source.toString("utf8").replaceAll(sourceUrl, targetUrl))
-      : source;
+    const output =
+      /\.m?js$/u.test(name) && source.includes(sourceUrl)
+        ? Buffer.from(source.toString("utf8").replaceAll(sourceUrl, targetUrl))
+        : source;
     const filename = path.join(directory, "dist", name);
-    fs.mkdirSync(path.dirname(filename), { recursive: true });
+    const parent = path.dirname(filename);
+    let created = directories.get(parent);
+    if (!created) {
+      created = fs.promises.mkdir(parent, { recursive: true });
+      directories.set(parent, created);
+    }
+    await created;
     if (source.equals(output)) {
-      fs.copyFileSync(original, filename, fs.constants.COPYFILE_FICLONE);
+      await fs.promises.copyFile(original, filename, fs.constants.COPYFILE_FICLONE);
     } else {
-      fs.writeFileSync(filename, output);
+      await fs.promises.writeFile(filename, output);
       manifest.outputs[name] = hashVitestWorkerArtifact(output);
+    }
+  };
+  const names = Object.keys(manifest.outputs);
+  const batchSize = 32;
+  for (let offset = 0; offset < names.length; offset += batchSize) {
+    // Join every started copy before the caller can dispose a failed generation.
+    const completed = await Promise.allSettled(
+      names.slice(offset, offset + batchSize).map(copyArtifact),
+    );
+    const failed = completed.find((result) => result.status === "rejected");
+    if (failed) {
+      throw failed.reason;
     }
   }
   manifest.identity = hashVitestWorkerArtifact(JSON.stringify([manifest.inputs, manifest.outputs]));

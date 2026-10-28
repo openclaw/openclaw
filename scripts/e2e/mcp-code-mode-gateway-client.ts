@@ -1,18 +1,15 @@
-// Mcp Code Mode Gateway Client script supports OpenClaw repository automation.
-import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { setTimeout as setNodeTimeout, clearTimeout as clearNodeTimeout } from "node:timers";
 import { pathToFileURL } from "node:url";
-import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
 import { readMcpCodeModeDiagnostics } from "./lib/mcp-code-mode-diagnostics.ts";
 import {
-  extractMcpCodeModePlannedTools,
-  type McpCodeModeMentions,
+  extractMcpCodeModeTranscriptEvidence,
   validateMcpCodeModeResult,
 } from "./lib/mcp-code-mode-validation.ts";
-import { countSessionLogMentions } from "./lib/session-log-mentions.ts";
 
 type FetchJsonOptions = {
   fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
@@ -71,8 +68,8 @@ export async function fetchJson(
     }, timeoutMs);
     timeout.unref?.();
   });
-  let response: Response | undefined;
-  let text = "";
+  let response: Response;
+  let text: string;
   try {
     response = await Promise.race([
       (options.fetchImpl ?? fetch)(url, { ...init, signal: controller.signal }),
@@ -89,32 +86,12 @@ export async function fetchJson(
       timeoutPromise,
     });
   } finally {
-    if (timeout) {
-      clearNodeTimeout(timeout);
-    }
-  }
-  if (!response) {
-    throw new Error(`HTTP request to ${url} did not return a response`);
+    clearNodeTimeout(timeout);
   }
   if (!response.ok) {
     throw new Error(`HTTP ${response.status} from ${url}: ${text}`);
   }
   return text ? JSON.parse(text) : {};
-}
-
-async function readSessionLogMentions(stateDir: string): Promise<Record<string, number>> {
-  const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
-  return await countSessionLogMentions({
-    sessionsDir,
-    needles: {
-      apiCall: "MCP.$api",
-      apiFileList: "API.list",
-      apiFileRead: "API.read",
-      mcpNamespace: "MCP.fixture",
-      mcpTool: "MCP.fixture.lookupNote",
-      toolSearchPollution: 'catalog.search("lookup note"',
-    },
-  });
 }
 
 async function main() {
@@ -125,6 +102,7 @@ async function main() {
   assert(gatewayUrl, "missing GW_URL");
   assert(gatewayToken, "missing GW_TOKEN");
   assert(stateDir, "missing OPENCLAW_STATE_DIR");
+  const attemptMarker = `mcp code mode api file qa check: ${randomUUID()}`;
 
   const response = await fetchJson(`${gatewayUrl.replace(/\/$/, "")}/v1/responses`, {
     method: "POST",
@@ -145,9 +123,9 @@ async function main() {
             {
               type: "input_text",
               text: [
-                "mcp code mode api file qa check:",
+                attemptMarker,
                 "MCP and API are code-mode globals; they are defined only inside the exec tool, not in normal chat.",
-                "Call exec with language javascript and this exact code:",
+                "Call exec with this exact JavaScript code:",
                 'const files = await API.list("mcp");',
                 'const root = await API.read("mcp/index.d.ts");',
                 'const api = await API.read("mcp/fixture.d.ts");',
@@ -165,18 +143,23 @@ async function main() {
       stream: false,
     }),
   });
-  const mentions = await readSessionLogMentions(stateDir);
+  const storePath = resolveStorePath(undefined, {
+    agentId: "main",
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  });
   const session = getSessionEntry({
     agentId: "main",
     sessionKey: MCP_CODE_MODE_SESSION_KEY,
+    storePath,
   });
   assert(session?.sessionId, "gateway did not persist the MCP code-mode session");
   const transcriptEvents = await readSessionTranscriptEvents({
     agentId: "main",
     sessionId: session.sessionId,
     sessionKey: MCP_CODE_MODE_SESSION_KEY,
+    storePath,
   });
-  const plannedTools = extractMcpCodeModePlannedTools(transcriptEvents);
+  const evidence = extractMcpCodeModeTranscriptEvidence(transcriptEvents, attemptMarker);
   if (process.env.MOCK_REQUEST_LOG) {
     process.stdout.write(
       `${JSON.stringify({
@@ -187,19 +170,14 @@ async function main() {
       })}\n`,
     );
   }
-  const finalText = validateMcpCodeModeResult(response, mentions as McpCodeModeMentions, {
-    plannedTools,
-    requireExec: true,
-  });
+  const proof = validateMcpCodeModeResult(response, evidence);
 
   process.stdout.write(
     `${JSON.stringify(
       {
         ok: true,
         gatewayUrl,
-        finalText,
-        plannedTools,
-        sessionLogMentions: mentions,
+        ...proof,
       },
       null,
       2,

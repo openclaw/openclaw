@@ -1,120 +1,60 @@
 import {
   createUnionActionGate,
   listTokenSourcedAccounts,
+  optionalPositiveIntegerSchema,
   readStringParam,
   resolveReactionMessageId,
 } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
-  ChannelMessageToolDiscovery,
   ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { asNonArrayRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
+import { Type } from "typebox";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
   createTelegramActionGate,
   listTelegramAccountIds,
   resolveTelegramPollActionGateState,
 } from "./accounts.js";
+import { TELEGRAM_MESSAGE_ACTION_MAP } from "./action-names.js";
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
-import {
-  createTelegramPollExtraToolSchemas,
-  createTelegramReactionEmojiSchema,
-  createTelegramRichSendExtraToolSchemas,
-} from "./message-tool-schema.js";
 import { rejectTelegramNativeButtonParams } from "./native-button-params.js";
 
 const loadTelegramActionRuntime = createLazyRuntimeModule(() => import("./action-runtime.js"));
 
-const telegramMessageActionRuntime = {
-  handleTelegramAction: async (
-    ...args: Parameters<typeof import("./action-runtime.js").handleTelegramAction>
-  ): ReturnType<typeof import("./action-runtime.js").handleTelegramAction> => {
-    const readConfig = args[0].action === "read" ? createRuntimeConfigReader(args[1]) : undefined;
-    const admittedConfig = readConfig?.();
-    const assertReadCurrent = readConfig
-      ? () => {
-          args[2]?.assertDirectAdapterHandoff?.();
-          if (readConfig() !== admittedConfig) {
-            throw new Error(
-              "Telegram history policy changed during the read; retry with current permissions.",
-            );
-          }
+async function handleTelegramRuntimeAction(
+  ...args: Parameters<typeof import("./action-runtime.js").handleTelegramAction>
+): ReturnType<typeof import("./action-runtime.js").handleTelegramAction> {
+  const readConfig = args[0].action === "read" ? createRuntimeConfigReader(args[1]) : undefined;
+  const admittedConfig = readConfig?.();
+  const assertReadCurrent = readConfig
+    ? () => {
+        args[2]?.assertDirectAdapterHandoff?.();
+        if (readConfig() !== admittedConfig) {
+          throw new Error(
+            "Telegram history policy changed during the read; retry with current permissions.",
+          );
         }
-      : undefined;
-    assertReadCurrent?.();
-    const { handleTelegramAction } = await loadTelegramActionRuntime();
-    assertReadCurrent?.();
-    const result = await handleTelegramAction(...args);
-    assertReadCurrent?.();
-    return result;
-  },
-};
-
-const TELEGRAM_MESSAGE_ACTION_MAP = {
-  delete: "deleteMessage",
-  edit: "editMessage",
-  "emoji-list": "emoji-list",
-  poll: "poll",
-  react: "react",
-  read: "read",
-  send: "sendMessage",
-  sticker: "sendSticker",
-  "sticker-search": "searchSticker",
-  "topic-create": "createForumTopic",
-  "topic-edit": "editForumTopic",
-} as const satisfies Partial<Record<ChannelMessageActionName, string>>;
-
-const TELEGRAM_TOOL_DELIVERY_ACTIONS = new Set([
-  "createForumTopic",
-  "delete",
-  "deleteMessage",
-  "edit",
-  "editForumTopic",
-  "editMessage",
-  "poll",
-  "react",
-  "send",
-  "sendMessage",
-  "sendSticker",
-  "sticker",
-  "topic-create",
-  "topic-edit",
-]);
-
-function resolveTelegramMessageActionName(action: ChannelMessageActionName) {
-  return TELEGRAM_MESSAGE_ACTION_MAP[action as keyof typeof TELEGRAM_MESSAGE_ACTION_MAP];
+      }
+    : undefined;
+  assertReadCurrent?.();
+  const { handleTelegramAction } = await loadTelegramActionRuntime();
+  assertReadCurrent?.();
+  const result = await handleTelegramAction(...args);
+  assertReadCurrent?.();
+  return result;
 }
 
-async function prepareTelegramSendPayload({
-  ctx,
-  payload,
-}: Parameters<NonNullable<ChannelMessageActionAdapter["prepareSendPayload"]>>[0]) {
-  rejectTelegramNativeButtonParams(ctx.params);
-  if (
-    ctx.action !== "send" ||
-    (!payload.presentation && !payload.location && payload.videoAsNote !== true)
-  ) {
-    return null;
-  }
-  const quoteText = readStringParam(ctx.params, "quoteText", { trim: false });
-  if (!quoteText) {
-    return payload;
-  }
-  const rawTelegramData = payload.channelData?.telegram;
-  const telegramData = asNonArrayRecord(rawTelegramData);
-  return {
-    ...payload,
-    channelData: {
-      ...payload.channelData,
-      telegram: { ...telegramData, quoteText },
-    },
-  };
-}
+const TELEGRAM_TOOL_DELIVERY_ACTIONS = new Set(
+  Object.entries(TELEGRAM_MESSAGE_ACTION_MAP).flatMap(([action, runtimeAction]) =>
+    ["read", "emoji-list", "sticker-search"].includes(action) ? [] : [action, runtimeAction],
+  ),
+);
 
 function resolveTelegramActionDiscovery({
   cfg,
@@ -131,19 +71,12 @@ function resolveTelegramActionDiscovery({
   if (accounts.length === 0) {
     return null;
   }
-  const unionGate = createUnionActionGate(accounts, (account) =>
-    createTelegramActionGate({
-      cfg,
-      accountId: account.accountId,
-    }),
+  const actionGate = (account: (typeof accounts)[number]) =>
+    createTelegramActionGate({ cfg, accountId: account.accountId });
+  const unionGate = createUnionActionGate(accounts, actionGate);
+  const pollEnabled = accounts.some(
+    (account) => resolveTelegramPollActionGateState(actionGate(account)).enabled,
   );
-  const pollEnabled = accounts.some((account) => {
-    const accountGate = createTelegramActionGate({
-      cfg,
-      accountId: account.accountId,
-    });
-    return resolveTelegramPollActionGateState(accountGate).enabled;
-  });
   const buttonsEnabled = accounts.some((account) =>
     isTelegramInlineButtonsEnabled({ cfg, accountId: account.accountId }),
   );
@@ -154,74 +87,8 @@ function resolveTelegramActionDiscovery({
   };
 }
 
-function describeTelegramMessageTool({
-  cfg,
-  accountId,
-}: Parameters<
-  NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
->[0]): ChannelMessageToolDiscovery {
-  const discovery = resolveTelegramActionDiscovery({ cfg, accountId });
-  if (!discovery) {
-    return {
-      actions: [],
-      capabilities: [],
-      schema: null,
-    };
-  }
-  const actions = new Set<ChannelMessageActionName>();
-  actions.add("read");
-  if (discovery.isEnabled("sendMessage")) {
-    actions.add("send");
-  }
-  if (discovery.pollEnabled) {
-    actions.add("poll");
-  }
-  if (discovery.isEnabled("reactions")) {
-    actions.add("react");
-    actions.add("emoji-list");
-  }
-  if (discovery.isEnabled("deleteMessage")) {
-    actions.add("delete");
-  }
-  if (discovery.isEnabled("editMessage")) {
-    actions.add("edit");
-  }
-  if (discovery.isEnabled("sticker", false)) {
-    actions.add("sticker");
-    actions.add("sticker-search");
-  }
-  if (discovery.isEnabled("createForumTopic")) {
-    actions.add("topic-create");
-  }
-  if (discovery.isEnabled("editForumTopic")) {
-    actions.add("topic-edit");
-  }
-  const schema: ChannelMessageToolSchemaContribution[] = [];
-  if (discovery.pollEnabled) {
-    schema.push({
-      properties: createTelegramPollExtraToolSchemas(),
-      visibility: "all-configured",
-    });
-  }
-  if (discovery.isEnabled("reactions")) {
-    schema.push({
-      properties: createTelegramReactionEmojiSchema(),
-      // The shared emoji parameter keeps react valid across channels; this
-      // contribution only adds Telegram-specific guidance for that parameter.
-      actions: [],
-    });
-  }
-  if (discovery.isEnabled("sendMessage")) {
-    schema.push({
-      properties: createTelegramRichSendExtraToolSchemas(),
-      visibility: "all-configured",
-    });
-  }
-  return {
-    actions: Array.from(actions),
-    capabilities: discovery.buttonsEnabled ? ["presentation", "delivery-pin"] : ["delivery-pin"],
-    schema,
-  };
+function optionalBoolean(description: string) {
+  return Type.Optional(Type.Boolean({ description }));
 }
 
 export function telegramMessageToolHints({
@@ -236,10 +103,103 @@ export function telegramMessageToolHints({
 }
 
 export const telegramMessageActions: ChannelMessageActionAdapter = {
-  describeMessageTool: describeTelegramMessageTool,
+  describeMessageTool: ({ cfg, accountId }) => {
+    const discovery = resolveTelegramActionDiscovery({ cfg, accountId });
+    if (!discovery) {
+      return {
+        actions: [],
+        capabilities: [],
+        schema: null,
+      };
+    }
+    const sendEnabled = discovery.isEnabled("sendMessage");
+    const reactionsEnabled = discovery.isEnabled("reactions");
+    const actions: ChannelMessageActionName[] = [
+      "read",
+      ...(sendEnabled ? ["send" as const] : []),
+      ...(discovery.pollEnabled ? ["poll" as const] : []),
+      ...(reactionsEnabled ? (["react", "emoji-list"] as const) : []),
+      ...(discovery.isEnabled("deleteMessage") ? ["delete" as const] : []),
+      ...(discovery.isEnabled("editMessage") ? ["edit" as const] : []),
+      ...(discovery.isEnabled("sticker", false) ? (["sticker", "sticker-search"] as const) : []),
+      ...(discovery.isEnabled("createForumTopic") ? ["topic-create" as const] : []),
+      ...(discovery.isEnabled("editForumTopic") ? ["topic-edit" as const] : []),
+    ];
+    const schema: ChannelMessageToolSchemaContribution[] = [];
+    if (discovery.pollEnabled) {
+      schema.push({
+        properties: {
+          pollDurationSeconds: optionalPositiveIntegerSchema(),
+          pollAnonymous: optionalBoolean(
+            "Send a display-only anonymous poll. Anonymous votes do not create agent turns. This is the default unless pollPublic is true.",
+          ),
+          pollPublic: optionalBoolean(
+            "Send a public poll whose votes route into the originating agent conversation. Voter identities are visible.",
+          ),
+        },
+        visibility: "all-configured",
+      });
+    }
+    if (reactionsEnabled) {
+      schema.push({
+        properties: {
+          emoji: Type.Optional(
+            Type.String({
+              description:
+                'Telegram reaction emoji: use a supported Unicode reaction, or pass the numeric custom_emoji_id identifier returned by action:"emoji-list" directly as emoji. ' +
+                'Use action:"emoji-list" to inspect reactions allowed in the current chat; arbitrary Unicode may be rejected by Telegram.',
+            }),
+          ),
+        },
+        // The shared emoji parameter keeps react valid across channels; this
+        // contribution only adds Telegram-specific guidance for that parameter.
+        actions: [],
+      });
+    }
+    if (sendEnabled) {
+      schema.push({
+        properties: {
+          asVideoNote: optionalBoolean(
+            "Send one video attachment as a round Telegram video note. Captions are delivered separately.",
+          ),
+          location: Type.Optional(
+            Type.Object(
+              {
+                latitude: Type.Number({ minimum: -90, maximum: 90 }),
+                longitude: Type.Number({ minimum: -180, maximum: 180 }),
+                accuracy: Type.Optional(
+                  Type.Number({
+                    description: "Pin uncertainty radius in meters.",
+                    minimum: 0,
+                    maximum: 1500,
+                  }),
+                ),
+                name: Type.Optional(
+                  Type.String({ description: "Venue name; requires address.", minLength: 1 }),
+                ),
+                address: Type.Optional(
+                  Type.String({ description: "Venue address; requires name.", minLength: 1 }),
+                ),
+              },
+              {
+                description:
+                  "Standalone Telegram location. Coordinates send a pin; name plus address sends a venue. Do not combine with message or media.",
+              },
+            ),
+          ),
+        },
+        visibility: "all-configured",
+      });
+    }
+    return {
+      actions,
+      capabilities: discovery.buttonsEnabled ? ["presentation", "delivery-pin"] : ["delivery-pin"],
+      schema,
+    };
+  },
   providerOwnedReadGates: ["react", "edit", "delete", "emoji-list", "read"],
   readAuthorityActions: ["read"],
-  writeAuthorityActions: ["edit"],
+  writeAuthorityActions: ["delete", "edit"],
   resolveExecutionMode: () => "gateway",
   messageActionTargetAliases: {
     read: { aliases: ["messageId"], deliveryTargetAliases: [] },
@@ -247,7 +207,27 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     edit: { aliases: ["messageId"], deliveryTargetAliases: [] },
     delete: { aliases: ["messageId"], deliveryTargetAliases: [] },
   },
-  prepareSendPayload: prepareTelegramSendPayload,
+  prepareSendPayload: async ({ ctx, payload }) => {
+    rejectTelegramNativeButtonParams(ctx.params);
+    if (
+      ctx.action !== "send" ||
+      (!payload.presentation && !payload.location && payload.videoAsNote !== true)
+    ) {
+      return null;
+    }
+    const quoteText = readStringParam(ctx.params, "quoteText", { trim: false });
+    if (!quoteText) {
+      return payload;
+    }
+    const telegramData = asNonArrayRecord(payload.channelData?.telegram);
+    return {
+      ...payload,
+      channelData: {
+        ...payload.channelData,
+        telegram: { ...telegramData, quoteText },
+      },
+    };
+  },
   resolveCliActionRequest: ({ action, args }) => {
     if (action !== "thread-create") {
       return { action, args };
@@ -261,34 +241,13 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       },
     };
   },
-  extractToolSend: ({ args }) => {
-    return extractToolSend(args, "sendMessage");
-  },
+  extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
   isToolDeliveryAction: ({ args }) =>
     typeof args.action === "string" && TELEGRAM_TOOL_DELIVERY_ACTIONS.has(args.action),
-  handleAction: async ({
-    action,
-    params,
-    reply,
-    progressSnapshot,
-    cfg,
-    accountId,
-    mediaAccess,
-    mediaLocalRoots,
-    mediaReadFile,
-    sessionKey,
-    inboundEventKind,
-    toolContext,
-    conversationReadOrigin,
-    requesterAccountId,
-    requesterSenderId,
-    gatewayClientScopes,
-    deliveryRetryOwner,
-    onPlatformSendDispatch,
-    assertDirectAdapterHandoff,
-    skipQueue,
-  }) => {
-    const telegramAction = resolveTelegramMessageActionName(action);
+  handleAction: async (ctx) => {
+    const { action, params, cfg, accountId, toolContext } = ctx;
+    const telegramAction =
+      TELEGRAM_MESSAGE_ACTION_MAP[action as keyof typeof TELEGRAM_MESSAGE_ACTION_MAP];
     if (!telegramAction) {
       throw new Error(`Unsupported Telegram action: ${action}`);
     }
@@ -303,7 +262,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       toolContext: _modelToolContext,
       ...runtimeParams
     } = params;
-    return await telegramMessageActionRuntime.handleTelegramAction(
+    return await handleTelegramRuntimeAction(
       {
         // Authority stays in the host-owned options object below. Model tool
         // arguments with these names must never reach the runtime as context.
@@ -318,21 +277,23 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       },
       cfg,
       {
-        ...(mediaAccess !== undefined ? { mediaAccess } : {}),
-        mediaLocalRoots,
-        mediaReadFile,
-        sessionKey,
-        inboundEventKind,
-        gatewayClientScopes,
-        deliveryRetryOwner,
-        onPlatformSendDispatch,
-        assertDirectAdapterHandoff,
-        skipQueue,
-        ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
-        ...(requesterAccountId ? { requesterAccountId } : {}),
-        ...(requesterSenderId ? { requesterSenderId } : {}),
-        ...(reply ? { reply } : {}),
-        ...(progressSnapshot ? { progressSnapshot } : {}),
+        ...(ctx.mediaAccess !== undefined ? { mediaAccess: ctx.mediaAccess } : {}),
+        mediaLocalRoots: ctx.mediaLocalRoots,
+        mediaReadFile: ctx.mediaReadFile,
+        sessionKey: ctx.sessionKey,
+        inboundEventKind: ctx.inboundEventKind,
+        gatewayClientScopes: ctx.gatewayClientScopes,
+        deliveryRetryOwner: ctx.deliveryRetryOwner,
+        onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+        assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
+        skipQueue: ctx.skipQueue,
+        ...(ctx.conversationReadOrigin
+          ? { conversationReadOrigin: ctx.conversationReadOrigin }
+          : {}),
+        ...(ctx.requesterAccountId ? { requesterAccountId: ctx.requesterAccountId } : {}),
+        ...(ctx.requesterSenderId ? { requesterSenderId: ctx.requesterSenderId } : {}),
+        ...(ctx.reply ? { reply: ctx.reply } : {}),
+        ...(ctx.progressSnapshot ? { progressSnapshot: ctx.progressSnapshot } : {}),
         ...(toolContext ? { toolContext } : {}),
       },
     );

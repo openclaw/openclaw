@@ -1,32 +1,38 @@
 {
   "name": "@openclaw/qa-lab",
-  "version": "2026.9.5",
+  "version": "2026.10.8",
   "private": true,
   "description": "OpenClaw QA lab plugin with private debugger UI and scenario runner",
   "type": "module",
+  "bundleDependencies": [
+    "@openclaw/crabline"
+  ],
   "dependencies": {
-    "@copilotkit/aimock": "1.41.0",
-    "@modelcontextprotocol/sdk": "1.30.0",
-    "@openclaw/crabline": "0.1.27",
-    "playwright-core": "1.63.0",
+    "@copilotkit/aimock": "1.45.1",
+    "@modelcontextprotocol/client": "2.3.1",
+    "@openclaw/crabline": "0.1.30",
+    "@openclaw/fs-safe": "0.26.13",
+    "json5": "2.2.3",
+    "playwright-core": "1.64.1",
     "semver": "7.8.5",
-    "ws": "8.21.3",
-    "yaml": "2.9.0",
-    "zod": "4.6.2"
+    "ws": "8.22.0",
+    "yaml": "2.9.1",
+    "zod": "4.6.7"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@openclaw/crabbox-provider": "workspace:*",
     "@openclaw/discord": "workspace:*",
-    "@openclaw/mattermost": "workspace:*",
     "@openclaw/matrix": "workspace:*",
+    "@openclaw/mattermost": "workspace:*",
     "@openclaw/plugin-sdk": "workspace:*",
     "@openclaw/slack": "workspace:*",
     "@openclaw/whatsapp": "workspace:*",
     "openclaw": "workspace:*",
-    "vite": "8.3.0"
+    "vite": "8.3.4"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.9.5"
+    "openclaw": ">=2026.10.8"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -43,7 +49,7 @@
       ]
     },
     "compat": {
-      "pluginApi": ">=2026.9.5"
+      "pluginApi": ">=2026.10.8"
     }
   }
 }

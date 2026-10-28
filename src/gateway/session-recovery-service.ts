@@ -7,38 +7,63 @@ import {
   type SessionsRecoverResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
-import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
-import { inspectMainRestartRecoveryRolloverEligibility } from "../agents/main-session-recovery/main-session-recovery-state.js";
-import { markOrphanedMainSessionForRecovery } from "../agents/main-session-recovery/main-session-restart-recovery-marking.js";
+import { resolveExecDefaultsAsync } from "../agents/exec-defaults.js";
+import {
+  buildMainSessionRecoveryClearPatch,
+  buildMainSessionRecoverySettlementPatch,
+} from "../agents/main-session-recovery/main-session-recovery-clear.js";
+import {
+  isMainSessionRecoveryPending,
+  isMainSessionRecoveryReconciliationCandidate,
+} from "../agents/main-session-recovery/main-session-recovery-state.js";
+import { commitMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-store.js";
+import { resolveMainSessionResumePolicy } from "../agents/main-session-recovery/main-session-restart-recovery-resume-policy.js";
+import { readInterruptedRunId } from "../agents/main-session-recovery/main-session-restart-recovery-shared.js";
+import { isCliProvider } from "../agents/model-selection-cli.js";
 import { createAgentRunDirectAbortError } from "../agents/run-termination.js";
+import type { SessionRestartResume } from "../config/sessions/restart-resume.js";
 import { recoverSessionEntryFromRestartTombstone } from "../config/sessions/session-accessor.js";
 import {
+  buildSessionCreationStamp,
   inheritSessionCreationPolicy,
   type SessionCreatedActor,
 } from "../config/sessions/session-entry-provenance.js";
-import type { InternalSessionEntry } from "../config/sessions/types.js";
+import { inheritSessionSelection } from "../config/sessions/session-entry-selection.js";
+import { buildRestartRecoveryExpectedState } from "../config/sessions/session-transcript-turn-state.js";
+import { readMessageIdempotencyKey } from "../config/sessions/transcript-message-identity.js";
+import { mergeSessionEntry, type InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { recordSessionCreated } from "../sessions/session-created.js";
 import {
-  closeSessionWorkAdmissions,
-  isSessionWorkAdmissionActive,
-  runExclusiveSessionLifecycleMutation,
-} from "../sessions/session-lifecycle-admission.js";
+  captureSessionTarget,
+  closeSessionControllerAdmission,
+  isSessionControllerWorkActive,
+  runSessionMutation,
+} from "../sessions/session-controller.lifecycle.js";
+import { recordSessionCreated } from "../sessions/session-created.js";
 import { normalizeSessionIdentities } from "../sessions/session-lifecycle-identity.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
-import { buildDashboardSessionKey } from "./session-create-service.js";
+import { buildDashboardSessionKey } from "./session-create-key.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
-import { buildRestartRecoverySuccessorEntry } from "./session-recovery-entry.js";
 import {
-  loadGatewaySessionEntryReadOnly,
-  resolveGatewaySessionStoreTarget,
-} from "./session-utils.js";
+  prepareRecoverySource,
+  reconcileOrphanedGatewaySessionRecovery,
+  SessionRecoverySourceChangedError,
+} from "./session-recovery-source.js";
+import { invalidSessionRequest } from "./session-request-error.js";
+import { SessionMutationFactsUnavailableError } from "./session-sharing-preparation.js";
+import { prepareSubagentRestartRecovery } from "./session-subagent-reactivation.js";
+import { readSessionMessagesAsync } from "./session-transcript-readers.js";
+import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+import { resolveWorkerPlacementSessionRuntimeAsync } from "./worker-environments/placement-session-runtime.js";
 import {
-  prepareSessionWorkerPlacementMutationCheck,
+  prepareSessionWorkerPlacementMutationCheckAsync,
   prepareSessionWorkerPlacementStop,
   type SessionWorkerPlacementContext,
 } from "./worker-environments/session-placement-lifecycle.js";
@@ -80,51 +105,117 @@ export async function recoverGatewaySession(params: {
   cfg: OpenClawConfig;
   commitGuard?: () => void;
   key: string;
+  mode?: "in-place" | "new-session";
+  sessionId?: string;
+  recoveryCycleId?: string;
   requestingOperatorProfileId?: string;
   operatorRoleActor?: GatewayOperatorRoleActor;
   workerPlacementContext: SessionWorkerPlacementContext;
   launchContinuation: (params: {
+    assertRecoveryCurrent?: () => void;
     agentId: string;
     idempotencyKey: string;
     sessionId: string;
     sessionKey: string;
+    storePath: string;
+    resume?: SessionRestartResume;
   }) => Promise<SessionRecoveryContinuationOutcome>;
 }): Promise<RecoverGatewaySessionResult> {
-  const sourceTarget = resolveGatewaySessionStoreTarget({
+  const sourceTarget = await resolveGatewaySessionStoreTargetInWorker({
     cfg: params.cfg,
     key: params.key,
     ...(params.agentId ? { agentId: params.agentId } : {}),
+    assertActive: params.commitGuard,
   });
-  const readSource = () =>
-    loadGatewaySessionEntryReadOnly(sourceTarget.canonicalKey, {
-      agentId: sourceTarget.agentId,
-    }).entry as InternalSessionEntry | undefined;
-  const initialSource = readSource();
+  const initialSource = findCanonicalStoreMatch(sourceTarget.store, sourceTarget.storeKeys)?.entry;
   if (!initialSource?.sessionId) {
+    return invalidSessionRequest("Session recovery source was not found.");
+  }
+  const recovery = initialSource.mainRestartRecovery;
+  const subagentRecovery =
+    !recovery && params.mode !== "new-session"
+      ? await prepareSubagentRestartRecovery({
+          sessionKey: sourceTarget.canonicalKey,
+          agentId: sourceTarget.agentId,
+          entry: initialSource,
+          assertCurrent: params.commitGuard,
+        })
+      : undefined;
+  // Rejected dispatches refund their attempt; startup can exhaust its passes without a tombstone.
+  const pendingRecovery =
+    params.mode !== "new-session" &&
+    isMainSessionRecoveryPending(initialSource, sourceTarget.canonicalKey);
+  if (
+    subagentRecovery
+      ? (params.sessionId !== undefined && params.sessionId !== initialSource.sessionId) ||
+        params.recoveryCycleId !== undefined
+      : params.mode === "in-place" &&
+        (params.sessionId !== initialSource.sessionId ||
+          params.recoveryCycleId !== recovery?.cycleId)
+  ) {
+    return { ok: false, error: recoveryConflictError("source-changed") };
+  }
+  const { getPrivateRequesterSettleRecoveryOwner } =
+    await import("../agents/subagents/registry/subagent-registry.js");
+  const privateOwner = await getPrivateRequesterSettleRecoveryOwner(
+    { ...sourceTarget, entry: initialSource },
+    initialSource.restartRecoveryDeliverySourceRunId ?? readInterruptedRunId(initialSource),
+  );
+  params.commitGuard?.();
+  if (privateOwner === "owned") {
+    return invalidSessionRequest(
+      "This interrupted turn is queued for automatic recovery. Wait for its result before resuming it manually.",
+    );
+  }
+  if (!subagentRecovery && isMainSessionRecoveryReconciliationCandidate(initialSource)) {
+    const repaired = await reconcileOrphanedGatewaySessionRecovery({
+      ...params,
+      target: sourceTarget,
+      entry: initialSource,
+    });
+    if (!repaired) {
+      return invalidSessionRequest(
+        "Session recovery is unavailable while the source still has active work.",
+      );
+    }
     return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, "Session recovery source was not found."),
+      ok: true,
+      agentId: sourceTarget.agentId,
+      created: false,
+      sourceKey: sourceTarget.canonicalKey,
+      successorEntry: repaired,
+      successorKey: sourceTarget.canonicalKey,
+      continuation: await params.launchContinuation({
+        agentId: sourceTarget.agentId,
+        idempotencyKey: `restart-recovery-reconcile:${repaired.sessionId}:${repaired.mainRestartRecovery?.cycleId}`,
+        sessionId: repaired.sessionId,
+        sessionKey: sourceTarget.canonicalKey,
+        storePath: sourceTarget.storePath,
+      }),
     };
   }
+  if (!subagentRecovery && (!recovery || (!pendingRecovery && !recovery.tombstone))) {
+    return invalidSessionRequest(
+      "Session recovery requires pending restart recovery or a restart-tombstoned session.",
+    );
+  }
   if (
-    initialSource.status === "running" &&
-    initialSource.abortedLastRun !== true &&
-    initialSource.mainRestartRecovery &&
-    !initialSource.mainRestartRecovery.tombstone
+    subagentRecovery ||
+    pendingRecovery ||
+    (params.mode === "in-place" && recovery && !recovery.tombstone?.recoveredSessionKey)
   ) {
-    const identities = [...sourceTarget.storeKeys, initialSource.sessionId];
-    const repaired = await runExclusiveSessionLifecycleMutation({
-      scope: sourceTarget.storePath,
-      identities,
-      run: async () => {
-        const assertPlacementCurrent = prepareSessionWorkerPlacementMutationCheck({
-          context: params.workerPlacementContext,
-          sessionId: initialSource.sessionId,
-        });
+    return await runQueuedStoreWrite({
+      queues: recoveryQueues,
+      storePath: normalizeSessionIdentities(sourceTarget.storePath, [
+        sourceTarget.canonicalKey,
+      ])[0]!,
+      label: "resumeGatewaySession",
+      fn: async () => {
+        using source = await prepareRecoverySource({ ...params, target: sourceTarget });
         const assertCurrent = () => {
           params.commitGuard?.();
-          assertPlacementCurrent();
-          const current = readSource();
+          subagentRecovery?.assertCurrent();
+          const current = source.current();
           const ownershipError = resolvePluginSessionOwnershipError({
             action: "recover",
             entry: current,
@@ -137,149 +228,312 @@ export async function recoverGatewaySession(params: {
           if (
             current?.sessionId !== initialSource.sessionId ||
             current.lifecycleRevision !== initialSource.lifecycleRevision ||
-            current.activeWriterRunId !== initialSource.activeWriterRunId ||
-            current.mainRestartRecovery?.cycleId !== initialSource.mainRestartRecovery?.cycleId ||
-            current.mainRestartRecovery?.revision !== initialSource.mainRestartRecovery?.revision ||
-            isSessionWorkAdmissionActive(sourceTarget.storePath, identities)
+            (subagentRecovery
+              ? current.lastRunId !== subagentRecovery.runId ||
+                current.status !== initialSource.status ||
+                current.abortedLastRun !== initialSource.abortedLastRun ||
+                current.mainRestartRecovery !== undefined
+              : !recovery ||
+                current.mainRestartRecovery?.cycleId !== recovery.cycleId ||
+                current.mainRestartRecovery.revision !== recovery.revision ||
+                (pendingRecovery
+                  ? !isMainSessionRecoveryPending(current, sourceTarget.canonicalKey)
+                  : !current.mainRestartRecovery.tombstone) ||
+                current.mainRestartRecovery.tombstone?.recoveredSessionKey) ||
+            current.archivedAt !== undefined ||
+            current.providerReview ||
+            isSessionControllerWorkActive(
+              sourceTarget.storePath,
+              [sourceTarget.canonicalKey, current.sessionId],
+              sourceTarget.agentId,
+            )
           ) {
-            throw new Error("Session changed before recovery; refresh and retry.");
+            throw new SessionRecoverySourceChangedError();
           }
         };
-        const result = await markOrphanedMainSessionForRecovery({
-          target: { ...sourceTarget, sessionKey: sourceTarget.canonicalKey },
-          expectedSessionId: initialSource.sessionId,
-          expectedLifecycleRevision: initialSource.lifecycleRevision,
-          cfg: params.cfg,
-          assertCommitAllowed: assertCurrent,
+        await source.refresh();
+        assertCurrent();
+        // Delivery custody stays with its existing owner; a new turn must not discard it.
+        if (initialSource.pendingFinalDelivery) {
+          return invalidSessionRequest(
+            "Finish the pending reply delivery before resuming this session.",
+          );
+        }
+        const stop = await runSessionMutation({
+          diagnosticLabel: "recovery-drain",
+          target: captureSessionTarget({
+            storeScope: sourceTarget.storePath,
+            sessionKey: sourceTarget.canonicalKey,
+            aliases: sourceTarget.storeKeys,
+            agentId: sourceTarget.agentId,
+            incarnation: initialSource.sessionId,
+          }),
+          run: async () => {
+            assertCurrent();
+            return await prepareSessionWorkerPlacementStop({
+              action: "recover",
+              agentId: sourceTarget.agentId,
+              authorize: assertCurrent,
+              context: params.workerPlacementContext,
+              sessionId: initialSource.sessionId,
+              sessionKey: sourceTarget.canonicalKey,
+            });
+          },
         });
-        return result.marked > 0 ? readSource() : undefined;
+        await stop.stop();
+        await source.refresh();
+        assertCurrent();
+        const assertPlacementCurrent = await prepareSessionWorkerPlacementMutationCheckAsync({
+          context: params.workerPlacementContext,
+          sessionId: initialSource.sessionId,
+        });
+        const messages = await readSessionMessagesAsync(
+          {
+            agentId: sourceTarget.agentId,
+            storePath: sourceTarget.storePath,
+            sessionKey: sourceTarget.canonicalKey,
+            sessionId: initialSource.sessionId,
+            sessionEntry: initialSource,
+          },
+          { mode: "recent", maxMessages: 20, maxBytes: 256 * 1024 },
+        );
+        if (messages.length === 0) {
+          return { ok: false as const, error: recoveryConflictError("transcript-missing") };
+        }
+        const execPolicy = await resolveExecDefaultsAsync({
+          cfg: params.cfg,
+          agentId: sourceTarget.agentId,
+          sessionKey: sourceTarget.canonicalKey,
+          sessionEntry: initialSource,
+        });
+        const fullAccess =
+          execPolicy.mode === "full" &&
+          execPolicy.security === "full" &&
+          execPolicy.ask === "off" &&
+          initialSource.restartRecoveryDeliveryMediaUrls === undefined &&
+          initialSource.restartRecoveryDisableMessageTool !== true &&
+          initialSource.restartRecoverySuppressTextDelivery !== true;
+        const retainedSafeTools =
+          initialSource.restartRecoveryForceSafeTools === true && !fullAccess;
+        const noticeKey = `main-session-restart-recovery:${initialSource.restartRecoveryDeliverySourceRunId ?? initialSource.restartRecoveryDeliveryRunId ?? initialSource.sessionId}:failed-notice`;
+        const policy = resolveMainSessionResumePolicy(
+          messages.filter((message) => readMessageIdempotencyKey(message) !== noticeKey),
+          retainedSafeTools,
+          initialSource.restartRecoveryDeliverySourceRunId,
+          initialSource.restartRecoveryBeforeAgentReplyState,
+          initialSource.restartRecoveryDeliveryReceiptState,
+          initialSource.restartRecoveryDeliveryToolCallId,
+          fullAccess,
+        );
+        const forceRestartSafeTools =
+          retainedSafeTools || policy.action === "complete" || policy.forceRestartSafeTools;
+        if (forceRestartSafeTools) {
+          const runtime = await resolveWorkerPlacementSessionRuntimeAsync({
+            cfg: params.cfg,
+            entry: initialSource,
+            agentId: sourceTarget.agentId,
+            sessionKey: sourceTarget.canonicalKey,
+            assertCurrent,
+          });
+          if (isCliProvider(runtime, params.cfg)) {
+            let successorEntry = initialSource;
+            if (pendingRecovery && recovery) {
+              const tombstoned = await commitMainSessionRecovery({
+                assertCommitAllowed: () => {
+                  assertCurrent();
+                  assertPlacementCurrent();
+                },
+                command: {
+                  kind: "tombstone",
+                  now: Date.now(),
+                  observation: {
+                    sessionId: initialSource.sessionId,
+                    cycleId: recovery.cycleId,
+                    revision: recovery.revision,
+                  },
+                  reason: "CLI runtime cannot enforce restart-safe tools",
+                },
+                requireWriteSuccess: true,
+                target: { ...sourceTarget, sessionKey: sourceTarget.canonicalKey },
+              });
+              if (tombstoned.transition.kind !== "tombstoned" || !tombstoned.entry) {
+                throw new SessionRecoverySourceChangedError();
+              }
+              successorEntry = tombstoned.entry;
+            }
+            return {
+              ok: true as const,
+              agentId: sourceTarget.agentId,
+              created: false,
+              sourceKey: sourceTarget.canonicalKey,
+              successorEntry,
+              successorKey: sourceTarget.canonicalKey,
+              continuation: {
+                status: "rejected" as const,
+                error: errorShape(
+                  ErrorCodes.INVALID_REQUEST,
+                  subagentRecovery
+                    ? "This CLI runtime cannot enforce restart-safe tools. Select a native runtime, then retry recovery."
+                    : "This CLI runtime cannot enforce restart-safe tools. Use Resume in new session.",
+                  { details: { reason: "restart-safe-tools-unavailable" } },
+                ),
+              },
+            };
+          }
+        }
+        assertCurrent();
+        assertPlacementCurrent();
+        const resume: SessionRestartResume = {
+          sessionId: initialSource.sessionId,
+          lifecycleRevision: initialSource.lifecycleRevision,
+          expectedState: {
+            ...buildRestartRecoveryExpectedState(initialSource),
+            expectedWriterRunId: initialSource.activeWriterRunId,
+            pendingFinalDelivery: null,
+          },
+          lifecycle: buildMainSessionRecoverySettlementPatch({
+            entry: initialSource,
+            recordTerminalSource: true,
+          }),
+          forceRestartSafeTools,
+          ...(policy.action === "resume" && policy.forceCodeModeTools
+            ? { forceCodeModeTools: true }
+            : {}),
+        };
+        // The input actor commits this patch with the pending operator input. Never clear first:
+        // a crash between clearing and accepting would otherwise lose the unfinished task.
+        return {
+          ok: true as const,
+          agentId: sourceTarget.agentId,
+          created: false,
+          sourceKey: sourceTarget.canonicalKey,
+          successorEntry: initialSource,
+          successorKey: sourceTarget.canonicalKey,
+          continuation: await params.launchContinuation({
+            agentId: sourceTarget.agentId,
+            ...(subagentRecovery ? { assertRecoveryCurrent: subagentRecovery.assertCurrent } : {}),
+            idempotencyKey: subagentRecovery
+              ? `subagent-restart-recovery:${subagentRecovery.runId}`
+              : `restart-recovery-resume:${initialSource.sessionId}:${recovery?.cycleId}`,
+            sessionId: initialSource.sessionId,
+            sessionKey: sourceTarget.canonicalKey,
+            storePath: sourceTarget.storePath,
+            resume,
+          }),
+        };
       },
+    }).catch((error: unknown) => {
+      if (
+        error instanceof SessionRecoverySourceChangedError ||
+        error instanceof SessionMutationFactsUnavailableError
+      ) {
+        return { ok: false as const, error: recoveryConflictError("source-changed") };
+      }
+      throw error;
     });
-    if (!repaired) {
-      return {
-        ok: false,
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Session recovery is unavailable while the source still has active work.",
-        ),
-      };
-    }
-    const continuation = await params.launchContinuation({
-      agentId: sourceTarget.agentId,
-      idempotencyKey: `restart-recovery-reconcile:${repaired.sessionId}:${repaired.mainRestartRecovery?.cycleId}`,
-      sessionId: repaired.sessionId,
-      sessionKey: sourceTarget.canonicalKey,
-    });
-    return {
-      ok: true,
-      agentId: sourceTarget.agentId,
-      created: false,
-      sourceKey: sourceTarget.canonicalKey,
-      successorEntry: repaired,
-      successorKey: sourceTarget.canonicalKey,
-      continuation,
-    };
   }
-  const initialEligibility = inspectMainRestartRecoveryRolloverEligibility(initialSource);
-  if (!initialEligibility.eligible && initialEligibility.reason !== "already_recovered") {
-    return {
-      ok: false,
-      error: errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "Session recovery requires a restart-tombstoned session.",
-      ),
-    };
-  }
-  const recovery = initialSource.mainRestartRecovery;
-  if (!recovery?.tombstone) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, "Session is not recoverable."),
-    };
+  if (!recovery) {
+    return invalidSessionRequest("Session recovery source is no longer available.");
   }
   const generatedSuccessorKey = buildDashboardSessionKey(sourceTarget.agentId);
-  const successorTarget = resolveGatewaySessionStoreTarget({
+  const successorTarget = await resolveGatewaySessionStoreTargetInWorker({
     cfg: params.cfg,
     key: generatedSuccessorKey,
     agentId: sourceTarget.agentId,
+    assertActive: params.commitGuard,
   });
   const successorSessionId = randomUUID();
 
-  const resolveCurrentSource = () => {
-    params.commitGuard?.();
-    const currentSource = readSource();
-    const currentOwnershipError = resolvePluginSessionOwnershipError({
-      action: "recover",
-      entry: currentSource,
-      key: sourceTarget.canonicalKey,
-      pluginOwnerId: params.authorizedPluginId,
-    });
-    if (currentOwnershipError) {
-      return { ok: false as const, error: currentOwnershipError };
-    }
-    if (
-      !currentSource?.sessionId ||
-      currentSource.sessionId !== initialSource.sessionId ||
-      currentSource.lifecycleRevision !== initialSource.lifecycleRevision ||
-      currentSource.mainRestartRecovery?.cycleId !== recovery.cycleId ||
-      (!currentSource.mainRestartRecovery.tombstone?.recoveredSessionKey &&
-        currentSource.mainRestartRecovery.revision !== recovery.revision)
-    ) {
-      return { ok: false as const, error: recoveryConflictError("source-changed") };
-    }
-    if (!currentSource.mainRestartRecovery?.tombstone?.recoveredSessionKey) {
-      const creationError = authorizeGatewaySessionCreation({
-        cfg: params.cfg,
-        agentId: sourceTarget.agentId,
-        ...(params.operatorRoleActor
-          ? { actor: params.operatorRoleActor }
-          : { profileId: params.requestingOperatorProfileId }),
-      });
-      if (creationError) {
-        return { ok: false as const, error: creationError };
-      }
-    }
-    if (
-      isEmbeddedAgentRunActive(currentSource.sessionId) ||
-      isSessionWorkAdmissionActive(sourceTarget.storePath, [
-        sourceTarget.canonicalKey,
-        currentSource.sessionId,
-      ])
-    ) {
-      return {
-        ok: false as const,
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Session recovery is unavailable while the source still has active work.",
-        ),
-      };
-    }
-    return { ok: true as const, source: currentSource };
-  };
-  const assertCurrent = () => {
-    const current = resolveCurrentSource();
-    if (!current.ok) {
-      throw new Error(current.error.message);
-    }
-  };
-  const sourceIdentities = [
-    ...sourceTarget.storeKeys,
-    sourceTarget.canonicalKey,
-    initialSource.sessionId,
-  ];
+  const sourceControllerTarget = captureSessionTarget({
+    storeScope: sourceTarget.storePath,
+    sessionKey: sourceTarget.canonicalKey,
+    aliases: sourceTarget.storeKeys,
+    agentId: sourceTarget.agentId,
+    incarnation: initialSource.sessionId,
+  });
+  const successorControllerTarget = captureSessionTarget({
+    storeScope: successorTarget.storePath,
+    sessionKey: successorTarget.canonicalKey,
+    agentId: successorTarget.agentId,
+    incarnation: successorSessionId,
+  });
   const stopFailure = (error: unknown) =>
     errorShape(
       ErrorCodes.UNAVAILABLE,
       `Session recovery cannot safely stop/reclaim its cloud worker: ${formatErrorMessage(error)} Stop cloud worker or call sessions.reclaim, then retry recovery.`,
       { retryable: true },
     );
+  const storageReady = createDeferredCore();
+  // Retain source custody while queued; read only after the previous recovery publishes.
+  const sourcePreparation = prepareRecoverySource({
+    ...params,
+    target: sourceTarget,
+    storageReady: storageReady.promise,
+  });
+  void sourcePreparation.catch(() => {});
   const commitRecovery = async () => {
+    storageReady.resolve();
     let release = () => {};
     try {
-      const prepared = await runExclusiveSessionLifecycleMutation({
-        scope: sourceTarget.storePath,
-        identities: sourceIdentities,
+      using source = await sourcePreparation;
+      const resolveCurrentSource = () => {
+        params.commitGuard?.();
+        const currentSource = source.current();
+        const currentOwnershipError = resolvePluginSessionOwnershipError({
+          action: "recover",
+          entry: currentSource,
+          key: sourceTarget.canonicalKey,
+          pluginOwnerId: params.authorizedPluginId,
+        });
+        if (currentOwnershipError) {
+          return { ok: false as const, error: currentOwnershipError };
+        }
+        if (
+          !currentSource?.sessionId ||
+          currentSource.sessionId !== initialSource.sessionId ||
+          currentSource.lifecycleRevision !== initialSource.lifecycleRevision ||
+          currentSource.mainRestartRecovery?.cycleId !== recovery.cycleId ||
+          (!currentSource.mainRestartRecovery.tombstone?.recoveredSessionKey &&
+            currentSource.mainRestartRecovery.revision !== recovery.revision)
+        ) {
+          return { ok: false as const, error: recoveryConflictError("source-changed") };
+        }
+        if (!currentSource.mainRestartRecovery?.tombstone?.recoveredSessionKey) {
+          const creationError = authorizeGatewaySessionCreation({
+            cfg: params.cfg,
+            agentId: sourceTarget.agentId,
+            ...(params.operatorRoleActor
+              ? { actor: params.operatorRoleActor }
+              : { profileId: params.requestingOperatorProfileId }),
+          });
+          if (creationError) {
+            return { ok: false as const, error: creationError };
+          }
+        }
+        if (
+          isSessionControllerWorkActive(
+            sourceTarget.storePath,
+            [sourceTarget.canonicalKey, currentSource.sessionId],
+            sourceTarget.agentId,
+          )
+        ) {
+          return invalidSessionRequest(
+            "Session recovery is unavailable while the source still has active work.",
+          );
+        }
+        return { ok: true as const, source: currentSource };
+      };
+      const assertCurrent = () => {
+        const current = resolveCurrentSource();
+        if (!current.ok) {
+          throw new Error(current.error.message);
+        }
+      };
+      const prepared = await runSessionMutation({
+        diagnosticLabel: "recovery-drain",
+        target: sourceControllerTarget,
         run: async () => {
+          await source.refresh();
           const current = resolveCurrentSource();
           if (!current.ok) {
             return current;
@@ -287,22 +541,23 @@ export async function recoverGatewaySession(params: {
           let stop: (() => Promise<void>) | undefined;
           try {
             if (!current.source.mainRestartRecovery?.tombstone?.recoveredSessionKey) {
-              stop = prepareSessionWorkerPlacementStop({
-                action: "recover",
-                agentId: sourceTarget.agentId,
-                authorize: assertCurrent,
-                context: params.workerPlacementContext,
-                sessionId: initialSource.sessionId,
-                sessionKey: sourceTarget.canonicalKey,
-              }).stop;
+              stop = (
+                await prepareSessionWorkerPlacementStop({
+                  action: "recover",
+                  agentId: sourceTarget.agentId,
+                  authorize: assertCurrent,
+                  context: params.workerPlacementContext,
+                  sessionId: initialSource.sessionId,
+                  sessionKey: sourceTarget.canonicalKey,
+                })
+              ).stop;
             }
           } catch (error) {
             return { ok: false as const, error: stopFailure(error) };
           }
           // Reclaim may need both queues after this short exact-owner preflight.
-          release = closeSessionWorkAdmissions({
-            scope: sourceTarget.storePath,
-            identities: sourceIdentities,
+          release = closeSessionControllerAdmission({
+            target: sourceControllerTarget,
             reason: createAgentRunDirectAbortError(),
           });
           return { ...current, stop };
@@ -315,25 +570,22 @@ export async function recoverGatewaySession(params: {
       if (prepared.stop) {
         try {
           await prepared.stop();
-          assertPlacementCurrent = prepareSessionWorkerPlacementMutationCheck({
+          assertPlacementCurrent = await prepareSessionWorkerPlacementMutationCheckAsync({
             context: params.workerPlacementContext,
             sessionId: initialSource.sessionId,
           });
         } catch (error) {
+          await source.refresh();
           const current = resolveCurrentSource();
           return current.ok ? { ok: false as const, error: stopFailure(error) } : current;
         }
       }
-      return await runExclusiveSessionLifecycleMutation({
-        targets: [
-          { scope: sourceTarget.storePath, identities: sourceIdentities },
-          {
-            scope: successorTarget.storePath,
-            identities: [successorTarget.canonicalKey, successorSessionId],
-          },
-        ],
+      return await runSessionMutation({
+        diagnosticLabel: "recover",
+        targets: [sourceControllerTarget, successorControllerTarget],
         prepare: async () => release(),
         run: async () => {
+          await source.refresh();
           const settled = resolveCurrentSource();
           if (!settled.ok) {
             return settled;
@@ -344,20 +596,47 @@ export async function recoverGatewaySession(params: {
             assertPlacementCurrent?.();
           };
           commitGuard();
-          const successorEntry = buildRestartRecoverySuccessorEntry({
+          // Owner attribution keeps the source isolation inherited by actorless recovery.
+          const creation = params.actor
+            ? {
+                actor: params.actor,
+                sandbox:
+                  params.actor.id === GATEWAY_OWNER_PROFILE_ID
+                    ? currentSource.sandbox
+                    : resolveCreatorSandbox(params.cfg, params),
+              }
+            : inheritSessionCreationPolicy(currentSource);
+          const entry = mergeSessionEntry(undefined, {
+            ...inheritSessionSelection(currentSource),
+            ...buildSessionCreationStamp({ via: "operator", ...creation }),
+            delivery: normalizeSessionDeliveryState(),
             sessionId: successorSessionId,
-            source: currentSource,
-            // Owner attribution keeps the source isolation inherited by actorless recovery.
-            creation: params.actor
-              ? {
-                  actor: params.actor,
-                  sandbox:
-                    params.actor.id === GATEWAY_OWNER_PROFILE_ID
-                      ? currentSource.sandbox
-                      : resolveCreatorSandbox(params.cfg, params),
-                }
-              : inheritSessionCreationPolicy(currentSource),
+            previousSessionId: currentSource.sessionId,
+            spawnDepth: 0,
+            ...(currentSource.agentHarnessId
+              ? { agentHarnessId: currentSource.agentHarnessId }
+              : {}),
+            ...(currentSource.modelSelectionLocked === true
+              ? { modelSelectionLocked: true as const }
+              : {}),
+            ...(currentSource.pluginOwnerId ? { pluginOwnerId: currentSource.pluginOwnerId } : {}),
+            ...(currentSource.visibility ? { visibility: currentSource.visibility } : {}),
+            ...(currentSource.communication
+              ? { communication: { ...currentSource.communication } }
+              : {}),
+            ...(currentSource.spawnedCwd ? { spawnedCwd: currentSource.spawnedCwd } : {}),
+            ...(currentSource.deviceFolder
+              ? { deviceFolder: { ...currentSource.deviceFolder } }
+              : {}),
+            ...(currentSource.execHost ? { execHost: currentSource.execHost } : {}),
+            ...(currentSource.execNode ? { execNode: currentSource.execNode } : {}),
+            ...(currentSource.execCwd ? { execCwd: currentSource.execCwd } : {}),
           });
+          const successorEntry = {
+            ...entry,
+            ...buildMainSessionRecoveryClearPatch(entry),
+            sessionId: successorSessionId,
+          };
 
           const result = await recoverSessionEntryFromRestartTombstone({
             agentId: sourceTarget.agentId,
@@ -388,42 +667,52 @@ export async function recoverGatewaySession(params: {
           };
         },
       });
+    } catch (error) {
+      if (
+        error instanceof SessionRecoverySourceChangedError ||
+        error instanceof SessionMutationFactsUnavailableError
+      ) {
+        return { ok: false as const, error: recoveryConflictError("source-changed") };
+      }
+      throw error;
     } finally {
       release();
     }
   };
-  // Only recovery takes this queue: Move/reclaim can acquire their lifecycle fences.
-  // Publish the successor before another recovery checks it; launch outside the queue.
-  const committed = await runQueuedStoreWrite({
+  // Serialize recovery through its ACK, after commitRecovery releases lifecycle fences.
+  // Move/reclaim never take this queue, and continuation does not wait for the turn to finish.
+  return await runQueuedStoreWrite({
     queues: recoveryQueues,
     storePath: normalizeSessionIdentities(sourceTarget.storePath, [sourceTarget.canonicalKey])[0]!,
     label: "recoverGatewaySession",
-    fn: commitRecovery,
-  });
-  if (!committed.ok) {
-    return committed;
-  }
+    fn: async () => {
+      const committed = await commitRecovery();
+      if (!committed.ok) {
+        return committed;
+      }
 
-  if (committed.created) {
-    recordSessionCreated(params.cfg, {
-      sessionKey: committed.successorKey,
-      entry: committed.successorEntry,
-      agentId: sourceTarget.agentId,
-    });
-  }
-  const continuation = await params.launchContinuation({
-    agentId: sourceTarget.agentId,
-    idempotencyKey: `restart-recovery-rollover:${committed.successorEntry.sessionId}`,
-    sessionId: committed.successorEntry.sessionId,
-    sessionKey: committed.successorKey,
+      if (committed.created) {
+        await recordSessionCreated(params.cfg, {
+          sessionKey: committed.successorKey,
+          entry: committed.successorEntry,
+          agentId: sourceTarget.agentId,
+        });
+      }
+      return {
+        ok: true as const,
+        agentId: sourceTarget.agentId,
+        created: committed.created,
+        sourceKey: sourceTarget.canonicalKey,
+        successorEntry: committed.successorEntry,
+        successorKey: committed.successorKey,
+        continuation: await params.launchContinuation({
+          agentId: sourceTarget.agentId,
+          idempotencyKey: `restart-recovery-rollover:${committed.successorEntry.sessionId}`,
+          sessionId: committed.successorEntry.sessionId,
+          sessionKey: committed.successorKey,
+          storePath: sourceTarget.storePath,
+        }),
+      };
+    },
   });
-  return {
-    ok: true,
-    agentId: sourceTarget.agentId,
-    created: committed.created,
-    sourceKey: sourceTarget.canonicalKey,
-    successorEntry: committed.successorEntry,
-    successorKey: committed.successorKey,
-    continuation,
-  };
 }

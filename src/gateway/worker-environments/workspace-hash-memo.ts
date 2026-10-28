@@ -1,30 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { compileFunction } from "node:vm";
 import { z } from "zod";
 
 export type WorkspaceHashMetrics = {
   contentHashCount: number;
-  contentHashDurationMs: number;
   memoHitCount: number;
 };
 
 export type WorkspaceHashMemo = Map<string, string>;
-
-export type WorkspaceReconcileMetrics = {
-  gateway: WorkspaceHashMetrics;
-  remoteManifestCalls: number;
-  remoteContentHashCount: number;
-  remoteMemoHitCount: number;
-  remoteMemoTruncatedCount: number;
-  remoteHashDurationMs: number;
-  remoteManifestDurationMs: number;
-  remoteManifestWallDurationMs: number;
-  localReconciliationDurationMs: number;
-};
-
-type RemoteWorkspaceHashMetrics = WorkspaceHashMetrics & {
-  memoTruncatedCount: number;
-  totalDurationMs: number;
-};
 
 export const MAX_WORKSPACE_HASH_MEMO_BYTES = 8 * 1024 * 1024;
 export const MAX_WORKSPACE_HASH_MEMO_ENTRIES = 25_000;
@@ -44,10 +27,8 @@ const remoteWorkspaceManifestEnvelopeSchema = z
     metrics: z
       .object({
         contentHashCount: z.number().finite().nonnegative(),
-        contentHashDurationMs: z.number().finite().nonnegative(),
         memoHitCount: z.number().finite().nonnegative(),
         memoTruncatedCount: z.number().finite().nonnegative(),
-        totalDurationMs: z.number().finite().nonnegative(),
       })
       .strict(),
   })
@@ -55,7 +36,6 @@ const remoteWorkspaceManifestEnvelopeSchema = z
 
 export type RemoteWorkspaceManifestEnvelope = z.infer<typeof remoteWorkspaceManifestEnvelopeSchema>;
 
-/** Parses and validates a memo-v1 capture response from the remote manifest script. */
 export function parseRemoteWorkspaceManifestEnvelope(
   stdout: string,
 ): RemoteWorkspaceManifestEnvelope {
@@ -84,24 +64,6 @@ type WorkspaceHashContext = {
 };
 
 const workspaceHashContext = new AsyncLocalStorage<WorkspaceHashContext>();
-
-export function createWorkspaceReconcileMetrics(): WorkspaceReconcileMetrics {
-  return {
-    gateway: {
-      contentHashCount: 0,
-      contentHashDurationMs: 0,
-      memoHitCount: 0,
-    },
-    remoteManifestCalls: 0,
-    remoteContentHashCount: 0,
-    remoteMemoHitCount: 0,
-    remoteMemoTruncatedCount: 0,
-    remoteHashDurationMs: 0,
-    remoteManifestDurationMs: 0,
-    remoteManifestWallDurationMs: 0,
-    localReconciliationDurationMs: 0,
-  };
-}
 
 export function activeWorkspaceHashContext(): WorkspaceHashContext | undefined {
   return workspaceHashContext.getStore();
@@ -147,14 +109,13 @@ export async function withoutWorkspaceHashContext<T>(operation: () => Promise<T>
 // crosses the shared byte cap so one placement cannot hold unbounded hash state.
 export function pruneWorkspaceHashMemo(memo: WorkspaceHashMemo): void {
   let bytes = 0;
-  for (const [identity, sha256] of memo) {
+  memo.forEach((sha256, identity) => {
     // Identities and digests are ASCII, so string length equals byte length.
     bytes += identity.length + sha256.length;
     if (bytes > MAX_WORKSPACE_HASH_MEMO_BYTES) {
       memo.clear();
-      return;
     }
-  }
+  });
 }
 
 /** Returns the placement-owned memo for a key, pruning it before each reuse. */
@@ -168,19 +129,25 @@ export function takeWorkspaceHashMemo(
   return memo;
 }
 
-/** Self-contained for the node script; preserve the largest hashes within both wire limits. */
-export function selectWorkerWorkspaceHashMemoEntries(
-  memo: ReadonlyMap<string, string>,
-  maxEntries: number,
-  maxBytes: number,
-): Array<[string, string]> {
-  const compareIdentity = ([left]: [string, string], [right]: [string, string]) =>
+// One source for host and standalone worker execution; transformed closures cannot
+// be serialized because their compiler-owned helpers stay in the parent module.
+export const WORKSPACE_HASH_MEMO_JS = String.raw`
+const WORKSPACE_CTIME_SAFETY_MARGIN_MS = 2000;
+function workspaceCtimeIsReusable(ctimeNs, startedAtMs) {
+  // Recent files cost another hash; a backwards clock keeps them outside the reuse window.
+  return ctimeNs >= 0n && ctimeNs < BigInt(startedAtMs - WORKSPACE_CTIME_SAFETY_MARGIN_MS) * 1000000n;
+}
+function workspaceStatIdentity(owner, stats) {
+  return [owner, stats.dev, stats.ino, stats.size, stats.mtimeNs, stats.ctimeNs].join(":");
+}
+function selectWorkerWorkspaceHashMemoEntries(memo, maxEntries, maxBytes) {
+  const compareIdentity = ([left], [right]) =>
     left < right ? -1 : left > right ? 1 : 0;
   const candidates = [...memo]
     .filter(([identity]) => identity.startsWith("worker:"))
     .map((entry) => ({ entry, size: Number(entry[0].split(":")[3]) }))
     .toSorted((left, right) => right.size - left.size || compareIdentity(left.entry, right.entry));
-  const selected: Array<[string, string]> = [];
+  const selected = [];
   let bytes = 2;
   for (const { entry } of candidates) {
     if (selected.length === maxEntries) {
@@ -193,7 +160,28 @@ export function selectWorkerWorkspaceHashMemoEntries(
     }
   }
   return selected.toSorted(compareIdentity);
-}
+}`;
+
+const {
+  workspaceCtimeIsReusable,
+  workspaceStatIdentity,
+  selectWorkerWorkspaceHashMemoEntries,
+}: {
+  workspaceCtimeIsReusable: (ctimeNs: bigint, startedAtMs: number) => boolean;
+  workspaceStatIdentity: (
+    owner: "gateway" | "worker",
+    stats: { dev: bigint; ino: bigint; size: bigint; mtimeNs: bigint; ctimeNs: bigint },
+  ) => string;
+  selectWorkerWorkspaceHashMemoEntries: (
+    memo: ReadonlyMap<string, string>,
+    maxEntries: number,
+    maxBytes: number,
+  ) => Array<[string, string]>;
+} = compileFunction(
+  `${WORKSPACE_HASH_MEMO_JS}\nreturn { workspaceCtimeIsReusable, workspaceStatIdentity, selectWorkerWorkspaceHashMemoEntries };`,
+)();
+
+export { workspaceCtimeIsReusable, workspaceStatIdentity };
 
 export function serializeRemoteWorkspaceHashMemo(
   memo: WorkspaceHashMemo,
@@ -202,40 +190,4 @@ export function serializeRemoteWorkspaceHashMemo(
   return JSON.stringify(
     selectWorkerWorkspaceHashMemoEntries(memo, MAX_WORKSPACE_HASH_MEMO_ENTRIES, maxBytes),
   );
-}
-
-export function recordRemoteWorkspaceHashMetrics(
-  aggregate: WorkspaceReconcileMetrics,
-  metrics: RemoteWorkspaceHashMetrics,
-): void {
-  aggregate.remoteContentHashCount += metrics.contentHashCount;
-  aggregate.remoteMemoHitCount += metrics.memoHitCount;
-  aggregate.remoteMemoTruncatedCount += metrics.memoTruncatedCount;
-  aggregate.remoteHashDurationMs += metrics.contentHashDurationMs;
-  aggregate.remoteManifestDurationMs += metrics.totalDurationMs;
-}
-
-export async function measureLocalWorkspaceReconciliation<T>(
-  metrics: WorkspaceReconcileMetrics,
-  operation: () => Promise<T>,
-): Promise<T> {
-  const startedAt = performance.now();
-  try {
-    return await operation();
-  } finally {
-    metrics.localReconciliationDurationMs += performance.now() - startedAt;
-  }
-}
-
-export function workspaceStatIdentity(
-  owner: "gateway" | "worker",
-  stats: {
-    dev: bigint;
-    ino: bigint;
-    size: bigint;
-    mtimeNs: bigint;
-    ctimeNs: bigint;
-  },
-): string {
-  return `${owner}:${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeNs}:${stats.ctimeNs}`;
 }

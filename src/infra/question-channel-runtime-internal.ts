@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import type {
   QuestionRecord,
   QuestionResolvedEvent,
@@ -9,6 +10,8 @@ import {
   captureAsyncWorkTracker,
   getAsyncWorkSignal,
 } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import type { GatewayScheduler, GatewayScheduledJob } from "./gateway-scheduler.js";
 
 const TERMINAL_DELIVERY_RETENTION_MS = 24 * 60 * 60 * 1_000;
 
@@ -21,75 +24,52 @@ type QuestionChannelEntry = {
   terminal?: QuestionResolvedEvent;
   deliveries: Map<string, QuestionDeliveryFinalizer>;
   finalizedDeliveryIds: Set<string>;
-  cleanupTimer?: ReturnType<typeof setTimeout>;
+  scheduler: GatewayScheduler;
+  cleanupJob?: GatewayScheduledJob;
 };
 
-type QuestionChannelRuntime = {
-  handleRequested: (record: QuestionRecord) => void;
-  handleResolved: (event: QuestionResolvedEvent) => void;
-  runWithDeliveries: <T>(
-    questionIds: readonly (string | undefined)[],
-    run: () => T,
-    options?: { unbound?: boolean },
-  ) => T;
-  registerDelivery: (params: {
-    questionId: string;
-    deliveryId: string;
-    finalize: QuestionDeliveryFinalizer;
-  }) => void;
-  retireGateway: (owner: AbortSignal) => void;
-  clear: () => Promise<void>;
-};
-
-function collectAnsweredLabels(
+function formatQuestionTerminalStatusLine(
   record: QuestionRecord,
-  event: Extract<QuestionResolvedEvent, { status: "answered" }>,
-): string[] {
+  event: QuestionResolvedEvent,
+): string {
+  if (event.status === "expired") {
+    return "Expired";
+  }
+  if (event.status === "cancelled") {
+    return "Cancelled";
+  }
   const answers = event.answers.answers;
-  return record.questions.flatMap((question) => {
+  const labels = record.questions.flatMap((question) => {
     // Only declared choices are safe to echo. Free-text answers can contain
     // secrets, mentions, or transport markup, and the label filter below drops
     // them; isOther alone must not suppress a declared selection.
     if (question.isSecret || question.options.length === 0) {
       return [];
     }
-    const optionLabels = new Set(question.options.map((option) => option.label));
-    return (answers[question.questionId] ?? []).filter((answer) => optionLabels.has(answer));
+    const optionLabels = new Map(
+      question.options.map((option) => [option.value ?? option.label, option.label]),
+    );
+    return (answers[question.questionId] ?? []).flatMap((answer) => {
+      const label = optionLabels.get(answer);
+      return label ? [label] : [];
+    });
   });
-}
-
-function formatQuestionTerminalStatusLine(params: {
-  record: QuestionRecord;
-  event: QuestionResolvedEvent;
-}): string {
-  if (params.event.status === "expired") {
-    return "Expired";
-  }
-  if (params.event.status === "cancelled") {
-    return "Cancelled";
-  }
-  const labels = collectAnsweredLabels(params.record, params.event);
   return labels.length > 0 ? `Answered: ${labels.join(", ")}` : "Answered";
 }
 
 export function createQuestionChannelRuntime(
   options: {
     onFinalizeError?: (error: unknown, questionId: string, deliveryId: string) => void;
-    terminalRetentionMs?: number;
   } = {},
-): QuestionChannelRuntime {
+) {
   const entries = new Map<string, QuestionChannelEntry>();
   const retainedEntries = new Set<QuestionChannelEntry>();
   const deliveryContext = new AsyncLocalStorage<{
     entries: Map<string, QuestionChannelEntry | undefined>;
-    finalizers: AsyncWorkScope;
-    owner: AbortSignal | undefined;
     track: ReturnType<typeof captureAsyncWorkTracker>;
   }>();
-  const retiredGateways = new WeakSet<AbortSignal>();
   let finalizers = new AsyncWorkScope();
   let clearing: Promise<void> | undefined;
-  const terminalRetentionMs = options.terminalRetentionMs ?? TERMINAL_DELIVERY_RETENTION_MS;
 
   const runFinalizer = (
     questionId: string,
@@ -105,7 +85,6 @@ export function createQuestionChannelRuntime(
   };
 
   const finalizeDelivery = (
-    questionId: string,
     entry: QuestionChannelEntry,
     deliveryId: string,
     finalize: QuestionDeliveryFinalizer,
@@ -115,11 +94,8 @@ export function createQuestionChannelRuntime(
     }
     entry.deliveries.delete(deliveryId);
     entry.finalizedDeliveryIds.add(deliveryId);
-    const statusLine = formatQuestionTerminalStatusLine({
-      record: entry.record,
-      event: entry.terminal,
-    });
-    runFinalizer(questionId, deliveryId, finalize, statusLine, entry.track);
+    const statusLine = formatQuestionTerminalStatusLine(entry.record, entry.terminal);
+    runFinalizer(entry.record.id, deliveryId, finalize, statusLine, entry.track);
   };
 
   const releaseEntry = (entry: QuestionChannelEntry) => {
@@ -127,23 +103,15 @@ export function createQuestionChannelRuntime(
     if (entries.get(entry.record.id) === entry) {
       entries.delete(entry.record.id);
     }
-    clearTimeout(entry.cleanupTimer);
+    entry.cleanupJob?.cancel();
     entry.deliveries.clear();
     entry.finalizedDeliveryIds.clear();
   };
 
-  const scheduleCleanup = (entry: QuestionChannelEntry) => {
-    if (entry.cleanupTimer || !retainedEntries.has(entry)) {
-      return;
-    }
-    entry.cleanupTimer = setTimeout(() => releaseEntry(entry), terminalRetentionMs);
-    entry.cleanupTimer.unref?.();
-  };
-
   return {
-    handleRequested(record) {
+    handleRequested: (record: QuestionRecord, scheduler: GatewayScheduler) => {
       const owner = getAsyncWorkSignal();
-      if (clearing || (owner && retiredGateways.has(owner))) {
+      if (clearing) {
         return;
       }
       // The host publishes Requested before delivery; callbacks cannot create
@@ -154,22 +122,35 @@ export function createQuestionChannelRuntime(
         track: captureAsyncWorkTracker(),
         deliveries: new Map(),
         finalizedDeliveryIds: new Set(),
+        scheduler,
       };
       retainedEntries.add(entry);
       entries.set(record.id, entry);
     },
-    handleResolved(event) {
+    handleResolved: (event: QuestionResolvedEvent) => {
       const entry = entries.get(event.id);
       if (!entry || entry.terminal) {
         return;
       }
       entry.terminal = event;
       for (const [deliveryId, finalize] of entry.deliveries) {
-        finalizeDelivery(event.id, entry, deliveryId, finalize);
+        finalizeDelivery(entry, deliveryId, finalize);
       }
-      scheduleCleanup(entry);
+      if (retainedEntries.has(entry)) {
+        entry.cleanupJob = runInDetachedAsyncContext(() =>
+          entry.scheduler.schedule({
+            id: `question-delivery:${randomUUID()}`,
+            delayMs: TERMINAL_DELIVERY_RETENTION_MS,
+            run: () => releaseEntry(entry),
+          }),
+        );
+      }
     },
-    runWithDeliveries(questionIds, run, deliveryOptions) {
+    runWithDeliveries: <T>(
+      questionIds: readonly (string | undefined)[],
+      run: () => T,
+      deliveryOptions?: { unbound?: boolean },
+    ): T => {
       if (!questionIds.some(Boolean)) {
         return run();
       }
@@ -185,29 +166,27 @@ export function createQuestionChannelRuntime(
       return deliveryContext.run(
         {
           entries: captured,
-          finalizers: parent?.finalizers ?? finalizers,
-          owner: parent ? parent.owner : getAsyncWorkSignal(),
           track: parent ? parent.track : captureAsyncWorkTracker(),
         },
         run,
       );
     },
-    registerDelivery({ questionId, deliveryId, finalize }) {
+    registerDelivery: ({
+      questionId,
+      deliveryId,
+      finalize,
+    }: {
+      questionId: string;
+      deliveryId: string;
+      finalize: QuestionDeliveryFinalizer;
+    }) => {
       const captured = deliveryContext.getStore();
-      if (
-        clearing ||
-        (captured &&
-          (captured.finalizers !== finalizers ||
-            (captured.owner && retiredGateways.has(captured.owner))))
-      ) {
+      if (clearing) {
         return;
       }
       const entry = captured?.entries.has(questionId)
         ? captured.entries.get(questionId)
         : entries.get(questionId);
-      if (entry?.owner && retiredGateways.has(entry.owner)) {
-        return;
-      }
       if (!entry || !retainedEntries.has(entry)) {
         // Lost or expired bindings cannot use a replacement request. Disable
         // every native target on the still-live delivery owner.
@@ -226,19 +205,18 @@ export function createQuestionChannelRuntime(
         return;
       }
       entry.deliveries.set(deliveryId, finalize);
-      finalizeDelivery(questionId, entry, deliveryId, finalize);
+      finalizeDelivery(entry, deliveryId, finalize);
     },
-    retireGateway(owner) {
+    retireGateway: (owner: AbortSignal) => {
       // The Gateway calls this after joining received work and its finalizers,
       // not at beginClose: an admitted resolve can still finalize deliveries.
-      retiredGateways.add(owner);
       for (const entry of retainedEntries) {
         if (entry.owner === owner) {
           releaseEntry(entry);
         }
       }
     },
-    clear() {
+    clear: () => {
       if (clearing) {
         return clearing;
       }

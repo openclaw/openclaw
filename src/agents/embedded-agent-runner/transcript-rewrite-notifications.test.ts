@@ -13,24 +13,60 @@ import {
   type InternalSessionTranscriptUpdate,
   type SessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
 import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
 import { SessionManager } from "../sessions/session-manager.js";
-import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
-import { handleEmbeddedAttemptMidTurnPrecheck } from "./run/attempt-prompt-preflight.js";
-import { createToolResultPromptProjectionState } from "./session-prompt-state.js";
+import { makeAgentAssistantMessage as assistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { textToolResult } from "../test-helpers/sparse-transcript.test-support.js";
+import { handleEmbeddedAttemptMidTurnPrecheck as precheck } from "./run/attempt-prompt-preflight.js";
+import { createToolResultPromptProjectionState as createProjectionState } from "./session-prompt-state.js";
 import {
-  repairRejectedCompactionReplayInSessionManager,
-  repairRejectedThinkingReplayInSessionManager,
+  repairRejectedCompactionReplayInSessionManager as repairCompaction,
+  repairRejectedThinkingReplayInSessionManager as repairThinking,
 } from "./thinking-replay-repair.js";
-import { truncateOversizedToolResultsInSessionManager } from "./tool-result-truncation.js";
+import { truncateOversizedToolResultsInSessionManager as truncateSession } from "./tool-result-truncation.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     cleanup();
   }),
 );
+
+const context = new AsyncLocalStorage<string>();
+function observe(scope?: Parameters<typeof loadTranscriptEventsSync>[0]) {
+  const internal: Array<{
+    update: InternalSessionTranscriptUpdate;
+    context: string | undefined;
+    committedEvents: ReturnType<typeof loadTranscriptEventsSync> | undefined;
+  }> = [];
+  const external: Array<{ update: SessionTranscriptUpdate; context: string | undefined }> = [];
+  const stopInternal = onInternalSessionTranscriptUpdate((update) => {
+    internal.push({
+      update,
+      context: context.getStore(),
+      committedEvents: scope ? loadTranscriptEventsSync(scope) : undefined,
+    });
+  });
+  const stopPublic = onSessionTranscriptUpdate((update) =>
+    external.push({ update, context: context.getStore() }),
+  );
+  return {
+    internal,
+    external,
+    [Symbol.dispose]() {
+      stopInternal();
+      stopPublic();
+    },
+  };
+}
+function toolResult() {
+  return { ...textToolResult("call", "read", oversizedOutput), isError: false, timestamp: 2 };
+}
 
 const checkpoint = { data: "rejected-checkpoint", id: "cmp_rejected" };
 const oversizedOutput = "synthetic oversized tool output ".repeat(3_000);
@@ -49,7 +85,7 @@ describe("committed transcript rewrite notifications", () => {
       await appendTranscriptMessage(scope, {
         message: { role: "user", content: "synthetic question", timestamp: 1 },
       });
-      const assistant = makeAgentAssistantMessage({
+      const assistant = assistantMessage({
         content:
           kind === "thinking"
             ? [
@@ -71,37 +107,12 @@ describe("committed transcript rewrite notifications", () => {
         };
       }
       await appendTranscriptMessage(scope, {
-        message:
-          kind === "mid-turn preflight"
-            ? {
-                role: "toolResult",
-                toolCallId: "synthetic-call",
-                toolName: "read",
-                content: [{ type: "text", text: oversizedOutput }],
-                isError: false,
-                timestamp: 2,
-              }
-            : assistant,
+        message: kind === "mid-turn preflight" ? toolResult() : assistant,
       });
       const manager = SessionManager.open(scope);
       const before = loadTranscriptEventsSync(scope);
-      const context = new AsyncLocalStorage<string>();
-      const internal: Array<{
-        update: InternalSessionTranscriptUpdate;
-        context: string | undefined;
-        committedEvents: ReturnType<typeof loadTranscriptEventsSync>;
-      }> = [];
-      const external: Array<{ update: SessionTranscriptUpdate; context: string | undefined }> = [];
-      const stopInternal = onInternalSessionTranscriptUpdate((update) => {
-        internal.push({
-          update,
-          context: context.getStore(),
-          committedEvents: loadTranscriptEventsSync(scope),
-        });
-      });
-      const stopPublic = onSessionTranscriptUpdate((update) => {
-        external.push({ update, context: context.getStore() });
-      });
+      using observed = observe(scope);
+      const { internal, external } = observed;
       // Caller labels can lag a rebound manager; only its persisted target owns the update.
       const caller = {
         sessionFile: "sqlite:other:old-session:/synthetic/old-store.json",
@@ -109,21 +120,16 @@ describe("committed transcript rewrite notifications", () => {
         sessionKey: "agent:other:old-session",
         agentId: "other",
       };
-      const repair = () => {
-        if (kind === "thinking") {
-          return repairRejectedThinkingReplayInSessionManager({
-            sessionManager: manager,
-            ...caller,
-          }).repaired;
+      const repair = async () => {
+        const params = { sessionManager: manager, ...caller };
+        if (kind !== "mid-turn preflight") {
+          return (
+            await (kind === "thinking"
+              ? repairThinking(params)
+              : repairCompaction({ ...params, checkpoint }))
+          ).repaired;
         }
-        if (kind === "compaction") {
-          return repairRejectedCompactionReplayInSessionManager({
-            sessionManager: manager,
-            ...caller,
-            checkpoint,
-          }).repaired;
-        }
-        const outcome = handleEmbeddedAttemptMidTurnPrecheck({
+        const outcome = await precheck({
           attempt: { ...caller, provider: "openai", modelId: "gpt-5.5", contextTokenBudget: 1_000 },
           request: {
             route: "truncate_tool_results_only",
@@ -135,7 +141,7 @@ describe("committed transcript rewrite notifications", () => {
           },
           sessionAgentId: caller.agentId,
           sessionManager: manager,
-          toolResultPromptProjectionState: createToolResultPromptProjectionState(),
+          toolResultPromptProjectionState: createProjectionState(),
           prePromptMessageCount: 2,
           replaceSessionMessages: () => {},
         });
@@ -144,118 +150,75 @@ describe("committed transcript rewrite notifications", () => {
           (outcome.preflightRecovery.truncatedCount ?? 0) > 0
         );
       };
-      try {
-        await context.run("caller-context", async () => {
-          expect(await withSessionManagerWrite(manager, repair)).toBe(true);
-          expect(context.getStore()).toBe("caller-context");
+      await context.run("caller-context", async () => {
+        expect(await withSessionManagerWrite(manager, repair)).toBe(true);
+        expect(context.getStore()).toBe("caller-context");
+      });
+      const { storePath: _storePath, ...publicTarget } = scope;
+      expect(internal).toEqual([
+        {
+          update: { sessionFile: caller.sessionFile, target: scope, ...publicTarget },
+          context: "caller-context",
+          committedEvents: loadTranscriptEventsSync(scope),
+        },
+      ]);
+      expect(internal[0]?.committedEvents?.length).toBeGreaterThan(before.length);
+      await vi.waitFor(() => expect(external).toHaveLength(1));
+      expect(external).toEqual([
+        { update: { target: publicTarget, ...publicTarget }, context: "caller-context" },
+      ]);
+      const messages = SessionManager.open(scope).buildSessionContext().messages;
+      if (kind === "thinking") {
+        expect(messages.at(-1)).toMatchObject({
+          content: [{ type: "text", text: "visible answer" }],
         });
-        expect(internal).toHaveLength(1);
-        expect(internal[0]?.update).toEqual({
-          sessionFile: caller.sessionFile,
-          target: scope,
-          agentId: scope.agentId,
-          sessionId: scope.sessionId,
-          sessionKey: scope.sessionKey,
-        });
-        expect(internal[0]?.context).toBe("caller-context");
-        expect(internal[0]?.committedEvents.length).toBeGreaterThan(before.length);
-        expect(internal[0]?.committedEvents).toEqual(loadTranscriptEventsSync(scope));
-        await vi.waitFor(() => expect(external).toHaveLength(1));
-        const { storePath: _storePath, ...publicTarget } = scope;
-        expect(external).toEqual([
-          {
-            update: { target: publicTarget, ...publicTarget },
-            context: "caller-context",
-          },
-        ]);
-        const messages = SessionManager.open(scope).buildSessionContext().messages;
-        if (kind === "thinking") {
-          expect(messages.at(-1)).toMatchObject({
-            content: [{ type: "text", text: "visible answer" }],
-          });
-        } else if (kind === "compaction") {
-          expect(messages.at(-1)).not.toHaveProperty("providerReplay");
-        } else {
-          expect(JSON.stringify(messages)).not.toContain(oversizedOutput);
-        }
-        expect(await withSessionManagerWrite(manager, repair)).toBe(false);
-        expect(internal).toHaveLength(1);
-        expect(external).toHaveLength(1);
-      } finally {
-        stopInternal();
-        stopPublic();
+      } else if (kind === "compaction") {
+        expect(messages.at(-1)).not.toHaveProperty("providerReplay");
+      } else {
+        expect(JSON.stringify(messages)).not.toContain(oversizedOutput);
       }
+      expect(await withSessionManagerWrite(manager, repair)).toBe(false);
+      expect(internal).toHaveLength(1);
+      expect(external).toHaveLength(1);
     },
   );
 
-  it("retains a file-only replay notification without a persisted manager target", () => {
-    const manager = SessionManager.inMemory();
-    manager.appendMessage(
-      makeAgentAssistantMessage({ content: [{ type: "thinking", thinking: "stale" }] }),
-    );
-    const internal = vi.fn();
-    const external = vi.fn();
-    const stopInternal = onInternalSessionTranscriptUpdate(internal);
-    const stopPublic = onSessionTranscriptUpdate(external);
-    try {
-      expect(
-        repairRejectedThinkingReplayInSessionManager({
-          sessionManager: manager,
-          sessionFile: "/synthetic/legacy.jsonl",
-          sessionKey: "agent:main:legacy",
-          agentId: "main",
-        }).repaired,
-      ).toBe(true);
-      expect(internal).toHaveBeenCalledExactlyOnceWith({
+  it.each(["file-only", "identity-only"])(
+    "retains %s notifications without a manager target",
+    async (kind) => {
+      const fileOnly = kind === "file-only";
+      const manager = SessionManager.inMemory();
+      manager.appendMessage(
+        fileOnly
+          ? assistantMessage({ content: [{ type: "thinking", thinking: "stale" }] })
+          : toolResult(),
+      );
+      const target = {
+        agentId: "main",
+        sessionId: "explicit",
+        sessionKey: "agent:main:explicit",
+        storePath: "/synthetic/explicit/sessions.json",
+      };
+      const legacy = {
         sessionFile: "/synthetic/legacy.jsonl",
         sessionKey: "agent:main:legacy",
         agentId: "main",
-      });
-      expect(external).not.toHaveBeenCalled();
-    } finally {
-      stopInternal();
-      stopPublic();
-    }
-  });
-
-  it("retains explicit identity-only truncation notification without a manager target", () => {
-    const manager = SessionManager.inMemory();
-    manager.appendMessage({
-      role: "toolResult",
-      toolCallId: "call",
-      toolName: "read",
-      content: [{ type: "text", text: oversizedOutput }],
-      isError: false,
-      timestamp: 1,
-    });
-    const target = {
-      agentId: "main",
-      sessionId: "explicit",
-      sessionKey: "agent:main:explicit",
-      storePath: "/synthetic/explicit/sessions.json",
-    };
-    const internal = vi.fn();
-    const external = vi.fn();
-    const stopInternal = onInternalSessionTranscriptUpdate(internal);
-    const stopPublic = onSessionTranscriptUpdate(external);
-    try {
-      expect(
-        truncateOversizedToolResultsInSessionManager({
-          sessionManager: manager,
-          contextWindowTokens: 1_000,
-          ...target,
-        }).truncated,
-      ).toBe(true);
-      expect(internal).toHaveBeenCalledExactlyOnceWith({
-        target,
-        agentId: target.agentId,
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-      });
-      expect(external).toHaveBeenCalledTimes(1);
-    } finally {
-      stopInternal();
-      stopPublic();
-    }
-  });
+      };
+      using observed = observe();
+      if (fileOnly) {
+        await expect(repairThinking({ sessionManager: manager, ...legacy })).resolves.toMatchObject(
+          { repaired: true },
+        );
+      } else {
+        await expect(
+          truncateSession({ sessionManager: manager, contextWindowTokens: 1_000, ...target }),
+        ).resolves.toMatchObject({ truncated: true });
+      }
+      const { storePath: _storePath, ...identity } = target;
+      expect(observed.internal.map(({ update }) => update)).toEqual([
+        fileOnly ? legacy : { target, ...identity },
+      ]);
+      expect(observed.external).toHaveLength(fileOnly ? 0 : 1);
+    },
+  );
 });

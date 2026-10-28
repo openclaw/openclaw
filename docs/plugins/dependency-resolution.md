@@ -40,6 +40,11 @@ OpenClaw uses stable per-source roots:
 - Local/path/archive installs are copied or referenced without dependency
   repair.
 
+These roots are durable install state, not caches. Deleting `~/.openclaw/npm` or
+`~/.openclaw/git` removes every installed external plugin; deployment cleanup
+scripts must leave them in place. Superseded plugin generations are retired by
+the Gateway itself.
+
 npm installs run in that per-plugin project root with:
 
 ```bash
@@ -208,6 +213,50 @@ recover downloadable plugins that are missing from local install records when
 config still references them. Doctor does not repair dependencies for an
 already-installed local plugin.
 
+### Nested dependency missing under preserve-symlinks
+
+Known issue in OpenClaw 2026.9.33 and later
+([#175591](https://github.com/openclaw/openclaw/issues/175591)): if the
+Gateway's Node process runs with `--preserve-symlinks` or
+`NODE_PRESERVE_SYMLINKS=1`, an external plugin can fail during register on
+every Gateway start even though its installed package is complete. The missing
+package belongs to one of the plugin's nested dependencies, and the importing
+path is under the Gateway's `plugin-captures` directory:
+
+```text
+[gateway] [plugins] plugin failed during register: runtime dependencies are missing for externally distributed plugin discord; reinstall or update the plugin package, then restart the Gateway. (Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'mdast-util-to-string' imported from ~/.openclaw/tmp/plugin-captures/<id>/captures/<build>/package-0/node_modules/@openclaw/discord/node_modules/mdast-util-from-markdown/lib/index.js)
+```
+
+Before it loads a plugin, the Gateway copies each package into its own capture
+directory and connects them with symlinks. A nested dependency's own
+dependencies are linked next to its captured copy. Node normally follows the
+symlink to that copy and finds them there. With `--preserve-symlinks`, Node
+resolves from the symlink's location inside the plugin's directory instead,
+where those packages are not linked. Reinstalling or updating the plugin does
+not help, because the installed package already has every file.
+
+To check whether the Gateway runs with the flag:
+
+- Run `openclaw gateway status`. Look for `--preserve-symlinks` in the
+  `Command:` line.
+- Status does not print `NODE_OPTIONS` or `NODE_PRESERVE_SYMLINKS`. Open the
+  file shown as `Service file:`, and any environment file it loads, and look
+  for either variable. On Linux, `systemctl --user cat openclaw-gateway` prints
+  the unit and its drop-ins; use `systemctl cat <unit>` for a system unit.
+- For a foreground Gateway, check `NODE_OPTIONS` and `NODE_PRESERVE_SYMLINKS`
+  in the shell that starts it.
+
+To work around it, remove `--preserve-symlinks` from the service command and
+from `NODE_OPTIONS`, and remove `NODE_PRESERVE_SYMLINKS=1`. After editing a
+systemd unit, run `systemctl --user daemon-reload` (or
+`sudo systemctl daemon-reload` for a system unit). Then restart the Gateway and
+confirm the channel loads:
+
+```bash
+openclaw gateway restart
+openclaw channels status
+```
+
 ## Bundled plugins
 
 Lightweight and core-critical bundled plugins ship as part of OpenClaw. They
@@ -228,16 +277,34 @@ be declared in the root OpenClaw package's `dependencies` or
 `optionalDependencies`, because the root package ships their runtime.
 External plugins keep their runtime dependencies plugin-local.
 
+Source-built Docker images are a composed distribution when
+`OPENCLAW_EXTENSIONS` selects an otherwise external plugin. The frozen install
+first resolves the ordinary root and selected-plugin production trees. Final
+artifact materialization then adds the selected plugins' existing exact runtime
+pins to the distribution manifest and links those installed identities at both
+the root resolution scope and each packaged plugin root. This supports unified
+root chunks without transferring the dependencies into the source plugin or
+running another install; incompatible existing root bindings fail closed.
+
 Package verification uses build-generated
 `dist/runtime-dependency-ownership.json` to identify chunks used only by
 plugins. Each entry binds a chunk filename and SHA-256 hash to its owning
 plugins; every owner must declare the dependency in its bundled or installed
 `@openclaw/<id>` package manifest. Root imports, including root references to
 otherwise plugin-owned chunks, still require root dependency declarations.
-Missing metadata or changed chunk bytes cannot grant a plugin exemption.
-Rebuilt releases, including `2026.7.33`, use this same generated artifact;
-package versions and generated source-region comments do not grant ownership.
-This verification does not change Node's runtime dependency resolution.
+For candidates built with the metadata producer, missing metadata or changed
+chunk bytes cannot grant a plugin exemption.
+
+Release preflight has a compatibility exception for source checkouts that predate
+`scripts/lib/runtime-dependency-ownership-build-plugin.mts`. When ownership
+metadata is absent, it can attribute individual imports inside generated plugin
+regions to that plugin's packaged or trusted source manifest. Imports outside
+those regions still require root declarations. A root reference to a chunk
+revokes its plugin exemption, including through transitive relative imports.
+Hoisted static imports follow the chunk's graph ownership; executable imports
+outside plugin regions remain root references. Public package entrypoints always
+count as root-owned. Present but invalid metadata never falls back to region ownership. This
+verification does not change Node's runtime dependency resolution.
 
 In source checkouts, use `pnpm install` followed by `pnpm build`. OpenClaw
 prefers `dist/extensions`, then `dist-runtime/extensions`, and falls back to
@@ -247,6 +314,11 @@ workspace links. Native Node imports resolve from each plugin package;
 packaged bundled runtime still uses the root runtime declarations above.
 Rebuild to pick up source edits when using a built tree. Source checkout development is pnpm-only; plain
 `npm install` at the repository root does not prepare the pnpm workspace.
+
+The root build discovers plugin packages and additional top-level source entries
+from Git's tracked files, preserving spaces and Unicode in filenames. Add new
+packages and auto-discovered entry files to the Git index before building. The
+standalone build below also supports packages that are not yet tracked.
 
 | Install shape                                   | Bundled plugin location                              | Dependency owner                                       |
 | ----------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------ |
@@ -277,6 +349,11 @@ it first with `node scripts/lib/plugin-npm-runtime-build.mjs extensions/<package
 The standalone build runs the selected package's asset build command and copies
 its declared `openclaw.build.staticAssets` into `dist`, including for new packages
 that are not yet tracked by Git. Missing declared source files fail the build.
+
+Root and standalone builds resolve sources under `node_modules/<package>/...`
+from the plugin's installed dependency, including hoisted installs. These are
+physical package paths; subpath export maps do not restrict the declared assets.
+A missing file in the selected dependency does not borrow another installed version.
 
 Declare private worker source files in `openclaw.build.workerEntries`, using
 package-relative paths such as `./src/store.worker.ts`. The standalone build

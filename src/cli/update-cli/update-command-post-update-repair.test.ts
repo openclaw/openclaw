@@ -1,38 +1,47 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
-import { GATEWAY_SERVICE_SELECTOR_ENV_KEYS } from "../../daemon/constants.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
-import * as gatewayService from "../../daemon/service.js";
+import { resolveGatewayService } from "../../daemon/service.js";
+import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
+import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
+import * as stateSchemas from "../../infra/update-candidate-state.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
-import type { UpdateRepairParams } from "../../infra/update-repair-protocol.js";
+import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import {
   createUpdateRun,
-  finishUpdateRun,
   getUpdateRun,
   recordUpdateRunPhase,
+  recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
-import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
-import { finishUpdate, type FinishUpdateParams } from "./update-command-post-update.js";
-import { taskRecovery } from "./update-command-post-update.test-support.js";
-import { repairUpdateService } from "./update-command-repair-service.js";
-import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
+import { classifyUpdateOutcome } from "../../shared/update-outcome-classification.js";
+import { writeOpenClawPackageFixture } from "./update-cli-package.test-support.js";
+import { registerUnverifiedDefinitionRecoveryTests } from "./update-command-definition-recovery.test-support.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import type { FinishUpdateParams } from "./update-command-finish-types.js";
+import * as freshDoctor from "./update-command-fresh-doctor.js";
+import { createPostUpdateRepairFixture } from "./update-command-post-update-repair.test-support.js";
+import { registerCurrentCoreRuntimeRefreshTests } from "./update-command-post-update-runtime-refresh.test-support.js";
+import { finishUpdate } from "./update-command-post-update.js";
+import { successfulPluginUpdate, taskRecovery } from "./update-command-post-update.test-support.js";
+import { UpdateCommandFailure } from "./update-command-result.js";
 import { inspectManagedGatewayServiceBeforeUpdate } from "./update-command-service-plan.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
+const { revalidateManagedGatewayServiceAfterUpdate } = await vi.importActual<
+  typeof import("./update-command-service-revalidation.js")
+>("./update-command-service-revalidation.js");
+
 const mocks = vi.hoisted(() => ({
-  repair:
-    vi.fn<typeof import("../../infra/update-repair-agent.js").prepareUnattendedUpdateRepair>(),
+  repair: vi.fn<typeof import("../../infra/update-repair-agent.js").runUpdateRepairLoop>(),
   rollback: vi.fn<typeof import("./update-command-rollback.js").rollbackFailedUpdate>(),
   restart: vi.fn<typeof import("./update-command-service.js").maybeRestartService>(),
   restartCommand:
@@ -49,13 +58,25 @@ const mocks = vi.hoisted(() => ({
   readService: vi.fn<typeof import("../../daemon/service.js").readGatewayServiceState>(),
   execSchtasks: vi.fn<typeof import("../../daemon/schtasks-exec.js").execSchtasks>(),
 }));
-vi.mock("../../daemon/schtasks-exec.js", () => ({ execSchtasks: mocks.execSchtasks }));
+// mock-isolation: Recovery tests mutate only their synthetic Windows task, never host services.
+vi.mock("../../daemon/schtasks-exec.js", () => ({
+  execSchtasks: mocks.execSchtasks,
+  execScheduledTaskEnabledChange: (taskName: string, enabled: boolean) =>
+    mocks.execSchtasks(["/Change", "/TN", taskName, enabled ? "/ENABLE" : "/DISABLE"]),
+}));
 vi.mock("../../infra/update-repair-agent.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/update-repair-agent.js")>()),
-  prepareUnattendedUpdateRepair: mocks.repair,
+  runUpdateRepairLoop: mocks.repair,
 }));
 vi.mock("./update-command-rollback.js", () => ({ rollbackFailedUpdate: mocks.rollback }));
-vi.mock("./progress.js", () => ({ printResult: mocks.print }));
+vi.mock("./progress.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./progress.js")>()),
+  printResult: mocks.print,
+  prepareResult:
+    async (...args: Parameters<typeof import("./progress.js").printResult>) =>
+    () =>
+      mocks.print(...args.slice(0, 3)),
+}));
 vi.mock("./shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared.js")>()),
   tryWriteCompletionCache: async () => {},
@@ -69,10 +90,14 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
     sourceConfig: asResolvedSourceConfig({}),
   }),
 }));
-vi.mock("../../daemon/service.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../daemon/service.js")>()),
-  readGatewayServiceState: mocks.readService,
-}));
+vi.mock("../../daemon/service.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../daemon/service.js")>();
+  return {
+    ...actual,
+    readGatewayServiceState: mocks.readService,
+    resolveGatewayService: vi.fn(actual.resolveGatewayService),
+  };
+});
 vi.mock("../daemon-cli/restart-health-probe.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon-cli/restart-health-probe.js")>()),
   resolveGatewayRestartProbeContext: async () => ({ config: {} }),
@@ -88,6 +113,7 @@ vi.mock("../daemon-cli/restart-health.js", async (importOriginal) => {
     versionMismatch: mocks.version !== expectedVersion,
     portUsage: { status: "free", listeners: [] },
     staleGatewayPids: [],
+    waitOutcome: mocks.healthy ? "healthy" : "stopped-free",
   });
   return {
     ...(await importOriginal<typeof import("../daemon-cli/restart-health.js")>()),
@@ -96,15 +122,14 @@ vi.mock("../daemon-cli/restart-health.js", async (importOriginal) => {
     waitForGatewayHttpReadiness: mocks.readyz,
   };
 });
-vi.mock("./update-command-service-recovery.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./update-command-service-recovery.js")>()),
-  hasLoadedLaunchdKeepAliveSupervisor: async () => false,
+vi.mock("./update-command-service-revalidation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-service-revalidation.js")>()),
+  revalidateManagedGatewayServiceAfterUpdate: mocks.revalidate,
 }));
 vi.mock("./update-command-service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service.js")>()),
   maybeRestartService: mocks.restart,
   maybeStopManagedServiceBeforeMutableUpdate: mocks.stop,
-  revalidateManagedGatewayServiceAfterUpdate: mocks.revalidate,
   resolveUpdatedGatewayRestartPort: async () => 19101,
   tryInstallShellCompletion: async () => {},
 }));
@@ -127,82 +152,29 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function fixture(): FinishUpdateParams {
-  const home = dirs.make("post-update-repair-");
-  for (const key of [
-    "OPENCLAW_HOME",
-    "OPENCLAW_SUPERVISOR_MODE",
-    ...GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
-  ]) {
-    vi.stubEnv(key, undefined);
-  }
-  vi.stubEnv("HOME", home);
-  vi.stubEnv("USERPROFILE", home);
-  vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: home });
-  const stateDir = path.join(home, ".openclaw");
-  const configPath = path.join(stateDir, "openclaw.json");
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-  const env = { ...process.env };
-  const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
-  return {
-    mutationStarted: true,
-    result: {
-      status: "ok",
-      mode: "npm",
-      root: "/candidate",
-      steps: [],
-      durationMs: 1,
-      before: { version: "2026.9.1" },
-      after: { version: "2026.9.3" },
-    },
-    root: "/candidate",
-    installKindChanged: false,
-    configSnapshot: {
-      path: configPath,
-      exists: false,
-      raw: null,
-      parsed: {},
-      sourceConfig: asResolvedSourceConfig({}),
-      resolved: asResolvedSourceConfig({}),
-      valid: true,
-      runtimeConfig: asRuntimeConfig({}),
-      config: asRuntimeConfig({}),
-      issues: [],
-      warnings: [],
-      legacyIssues: [],
-    },
-    requestedChannel: null,
-    storedChannel: "stable",
-    channel: "stable",
-    downgradeRisk: false,
-    shouldRestart: true,
-    opts: { json: true, run },
-    ownedManagedUpdateEnv: env,
-    preManagedServiceStop: {
-      stopped: true,
-      running: true,
-      inspected: true,
-      runtimeInspected: true,
-      serviceEnv: env,
-      serviceUpdateVerdict: {
-        kind: "owned",
-        root: "/candidate",
-        fingerprint: "fixture",
-        refreshDefinition: false,
-      },
-    },
-    controlPlaneUpdateSentinelMeta: null,
-    preUpdatePluginInstallRecords: {},
-    startedAt: Date.now(),
-    updateStepTimeoutMs: 1_000,
-    rollbackBlockedReason: "state-migrated-no-rollback",
-  };
-}
+const fixture = (profile?: string) =>
+  createPostUpdateRepairFixture(dirs.make("post-update-repair-"), profile);
 
-describe("post-activation repair after rollback refusal or failure", () => {
-  beforeEach(() => {
+describe("post-activation failure settlement without inference", () => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+      dirs.make("post-update-repair-native-"),
+    );
+    const actualService =
+      await vi.importActual<typeof import("../../daemon/service.js")>("../../daemon/service.js");
+    vi.mocked(resolveGatewayService)
+      .mockReset()
+      .mockImplementation((...args) => ({
+        ...actualService.resolveGatewayService(...args),
+        isLoaded: async () => false,
+      }));
+    const verification = await vi.importActual<typeof import("./update-command-verification.js")>(
+      "./update-command-verification.js",
+    );
+    vi.mocked(verifyUpdatedGateway)
+      .mockReset()
+      .mockImplementation(verification.verifyUpdatedGateway);
     mocks.healthy = false;
     mocks.version = "2026.9.3";
     mocks.readService.mockResolvedValue({
@@ -228,6 +200,7 @@ describe("post-activation repair after rollback refusal or failure", () => {
       rolledBack: false,
     }));
     mocks.restart.mockImplementation(async (params) => {
+      params.onGatewayStartAttempted?.();
       if (!mocks.restart.mock.calls.slice(0, -1).length) {
         if (params.opts.run) {
           recordUpdateRunPhase(params.opts.run.runId, "verifying", undefined, {
@@ -340,72 +313,27 @@ describe("post-activation repair after rollback refusal or failure", () => {
     },
   );
 
-  it("terminalizes a failed final native read after current-core plugin parking", async () => {
-    const params = fixture();
-    params.coreAlreadyCurrent = true;
-    params.preManagedServiceStop!.stopped = false;
-    params.result.status = "skipped";
-    params.result.reason = "already-current";
-    params.result.before = params.result.after;
-    mocks.stop.mockResolvedValue({ ...params.preManagedServiceStop!, stopped: true });
-    mocks.converge.mockImplementation(
-      async (convergence: {
-        result: FinishUpdateParams["result"];
-        beforeDoctor?: () => Promise<void>;
-      }) => {
-        await convergence.beforeDoctor?.();
-        mocks.readService.mockRejectedValueOnce(new Error("final native query failed"));
-        return {
-          resultWithPostUpdate: {
-            ...convergence.result,
-            postUpdate: { plugins: { status: "ok", changed: true } },
-          },
-          postUpdateConfigSnapshot: params.configSnapshot,
-        };
-      },
-    );
-    await expect(finishUpdate(params)).rejects.toMatchObject({
-      exitCode: 1,
-      result: {
-        status: "error",
-        reason: "state-migrated-no-rollback",
-        steps: expect.arrayContaining([
-          expect.objectContaining({ name: "post-update verification", exitCode: 1 }),
-        ]),
-      },
-    });
-    expect(getUpdateRun(params.opts.run!.runId, { env: params.opts.run!.env })).toMatchObject({
-      status: "failed",
-    });
-    expect(mocks.stop).toHaveBeenCalledOnce();
-    expect(mocks.restart).not.toHaveBeenCalled();
+  registerCurrentCoreRuntimeRefreshTests(fixture, mocks);
+
+  registerUnverifiedDefinitionRecoveryTests({
+    fixture,
+    makeHome: () => dirs.make("update-definition-recovery-unverified-"),
+    mocks,
   });
 
   it.each([
-    { rollback: "blocked", repaired: true },
-    { rollback: "blocked", repaired: false },
-    { rollback: "failed", repaired: true },
-    { rollback: "failed", repaired: false },
-    { rollback: "unavailable", repaired: true },
-    { rollback: "unavailable", repaired: false },
-    { rollback: "restored", repaired: true },
-    { rollback: "restored", repaired: false },
-    { rollback: "blocked", repaired: false, healthy: true, readinessUnavailable: true },
-    { rollback: "restored", repaired: false, healthy: true, readinessUnavailable: true },
+    { rollback: "blocked", restoredHealthy: false },
+    { rollback: "failed", restoredHealthy: false },
+    { rollback: "unavailable", restoredHealthy: false },
+    { rollback: "restored", restoredHealthy: false },
+    { rollback: "restored", restoredHealthy: true },
   ])(
-    "$rollback rollback with repaired=$repaired readinessUnavailable=$readinessUnavailable",
-    async ({ rollback, repaired, healthy, readinessUnavailable }) => {
-      const unready = Boolean(healthy && readinessUnavailable);
-      if (unready) {
-        vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue({
-          ...gatewayService.resolveGatewayService(),
-          readRuntime: async () => ({ status: mocks.healthy ? "running" : "stopped", pid: 4321 }),
-        });
-      }
-      if (readinessUnavailable) {
-        mocks.readyz.mockResolvedValue({ readyz: 503 });
-      }
+    "settles $rollback rollback before allowing post-failure triage (restoredHealthy=$restoredHealthy)",
+    async ({ rollback, restoredHealthy }) => {
       const params = fixture();
+      const installedRoot = dirs.make("repair-installed-runtime-");
+      await writeOpenClawPackageFixture(installedRoot, "2026.9.3");
+      params.result.root = installedRoot;
       if (rollback === "unavailable") {
         params.result.mode = "git";
         params.rollbackBlockedReason = undefined;
@@ -470,17 +398,14 @@ describe("post-activation repair after rollback refusal or failure", () => {
         const actual = await vi.importActual<typeof import("./update-command-rollback.js")>(
           "./update-command-rollback.js",
         );
-        mocks.rollback.mockImplementation(actual.rollbackFailedUpdate);
+        mocks.rollback.mockImplementation(async (rollbackParams) => {
+          // Real rollback must inspect the restored generation, not the candidate-phase fixture.
+          mocks.revalidate.mockImplementation(revalidateManagedGatewayServiceAfterUpdate);
+          return await actual.rollbackFailedUpdate(rollbackParams);
+        });
         mocks.stop.mockResolvedValue({
           ...params.preManagedServiceStop!,
-          windowsTaskAutoStartRecovery: {
-            suspended: Promise.resolve(true),
-            beginMutation: () => {},
-            restore: vi.fn(async () => {}),
-            handoff: () => {},
-            complete: completeRecovery,
-            interrupted: () => false,
-          },
+          windowsTaskAutoStartRecovery: { ...taskRecovery(), complete: completeRecovery },
         });
         params.rollbackBlockedReason = undefined;
         params.previousVerified = true;
@@ -494,6 +419,7 @@ describe("post-activation repair after rollback refusal or failure", () => {
           complete: vi.fn(async () => {}),
           rollback: async () => {
             mocks.version = "2026.9.1";
+            mocks.healthy = restoredHealthy;
             return {
               name: "package rollback",
               activePackageRoot: previousRoot,
@@ -506,88 +432,39 @@ describe("post-activation repair after rollback refusal or failure", () => {
         };
       }
       const activeRoot = rollback === "restored" ? params.root : params.result.root;
-      mocks.repair.mockImplementation(async (repair: UpdateRepairParams) => {
-        expect(repair.context.phase).toBe("verifying");
-        expect(repair.target).toMatchObject({
-          installRoot: activeRoot,
-          stateDir: run.env.OPENCLAW_STATE_DIR,
-          configPath: run.env.OPENCLAW_CONFIG_PATH,
-        });
-        expect(getUpdateRun(run.runId, { env: run.env })?.phase).toBe("repairing");
-        const signal = new AbortController().signal;
-        expect((await repair.validate(signal)).ok).toBe(false);
-        expect(mocks.restart).toHaveBeenCalledTimes(rollback === "restored" ? 2 : 1);
-        repair.onEvent?.({
-          type: "turn-started",
-          turn: 1,
-          model: "gpt-5.6-luna",
-          provider: "openai",
-        });
-        mocks.restartCommand.mockImplementationOnce(async () => {
-          mocks.healthy = healthy ?? repaired;
-          return "accepted";
-        });
-        const validation = await repair.validate(signal);
-        const attempt = {
-          turn: 1,
-          model: "gpt-5.6-luna",
-          provider: "openai",
-          durationMs: 20,
-          toolCalls: 1,
-          summary: "Repaired startup configuration.",
-          validation,
-        };
-        repair.onEvent?.({ type: "turn-finished", ...attempt });
-        repair.onEvent?.({
-          type: "stopped",
-          status: validation.ok ? "repaired" : "unrepaired",
-          reason: validation.stopReason,
-        });
-        return {
-          status: validation.ok ? "repaired" : "unrepaired",
-          reason: validation.stopReason,
-          finalValidation: validation,
-          attempts: [attempt],
-        };
+      const reason =
+        rollback === "blocked"
+          ? "state-migrated-no-rollback"
+          : rollback === "failed"
+            ? "source-rollback-failed"
+            : "readyz-unhealthy";
+      await expect(finishUpdate(params)).rejects.toMatchObject({
+        exitCode: 1,
+        result: {
+          status: "error",
+          reason,
+          root: activeRoot,
+          after: { version: rollback === "restored" ? "2026.9.1" : "2026.9.3" },
+        },
       });
-      if (repaired && rollback !== "restored") {
-        await expect(finishUpdate(params)).resolves.toMatchObject({ status: "ok" });
-      } else {
-        const reason =
-          rollback === "blocked"
-            ? "state-migrated-no-rollback"
-            : rollback === "failed"
-              ? "source-rollback-failed"
-              : "readyz-unhealthy";
-        await expect(finishUpdate(params)).rejects.toMatchObject({
-          exitCode: 1,
-          result: {
-            status: "error",
-            reason,
-            root: activeRoot,
-            after: { version: rollback === "restored" ? "2026.9.1" : "2026.9.3" },
-          },
-        });
-      }
-      // Plugin writes complete in the original stopped interval even when the
-      // subsequent activation/repair fails; they are never rerun after restore.
+      // Plugin writes remain in the original stopped interval and never rerun after restoration.
       expect(mocks.converge).toHaveBeenCalledOnce();
       expect(mocks.converge.mock.invocationCallOrder[0]).toBeLessThan(
         mocks.restart.mock.invocationCallOrder[0]!,
       );
-      expect(mocks.repair).toHaveBeenCalledOnce();
+      expect(mocks.repair).not.toHaveBeenCalled();
       if (rollback === "restored") {
         expect(mocks.print.mock.calls.at(-1)?.[0]).toMatchObject({
           recovery: {
             serviceRestartSafe: true,
             packageRollbackVerified: true,
             version: "2026.9.1",
-            service: repaired ? "healthy" : "failed",
-            ...(!repaired ? { reason: "readyz-unhealthy" } : {}),
+            service: restoredHealthy ? "healthy" : "failed",
+            ...(!restoredHealthy ? { reason: "stopped-free" } : {}),
           },
         });
         expect(completeRecovery).toHaveBeenCalled();
-        if (repaired) {
+        if (restoredHealthy) {
           expect(completeRecovery).not.toHaveBeenCalledWith(false);
         } else {
           expect(completeRecovery).toHaveBeenCalledWith(false);
@@ -602,58 +479,26 @@ describe("post-activation repair after rollback refusal or failure", () => {
         );
       }
       expect(mocks.restart).toHaveBeenCalledTimes(rollback === "restored" ? 2 : 1);
-      expect(mocks.restartCommand).toHaveBeenCalledOnce();
-      expect(mocks.restartCommand).toHaveBeenCalledWith(
-        expect.objectContaining({
-          result: expect.objectContaining({ root: activeRoot }),
-          signal: expect.any(AbortSignal),
-        }),
-        "restart",
-      );
+      expect(mocks.restartCommand).not.toHaveBeenCalled();
       expect(getUpdateRun(run.runId, { env: run.env })).toMatchObject({
-        status:
-          rollback === "restored"
-            ? repaired
-              ? "rolled-back"
-              : "failed"
-            : repaired
-              ? "succeeded"
-              : "failed",
+        status: restoredHealthy ? "rolled-back" : "failed",
+        phase: "finished",
         after: { version: rollback === "restored" ? "2026.9.1" : "2026.9.3" },
-        ...(rollback === "restored" ? { reason: "readyz-unhealthy" } : {}),
-        repair: [expect.objectContaining({ attempt: 1 })],
-        ...(repaired
-          ? {
-              verification: {
-                serviceRunning: true,
-                versionMatch: true,
-                readyz: true,
-              },
-            }
-          : {}),
+        reason,
+        repair: [],
       });
-      if (unready) {
-        expect(getUpdateRun(run.runId, { env: run.env })).toMatchObject({
-          confirmedAtMs: null,
-          verification: { serviceRunning: true, readyz: false, settled: false },
-        });
-      }
     },
   );
 
-  it.each([
-    { activated: true, finalProof: true },
-    { activated: false, finalProof: true },
-    { activated: true, finalProof: false },
-  ])(
-    "settles Windows recovery after candidate repair and plugin activation (healthy=$activated, proof=$finalProof)",
-    async ({ activated, finalProof }) => {
+  it.each([true, false])(
+    "settles Windows recovery after plugin activation without inference (healthy=%s)",
+    async (activated) => {
       const params = fixture();
       const run = params.opts.run!;
       vi.stubEnv("OPENCLAW_WINDOWS_TASK_NAME", "repair-plugin-fixture");
       run.env.OPENCLAW_WINDOWS_TASK_NAME = "repair-plugin-fixture";
       const root = await fs.realpath(dirs.make("repair-plugin-windows-candidate-"));
-      await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+      await writeOpenClawPackageFixture(root, "2026.9.3");
       const state: GatewayServiceState = {
         installed: true,
         loadState: { status: "loaded" },
@@ -716,7 +561,7 @@ describe("post-activation repair after rollback refusal or failure", () => {
         });
         mocks.restart.mockImplementation(async (restart) => {
           await startTask();
-          mocks.healthy = false;
+          mocks.healthy = activated;
           recordUpdateRunPhase(run.runId, "verifying", undefined, { env: run.env });
           if (!mocks.healthy) {
             restart.onVerificationFailure?.("readyz-unhealthy");
@@ -731,35 +576,11 @@ describe("post-activation repair after rollback refusal or failure", () => {
             requireRunningService: true,
             onVerified: restart.onVerified,
           });
+          expect(verification, JSON.stringify(verification)).toMatchObject({ ok: activated });
           if (!verification.ok) {
             restart.onVerificationFailure?.(verification.summary);
           }
           return verification.ok ? "ok" : "restart-health-failed";
-        });
-        mocks.restartCommand.mockImplementation(async () => {
-          await startTask();
-          mocks.healthy = activated;
-          return "accepted";
-        });
-        mocks.repair.mockImplementation(async (repair) => {
-          const signal = new AbortController().signal;
-          expect((await repair.validate(signal)).ok).toBe(false);
-          repair.onEvent?.({
-            type: "turn-started",
-            turn: 1,
-            provider: "openai",
-            model: "gpt-5.6-luna",
-          });
-          const validation = await repair.validate(signal);
-          expect(validation.ok).toBe(activated && finalProof);
-          const status = validation.ok ? "repaired" : "unrepaired";
-          repair.onEvent?.({ type: "stopped", status, reason: validation.stopReason });
-          return {
-            status,
-            reason: validation.stopReason,
-            attempts: [],
-            finalValidation: validation,
-          };
         });
         mocks.converge.mockImplementation(
           async (convergence: {
@@ -769,20 +590,17 @@ describe("post-activation repair after rollback refusal or failure", () => {
             expect(mocks.healthy).toBe(false);
             await convergence.beforeDoctor?.();
             expect(enabled).toBe(false);
-            if (!finalProof) {
-              mocks.readyz.mockResolvedValue({ readyz: 503 });
-            }
             return {
               resultWithPostUpdate: {
                 ...convergence.result,
-                postUpdate: { plugins: { status: "ok", changed: true } },
+                postUpdate: { plugins: { ...successfulPluginUpdate, changed: true } },
               },
               postUpdateConfigSnapshot: params.configSnapshot,
             };
           },
         );
 
-        if (activated && finalProof) {
+        if (activated) {
           await expect(finishUpdate(params)).resolves.toMatchObject({ status: "ok" });
         } else {
           await expect(finishUpdate(params)).rejects.toMatchObject({
@@ -793,12 +611,12 @@ describe("post-activation repair after rollback refusal or failure", () => {
         // Refused rollback leaves the original recovery owner in charge.
         await originalRecovery.restore();
         await originalRecovery.complete();
-        expect(mocks.rollback).toHaveBeenCalledOnce();
-        expect(mocks.repair).toHaveBeenCalledOnce();
+        expect(mocks.rollback).toHaveBeenCalledTimes(activated ? 0 : 1);
+        expect(mocks.repair).not.toHaveBeenCalled();
         expect(mocks.restart).toHaveBeenCalledOnce();
-        expect(mocks.restartCommand).toHaveBeenCalledOnce();
+        expect(mocks.restartCommand).not.toHaveBeenCalled();
         expect(mocks.stop).not.toHaveBeenCalled();
-        expect(enabled).toBe(activated && finalProof);
+        expect(enabled).toBe(activated);
         expect(signals.map((signal) => process.listenerCount(signal))).toEqual(baselineListeners);
       } finally {
         for (const recovery of recoveries) {
@@ -808,201 +626,391 @@ describe("post-activation repair after rollback refusal or failure", () => {
     },
   );
 
-  it.each(["restart-result", "restart-error", "readiness-result"] as const)(
-    "does not continue repair after authority is lost during %s",
-    async (boundary) => {
-      const params = fixture();
+  it("does not restart or start inference after service ownership changes", async () => {
+    const params = fixture();
+    mocks.revalidate.mockRejectedValueOnce(new Error("Gateway owner changed"));
+    await expect(finishUpdate(params)).rejects.toMatchObject({
+      result: { status: "error", reason: "state-migrated-no-rollback" },
+    });
+    expect(mocks.restart).not.toHaveBeenCalled();
+    expect(mocks.restartCommand).not.toHaveBeenCalled();
+    expect(mocks.repair).not.toHaveBeenCalled();
+    const run = params.opts.run!;
+    expect(getUpdateRun(run.runId, { env: run.env })).toMatchObject({
+      status: "failed",
+      phase: "finished",
+      repair: [],
+    });
+  });
+
+  it.each([
+    "settled",
+    "unsettled",
+    "missing",
+    "foreign",
+    "database-restored",
+    "source-rollback-failed",
+    "migration-required",
+    "migration-verified",
+    "migration-incomplete",
+    "migration-refused",
+    "migration-local-current",
+    "migration-local-client-newer",
+    "migration-local-daemon-newer",
+    "current-core-parked",
+    "current-core-rollback-refused",
+    "current-core-data-at-risk",
+    "operator-stopped",
+    "operator-stopped-before-doctor",
+  ] as const)(
+    "recovers the installed Gateway only for an owned stop and settled Doctor (%s)",
+    async (receipt) => {
+      const params = fixture("work");
       const run = params.opts.run!;
-      const onVerified = vi.fn();
-      let settledRun = getUpdateRun(run.runId, { env: run.env });
-      const revoke = () => {
-        finishUpdateRun(run.runId, { status: "failed", reason: "owner-revoked" }, { env: run.env });
-        settledRun = getUpdateRun(run.runId, { env: run.env });
+      const stateDir = run.env.OPENCLAW_STATE_DIR!;
+      const swap =
+        receipt === "migration-verified" ? await createRetainedPackageSwap(stateDir) : undefined;
+      mocks.version = swap ? "2.0.0" : "2026.9.7";
+      const root = swap?.packageRoot ?? path.join(stateDir, "candidate");
+      await writeOpenClawPackageFixture(root, mocks.version, { entrySource: "export {};\n" });
+      const scratch = path.join(root, "tmp");
+      await fs.mkdir(scratch);
+      vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(scratch);
+      params.root = root;
+      const migration = receipt.startsWith("migration-");
+      const localVersionOnly = receipt.startsWith("migration-local-");
+      const currentCore = receipt.startsWith("current-core-") || receipt.startsWith("operator-");
+      const untouched = receipt.startsWith("operator-");
+      const recovered =
+        receipt === "settled" ||
+        receipt === "migration-required" ||
+        receipt === "migration-verified" ||
+        receipt === "migration-local-current" ||
+        receipt === "current-core-parked" ||
+        receipt === "current-core-rollback-refused";
+      let agentVersion = localVersionOnly || receipt === "migration-verified" ? 23 : 21;
+      const doctor = vi.spyOn(freshDoctor, "runUpdateFinalizationDoctorInFreshProcess");
+      if (migration) {
+        params.candidateSchemaVersions = { state: 18, agent: 23 };
+        vi.spyOn(stateSchemas, "readUpdateStateSchemaVersions").mockImplementation(async () =>
+          Object.entries({
+            "state/openclaw.sqlite": 18,
+            "agents/main/agent/openclaw-agent.sqlite": agentVersion,
+            "client/credentials.sqlite": receipt === "migration-local-client-newer" ? 2 : 1,
+            "control/services.sqlite": receipt === "migration-local-daemon-newer" ? 2 : 1,
+          }).map(([file, userVersion]) => ({ path: path.join(stateDir, file), userVersion })),
+        );
+        doctor.mockImplementation(async () => {
+          expect(mocks.restartCommand).not.toHaveBeenCalled();
+          if (receipt === "migration-refused") {
+            throw new Error("Agent database migration refused: active writer");
+          }
+          if (receipt === "migration-required") {
+            agentVersion = 23;
+          }
+        });
+      }
+      params.result = {
+        ...params.result,
+        root,
+        status: "error",
+        before: { version: "2026.9.7" },
+        after: { version: mocks.version },
+        reason: "state-migrated-no-rollback",
+        recovery:
+          receipt === "unsettled"
+            ? {
+                serviceRestartSafe: true,
+                version: mocks.version,
+              }
+            : {
+                serviceRestartSafe: false,
+                reason:
+                  receipt === "source-rollback-failed" ? receipt : "runtime-verification-failed",
+              },
+        steps: [
+          {
+            name: currentCore ? "finalize-doctor" : "post-install verification",
+            command: "openclaw doctor",
+            cwd: root,
+            durationMs: 5_000,
+            exitCode: 1,
+            termination: migration || currentCore ? "exit" : "timeout",
+            stderrTail: currentCore
+              ? "Doctor refused a maintenance step."
+              : migration
+                ? "Doctor config promotion refused: authority-check-failed: OpenClaw state is undergoing offline maintenance; retry when it finishes."
+                : "Doctor timed out while repairing state.",
+            failureFacts: currentCore
+              ? [{ check: "maintenance", code: "step-refused" }]
+              : migration
+                ? [{ check: "config-write", code: "authority-check-failed" }]
+                : [{ check: "package-runtime", code: "runtime-verification-failed" }],
+          },
+        ],
       };
-      mocks.repair.mockImplementation(async (repair) => {
-        const controller = new AbortController();
-        const initial = await repair.validate(controller.signal);
-        repair.onEvent?.({
-          type: "turn-started",
-          turn: 1,
-          provider: "openai",
-          model: "gpt-4.1",
+      if (receipt === "migration-verified") {
+        params.packageTransaction = swap?.transaction;
+        params.result.steps = [
+          {
+            name: "verifying",
+            command: "gateway verification",
+            cwd: root,
+            durationMs: 1,
+            exitCode: null,
+          },
+        ];
+      }
+      const settledStep = {
+        name: "doctor process settlement",
+        command: "settle doctor process groups",
+        cwd: receipt === "foreign" ? path.join(root, "other-candidate") : root,
+        durationMs: 1,
+        exitCode: 0,
+        advisory:
+          migration || currentCore
+            ? undefined
+            : {
+                kind: "recoverable-maintenance" as const,
+                message:
+                  "Doctor timed out; all tracked process groups stopped. Run `openclaw update repair`.",
+              },
+      };
+      if (receipt !== "missing" && receipt !== "migration-verified") {
+        params.result.steps.push(settledStep);
+      }
+      const unsettledReason =
+        "Doctor writers remain unsettled (PIDs: 41001, 41002). Data is at risk; run `openclaw update repair` after they stop.";
+      if (receipt === "unsettled") {
+        params.result.steps.push({
+          ...settledStep,
+          exitCode: 1,
+          advisory: undefined,
+          stderrTail: unsettledReason,
+          failureFacts: [
+            {
+              check: "doctor-process-settlement",
+              code: "doctor-processes-unsettled",
+              message: unsettledReason,
+            },
+          ],
         });
-        if (boundary === "readiness-result") {
-          mocks.healthy = true;
-          mocks.readyz.mockImplementationOnce(async () => {
-            revoke();
-            return { readyz: 200 };
-          });
-        } else {
-          mocks.restartCommand.mockImplementationOnce(async () => {
-            revoke();
-            mocks.healthy = true;
-            if (boundary === "restart-error") {
-              throw new Error("Native restart failed after revocation");
+      }
+      if (receipt === "unsettled" || receipt === "database-restored") {
+        params.result.steps.push({
+          name: "database rollback",
+          command: "restore database snapshot",
+          cwd: root,
+          durationMs: 1,
+          exitCode: receipt === "database-restored" ? 0 : 1,
+        });
+      }
+      if (currentCore) {
+        const oldRun = createUpdateRun({ trigger: "cli" }, { env: run.env });
+        recordUpdateRunStep(
+          oldRun.runId,
+          {
+            step: `finalize:predecessor-stop:1:${process.getuid?.() ?? 501}:4321:fixture`,
+            status: "completed",
+            endedAtMs: 1,
+          },
+          { env: run.env },
+        );
+        params.coreAlreadyCurrent = true;
+        params.rollbackBlockedReason =
+          receipt === "current-core-rollback-refused" || receipt === "current-core-data-at-risk"
+            ? "state-migrated-no-rollback"
+            : undefined;
+        params.mutationStarted = false;
+        params.preManagedServiceStop!.stopped = false;
+        params.preManagedServiceStop!.running = receipt !== "operator-stopped";
+        const failureSteps = params.result.steps;
+        params.result = {
+          ...params.result,
+          status: "skipped",
+          reason: "already-current",
+          recovery: undefined,
+          steps: [],
+        };
+        mocks.stop.mockImplementation(async ({ onStopped }) => {
+          const stopped = {
+            ...params.preManagedServiceStop!,
+            stopped: receipt !== "operator-stopped-before-doctor",
+            stoppedAtMs: Date.now(),
+          };
+          if (stopped.stopped) {
+            onStopped?.(stopped);
+          }
+          return stopped;
+        });
+        mocks.converge.mockImplementation(
+          async (convergence: { beforeDoctor?: () => Promise<void> }) => {
+            await convergence.beforeDoctor?.();
+            if (receipt === "current-core-data-at-risk") {
+              params.result.steps.push(...failureSteps);
+              throw new DoctorMaintenanceRefusalError(
+                "State is unreadable",
+                {
+                  kind: "data-at-risk",
+                  reason: "unreadable-state",
+                },
+                {
+                  failureFacts: Array.from({ length: 5 }, () => ({
+                    check: "doctor",
+                    code: "doctor-failed",
+                  })),
+                },
+              );
             }
-            return "accepted";
-          });
-        }
-        await expect(repair.validate(controller.signal)).rejects.toThrow(
-          "Repair no longer owns the update attempt.",
+            return {
+              resultWithPostUpdate: {
+                ...params.result,
+                status: "error",
+                reason: "step-refused",
+                steps: failureSteps,
+              },
+            };
+          },
         );
-        return { status: "aborted", attempts: [], finalValidation: initial };
-      });
-      await repairUpdateService({
-        result: { ...params.result, status: "error", reason: "readyz-unhealthy" },
-        root: params.root,
-        env: run.env,
-        opts: params.opts,
-        gatewayPort: 19101,
-        timeoutMs: 1_000,
-        expectedService: params.preManagedServiceStop!,
-        onVerified,
-      });
-      expect(onVerified).not.toHaveBeenCalled();
-      expect(getUpdateRun(run.runId, { env: run.env })).toEqual(settledRun);
-    },
-  );
-
-  it.each(["owner-changed", "aborted"] as const)(
-    "does not restart after repair is %s",
-    async (fence) => {
-      const params = fixture();
-      mocks.repair.mockImplementation(async (repair) => {
-        const controller = new AbortController();
-        const initial = await repair.validate(controller.signal);
-        repair.onEvent?.({
-          type: "turn-started",
-          turn: 1,
-          provider: "openai",
-          model: "gpt-5.6-luna",
-        });
-        if (fence === "owner-changed") {
-          mocks.revalidate.mockRejectedValueOnce(new Error("Gateway owner changed"));
-        } else {
-          controller.abort(new Error("repair-budget"));
-        }
-        await expect(async () => repair.validate(controller.signal)).rejects.toThrow(
-          fence === "owner-changed" ? "Gateway owner changed" : "repair-budget",
-        );
-        repair.onEvent?.({ type: "stopped", status: "aborted", reason: fence });
-        return { status: "aborted", attempts: [], finalValidation: initial, reason: fence };
-      });
-      await expect(finishUpdate(params)).rejects.toMatchObject({
-        result: { status: "error", reason: "state-migrated-no-rollback" },
-      });
-      expect(mocks.restartCommand).not.toHaveBeenCalled();
-      expect(mocks.restart).toHaveBeenCalledOnce();
-      const run = params.opts.run!;
-      expect(getUpdateRun(run.runId, { env: run.env })).toMatchObject({
-        status: "failed",
-        repair: [expect.objectContaining({ summary: fence })],
-      });
-    },
-  );
-
-  it.each(["ownership-inspection", "after-enable"] as const)(
-    "settles Windows task state when repair aborts during %s",
-    async (abortAt) => {
-      const params = fixture();
-      const env = params.opts.run!.env;
-      const root = dirs.make("repair-windows-candidate-");
-      await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+      }
       const state: GatewayServiceState = {
         installed: true,
         loadState: { status: "loaded" },
         running: false,
-        runtime: { status: "stopped" },
-        env,
-        command: { programArguments: ["node", path.join(root, "dist/entry.js"), "gateway"] },
+        runtime: { status: "stopped", systemd: { managerUid: process.getuid?.() ?? 501 } },
+        env: run.env,
+        command: {
+          programArguments: [process.execPath, path.join(root, "dist/index.js"), "gateway"],
+        },
       };
-      state.runtime!.systemd = { managerUid: 2001 };
-      mocks.readService.mockResolvedValue(state);
+      params.preManagedServiceStop!.serviceManagerUid = process.getuid?.() ?? 501;
+      params.preManagedServiceStop!.serviceUpdateVerdict =
+        await revalidateManagedGatewayServiceAfterUpdate({ state, root });
       mocks.revalidate.mockImplementation(revalidateManagedGatewayServiceAfterUpdate);
-      const expectedService = {
-        serviceEnv: env,
-        serviceManagerUid: 2001,
-        serviceUpdateVerdict: await revalidateManagedGatewayServiceAfterUpdate({ state, root }),
-      };
-      const controller = new AbortController();
-      const inspected = createDeferred();
-      const finishInspection = createDeferred();
-      const actions: string[] = [];
-      let enabled = false;
-      mocks.execSchtasks.mockImplementation(async (args) => {
-        if (args[0] === "/Query") {
-          return {
-            code: 0,
-            stdout: `<Task><Settings><Enabled>${enabled}</Enabled></Settings></Task>`,
-            stderr: "",
+      mocks.readService.mockImplementation(async () => ({
+        ...state,
+        running: mocks.healthy,
+        runtime: { ...state.runtime, status: mocks.healthy ? "running" : "stopped" },
+      }));
+      vi.mocked(resolveGatewayService).mockReturnValue(createMockGatewayService());
+      mocks.restartCommand.mockImplementation(async (restart, action) => {
+        restart.onGatewayStartAttempted?.(action);
+        if (migration) {
+          expect(agentVersion).toBe(23);
+        }
+        mocks.healthy = true;
+        return "accepted";
+      });
+      if (!currentCore) {
+        vi.mocked(verifyUpdatedGateway).mockImplementation(async ({ result }) => {
+          result.verification = {
+            serviceRunning: mocks.healthy,
+            readyz: mocks.healthy,
+            settled: mocks.healthy,
+            runningVersion: mocks.version,
           };
-        }
-        const action = args.at(-1)!;
-        actions.push(action);
-        enabled = action === "/ENABLE";
-        if (enabled && abortAt === "after-enable") {
-          controller.abort(new Error("repair-budget"));
-        }
-        return { code: 0, stdout: "", stderr: "" };
-      });
-      const recovery = createWindowsTaskAutoStartRecovery({
-        serviceEnv: env,
-        alreadySuspended: true,
-      });
-      mocks.repair.mockImplementation(async (repair) => {
-        const initial = await repair.validate(controller.signal);
-        repair.onEvent?.({
-          type: "turn-started",
-          turn: 1,
-          provider: "openai",
-          model: "gpt-5.6-luna",
+          return { ok: mocks.healthy, score: 7, summary: "Migrated candidate is healthy" };
         });
-        if (abortAt === "ownership-inspection") {
-          mocks.readService.mockResolvedValueOnce(state).mockImplementationOnce(async () => {
-            inspected.resolve();
-            await finishInspection.promise;
-            return state;
-          });
+      }
+
+      await withUpdateCommandExecutor(run.runId, async (executor) => {
+        run.executorFence = await executor.enter(root);
+        const failure = await finishUpdate(params).catch((error: unknown) => error);
+        assert(failure instanceof UpdateCommandFailure);
+        if (localVersionOnly && !recovered) {
+          const refusal = failure.result.steps.findLast(
+            (step) => step.name === "gateway migration recovery",
+          );
+          expect(refusal?.stderrTail).toContain("expected schema 1, found 2");
+          expect(refusal?.stderrTail).toContain(
+            receipt === "migration-local-client-newer"
+              ? path.join("client", "credentials.sqlite")
+              : path.join("control", "services.sqlite"),
+          );
         }
-        const validation = expect(repair.validate(controller.signal)).rejects.toThrow(
-          "repair-budget",
+        expect(failure.result.recovery, JSON.stringify(failure.result)).toEqual(
+          untouched
+            ? undefined
+            : expect.objectContaining(
+                recovered
+                  ? {
+                      serviceRestartSafe: true,
+                      service: "healthy",
+                      version: mocks.version,
+                    }
+                  : {
+                      serviceRestartSafe: false,
+                      ...(receipt === "current-core-data-at-risk" && {
+                        dataAtRisk: "unreadable-state",
+                      }),
+                    },
+              ),
         );
-        if (abortAt === "ownership-inspection") {
-          await inspected.promise;
-          controller.abort(new Error("repair-budget"));
-          finishInspection.resolve();
-        }
-        await validation;
-        repair.onEvent?.({ type: "stopped", status: "aborted", reason: "repair-budget" });
-        return { status: "aborted", attempts: [], finalValidation: initial };
       });
-      try {
-        const result = await repairUpdateService({
-          result: { ...params.result, root, status: "error", reason: "readyz-unhealthy" },
-          root,
-          env,
-          opts: params.opts,
-          gatewayPort: 19101,
-          timeoutMs: 1_000,
-          expectedService,
-          recoveryStop: {
-            ...expectedService,
-            stopped: true,
-            inspected: true,
-            runtimeInspected: true,
-            running: false,
-            windowsTaskAutoStartRecovery: recovery,
-          },
+      expect(mocks.restartCommand).toHaveBeenCalledTimes(recovered ? 1 : 0);
+      if (currentCore) {
+        expect(mocks.stop).toHaveBeenCalledTimes(receipt === "operator-stopped" ? 0 : 1);
+        expect(mocks.rollback).toHaveBeenCalledTimes(
+          receipt === "current-core-rollback-refused" || receipt === "current-core-data-at-risk"
+            ? 1
+            : 0,
+        );
+      }
+      if (migration) {
+        expect(doctor).toHaveBeenCalledTimes(
+          localVersionOnly || receipt === "migration-verified" ? 0 : 1,
+        );
+      }
+      const report = getUpdateRun(run.runId, { env: run.env });
+      expect(report?.verification.serviceRunning).toBe(untouched ? undefined : recovered);
+      expect(report?.verification.readyz).toBe(untouched ? undefined : recovered);
+      const rendered = renderUpdateRunReport(report!).lines.join("\n");
+      if (migration) {
+        expect(report?.status).toBe("failed");
+        if (receipt === "migration-verified") {
+          expect(report?.steps).toContainEqual(
+            expect.objectContaining({ step: "package-backup-retention", exitCode: 1 }),
+          );
+        } else {
+          expect(
+            report?.steps.find((step) => step.step === "post-install verification")?.failureFacts,
+          ).toContainEqual(expect.objectContaining({ code: "authority-check-failed" }));
+        }
+      }
+      if (localVersionOnly && !recovered) {
+        const refusal = report?.steps.findLast(
+          (step) => step.step === "gateway migration recovery",
+        );
+        expect(refusal).toMatchObject({ status: "failed", exitCode: 1 });
+      }
+      if (migration && !recovered) {
+        expect(rendered).toContain("openclaw --profile work doctor --fix");
+        expect(rendered).toContain("openclaw --profile work gateway start");
+      }
+      if (recovered) {
+        expect(rendered).toContain("openclaw --profile work update repair");
+        expect(report?.origin.nextAction).toContain("installed Gateway is healthy");
+        expect(report?.origin.nextAction).toContain("running on the retained state");
+        expect(report?.origin.nextAction).toContain("openclaw --profile work gateway stop");
+        expect(report?.origin.nextAction).not.toContain("migrated state");
+      }
+      if (receipt === "unsettled") {
+        expect(mocks.rollback).not.toHaveBeenCalled();
+        expect(report?.origin.nextAction).toContain("41001, 41002");
+        expect(report?.origin.nextAction).toContain("Keep the Gateway stopped");
+        expect(
+          report?.steps.findLast((step) => step.step === "doctor process settlement"),
+        ).toMatchObject({
+          status: "failed",
+          exitCode: 1,
+          failureFacts: [
+            {
+              check: "doctor-process-settlement",
+              code: "doctor-processes-unsettled",
+              message: unsettledReason,
+            },
+          ],
         });
-        expect(result).toMatchObject({ status: "error", reason: "readyz-unhealthy" });
-        expect(actions).toEqual(abortAt === "after-enable" ? ["/ENABLE"] : []);
-        await recovery.complete(false);
-        expect(enabled).toBe(false);
-        expect(actions).toEqual(abortAt === "after-enable" ? ["/ENABLE", "/DISABLE"] : []);
-        expect(mocks.restartCommand).not.toHaveBeenCalled();
-      } finally {
-        finishInspection.resolve();
-        await recovery.complete(false);
       }
     },
   );

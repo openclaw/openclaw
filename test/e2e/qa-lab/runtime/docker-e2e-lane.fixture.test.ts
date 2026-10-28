@@ -1,30 +1,12 @@
 // Docker E2E lane fixture tests keep QA scenario dispatch policy reusable.
 import { describe, expect, it, vi } from "vitest";
 import {
-  formatQaDockerE2eLaneUsage,
-  listQaDockerE2eLaneNames,
   parseQaDockerE2eLaneArgs,
   resolveQaDockerE2eLane,
   runQaDockerE2eLane,
 } from "./docker-e2e-lane.fixture.ts";
 
 describe("QA Docker E2E lane fixture", () => {
-  it("lists known Docker lanes for scenario wrappers", () => {
-    expect(listQaDockerE2eLaneNames()).toEqual(
-      expect.arrayContaining([
-        "agent-bundle-mcp-tools",
-        "cli-installer-distribution",
-        "codex-on-demand",
-        "system-agent-first-run",
-        "gateway-network",
-        "release-plugin-marketplace",
-        "update-migration",
-        "update-restart-auth",
-      ]),
-    );
-    expect(listQaDockerE2eLaneNames()).toEqual([...listQaDockerE2eLaneNames()].toSorted());
-  });
-
   it("parses help, list, and lane arguments", () => {
     expect(parseQaDockerE2eLaneArgs(["--help"])).toEqual({ kind: "help" });
     expect(parseQaDockerE2eLaneArgs(["--list"])).toEqual({ kind: "list" });
@@ -35,14 +17,6 @@ describe("QA Docker E2E lane fixture", () => {
 
     expect(() => parseQaDockerE2eLaneArgs([])).toThrow("--lane is required");
     expect(() => parseQaDockerE2eLaneArgs(["--lane"])).toThrow("--lane requires a value");
-  });
-
-  it("renders usage from the shared lane registry", () => {
-    const usage = formatQaDockerE2eLaneUsage("node qa-docker.js");
-
-    expect(usage).toContain("Usage: node qa-docker.js --lane <name>");
-    expect(usage).toContain("  - gateway-network");
-    expect(usage).toContain("  - update-restart-auth");
   });
 
   it("resolves lane-specific environment overlays at run time", () => {

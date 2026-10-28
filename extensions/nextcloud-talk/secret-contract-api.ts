@@ -1,4 +1,3 @@
-// Nextcloud Talk API module exposes the plugin public contract.
 export {
   channelSecrets,
   collectRuntimeConfigAssignments,

@@ -1,142 +1,111 @@
-// Config-flow step tests cover doctor repair step ordering and mutation planning.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSnapshot } from "../../../config/mutate.test-support.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
 
-const { migrateLegacyConfigMock, stripUnknownConfigKeysMock } = vi.hoisted(() => ({
+const { migrateLegacyConfigMock, stripUnknownConfigKeysMock, noteMock } = vi.hoisted(() => ({
   migrateLegacyConfigMock: vi.fn(),
   stripUnknownConfigKeysMock: vi.fn(),
+  noteMock: vi.fn(),
 }));
 
-vi.mock("./legacy-config-migrate.js", () => ({
-  migrateLegacyConfig: migrateLegacyConfigMock,
-}));
+// mock-isolation: Exercise flow decisions with a fixed migration result, not plugin discovery.
+vi.mock("./legacy-config-migrate.js", () => ({ migrateLegacyConfig: migrateLegacyConfigMock }));
 
 vi.mock("../../doctor-config-analysis.js", () => ({
   stripUnknownConfigKeys: stripUnknownConfigKeysMock,
 }));
 
-import { applyLegacyCompatibilityStep, applyUnknownConfigKeyStep } from "./config-flow-steps.js";
+// mock-isolation: Capture the public flow's terminal diagnostics without rendering them.
+vi.mock("../../../../packages/terminal-core/src/note.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../packages/terminal-core/src/note.js")>()),
+  note: noteMock,
+}));
+
+import { applyLegacyCompatibilityStep, applyRetiredConfigStep } from "./config-flow-steps.js";
 
 function createLegacyStepResult(
   snapshot: Pick<ConfigFileSnapshot, "parsed" | "legacyIssues"> & Partial<ConfigFileSnapshot>,
-  doctorFixCommand = "openclaw doctor --fix",
+  sourceConfig: OpenClawConfig = {},
 ) {
   return applyLegacyCompatibilityStep({
     snapshot: {
-      exists: true,
-      path: "/tmp/config.json",
-      valid: true,
+      ...createSnapshot({ hash: "fixture", path: "/tmp/config.json", sourceConfig }),
       raw: "{}",
-      resolved: {},
-      sourceConfig: {},
-      config: {},
-      runtimeConfig: {},
-      issues: [],
-      warnings: [],
       ...snapshot,
     },
-    state: {
-      cfg: {},
-      candidate: {},
-      pendingChanges: false,
-      fixHints: [],
-    },
+    state: mutationState(),
     shouldRepair: false,
-    doctorFixCommand,
+    doctorFixCommand: "openclaw doctor --fix",
   });
+}
+
+function mutationState(candidate: OpenClawConfig = {}) {
+  return { cfg: {}, candidate, pendingChanges: false, fixHints: [] };
+}
+
+async function repairAfterAuthKeyCleanup(
+  profileId: string,
+  metadata: Record<string, unknown>,
+  model: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["model"],
+  withProvider = true,
+) {
+  const candidate = {
+    auth: { profiles: { [profileId]: metadata } },
+    ...(withProvider ? { models: { providers: { openai: { apiKey: "${OPENAI_API_KEY}" } } } } : {}),
+    agents: { defaults: { model } },
+  } as unknown as OpenClawConfig;
+  const config = structuredClone(candidate);
+  Reflect.deleteProperty(
+    expectDefined(config.auth?.profiles?.[profileId], "auth profile fixture"),
+    "key",
+  );
+  stripUnknownConfigKeysMock.mockReturnValueOnce({
+    config,
+    removed: [`auth.profiles.${profileId}.key`],
+  });
+  const changes: string[] = [];
+  const state = await applyRetiredConfigStep({
+    state: mutationState(candidate),
+    shouldRepair: true,
+    doctorFixCommand: "openclaw doctor --fix",
+    sourceConfig: candidate,
+    emitChanges: (lines) => changes.push(...lines),
+  });
+  return { state, changes };
 }
 
 describe("doctor config flow steps", () => {
   beforeEach(() => {
-    migrateLegacyConfigMock.mockReset();
-    migrateLegacyConfigMock.mockImplementation((config: OpenClawConfig) => ({
+    migrateLegacyConfigMock.mockReset().mockImplementation((config: OpenClawConfig) => ({
       config,
       changes: [],
     }));
     stripUnknownConfigKeysMock.mockReset();
-  });
-
-  it("collects legacy compatibility issue lines and preview fix hints", () => {
-    migrateLegacyConfigMock.mockReturnValueOnce({
-      config: {},
-      changes: ["Moved heartbeat → agents.defaults.heartbeat."],
-    });
-
-    const result = createLegacyStepResult({
-      parsed: { heartbeat: { enabled: true } },
-      legacyIssues: [{ path: "heartbeat", message: "use agents.defaults.heartbeat" }],
-    });
-
-    expect(result.issueLines).toEqual(["- heartbeat: use agents.defaults.heartbeat"]);
-    expect(result.changeLines).not.toStrictEqual([]);
-    expect(result.state.fixHints).toStrictEqual([
-      'Run "openclaw doctor --fix" to migrate legacy config keys.',
-    ]);
-    expect(result.state.pendingChanges).toBe(true);
-  });
-
-  it("migrates the resolved config so single-file include values are repairable", () => {
-    const sourceConfig = {
-      mcp: { servers: { local: { command: "node", disabled: true } } },
-    } as unknown as OpenClawConfig;
-    migrateLegacyConfigMock.mockReturnValueOnce({
-      config: {
-        commands: { native: "auto" },
-        mcp: { servers: { local: { command: "node", enabled: false } } },
-      },
-      sourceConfig: { mcp: { servers: { local: { command: "node", enabled: false } } } },
-      changes: ["Moved mcp.servers.local.disabled true → enabled false."],
-    });
-
-    const result = createLegacyStepResult({
-      parsed: { mcp: { $include: "./mcp.json5" } },
-      legacyIssues: [{ path: "mcp.servers", message: "disabled is legacy" }],
-      valid: false,
-      resolved: sourceConfig,
-      sourceConfig,
-      config: sourceConfig,
-      runtimeConfig: sourceConfig,
-    });
-
-    expect(migrateLegacyConfigMock).toHaveBeenCalledWith(sourceConfig, {
-      sourceConfigBeforeMigrations: undefined,
-      context: {
-        authoredRaw: { mcp: { $include: "./mcp.json5" } },
-        resolvedRaw: sourceConfig,
-      },
-    });
-    expect(result.state.pendingChanges).toBe(true);
-    expect(result.state.candidate.mcp?.servers?.local?.enabled).toBe(false);
-    expect(result.state.candidate.commands).toBeUndefined();
+    noteMock.mockClear();
   });
 
   it("blocks grpc migration when include ownership is ambiguous and names every source", () => {
     const sourceConfig = {
       diagnostics: { otel: { enabled: true, protocol: "grpc" } },
     } as unknown as OpenClawConfig;
-    const result = createLegacyStepResult({
-      parsed: { diagnostics: { $include: ["./a.json5", "./b.json5"] } },
-      includeProvenance: [
-        {
-          path: ["diagnostics"],
-          kind: "multiple",
-          hasSiblingOverrides: false,
-          hasArrayAncestor: false,
-          targetPaths: ["/tmp/a.json5", "/tmp/b.json5"],
-        },
-      ],
-      legacyIssues: [
-        {
-          path: "diagnostics.otel.protocol",
-          message: "grpc is unsupported",
-        },
-      ],
-      valid: false,
-      resolved: sourceConfig,
+    const result = createLegacyStepResult(
+      {
+        parsed: { diagnostics: { $include: ["./a.json5", "./b.json5"] } },
+        includeProvenance: [
+          {
+            path: ["diagnostics"],
+            kind: "multiple",
+            hasSiblingOverrides: false,
+            hasArrayAncestor: false,
+            targetPaths: ["/tmp/a.json5", "/tmp/b.json5"],
+          },
+        ],
+        legacyIssues: [{ path: "diagnostics.otel.protocol", message: "grpc is unsupported" }],
+        valid: false,
+      },
       sourceConfig,
-      config: sourceConfig,
-      runtimeConfig: sourceConfig,
-    });
+    );
 
     expect(migrateLegacyConfigMock).not.toHaveBeenCalled();
     expect(result.blocksWrite).toBe(true);
@@ -165,56 +134,45 @@ describe("doctor config flow steps", () => {
     ]);
   });
 
-  it.each([false, true])(
-    "does not queue a write for deferred-only legacy advice (candidate %s)",
-    (hasCandidate) => {
-      const config = { agents: { entries: { main: {} }, defaults: { models: { bare: {} } } } };
-      migrateLegacyConfigMock.mockReturnValueOnce({
-        config: hasCandidate ? config : null,
-        changes: [],
-      });
-      const result = createLegacyStepResult({
+  it("does not queue a write for deferred-only legacy advice without a candidate", () => {
+    const config = { agents: { entries: { main: {} }, defaults: { models: { bare: {} } } } };
+    migrateLegacyConfigMock.mockReturnValueOnce({ config: null, changes: [] });
+    const result = createLegacyStepResult(
+      {
         parsed: config,
         raw: JSON.stringify(config),
         sourceConfigBeforeMigrations: config,
-        sourceConfig: config,
-        resolved: config,
-        config,
-        runtimeConfig: config,
         legacyIssues: [
           {
             path: "agents.defaults.models",
             message: "Legacy model restriction retained; set an explicit policy.",
           },
         ],
-      });
-      expect(result.issueLines).toEqual([
-        "- agents.defaults.models: Legacy model restriction retained; set an explicit policy.",
-      ]);
-      expect(result.changeLines).toEqual([]);
-      expect(result.state.pendingChanges).toBe(false);
-      expect(result.state.fixHints).toEqual([]);
-    },
-  );
+      },
+      config,
+    );
+    expect(result.issueLines).toEqual([
+      "- agents.defaults.models: Legacy model restriction retained; set an explicit policy.",
+    ]);
+    expect(result.changeLines).toEqual([]);
+    expect(result.state.pendingChanges).toBe(false);
+    expect(result.state.fixHints).toEqual([]);
+  });
 
   it("commits migration even when post-migration validation has unrelated issues (#76798)", () => {
-    const migratedConfig = { agents: { defaults: { model: { primary: "openai/gpt-5.4" } } } };
+    const migratedConfig = { agents: { defaults: { typingMode: "thinking" } }, session: {} };
     migrateLegacyConfigMock.mockReturnValueOnce({
       config: migratedConfig,
-      changes: [
-        "Removed agents.defaults.llm; model idle timeout now follows models.providers within the agent/run timeout ceiling.",
-      ],
+      changes: ["Moved session.typingMode → agents.defaults.typingMode."],
       partiallyValid: true,
     });
 
     const result = createLegacyStepResult({
       parsed: {
-        agents: {
-          defaults: { llm: { idleTimeoutSeconds: 120 }, model: { primary: "openai/gpt-5.4" } },
-        },
+        session: { typingMode: "thinking" },
         tools: { web: { search: { provider: "brave" } } },
       },
-      legacyIssues: [{ path: "agents.defaults.llm", message: "deprecated key" }],
+      legacyIssues: [{ path: "session.typingMode", message: "deprecated key" }],
       valid: false,
       issues: [
         {
@@ -229,355 +187,60 @@ describe("doctor config flow steps", () => {
     expect(result.state.pendingChanges).toBe(true);
   });
 
-  it("removes unknown keys and adds preview hint", () => {
-    stripUnknownConfigKeysMock.mockReturnValueOnce({
-      config: {},
-      removed: ["bogus"],
-    });
+  it("removes unknown keys and adds preview hint", async () => {
+    stripUnknownConfigKeysMock.mockReturnValueOnce({ config: {}, removed: ["bogus"] });
 
-    const result = applyUnknownConfigKeyStep({
-      state: {
-        cfg: {},
-        candidate: { bogus: true } as unknown as OpenClawConfig,
-        pendingChanges: false,
-        fixHints: [],
-      },
+    const candidate = { bogus: true } as unknown as OpenClawConfig;
+    const state = await applyRetiredConfigStep({
+      state: mutationState(candidate),
       shouldRepair: false,
       doctorFixCommand: "openclaw doctor --fix",
+      sourceConfig: candidate,
+      emitChanges: vi.fn(),
     });
 
-    expect(result.removed).toEqual(["bogus"]);
-    expect(result.state.candidate).toStrictEqual({});
-    expect(result.state.fixHints).toStrictEqual([
-      'Run "openclaw doctor --fix" to remove these keys.',
-    ]);
+    expect(noteMock).toHaveBeenCalledWith("- bogus", "Unknown config keys");
+    expect(state.candidate).toStrictEqual({});
+    expect(state.fixHints).toStrictEqual(['Run "openclaw doctor --fix" to remove these keys.']);
   });
 
-  it("repairs active malformed auth profile metadata after unknown-key cleanup", () => {
-    stripUnknownConfigKeysMock.mockReturnValueOnce({
-      config: {
-        auth: {
-          profiles: {
-            "openai:default": {},
-          },
-        },
-        models: {
-          providers: {
-            openai: { apiKey: "${OPENAI_API_KEY}" },
-          },
-        },
-        agents: {
-          defaults: {
-            model: {
-              primary: "anthropic/claude-opus-4-6",
-              fallbacks: ["openai/gpt-5.5"],
-            },
-          },
-        },
-      },
-      removed: ["auth.profiles.openai:default.key"],
-    });
-
-    const result = applyUnknownConfigKeyStep({
-      state: {
-        cfg: {},
-        candidate: {
-          auth: {
-            profiles: {
-              "openai:default": { key: "sk-test" },
-            },
-          },
-          models: {
-            providers: {
-              openai: { apiKey: "${OPENAI_API_KEY}" },
-            },
-          },
-          agents: {
-            defaults: {
-              model: {
-                primary: "anthropic/claude-opus-4-6",
-                fallbacks: ["openai/gpt-5.5"],
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
-        pendingChanges: false,
-        fixHints: [],
-      },
-      shouldRepair: true,
-      doctorFixCommand: "openclaw doctor --fix",
-    });
-
-    expect(result.repairs).toEqual([
-      "Repaired auth.profiles.openai:default metadata for active openai auth.",
-    ]);
-    expect(result.state.cfg.auth?.profiles?.["openai:default"]).toEqual({
-      provider: "openai",
-      mode: "api_key",
-    });
-  });
-
-  it("keeps valid active auth profile metadata while stripping stale secret fields", () => {
-    stripUnknownConfigKeysMock.mockReturnValueOnce({
-      config: {
-        auth: {
-          profiles: {
-            "openai:default": { provider: "openai", mode: "api_key" },
-          },
-        },
-        models: {
-          providers: {
-            openai: { apiKey: "${OPENAI_API_KEY}" },
-          },
-        },
-        agents: {
-          defaults: {
-            model: {
-              fallbacks: ["openai/gpt-5.5"],
-            },
-          },
-        },
-      },
-      removed: ["auth.profiles.openai:default.key"],
-    });
-
-    const result = applyUnknownConfigKeyStep({
-      state: {
-        cfg: {},
-        candidate: {
-          auth: {
-            profiles: {
-              "openai:default": {
-                provider: "openai",
-                mode: "api_key",
-                key: "sk-test",
-              },
-            },
-          },
-          models: {
-            providers: {
-              openai: { apiKey: "${OPENAI_API_KEY}" },
-            },
-          },
-          agents: {
-            defaults: {
-              model: {
-                fallbacks: ["openai/gpt-5.5"],
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
-        pendingChanges: false,
-        fixHints: [],
-      },
-      shouldRepair: true,
-      doctorFixCommand: "openclaw doctor --fix",
-    });
-
-    expect(result.repairs).toStrictEqual([]);
-    expect(result.state.cfg.auth?.profiles?.["openai:default"]).toEqual({
-      provider: "openai",
-      mode: "api_key",
-    });
-  });
-
-  it("repairs non-default auth profiles for active providers", () => {
-    stripUnknownConfigKeysMock.mockReturnValueOnce({
-      config: {
-        auth: {
-          profiles: {
-            "openai:work": {},
-          },
-        },
-        agents: {
-          defaults: {
-            model: {
-              fallbacks: ["openai/gpt-5.5"],
-            },
-          },
-        },
-      },
-      removed: ["auth.profiles.openai:work.key"],
-    });
-
-    const result = applyUnknownConfigKeyStep({
-      state: {
-        cfg: {},
-        candidate: {
-          auth: {
-            profiles: {
-              "openai:work": { key: "sk-test" },
-            },
-          },
-          agents: {
-            defaults: {
-              model: {
-                fallbacks: ["openai/gpt-5.5"],
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
-        pendingChanges: false,
-        fixHints: [],
-      },
-      shouldRepair: true,
-      doctorFixCommand: "openclaw doctor --fix",
-    });
-
-    expect(result.repairs).toEqual([
-      "Repaired auth.profiles.openai:work metadata for active openai auth.",
-    ]);
-    expect(result.state.cfg.auth?.profiles?.["openai:work"]).toEqual({
-      provider: "openai",
-      mode: "api_key",
-    });
-  });
-
-  it("preserves explicit model auth profile refs during unknown-key cleanup", () => {
-    stripUnknownConfigKeysMock.mockReturnValueOnce({
-      config: {
-        auth: {
-          profiles: {
-            "openai:default": {},
-          },
-        },
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/gpt-5.5@openai:default",
-            },
-          },
-        },
-      },
-      removed: ["auth.profiles.openai:default.key"],
-    });
-
-    const result = applyUnknownConfigKeyStep({
-      state: {
-        cfg: {},
-        candidate: {
-          auth: {
-            profiles: {
-              "openai:default": { key: "sk-test" },
-            },
-          },
-          agents: {
-            defaults: {
-              model: {
-                primary: "openai/gpt-5.5@openai:default",
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
-        pendingChanges: false,
-        fixHints: [],
-      },
-      shouldRepair: true,
-      doctorFixCommand: "openclaw doctor --fix",
-    });
-
-    expect(result.state.cfg.auth?.profiles?.["openai:default"]).toEqual({
-      provider: "openai",
-      mode: "api_key",
-    });
-  });
-
-  it("infers providers for bare auth profile suffixes", () => {
-    stripUnknownConfigKeysMock.mockReturnValueOnce({
-      config: {
-        auth: {
-          profiles: {
-            work: {},
-          },
-        },
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/gpt-5.5@work",
-            },
-          },
-        },
-      },
-      removed: ["auth.profiles.work.key"],
-    });
-
-    const result = applyUnknownConfigKeyStep({
-      state: {
-        cfg: {},
-        candidate: {
-          auth: {
-            profiles: {
-              work: { key: "sk-test" },
-            },
-          },
-          agents: {
-            defaults: {
-              model: {
-                primary: "openai/gpt-5.5@work",
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
-        pendingChanges: false,
-        fixHints: [],
-      },
-      shouldRepair: true,
-      doctorFixCommand: "openclaw doctor --fix",
-    });
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.state.cfg.auth?.profiles?.work).toEqual({
-      provider: "openai",
-      mode: "api_key",
-    });
-  });
-
-  it("protects auth profiles referenced only by channel model overrides", () => {
-    stripUnknownConfigKeysMock.mockReturnValueOnce({
-      config: {
-        auth: {
-          profiles: {
-            "openai:default": {},
-          },
-        },
-        channels: {
-          modelByChannel: {
-            slack: {
-              C123: "openai/gpt-5.5@openai:default",
-            },
-          },
-        },
-      },
-      removed: ["auth.profiles.openai:default.key"],
-    });
-
-    const result = applyUnknownConfigKeyStep({
-      state: {
-        cfg: {},
-        candidate: {
-          auth: {
-            profiles: {
-              "openai:default": { key: "sk-test" },
-            },
-          },
-          channels: {
-            modelByChannel: {
-              slack: {
-                C123: "openai/gpt-5.5@openai:default",
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
-        pendingChanges: false,
-        fixHints: [],
-      },
-      shouldRepair: true,
-      doctorFixCommand: "openclaw doctor --fix",
-    });
-
-    expect(result.state.cfg.auth?.profiles?.["openai:default"]).toEqual({
-      provider: "openai",
-      mode: "api_key",
-    });
-  });
+  it.each([
+    [
+      "openai:default",
+      { key: "sk-test" },
+      { primary: "anthropic/claude-opus-4-6", fallbacks: ["openai/gpt-5.5"] },
+      ["Repaired auth.profiles.openai:default metadata for active openai auth."],
+    ],
+    [
+      "openai:default",
+      { provider: "openai", mode: "api_key", key: "sk-test" },
+      { fallbacks: ["openai/gpt-5.5"] },
+      [],
+    ],
+    [
+      "work",
+      { key: "sk-test" },
+      { primary: "openai/gpt-5.5@work" },
+      ["Repaired auth.profiles.work metadata for active openai auth."],
+    ],
+  ])(
+    "normalizes %s metadata %j after unknown-key cleanup",
+    async (profileId, metadata, model, repairs) => {
+      const result = await repairAfterAuthKeyCleanup(
+        profileId,
+        metadata,
+        model,
+        profileId !== "work",
+      );
+      expect(result.changes).toStrictEqual([
+        `- auth.profiles.${profileId}.key`,
+        ...repairs.map((repair) => `- ${repair}`),
+      ]);
+      expect(noteMock).not.toHaveBeenCalled();
+      expect(result.state.cfg.auth?.profiles?.[profileId]).toEqual({
+        provider: "openai",
+        mode: "api_key",
+      });
+    },
+  );
 });

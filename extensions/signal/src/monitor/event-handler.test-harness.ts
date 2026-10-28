@@ -5,20 +5,36 @@ import type {
   PreparedInboundReply,
   runChannelInboundEvent,
 } from "openclaw/plugin-sdk/channel-inbound";
-import type { SignalEventHandlerDeps, SignalReactionMessage } from "./event-handler.types.js";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
+import { setSignalRuntime } from "../runtime.js";
+import type { SignalEventHandlerDeps } from "./event-handler.types.js";
+
+export type TestDispatchResult = {
+  queuedFinal: boolean;
+  counts: Record<"tool" | "block" | "final", number>;
+  failedCounts?: Partial<Record<"tool" | "block" | "final", number>>;
+  settledReceipt?: {
+    counts: Record<
+      "tool" | "block" | "final",
+      {
+        delivered: number;
+        deliveredNotVisible: number;
+        cancelled: number;
+        failedBeforeSend: number;
+        failedAfterSend: number;
+      }
+    >;
+    anyVisibleDelivered: boolean;
+  };
+};
 
 export function createBaseSignalEventHandlerDeps(
   overrides: Partial<SignalEventHandlerDeps> = {},
 ): SignalEventHandlerDeps {
+  setSignalRuntime(createPluginRuntimeMock());
   return {
     runtime: { log: () => {}, error: () => {} } as SignalEventHandlerDeps["runtime"],
-    statusReactionTiming: {
-      debounceMs: 0,
-      doneHoldMs: 0,
-      errorHoldMs: 0,
-      stallSoftMs: 60_000,
-      stallHardMs: 120_000,
-    },
     cfg: {},
     baseUrl: "http://localhost",
     accountId: "default",
@@ -37,12 +53,6 @@ export function createBaseSignalEventHandlerDeps(
     readReceiptsViaDaemon: false,
     fetchAttachment: async () => null,
     deliverReplies: async () => {},
-    resolveSignalReactionTargets: () => [],
-    isSignalReactionMessage: (
-      _reaction: SignalReactionMessage | null | undefined,
-    ): _reaction is SignalReactionMessage => false,
-    shouldEmitSignalReactionNotification: () => false,
-    buildSignalReactionSystemEventText: () => "reaction",
     ...overrides,
   };
 }
@@ -80,7 +90,9 @@ export function createSignalPreparedDispatchRunner(
             channel: resolved.channel,
             accountId: resolved.accountId,
             routeSessionKey: resolved.route.sessionKey,
-            storePath: "/tmp/openclaw/signal-sessions.json",
+            storePath: resolveStorePath(resolved.cfg.session?.store, {
+              agentId: resolved.route.agentId,
+            }),
             ctxPayload: resolved.ctxPayload,
             recordInboundSession,
             afterRecord: resolved.afterRecord,

@@ -1,5 +1,57 @@
 [
   {
+    "source": "Get support",
+    "target": "获取支持"
+  },
+  {
+    "source": "Database engines",
+    "target": "数据库引擎"
+  },
+  {
+    "source": "PostgreSQL operator guide",
+    "target": "PostgreSQL 运维指南"
+  },
+  {
+    "source": "MCP Events",
+    "target": "MCP Events"
+  },
+  {
+    "source": "Mcp Events plugin reference",
+    "target": "MCP Events 插件参考"
+  },
+  {
+    "source": "MCP connections",
+    "target": "MCP 连接"
+  },
+  {
+    "source": "Plugin service runtime",
+    "target": "插件服务运行时"
+  },
+  {
+    "source": "Migrate synchronous SQLite APIs",
+    "target": "迁移同步 SQLite API"
+  },
+  {
+    "source": "Async SQLite migration",
+    "target": "异步 SQLite 迁移"
+  },
+  {
+    "source": "X / Twitter",
+    "target": "X / Twitter"
+  },
+  {
+    "source": "X plugin reference",
+    "target": "X 插件参考"
+  },
+  {
+    "source": "X replies",
+    "target": "X 回复"
+  },
+  {
+    "source": "x",
+    "target": "x"
+  },
+  {
     "source": "Radius",
     "target": "Radius"
   },
@@ -12,12 +64,68 @@
     "target": "radius"
   },
   {
+    "source": "Requesty",
+    "target": "Requesty"
+  },
+  {
+    "source": "Requesty (unified router)",
+    "target": "Requesty（统一路由）"
+  },
+  {
+    "source": "Requesty plugin reference",
+    "target": "Requesty 插件参考"
+  },
+  {
+    "source": "requesty",
+    "target": "requesty"
+  },
+  {
+    "source": "Abliteration",
+    "target": "Abliteration"
+  },
+  {
+    "source": "Abliteration plugin reference",
+    "target": "Abliteration 插件参考"
+  },
+  {
+    "source": "abliteration",
+    "target": "abliteration"
+  },
+  {
+    "source": "All providers",
+    "target": "所有提供商"
+  },
+  {
+    "source": "Thinking modes",
+    "target": "思考模式"
+  },
+  {
     "source": "Omarchy",
     "target": "Omarchy"
   },
   {
     "source": "OpenClaw",
     "target": "OpenClaw"
+  },
+  {
+    "source": "FaceTime plugin",
+    "target": "FaceTime 插件"
+  },
+  {
+    "source": "FaceTime recovery and removal",
+    "target": "FaceTime 恢复与移除"
+  },
+  {
+    "source": "Facetime plugin",
+    "target": "FaceTime 插件"
+  },
+  {
+    "source": "Facetime plugin reference",
+    "target": "FaceTime 插件参考"
+  },
+  {
+    "source": "facetime",
+    "target": "facetime"
   },
   {
     "source": "macOS platform notes",
@@ -170,6 +278,14 @@
   {
     "source": "OpenAI provider",
     "target": "OpenAI provider"
+  },
+  {
+    "source": "OpenAI authentication",
+    "target": "OpenAI 身份验证"
+  },
+  {
+    "source": "Authentication",
+    "target": "身份验证"
   },
   {
     "source": "xAI provider",
@@ -684,6 +800,14 @@
     "target": "Moonshot AI"
   },
   {
+    "source": "Neon AI Gateway",
+    "target": "Neon AI Gateway"
+  },
+  {
+    "source": "Liquid Inference",
+    "target": "Liquid Inference"
+  },
+  {
     "source": "Mistral",
     "target": "Mistral"
   },
@@ -780,8 +904,24 @@
     "target": "Kubernetes"
   },
   {
+    "source": "Cloudflare",
+    "target": "Cloudflare"
+  },
+  {
     "source": "Cloudflare Containers",
     "target": "Cloudflare Containers"
+  },
+  {
+    "source": "Cloudflare plugin",
+    "target": "Cloudflare 插件"
+  },
+  {
+    "source": "Cloudflare plugin reference",
+    "target": "Cloudflare 插件参考"
+  },
+  {
+    "source": "cloudflare",
+    "target": "cloudflare"
   },
   {
     "source": "Fly.io",
@@ -1438,6 +1578,26 @@
   {
     "source": "Zoom meetings plugin",
     "target": "Zoom 会议插件"
+  },
+  {
+    "source": "Slack huddles plugin",
+    "target": "Slack 快速通话插件"
+  },
+  {
+    "source": "Slack huddles plugin reference",
+    "target": "Slack 快速通话插件参考"
+  },
+  {
+    "source": "slack-huddles",
+    "target": "slack-huddles"
+  },
+  {
+    "source": "Slack channel",
+    "target": "Slack 频道"
+  },
+  {
+    "source": "Transcripts CLI",
+    "target": "转录 CLI"
   },
   {
     "source": "Voice call plugin",
@@ -2452,6 +2612,10 @@
     "target": "Gateway 网关服务与进程"
   },
   {
+    "source": "Config validation and checks",
+    "target": "配置验证与检查"
+  },
+  {
     "source": "Config validation and probes",
     "target": "配置校验与探针"
   },
@@ -2786,6 +2950,10 @@
   {
     "source": "Session management",
     "target": "会话管理"
+  },
+  {
+    "source": "Session controller",
+    "target": "会话控制器"
   },
   {
     "source": "Transcript hygiene",
@@ -3230,6 +3398,10 @@
   {
     "source": "CI runner classes",
     "target": "CI 运行器类型"
+  },
+  {
+    "source": "CI routing costs",
+    "target": "CI 路由成本"
   },
   {
     "source": "CI capacity and shard weights",
@@ -3768,8 +3940,8 @@
     "target": "OpenAI 覆盖范围与费用"
   },
   {
-    "source": "OpenAI image and video generation",
-    "target": "OpenAI 图像与视频生成"
+    "source": "OpenAI image generation",
+    "target": "OpenAI 图像生成"
   },
   {
     "source": "OpenAI voice and speech",
@@ -3786,6 +3958,10 @@
   {
     "source": "Code Mode quickstart",
     "target": "代码模式快速上手"
+  },
+  {
+    "source": "Code Mode executors",
+    "target": "代码模式执行器"
   },
   {
     "source": "Code Mode configuration",
@@ -3864,6 +4040,10 @@
     "target": "远程与托管浏览器"
   },
   {
+    "source": "Lightweight browsers",
+    "target": "轻量级浏览器"
+  },
+  {
     "source": "Browser security",
     "target": "浏览器安全"
   },
@@ -3914,6 +4094,10 @@
   {
     "source": "Canonical scenario coverage",
     "target": "标准场景覆盖"
+  },
+  {
+    "source": "Scenario coverage",
+    "target": "场景覆盖"
   },
   {
     "source": "Channel QA reference",
@@ -4292,6 +4476,18 @@
     "target": "存储变更与发布预检"
   },
   {
+    "source": "storage",
+    "target": "storage"
+  },
+  {
+    "source": "Storage locations",
+    "target": "存储位置"
+  },
+  {
+    "source": "Storage CLI",
+    "target": "存储 CLI"
+  },
+  {
     "source": "Agent schema history",
     "target": "Agent 数据库 schema 历史"
   },
@@ -4584,8 +4780,12 @@
     "target": "Telegram 传输方式"
   },
   {
-    "source": "Telegram Dashboard Mini App",
-    "target": "Telegram 仪表盘小程序"
+    "source": "Control UI Mini App",
+    "target": "Control UI 小程序"
+  },
+  {
+    "source": "Telegram Control UI Mini App",
+    "target": "Telegram Control UI 小程序"
   },
   {
     "source": "Telegram troubleshooting",
@@ -4866,5 +5066,117 @@
   {
     "source": "Decision models",
     "target": "决策模型"
+  },
+  {
+    "source": "TypeSafe AI",
+    "target": "TypeSafe AI"
+  },
+  {
+    "source": "Typesafe plugin reference",
+    "target": "TypeSafe 插件参考"
+  },
+  {
+    "source": "typesafe",
+    "target": "typesafe"
+  },
+  {
+    "source": "Local ONNX decision models",
+    "target": "本地 ONNX 决策模型"
+  },
+  {
+    "source": "ONNX",
+    "target": "ONNX"
+  },
+  {
+    "source": "onnx",
+    "target": "onnx"
+  },
+  {
+    "source": "Onnx plugin reference",
+    "target": "ONNX 插件参考"
+  },
+  {
+    "source": "Telnyx",
+    "target": "Telnyx"
+  },
+  {
+    "source": "Telnyx plugin",
+    "target": "Telnyx 插件"
+  },
+  {
+    "source": "telnyx",
+    "target": "telnyx"
+  },
+  {
+    "source": "Telnyx (AI inference)",
+    "target": "Telnyx（AI 推理）"
+  },
+  {
+    "source": "Deploy a team server",
+    "target": "部署团队服务器"
+  },
+  {
+    "source": "Worker-local inference",
+    "target": "工作器本地推理"
+  },
+  {
+    "source": "Recommended models",
+    "target": "推荐模型"
+  },
+  {
+    "source": "MCP Relay",
+    "target": "MCP Relay"
+  },
+  {
+    "source": "Mcp Relay plugin reference",
+    "target": "MCP Relay 插件参考"
+  },
+  {
+    "source": "mcp-relay",
+    "target": "mcp-relay"
+  },
+  {
+    "source": "Remote Control UI ingress",
+    "target": "远程 Control UI 入口"
+  },
+  {
+    "source": "Cloud environment file",
+    "target": "云环境文件"
+  },
+  {
+    "source": "Standalone builds",
+    "target": "独立可执行文件构建"
+  },
+  {
+    "source": "PostgreSQL operator guide",
+    "target": "PostgreSQL 运维指南"
+  },
+  {
+    "source": "Plugin runtime compatibility",
+    "target": "插件运行时兼容性"
+  },
+  {
+    "source": "Runtime compatibility",
+    "target": "运行时兼容性"
+  },
+  {
+    "source": "Runtime compatibility lint",
+    "target": "运行时兼容性静态检查"
+  },
+  {
+    "source": "Liquid AI",
+    "target": "Liquid AI"
+  },
+  {
+    "source": "Liquid AI plugin reference",
+    "target": "Liquid AI 插件参考"
+  },
+  {
+    "source": "liquid-ai",
+    "target": "liquid-ai"
+  },
+  {
+    "source": "Liquid AI (Decision models)",
+    "target": "Liquid AI（决策模型）"
   }
 ]

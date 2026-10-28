@@ -29,5 +29,6 @@ vi.mock("../../../infra/agent-events.js", () => ({
 vi.mock("../../../infra/agent-run-registry.js", () => ({
   getAgentRunLifecycleGeneration: () => "test-generation",
   getAgentRunContext: () => undefined,
+  listAgentRunsForSession: () => [],
   hasLiveAgentRunContext: () => false,
 }));

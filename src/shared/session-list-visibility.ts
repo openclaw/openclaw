@@ -1,4 +1,24 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { isSubagentSessionKey, parseAgentSessionKey } from "../sessions/session-key-utils.js";
+
+export function isSubagentSessionRow(
+  key: string,
+  entry?: { spawnedBy?: string; category?: string },
+): boolean {
+  return (
+    isSubagentSessionKey(key) ||
+    // Visible spawned conversations use dashboard keys even without a sidebar group.
+    // Lineage alone must not hide the session where the human follows the work.
+    Boolean(
+      entry?.spawnedBy &&
+      !parseAgentSessionKey(key)?.rest.toLowerCase().startsWith("dashboard:") &&
+      !normalizeOptionalString(entry.category),
+    )
+  );
+}
 
 /** Display/discovery classification; routing validates canonical keys separately. */
 export function isCronSessionDisplayKey(key: string): boolean {
@@ -8,9 +28,9 @@ export function isCronSessionDisplayKey(key: string): boolean {
 }
 
 /**
- * Classify probes from recorded provenance, never transcript text. Legacy rows
- * without provenance and operator-named CLI sessions remain discoverable. Cron
- * rows belong to the separate automation filter even when a system created them.
+ * Classify internal lanes from provenance or reserved keys, never transcript text.
+ * Legacy rows without either and operator-named CLI sessions remain discoverable.
+ * Cron rows belong to the separate automation filter even when a system created them.
  */
 export function isSystemCreatedSessionRow(row: {
   key: string;
@@ -19,9 +39,21 @@ export function isSystemCreatedSessionRow(row: {
   label?: string;
   displayName?: string;
   subject?: string;
+  classification?: string;
 }): boolean {
   if (isCronSessionDisplayKey(row.key)) {
     return false;
+  }
+  // Recall rows predate creation provenance. Their producer-owned suffix also
+  // identifies existing rows while the recall is running or awaiting cleanup.
+  if (/^agent:[^:]+:(?:.+:)?active-memory:[a-f0-9]{12}$/iu.test(row.key.trim())) {
+    return true;
+  }
+  // Isolated heartbeat lanes are Gateway-owned background work surfaced with a
+  // recorded classification. Hide them from default views, while keeping
+  // operator-named lanes discoverable and reachable via the system toggle.
+  if (row.classification === "heartbeat") {
+    return !(row.label?.trim() || row.displayName?.trim() || row.subject?.trim());
   }
   if (row.createdActor?.type === "system") {
     return true;

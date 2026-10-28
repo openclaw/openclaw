@@ -12,23 +12,15 @@ import { readResponseTextWithLimit } from "../../lib/response-body.ts";
 const TWEAKCN_HOSTS = new Set(["tweakcn.com", "www.tweakcn.com"]);
 const MAX_TWEAKCN_THEME_BYTES = 200_000;
 const TWEAKCN_FETCH_TIMEOUT_MS = 10_000;
-type TweakcnThemeResolution = {
-  sourceUrl: string;
-  fetchUrl: string;
-  themeId: string;
-};
 
 function normalizeThemeIdFromPath(pathname: string): string | null {
   const segments = pathname.split("/").filter(Boolean);
   const themeId = segments.at(-1);
-  if (!themeId) {
-    return null;
-  }
-  if (segments.length === 2 && segments[0] === "themes") {
-    requireThemeId(themeId);
-    return themeId;
-  }
-  if (segments.length === 3 && segments[0] === "r" && segments[1] === "themes") {
+  if (
+    themeId &&
+    ((segments.length === 2 && segments[0] === "themes") ||
+      (segments.length === 3 && segments[0] === "r" && segments[1] === "themes"))
+  ) {
     requireThemeId(themeId);
     return themeId;
   }
@@ -56,23 +48,7 @@ function normalizePastedThemeInput(input: string): string {
   return embeddedUrl ?? inputValue;
 }
 
-function normalizeThemeIdFromUrl(parsed: URL): string {
-  const pathThemeId = normalizeThemeIdFromPath(parsed.pathname);
-  if (pathThemeId) {
-    return pathThemeId;
-  }
-  const queryThemeId =
-    parsed.searchParams.get("theme") ??
-    parsed.searchParams.get("themeId") ??
-    parsed.searchParams.get("id");
-  if (queryThemeId) {
-    requireThemeId(queryThemeId);
-    return queryThemeId;
-  }
-  throw new Error("Unsupported tweakcn link. Expected a theme share URL.");
-}
-
-function normalizeTweakcnThemeUrl(input: string): TweakcnThemeResolution {
+export async function importCustomThemeFromUrl(input: string): Promise<ImportedCustomTheme> {
   const normalized = normalizePastedThemeInput(input);
   let parsed: URL;
   try {
@@ -83,83 +59,69 @@ function normalizeTweakcnThemeUrl(input: string): TweakcnThemeResolution {
   if (!TWEAKCN_HOSTS.has(parsed.hostname)) {
     throw new Error("Only tweakcn.com theme links are supported.");
   }
-  const themeId = normalizeThemeIdFromUrl(parsed);
-  return {
-    themeId,
-    sourceUrl: `https://tweakcn.com/themes/${themeId}`,
-    fetchUrl: `https://tweakcn.com/r/themes/${themeId}`,
-  };
-}
-
-function normalizeImportedCustomTheme(
-  payload: unknown,
-  resolution: Pick<TweakcnThemeResolution, "sourceUrl" | "themeId">,
-): ImportedCustomTheme {
-  const record = readThemeRecord(payload);
-  const cssVars = readThemeRecord(record?.cssVars);
-  const light = readThemeRecord(cssVars?.light);
-  const dark = readThemeRecord(cssVars?.dark);
-  const shared = cssVars?.theme === undefined ? undefined : readThemeRecord(cssVars.theme);
-  if (!record || !cssVars || !light || !dark || shared === null) {
-    throw new Error("tweakcn returned an invalid theme payload.");
+  let themeId = normalizeThemeIdFromPath(parsed.pathname);
+  if (!themeId) {
+    themeId =
+      parsed.searchParams.get("theme") ??
+      parsed.searchParams.get("themeId") ??
+      parsed.searchParams.get("id");
+    if (!themeId) {
+      throw new Error("Unsupported tweakcn link. Expected a theme share URL.");
+    }
+    requireThemeId(themeId);
   }
-  return {
-    sourceUrl: resolution.sourceUrl,
-    themeId: resolution.themeId,
-    label: describeThemeLabel(normalizeOptionalString(record.name)),
-    importedAt: new Date().toISOString(),
-    light: normalizeThemePalette("light", light, shared),
-    dark: normalizeThemePalette("dark", dark, shared),
-  };
-}
-
-function assertTweakcnResponseUrl(value: string | undefined) {
-  if (!value) {
-    return;
-  }
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    throw new Error("Unexpected tweakcn import response URL.");
-  }
-  if (parsed.protocol !== "https:" || !TWEAKCN_HOSTS.has(parsed.hostname)) {
-    throw new Error("Unexpected redirect during tweakcn import.");
-  }
-}
-
-async function readJsonResponseWithLimit(response: Response): Promise<unknown> {
-  const text = await readResponseTextWithLimit(response, {
-    maxBytes: MAX_TWEAKCN_THEME_BYTES,
-    tooLargeMessage: "tweakcn theme payload is too large.",
-    missingBodyMessage: "tweakcn returned an unreadable theme payload.",
-  });
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    throw new Error("tweakcn returned invalid JSON.");
-  }
-}
-
-export async function importCustomThemeFromUrl(
-  input: string,
-  fetchImpl: typeof fetch = fetch,
-): Promise<ImportedCustomTheme> {
-  const resolution = normalizeTweakcnThemeUrl(input);
+  const sourceUrl = `https://tweakcn.com/themes/${themeId}`;
+  const fetchUrl = `https://tweakcn.com/r/themes/${themeId}`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TWEAKCN_FETCH_TIMEOUT_MS);
   try {
-    const response = await fetchImpl(resolution.fetchUrl, {
+    const response = await fetch(fetchUrl, {
       headers: { accept: "application/json" },
       redirect: "error",
       signal: controller.signal,
     });
-    assertTweakcnResponseUrl(response.url);
+    const responseUrlText = response.url;
+    if (responseUrlText) {
+      let responseUrl: URL;
+      try {
+        responseUrl = new URL(responseUrlText);
+      } catch {
+        throw new Error("Unexpected tweakcn import response URL.");
+      }
+      if (responseUrl.protocol !== "https:" || !TWEAKCN_HOSTS.has(responseUrl.hostname)) {
+        throw new Error("Unexpected redirect during tweakcn import.");
+      }
+    }
     if (!response.ok) {
       throw new Error(`tweakcn import failed (${response.status}).`);
     }
-    const payload = await readJsonResponseWithLimit(response);
-    return normalizeImportedCustomTheme(payload, resolution);
+    const text = await readResponseTextWithLimit(response, {
+      maxBytes: MAX_TWEAKCN_THEME_BYTES,
+      tooLargeMessage: "tweakcn theme payload is too large.",
+      missingBodyMessage: "tweakcn returned an unreadable theme payload.",
+    });
+    let payload: unknown;
+    try {
+      payload = JSON.parse(text) as unknown;
+    } catch {
+      throw new Error("tweakcn returned invalid JSON.");
+    }
+    const record = readThemeRecord(payload);
+    const cssVars = readThemeRecord(record?.cssVars);
+    const light = readThemeRecord(cssVars?.light);
+    const dark = readThemeRecord(cssVars?.dark);
+    const shared = cssVars?.theme === undefined ? undefined : readThemeRecord(cssVars.theme);
+    if (!record || !cssVars || !light || !dark || shared === null) {
+      throw new Error("tweakcn returned an invalid theme payload.");
+    }
+    return {
+      sourceUrl,
+      themeId,
+      label: describeThemeLabel(normalizeOptionalString(record.name)),
+      importedAt: new Date().toISOString(),
+      light: normalizeThemePalette("light", light, shared),
+      dark: normalizeThemePalette("dark", dark, shared),
+    };
   } catch (error) {
     if (controller.signal.aborted) {
       throw new Error("tweakcn import timed out.", { cause: error });

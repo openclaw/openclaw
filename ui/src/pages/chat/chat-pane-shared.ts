@@ -1,43 +1,28 @@
-import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  isApplePlatform,
+  matchesKeyboardShortcut,
+  resolveAsciiShortcutKey,
+} from "../../../../src/shared/keyboard-shortcuts.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { capturePlacementStartupConnection } from "../../app/session-placement-startup.ts";
+import { findMenuSearch, menuOwnsShortcut } from "../../components/menu-shortcuts.ts";
+import { hasModalSurface, registryFor } from "../../components/overlay-registry.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
-import type { ChatAttachment, ChatGoalDraftMode, HumanMention } from "../../lib/chat/chat-types.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import {
+  PANE_SESSION_HANDOFF_TTL_MS,
+  paneSessionHandoffs,
+  removePaneSessionHandoffs,
+  type PaneSessionHandoff,
+  type PendingPaneSessionHandoff,
+} from "./chat-pane-handoff-lifecycle.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
-export type ChatPageContext = ApplicationContext;
 export type PaneSessionChangeOptions = { replace?: boolean };
-export type PaneSessionHandoff = {
-  goalMode?: ChatGoalDraftMode;
-  attachments: ChatAttachment[];
-  composerFallbacks?: ChatPageHost["chatComposerFallbackByScope"];
-  draft: string;
-  mentions?: readonly HumanMention[];
-  send?: boolean;
-};
-type PendingPaneSessionHandoff = PaneSessionHandoff & { expiresAt: number; sessionKey: string };
-// A retained pane owns one session for life, so creation/fork adoption crosses
-// component instances. The application context scopes that one-shot transfer.
-const PANE_SESSION_HANDOFF_TTL_MS = 30_000;
 const PANE_SESSION_HANDOFF_LIMIT = 4;
-const paneSessionHandoffs = new WeakMap<
-  ApplicationContext,
-  Map<string, PendingPaneSessionHandoff[]>
->();
-
-function removePaneSessionHandoffs(
-  pending: PendingPaneSessionHandoff[] | undefined,
-  matches: (handoff: PendingPaneSessionHandoff) => boolean,
-): void {
-  for (let index = (pending?.length ?? 0) - 1; index >= 0; index -= 1) {
-    if (matches(pending![index]!)) {
-      pending!.splice(index, 1);
-    }
-  }
-}
 
 function paneHandoffs(
   context: ApplicationContext,
@@ -71,9 +56,15 @@ export function preparePaneSessionHandoff(
   removePaneSessionHandoffs(pending, (candidate) =>
     areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey),
   );
+  const owner = context.gateway.snapshot.client;
+  const sameConnection = capturePlacementStartupConnection(context.gateway, {
+    gatewayUrl: context.gateway.connection.gatewayUrl,
+    recoveryScope: owner?.recoveryScope || undefined,
+  });
   const stored = {
     sessionKey,
-    ...handoff,
+    value: { ...handoff },
+    isCurrent: () => context.gateway.snapshot.client === owner && sameConnection(),
     expiresAt: Date.now() + PANE_SESSION_HANDOFF_TTL_MS,
   };
   pending.push(stored);
@@ -91,15 +82,14 @@ export function consumePaneSessionHandoff(
   sessionKey: string,
 ): PaneSessionHandoff | null {
   const pending = paneHandoffs(context, paneId, false);
-  const index = pending?.findIndex((candidate) =>
-    areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey),
+  const index = pending?.findIndex(
+    (candidate) =>
+      candidate.isCurrent() && areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey),
   );
   if (!pending || index === undefined || index < 0) {
     return null;
   }
-  const handoff = pending.splice(index, 1)[0]!;
-  const { expiresAt: _expiresAt, sessionKey: _sessionKey, ...value } = handoff;
-  return value;
+  return pending.splice(index, 1)[0]!.value;
 }
 
 export function clearPaneSessionHandoff(
@@ -112,31 +102,11 @@ export function clearPaneSessionHandoff(
   );
 }
 
-export function retireSessionPaneHandoffs(
-  context: ApplicationContext,
-  targets: readonly { key: string; retireBeforeRevision: number }[],
-): void {
-  for (const pending of paneSessionHandoffs.get(context)?.values() ?? []) {
-    removePaneSessionHandoffs(pending, (handoff) =>
-      targets.some(
-        ({ key, retireBeforeRevision }) =>
-          areUiSessionKeysEquivalent(handoff.sessionKey, key) &&
-          handoff.expiresAt - PANE_SESSION_HANDOFF_TTL_MS < retireBeforeRevision,
-      ),
-    );
-  }
-}
-
 export function clearPaneSessionHandoffs(context: ApplicationContext, paneId: string): void {
   const byPane = paneSessionHandoffs.get(context);
-  if (!byPane) {
+  if (!byPane?.delete(paneId)) {
     return;
   }
-  const pending = byPane.get(paneId);
-  if (!pending) {
-    return;
-  }
-  byPane.delete(paneId);
   if (byPane.size === 0) {
     paneSessionHandoffs.delete(context);
   }
@@ -151,53 +121,20 @@ export type ResolvedBoardView = {
   activeTabId: string;
 };
 
-export const CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS = 500;
 // One distance owns both halves of early history loading: upward intent within
 // this range arms the sentinel observer, and the observer's rootMargin fires
 // the same distance out. Splitting them re-creates the wall at the smaller value.
 export const CHAT_HISTORY_PREFETCH_EDGE_PX = 1200;
 export const CHAT_HISTORY_INTENT_IDLE_MS = 200;
-export const CHAT_HISTORY_TOUCH_INTENT_PX = 8;
-export const CHAT_HISTORY_UPWARD_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);
-export const headerPlatformByClient = new WeakMap<GatewayBrowserClient, Promise<string | null>>();
-
-export function catalogRawString(raw: unknown, keys: readonly string[]): string | null {
-  const record = catalogRawRecord(raw);
-  if (!record) {
-    return null;
-  }
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return null;
-}
-export function catalogRawResult(raw: unknown): string | null {
-  const result = catalogRawRecord(raw)?.result;
-  if (result === undefined) {
-    return null;
-  }
-  try {
-    const text = JSON.stringify(result);
-    return text || null;
-  } catch {
-    return null;
-  }
-}
 
 export type ChatPaneConnectionScope = {
-  context: ChatPageContext;
+  context: ApplicationContext;
   state: ChatPageHost;
   client: GatewayBrowserClient;
   generation: number;
   headerOutcomeOwner: string;
-  sessions: ChatPageContext["sessions"];
+  sessions: ApplicationContext["sessions"];
 };
-export const CHAT_OPEN_DETAILS_SELECTOR =
-  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
-export const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
 // Menus without typeahead own activation/navigation, not printable input.
 // Keeping those key classes separate prevents an open menu from silently dropping a letter.
 const CHAT_PRINTABLE_KEY_TARGET_SELECTOR =
@@ -214,16 +151,6 @@ const CHAT_DROPDOWN_KEYS = new Set([
   "Escape",
 ]);
 
-// Shortcut menus own only advertised, enabled keys; every other printable key
-// can still transfer to the composer through the normal browser input pipeline.
-function keyboardShortcutTargetOwnsKey(target: HTMLElement, key: string): boolean {
-  return (
-    /^[a-z0-9]$/iu.test(key) &&
-    target.matches("wa-dropdown, [data-chat-autotype-shortcuts][open]") &&
-    target.querySelector(`[data-shortcut="${key.toLowerCase()}"]:not([disabled])`) !== null
-  );
-}
-
 export const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new session after the active run or queued messages finish.";
 export const NEW_SESSION_LIST_LOADING_MESSAGE =
@@ -231,51 +158,77 @@ export const NEW_SESSION_LIST_LOADING_MESSAGE =
 export const NEW_SESSION_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new thread. Try again in a moment.";
 
+// Expanded questions own only their advertised, enabled numeric shortcuts.
+function questionOwnsNumericShortcut(target: HTMLElement, key: string): boolean {
+  return (
+    /^[1-9]$/u.test(key) &&
+    target.matches(
+      `[data-chat-autotype-shortcuts="active"]:has([data-shortcut="${key}"]:not(:disabled))`,
+    )
+  );
+}
+
 function keyboardEventPathHasInteractiveTarget(event: KeyboardEvent): boolean {
   return event
     .composedPath()
     .some(
       (target) =>
         target instanceof HTMLElement &&
-        (target.matches(CHAT_PRINTABLE_KEY_TARGET_SELECTOR) ||
-          keyboardShortcutTargetOwnsKey(target, event.key) ||
+        (target.matches("dialog[open], [aria-modal='true']") ||
+          target.matches(CHAT_PRINTABLE_KEY_TARGET_SELECTOR) ||
+          menuOwnsShortcut(target, event.key) ||
+          (!(event.target instanceof HTMLAnchorElement) &&
+            questionOwnsNumericShortcut(target, event.key)) ||
           (event.key === " " && target.matches(CHAT_SPACE_ACTIVATION_SELECTOR))),
     );
 }
 
-function openDropdownOwnsKey(root: ParentNode, key: string): boolean {
-  const surface = root instanceof Element ? (root.closest("openclaw-app") ?? root) : root;
-  return [...surface.querySelectorAll<HTMLElement & { open?: boolean }>("wa-dropdown")].some(
-    (dropdown) =>
-      dropdown.open === true &&
-      !dropdown.closest("[inert]") &&
-      (CHAT_DROPDOWN_KEYS.has(key) || keyboardShortcutTargetOwnsKey(dropdown, key)),
+function openDropdownOwnsKey(root: HTMLElement, key: string): boolean {
+  // Portaled menus can belong to any surface in the containing app.
+  const surface = root.closest("openclaw-app, openclaw-app-shell") ?? root;
+  return [...registryFor(root.ownerDocument).members.keys()].some(
+    (overlay) =>
+      surface.contains(overlay.surface) &&
+      overlay.open &&
+      overlay.surface.matches('[role="menu"][popover]') &&
+      !overlay.surface.closest("[inert]") &&
+      (CHAT_DROPDOWN_KEYS.has(key) ||
+        menuOwnsShortcut(overlay.surface, key) ||
+        (key.length === 1 && Boolean(findMenuSearch(overlay.surface)))),
   );
 }
 
-export function focusChatComposerFromPrintableKeydown(
-  root: ParentNode,
+export function focusChatComposerFromKeydown(
+  root: HTMLElement,
   event: KeyboardEvent,
+  composer: HTMLTextAreaElement | null,
+  options: { allowPaste?: boolean } = {},
 ): void {
+  const nativePaste =
+    options.allowPaste === true &&
+    matchesKeyboardShortcut(
+      { modifiers: event.shiftKey ? ["mod", "shift"] : ["mod"], key: "v", platformSpecific: true },
+      event,
+      isApplePlatform(),
+      resolveAsciiShortcutKey(event),
+    );
+  // Native callers cross modal and composer renderer boundaries to transfer keyboard ownership.
   if (
     event.defaultPrevented ||
     event.isComposing ||
-    event.metaKey ||
-    event.ctrlKey ||
-    event.altKey ||
+    (!nativePaste && (event.metaKey || event.ctrlKey || event.altKey || event.key.length !== 1)) ||
     openDropdownOwnsKey(root, event.key) ||
-    event.key.length !== 1 ||
     keyboardEventPathHasInteractiveTarget(event) ||
-    document.openClawModalLayers?.size ||
-    document.querySelector("dialog[open], [aria-modal='true']")
+    root.closest("[inert]") ||
+    hasModalSurface(root.ownerDocument)
   ) {
     return;
   }
-  const composer = root.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR);
   if (!composer || composer.disabled || composer.readOnly) {
     return;
   }
-  // Focus transfers ownership; block old-target dropdown typeahead from cancelling input.
+  // Keep the native default: paste must reach this textarea with its original clipboard data.
+  // Block old-target dropdown typeahead from cancelling the transferred input.
   composer.focus({ preventScroll: true });
   event.stopImmediatePropagation();
 }

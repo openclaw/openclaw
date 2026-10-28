@@ -47,6 +47,13 @@ export function isCiLikeEnv(env: Record<string, string | undefined> = process.en
 }
 
 /** @internal Shared repository-script contract. */
+export function shouldContinueVitestFailures(
+  env: Record<string, string | undefined> = process.env,
+) {
+  return isCiLikeEnv(env) || env.OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE === "1";
+}
+
+/** @internal Shared repository-script contract. */
 export function resolveLocalVitestEnv(
   env: Record<string, string | undefined> = process.env,
 ): Record<string, string | undefined> {
@@ -234,13 +241,13 @@ export function resolveLocalVitestScheduling(
   }
 
   if (loadRatio >= 0.75) {
-    const loadWorkers = Math.max(2, Math.ceil(inferred * 0.75));
+    const loadWorkers = Math.ceil(inferred * 0.75);
     const maxWorkers =
       memoryPressureLimit === null ? loadWorkers : Math.min(loadWorkers, memoryPressureLimit);
     return {
       maxWorkers,
       fileParallelism: maxWorkers > 1,
-      throttledBySystem: maxWorkers < inferred || maxWorkers < loadWorkers,
+      throttledBySystem: maxWorkers < inferred || memoryPressureLimit === 1,
     };
   }
 

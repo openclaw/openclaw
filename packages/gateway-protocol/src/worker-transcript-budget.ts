@@ -1,28 +1,51 @@
-import type { WorkerTranscriptCommitRequestFrame } from "./schema/worker-admission.js";
+import type {
+  WorkerTranscriptCommitRequestFrame,
+  WorkerTranscriptMessage,
+} from "./schema/worker-admission.js";
 import {
-  WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+  isWorkerFrameWithinBudget,
   WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES,
+  WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
 } from "./schema/worker-protocol-primitives.js";
 
-/** Only image bytes may exceed the transcript's ordinary control budget. */
+function transcriptImageData({ content }: WorkerTranscriptMessage): string[] {
+  return typeof content === "string"
+    ? []
+    : content.flatMap((part) => (part.type === "image" ? [part.data] : []));
+}
+
 export function isWorkerTranscriptFrameWithinBudget(
   frame: WorkerTranscriptCommitRequestFrame,
 ): boolean {
+  return isWorkerFrameWithinBudget(frame, () => frame.params.messages.flatMap(transcriptImageData));
+}
+
+export function takeFittingWorkerTranscriptBatch(
+  frame: WorkerTranscriptCommitRequestFrame,
+): WorkerTranscriptMessage[] {
+  const batch: WorkerTranscriptMessage[] = [];
   try {
-    const bytes = Buffer.byteLength(JSON.stringify(frame), "utf8");
-    if (bytes > WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES) {
-      return false;
-    }
+    let bytes = Buffer.byteLength(
+      JSON.stringify({ ...frame, params: { ...frame.params, messages: [] } }),
+      "utf8",
+    );
     let imageBytes = 0;
     for (const message of frame.params.messages) {
-      for (const part of message.content) {
-        if (part.type === "image") {
-          imageBytes += Buffer.byteLength(JSON.stringify(part.data), "utf8") - 2;
-        }
+      // JSON messages contribute their own bytes plus the comma between array entries.
+      bytes += Buffer.byteLength(JSON.stringify(message), "utf8") + (batch.length > 0 ? 1 : 0);
+      for (const data of transcriptImageData(message)) {
+        imageBytes += Buffer.byteLength(JSON.stringify(data), "utf8") - 2;
       }
+      if (
+        bytes > WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES ||
+        bytes - imageBytes > WORKER_PROTOCOL_MAX_PAYLOAD_BYTES
+      ) {
+        break;
+      }
+      batch.push(message);
     }
-    return bytes - imageBytes <= WORKER_PROTOCOL_MAX_PAYLOAD_BYTES;
   } catch {
-    return false;
+    // Match frame admission: an unserializable message cannot join the batch.
   }
+  return batch;
 }

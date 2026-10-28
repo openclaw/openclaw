@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/acpx",
-  "version": "2026.9.5",
+  "version": "2026.10.8",
   "description": "OpenClaw ACP runtime backend with plugin-owned session and transport management.",
   "repository": {
     "type": "git",
@@ -8,11 +8,12 @@
   },
   "type": "module",
   "dependencies": {
-    "@agentclientprotocol/claude-agent-acp": "0.76.0",
-    "@agentclientprotocol/codex-acp": "1.10.0",
-    "acpx": "0.16.0",
-    "smol-toml": "1.8.0",
-    "zod": "4.6.2"
+    "@agentclientprotocol/claude-agent-acp": "0.95.0",
+    "@agentclientprotocol/codex-acp": "2.2.2",
+    "@openclaw/fs-safe": "0.26.13",
+    "acpx": "0.21.0",
+    "smol-toml": "1.9.1",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -44,20 +45,10 @@
       ]
     },
     "compat": {
-      "pluginApi": ">=2026.9.5"
+      "pluginApi": ">=2026.10.8"
     },
     "build": {
-      "openclawVersion": "2026.9.5",
-      "staticAssets": [
-        {
-          "source": "./src/runtime-internals/mcp-proxy.mjs",
-          "output": "mcp-proxy.mjs"
-        },
-        {
-          "source": "./src/runtime-internals/mcp-command-line.mjs",
-          "output": "mcp-command-line.mjs"
-        }
-      ]
+      "openclawVersion": "2026.10.8"
     },
     "release": {
       "publishToClawHub": true,

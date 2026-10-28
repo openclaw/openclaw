@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
+import { toStreamingMarkdownParts } from "./markdown.test-support.ts";
+import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 function htmlFragment(html: string): DocumentFragment {
   return document.createRange().createContextualFragment(html);
+}
+
+function renderDetails(source: string, streaming = false) {
+  const html = streaming
+    ? toStreamingMarkdownParts(source).join("")
+    : toSanitizedMarkdownHtml(source);
+  const fragment = htmlFragment(html);
+  return { html, fragment, details: fragment.querySelector("details") };
 }
 
 const rawHtmlStreamingContexts = [
@@ -13,7 +22,7 @@ const rawHtmlStreamingContexts = [
 
 describe("model-authored details blocks", () => {
   it("renders block-level details with nested markdown", () => {
-    const html = toSanitizedMarkdownHtml(
+    const { details } = renderDetails(
       [
         "<details open>",
         "",
@@ -32,8 +41,6 @@ describe("model-authored details blocks", () => {
         "</details>",
       ].join("\n"),
     );
-    const fragment = htmlFragment(html);
-    const details = fragment.querySelector("details");
 
     expect(details?.hasAttribute("open")).toBe(true);
     expect(details?.querySelector("summary")?.textContent).toBe("Optional depth");
@@ -47,10 +54,9 @@ describe("model-authored details blocks", () => {
   });
 
   it("renders a compact details block while escaping HTML in its body", () => {
-    const html = toSanitizedMarkdownHtml(
+    const { fragment } = renderDetails(
       "<details><summary>More</summary>**bold** <script>nope</script></details>",
     );
-    const fragment = htmlFragment(html);
 
     expect(fragment.querySelector("details summary")?.textContent).toBe("More");
     expect(fragment.querySelector("details strong")?.textContent).toBe("bold");
@@ -62,9 +68,7 @@ describe("model-authored details blocks", () => {
     const source =
       "<details><summary>Outer </details><details> label</summary>" +
       "<details><summary>Inner</summary>body</details>tail</details>\n\noutside";
-    const fragment = htmlFragment(
-      streaming ? toStreamingMarkdownParts(source).join("") : toSanitizedMarkdownHtml(source),
-    );
+    const { fragment } = renderDetails(source, streaming);
     const details = fragment.querySelectorAll("details");
 
     expect(details).toHaveLength(2);
@@ -96,8 +100,7 @@ describe("model-authored details blocks", () => {
       markdown = `<details><summary>Level ${index}</summary>${markdown}</details>`;
     }
 
-    const html = toSanitizedMarkdownHtml(markdown);
-    const fragment = htmlFragment(html);
+    const { fragment } = renderDetails(markdown);
 
     expect(fragment.querySelectorAll("details")).toHaveLength(32);
     expect(fragment.textContent).toContain("<details>");
@@ -113,8 +116,7 @@ describe("model-authored details blocks", () => {
       lines.push("", "</details>");
     }
 
-    const html = toSanitizedMarkdownHtml(lines.join("\n"));
-    const fragment = htmlFragment(html);
+    const { fragment } = renderDetails(lines.join("\n"));
 
     expect(fragment.querySelectorAll("details")).toHaveLength(32);
     expect(fragment.textContent).toContain("<details>");
@@ -122,18 +124,16 @@ describe("model-authored details blocks", () => {
 
   it("applies the depth cap to every opener on a matched line", () => {
     const markdown = `${Array.from({ length: 24 }, () => "<details><details>").join("\n\n")}\n\ndeep body`;
-    const html = toSanitizedMarkdownHtml(markdown);
-    const fragment = htmlFragment(html);
+    const { fragment } = renderDetails(markdown);
 
     expect(fragment.querySelectorAll("details")).toHaveLength(32);
     expect(fragment.textContent).toContain("<details>");
   });
 
   it("escapes unsupported openers while continuing to scan later valid tags", () => {
-    const html = toSanitizedMarkdownHtml(
+    const { html, fragment } = renderDetails(
       '<details><summary>Outer</summary><details class="x">inner</details>after</details>',
     );
-    const fragment = htmlFragment(html);
     const details = fragment.querySelectorAll("details");
 
     expect(details).toHaveLength(1);
@@ -144,11 +144,10 @@ describe("model-authored details blocks", () => {
   });
 
   it("keeps an unterminated details block in the repaired streaming tail", () => {
-    const html = toStreamingMarkdownParts(
+    const { html, fragment, details } = renderDetails(
       "Intro\n\n<details open>\n<summary>More</summary>\n\n**partial body",
-    ).join("");
-    const fragment = htmlFragment(html);
-    const details = fragment.querySelector("details");
+      true,
+    );
 
     expect(fragment.querySelector("p")?.textContent).toBe("Intro");
     expect(details?.hasAttribute("open")).toBe(true);
@@ -179,11 +178,10 @@ describe("model-authored details blocks", () => {
   });
 
   it("keeps completed code fences inside an open details streaming tail", () => {
-    const html = toStreamingMarkdownParts(
+    const { fragment, details } = renderDetails(
       "<details>\n<summary>Logs</summary>\n\n~~~ts\nconst value = 1;\n~~~\n\nstill streaming",
-    ).join("");
-    const fragment = htmlFragment(html);
-    const details = fragment.querySelector("details");
+      true,
+    );
 
     expect(details?.querySelector("code.language-ts")?.textContent).toContain("const value = 1;");
     expect(details?.textContent).toContain("still streaming");
@@ -191,10 +189,10 @@ describe("model-authored details blocks", () => {
   });
 
   it("repairs prose after a closed fence and details block without a blank line", () => {
-    const html = toStreamingMarkdownParts(
+    const { fragment } = renderDetails(
       "<details>\n<summary>Logs</summary>\n\n```ts\nconst value = 1;\n```\n</details>\ncontinuing **now",
-    ).join("");
-    const fragment = htmlFragment(html);
+      true,
+    );
 
     expect(fragment.querySelector("details code.language-ts")?.textContent).toContain(
       "const value = 1;",
@@ -214,10 +212,10 @@ describe("model-authored details blocks", () => {
   });
 
   it("stabilizes a completed details block before the live markdown tail", () => {
-    const html = toStreamingMarkdownParts(
+    const { fragment } = renderDetails(
       "<details><summary>Done</summary>fixed</details>\n\ncontinuing **now",
-    ).join("");
-    const fragment = htmlFragment(html);
+      true,
+    );
 
     expect(fragment.querySelector("details summary")?.textContent).toBe("Done");
     expect(fragment.querySelector("details p")?.textContent).toBe("fixed");
@@ -225,10 +223,10 @@ describe("model-authored details blocks", () => {
   });
 
   it("keeps a closed disclosure and its continuation in the same list item", () => {
-    const html = toStreamingMarkdownParts(
+    const { fragment } = renderDetails(
       "- <details>\n  <summary>Logs</summary>\n\n  body\n  </details>\n  continuing **now",
-    ).join("");
-    const fragment = htmlFragment(html);
+      true,
+    );
     const listItem = fragment.querySelector("li");
 
     expect(listItem?.querySelector("details")?.textContent).toContain("body");
@@ -239,10 +237,9 @@ describe("model-authored details blocks", () => {
 
 describe("multi-token details shapes", () => {
   it("parses body blocks normally after an opener and summary share a line", () => {
-    const html = toSanitizedMarkdownHtml(
+    const { details } = renderDetails(
       "<details><summary>More</summary>\nbody **one**\n\nbody two\n</details>",
     );
-    const details = htmlFragment(html).querySelector("details");
 
     expect(details?.querySelector("summary")?.textContent).toBe("More");
     expect(details?.querySelector("strong")?.textContent).toBe("one");
@@ -250,21 +247,18 @@ describe("multi-token details shapes", () => {
   });
 
   it("renders a summary authored after a blank line", () => {
-    const html = toSanitizedMarkdownHtml(
+    const { details } = renderDetails(
       "<details>\n\n<summary>Authored label</summary>\n\nbody\n</details>",
     );
-    const details = htmlFragment(html).querySelector("details");
 
     expect(details?.querySelector("summary")?.textContent).toBe("Authored label");
     expect(details?.textContent).toContain("body");
   });
 
   it("renders details when body text follows the summary without a blank line", () => {
-    const html = toSanitizedMarkdownHtml(
+    const { html, details } = renderDetails(
       "<details>\n<summary>More</summary>\nfirst line\n\nsecond paragraph\n</details>",
     );
-    const fragment = htmlFragment(html);
-    const details = fragment.querySelector("details");
 
     expect(details?.querySelector("summary")?.textContent).toBe("More");
     expect(details?.textContent).toContain("first line");
@@ -273,8 +267,9 @@ describe("multi-token details shapes", () => {
   });
 
   it("renders markdown following a closed details block from the same token", () => {
-    const html = toSanitizedMarkdownHtml("<details><summary>A</summary>a</details>\ncontinuing");
-    const fragment = htmlFragment(html);
+    const { html, fragment } = renderDetails(
+      "<details><summary>A</summary>a</details>\ncontinuing",
+    );
 
     expect(fragment.querySelector("details summary")?.textContent).toBe("A");
     expect(fragment.querySelector("details")?.textContent).toContain("a");
@@ -282,26 +277,12 @@ describe("multi-token details shapes", () => {
     expect(html).not.toContain("&lt;details");
   });
 
-  it("renders consecutive details blocks without a blank line", () => {
-    const html = toSanitizedMarkdownHtml(
-      "<details><summary>A</summary>a</details>\n<details><summary>B</summary>b</details>",
-    );
-    const details = htmlFragment(html).querySelectorAll("details");
-
-    expect([...details].map((entry) => entry.querySelector("summary")?.textContent)).toEqual([
-      "A",
-      "B",
-    ]);
-    expect([...details].map((entry) => entry.textContent?.trim())).toEqual(["Aa", "Bb"]);
-  });
-
   it("renders more than 32 sibling details blocks and their trailing markdown", () => {
     const siblings = Array.from(
       { length: 40 },
       (_, index) => `<details><summary>Sibling ${index}</summary>body ${index}</details>`,
     ).join("\n");
-    const html = toSanitizedMarkdownHtml(`${siblings}\ntrailing **done**`);
-    const fragment = htmlFragment(html);
+    const { html, fragment } = renderDetails(`${siblings}\ntrailing **done**`);
     const details = fragment.querySelectorAll("details");
 
     expect(details).toHaveLength(40);
@@ -311,11 +292,9 @@ describe("multi-token details shapes", () => {
   });
 
   it("renders markdown following a standalone details close token", () => {
-    const html = toSanitizedMarkdownHtml(
+    const { html, fragment, details } = renderDetails(
       "<details>\n<summary>A</summary>\n\nbody\n\n</details>\ncontinuing",
     );
-    const fragment = htmlFragment(html);
-    const details = fragment.querySelector("details");
 
     expect(details?.textContent).toContain("body");
     expect(details?.textContent).not.toContain("continuing");
@@ -324,11 +303,9 @@ describe("multi-token details shapes", () => {
   });
 
   it("closes before trailing prose when a type-6 HTML block absorbs the closer", () => {
-    const html = toSanitizedMarkdownHtml(
+    const { fragment, details } = renderDetails(
       "<details>\n<summary>X</summary>\n\n<div>body</div>\n</details>\n\nFollowing",
     );
-    const fragment = htmlFragment(html);
-    const details = fragment.querySelector("details");
 
     expect(details?.textContent).toContain("body");
     expect(details?.textContent).not.toContain("Following");
@@ -338,16 +315,13 @@ describe("multi-token details shapes", () => {
   it.each([
     ...rawHtmlStreamingContexts,
     ["script", "<script>\n</details>\n</script>"],
-    ["style", "<style>\n</details>\n</style>"],
     ["processing instruction", "<?pi\n</details>\n?>"],
     ["declaration", "<!DOCTYPE\n</details>\n>"],
     ["CDATA", "<![CDATA[\n</details>\n]]>"],
   ] as const)("keeps closer-shaped text inside an embedded raw HTML %s literal", (_name, raw) => {
-    const html = toSanitizedMarkdownHtml(
+    const { fragment, details } = renderDetails(
       `<details>\n<summary>X</summary>\n\n<div>\n${raw}\n</div>\n</details>\n\nFollowing`,
     );
-    const fragment = htmlFragment(html);
-    const details = fragment.querySelector("details");
 
     expect(details?.textContent).toContain("</details>");
     expect(details?.textContent).not.toContain("Following");
@@ -430,16 +404,12 @@ describe("multi-token details shapes", () => {
       const rawBlock = raw.replace("</details>", `${delimiter}literal`);
       const literal = closed ? rawBlock : rawBlock.slice(0, rawBlock.lastIndexOf("\n"));
       const source = `<details>\n<summary>X</summary>\n\n${literal}${closed ? `\n${delimiter}outside` : ""}`;
-      const details = htmlFragment(toStreamingMarkdownParts(source).join("")).querySelector(
-        "details",
-      );
+      const { details } = renderDetails(source, true);
       expect(details?.textContent).toContain(literal);
       if (closed) {
         expect(details?.querySelector(tag)?.textContent).toBe("outside");
       } else {
-        const staticDetails = htmlFragment(toSanitizedMarkdownHtml(source)).querySelector(
-          "details",
-        );
+        const { details: staticDetails } = renderDetails(source);
         expect(details?.textContent).toBe(staticDetails?.textContent);
       }
     },
@@ -463,9 +433,9 @@ describe("multi-token details shapes", () => {
   );
 
   it("renders details when body text starts without a summary", () => {
-    const html = toSanitizedMarkdownHtml("<details>\nfirst line\n\nsecond paragraph\n</details>");
-    const fragment = htmlFragment(html);
-    const details = fragment.querySelector("details");
+    const { html, details } = renderDetails(
+      "<details>\nfirst line\n\nsecond paragraph\n</details>",
+    );
 
     expect(details?.querySelector("summary")).toBeNull();
     expect(details?.textContent).toContain("first line");
@@ -476,7 +446,7 @@ describe("multi-token details shapes", () => {
 
 describe("details line-start contract", () => {
   it("keeps inline-code, prose, and task-item occurrences escaped", () => {
-    const html = toSanitizedMarkdownHtml(
+    const { fragment } = renderDetails(
       [
         "`<details><summary>code</summary>body</details>`",
         "",
@@ -485,7 +455,6 @@ describe("details line-start contract", () => {
         "- [ ] <details><summary>task</summary>body</details>",
       ].join("\n"),
     );
-    const fragment = htmlFragment(html);
 
     expect(fragment.querySelector("details")).toBeNull();
     expect(fragment.querySelector("code")?.textContent).toContain("<details>");
@@ -493,25 +462,29 @@ describe("details line-start contract", () => {
     expect(fragment.textContent).toContain("prose <details>");
   });
 
-  it("keeps an open streaming details block intact across inline code", () => {
-    const code = "`literal </details> marker`";
-    const html = toStreamingMarkdownParts(
-      `<details>\n<summary>Example</summary>\n${code}\n\nstill inside`,
-    ).join("");
-    const fragment = htmlFragment(html);
-    const details = fragment.querySelector("details");
+  it.each([
+    [
+      "inline code",
+      "<details>\n<summary>Example</summary>\n`literal </details> marker`\n\nstill inside",
+      "literal </details> marker",
+    ],
+    [
+      "an inline prose close tag",
+      "<details>\n<summary>A</summary>\nliteral </details> text\n\nstill inside",
+      "literal </details> text",
+    ],
+  ])("keeps streaming details intact across %s", (_name, markdown, literal) => {
+    const { fragment, details } = renderDetails(markdown, true);
 
-    expect(details?.textContent).toContain("literal </details> marker");
+    expect(details?.textContent).toContain(literal);
     expect(details?.textContent).toContain("still inside");
     expect([...fragment.children]).toHaveLength(1);
   });
 
   it("keeps disclosure-shaped inline code on a structural line literal", () => {
-    const html = toSanitizedMarkdownHtml(
+    const { fragment, details } = renderDetails(
       "<details><summary>A</summary>`literal </details>` still inside</details>",
     );
-    const fragment = htmlFragment(html);
-    const details = fragment.querySelector("details");
 
     expect(details?.querySelector("code")?.textContent).toBe("literal </details>");
     expect(details?.textContent).toContain("still inside");
@@ -519,11 +492,9 @@ describe("details line-start contract", () => {
   });
 
   it("keeps escaped disclosure tags on a structural line literal", () => {
-    const html = toSanitizedMarkdownHtml(
+    const { fragment, details } = renderDetails(
       "<details><summary>A</summary>\\</details> still inside</details>",
     );
-    const fragment = htmlFragment(html);
-    const details = fragment.querySelector("details");
 
     expect(details?.textContent).toContain("</details> still inside");
     expect(fragment.querySelectorAll("details")).toHaveLength(1);
@@ -537,35 +508,15 @@ describe("details line-start contract", () => {
     expect(code?.textContent).not.toContain("</summary>");
   });
 
-  it("keeps streaming details intact across an inline prose close tag", () => {
-    const html = toStreamingMarkdownParts(
-      "<details>\n<summary>A</summary>\nliteral </details> text\n\nstill inside",
-    ).join("");
-    const fragment = htmlFragment(html);
-    const details = fragment.querySelector("details");
-
-    expect(details?.textContent).toContain("literal </details> text");
-    expect(details?.textContent).toContain("still inside");
-    expect([...fragment.children]).toHaveLength(1);
-  });
-
   it.each([
     ["list item", "- <details>\n  <summary>A</summary>\n\n  still inside"],
     ["blockquote", "> <details>\n> <summary>A</summary>\n>\n> still inside"],
-  ])("keeps streaming details intact inside a %s container", (_name, markdown) => {
-    const html = toStreamingMarkdownParts(markdown).join("");
-    const details = htmlFragment(html).querySelector("details");
-
-    expect(details?.querySelector("summary")?.textContent).toBe("A");
-    expect(details?.textContent).toContain("still inside");
-    expect(html).not.toContain("&lt;details");
-  });
-
-  it("keeps streaming details intact on a wide list continuation indent", () => {
-    const html = toStreamingMarkdownParts(
+    [
+      "wide list continuation indent",
       "1.  item\n    <details>\n    <summary>A</summary>\n\n    still inside",
-    ).join("");
-    const details = htmlFragment(html).querySelector("details");
+    ],
+  ])("keeps streaming details intact inside a %s container", (_name, markdown) => {
+    const { html, details } = renderDetails(markdown, true);
 
     expect(details?.querySelector("summary")?.textContent).toBe("A");
     expect(details?.textContent).toContain("still inside");

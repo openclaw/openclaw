@@ -50,3 +50,15 @@ export type SkillStatusReport = {
   agentSkillFilter?: string[];
   skills: SkillStatusEntry[];
 };
+
+/** Filesystem facts, separate from Gateway policy and execution-host requirements. */
+export type WorkspaceSkillStatusFacts = {
+  workspaceDir: string;
+  managedSkillsDir: string;
+  files: Array<{
+    name: string;
+    filePath: string;
+    clawhub?: ClawHubSkillStatusLink;
+    skillCard?: LocalSkillCardStatus & { content?: string };
+  }>;
+};

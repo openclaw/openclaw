@@ -1,108 +1,70 @@
-/** Tests runtime config-option serialization against advertised backend keys. */
-import { describe, expect, it } from "vitest";
-import type { AcpSessionRuntimeOptions } from "../../config/sessions/types.js";
-import { buildRuntimeConfigOptionPairs, mergeRuntimeOptions } from "./runtime-options.js";
+import { expect, it } from "vitest";
+import {
+  buildRuntimeConfigOptionPairs,
+  mergeRuntimeOptions,
+  validateRuntimeOptionPatch,
+} from "./runtime-options.js";
 
-describe("mergeRuntimeOptions", () => {
-  it("clears top-level options when a patch explicitly sets them to undefined", () => {
-    const patch = {
-      runtimeMode: undefined,
-      model: undefined,
-      thinking: undefined,
-      cwd: undefined,
-      permissionProfile: undefined,
-      timeoutSeconds: undefined,
-    } as Partial<AcpSessionRuntimeOptions>;
+it("normalizes cwd without changing the input", () => {
+  const patch = Object.freeze({ cwd: " /workspace/project " });
+  expect(validateRuntimeOptionPatch(patch)).toStrictEqual({ cwd: "/workspace/project" });
+});
 
-    expect(
-      mergeRuntimeOptions({
-        current: {
-          runtimeMode: "plan",
-          model: "claude-sonnet-4.6",
-          thinking: "high",
-          cwd: "/tmp/project",
-          permissionProfile: "trusted",
-          timeoutSeconds: 120,
-        },
-        patch,
-      }),
-    ).toEqual({});
-  });
+it.each<Record<string, unknown>>([
+  { thinking: "x".repeat(33) },
+  { cwd: "relative/project" },
+  { unknown: true },
+  { backendExtras: [] },
+  { timeoutSeconds: null },
+  { timeoutSeconds: 86_400.5 },
+  ...["runtimeMode", "model", "thinking", "cwd", "permissionProfile"].map((key) => ({
+    [key]: null,
+  })),
+])("rejects invalid runtime options: %j", (patch) => {
+  expect(() => validateRuntimeOptionPatch(patch)).toThrow(
+    expect.objectContaining({ code: "ACP_INVALID_RUNTIME_OPTION" }),
+  );
+});
 
-  it("clears backend extras when a patch explicitly clears them", () => {
-    expect(
-      mergeRuntimeOptions({
-        current: {
-          model: "claude-sonnet-4.6",
-          backendExtras: { provider: "anthropic", profile: "work" },
-        },
-        patch: { backendExtras: undefined } as Partial<AcpSessionRuntimeOptions>,
-      }),
-    ).toEqual({ model: "claude-sonnet-4.6" });
-  });
-
-  it("keeps merging backend extras when a patch provides new entries", () => {
-    expect(
-      mergeRuntimeOptions({
-        current: { backendExtras: { provider: "anthropic" } },
-        patch: { backendExtras: { profile: "work" } },
-      }),
-    ).toEqual({ backendExtras: { provider: "anthropic", profile: "work" } });
+it("distinguishes omitted, inherited and own undefined timeoutSeconds", () => {
+  expect(validateRuntimeOptionPatch({})).toStrictEqual({});
+  expect(validateRuntimeOptionPatch(Object.create({ timeoutSeconds: 60.6 }))).toStrictEqual({});
+  expect(validateRuntimeOptionPatch({ timeoutSeconds: undefined })).toStrictEqual({
+    timeoutSeconds: undefined,
   });
 });
 
-describe("buildRuntimeConfigOptionPairs timeout advertisement", () => {
-  it("omits the timeout pair when advertised keys exclude every timeout alias", () => {
-    const pairs = buildRuntimeConfigOptionPairs({ timeoutSeconds: 60 }, [
-      "model",
-      "thinking",
-      "approval_policy",
-    ]);
-    expect(pairs).toEqual([]);
+it("rounds timeout before checking its bounds", () => {
+  expect(validateRuntimeOptionPatch({ timeoutSeconds: 86_400.49 })).toEqual({
+    timeoutSeconds: 86_400,
   });
+});
 
-  it("keeps the timeout pair when advertised keys include `timeout`", () => {
-    const pairs = buildRuntimeConfigOptionPairs({ timeoutSeconds: 60 }, ["model", "timeout"]);
-    expect(pairs).toEqual([["timeout", "60"]]);
-  });
+it.each([
+  ["clears", undefined, undefined],
+  ["merges", { profile: "work" }, { provider: "anthropic", profile: "work" }],
+] as const)("%s backend extras without changing the model", (_action, backendExtras, expected) => {
+  const model = "claude-sonnet-4.6";
+  expect(
+    mergeRuntimeOptions({
+      current: { model, backendExtras: { provider: "anthropic" } },
+      patch: { backendExtras },
+    }),
+  ).toEqual(expected ? { model, backendExtras: expected } : { model });
+});
 
-  it("keeps the timeout pair using the advertised `timeout_seconds` alias", () => {
-    const pairs = buildRuntimeConfigOptionPairs({ timeoutSeconds: 60 }, [
-      "model",
-      "timeout_seconds",
-    ]);
-    expect(pairs).toEqual([["timeout_seconds", "60"]]);
-  });
+it.each([undefined, []])("keeps timeout when advertised keys are unknown: %j", (keys) => {
+  expect(buildRuntimeConfigOptionPairs({ timeoutSeconds: 60 }, keys)).toEqual([["timeout", "60"]]);
+});
 
-  it("keeps the timeout pair when advertised keys are unknown (empty or undefined)", () => {
-    expect(buildRuntimeConfigOptionPairs({ timeoutSeconds: 60 })).toEqual([["timeout", "60"]]);
-    expect(buildRuntimeConfigOptionPairs({ timeoutSeconds: 60 }, [])).toEqual([["timeout", "60"]]);
-  });
-
-  it("does not affect model or thinking emission when only timeout is unadvertised", () => {
-    const pairs = buildRuntimeConfigOptionPairs(
+it("emits model and thinking but omits unadvertised timeout", () => {
+  expect(
+    buildRuntimeConfigOptionPairs(
       { model: "claude-sonnet-4.6", thinking: "high", timeoutSeconds: 60 },
       ["model", "thinking"],
-    );
-    expect(pairs).toEqual([
-      ["model", "claude-sonnet-4.6"],
-      ["thinking", "high"],
-    ]);
-  });
-});
-
-describe("buildRuntimeConfigOptionPairs thinking advertisement", () => {
-  it("omits automatic thinking when the backend advertises no thinking alias", () => {
-    expect(buildRuntimeConfigOptionPairs({ thinking: "high" }, ["mode", "model"])).toEqual([]);
-  });
-
-  it("maps automatic thinking to the advertised reasoning_effort alias", () => {
-    expect(
-      buildRuntimeConfigOptionPairs({ thinking: "high" }, ["model", "reasoning_effort"]),
-    ).toEqual([["reasoning_effort", "high"]]);
-  });
-
-  it("keeps automatic thinking when advertised keys are unknown", () => {
-    expect(buildRuntimeConfigOptionPairs({ thinking: "high" })).toEqual([["thinking", "high"]]);
-  });
+    ),
+  ).toEqual([
+    ["model", "claude-sonnet-4.6"],
+    ["thinking", "high"],
+  ]);
 });

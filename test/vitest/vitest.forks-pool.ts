@@ -1,15 +1,19 @@
 import { ChildProcess } from "node:child_process";
-import { subscribe, unsubscribe } from "node:diagnostics_channel";
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ForksPoolWorker, type PoolOptions, type WorkerRequest } from "vitest/node";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
-import { collectNodeDiagnosticReport } from "../../scripts/lib/node-diagnostic-report.mts";
+import {
+  collectNodeDiagnosticReport,
+  shouldEnableNodeDiagnosticReports,
+} from "../../scripts/lib/node-diagnostic-report.mts";
 import { collectVitestForkOsDiagnostics } from "../../scripts/lib/vitest-fork-os-diagnostics.mts";
 
 const POOL_NAME = "openclaw-forks";
 const MAX_REPORT_CHARS = 64 * 1_024;
+const childProcesses = channel("child_process");
 
 class DiagnosticForksPoolWorker extends ForksPoolWorker {
   override readonly name = POOL_NAME;
@@ -29,14 +33,14 @@ class DiagnosticForksPoolWorker extends ForksPoolWorker {
   }
 
   override async start(): Promise<void> {
-    if (process.platform !== "win32" && !process.versions.bun) {
+    if (shouldEnableNodeDiagnosticReports()) {
       try {
         // openclaw-temp-dir: allow pool-owned diagnostics outlive individual test hooks.
         this.reportDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-vitest-report-"));
         this.execArgv = [
           ...this.execArgv,
           "--report-on-signal",
-          "--report-signal=SIGUSR2",
+          "--report-signal=SIGQUIT",
           `--report-directory=${this.reportDir}`,
           "--report-filename=diagnostic.json",
           "--report-exclude-env",
@@ -53,15 +57,15 @@ class DiagnosticForksPoolWorker extends ForksPoolWorker {
         children.push(message.process);
       }
     };
-    // Vitest 5.0.0 + patches/vitest@5.0.0.patch (pnpm hash 5e7c1655) starts
+    // Vitest 5.0.5 + patches/vitest@5.0.5.patch starts
     // forks synchronously and calls stop() after its deadline or joined exit.
     // Recheck that contract on upgrades; the transport remains Vitest-owned.
-    subscribe("child_process", observe);
+    childProcesses.subscribe(observe);
     let started: Promise<void>;
     try {
       started = super.start();
     } finally {
-      unsubscribe("child_process", observe);
+      childProcesses.unsubscribe(observe);
     }
     this.child = children.find((child) => child.spawnargs?.includes(this.entrypoint));
     this.child?.once("exit", () => clearTimeout(this.diagnosticTimer));
@@ -108,7 +112,7 @@ class DiagnosticForksPoolWorker extends ForksPoolWorker {
           ? collectVitestForkOsDiagnostics(child.pid)
           : Promise.resolve("OS process diagnostics unavailable.");
         let report = "Node diagnostic report unavailable on this runtime or host.";
-        if (this.reportDir && child.kill("SIGUSR2")) {
+        if (this.reportDir && child.kill("SIGQUIT")) {
           report = await collectNodeDiagnosticReport(path.join(this.reportDir, "diagnostic.json"));
         }
         const boundedReport =

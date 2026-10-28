@@ -1,5 +1,6 @@
-import { vi } from "vitest";
-import type { ModelCatalogEntry } from "../../api/types.ts";
+import { expect, onTestFinished, vi } from "vitest";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
@@ -15,6 +16,7 @@ import type { ChatHost } from "./chat-send-contract.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatComposerMemoryFallback } from "./chat-state-host.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
+import type { ChatMessageCache } from "./session-message-cache.ts";
 
 type RequestHandlers = Record<string, unknown>;
 
@@ -35,6 +37,61 @@ export function makeRequestMock(handlers: RequestHandlers = {}): GatewayRequestM
 }
 
 type RequestMock = ReturnType<typeof makeRequestMock>;
+
+type MockCallSource<Call extends ReadonlyArray<unknown> = ReadonlyArray<unknown>> = {
+  mock: {
+    calls: ArrayLike<Call>;
+  };
+};
+
+export function requestCalls<Call extends ReadonlyArray<unknown>>(
+  source: MockCallSource<Call>,
+  method: string,
+): Call[] {
+  return Array.from(source.mock.calls).filter(([calledMethod]) => calledMethod === method);
+}
+
+export function expectRequestCounts(request: MockCallSource, counts: Record<string, number>) {
+  for (const [method, count] of Object.entries(counts)) {
+    expect(requestCalls(request, method)).toHaveLength(count);
+  }
+}
+
+export function expectRpc(
+  request: unknown,
+  method: string,
+  payload: unknown = expect.anything(),
+): void {
+  expect(request).toHaveBeenCalledWith(
+    method,
+    payload,
+    method === "chat.send"
+      ? {
+          timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+          signal: expect.any(AbortSignal),
+          retainSentResultOnAbort: true,
+        }
+      : { timeoutMs: 30_000 },
+  );
+}
+
+export function expectNoRpc(
+  request: unknown,
+  method: string,
+  payload: unknown = expect.anything(),
+): void {
+  expect(request).not.toHaveBeenCalledWith(method, payload, expect.anything());
+}
+
+export const requireRecord = createRequireRecord("object", "expected-label");
+
+export function findRequestPayload(source: MockCallSource, method: string, label: string) {
+  const call = Array.from(source.mock.calls).find((candidate) => candidate[0] === method);
+  if (!call) {
+    throw new Error(`expected request call: ${label}`);
+  }
+  return requireRecord(call[1], label);
+}
 
 export function createBrowserAnnotationAttachment(
   id: string,
@@ -57,11 +114,31 @@ export function createBrowserAnnotationAttachment(
 export function findChatSendPayload(host: {
   request: { mock: { calls: ReadonlyArray<Readonly<Parameters<GatewayRequestHandler>>> } };
 }): Record<string, unknown> {
-  const call = host.request.mock.calls.find(([method]) => method === "chat.send");
-  if (!call?.[1] || typeof call[1] !== "object") {
-    throw new Error("Expected chat.send payload");
-  }
-  return call[1] as Record<string, unknown>;
+  return findRequestPayload(host.request, "chat.send", "chat.send payload");
+}
+
+function composerDefaults(chatMessage = "", chatAttachments: ChatAttachment[] = []) {
+  const chatMessagesBySession: ChatMessageCache = new Map();
+  return {
+    connected: true,
+    sessionKey: "agent:main",
+    chatLoading: false,
+    chatMessage,
+    chatMessages: [],
+    chatMessagesBySession,
+    chatLocalInputHistoryBySession: {},
+    chatInputHistorySessionKey: null,
+    chatInputHistoryItems: null,
+    chatInputHistoryIndex: -1,
+    chatDraftBeforeHistory: null,
+    chatAttachments,
+    chatQueue: [],
+    chatRunId: null,
+    chatSending: false,
+    chatStream: null,
+    chatModelCatalog: [],
+    refreshSessionsAfterChat: new Map(),
+  };
 }
 
 export function createImmediateCommandHost(
@@ -70,52 +147,32 @@ export function createImmediateCommandHost(
   overrides: Partial<ChatHost> = {},
 ): ChatHost {
   const host = {
+    ...composerDefaults(command, [attachment]),
     sessions: createTestSessionCapability({
       snapshot: { client: null, phase: "reconnecting", hello: null },
       subscribe: () => () => undefined,
       subscribeEvents: () => () => undefined,
     }),
     client: null,
-    connected: true,
-    sessionKey: "agent:main",
-    chatLoading: false,
-    chatMessage: command,
-    chatMessages: [],
-    chatLocalInputHistoryBySession: {},
-    chatInputHistorySessionKey: null,
-    chatInputHistoryItems: null,
-    chatInputHistoryIndex: -1,
-    chatDraftBeforeHistory: null,
-    chatAttachments: [attachment],
-    chatQueue: [],
-    chatRunId: null,
-    chatSending: false,
-    chatStream: null,
-    chatModelCatalog: [],
     hello: null,
-    refreshSessionsAfterChat: new Map(),
     ...overrides,
   } satisfies Partial<ChatHost>;
   return host as ChatHost;
 }
 
-type TestChatHost = Omit<ChatHost, "settings"> & {
-  applySettings: (patch: Partial<UiSettings>) => void;
+type TestChatHost = ChatHost & {
+  selectedChatSessionIncognito: boolean;
   basePath: string;
   resourceBasePath: string;
   chatAvatarUrl: string | null;
-  chatAvatarSource?: string | null;
   chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   chatAvatarReason?: string | null;
   chatComposerFallbackByScope: Record<string, ChatComposerMemoryFallback>;
-  chatModelCatalog: ModelCatalogEntry[];
   chatModelSwitchPromises?: Record<string, Promise<boolean>>;
   sessionsError?: string | null;
-  sessionsResultAgentId?: string | null;
   sessionsArchivedFilter?: "active" | "archived" | "all";
   password?: string;
   pendingSettingsPatches?: Record<string, Promise<boolean>>;
-  settings: Pick<UiSettings, "lastActiveSessionKey"> & Partial<UiSettings>;
 };
 
 function createPendingSettingsSessionCapability(
@@ -159,55 +216,70 @@ export function makeChatHost(
   const { requestHandlers, ...hostOverrides } = overrides ?? {};
   const request = requestHandlers ? makeRequestMock(requestHandlers) : undefined;
   const settings = { lastActiveSessionKey: "", ...hostOverrides.settings };
-  const renderLifecycle: RenderLifecycle = {
-    invalidate: vi.fn(),
-    afterCommit: (effect) => {
-      let active = true;
-      renderLifecycle.invalidate();
+  let disposed = false;
+  const pendingEffects = new Set<() => void>();
+  const renderLifecycle: Pick<RenderLifecycle, "afterCommit"> = {
+    afterCommit: (effect, onCancel) => {
+      if (disposed) {
+        onCancel?.();
+        return () => undefined;
+      }
+      let cleanup = onCancel;
+      const complete = () => {
+        cleanup = undefined;
+        pendingEffects.delete(cancel);
+      };
+      const cancel = () => {
+        if (pendingEffects.delete(cancel)) {
+          const release = cleanup;
+          cleanup = undefined;
+          release?.();
+        }
+      };
+      pendingEffects.add(cancel);
       queueMicrotask(() => {
-        if (active) {
-          effect(() => undefined);
+        if (!pendingEffects.has(cancel)) {
+          return;
+        }
+        cleanup = undefined;
+        try {
+          const nextCleanup = effect(complete);
+          if (typeof nextCleanup === "function") {
+            if (pendingEffects.has(cancel)) {
+              cleanup = nextCleanup;
+            } else {
+              nextCleanup();
+            }
+          } else {
+            complete();
+          }
+        } catch (error) {
+          complete();
+          throw error;
         }
       });
-      return () => {
-        active = false;
-      };
+      return cancel;
     },
   };
   const host = {
+    ...composerDefaults(),
+    selectedChatSessionIncognito: false,
     chatSubmissions: createChatSubmissions(),
     client: request ? createTestGatewayClient(request) : null,
-    chatMessages: [],
     chatDisplayedLeafEntryId: undefined,
-    chatStream: null,
     chatStreamSegments: [],
     chatToolMessages: [],
-    connected: true,
     connectionEpoch: 0,
-    chatLoading: false,
-    chatMessage: "",
     canRestoreComposer: () => true,
-    chatThinkingLevel: null,
     chatVerboseLevel: null,
-    chatLocalInputHistoryBySession: {},
-    chatInputHistorySessionKey: null,
-    chatInputHistoryItems: null,
-    chatInputHistoryIndex: -1,
-    chatDraftBeforeHistory: null,
-    chatAttachments: [],
     chatComposerFallbackByScope: {},
-    chatQueue: [],
-    chatRunId: null,
-    chatSending: false,
     chatStreamStartedAt: null,
     lastError: null,
-    sessionKey: "agent:main",
     sidebarLayout: { columns: [] },
     basePath: "",
     resourceBasePath: "",
     hello: sessionMutationGatewayHello(),
     chatAvatarUrl: null,
-    chatAvatarSource: null,
     chatAvatarStatus: null,
     chatAvatarReason: null,
     sessionsLoading: false,
@@ -216,9 +288,7 @@ export function makeChatHost(
     sessionsError: null,
     sessionsArchivedFilter: "active" as const,
     chatModelsLoading: false,
-    chatModelCatalog: [],
     chatModelCatalogError: null,
-    refreshSessionsAfterChat: new Map(),
     toolStreamById: new Map(),
     toolStreamOrder: [],
     toolStreamSyncTimer: null,
@@ -239,6 +309,8 @@ export function makeChatHost(
         chatShowToolCalls: next.chatShowToolCalls,
         chatPersistCommentary: next.chatPersistCommentary,
         chatSendShortcut: next.chatSendShortcut,
+        chatBubbleSessionKeys: next.chatBubbleSessionKeys,
+        chatBubbleDisabledSessionKeys: next.chatBubbleDisabledSessionKeys,
       });
     }),
     ...hostOverrides,
@@ -270,5 +342,11 @@ export function makeChatHost(
   for (const sessionKey of Object.keys(pendingSettingsPatches ?? {})) {
     void patchChatSessionSettings(resolvedHost, sessionKey, {}).catch(() => undefined);
   }
+  onTestFinished(() => {
+    disposed = true;
+    for (const cancel of pendingEffects) {
+      cancel();
+    }
+  });
   return request ? Object.assign(resolvedHost, { request }) : resolvedHost;
 }

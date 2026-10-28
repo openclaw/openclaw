@@ -19,7 +19,7 @@ function createExtensionCodexAppServerAttemptSupportVitestConfig(
       dir: "extensions",
       env,
       exclude: databaseWorkerExtensionTestFiles,
-      fileParallelism: false,
+      isolate: true,
       name: "extension-codex-app-server-attempt-support",
       passWithNoTests: true,
       setupFiles: ["test/setup.extensions.ts"],

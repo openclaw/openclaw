@@ -183,28 +183,17 @@ export function observeCodexCatalogClient(
 }
 
 /** Acknowledged resume settings may differ from the response thread's persisted metadata. */
-export function publishCodexCatalogResume(
+export async function publishCodexCatalogResume(
   client: CodexAppServerClient,
   response: CodexCatalogResumeMetadata,
   sanitize: typeof sanitizeTerminalText,
 ): Promise<void> {
   try {
-    return publishPreparedResume(client, {
+    const prepared = {
       thread: projectCodexCatalogNativeThread(response.thread, sanitize),
       cwd: boundedCatalogString(response.cwd, MAX_CWD_LENGTH),
       modelProvider: boundedCatalogString(response.modelProvider, 500, "truncate"),
-    });
-  } catch (error) {
-    embeddedAgentLog.warn("Codex catalog resume publication failed", { error });
-    return Promise.resolve();
-  }
-}
-
-async function publishPreparedResume(
-  client: CodexAppServerClient,
-  response: CodexCatalogResumeMetadata,
-): Promise<void> {
-  try {
+    };
     const state = getCatalogEvents();
     const binding = await state.clients.get(client);
     if (!binding || binding.source.closed) {
@@ -213,7 +202,7 @@ async function publishPreparedResume(
     await Promise.all(
       Array.from(state.listeners.get(binding.homeKey) ?? [], async (listener) => {
         try {
-          await listener.onResume?.(response, binding.source);
+          await listener.onResume?.(prepared, binding.source);
         } catch (error) {
           embeddedAgentLog.warn("Codex catalog resume observer failed", { error });
         }

@@ -1,6 +1,4 @@
-// Qa Lab plugin module owns canonical taxonomy profile membership planning.
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
@@ -15,19 +13,6 @@ import {
   type QaScorecardTaxonomyReport,
   type QaScorecardChannelDriver,
 } from "./scorecard-taxonomy.js";
-
-type QaRunProfileMembership = {
-  categories: QaScorecardCategoryCoverageReport[];
-  excludedScenarioIds: string[];
-  profile: QaScorecardTaxonomyReport["profiles"][number];
-  profileScenarios: QaSeedScenarioWithSource[];
-  selectedScenarios: QaSeedScenarioWithSource[];
-};
-
-type QaRunProfileExecutionSelection = {
-  excludedScenarios: Array<{ scenario: QaSeedScenarioWithSource; reasons: string[] }>;
-  selectedScenarios: QaSeedScenarioWithSource[];
-};
 
 function categoryMatchesRunProfile(
   category: QaScorecardCategoryCoverageReport,
@@ -56,7 +41,7 @@ export function resolveQaRunProfileMembership(
     scenarios?: QaSeedScenarioWithSource[];
     scorecardReport?: QaScorecardTaxonomyReport;
   },
-): QaRunProfileMembership {
+) {
   const scenarios = source?.scenarios ?? readQaScenarioPack().scenarios;
   const scorecardReport = source?.scorecardReport ?? readQaScorecardTaxonomyReport(scenarios);
   const profileId = opts.profile.trim();
@@ -88,19 +73,10 @@ export function resolveQaRunProfileMembership(
   const requestedScenarioIds = uniqueStrings(
     (opts.scenarioIds ?? []).map((scenarioId) => scenarioId.trim()).filter(Boolean),
   );
-  if (requestedScenarioIds.length === 0) {
-    return {
-      categories,
-      excludedScenarioIds: [],
-      profile,
-      profileScenarios,
-      selectedScenarios: profileScenarios,
-    };
-  }
   const requestedScenarioIdSet = new Set(requestedScenarioIds);
-  const selectedScenarios = profileScenarios.filter((scenario) =>
-    requestedScenarioIdSet.has(scenario.id),
-  );
+  const selectedScenarios = requestedScenarioIds.length
+    ? profileScenarios.filter((scenario) => requestedScenarioIdSet.has(scenario.id))
+    : profileScenarios;
   const selectedScenarioIdSet = new Set(selectedScenarios.map((scenario) => scenario.id));
   return {
     categories,
@@ -120,13 +96,12 @@ export function resolveQaRunProfileExecutionSelection(params: {
   channelDriver: QaScorecardChannelDriver;
   channel?: string | null;
   defaultChannel?: string;
-  claudeCliAuthMode?: QaCliBackendAuthMode;
   executionKind?: QaSeedScenarioWithSource["execution"]["kind"];
   supportsChannel?: (channel: string) => boolean;
   resolveModuleFlowSupport?: (channel?: string) => boolean;
-}): QaRunProfileExecutionSelection {
+}) {
   const selectedScenarios: QaSeedScenarioWithSource[] = [];
-  const excludedScenarios: QaRunProfileExecutionSelection["excludedScenarios"] = [];
+  const excludedScenarios: Array<{ scenario: QaSeedScenarioWithSource; reasons: string[] }> = [];
   for (const scenario of params.scenarios) {
     const reasons: string[] = [];
     if (params.executionKind && scenario.execution.kind !== params.executionKind) {
@@ -154,7 +129,6 @@ export function resolveQaRunProfileExecutionSelection(params: {
         primaryModel: params.primaryModel,
         channelDriver: params.channelDriver,
         channel: effectiveChannel,
-        claudeCliAuthMode: params.claudeCliAuthMode,
         supportsModuleFlows: params.resolveModuleFlowSupport?.(effectiveChannel),
       }),
     );

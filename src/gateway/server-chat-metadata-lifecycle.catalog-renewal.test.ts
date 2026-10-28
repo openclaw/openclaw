@@ -6,9 +6,10 @@ import {
   resetPreparedModelRuntimeHarness,
 } from "../agents/prepared-model-runtime.test-harness.js";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
+import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
 import {
   getPreparedModelFullCatalogAuth,
   setPreparedModelFullCatalogAuth,
@@ -26,49 +27,51 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
-import type { ChatMetadataRuntimeDeps } from "./server-methods/chat-metadata-facts.js";
+import * as projectionRuntime from "./server-methods/chat-metadata-session-projection.js";
+import * as commands from "./server-methods/commands-list-result.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 
 const mocks = getPreparedModelRuntimeMocks();
 const buildCommands = vi.fn(async () => ({ commands: [] }));
-const buildProjection = vi.fn<ChatMetadataRuntimeDeps["buildProjection"]>(async ({ facts }) => ({
-  modelCatalog: facts.modelCatalog.entries,
-  read: () => ({ models: facts.modelCatalog.entries }),
-  isCurrent: () => true,
-}));
+const buildProjection = vi.fn<typeof projectionRuntime.prepareChatMetadataModelProjection>(
+  async ({ facts }) => ({
+    modelCatalog: facts.modelCatalog.entries,
+    read: () => ({ models: facts.modelCatalog.entries }),
+    isCurrent: () => true,
+  }),
+);
 let owner: PreparedModelRuntimeSnapshot;
 let state: OpenClawTestState;
-
-vi.mock("./server-methods/chat-metadata-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./server-methods/chat-metadata-runtime.js")>();
-  return {
-    ...actual,
-    createGatewayChatMetadataRuntime: (
-      params: Parameters<typeof actual.createGatewayChatMetadataRuntime>[0],
-    ) =>
-      actual.createGatewayChatMetadataRuntime({
-        ...params,
-        deps: {
-          getPreparedOwner: () => owner,
-          getSkillsVersion: () => 0,
-          getPluginRegistryVersion: () => 0,
-          buildCommands,
-          buildProjection,
-        },
-      }),
-  };
+let stop: (() => Promise<void>) | undefined;
+const modelIds = (entries: ModelCatalogSnapshot["entries"]) =>
+  entries.map(({ id }) => id).toSorted();
+const buildCounts = () => [buildCommands.mock.calls.length, buildProjection.mock.calls.length];
+const clearBuilds = () => [buildCommands, buildProjection].forEach((mock) => mock.mockClear());
+const publication = (changed: boolean) => ({
+  phase: "catalog-published",
+  modelFactsChanged: changed,
+  refreshStatusChanged: true,
 });
 
 beforeEach(async () => {
   state = await createOpenClawTestState({ label: "catalog-renewal-metadata" });
   await resetPreparedModelRuntimeHarness(state);
-  buildCommands.mockClear();
-  buildProjection.mockClear();
+  clearBuilds();
+  vi.spyOn(commands, "buildCommandsListResult").mockImplementation(buildCommands);
+  vi.spyOn(projectionRuntime, "prepareChatMetadataModelProjection").mockImplementation(
+    buildProjection,
+  );
 });
 
 afterEach(async ({ task }) => {
-  await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
+  try {
+    await stop?.();
+  } finally {
+    stop = undefined;
+    vi.restoreAllMocks();
+    await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
+  }
 });
 
 async function createRenewalLifecycle() {
@@ -85,15 +88,13 @@ async function createRenewalLifecycle() {
       { provider: "sibling", id: "other", name: "Other" },
     ],
     routeVariants: [],
-    providerOutcomes: [
-      { provider: "custom", status: "ready" },
-      { provider: "sibling", status: "ready" },
-    ],
+    providerOutcomes: ["custom", "sibling"].map((provider) => ({ provider, status: "ready" })),
   };
   mocks.runPreparedModelCatalogWorker.mockImplementation(async () => structuredClone(inventory));
   await refreshPreparedModelRuntimeSnapshots(config, {
     gatewayLifecycle: true,
     catalogMode: "static",
+    allowGatewaySubagentBinding: true,
   });
   owner = getPreparedModelRuntimeSnapshot({
     config,
@@ -101,156 +102,168 @@ async function createRenewalLifecycle() {
     agentDir: state.agentDir("main"),
   })!;
   await owner.loadFullModelCatalog!({ refresh: true });
-  const broadcast = vi.fn();
+  const observedCatalogs: ModelCatalogSnapshot[] = [];
+  const broadcast = vi.fn(() => {
+    // A connected consumer receives serialized status, not the owner's live status getters.
+    const current = getPublishedPreparedModelCatalogOwnerSnapshot({ config, agentId: "main" });
+    if (!current) {
+      throw new Error("Metadata publication omitted its model owner");
+    }
+    observedCatalogs.push(
+      structuredClone(current.readFullModelCatalog?.() ?? current.modelCatalog),
+    );
+  });
   const lifecycle = await createGatewayChatMetadataLifecycle({
     getConfig: () => config,
-    minimalTestGateway: false,
     log: { warn: mocks.warn } as never,
   });
   const sidecars = createGatewaySidecarStopOwner();
+  stop = () => sidecars.stop();
   await lifecycle.attachContext(
     { broadcast } as unknown as GatewayRequestContext,
     sidecars.publish,
   );
   await lifecycle.read({ agentId: "main" });
   broadcast.mockClear();
-  buildCommands.mockClear();
-  buildProjection.mockClear();
-  return { inventory, broadcast, lifecycle, stop: () => sidecars.stop() };
+  observedCatalogs.length = 0;
+  clearBuilds();
+  return { inventory, broadcast, observedCatalogs, lifecycle };
 }
 
-describe("catalog renewal metadata broadcasts", () => {
-  it.each(["identical", "usage", "auth", "added", "removed", "outcome", "failed"] as const)(
-    "publishes only settled visible changes for a renewal (%s)",
-    async (change) => {
-      const harness = await createRenewalLifecycle();
-      const entered = createDeferred();
-      const release = createDeferred();
-      const original = owner.readFullModelCatalog!()!;
-      const publications =
-        vi.fn<Parameters<typeof registerPreparedModelRuntimePublicationListener>[0]>();
-      const unregister = registerPreparedModelRuntimePublicationListener(publications);
-      const next = structuredClone(harness.inventory);
-      if (change === "added") {
-        next.entries.push({ provider: "custom", id: "new", name: "New" });
-      } else if (change === "removed") {
-        next.entries = next.entries.filter(({ id }) => id !== "second");
-      } else if (change === "outcome") {
-        next.providerOutcomes = [{ provider: "custom", status: "unavailable" }];
-      }
-      if (change === "usage" || change === "auth") {
-        const auth = getPreparedModelFullCatalogAuth(original)!;
-        setPreparedModelFullCatalogAuth(next, {
-          ...auth,
-          authStore: {
-            ...auth.authStore,
-            ...(change === "usage"
-              ? {
-                  lastGood: { custom: "custom:default" },
-                  usageStats: { "custom:default": { lastUsed: 42 } },
-                }
-              : {
-                  profiles: {
-                    ...auth.authStore.profiles,
-                    "custom:added": {
-                      type: "api_key",
-                      provider: "custom",
-                      key: "synthetic-added-key",
-                    },
-                  },
-                }),
-          },
-        });
-      }
-      mocks.runPreparedModelCatalogWorker.mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
-        if (change === "failed") {
-          throw new Error("synthetic renewal failure");
-        }
-        return next;
-      });
-      const inventoryOwner = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!;
-      inventoryOwner.catalogInventory!.providers.get("custom")!.expiresAt = 0;
-      owner.readFullModelCatalog!();
-      let renewal: Promise<unknown> | undefined;
-      try {
-        await entered.promise;
-        expect(original.pendingProviders).toEqual(["custom"]);
-        // An unrelated refresh during discovery must not turn progress into a metadata change.
-        await harness.lifecycle.refresh();
-        await harness.lifecycle.read({ agentId: "main" });
-        expect.soft(harness.broadcast.mock.calls.length).toBe(0);
-        expect.soft(buildCommands.mock.calls.length).toBe(0);
-        expect.soft(buildProjection.mock.calls.length).toBe(0);
-        renewal = owner.loadFullModelCatalog!({ refresh: true, providerIds: ["custom"] }).catch(
-          (error: unknown) => error,
-        );
-        release.resolve();
-        await renewal;
-        await nextEventLoopTurn();
-        const result = await harness.lifecycle.read({ agentId: "main" });
-        expect(
-          publications.mock.calls
-            .map(([event]) => event)
-            .filter((event) => event.phase === "catalog-published"),
-        ).toEqual(
-          change === "failed"
-            ? []
-            : [
-                {
-                  phase: "catalog-published",
-                  modelFactsChanged: change !== "identical" && change !== "usage",
-                },
-              ],
-        );
-        const changes = change === "identical" || change === "usage" ? 0 : 1;
-        expect(harness.broadcast.mock.calls).toEqual(
-          Array.from({ length: changes }, () => [
-            "chat.metadata.changed",
-            {},
-            { dropIfSlow: true },
-          ]),
-        );
-        expect(buildCommands).toHaveBeenCalledTimes(changes);
-        expect(buildProjection).toHaveBeenCalledTimes(changes);
-        if (change === "identical" || change === "usage") {
-          expect(owner.readFullModelCatalog!()).toBe(original);
-          if (change === "usage") {
-            expect(getPreparedModelFullCatalogAuth(original)?.authStore.lastGood).toEqual({
-              custom: "custom:default",
-            });
-          }
-        } else if (change === "auth") {
-          expect(
-            getPreparedModelFullCatalogAuth(owner.readFullModelCatalog!()!)?.authStore.profiles,
-          ).toHaveProperty("custom:added");
-        } else if (change === "added" || change === "removed") {
-          expect(result.models?.map(({ id }) => id).toSorted()).toEqual(
-            next.entries.map(({ id }) => id).toSorted(),
-          );
-        } else {
-          expect(owner.readFullModelCatalog!()?.refreshFailed).toBe(true);
-          await owner.loadFullModelCatalog!({ refresh: true, providerIds: ["custom"] });
-          await nextEventLoopTurn();
-          await harness.lifecycle.read({ agentId: "main" });
-          expect(owner.readFullModelCatalog!()?.refreshFailed).toBeUndefined();
-          expect(harness.broadcast).toHaveBeenCalledTimes(2);
-          expect(buildCommands).toHaveBeenCalledTimes(2);
-          if (change === "failed") {
-            expect(publications).toHaveBeenLastCalledWith({
-              phase: "catalog-published",
-              modelFactsChanged: false,
-              refreshStatusChanged: true,
-            });
-          }
-        }
-      } finally {
-        release.resolve();
-        await renewal;
-        unregister();
-        await harness.stop();
-      }
-    },
-  );
+it("retains the published model owner across metadata reads and catalog renewal", async () => {
+  const harness = await createRenewalLifecycle();
+  expect(owner.isCurrent()).toBe(true);
+  const next = structuredClone(harness.inventory);
+  next.entries.push({ provider: "custom", id: "renewed", name: "Renewed" });
+  mocks.runPreparedModelCatalogWorker.mockResolvedValueOnce(next);
+  await owner.loadFullModelCatalog!({ refresh: true, providerIds: ["custom"] });
+  const metadata = await harness.lifecycle.read({ agentId: "main" });
+  expect(modelIds(metadata.models ?? [])).toEqual(modelIds(next.entries));
+  expect(owner.isCurrent()).toBe(true);
+  expect(harness.broadcast).toHaveBeenCalledOnce();
+  await harness.lifecycle.read({ agentId: "main" });
+  expect(harness.broadcast).toHaveBeenCalledOnce();
+  expect(owner.isCurrent()).toBe(true);
 });
+
+it("observes expired published inventory without starting provider discovery", async () => {
+  const harness = await createRenewalLifecycle();
+  const inventoryOwner = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!;
+  inventoryOwner.catalogInventory!.providers.get("custom")!.expiresAt = 0;
+  const acquisitions = mocks.runPreparedModelCatalogWorker.mock.calls.length;
+  await harness.lifecycle.refresh();
+  const metadata = await harness.lifecycle.read({ agentId: "main" });
+  expect(metadata.models).toMatchObject(harness.inventory.entries);
+  expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(acquisitions);
+});
+
+it.for(["usage", "removed", "failed"] as const)(
+  "publishes only settled visible changes for a renewal (%s)",
+  async (change, { signal }) => {
+    const harness = await createRenewalLifecycle();
+    const entered = createDeferred();
+    const release = createDeferred();
+    const original = owner.readFullModelCatalog!()!;
+    const publications =
+      vi.fn<Parameters<typeof registerPreparedModelRuntimePublicationListener>[0]>();
+    const renewal = createDeferred<string>();
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      publications(event);
+      if (event.phase === "catalog-failed" || event.phase === "catalog-published") {
+        renewal.resolve(event.phase);
+      }
+    });
+    const next = structuredClone(harness.inventory);
+    if (change === "removed") {
+      next.entries = next.entries.filter(({ id }) => id !== "second");
+    }
+    if (change === "usage") {
+      const auth = getPreparedModelFullCatalogAuth(original)!;
+      setPreparedModelFullCatalogAuth(next, {
+        ...auth,
+        authStore: {
+          ...auth.authStore,
+          lastGood: { custom: "custom:default" },
+          usageStats: { "custom:default": { lastUsed: 42 } },
+        },
+      });
+    }
+    mocks.runPreparedModelCatalogWorker.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      if (change === "failed") {
+        throw new Error("synthetic renewal failure");
+      }
+      return next;
+    });
+    const inventoryOwner = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!;
+    inventoryOwner.catalogInventory!.providers.get("custom")!.expiresAt = 0;
+    owner.refreshExpiredModelCatalog!();
+    try {
+      await entered.promise;
+      const pendingCatalog = structuredClone(original);
+      expect(pendingCatalog.pendingProviders).toEqual(["custom"]);
+      // An unrelated refresh during discovery must not turn progress into a metadata change.
+      await harness.lifecycle.refresh();
+      await harness.lifecycle.read({ agentId: "main" });
+      expect.soft([harness.broadcast.mock.calls.length, ...buildCounts()]).toEqual([0, 0, 0]);
+      release.resolve();
+      expect(await withinTest(renewal.promise, signal)).toBe(
+        change === "failed" ? "catalog-failed" : "catalog-published",
+      );
+      await nextEventLoopTurn();
+      const result = await harness.lifecycle.read({ agentId: "main" });
+      const published = publications.mock.calls.flatMap(([event]) =>
+        event.phase === "catalog-published" ? [event] : [],
+      );
+      expect(published).toEqual(change === "failed" ? [] : [publication(change !== "usage")]);
+      expect(harness.broadcast).toHaveBeenCalledExactlyOnceWith(
+        "chat.metadata.changed",
+        {
+          modelCatalogChanged: change !== "usage",
+          ...(change === "usage" ? { modelCatalogStatusChanged: true } : {}),
+          authChanged: change === "removed",
+          commandsChanged: false,
+        },
+        { dropIfSlow: true },
+      );
+      expect(harness.observedCatalogs).toHaveLength(1);
+      const observedCatalog = harness.observedCatalogs[0]!;
+      expect(observedCatalog.pendingProviders).toBeUndefined();
+      // The pending reply remains pending until the consumer receives the settlement signal.
+      expect(pendingCatalog.pendingProviders).toEqual(["custom"]);
+      const modelChanges = change === "usage" ? 0 : 1;
+      expect(buildCounts()).toEqual([modelChanges, modelChanges]);
+      if (change === "usage") {
+        expect(owner.readFullModelCatalog!()).toBe(original);
+        expect(observedCatalog.entries).toEqual(pendingCatalog.entries);
+        expect(owner.isCurrent()).toBe(true);
+        expect(getPreparedModelFullCatalogAuth(original)?.authStore.lastGood).toEqual({
+          custom: "custom:default",
+        });
+      } else if (change === "removed") {
+        expect(modelIds(result.models ?? [])).toEqual(modelIds(next.entries));
+      } else {
+        expect(owner.readFullModelCatalog!()?.refreshFailed).toBe(true);
+        await owner.loadFullModelCatalog!({ refresh: true, providerIds: ["custom"] });
+        await nextEventLoopTurn();
+        await harness.lifecycle.read({ agentId: "main" });
+        expect(owner.readFullModelCatalog!()?.refreshFailed).toBeUndefined();
+        expect(harness.broadcast).toHaveBeenCalledTimes(2);
+        expect(buildCommands).toHaveBeenCalledTimes(2);
+        expect(publications).toHaveBeenLastCalledWith(publication(false));
+      }
+      const broadcasts = harness.broadcast.mock.calls.length;
+      await harness.lifecycle.refresh();
+      await harness.lifecycle.read({ agentId: "main" });
+      expect(harness.broadcast).toHaveBeenCalledTimes(broadcasts);
+    } finally {
+      release.resolve();
+      try {
+        await withinTest(renewal.promise, signal);
+      } finally {
+        unregister();
+      }
+    }
+  },
+);

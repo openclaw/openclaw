@@ -1,3 +1,4 @@
+import { asNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { isNonEmptyProtocolString, isProtocolRecord } from "./protocol-value-normalization.js";
 import type { EventFrame, ResponseFrame } from "./schema/frames.js";
 export { GATEWAY_SERVER_CAPS } from "./server-capabilities.js";
@@ -11,10 +12,6 @@ export type {
   ResponseFrame,
 } from "./schema/frames.js";
 
-function isNonNegativeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0;
-}
-
 function isGatewayErrorShape(value: unknown): boolean {
   if (!isProtocolRecord(value)) {
     return false;
@@ -25,7 +22,7 @@ function isGatewayErrorShape(value: unknown): boolean {
   if (value.retryable !== undefined && typeof value.retryable !== "boolean") {
     return false;
   }
-  return value.retryAfterMs === undefined || isNonNegativeInteger(value.retryAfterMs);
+  return value.retryAfterMs === undefined || asNonNegativeInteger(value.retryAfterMs) !== undefined;
 }
 
 // These lightweight guards validate dispatch-critical envelope fields without
@@ -38,7 +35,7 @@ export function isGatewayEventFrame(value: unknown): value is EventFrame {
   ) {
     return false;
   }
-  return value.seq === undefined || isNonNegativeInteger(value.seq);
+  return value.seq === undefined || asNonNegativeInteger(value.seq) !== undefined;
 }
 
 export function isGatewayResponseFrame(value: unknown): value is ResponseFrame {

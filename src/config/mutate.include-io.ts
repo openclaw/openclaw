@@ -3,11 +3,13 @@ import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  withDeferredPluginConfigRollback,
   withDeferredPluginMigrationsCurrent,
   type DeferredPluginMigration,
 } from "../infra/deferred-plugin-migrations.js";
-import { formatErrorMessage, isMissingPathError } from "../infra/errors.js";
+import { isMissingPathError } from "../infra/errors.js";
 import { root as createFsRoot, type Root as FsSafeRoot } from "../infra/fs-safe.js";
+import { recordUpdateDoctorConfigFileWrite } from "../infra/update-doctor-result.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { prepareConfigFileWrite } from "./backup-rotation.js";
 import {
@@ -17,18 +19,19 @@ import {
 } from "./includes.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
 import type { ConfigWriteOptions } from "./io.types.js";
-import { ConfigWritePostCommitError, type ConfigWriteRollbackStatus } from "./io.write-errors.js";
+import { recoverConfigWriteFailure } from "./io.write-errors.js";
 import {
   captureConfigFileWritePathProof,
-  createGuardedConfigFileSystem,
-  createConfigWriteAuthorityGuard,
+  createConfigFileWriteGuard,
   rollbackConfigFileWriteIfUnchanged,
+  type ConfigFileRollbackPublication,
   type ConfigFileWriteRollbackProof,
 } from "./io.write-safety.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigFileSnapshot } from "./types.js";
 import { rejectConfigNonFiniteNumbers } from "./value-tree.js";
+import { createConfigWriteAuthorityGuard } from "./write-authority.js";
 
 export function formatJsonFileValue(value: unknown): string {
   rejectConfigNonFiniteNumbers(value);
@@ -160,6 +163,7 @@ export async function assertIncludeGraphStillMatchesSnapshot(params: {
 
 type IncludePublicationProof = ReturnType<typeof captureConfigFileWritePathProof> & {
   captureRollbackProof: () => ConfigFileWriteRollbackProof;
+  withPublication?: ConfigFileRollbackPublication;
 };
 
 export async function rollbackJsonFileWriteIfUnchanged(params: {
@@ -168,7 +172,7 @@ export async function rollbackJsonFileWriteIfUnchanged(params: {
   committedRaw: string | null;
   pathProof: IncludePublicationProof;
 }): Promise<boolean> {
-  return await rollbackConfigFileWriteIfUnchanged({
+  const restored = await rollbackConfigFileWriteIfUnchanged({
     configPath: params.target.absolutePath,
     previousSnapshot: {
       path: params.target.absolutePath,
@@ -181,12 +185,22 @@ export async function rollbackJsonFileWriteIfUnchanged(params: {
     preserveDirectoryMode: true,
     durable: true,
     destinationHardlinks: "reject",
+    withPublication: params.pathProof.withPublication,
   });
+  if (restored) {
+    recordUpdateDoctorConfigFileWrite(
+      params.target.absolutePath,
+      hashConfigRaw(params.committedRaw),
+      hashConfigRaw(params.previousRaw),
+    );
+  }
+  return restored;
 }
 
 export async function writeRootBoundJsonFile(params: {
   env: NodeJS.ProcessEnv;
-  deferredPluginMigrations: readonly DeferredPluginMigration[];
+  databaseAccess?: ConfigWriteOptions["databaseAccess"];
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
   configPath: string;
   includePath: string;
   allowedRoots: readonly string[];
@@ -199,6 +213,7 @@ export async function writeRootBoundJsonFile(params: {
   assertOwnerForRollback: () => void;
   preCommitRuntimePreflight?: () => Promise<unknown>;
   beforeCommit?: () => void | Promise<void>;
+  assertBeforePublish?: () => void;
   skipOutputLogs?: boolean;
 }): Promise<IncludePublicationProof> {
   params.assertConfigPathForWrite();
@@ -238,7 +253,7 @@ export async function writeRootBoundJsonFile(params: {
     skipOutputLogs: params.skipOutputLogs,
   });
   const publication: { phase: "unpublished" | "removed" | "published" } = { phase: "unpublished" };
-  const guardedFs = createGuardedConfigFileSystem(
+  const writeGuard = createConfigFileWriteGuard(
     targetAtCommit.absolutePath,
     fsNode,
     assertCurrent,
@@ -259,63 +274,77 @@ export async function writeRootBoundJsonFile(params: {
     ...pathProof,
     assertCurrent: () => {
       params.assertOwnerForRollback();
-      pathProof.assertCurrent();
-      guardedFs.assertPublishedIdentity();
+      writeGuard.assertPublishedIdentity();
     },
-    captureRollbackProof: () => guardedFs.captureRollbackProof(params.assertOwnerForRollback),
+    captureRollbackProof: () => writeGuard.captureRollbackProof(params.assertOwnerForRollback),
+    withPublication: (publish, didMutate) =>
+      params.databaseAccess === "none"
+        ? publish()
+        : withDeferredPluginConfigRollback(
+            {
+              configPath: params.configPath,
+              env: params.env,
+              assertCurrent: params.assertOwnerForRollback,
+            },
+            publish,
+            didMutate,
+          ),
   };
   try {
     await using preparedFile = await prepareConfigFileWrite({
       configPath: targetAtCommit.absolutePath,
       previousRaw: currentRaw,
       content,
-      fsModule: guardedFs.fileSystem,
-      assertCurrent: guardedFs.assertCurrent,
+      fsModule: writeGuard.fileSystem,
+      assertCurrent: writeGuard.assertCurrent,
+      assertBeforeMutation: writeGuard.assertBeforeMutation,
+      onDestinationState: writeGuard.onDestinationState,
       destinationHardlinks: "reject",
       durable: true,
     });
     await params.beforeCommit?.();
-    guardedFs.assertCurrent();
-    withDeferredPluginMigrationsCurrent(
-      { env: params.env, expectedPending: params.deferredPluginMigrations },
-      () => {
-        preparedFile.publish();
-        publication.phase = "published";
-      },
-    );
+    writeGuard.assertCurrent();
+    const publish = () => {
+      params.assertBeforePublish?.();
+      preparedFile.publish();
+      publication.phase = "published";
+      recordUpdateDoctorConfigFileWrite(
+        targetAtCommit.absolutePath,
+        hashConfigRaw(currentRaw),
+        hashConfigRaw(content),
+      );
+    };
+    if (params.databaseAccess === "none") {
+      publish();
+    } else {
+      withDeferredPluginMigrationsCurrent(
+        {
+          env: params.env,
+          configPath: params.configPath,
+          expectedPending: params.deferredPluginMigrations,
+          phase: "config include publication",
+        },
+        publish,
+      );
+    }
     await params.assertIncludeGraphForWrite(hashConfigIncludeRaw(content));
-    guardedFs.assertCurrent();
-    guardedFs.assertPublishedIdentity();
+    writeGuard.assertCurrent();
+    writeGuard.assertPublishedIdentity();
   } catch (error) {
     if (publication.phase === "unpublished") {
       throw error;
     }
-    let rollbackStatus: ConfigWriteRollbackStatus = "unknown";
-    try {
-      const rolledBack = await rollbackJsonFileWriteIfUnchanged({
-        target: targetAtCommit,
-        previousRaw: currentRaw,
-        committedRaw: publication.phase === "published" ? content : null,
-        pathProof: publicationProof,
-      });
-      rollbackStatus = rolledBack ? "restored" : "not-restored";
-    } catch (rollbackError) {
-      throw new ConfigWritePostCommitError({
-        configPath: targetAtCommit.absolutePath,
-        rollbackStatus,
-        publication: publication.phase === "removed" ? "partial" : "complete",
-        cause: new AggregateError(
-          [error, rollbackError],
-          `${formatErrorMessage(error)} Recovery failed: ${formatErrorMessage(rollbackError)}`,
-          { cause: rollbackError },
-        ),
-      });
-    }
-    throw new ConfigWritePostCommitError({
+    return await recoverConfigWriteFailure({
       configPath: targetAtCommit.absolutePath,
-      rollbackStatus,
       publication: publication.phase === "removed" ? "partial" : "complete",
       cause: error,
+      restoreFile: () =>
+        rollbackJsonFileWriteIfUnchanged({
+          target: targetAtCommit,
+          previousRaw: currentRaw,
+          committedRaw: publication.phase === "published" ? content : null,
+          pathProof: publicationProof,
+        }),
     });
   }
   return publicationProof;

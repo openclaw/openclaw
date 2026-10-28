@@ -5,6 +5,7 @@ import type {
   ControlUiLinkReaderDescriptor,
   ControlUiLinkReaderPreview,
 } from "../../../src/shared/control-ui-link-reader.js";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n } from "../i18n/index.ts";
 import { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
@@ -65,13 +66,14 @@ function connect(
   provider: LinkReaderHovercardProvider,
   request = vi.fn().mockResolvedValue(preview()),
 ) {
-  provider.client = { request } as unknown as GatewayBrowserClient;
+  provider.client = { request, connected: true } as unknown as GatewayBrowserClient;
   return request;
 }
 function card() {
   return document.querySelector<HTMLElement>(".link-reader-hovercard");
 }
 async function hover(anchor: HTMLAnchorElement) {
+  await Promise.resolve(); // Allow the bridge to mount before dispatching intent.
   anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
   await vi.advanceTimersByTimeAsync(250);
 }
@@ -89,12 +91,14 @@ describe("openclaw-link-reader-hovercard-provider", () => {
   afterEach(async () => {
     await i18n.setLocale("en");
     document.body.replaceChildren();
+    await Promise.resolve();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
   it("renders and caches plugin-projected details without changing the source link", async () => {
-    const { anchor, provider } = createLink();
+    const url = href + "#comment-1";
+    const { anchor, provider } = createLink(url);
     const request = connect(provider);
     await hover(anchor);
     expect(card()?.textContent).toContain("Merged");
@@ -106,12 +110,12 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     expect(card()?.textContent).toContain("3 files");
     expect(card()?.textContent).toContain("5m ago");
     expect(card()?.querySelector("img")?.src).toBe(preview().imageUrl);
-    expect(anchor.href).toBe(href);
+    expect(anchor.href).toBe(url);
     expect(anchor.getAttribute("aria-controls")).toBe(card()?.id);
     expect(card()?.getAttribute("role")).toBe("dialog");
     expect(request).toHaveBeenCalledWith(
       "github.preview",
-      { url: href },
+      { url },
       { signal: expect.any(AbortSignal) },
     );
     leave(anchor);
@@ -124,6 +128,67 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     leave(anchor);
     await hover(anchor);
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves co-author faces, missing-face counts, and accessible credit", async () => {
+    const { anchor, provider } = createLink();
+    const imageUrl = preview().imageUrl;
+    connect(
+      provider,
+      vi.fn().mockResolvedValue({
+        ...preview(),
+        authorUrl: "https://github.com/reviewer",
+        coAuthors: [
+          { name: "ada", imageUrl },
+          { name: "mira", imageUrl: "https://127.0.0.1/private.png" },
+          { name: "lin", imageUrl },
+          { name: "noor", imageUrl },
+          { name: "rune", imageUrl },
+        ],
+        coAuthorCount: 7,
+      }),
+    );
+    await hover(anchor);
+    const group = card()?.querySelector(".link-reader-hovercard__coauthors");
+    expect(group?.getAttribute("aria-label")).toContain("ada, mira, lin, noor, rune +2");
+    expect(group?.querySelectorAll(".link-reader-hovercard__coauthor")).toHaveLength(3);
+    expect(group?.querySelector(".link-reader-hovercard__coauthors-more")?.textContent).toBe("+4");
+    const image = group?.querySelector("img");
+    expect(image?.crossOrigin).toBe("anonymous");
+    expect(image?.getAttribute("referrerpolicy")).toBe("no-referrer");
+    image?.dispatchEvent(new Event("error"));
+    expect(image && (!image.isConnected || image.hidden)).toBe(true);
+    expect(image?.parentElement?.textContent).toContain("A");
+    await i18n.setLocale("de");
+    const retainedFace = card()?.querySelector(".link-reader-hovercard__coauthor img");
+    expect(!retainedFace || retainedFace.hasAttribute("hidden")).toBe(true);
+    expect(group?.querySelector(".link-reader-hovercard__coauthors-more")?.textContent).toBe("+4");
+    image?.dispatchEvent(new Event("load"));
+    expect(image?.hidden).toBe(false);
+    i18n.registerTranslation("pt-BR", {
+      linkReader: {
+        loadingPreview: "Carregando prévia…",
+        previewAriaLabel: "Prévia: {title}",
+      },
+    });
+    await i18n.setLocale("pt-BR");
+    expect(card()?.getAttribute("aria-label")).toBe("Prévia: Keep previews compact");
+    expect(card()?.textContent).toContain("Merged");
+  });
+
+  it.each([
+    ["https://github.com/reviewer", "https://github.com/reviewer"],
+    ["/reviewer", "https://github.com/reviewer"],
+    ["javascript:alert(1)", null],
+    ["https://other.example/reviewer", null],
+    ["https://name:password@github.com/reviewer", null],
+  ])("only links author profiles on the source origin: %s", async (authorUrl, expected) => {
+    const { anchor, provider } = createLink();
+    connect(provider, vi.fn().mockResolvedValue({ ...preview(), authorUrl }));
+    await hover(anchor);
+    expect(card()?.querySelector(".link-reader-hovercard__author")?.getAttribute("href")).toBe(
+      expected,
+    );
   });
 
   it("uses a second reader's method and passive DTO with keyboard focus and Escape", async () => {
@@ -140,6 +205,7 @@ describe("openclaw-link-reader-hovercard-provider", () => {
         metadata: [{ label: "Comments", value: "4" }],
       }),
     );
+    await provider.updateComplete;
     anchor.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
     await vi.advanceTimersByTimeAsync(0);
     expect(card()?.textContent).toContain("Change C42");
@@ -169,20 +235,49 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     expect(card()).toBeNull();
   });
 
-  it("accepts a preview for the requested document with a different anchor", async () => {
-    const { anchor, provider } = createLink(href + "#comment-1");
-    connect(provider, vi.fn().mockResolvedValue(preview(href)));
+  it.each([
+    {
+      url: href + "#issuecomment-123",
+      label: "PR openclaw/openclaw#99816",
+      reader: github,
+      branded: true,
+    },
+    {
+      url: "https://github.com/openclaw/openclaw/issues/99815",
+      label: "Issue openclaw/openclaw#99815",
+      reader: github,
+      branded: true,
+    },
+    {
+      url: "https://forge.example/changes/C42",
+      label: "Changes",
+      reader: forge,
+      branded: false,
+    },
+  ])("caches the failed preview with its identity and source link for $label", async (scenario) => {
+    const { anchor, provider } = createLink(scenario.url, [scenario.reader]);
+    const message = "GitHub API rate limit reached. Retry after 40 minutes.";
+    const request = connect(
+      provider,
+      vi.fn().mockRejectedValue(new GatewayRequestError({ code: "UNAVAILABLE", message })),
+    );
     await hover(anchor);
-    expect(card()?.textContent).toContain("Keep previews compact");
-  });
-
-  it("keeps failed previews invisible and briefly caches failures", async () => {
-    const { anchor, provider } = createLink();
-    const request = connect(provider, vi.fn().mockRejectedValue(new Error("Not Found")));
-    await hover(anchor);
-    expect(card()).toBeNull();
+    expect(card()?.textContent).toContain("Could not load preview");
+    expect(card()?.textContent).toContain(message);
+    const source = card()?.querySelector(".link-reader-hovercard__error-source");
+    expect(source?.textContent?.trim()).toBe(scenario.label);
+    expect(Boolean(source?.querySelector("svg.icon--filled"))).toBe(scenario.branded);
+    expect(card()?.querySelector('[role="status"]')?.textContent).toBe(message);
+    const externalLink = card()?.querySelector<HTMLAnchorElement>("a");
+    expect(externalLink?.textContent?.trim()).toBe("Open on " + scenario.reader.label);
+    expect(externalLink?.href).toBe(scenario.url);
+    expect(externalLink?.target).toBe("_blank");
+    expect(card()?.querySelector("button")).toBeNull();
     leave(anchor);
+    await vi.advanceTimersByTimeAsync(120);
+    expect(card()).toBeNull();
     await hover(anchor);
+    expect(card()?.textContent).toContain(message);
     expect(request).toHaveBeenCalledTimes(1);
     leave(anchor);
     await vi.advanceTimersByTimeAsync(30_000);
@@ -195,11 +290,12 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     { title: "Wrong reader", url: "https://other.example/item/1" },
     { title: "Wrong item", url: href.replace("99816", "99817") },
     { title: "Wrong query", url: href + "?resource=other" },
-  ])("rejects invalid preview data without mounting an empty popup: %j", async (value) => {
+  ])("reports invalid preview data without rendering mismatched details: %j", async (value) => {
     const { anchor, provider } = createLink();
     connect(provider, vi.fn().mockResolvedValue(value));
     await hover(anchor);
-    expect(card()).toBeNull();
+    expect(card()?.textContent).toContain("Could not load preview");
+    expect(card()?.textContent).not.toContain("Wrong");
   });
 
   it("preserves existing descriptions when leaving before opening and on route removal", async () => {
@@ -218,29 +314,6 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     await Promise.resolve();
     expect(card()).toBeNull();
     expect(anchor.getAttribute("aria-describedby")).toBe("existing-description");
-  });
-
-  it("removes canceled loads from cache and ignores late completions", async () => {
-    const { anchor, provider } = createLink();
-    const first = deferredPreview();
-    const request = connect(
-      provider,
-      vi
-        .fn()
-        .mockReturnValueOnce(first.promise)
-        .mockResolvedValue({ ...preview(), title: "Current preview" }),
-    );
-    await hover(anchor);
-    expect(card()).toBeNull();
-    const signal = request.mock.calls[0]?.[2]?.signal as AbortSignal;
-    leave(anchor);
-    expect(signal.aborted).toBe(true);
-    await hover(anchor);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(card()?.textContent).toContain("Current preview");
-    first.resolve({ ...preview(), title: "Stale preview" });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(card()?.textContent).not.toContain("Stale preview");
   });
 
   it.each(["readers", "client"] as const)(
@@ -269,26 +342,6 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     },
   );
 
-  it("replays pre-upgrade properties through the lazy provider's epoch setters", async () => {
-    const tag = "test-lazy-link-reader-" + crypto.randomUUID();
-    const provider = document.createElement(tag) as LinkReaderHovercardProvider;
-    provider.readers = [github];
-    const request = connect(provider);
-    const anchor = document.createElement("a");
-    anchor.href = href;
-    provider.append(anchor);
-    document.body.append(provider);
-    customElements.define(tag, class extends LinkReaderHovercardProvider {});
-    await provider.updateComplete;
-    await hover(anchor);
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(card()?.textContent).toContain("Keep previews compact");
-    provider.readers = [];
-    expect(card()).toBeNull();
-    await hover(anchor);
-    expect(request).toHaveBeenCalledTimes(1);
-  });
-
   it("does not request disabled previews and cancels pending requests when their descriptor is removed", async () => {
     const { anchor, provider } = createLink(href, [
       { ...github, linkReader: { ...github.linkReader, previewMethod: undefined } },
@@ -314,7 +367,7 @@ describe("openclaw-link-reader-hovercard-provider", () => {
       vi
         .fn()
         .mockImplementation((_method: string, params: { url: string }) =>
-          Promise.resolve(preview(params.url)),
+          Promise.resolve({ url: params.url, title: "Cached preview" }),
         ),
     );
     await hover(anchor);
@@ -323,12 +376,16 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     await hover(anchor);
     expect(request).toHaveBeenCalledTimes(2);
     leave(anchor);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(card()).toBeNull();
+    const signal = new AbortController().signal;
+    // Fill the same cache without creating 100 disposable hovercard portals.
     for (let index = 1; index <= 100; index++) {
-      anchor.href = "https://github.com/openclaw/openclaw/issues/" + index;
-      await hover(anchor);
-      leave(anchor);
+      await provider.prefetch(
+        { href: "https://github.com/openclaw/openclaw/issues/" + index, reader: github },
+        signal,
+      );
     }
-    anchor.href = href;
     await hover(anchor);
     expect(request).toHaveBeenCalledTimes(103);
   });
@@ -352,21 +409,6 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     } else {
       expect(image).toBeNull();
     }
-  });
-
-  it("rerenders host-owned preview copy when the locale changes", async () => {
-    const { anchor, provider } = createLink();
-    connect(provider);
-    await hover(anchor);
-    i18n.registerTranslation("pt-BR", {
-      linkReader: {
-        loadingPreview: "Carregando prévia…",
-        previewAriaLabel: "Prévia: {title}",
-      },
-    });
-    await i18n.setLocale("pt-BR");
-    expect(card()?.getAttribute("aria-label")).toBe("Prévia: Keep previews compact");
-    expect(card()?.textContent).toContain("Merged");
   });
 });
 

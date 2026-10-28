@@ -1,22 +1,12 @@
 import path from "node:path";
 import { spawn } from "@lydell/node-pty";
 
-const [runtime, home] = process.argv.slice(2);
-if (!runtime || !home) {
-  throw new Error("Usage: clack-prompter.process-driver.mjs <runtime> <home>");
+const [runtime, home, ...fixtureArgs] = process.argv.slice(2);
+if (!runtime || !home || fixtureArgs.length === 0) {
+  throw new Error("Usage: clack-prompter.process-driver.mjs <runtime> <home> <fixture args...>");
 }
 
-const fixture = `
-  import { runInteractiveOnboarding } from "./src/commands/onboard-interactive-runner.ts";
-  import { defaultRuntime } from "./src/runtime.ts";
-  import { createClackPrompter } from "./src/wizard/clack-prompter.ts";
-
-  const prompter = createClackPrompter();
-  await runInteractiveOnboarding(async () => {
-    await prompter.confirm({ message: "Continue?", initialValue: false });
-  }, defaultRuntime);
-`;
-const child = spawn(runtime, ["--import", "tsx", "--input-type=module", "--eval", fixture], {
+const child = spawn(runtime, fixtureArgs, {
   cwd: process.cwd(),
   cols: 100,
   rows: 30,

@@ -1,96 +1,78 @@
-import { readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createDeferredCore } from "../../shared/deferred.js";
-import { createSpawnBrokerHost } from "./host.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createStubChild } from "../supervisor/adapters/child.test-support.js";
+import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const native = vi.hoisted(() => ({ spawn: vi.fn() }));
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawn: native.spawn,
+}));
+vi.mock("./cleanup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./cleanup.js")>()),
+  terminateBrokerProcessGroup: () => ({ force: vi.fn(), settled: Promise.resolve() }),
+}));
 
-const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+let child: ReturnType<typeof createStubChild>;
+let host: SpawnBrokerHost;
+const workerUrl = new URL("synthetic-spawn-broker.mjs", import.meta.url);
+beforeEach(async () => {
+  vi.useFakeTimers();
+  native.spawn.mockReset().mockImplementation(() => {
+    child = createStubChild(40999 + native.spawn.mock.calls.length);
+    const current = child;
+    // The broker inherits stdin and ignores output; it owns no piped stdio descriptors.
+    Object.defineProperty(current.child, "stdio", { value: [null, null, null, null] });
+    current.disconnectMock.mockImplementation(() => retire(current, 0));
+    return current.child;
+  });
+  host = createSpawnBrokerHost({ workerUrl });
+  markReady();
+  await host.ready();
+});
+afterEach(async () => {
+  try {
+    await host.close();
+  } finally {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  }
+});
 
-describe.skipIf(skipBrokerTests)("spawn broker recovery budget", () => {
-  it("recovers after more than five independently healthy generations", async () => {
-    let onRecovered: ((pid: number) => void) | undefined;
-    const host = createSpawnBrokerHost({ onReady: (pid) => onRecovered?.(pid) });
-    try {
-      await host.ready();
-      const runHealthyCommand = async () => {
-        const child = host.spawn(
-          process.execPath,
-          ["-e", "process.stdout.write(String(process.ppid))"],
-          {
-            stdio: ["ignore", "pipe", "pipe"],
-          },
-        );
-        await child.ready();
-        let stdout = "";
-        child.stdout!.on("data", (chunk) => {
-          stdout += chunk;
-        });
-        await child.waitForClose();
-        expect(Number(stdout)).toBe(host.pid);
-      };
-      for (let cycle = 0; cycle < 7; cycle += 1) {
-        await runHealthyCommand();
-        const previousPid = host.pid!;
-        const recovered = createDeferredCore<number>();
-        onRecovered = recovered.resolve;
-        process.kill(previousPid, "SIGKILL");
-        const nextPid = await withTestTimeout(
-          recovered.promise,
-          5000,
-          `Broker recovery ${cycle + 1} did not become ready`,
-        );
-        expect(nextPid).not.toBe(previousPid);
-        await host.ready();
-      }
-      await runHealthyCommand();
-    } finally {
-      await host.close();
-    }
-  }, 20_000);
-  it("stops after bounded consecutive recovery failures following a healthy startup", async () => {
-    const directory = tempDirs.make("openclaw-broker-restarts-");
-    const marker = path.join(directory, "starts");
-    const preload = path.join(directory, "fail-startup.mjs");
-    await writeFile(
-      preload,
-      `
-      import {appendFileSync,existsSync} from 'node:fs';
-      if (/\\/spawn-broker\\/worker\\.(?:ts|js)$/.test(process.argv[1] ?? '')) {
-        const recovering = existsSync(${JSON.stringify(marker)});
-        appendFileSync(${JSON.stringify(marker)}, 'start\\n');
-        if (recovering) process.exit(1);
-      }
-    `,
-    );
-    const previousNodeOptions = process.env.NODE_OPTIONS;
-    process.env.NODE_OPTIONS = `${previousNodeOptions ?? ""} --import=${pathToFileURL(preload).href}`;
-    const host = createSpawnBrokerHost();
-    const starts = async () => (await readFile(marker, "utf8")).trim().split("\n").length;
-    try {
-      await host.ready();
-      process.kill(host.pid!, "SIGKILL");
-      await vi.waitFor(
-        async () => {
-          expect(await starts()).toBeGreaterThanOrEqual(6);
-        },
-        { timeout: 7000 },
-      );
-      await expect(host.ready()).rejects.toMatchObject({ code: "ERR_SPAWN_BROKER_UNAVAILABLE" });
-      await delay(2500);
-      expect(await starts()).toBe(6);
-    } finally {
-      await host.close();
-      if (previousNodeOptions === undefined) {
-        delete process.env.NODE_OPTIONS;
-      } else {
-        process.env.NODE_OPTIONS = previousNodeOptions;
-      }
-    }
-  }, 15_000);
+function markReady() {
+  child.child.emit("message", { type: "ready", pid: child.child.pid });
+}
+function retire(current: typeof child, code: number) {
+  Object.defineProperty(current.child, "connected", { value: false });
+  current.child.emit("disconnect");
+  current.emitExit(code);
+  current.emitClose(code);
+}
+it("recovers after more than five independently healthy generations", async () => {
+  for (let cycle = 0; cycle < 7; cycle++) {
+    const previousPid = host.pid;
+    retire(child, 1);
+    const ready = host.ready();
+    await vi.advanceTimersToNextTimerAsync();
+    expect(host.pid).not.toBe(previousPid);
+    markReady();
+    await expect(ready).resolves.toBeUndefined();
+  }
+  expect(native.spawn).toHaveBeenCalledTimes(8);
+});
+
+it("stops after bounded consecutive recovery failures following a healthy startup", async () => {
+  retire(child, 1);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const failed = expect(host.ready()).rejects.toMatchObject({
+      code: "ERR_SPAWN_BROKER_UNAVAILABLE",
+    });
+    await vi.advanceTimersToNextTimerAsync();
+    retire(child, 1);
+    await failed;
+  }
+  // Exhaustion must leave no later generation queued, even beyond its backoff.
+  await vi.advanceTimersToNextTimerAsync();
+  expect(native.spawn).toHaveBeenCalledTimes(6);
+  await host.waitForCleanup();
+  await expect(host.ready()).rejects.toMatchObject({ code: "ERR_SPAWN_BROKER_UNAVAILABLE" });
 });

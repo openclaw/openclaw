@@ -22,10 +22,37 @@ const enPortals = {
     closeFailed: "Could not close the portal: {error}",
     unreachableTitle: "Portal not reachable from this browser",
     unreachableBody:
-      "The Gateway is likely being accessed through a proxy or tunnel that exposes only its main port. Open this URL from a browser on the Gateway host.",
+      "Check the portal URL's DNS, TLS, and network access. For private Tailscale Serve, allow its HTTPS port in your tailnet policy. For a reverse proxy, check the dedicated portal ingress route, then retry.",
+    newTabRequiredTitle: "Open this HTTP portal in a new tab",
+    newTabRequiredBody:
+      "This portal uses HTTP with a different hostname or scheme from the Control UI. Open the link in a new tab so its authentication cookies work, or use an HTTPS portal for an embedded preview.",
+    ingressRequiredTitle: "Remote portal ingress required",
+    ingressRequiredBody:
+      "This Gateway returned a loopback URL, which points to this browser's machine. Use a browser on the Gateway host, enable managed private Tailscale Serve, or configure gateway.portals.ingress with a separate private HTTPS wildcard proxy. Forwarding only the Gateway port is not enough.",
     writeAccessRequiredTitle: "Write access required",
     writeAccessRequiredBody: "This portal requires an operator with write access.",
     retry: "Retry",
+    embeddedRefresh: "Refresh",
+    embeddedOptions: "Portal options",
+    embeddedCopyLink: "Copy link",
+    embeddedCopied: "Link copied",
+    embeddedCopyFailed: "Could not copy the link. Try again.",
+    embeddedOpen: "Open portal",
+    embeddedOpenBrowser: "Open in browser",
+    embeddedClose: "Close portal",
+    embeddedEmptyTitle: "No portal open",
+    embeddedEmptyBody: "Ask the agent to start an application in a portal.",
+    embeddedUnavailableTitle: "Portal is no longer available",
+    embeddedUnavailableBody: "Ask the agent to reopen the application.",
+    embeddedWriteAccessBody: "You need write access to view this portal.",
+    embeddedNewTabRequiredTitle: "Can’t display this portal",
+    embeddedNewTabRequiredBody:
+      "This portal uses HTTP. An HTTPS address allows it to appear inside this panel.",
+    embeddedIngressRequiredTitle: "This portal needs a remote address",
+    embeddedIngressRequiredBody:
+      "This local address belongs to the Gateway’s machine. Use a remote portal address that this browser can reach.",
+    embeddedUnreachableTitle: "Portal isn’t reachable",
+    embeddedUnreachableBody: "Check the portal address and your connection, then try again.",
   },
 } satisfies TranslationMap;
 

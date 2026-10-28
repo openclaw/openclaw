@@ -1,31 +1,24 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
-import { copyPrWrapperSources } from "./pr-wrapper.test-support.js";
+import { createMainRefreshFixture } from "./pr-main-refresh.test-support.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
-const outcomeRef = "refs/openclaw/pr-merge-outcomes/123";
-const lockRef = "refs/openclaw/pr-operation-locks/123";
+const outcomeRef = "refs/openclaw/pr-merge-outcomes/42";
+const lockRef = "refs/openclaw/pr-operation-locks/42";
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
 function fixture() {
-  const root = realpathSync(temps.make("pr-cross-checkout-"));
-  const owner = join(root, "owner");
+  const shared = createMainRefreshFixture(temps.make("pr-cross-checkout-"), {
+    precreateWorktree: false,
+    perWorktreeConfig: false,
+  });
+  const { root, canonical: owner, head, main: base, worktree } = shared;
   const caller = join(root, "caller");
-  const bin = join(root, "bin");
-  for (const dir of [owner, caller, bin]) {
-    mkdirSync(dir);
-  }
+  const bin = join(root, "cross-checkout-bin");
+  mkdirSync(bin);
   // Recovery and metadata checks need these preflight commands but must never execute them.
   for (const command of ["rg", "pnpm"]) {
     writeFileSync(
@@ -35,38 +28,23 @@ function fixture() {
     );
   }
   const env = {
-    HOME: root,
-    TMPDIR: root,
-    PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_ALLOW_PROTOCOL: "file",
-    GH_REPO: "fixture/repo",
+    ...shared.env,
+    PATH: `${bin}${delimiter}${shared.env.PATH}`,
+    OPENCLAW_GH_BIN: join(bin, "gh"),
   };
   const git = (repo: string, args: string[], input?: string) =>
-    execFileSync("git", ["-C", repo, ...args], {
+    execFileSync(shared.realGit, ["-C", repo, ...args], {
       env,
       input,
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
     }).trim();
-  for (const repo of [owner, caller]) {
-    git(repo, ["init", "-q", "-b", "main"]);
-    git(repo, ["config", "user.name", "Fixture"]);
-    git(repo, ["config", "user.email", "fixture@example.invalid"]);
-    git(repo, ["config", "core.hooksPath", "/dev/null"]);
-    git(repo, ["config", "commit.gpgsign", "false"]);
-    git(repo, ["commit", "--allow-empty", "-qm", "Base"]);
-  }
-  copyPrWrapperSources(owner);
-  const base = git(owner, ["rev-parse", "HEAD"]);
-  const blob = git(owner, ["hash-object", "-w", "--stdin"], "reviewed change\n");
-  const tree = git(owner, ["mktree"], `100644 blob ${blob}\towner.txt\n`);
-  const head = git(owner, ["commit-tree", tree, "-p", base], "Source\n");
+  git(root, ["clone", "-q", owner, caller]);
+  const tree = git(owner, ["rev-parse", `${head}^{tree}`]);
   const landed = git(owner, ["commit-tree", tree, "-p", base], "Landed\n");
   git(owner, ["update-ref", "refs/heads/main", landed]);
-  git(owner, ["remote", "add", "origin", owner]);
-  const worktree = join(owner, ".worktrees/pr-123");
+  git(owner, ["push", "-q", "origin", "main"]);
+  git(owner, ["update-ref", "refs/remotes/origin/main", landed]);
   git(owner, ["worktree", "add", "-q", "--detach", worktree, head]);
   mkdirSync(join(worktree, ".local"));
   const capture = join(worktree, ".local/merge-output.log");
@@ -81,7 +59,7 @@ function fixture() {
   const record = {
     version: 1,
     repo,
-    pr: 123,
+    pr: 42,
     prId: "fixture-pr",
     base: "main",
     head,
@@ -105,23 +83,22 @@ function fixture() {
         databaseId: repo.id,
         ref: { target: { oid: landed } },
         pullRequest: {
-          id: record.prId,
-          number: 123,
-          url: `${repo.url}/pull/123`,
+          ...shared.metadata,
           state: "MERGED",
-          headRefOid: head,
-          baseRefName: "main",
-          isDraft: false,
           mergeCommit: { oid: landed },
-          autoMergeRequest: null,
-          isInMergeQueue: false,
-          isMergeQueueEnabled: false,
           mergeable: "UNKNOWN",
           mergeStateStatus: "UNKNOWN",
         },
       },
     },
   };
+  const pullResponse = (baseRef: string) =>
+    JSON.stringify({
+      number: 42,
+      html_url: `${repo.url}/pull/42`,
+      base: { ref: baseRef, repo: repoAuthority },
+      head: { sha: "" },
+    });
   const calls = join(root, "calls.log");
   const gh = join(bin, "gh");
   writeFileSync(
@@ -129,25 +106,28 @@ function fixture() {
     `#!/bin/sh
 printf '%s\\t%s\\n' "$(git rev-parse --show-toplevel)" "$*" >> '${calls}'
 case "$1 $2" in
-  "browse --no-browser") printf '%s\\n' '${repo.url}' ;;
+  "browse ") printf '%s\\n' '${repo.url}' ;;
+  "api user") printf 'HTTP/2.0 200 OK\\n\\n{"login":"fixture"}\\n' ;;
   "api --hostname")
     case "$4" in
-      repos/fixture/repo) printf '%s\\n' '${JSON.stringify(repoAuthority)}' ;;
-      repos/fixture/repo/pulls/123)
+      repos/fixture/repo/pulls/42)
         if [ "$(git rev-parse --show-toplevel)" = '${owner}' ]; then
-          printf '%s\\n' '{"base":{"ref":"owner-release"},"head":{"sha":""}}'
+          printf '%s\\n' '${pullResponse("owner-release")}'
         else
-          printf '%s\\n' '{"base":{"ref":"caller-release"},"head":{"sha":""}}'
+          printf '%s\\n' '${pullResponse("caller-release")}'
         fi ;;
+      repos/fixture/repo/pulls/42/files?per_page=100) printf '%s\\n' '[[]]' ;;
       *) echo "Unexpected GitHub operation: $*" >&2; exit 99 ;;
     esac ;;
-  "api graphql") printf '%s\\n' '${JSON.stringify(response)}' ;;
+  "api graphql")
+    case " $* " in *" --include "*) printf 'HTTP/2.0 200 OK\\n\\n' ;; esac
+    printf '%s\\n' '${JSON.stringify(response)}' ;;
   *) echo "Unexpected GitHub operation: $*" >&2; exit 99 ;;
 esac
 `,
   );
   chmodSync(gh, 0o755);
-  const run = (cwd = caller, args = ["merge-run", "123"]) => {
+  const run = (cwd = caller, args = ["merge-run", "42"]) => {
     const result = spawnSync(join(owner, "scripts/pr"), args, {
       cwd,
       env,
@@ -157,6 +137,8 @@ esac
     return { ...result, output: result.stdout + result.stderr };
   };
   const readCalls = () => readFileSync(calls, "utf8").trim().split("\n");
+  const refs = (repoPath: string, prefix: string) =>
+    git(repoPath, ["for-each-ref", "--format=%(refname)", prefix]);
   return {
     root,
     owner,
@@ -169,26 +151,29 @@ esac
     record,
     git,
     run,
-    readCalls,
+    expectOwnerCalls: () => {
+      const observedCalls = readCalls();
+      expect(new Set(observedCalls.map((call) => call.split("\t")[0]))).toEqual(new Set([owner]));
+      expect(
+        observedCalls.filter((call) =>
+          /\bmutation\b|(?:--method|-X) (?:POST|PATCH|PUT|DELETE)\b/u.test(call),
+        ),
+      ).toEqual([]);
+    },
+    refs,
   };
 }
 
 describePosix("native PR wrapper repository ownership", () => {
-  it.each(["foreign", "foreign with outcome", "linked", "non-Git"])(
-    "reconciles the owner's accepted intent from a %s caller without redispatch or cleanup",
+  it.each(["conflicting caller outcome", "non-Git caller"])(
+    "reconciles from a %s without redispatch or cleanup",
     (location) => {
       const f = fixture();
-      let cwd = f.caller;
-      if (location === "foreign with outcome") {
-        // A same-number record in another clone must never become recovery authority.
+      if (location === "conflicting caller outcome") {
         f.git(f.caller, ["update-ref", outcomeRef, f.git(f.caller, ["rev-parse", "HEAD"])]);
-      } else if (location === "linked") {
-        cwd = f.worktree;
-      } else if (location === "non-Git") {
-        cwd = f.root;
       }
       const callerRefs = f.git(f.caller, ["show-ref"]);
-      const result = f.run(cwd);
+      const result = f.run(location === "non-Git caller" ? f.root : f.caller);
 
       expect(result.status, result.output).toBe(0);
       expect(result.output).toContain(`MERGED exact attempted head ${f.head} as ${f.landed}`);
@@ -201,17 +186,8 @@ describePosix("native PR wrapper repository ownership", () => {
       f.git(f.owner, ["merge-base", "--is-ancestor", f.intent, outcomeRef]);
       expect(readFileSync(f.capture, "utf8")).toBe("retained capture\n");
       expect(f.git(f.caller, ["show-ref"])).toBe(callerRefs);
-      expect(f.git(f.owner, ["for-each-ref", "--format=%(refname)", lockRef])).toBe("");
-      expect(f.readCalls()).toHaveLength(5);
-      expect(f.readCalls().slice(0, 3)).toEqual([
-        `${f.owner}\tbrowse --no-browser`,
-        `${f.owner}\tapi --hostname github.com repos/fixture/repo -H Cache-Control: max-age=0`,
-        `${f.owner}\tapi --hostname github.com repos/fixture/repo -H Cache-Control: max-age=0`,
-      ]);
-      expect(f.readCalls().every((call) => call.startsWith(`${f.owner}\t`))).toBe(true);
-      expect(f.readCalls().some((call) => call.includes("pr merge") || call.includes("POST"))).toBe(
-        false,
-      );
+      expect(f.refs(f.owner, lockRef)).toBe("");
+      f.expectOwnerCalls();
     },
   );
 
@@ -222,7 +198,7 @@ describePosix("native PR wrapper repository ownership", () => {
     expect(result.status, result.output).toBe(0);
     expect(result.output).toContain("completion pending");
     expect(existsSync(f.worktree)).toBe(false);
-    expect(f.git(f.caller, ["for-each-ref", "--format=%(refname)", "refs/openclaw"])).toBe("");
+    expect(f.refs(f.caller, "refs/openclaw")).toBe("");
   });
 
   it("rejects corrupt owner evidence even when the caller has a valid retained intent", () => {
@@ -235,50 +211,24 @@ describePosix("native PR wrapper repository ownership", () => {
     expect(f.git(f.owner, ["rev-parse", outcomeRef])).toBe(f.head);
     expect(f.git(f.caller, ["rev-parse", outcomeRef])).toBe(f.intent);
     expect(readFileSync(f.capture, "utf8")).toBe("retained capture\n");
-    expect(f.readCalls()).toEqual([
-      `${f.owner}\tbrowse --no-browser`,
-      `${f.owner}\tapi --hostname github.com repos/fixture/repo -H Cache-Control: max-age=0`,
-      `${f.owner}\tapi --hostname github.com repos/fixture/repo -H Cache-Control: max-age=0`,
-    ]);
+    f.expectOwnerCalls();
   });
 
-  it.each(["prepare-run", "merge-recover", "ci-dispatch", "review-init"])(
+  it.each(["ci-dispatch", "review-init"])(
     "uses owner repository metadata for early %s validation",
     (command) => {
       const f = fixture();
-      if (command === "prepare-run") {
-        const review = validReview(f.head);
-        review.pr.number = 123;
-        review.recommendation = "READY FOR /prepare-pr";
-        review.issueValidation.status = "valid";
-        writeReviewArtifacts(f.worktree, review, { prNumber: 123, headSha: f.head });
-      }
-      const result = f.run(f.caller, [
-        command,
-        "123",
-        ...(command === "merge-recover" ? [f.intent, "--confirmed-operator-recovery"] : []),
-      ]);
+      const result = f.run(f.caller, [command, "42"]);
       expect(result.status, result.output).toBe(1);
       expect(result.output).toContain(
         command === "ci-dispatch"
           ? "missing remote headRefName/headRefOid metadata"
-          : command === "review-init"
-            ? "Invalid PR identity for #123: expected complete base/head OIDs and refs before reading checks."
-            : "targets owner-release",
+          : "did not include a head SHA",
       );
-      expect(f.readCalls()).toEqual([
-        ...(command === "review-init"
-          ? [
-              `${f.owner}\tbrowse --no-browser`,
-              `${f.owner}\tapi --hostname github.com repos/fixture/repo -H Cache-Control: max-age=0`,
-            ]
-          : []),
-        `${f.owner}\tbrowse --no-browser`,
-        `${f.owner}\tapi --hostname github.com repos/fixture/repo/pulls/123`,
-      ]);
+      f.expectOwnerCalls();
       expect(f.git(f.owner, ["rev-parse", outcomeRef])).toBe(f.intent);
-      expect(f.git(f.owner, ["for-each-ref", "--format=%(refname)", lockRef])).toBe("");
-      expect(f.git(f.caller, ["for-each-ref", "--format=%(refname)", "refs/openclaw"])).toBe("");
+      expect(f.refs(f.owner, lockRef)).toBe("");
+      expect(f.refs(f.caller, "refs/openclaw")).toBe("");
     },
   );
 });

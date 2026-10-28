@@ -1,4 +1,5 @@
 import type { CronJob } from "../api/types.ts";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import {
   createControlUiChatHistoryMessage as chatHistoryMessage,
   createControlUiMockSessionRow as sessionRow,
@@ -9,6 +10,7 @@ import {
   buildWorkboardStateSessions,
   MATRIX_STATES,
 } from "./control-ui-workboard-states.ts";
+import { cronJobsListResponse, cronListResponseFixture } from "./cron.ts";
 
 export function buildWorkboardMocks(
   baseTime: number,
@@ -327,65 +329,21 @@ export function buildWorkboardMocks(
   };
   const boards = matrix
     ? [
-        ...MATRIX_STATES.map((state) => ({
-          id: `matrix-${state}`,
-          name: `Matrix · ${state}`,
-          description: "Synthetic card presentation matrix",
-          ...summarizeBoard(
-            matrixCells.filter((cell) => cell.state === state).map((cell) => cell.card),
+        ...MATRIX_STATES.map((state) =>
+          Object.assign(
+            {
+              id: `matrix-${state}`,
+              name: `Matrix · ${state}`,
+              description: "Synthetic card presentation matrix",
+            },
+            summarizeBoard(
+              matrixCells.filter((cell) => cell.state === state).map((cell) => cell.card),
+            ),
           ),
-        })),
+        ),
         { ...statesBoard, name: "Natural stale regression", total: 1, active: 1 },
       ]
     : [board, statesBoard];
-  const tasks = ["queued", "running", "timeout", "stopped", "completed", "failed"].map((id) =>
-    Object.assign(
-      {
-        id: `task-card-states-${id}`,
-        taskId: `task-card-states-${id}`,
-        agentId: "main",
-        sessionKey: `agent:main:card-states-${id}`,
-        status: id === "timeout" ? "timed_out" : id === "stopped" ? "cancelled" : id,
-        title: `Synthetic ${id} task`,
-        createdAt: baseTime - 600_000,
-        updatedAt: baseTime - 60_000,
-        progressSummary:
-          id === "queued" ? "Waiting for an available worker." : "Checking the release checklist.",
-        terminalSummary:
-          id === "timeout"
-            ? "The environment did not respond before the deadline."
-            : id === "stopped"
-              ? "Stopped by the operator."
-              : id === "completed"
-                ? "The synthetic task completed its release review."
-                : id === "failed"
-                  ? "The synthetic task failed before its session was stopped."
-                  : "",
-      },
-      id === "failed" ? { runId: "state-current-failed-run" } : {},
-    ),
-  );
-  if (matrix) {
-    tasks.splice(
-      0,
-      tasks.length,
-      ...MATRIX_STATES.filter((state) => state === "cancelled" || state === "timed_out").map(
-        (state) => ({
-          id: `task-matrix-${state}`,
-          taskId: `task-matrix-${state}`,
-          agentId: "main",
-          sessionKey: `agent:main:matrix-${state}`,
-          status: state,
-          title: "Release verification",
-          createdAt: baseTime - 600_000,
-          updatedAt: baseTime - 120_000,
-          progressSummary: "",
-          terminalSummary:
-            state === "cancelled" ? "Stopped by the operator." : "Execution deadline elapsed.",
-        }),
-      ),
-    );
-  }
   const automationJob: CronJob = {
     id: board.automationJobId,
     agentId: "main",
@@ -449,11 +407,23 @@ export function buildWorkboardMocks(
       status: "running",
       hasActiveRun: false,
     }),
-    ...tasks.map((task) =>
-      sessionRow(task.sessionKey, task.title, task.updatedAt, {
-        status: task.status === "failed" ? "killed" : undefined,
-        hasActiveRun: false,
-      }),
+    ...(["queued", "running", "timeout", "stopped", "completed", "failed"] as const).map((state) =>
+      sessionRow(
+        `agent:main:card-states-${state}`,
+        `Synthetic ${state} session`,
+        baseTime - 60_000,
+        {
+          status:
+            state === "timeout"
+              ? "timeout"
+              : state === "stopped"
+                ? "killed"
+                : state === "completed"
+                  ? "done"
+                  : state,
+          hasActiveRun: state === "running",
+        },
+      ),
     ),
   );
   if (matrix) {
@@ -553,7 +523,6 @@ export function buildWorkboardMocks(
     board,
     boards,
     cards: allCards,
-    tasks,
     sessionKey,
     cardSessions,
     cardSessionHistories: Object.fromEntries(
@@ -596,36 +565,26 @@ export function buildWorkboardMocks(
           },
         ],
       },
-      "cron.list": {
-        jobs: [automationJob],
-        snapshotRevision: "workboard-mock-cron",
-        total: 1,
-        offset: 0,
-        limit: 50,
-        hasMore: false,
-        nextOffset: null,
-      },
+      "cron.list": cronListResponseFixture(
+        cronJobsListResponse([automationJob], {
+          snapshotRevision: "workboard-mock-cron",
+        }),
+      ),
 
       "board.get": {
         sessionKey,
         revision: 1,
         tabs: [{ tabId: "main", title: "Workboard", position: 0, chatDock: "hidden" }],
         widgets: [
-          {
+          createBoardWidget({
             name: "session-progress",
-            tabId: "main",
             title: "Session progress",
             contentKind: "plugin",
             pluginKind: "session:progress",
-            sizeW: 6,
             sizeH: 5,
-            position: 0,
-            grantState: "none",
-            revision: 1,
-          },
-          {
+          }),
+          createBoardWidget({
             name: "workboard-product-operations",
-            tabId: "main",
             title: "Product Operations",
             contentKind: "plugin",
             pluginKind: "workboard:board",
@@ -634,9 +593,7 @@ export function buildWorkboardMocks(
             sizeW: 12,
             sizeH: 16,
             position: 1,
-            grantState: "none",
-            revision: 1,
-          },
+          }),
         ],
       },
       "workboard.boards.list": { boards },

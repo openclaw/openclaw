@@ -9,6 +9,7 @@ import {
   resolveExplicitVitestMode,
   vitestOptionConsumesNextArg,
 } from "./vitest-cli-mode.mts";
+import { resolveIsolatedVitestBuild } from "./vitest-isolated-build.mts";
 import {
   copyIsolatedVitestSource,
   isIsolatedSourcePath,
@@ -20,7 +21,7 @@ const LABEL = "io.openclaw.vitest-isolated";
 const CONTAINER_ENV = {
   PATH: "/opt/openclaw-vitest:/usr/local/bin:/usr/bin:/bin",
   HOME: "/tmp/home",
-  TMPDIR: "/tmp",
+  TMPDIR: "/workspace/.openclaw/tmp",
   LANG: "C.UTF-8",
   LC_ALL: "C.UTF-8",
   CI: "1",
@@ -158,6 +159,9 @@ export function isolatedVitestCreateArgs(options: {
   argv: string[];
 }) {
   const { name, image, snapshot, mounts, node, pnpm, uid, gid, pnpmVersion, argv } = options;
+  // Runtime builds need the compiler's 12 GiB heap plus native/bundler headroom.
+  // Keep the smaller envelope for source-only tests that need no runtime build.
+  const memory = resolveIsolatedVitestBuild(argv, CONTAINER_ENV) ? "16g" : "8g";
   const bindings = [
     { source: snapshot, target: "/workspace", readonly: false },
     ...mounts.map((mount) => ({ source: mount.source, target: mount.target, readonly: true })),
@@ -185,10 +189,12 @@ export function isolatedVitestCreateArgs(options: {
     "--userns=keep-id",
     `--user=${uid}:${gid}`,
     "--pid=private",
+    // Detached test children outlive their launcher; Node cannot reap adopted orphans.
+    "--init",
     "--ipc=private",
     "--cpus=4",
-    "--memory=8g",
-    "--memory-swap=8g",
+    `--memory=${memory}`,
+    `--memory-swap=${memory}`,
     "--pids-limit=512",
     "--shm-size=512m",
     "--tmpfs",
@@ -267,6 +273,7 @@ export function verifyIsolatedVitestContainer(
     host.NetworkMode !== "none" ||
     host.Privileged !== false ||
     host.ReadonlyRootfs !== true ||
+    host.Init !== true ||
     config.User !== `${process.getuid?.()}:${process.getgid?.()}`
   ) {
     throw new Error("Container isolation settings differ from the admitted invocation.");

@@ -662,6 +662,7 @@ async fn raw_event_subscription_closes_with_the_session() {
 async fn default_buffer_retains_256_small_events() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
+    let (assertions_done_tx, assertions_done_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (tcp, _) = listener.accept().await.unwrap();
         let mut socket = accept_async(tcp).await.unwrap();
@@ -688,7 +689,8 @@ async fn default_buffer_retains_256_small_events() {
             )
             .await;
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        acknowledge_buffered_events(&mut socket).await;
+        let _ = assertions_done_rx.await;
     });
 
     let session = GatewayClient::connect(
@@ -697,12 +699,13 @@ async fn default_buffer_retains_256_small_events() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(25)).await;
+    session.request("test.buffered", Value::Null).await.unwrap();
     for seq in 0..256 {
         let event = session.next_event().await.unwrap();
         assert_eq!(event.event, "node.small");
         assert_eq!(event.seq, Some(seq));
     }
+    assertions_done_tx.send(()).unwrap();
     server.await.unwrap();
 }
 
@@ -710,6 +713,7 @@ async fn default_buffer_retains_256_small_events() {
 async fn oversized_retained_event_lags_without_closing_the_session() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
+    let (assertions_done_tx, assertions_done_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (tcp, _) = listener.accept().await.unwrap();
         let mut socket = accept_async(tcp).await.unwrap();
@@ -742,7 +746,8 @@ async fn oversized_retained_event_lags_without_closing_the_session() {
             json!({"type":"event", "event":"node.after-large", "seq":2}),
         )
         .await;
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        acknowledge_buffered_events(&mut socket).await;
+        let _ = assertions_done_rx.await;
     });
 
     let config = GatewayClientConfig::new(format!("ws://{address}"))
@@ -754,6 +759,7 @@ async fn oversized_retained_event_lags_without_closing_the_session() {
     })
     .await
     .unwrap();
+    session.request("test.buffered", Value::Null).await.unwrap();
     assert!(matches!(
         session.next_event().await,
         Err(ClientError::EventLagged(1))
@@ -762,73 +768,92 @@ async fn oversized_retained_event_lags_without_closing_the_session() {
         session.next_event().await.unwrap().event,
         "node.after-large"
     );
+    assert!(!session.is_closed());
+    assertions_done_tx.send(()).unwrap();
     server.await.unwrap();
 }
 
 #[tokio::test]
 async fn abandoned_request_releases_its_in_flight_permit() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let (first_seen_tx, first_seen_rx) = tokio::sync::oneshot::channel();
-    let server = tokio::spawn(async move {
-        let (tcp, _) = listener.accept().await.unwrap();
-        let mut socket = accept_async(tcp).await.unwrap();
-        send_json(
+    for caller_owned in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (first_seen_tx, first_seen_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(tcp).await.unwrap();
+            send_json(
             &mut socket,
             json!({
                 "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-abandon","ts":1_700_000_000_123_u64}
             }),
         )
         .await;
-        let connect = receive_json(&mut socket).await;
-        send_json(
-            &mut socket,
-            json!({
-                "type":"res", "id":connect["id"], "ok":true,
-                "payload":{"type":"hello-ok","protocol":4}
-            }),
-        )
-        .await;
-        let first = receive_json(&mut socket).await;
-        assert_eq!(first["method"], "node.first");
-        first_seen_tx.send(()).unwrap();
-        let second = receive_json(&mut socket).await;
-        assert_eq!(second["method"], "node.second");
-        send_json(
-            &mut socket,
-            json!({
-                "type":"res", "id":second["id"], "ok":true,
-                "payload":{"ok":true}
-            }),
-        )
-        .await;
-    });
+            let connect = receive_json(&mut socket).await;
+            send_json(
+                &mut socket,
+                json!({
+                    "type":"res", "id":connect["id"], "ok":true,
+                    "payload":{"type":"hello-ok","protocol":4}
+                }),
+            )
+            .await;
+            let first = receive_json(&mut socket).await;
+            assert_eq!(first["method"], "node.first");
+            first_seen_tx.send(()).unwrap();
+            let second = receive_json(&mut socket).await;
+            assert_eq!(second["method"], "node.second");
+            send_json(
+                &mut socket,
+                json!({
+                    "type":"res", "id":second["id"], "ok":true,
+                    "payload":{"ok":true}
+                }),
+            )
+            .await;
+        });
 
-    let config = GatewayClientConfig::new(format!("ws://{address}"))
-        .unwrap()
-        .request_timeout(Duration::from_millis(250))
-        .max_in_flight(1);
-    let session = GatewayClient::connect(config, |_| async {
-        Ok::<_, io::Error>(json!({"role":"node"}))
-    })
-    .await
-    .unwrap();
-    let first_session = session.clone();
-    let first = tokio::spawn(async move { first_session.request("node.first", json!({})).await });
-    first_seen_rx.await.unwrap();
-    first.abort();
-
-    assert_eq!(
-        tokio::time::timeout(
-            Duration::from_secs(1),
-            session.request("node.second", json!({}))
-        )
+        let config = GatewayClientConfig::new(format!("ws://{address}"))
+            .unwrap()
+            .request_timeout(Duration::from_millis(250))
+            .max_in_flight(1);
+        let session = GatewayClient::connect(config, |_| async {
+            Ok::<_, io::Error>(json!({"role":"node"}))
+        })
         .await
-        .expect("second request must acquire the released permit")
-        .unwrap(),
-        json!({"ok":true})
-    );
-    server.await.unwrap();
+        .unwrap();
+        let first_session = session.clone();
+        let mut first = tokio::spawn(async move {
+            if caller_owned {
+                first_session
+                    .request_until_cancelled("node.first", json!({}))
+                    .await
+            } else {
+                first_session.request("node.first", json!({})).await
+            }
+        });
+        first_seen_rx.await.unwrap();
+        if caller_owned {
+            // The native owner may legitimately wait beyond the shared client's default deadline.
+            assert!(tokio::time::timeout(Duration::from_millis(500), &mut first)
+                .await
+                .is_err());
+        }
+        first.abort();
+        assert!(first.await.unwrap_err().is_cancelled());
+
+        assert_eq!(
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                session.request("node.second", json!({}))
+            )
+            .await
+            .expect("second request must acquire the released permit")
+            .unwrap(),
+            json!({"ok":true})
+        );
+        server.await.unwrap();
+    }
 }
 
 #[tokio::test]
@@ -893,6 +918,7 @@ async fn drains_a_queued_event_before_reporting_disconnect() {
 async fn surfaces_websocket_ping_as_transport_activity() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
+    let (subscribed_tx, subscribed_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (tcp, _) = listener.accept().await.unwrap();
         let mut socket = accept_async(tcp).await.unwrap();
@@ -912,7 +938,7 @@ async fn surfaces_websocket_ping_as_transport_activity() {
             }),
         )
         .await;
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        subscribed_rx.await.unwrap();
         socket
             .send(Message::Ping(vec![1, 2, 3].into()))
             .await
@@ -928,6 +954,7 @@ async fn surfaces_websocket_ping_as_transport_activity() {
     .await
     .unwrap();
     let mut activity = session.subscribe_transport_activity();
+    subscribed_tx.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(1), activity.changed())
         .await
         .expect("ping activity timeout")
@@ -936,9 +963,76 @@ async fn surfaces_websocket_ping_as_transport_activity() {
 }
 
 #[tokio::test]
+async fn websocket_ping_remains_available_when_rpc_capacity_is_full() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_seen_tx, request_seen_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(tcp).await.unwrap();
+        send_json(
+            &mut socket,
+            json!({
+                "type":"event", "event":"connect.challenge",
+                "payload":{"nonce":"nonce-saturated-ping","ts":1_700_000_000_123_u64}
+            }),
+        )
+        .await;
+        let connect = receive_json(&mut socket).await;
+        send_json(
+            &mut socket,
+            json!({
+                "type":"res", "id":connect["id"], "ok":true,
+                "payload":{"type":"hello-ok","protocol":4}
+            }),
+        )
+        .await;
+
+        let request = receive_json(&mut socket).await;
+        assert_eq!(request["method"], "node.blocked");
+        request_seen_tx.send(()).unwrap();
+        let ping = socket.next().await.unwrap().unwrap();
+        let Message::Ping(payload) = ping else {
+            panic!("expected websocket ping while request capacity is full");
+        };
+        socket.send(Message::Pong(payload)).await.unwrap();
+        send_json(
+            &mut socket,
+            json!({
+                "type":"res", "id":request["id"], "ok":true,
+                "payload":{"released":true}
+            }),
+        )
+        .await;
+    });
+
+    let session = GatewayClient::connect(
+        GatewayClientConfig::new(format!("ws://{address}"))
+            .unwrap()
+            .request_timeout(Duration::from_secs(1))
+            .max_in_flight(1),
+        |_| async { Ok::<_, io::Error>(json!({"role":"node"})) },
+    )
+    .await
+    .unwrap();
+    let request_session = session.clone();
+    let request =
+        tokio::spawn(async move { request_session.request("node.blocked", json!({})).await });
+    request_seen_rx.await.unwrap();
+
+    tokio::time::timeout(Duration::from_secs(1), session.ping())
+        .await
+        .expect("ping must not wait for RPC capacity")
+        .unwrap();
+    assert_eq!(request.await.unwrap().unwrap(), json!({"released":true}));
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn malformed_idle_text_is_activity_and_does_not_close_the_session() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
+    let (subscribed_tx, subscribed_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (tcp, _) = listener.accept().await.unwrap();
         let mut socket = accept_async(tcp).await.unwrap();
@@ -959,7 +1053,7 @@ async fn malformed_idle_text_is_activity_and_does_not_close_the_session() {
             }),
         )
         .await;
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        subscribed_rx.await.unwrap();
         socket
             .send(Message::Text("not gateway json".into()))
             .await
@@ -982,6 +1076,7 @@ async fn malformed_idle_text_is_activity_and_does_not_close_the_session() {
     .await
     .unwrap();
     let mut activity = session.subscribe_transport_activity();
+    subscribed_tx.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(1), activity.changed())
         .await
         .expect("malformed idle frame activity timeout")
@@ -1189,6 +1284,21 @@ async fn pinned_trust_rejects_plaintext_before_connecting() {
         .tls_trust(openclaw_gateway_client::TlsTrust::Pinned([7; 32]));
     let result = GatewayClient::connect(config, |_| async { Ok::<_, io::Error>(json!({})) }).await;
     assert!(matches!(result, Err(ClientError::Tls(_))));
+}
+
+async fn acknowledge_buffered_events<S>(socket: &mut tokio_tungstenite::WebSocketStream<S>)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    // The response follows every event on the same socket, so the client must
+    // process those events before completing the request and starting to drain.
+    let barrier = receive_json(socket).await;
+    assert_eq!(barrier["method"], "test.buffered");
+    send_json(
+        socket,
+        json!({"type":"res", "id":barrier["id"], "ok":true, "payload":null}),
+    )
+    .await;
 }
 
 async fn send_json<S>(socket: &mut tokio_tungstenite::WebSocketStream<S>, value: Value)

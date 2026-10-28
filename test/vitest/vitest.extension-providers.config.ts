@@ -5,9 +5,7 @@ import { providerExtensionTestRoots } from "./vitest.extension-provider-paths.mj
 export function createExtensionProvidersVitestConfig(
   env: Record<string, string | undefined> = process.env,
 ) {
-  return createExtensionVitestConfig("providers", providerExtensionTestRoots, env, {
-    isolate: true,
-  });
+  return createExtensionVitestConfig("providers", providerExtensionTestRoots, env);
 }
 
 export default createExtensionProvidersVitestConfig();

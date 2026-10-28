@@ -1,0 +1,25 @@
+.oc-tabs {
+  min-width: 0;
+}
+
+:where(.oc-tab) {
+  appearance: none;
+  flex: none;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: inherit;
+  cursor: var(--cursor-action);
+}
+
+.oc-tab:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button:where(.oc-tab) {
+  font-weight: var(--control-ui-font-weight-semibold);
+}

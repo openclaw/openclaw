@@ -46,6 +46,9 @@ describe("early service capability routing", () => {
           updateExecutor: "root-spawner-v1",
           targetRootBinding: true,
           definitionBackup: true,
+          retainedOwnerBinding: true,
+          originalDefinitionBinding: true,
+          originalRuntimePinBinding: true,
         }) + "\nprobe returned",
       );
     } finally {

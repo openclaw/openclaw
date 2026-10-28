@@ -1,17 +1,38 @@
+import type {
+  SessionEntryCurrentCheck,
+  SessionEntryCurrentFacts,
+} from "../../../config/sessions/session-entry-current.types.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { SubagentEndReason } from "../../../context-engine/types.js";
-import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
-/** Persisted execution, completion, delivery, and attachment state for child runs. */
+import type {
+  QueuedOperatorRecoverySource,
+  RestartRecoveryOperatorSource,
+} from "../../../gateway/operator-run-recovery-source.codec.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
-import type { AgentRunSessionTarget } from "../../run-session-target.js";
+import type { RequesterOrigin } from "../../requester-origin.js";
+import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { SubagentLaunchAuthorization } from "../spawn/subagent-launch-authorization.js";
 import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import type {
-  SubagentRunReadRecord,
   SubagentCompletionDeliveryState,
+  SubagentRunReadRecord,
 } from "./subagent-registry-read.types.js";
+
+export type SubagentSessionEffects = {
+  isCurrent(): Promise<boolean>;
+  assertHostCurrent(): void;
+  assertCurrentEntry(this: void, facts: SessionEntryCurrentFacts | undefined): void;
+  nativeCheck?: SessionEntryCurrentCheck;
+};
+
+export type SubagentRecoveryCurrent = {
+  prepare(): Promise<boolean>;
+  isHostCurrent(): boolean;
+  onPublished?(entry: SubagentRunRecord): void;
+};
 
 export type SubagentCompletionRequest = {
   runId: string;
@@ -25,9 +46,15 @@ export type SubagentCompletionRequest = {
   triggerCleanup: boolean;
   startedAt?: number;
   suppressSessionEffects?: boolean;
-  recoverInterrupted?: true;
+  recoverInterrupted?: true | "failed";
+  /** Prepare database currency asynchronously; publication rechecks live host authority. */
+  recoveryCurrent?: SubagentRecoveryCurrent;
+  /** Child effects may be fenced while the recorded result still owes requester delivery. */
+  sessionEffects?: SubagentSessionEffects;
   completionSnapshot?: { resultText: string | null; capturedAt: number };
   terminalReply?: AgentRunTerminalReplySnapshot;
+  /** Explicitly settle a yielded run that no continuation can reach; kill is the only other exception. */
+  settleYielded?: true;
 };
 
 export type ContextEngineSubagentEndedParams = {
@@ -59,13 +86,12 @@ export type SubagentRestartRecoveryReceipt = {
 type SubagentExecutionState = SubagentRunReadRecord["execution"] & {
   /** Gateway lifecycle that owns child-session effects for this run. */
   lifecycleGeneration?: string;
-  /** Durable dispatch receipt for one interrupted-session snapshot. */
+  /** Persisted pre-cutover launch receipt; reconciled without automatic replay. */
   restartRecovery?: SubagentRestartRecoveryReceipt;
   /** Sticky terminal policy: this run must never mutate its child session again. */
   suppressSessionEffects?: true;
   acceptedAt?: number;
   interruptedAt?: number;
-  interruptionReason?: "gateway-restart";
   transcriptTarget?: AgentRunSessionTarget;
 };
 
@@ -82,6 +108,8 @@ type SwarmCollectorCompletion = NonNullable<SubagentRunReadRecord["collectorComp
   structured?: unknown;
   schemaError?: string;
   usage?: { inputTokens: number; outputTokens: number };
+  /** Set only when the registry sweeper settled a collector that yielded without a result. */
+  reason?: "yielded_without_result";
 };
 
 export type SwarmStructuredOutputState = {
@@ -92,6 +120,12 @@ export type SwarmStructuredOutputState = {
 
 type SwarmQueuedLaunch = {
   request: Record<string, unknown>;
+  /** A captured empty source is system work; legacy absence cannot establish a requester. */
+  requesterRecovery?: {
+    /** Null records requester facts that could not fit the bounded restart source. */
+    facts?: RequesterOrigin | null;
+    operator?: QueuedOperatorRecoverySource;
+  };
   /** Exact trusted launch capability, persisted so restart replay cannot lose it. */
   authorization?: SubagentLaunchAuthorization;
   timeoutMs: number;
@@ -101,12 +135,16 @@ type SwarmQueuedLaunch = {
 
 /** Durable outbox state for the top-level requester settle wake. */
 export type RequesterSettleWakeState = {
+  /** Pending message-wait notice; consuming it leaves the completion cohort armed. */
+  pauseNotice?: { acknowledgment: string };
   status: "pending" | "dispatching";
   /** Number of delivery attempts already admitted. */
   attemptCount: number;
+  /** Raw private input retained with its exact dispatch identity until this wake settles. */
+  privateInput?: { runId: string; message: string };
   /** Ambiguous transport replays made with the current idempotency key. */
   replayCount?: number;
-  /** Persisted retry deadline; restore waits until this instant. */
+  /** Retained retry receipt from an admitted attempt; mailbox admission owns scheduling. */
   nextAttemptAt?: number;
   /** Frozen wave membership after delivery admission or requester-yield re-admission. */
   batchRunIds?: string[];
@@ -114,12 +152,16 @@ export type RequesterSettleWakeState = {
   requesterYieldBatch?: true;
   /** Present only when an idle requester needs a new turn after yielding. */
   afterRequesterYield?: true;
+  /**
+   * A yielded batch with private results was admitted with a deliverable requester
+   * final. Absent on a dispatching private batch means an earlier build admitted it
+   * as a private turn; replay keeps that policy.
+   */
+  yieldedFinalDeliverable?: true;
   /** Monotonic process generation protecting a newer yield from stale completion. */
   rearmGeneration?: number;
   /** Reference to the conversation receipt for this presentation, not completion credit. */
   progressOperationId?: string;
-  /** Number of times this batch has been deferred due to unsettled descendants. */
-  deferralCount?: number;
   lastError?: string | null;
   /** Cleanup wanted to retire this row; defer deletion until the outbox resolves. */
   retireAfterSettle?: boolean;
@@ -146,8 +188,24 @@ type SubagentKillIntent = {
 };
 
 export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "collectorCompletion"> & {
-  /** Detached task owner; steer/restart changes runId but continues the same task. */
-  taskRunId?: string;
+  /** Host-captured SDK spawn provenance; absence never establishes plugin ownership. */
+  nativePluginOwner?: {
+    version: 1;
+    pluginId: string;
+    requesterProfileId: string;
+    requestId: string;
+  };
+  /** Exact package instructions used at child creation; not runtime authority. */
+  subagentProfile?: {
+    pluginId: string;
+    id: string;
+    instructionsFile: string;
+    instructionsSha256: string;
+  };
+  /** Admission evidence only; restart continuation revalidates the live operator grant. */
+  operatorRecoverySource?: RestartRecoveryOperatorSource;
+  /** Child identity stays fixed when recovery redirects transcript writes. */
+  childSessionIdentity?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
   /** Exact requester attempt for cancellation, independent of completion messaging. */
   requesterTurnRunId?: string;
   /** Durable proof that this requester attempt invoked sessions_yield. */
@@ -170,8 +228,6 @@ export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "colle
   suppressAnnounceReason?: "steer-restart" | "killed";
   /** Sticky owner while restart recovery replays this exact terminal run. */
   terminalOwner?: "interrupted-recovery";
-  /** Durable requester notice debt, independent of restart execution ownership. */
-  resumptionNotice?: { idempotencyKey: string };
   /** Present only while a current-version killed run awaits bounded reconciliation. */
   killReconciliation?: SubagentKillReconciliationState;
   /** Durable operator cancellation ownership before runtime side effects complete. */
@@ -181,6 +237,7 @@ export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "colle
   expectsCompletionMessage?: boolean;
   completionTarget?: "parent";
   completionRequesterSessionId?: string;
+  completionRequesterLifecycleRevision?: string;
   wakeOnDescendantSettle?: boolean;
   execution: SubagentExecutionState;
   completion?: SubagentCompletionState;
@@ -200,12 +257,8 @@ export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "colle
   retainAttachmentsOnKeep?: boolean;
   /** Spawner plus ancestor sessions authorized to wait, frozen when the collector is registered. */
   swarmWaitOwnerSessionKeys?: string[];
-  /** Stable scheduler slot identity across gateway-assigned run id replacements. */
-  schedulerSlotId?: string;
   /** Exact host-reserved Gateway request identity for the current collector turn. */
   swarmLaunchIdempotencyKey?: string;
-  /** Replay-safe host bridge identity used to recover a collector after restart. */
-  swarmLaunchReplayKey?: string;
   /** Canonical collector request hash paired with a host-reserved launch identity. */
   swarmLaunchRequestFingerprint?: string;
   /** True only between host reservation and accepted Gateway dispatch. */
@@ -225,6 +278,7 @@ export type SubagentRunMaintenanceRecord = Pick<
   SubagentRunRecord,
   | "runId"
   | "childSessionKey"
+  | "childAgentId"
   | "requesterSessionKey"
   | "createdAt"
   | "cleanupCompletedAt"
@@ -236,44 +290,26 @@ export type SubagentRunMaintenanceRecord = Pick<
   delivery?: Pick<SubagentCompletionDeliveryState, "status" | "suspendedAt">;
 };
 
-export type RegisterSubagentRunParams = {
-  runId: string;
-  requesterTurnRunId?: string;
-  childSessionKey: string;
-  controllerSessionKey?: string;
-  requesterSessionKey: string;
-  requesterOrigin?: DeliveryContext;
-  progressOrigin?: SubagentProgressOrigin;
-  requesterDisplayKey: string;
-  task: string;
-  taskName?: string;
-  agentId?: string;
-  requesterAgentId?: string;
-  cleanup: "delete" | "keep";
-  label?: string;
-  model?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  runTimeoutSeconds?: number;
-  expectsCompletionMessage?: boolean;
-  completionTarget?: "parent";
-  completionRequesterSessionId?: string;
-  spawnMode?: "run" | "session";
-  attachmentId?: string;
-  attachmentsDir?: string;
-  attachmentsRootDir?: string;
-  retainAttachmentsOnKeep?: boolean;
-  collect?: boolean;
-  swarmRequesterSessionKey?: string;
-  swarmLaunchIdempotencyKey?: string;
-  swarmLaunchReplayKey?: string;
-  swarmLaunchRequestFingerprint?: string;
-  groupId?: string;
-  outputSchema?: Record<string, unknown>;
-  queuedLaunch?: SwarmQueuedLaunch;
-  queued?: boolean;
-  /** Required when direct dispatch suppresses Gateway tracking. Out-of-process launches keep
-      Gateway's existing best-effort CLI policy; other callers create a best-effort row here. */
-  taskRowOwnership?: "required" | "gateway_best_effort";
-  gatewayContextResolver?: GatewayContextResolver;
+export type SubagentRegistrationScope = {
+  readonly waitForClaim: () => Promise<void> | undefined;
+  readonly waitForRetirementPublication: () => Promise<void> | undefined;
+  readonly canLaunch: () => boolean;
+  readonly canCleanupSession: () => boolean;
+  readonly canAcceptLaunch: () => boolean;
+  readonly canAbortAcceptedRun: () => boolean;
+  readonly canRetireReservation: () => boolean;
+  readonly settleFailedLaunch: (error: string) => Promise<void>;
 };
+
+export type RegisterSubagentRunOptions = {
+  /** An accepted dispatch replay retains its original completion owner and waiter. */
+  acceptedRunReplay?: true;
+  assertCurrent?: () => void;
+  assertPublicationCurrent?: () => void;
+  retainOwnership?: (scope: SubagentRegistrationScope) => void;
+  /** Retain rejection cleanup at the non-queued registration's durable commit. */
+  retainAdmission?: (reject: SubagentAdmissionRejection) => void;
+  admissionSessionEffects?: SubagentSessionEffects;
+};
+
+export type SubagentAdmissionRejection = (error: string) => Promise<void>;

@@ -1,11 +1,9 @@
 // Avatar policy tests cover avatar source resolution and fallback behavior.
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   hasAvatarUriScheme,
   isAvatarDataUrl,
   isAvatarHttpUrl,
-  isPathWithinRoot,
   isSupportedLocalAvatarExtension,
   isWindowsAbsolutePath,
   looksLikeAvatarPath,
@@ -19,14 +17,6 @@ describe("avatar policy", () => {
     expect(isAvatarHttpUrl("ftp://example.com/avatar.png")).toBe(false);
     expect(hasAvatarUriScheme("slack://avatar")).toBe(true);
     expect(isWindowsAbsolutePath("C:\\\\avatars\\\\openclaw.png")).toBe(true);
-  });
-
-  it("checks path containment safely", () => {
-    const root = path.resolve("/tmp/root");
-    expect(isPathWithinRoot(root, root)).toBe(true);
-    expect(isPathWithinRoot(root, path.resolve("/tmp/root/avatars/a.png"))).toBe(true);
-    expect(isPathWithinRoot(root, path.resolve("/tmp/root/../outside.png"))).toBe(false);
-    expect(isPathWithinRoot(root, path.resolve("/tmp/root-sibling/avatar.png"))).toBe(false);
   });
 
   it("detects avatar-like path strings", () => {

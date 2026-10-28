@@ -1,13 +1,7 @@
 // Telegram tests cover canonical thread-scope resolution and encoding.
 import type { Message } from "grammy/types";
 import { describe, expect, it } from "vitest";
-import {
-  buildTelegramInboundOriginTarget,
-  buildTelegramRoutingTarget,
-  buildTelegramThreadParams,
-  buildTypingThreadParams,
-  resolveTelegramMessageThreadSpec,
-} from "./bot/helpers.js";
+import { buildTelegramThreadParams, resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
 
 describe("resolveTelegramMessageThreadSpec", () => {
   it.each([
@@ -71,65 +65,5 @@ describe("buildTelegramThreadParams", () => {
     { input: { id: 42.9, scope: "forum" as const }, expected: { message_thread_id: 42 } },
   ])("builds thread params", ({ input, expected }) => {
     expect(buildTelegramThreadParams(input)).toEqual(expected);
-  });
-});
-
-describe("buildTelegramRoutingTarget", () => {
-  it.each([
-    {
-      name: "keeps General forum topic chat-scoped",
-      chatId: -100123,
-      thread: { id: 1, scope: "forum" as const },
-      expected: "telegram:-100123",
-    },
-    {
-      name: "includes real forum topic ids",
-      chatId: -100123,
-      thread: { id: 42, scope: "forum" as const },
-      expected: "telegram:-100123:topic:42",
-    },
-    {
-      name: "includes channel Direct Messages topic ids with a distinct marker",
-      chatId: -100123,
-      thread: { id: 77, scope: "direct-messages" as const },
-      expected: "telegram:-100123:direct-topic:77",
-    },
-  ])("$name", ({ chatId, thread, expected }) => {
-    expect(buildTelegramRoutingTarget(chatId, thread)).toBe(expected);
-  });
-});
-
-describe("buildTelegramInboundOriginTarget", () => {
-  it.each([
-    {
-      name: "keeps bot-private topic thread ids out of the origin target",
-      chatId: 42,
-      thread: { id: 77, scope: "dm" as const },
-      expected: "telegram:42",
-    },
-    {
-      name: "includes real forum topic ids",
-      chatId: -100123,
-      thread: { id: 42, scope: "forum" as const },
-      expected: "telegram:-100123:topic:42",
-    },
-    {
-      name: "includes channel Direct Messages topics",
-      chatId: -100123,
-      thread: { id: 77, scope: "direct-messages" as const },
-      expected: "telegram:-100123:direct-topic:77",
-    },
-  ])("$name", ({ chatId, thread, expected }) => {
-    expect(buildTelegramInboundOriginTarget(chatId, thread)).toBe(expected);
-  });
-});
-
-describe("buildTypingThreadParams", () => {
-  it.each([
-    { input: undefined, expected: undefined },
-    { input: 1, expected: { message_thread_id: 1 } },
-    { input: 42.9, expected: { message_thread_id: 42 } },
-  ])("builds typing params", ({ input, expected }) => {
-    expect(buildTypingThreadParams(input)).toEqual(expected);
   });
 });

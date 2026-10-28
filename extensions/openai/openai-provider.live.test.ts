@@ -27,114 +27,101 @@ type LiveModelCase = {
 };
 
 function resolveLiveModelCase(modelId: string): LiveModelCase {
+  const buildCase = (
+    [templateId, templateName]: [id: string, name: string],
+    [input, output, cacheRead, cacheWrite]: [
+      input: number,
+      output: number,
+      cacheRead: number,
+      cacheWrite: number,
+    ],
+    [contextWindow, maxTokens, reasoning, textVerbosity]: [
+      contextWindow: number,
+      maxTokens: number,
+      reasoning: boolean,
+      textVerbosity: LiveModelCase["textVerbosity"],
+    ],
+  ): LiveModelCase => ({
+    modelId,
+    templateId,
+    templateName,
+    cost: { input, output, cacheRead, cacheWrite },
+    contextWindow,
+    maxTokens,
+    reasoning,
+    textVerbosity,
+  });
   switch (modelId) {
+    case "gpt-6.1-sol":
+      return buildCase(
+        ["gpt-5.6-sol", "GPT-5.6 Sol"],
+        [2, 10, 0.1, 2.5],
+        [1_050_000, 128_000, true, "low"],
+      );
     case "gpt-6-astra":
-      return {
-        modelId,
-        templateId: "gpt-5.6-sol",
-        templateName: "GPT-5.6 Sol",
-        cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
-        contextWindow: 1_050_000,
-        maxTokens: 128_000,
-        reasoning: true,
-        textVerbosity: "low",
-      };
+      return buildCase(
+        ["gpt-5.6-sol", "GPT-5.6 Sol"],
+        [10, 50, 1, 12.5],
+        [1_050_000, 128_000, true, "low"],
+      );
+    case "gpt-6-sol":
+    case "gpt-6-luna":
+      return buildCase(
+        ["gpt-5.6-sol", "GPT-5.6 Sol"],
+        modelId === "gpt-6-sol" ? [2, 10, 0.2, 2.5] : [0.1, 0.5, 0.01, 0.125],
+        [1_050_000, 128_000, true, "low"],
+      );
     case "gpt-5.6":
     case "gpt-5.6-sol":
     case "gpt-5.6-terra":
     case "gpt-5.6-luna":
-      return {
-        modelId,
-        templateId: "gpt-5.5",
-        templateName: "GPT-5.5",
-        cost:
-          modelId === "gpt-5.6-terra"
-            ? { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 }
-            : modelId === "gpt-5.6-luna"
-              ? { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 }
-              : { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
-        contextWindow: 1_050_000,
-        maxTokens: 128_000,
-        reasoning: true,
-        textVerbosity: "low",
-      };
+      return buildCase(
+        ["gpt-5.5", "GPT-5.5"],
+        modelId === "gpt-5.6-terra"
+          ? [2.5, 15, 0.25, 3.125]
+          : modelId === "gpt-5.6-luna"
+            ? [1, 6, 0.1, 1.25]
+            : [5, 30, 0.5, 6.25],
+        [1_050_000, 128_000, true, "low"],
+      );
     case "chat-latest":
-      return {
-        modelId,
-        templateId: "gpt-5.5",
-        templateName: "GPT-5.5",
-        cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-        contextWindow: 400_000,
-        maxTokens: 128_000,
-        reasoning: false,
-        textVerbosity: "medium",
-      };
+      return buildCase(
+        ["gpt-5.5", "GPT-5.5"],
+        [5, 30, 0.5, 0],
+        [400_000, 128_000, false, "medium"],
+      );
     case "gpt-5.5":
-      return {
-        modelId,
-        templateId: "gpt-5.5",
-        templateName: "GPT-5.5",
-        cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-        contextWindow: 1_050_000,
-        maxTokens: 128_000,
-        reasoning: true,
-        textVerbosity: "low",
-      };
+      return buildCase(["gpt-5.5", "GPT-5.5"], [5, 30, 0.5, 0], [1_050_000, 128_000, true, "low"]);
     case "gpt-5.5-pro":
-      return {
-        modelId,
-        templateId: "gpt-5.4-pro",
-        templateName: "GPT-5.4 Pro",
-        cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 1_050_000,
-        maxTokens: 128_000,
-        reasoning: true,
-        textVerbosity: "low",
-      };
+      return buildCase(
+        ["gpt-5.4-pro", "GPT-5.4 Pro"],
+        [30, 180, 0, 0],
+        [1_050_000, 128_000, true, "low"],
+      );
     case "gpt-5.4":
-      return {
-        modelId,
-        templateId: "gpt-5.2",
-        templateName: "GPT-5.2",
-        cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
-        contextWindow: 1_050_000,
-        maxTokens: 128_000,
-        reasoning: true,
-        textVerbosity: "low",
-      };
+      return buildCase(
+        ["gpt-5.2", "GPT-5.2"],
+        [2.5, 15, 0.25, 0],
+        [1_050_000, 128_000, true, "low"],
+      );
     case "gpt-5.4-pro":
-      return {
-        modelId,
-        templateId: "gpt-5.2-pro",
-        templateName: "GPT-5.2 Pro",
-        cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 1_050_000,
-        maxTokens: 128_000,
-        reasoning: true,
-        textVerbosity: "low",
-      };
+      return buildCase(
+        ["gpt-5.2-pro", "GPT-5.2 Pro"],
+        [30, 180, 0, 0],
+        [1_050_000, 128_000, true, "low"],
+      );
     case "gpt-5.4-mini":
-      return {
-        modelId,
-        templateId: "gpt-5-mini",
-        templateName: "GPT-5 mini",
-        cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
-        contextWindow: 400_000,
-        maxTokens: 128_000,
-        reasoning: true,
-        textVerbosity: "low",
-      };
+      return buildCase(
+        ["gpt-5-mini", "GPT-5 mini"],
+        [0.75, 4.5, 0.075, 0],
+        [400_000, 128_000, true, "low"],
+      );
     case "gpt-5.4-nano":
-      return {
-        modelId,
-        templateId: "gpt-5-nano",
-        templateName: "GPT-5 nano",
-        cost: { input: 0.2, output: 1.25, cacheRead: 0.02, cacheWrite: 0 },
-        contextWindow: 400_000,
-        maxTokens: 128_000,
-        reasoning: true,
-        textVerbosity: "low",
-      };
+      return buildCase(
+        ["gpt-5-nano", "GPT-5 nano"],
+        [0.2, 1.25, 0.02, 0],
+        [400_000, 128_000, true, "low"],
+      );
     default:
       throw new Error(`Unsupported live OpenAI model: ${modelId}`);
   }
@@ -208,15 +195,16 @@ describeLive("buildOpenAIProvider live", () => {
         baseURL: normalized?.baseUrl,
       });
 
+      const requiresReasoning = normalized?.thinkingLevelMap?.off === null;
       const response = await client.responses.create({
         model: normalized?.id ?? liveCase.modelId,
         instructions: "Return exactly OK and no other text.",
         input: "Return exactly OK.",
-        max_output_tokens: liveCase.modelId === "gpt-6-astra" ? 256 : 64,
+        max_output_tokens: requiresReasoning ? 256 : 64,
         ...(liveCase.reasoning
           ? {
               reasoning: {
-                effort: liveCase.modelId === "gpt-6-astra" ? ("low" as const) : ("none" as const),
+                effort: requiresReasoning ? ("low" as const) : ("none" as const),
               },
             }
           : {}),

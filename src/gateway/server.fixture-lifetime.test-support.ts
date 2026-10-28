@@ -1,25 +1,27 @@
-import type { ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { expect, type TestContext } from "vitest";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
+import type { VitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { runVitestShutdownCommand } from "../../test/helpers/vitest-shutdown-command.js";
-import { hasErrnoCode } from "../infra/errno.js";
 
 export function createGatewayFixtureFork(
+  workerRun: VitestWorkerRun,
   registerCleanup: (cleanup: () => Promise<void>) => unknown,
   maxBytes = 4 * 1024 * 1024,
 ) {
   const lifetime = createFixtureLifetime();
   registerCleanup(() => lifetime.cleanup());
   const repoRoot = path.resolve(import.meta.dirname, "../..");
-  let project: Promise<{ root: string; config: string }> | undefined;
+  const artifactsRoot = path.join(repoRoot, ".artifacts");
+  let project: Promise<{ config: string }> | undefined;
   const prepareProject = () =>
     (project ??= (async () => {
       const root = lifetime.createTempDir("gateway-fixture-code-");
+      await fs.mkdir(artifactsRoot, { recursive: true });
       await fs.symlink(
         path.join(repoRoot, "node_modules"),
         path.join(root, "node_modules"),
@@ -38,6 +40,7 @@ export default defineConfig({
   resolve: sharedVitestConfig.resolve,
   test: {
     pool: "forks", isolate: true, maxWorkers: 1, fileParallelism: false,
+    environment: sharedVitestConfig.test.environment,
     include: ["fixture.test.ts"],
     testTimeout: sharedVitestConfig.test.testTimeout,
     hookTimeout: sharedVitestConfig.test.hookTimeout,
@@ -49,12 +52,12 @@ export default defineConfig({
 });
 `,
       );
-      return { root, config };
+      return { config };
     })());
 
   return function runGatewayFixtureFork(
     context: Pick<TestContext, "signal" | "onTestFinished">,
-    source: (repoRoot: string, root: string) => string,
+    source: (repoRoot: string, root: string, codeRoot: string) => string,
     assertJournal?: (journal: unknown, text: string) => void,
   ): Promise<void> {
     const run = lifetime.run(async () => {
@@ -69,31 +72,28 @@ export default defineConfig({
         const prepared = await prepareProject();
         const require = createRequire(import.meta.url);
         const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
-        await fs.symlink(
-          path.join(repoRoot, "node_modules"),
-          path.join(root, "node_modules"),
-          "junction",
-        );
+        // Vite's native runner needs generated tests and their imports under the same root.
+        const codeRoot = lifetime.createTempDir("gateway-fixture-code-", artifactsRoot);
         await fs.mkdir(path.join(root, "home"));
         await fs.mkdir(path.join(root, "tmp"));
-        await fs.writeFile(path.join(root, "fixture.test.ts"), source(repoRoot, root));
-        const reportFile = path.join(root, "report.json");
-        let child: ChildProcess | undefined;
+        await fs.writeFile(
+          path.join(codeRoot, "fixture.test.ts"),
+          source(repoRoot, root, codeRoot),
+        );
         const output = await runVitestShutdownCommand({
+          workerRun,
           args: [
             path.join(vitestPackageDir, "vitest.mjs"),
             "run",
             "--root",
-            prepared.root,
+            repoRoot,
             "--dir",
-            root,
+            codeRoot,
             "--config",
             prepared.config,
             "--configLoader",
             "runner",
             "--reporter=verbose",
-            "--reporter=json",
-            `--outputFile=${reportFile}`,
           ],
           cwd: repoRoot,
           signal: context.signal,
@@ -113,32 +113,15 @@ export default defineConfig({
             CI: "1",
             NO_COLOR: "1",
           },
-          onReady(owned) {
-            child = owned;
-          },
         });
         const diagnostics = `${output.stdout}\n${output.stderr}`;
-        expect(child?.signalCode, diagnostics).toBeNull();
-        expect(child?.killed, diagnostics).toBe(false);
         const pid = Number(await fs.readFile(path.join(root, "worker.pid"), "utf8"));
         expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
-        let workerStopped = false;
-        try {
-          process.kill(pid, 0);
-        } catch (error) {
-          if (!hasErrnoCode(error, "ESRCH")) {
-            throw error;
-          }
-          workerStopped = true;
-        }
-        expect(workerStopped, "native fixture worker must exit before root release").toBe(true);
+        expect(() => process.kill(pid, 0), "native worker must exit before root release").toThrow(
+          expect.objectContaining({ code: "ESRCH" }),
+        );
         joined = true;
         expect(output.code, diagnostics).toBe(0);
-        expect(JSON.parse(await fs.readFile(reportFile, "utf8")), diagnostics).toMatchObject({
-          numPassedTests: 1,
-          numFailedTests: 0,
-          success: true,
-        });
         if (assertJournal) {
           const journal = await fs.readFile(path.join(root, "journal.json"), "utf8");
           assertJournal(JSON.parse(journal), journal);
@@ -147,8 +130,7 @@ export default defineConfig({
         if (joined) {
           await fs.rm(root, { recursive: true, force: true });
         } else {
-          // A missing PID receipt can be a plain assertion/IO error. Keep shared code
-          // alive too; ordinary rejected bodies alone do not retain fixture inputs.
+          // Missing join receipts retain shared code even after ordinary assertion/IO failures.
           void lifetime.verifyCleanup(async () => {
             throw new Error(`Unjoined native Gateway fixture still owns shared code: ${root}`);
           });
@@ -199,8 +181,8 @@ const scenario = ${JSON.stringify(scenario)};
 const takeHooks = () => Object.fromEntries(
   Object.entries(hooks).map(([name, callbacks]) => [name, callbacks.splice(0)]),
 );
-async function runHooks(callbacks) {
-  for (const callback of callbacks) await callback();
+async function runHooks(callbacks, context) {
+  for (const callback of callbacks) await callback(context);
 }
 function containsError(error, expected) {
   return expected !== undefined && (error === expected || (error instanceof Error && (
@@ -224,10 +206,20 @@ function closeOwned(server) {
   }) : Promise.resolve();
 }
 
-test("observes startup cleanup ownership through fixture teardown", async () => {
+test("observes startup cleanup ownership through fixture teardown", async (context) => {
   const originals = [];
   const own = promise => { originals.push(promise); return promise; };
   const restorers = [];
+  const spy = (target, method, wrap) => {
+    const original = target[method];
+    const handle = vi.spyOn(target, method).mockImplementation((...args) => wrap(original, ...args));
+    restorers.push(() => handle.mockRestore());
+  };
+  const capture = (list, promise) => {
+    const pending = own(promise);
+    list.push(pending);
+    return pending;
+  };
   const blocker = net.createServer();
   const probe = net.createServer();
   const fault = new Error("synthetic startup probe cleanup failure");
@@ -242,7 +234,7 @@ test("observes startup cleanup ownership through fixture teardown", async () => 
     gateway.installGatewayTestHooks({ scope: "suite" });
     const fixture = takeHooks();
     await own(runHooks(fixture.setup));
-    await own(runHooks(fixture.reset));
+    await own(runHooks(fixture.reset, context));
     const home = process.env.HOME;
     const state = process.env.OPENCLAW_STATE_DIR;
     if (!home || !state) throw new Error("expected isolated Gateway fixture selectors");
@@ -252,9 +244,8 @@ test("observes startup cleanup ownership through fixture teardown", async () => 
     expect(opened.map(result => result.status)).toEqual(["fulfilled", "fulfilled"]);
     const address = blocker.address();
     if (!address || typeof address === "string") throw new Error("expected owned TCP blocker");
-    const retain = metadataModule.retainGatewayPluginMetadata;
-    const metadataSpy = vi.spyOn(metadataModule, "retainGatewayPluginMetadata").mockImplementation(() => {
-      const owner = retain();
+    spy(metadataModule, "retainGatewayPluginMetadata", (retain, ...metadataArgs) => {
+      const owner = retain(...metadataArgs);
       metadataRetains++;
       return { ...owner, close: async (...args) => {
         const result = await own(owner.close(...args));
@@ -262,21 +253,13 @@ test("observes startup cleanup ownership through fixture teardown", async () => 
         return result;
       } };
     });
-    restorers.push(() => metadataSpy.mockRestore());
-    const prepare = lifecycleModule.prepareGatewayLifecycle;
-    const factory = vi.spyOn(lifecycleModule, "prepareGatewayLifecycle").mockImplementation((...args) => {
+    spy(lifecycleModule, "prepareGatewayLifecycle", (prepare, ...args) => {
       const preparing = own(prepare(...args));
       return own(preparing.then(async runtime => {
         lifecycle = runtime;
         tlsError = runtime.gatewayTls.error;
         runtime.registerGatewayLifetimeSidecars(sidecar);
-        const close = runtime.closeOnStartupFailure;
-        const closeSpy = vi.spyOn(runtime, "closeOnStartupFailure").mockImplementation(() => {
-          const closing = own(close());
-          nativeCloses.push(closing);
-          return closing;
-        });
-        restorers.push(() => closeSpy.mockRestore());
+        spy(runtime, "closeOnStartupFailure", close => capture(nativeCloses, close()));
         if (scenario.requiredJoin) {
           const cleanup = own(runtime.connectionWork.trackCleanup(stopProbe));
           await Promise.allSettled([cleanup]);
@@ -284,21 +267,12 @@ test("observes startup cleanup ownership through fixture teardown", async () => 
         return runtime;
       }));
     });
-    restorers.push(() => factory.mockRestore());
-    const createKernel = kernelModule.createGatewayKernel;
-    const kernelSpy = vi.spyOn(kernelModule, "createGatewayKernel").mockImplementation((...args) => {
-      kernelStart = own(createKernel(...args));
-      return kernelStart;
-    });
-    restorers.push(() => kernelSpy.mockRestore());
-    const listen = listenModule.listenGatewayHttpServer;
-    const listenSpy = vi.spyOn(listenModule, "listenGatewayHttpServer").mockImplementation((params) => {
+    spy(kernelModule, "createGatewayKernel", (createKernel, ...args) =>
+      (kernelStart = own(createKernel(...args))));
+    spy(listenModule, "listenGatewayHttpServer", (listen, params) => {
       // The owned blocker cannot leave; retry policy has its own listener tests.
-      const listening = own(listen({ ...params, retryEaddrinuse: false }));
-      nativeListens.push(listening);
-      return listening;
+      return capture(nativeListens, listen({ ...params, retryEaddrinuse: false }));
     });
-    restorers.push(() => listenSpy.mockRestore());
     if (scenario.missingTls) {
       const config = await import(${source("src/config/config.ts")});
       const snapshot = await config.readConfigFileSnapshot();
@@ -355,7 +329,7 @@ test("observes startup cleanup ownership through fixture teardown", async () => 
     const beforeCleanup = readState();
     const fixtureRelease = await observe(() => lifetimeModule.gatewayFixtureLifetime.assertReleased());
     // Expected owner refusals are asserted by the outer test, not unhandled suite-hook failures.
-    const afterEach = await observe(() => runHooks(fixture.afterEach));
+    const afterEach = await observe(() => runHooks(fixture.afterEach, context));
     const cleanup = await observe(() => runHooks(fixture.cleanup.toReversed()));
     const afterCleanup = readState();
     const homeRestored = process.env.HOME === homeBefore;

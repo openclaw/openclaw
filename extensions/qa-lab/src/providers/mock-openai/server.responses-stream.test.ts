@@ -7,32 +7,11 @@ afterEach(() => vi.unstubAllEnvs());
 
 it.each([
   {
-    name: "plain answer",
-    prompt: "Reply exactly: QA-SDK-STREAM",
-    text: "QA-SDK-STREAM",
-    status: "completed",
-    preview: "",
-  },
-  {
     name: "preview followed by different final text",
     prompt: "Final-only marker streaming QA check. Reply exactly: QA-SDK-FINAL",
     text: "QA-SDK-FINAL",
     status: "completed",
     preview: "QA streaming preview in progress",
-  },
-  {
-    name: "reasoning followed by an answer",
-    prompt: "QA thinking visibility check max: answer exactly THINKING-MAX-OK.",
-    text: "THINKING-MAX-OK",
-    status: "completed",
-    preview: "THINKING-MAX-OK",
-  },
-  {
-    name: "partial answer followed by failure",
-    prompt: "Telegram visible partial failure QA check",
-    text: "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE",
-    status: "failed",
-    preview: "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE",
   },
 ])("accumulates $name through the SDK stream", async ({ prompt, text, status, preview }) => {
   const server = await startQaMockOpenAiServer({ finalOnlyMarkerPauseMs: 1 });

@@ -8,7 +8,8 @@ title: "Menu bar"
 **Open Dashboard** and Gateway window actions use the **Web** experience by
 default. Enable **Native experience (Experimental)** under **Dashboard → Settings
 → This Mac → App** to use native chat windows. The preference applies to the menu
-bar, Dock, main **Gateways** menu, and **File → New Gateway Window…** (Cmd-N).
+bar, Dock, main **Gateways** menu, and **File → New Gateway Window…**.
+Cmd-N opens a new session in the selected experience.
 Settings always opens the web Dashboard settings page. See
 [WebChat](/platforms/mac/webchat) for switching behavior and native chat features.
 
@@ -23,7 +24,7 @@ Settings always opens the web Dashboard settings page. See
 - **Quick Chat** opens the floating main-session composer. Its current global shortcut appears beside the item.
 - **Settings…** (Cmd-,) opens Dashboard settings. App and device preferences live under **This Mac**, voice controls under **Talk**, and app update preferences under **Updates**.
 - **Connection…** opens the native Connection window. This is a standard macOS settings window with **Connection** and **Gateways** toolbar tabs. **Debug** also appears while the developer toggle is enabled. The window remains available when the Gateway is unreachable.
-- **About OpenClaw** opens the standard macOS About panel with version, build information, and credits.
+- **About OpenClaw** selects **About** in the native Connection window, with the app version, build information, resource links, and **Copy Build Info**. It works without a Gateway connection.
 
 The app's main **Gateways** menu is always present. It lists the primary Gateway, when configured, followed by **This Mac** when it also hosts a local Gateway, then saved Gateways, with Command-1 through Command-9 assigned in that order. Each card shows health, version and shortened build ID, endpoint, latency, and the number of open windows in the selected experience when available. Browser-authenticated profiles also show **Access** and their session expiry. A **Primary** badge identifies the primary Gateway. A front-window marker follows the selected experience's frontmost Gateway window. Selecting a card opens that Gateway in the chosen experience or brings its existing window to the front. Hold Option to reveal **New … Window**, or press Option-Command with the same digit. Both open another independent window for that Gateway. **Manage Gateways…** opens **Connection → Gateways** and remains available when no Gateways are configured.
 
@@ -31,9 +32,9 @@ Right-click the OpenClaw Dock icon for **Open Dashboard** and **Settings…**. W
 
 Gateway status dots follow each open Dashboard’s live connection, including saved Gateways that are not primary. Green means connected, red means a connection error, and gray means no current connection result. If multiple windows show the same Gateway, it stays green while any of them is connected. The checkmark identifies the selected window’s Gateway; **Primary** is a separate setting.
 
-Gateway health probes run only while the main **Gateways** menu is open. Cards show cached facts while refreshing, or **checking…** before the first result. After a failure they show **unreachable** with the last successful contact time. Closing the menu cancels its probes and disconnects probed saved Gateways with no open Web or Native windows. The primary connection stays connected, and cached facts remain available until the app quits.
+Gateway health checks run only while the main **Gateways** menu is open. Cards show cached facts while refreshing, or **checking…** before the first result. After a failure they show **unreachable** with the last successful contact time. Closing the menu cancels its checks and disconnects saved Gateways used for those checks with no open Web or Native windows. The primary connection stays connected, and cached facts remain available until the app quits.
 
-The Devices and Automations summaries refresh while the menu is open. Closing it stops their menu-owned polling. Cached summaries remain available when reopening the same Primary Gateway. Changing Primary refreshes Devices, Automations, Usage, and cost details from the newly selected Gateway. Manage jobs in the Dashboard's **Cron Jobs** page.
+The Devices and Automations summaries refresh when the menu opens. While it stays open, Automations follows Cron events with a ten-minute safety refresh for missed updates. Closing the menu stops both summaries' subscriptions and polling. Cached summaries remain available when reopening the same Primary Gateway. Changing Primary refreshes Devices, Automations, Usage, and cost details from the newly selected Gateway. Manage jobs in the Dashboard's **Cron Jobs** page.
 
 The Automations summary shows the full enabled-job count and previews up to eight jobs, ordered by next run.
 

@@ -1,8 +1,5 @@
 // Explicit session keys are normalized by the channel that owns their opaque id shape.
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { getLoadedChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../../sessions/session-key-utils.js";
@@ -13,8 +10,6 @@ function resolveExplicitSessionKeyNormalizerCandidates(
   sessionKey: string,
   ctx: Pick<MsgContext, "From" | "Provider" | "Surface">,
 ): string[] {
-  const normalizedProvider = normalizeOptionalLowercaseString(ctx.Provider);
-  const normalizedSurface = normalizeOptionalLowercaseString(ctx.Surface);
   const normalizedFrom = normalizeLowercaseStringOrEmpty(ctx.From);
   const candidates = new Set<string>();
   const maybeAdd = (value?: string | null) => {
@@ -23,8 +18,8 @@ function resolveExplicitSessionKeyNormalizerCandidates(
       candidates.add(normalized);
     }
   };
-  maybeAdd(normalizedSurface);
-  maybeAdd(normalizedProvider);
+  maybeAdd(ctx.Surface);
+  maybeAdd(ctx.Provider);
   maybeAdd(normalizedFrom.split(":", 1)[0]);
   for (const plugin of listChannelPlugins()) {
     const pluginId = normalizeMessageChannel(plugin.id);

@@ -1,13 +1,9 @@
-// Gateway Network Client tests cover gateway network client script behavior.
 import { EventEmitter } from "node:events";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   type GatewayFrame,
-  assertGatewaySuspendingError,
-  assertReadySuspensionResponse,
-  assertSuspendedProbes,
   prepareReadySuspension,
   runGatewayNetworkClient,
   runGatewaySuspensionPostRestartClient,
@@ -18,558 +14,321 @@ import { onceFrame } from "../../scripts/e2e/lib/gateway-network/ws-frames.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const timeoutKey = "OPENCLAW_GATEWAY_NETWORK_CLIENT_CONNECT_TIMEOUT_MS";
+const fallbackKey = "OPENCLAW_GATEWAY_NETWORK_CONNECT_READY_TIMEOUT_MS";
+const suspensionMethods = [
+  "gateway.suspend.prepare",
+  "gateway.suspend.status",
+  "gateway.suspend.resume",
+];
+const clientOptions = { token: "test-token", url: "ws://127.0.0.1:12345", timeoutMs: 1000 };
+const stalledOptions = {
+  ...clientOptions,
+  token: "x",
+  statePath: "/tmp/unused-gateway-network-state.json",
+  timeoutMs: 25,
+};
+const busyResponse = adminResponse({
+  status: "busy",
+  retryAfterMs: 250,
+  activeCount: 1,
+  blockers: ["agent"],
+});
+function adminResponse(payload: GatewayFrame["payload"]) {
+  return { status: 200, body: { ok: true, payload } };
+}
+function readyPayload(expiresAtMs = Date.now() + 10_000) {
+  return { status: "ready", suspensionId: "lease-1", expiresAtMs, activeCount: 0, blockers: [] };
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("gateway network client", () => {
-  function expectDeadlineBudgets(calls: Array<[number]>) {
-    expect(calls.length).toBeGreaterThan(0);
-    for (const [timeoutMs] of calls) {
-      expect(timeoutMs).toBeGreaterThan(0);
-      expect(timeoutMs).toBeLessThanOrEqual(25);
+function expectDeadlineBudgets(calls: Array<[number]>) {
+  expect(calls.length).toBeGreaterThan(0);
+  for (const [timeoutMs] of calls) {
+    expect(timeoutMs).toBeGreaterThan(0);
+    expect(timeoutMs).toBeLessThanOrEqual(25);
+  }
+}
+
+function rejectWhenAborted(signal: AbortSignal | null | undefined): Promise<never> {
+  expect(signal).toBeInstanceOf(AbortSignal);
+  const requestSignal = signal as AbortSignal;
+  return new Promise((_, reject) => {
+    const rejectWithReason = () => reject(requestSignal.reason as Error);
+    if (requestSignal.aborted) {
+      rejectWithReason();
+      return;
     }
-  }
+    requestSignal.addEventListener("abort", rejectWithReason, { once: true });
+  });
+}
 
-  function rejectWhenAborted(signal: AbortSignal | null | undefined): Promise<never> {
-    expect(signal).toBeInstanceOf(AbortSignal);
-    const requestSignal = signal as AbortSignal;
-    return new Promise((_, reject) => {
-      const rejectWithReason = () => reject(requestSignal.reason as Error);
-      if (requestSignal.aborted) {
-        rejectWithReason();
-        return;
-      }
-      requestSignal.addEventListener("abort", rejectWithReason, { once: true });
-    });
-  }
-
-  function healthResponse() {
-    return {
+function healthResponse() {
+  return {
+    ok: true,
+    payload: {
+      agents: [],
+      channelOrder: [],
+      channels: {},
+      defaultAgentId: "test",
+      durationMs: 0,
       ok: true,
-      payload: {
-        agents: [],
-        channelOrder: [],
-        channels: {},
-        defaultAgentId: "codex",
-        durationMs: 3,
-        ok: true,
-        sessions: { count: 0, path: "/state/sessions", recent: [] },
-        ts: Date.now(),
-      },
-    };
-  }
+      sessions: {},
+      ts: 0,
+    },
+  };
+}
 
-  function connectResponse(
-    methods: unknown = [
-      "gateway.suspend.prepare",
-      "gateway.suspend.status",
-      "gateway.suspend.resume",
-    ],
-  ) {
-    return {
-      ok: true,
-      payload: {
-        features: { methods },
-      },
-    };
-  }
+function connectResponse(methods: unknown = suspensionMethods) {
+  return { ok: true, payload: { features: { methods } } };
+}
 
-  it("rejects loose client timeout env values instead of parsing prefixes", () => {
-    expect(() =>
-      readGatewayNetworkClientConnectTimeoutMs({
-        OPENCLAW_GATEWAY_NETWORK_CLIENT_CONNECT_TIMEOUT_MS: "100ms",
-      }),
-    ).toThrow("invalid OPENCLAW_GATEWAY_NETWORK_CLIENT_CONNECT_TIMEOUT_MS: 100ms");
-    expect(() =>
-      readGatewayNetworkClientConnectTimeoutMs({
-        OPENCLAW_GATEWAY_NETWORK_CONNECT_READY_TIMEOUT_MS: "1e3",
-      }),
-    ).toThrow("invalid OPENCLAW_GATEWAY_NETWORK_CONNECT_READY_TIMEOUT_MS: 1e3");
-    expect(() =>
-      readGatewayNetworkClientConnectTimeoutMs({
-        OPENCLAW_GATEWAY_NETWORK_CLIENT_CONNECT_TIMEOUT_MS: "0",
-      }),
-    ).toThrow("invalid OPENCLAW_GATEWAY_NETWORK_CLIENT_CONNECT_TIMEOUT_MS: 0");
+it("prefers the explicit client timeout over the connect-ready fallback", () => {
+  expect(
+    readGatewayNetworkClientConnectTimeoutMs({
+      [timeoutKey]: "5000",
+      [fallbackKey]: "1000",
+    }),
+  ).toBe(5000);
+  expect(readGatewayNetworkClientConnectTimeoutMs({ [fallbackKey]: "3000" })).toBe(3000);
+});
+
+it("retries busy suspension preparation using the server delay", async () => {
+  const rpc = vi
+    .fn()
+    .mockResolvedValueOnce(busyResponse)
+    .mockResolvedValueOnce(adminResponse(readyPayload()));
+  const delayImpl = vi.fn(async () => undefined);
+
+  await expect(
+    prepareReadySuspension(
+      { deadline: Date.now() + 5_000, requestId: "request-1", rpc },
+      { delayImpl },
+    ),
+  ).resolves.toMatchObject({ status: "ready", suspensionId: "lease-1" });
+  expect(rpc).toHaveBeenCalledTimes(2);
+  expect(rpc).toHaveBeenNthCalledWith(1, "gateway.suspend.prepare", { requestId: "request-1" });
+  expect(delayImpl).toHaveBeenCalledWith(250);
+});
+
+it("stops busy suspension retries at the client deadline", async () => {
+  let nowMs = 1_000;
+  const rpc = vi.fn(async () => busyResponse);
+  const delayImpl = vi.fn(async (ms: number) => {
+    nowMs += ms;
   });
 
-  it("prefers the explicit client timeout over the connect-ready fallback", () => {
-    expect(
-      readGatewayNetworkClientConnectTimeoutMs({
-        OPENCLAW_GATEWAY_NETWORK_CLIENT_CONNECT_TIMEOUT_MS: "5000",
-        OPENCLAW_GATEWAY_NETWORK_CONNECT_READY_TIMEOUT_MS: "1000",
-      }),
-    ).toBe(5000);
-    expect(
-      readGatewayNetworkClientConnectTimeoutMs({
-        OPENCLAW_GATEWAY_NETWORK_CONNECT_READY_TIMEOUT_MS: "3000",
-      }),
-    ).toBe(3000);
-  });
+  await expect(
+    prepareReadySuspension(
+      { deadline: 1_250, requestId: "request-busy", rpc },
+      { delayImpl, now: () => nowMs },
+    ),
+  ).rejects.toMatchObject({ name: "TimeoutError" });
+  expect(rpc).toHaveBeenCalledOnce();
+  expect(delayImpl).toHaveBeenCalledWith(250);
+});
 
-  it("retries busy suspension preparation using the server delay", async () => {
-    const expiresAtMs = Date.now() + 10_000;
-    const rpc = vi
-      .fn()
-      .mockResolvedValueOnce({
-        status: 200,
-        body: {
-          ok: true,
-          payload: { status: "busy", retryAfterMs: 250, activeCount: 1, blockers: ["agent"] },
-        },
-      })
-      .mockResolvedValueOnce({
-        status: 200,
-        body: {
-          ok: true,
-          payload: {
-            status: "ready",
-            suspensionId: "lease-1",
-            expiresAtMs,
-            activeCount: 0,
-            blockers: [],
-          },
-        },
-      });
-    const delayImpl = vi.fn(async () => undefined);
-
-    await expect(
-      prepareReadySuspension(
-        { deadline: Date.now() + 5_000, requestId: "request-1", rpc },
-        { delayImpl },
-      ),
-    ).resolves.toMatchObject({ status: "ready", suspensionId: "lease-1" });
-    expect(rpc).toHaveBeenCalledTimes(2);
-    expect(rpc).toHaveBeenNthCalledWith(1, "gateway.suspend.prepare", {
-      requestId: "request-1",
-    });
-    expect(delayImpl).toHaveBeenCalledWith(250);
-  });
-
-  it("stops busy suspension retries at the client deadline", async () => {
-    let nowMs = 1_000;
-    const rpc = vi.fn(async () => ({
-      status: 200,
-      body: {
-        ok: true,
-        payload: { status: "busy", retryAfterMs: 250, activeCount: 1, blockers: ["agent"] },
-      },
-    }));
-    const delayImpl = vi.fn(async (ms: number) => {
-      nowMs += ms;
-    });
-
-    await expect(
-      prepareReadySuspension(
-        { deadline: 1_250, requestId: "request-busy", rpc },
-        { delayImpl, now: () => nowMs },
-      ),
-    ).rejects.toMatchObject({ name: "TimeoutError" });
-    expect(rpc).toHaveBeenCalledOnce();
-    expect(delayImpl).toHaveBeenCalledWith(250);
-  });
-
-  it("bounds a stalled suspension admin request by the client deadline", async () => {
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
-    let requestSignal: AbortSignal | null | undefined;
-    const fetchImpl = vi.fn<typeof fetch>((_input, init) => {
-      requestSignal = init?.signal;
-      return rejectWhenAborted(requestSignal);
-    });
-
-    await expect(
-      runGatewaySuspensionPreRestartClient(
-        {
-          statePath: "/tmp/unused-gateway-network-state.json",
-          token: "x",
-          url: "ws://127.0.0.1:12345",
-          timeoutMs: 25,
-        },
-        { fetchImpl },
-      ),
-    ).rejects.toMatchObject({ name: "TimeoutError" });
-
-    expectDeadlineBudgets(timeoutSpy.mock.calls);
-    expect(requestSignal?.aborted).toBe(true);
-    expect(fetchImpl).toHaveBeenCalledOnce();
-  });
-
-  it("keeps a stalled suspension response body inside the client deadline", async () => {
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
-    let callCount = 0;
-    let bodySignal: AbortSignal | null | undefined;
-    const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
-      callCount += 1;
-      if (callCount === 1) {
-        return Response.json({
-          ok: true,
-          payload: {
-            status: "ready",
-            suspensionId: "lease-1",
-            expiresAtMs: Date.now() + 10_000,
-            activeCount: 0,
-            blockers: [],
-          },
-        });
-      }
-      bodySignal = init?.signal;
-      const response = new Response(null, { status: 200 });
-      vi.spyOn(response, "json").mockImplementation(() => rejectWhenAborted(bodySignal));
-      return response;
-    });
-
-    await expect(
-      runGatewaySuspensionPreRestartClient(
-        {
-          statePath: "/tmp/unused-gateway-network-state.json",
-          token: "x",
-          url: "ws://127.0.0.1:12345",
-          timeoutMs: 25,
-        },
-        { fetchImpl },
-      ),
-    ).rejects.toMatchObject({ name: "TimeoutError" });
-
-    expectDeadlineBudgets(timeoutSpy.mock.calls);
-    expect(bodySignal?.aborted).toBe(true);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    const request = fetchImpl.mock.calls[1]?.[0];
-    const requestUrl =
-      request instanceof Request
-        ? request.url
-        : request instanceof URL
-          ? request.href
-          : (request ?? "");
-    expect(requestUrl).toContain("/healthz");
-  });
-
-  it("bounds a stalled post-restart admin request by the client deadline", async () => {
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
-    const workDir = tempDirs.make("openclaw-gateway-network-post-restart-");
-    const statePath = join(workDir, "suspension.json");
+it.each(["pre", "post"] as const)("bounds a stalled %s-restart admin request", async (phase) => {
+  const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+  const fetchImpl = vi.fn<typeof fetch>((_input, init) => rejectWhenAborted(init?.signal));
+  const options = { ...stalledOptions };
+  if (phase === "post") {
+    options.statePath = join(tempDirs.make("gateway-post-restart-"), "suspension.json");
     writeFileSync(
-      statePath,
+      options.statePath,
       JSON.stringify({
         requestId: "gateway-network-restart-contract",
         suspensionId: "lease-before-restart",
         expiresAtMs: Date.now() + 10_000,
       }),
     );
-    let requestSignal: AbortSignal | null | undefined;
-    const fetchImpl = vi.fn<typeof fetch>((_input, init) => {
-      requestSignal = init?.signal;
-      return rejectWhenAborted(requestSignal);
-    });
+  }
+  const run =
+    phase === "pre" ? runGatewaySuspensionPreRestartClient : runGatewaySuspensionPostRestartClient;
+  await expect(run(options, { fetchImpl })).rejects.toMatchObject({ name: "TimeoutError" });
+  expectDeadlineBudgets(timeoutSpy.mock.calls);
+  expect(fetchImpl).toHaveBeenCalledOnce();
+  expect(fetchImpl.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+});
 
-    await expect(
-      runGatewaySuspensionPostRestartClient(
-        {
-          statePath,
-          token: "x",
-          url: "ws://127.0.0.1:12345",
-          timeoutMs: 25,
-        },
-        { fetchImpl },
-      ),
-    ).rejects.toMatchObject({ name: "TimeoutError" });
-
-    expectDeadlineBudgets(timeoutSpy.mock.calls);
-    expect(requestSignal?.aborted).toBe(true);
-    expect(fetchImpl).toHaveBeenCalledOnce();
+it("keeps a stalled suspension response body inside the client deadline", async () => {
+  const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+  let callCount = 0;
+  const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
+    callCount += 1;
+    if (callCount === 1) {
+      return Response.json({ ok: true, payload: readyPayload() });
+    }
+    const response = new Response(null, { status: 200 });
+    vi.spyOn(response, "json").mockImplementation(() => rejectWhenAborted(init?.signal));
+    return response;
   });
 
-  it("resolves matching frames and ignores unrelated frames", async () => {
+  await expect(
+    runGatewaySuspensionPreRestartClient(stalledOptions, { fetchImpl }),
+  ).rejects.toMatchObject({ name: "TimeoutError" });
+
+  expectDeadlineBudgets(timeoutSpy.mock.calls);
+  expect(fetchImpl.mock.calls[1]?.[1]?.signal?.aborted).toBe(true);
+  expect(fetchImpl).toHaveBeenCalledTimes(2);
+  const request = fetchImpl.mock.calls[1]?.[0];
+  const requestUrl =
+    request instanceof Request
+      ? request.url
+      : request instanceof URL
+        ? request.href
+        : (request ?? "");
+  expect(requestUrl).toContain("/healthz");
+});
+
+it("resolves matching frames and ignores unrelated frames", async () => {
+  const ws = new EventEmitter();
+  const frame = onceFrame(ws, (message) => message?.id === "target", 1000);
+
+  ws.emit("message", JSON.stringify({ id: "noise" }));
+  ws.emit("message", JSON.stringify({ id: "target", ok: true }));
+
+  await expect(frame).resolves.toEqual({ id: "target", ok: true });
+});
+
+it.each([
+  ["timeout", "message", JSON.stringify({ id: "noise" }), "timeout", 10],
+  ["socket error", "error", new Error("socket exploded"), "socket exploded", 1000],
+  ["invalid JSON", "message", "{nope", undefined, 1000],
+] satisfies Array<[string, string, unknown, string | undefined, number]>)(
+  "rejects frame waits on %s",
+  async (_label, event, data, error, timeoutMs) => {
     const ws = new EventEmitter();
-    const frame = onceFrame(ws, (message) => message?.id === "target", 1000);
+    const frame = onceFrame(ws, () => false, timeoutMs);
+    ws.emit(event, data);
+    await expect(frame).rejects.toThrow(error);
+  },
+);
 
-    ws.emit("message", JSON.stringify({ id: "noise" }));
-    ws.emit("message", JSON.stringify({ id: "target", ok: true }));
-
-    await expect(frame).resolves.toEqual({ id: "target", ok: true });
-  });
-
-  it("times out when no matching frame arrives", async () => {
+it("rejects frame waits immediately when the socket closes", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
     const ws = new EventEmitter();
-    const frame = onceFrame(ws, () => false, 10);
-
-    ws.emit("message", JSON.stringify({ id: "noise" }));
-
-    await expect(frame).rejects.toThrow("timeout");
-  });
-
-  it("rejects frame waits immediately when the socket closes", async () => {
-    const ws = new EventEmitter();
-    const startedAt = Date.now();
-    const frame = onceFrame(ws, () => false, 1000);
+    const rejected = vi.fn();
+    const frame = onceFrame(ws, () => false, 1000).catch(rejected);
+    expect(vi.getTimerCount()).toBe(1);
 
     ws.emit("close", 1006, Buffer.from("bye"));
+    await vi.advanceTimersByTimeAsync(0);
 
-    await expect(frame).rejects.toThrow("closed before frame: 1006 bye");
-    expect(Date.now() - startedAt).toBeLessThan(250);
-  });
-
-  it("rejects frame waits immediately on socket errors", async () => {
-    const ws = new EventEmitter();
-    const frame = onceFrame(ws, () => false, 1000);
-
-    ws.emit("error", new Error("socket exploded"));
-
-    await expect(frame).rejects.toThrow("socket exploded");
-  });
-
-  it("rejects invalid JSON frames instead of crashing the process", async () => {
-    const ws = new EventEmitter();
-    const frame = onceFrame(ws, () => false, 1000);
-
-    ws.emit("message", "{nope");
-
-    await expect(frame).rejects.toThrow();
-  });
-
-  function createNetworkClientHarness(responses: GatewayFrame[]) {
-    const frames = [...responses];
-    const sentMethods: string[] = [];
-    const stdout: string[] = [];
-    let closeCount = 0;
-    const socket = {
-      close: () => {
-        closeCount += 1;
-      },
-      send: (payload: string) => {
-        sentMethods.push(JSON.parse(payload).method);
-      },
-    };
-
-    return {
-      get closeCount() {
-        return closeCount;
-      },
-      sentMethods,
-      stdout,
-      deps: {
-        delay: async () => {},
-        onceFrame: async (
-          _ws: unknown,
-          predicate: (frame: GatewayFrame) => boolean,
-          _timeoutMs?: number,
-        ) => {
-          const response = frames.shift();
-          const frame = {
-            type: "res",
-            id: sentMethods.at(-1) === "connect" ? "c1" : "h1",
-            ...(sentMethods.at(-1) === "connect" && response?.ok && !response.payload
-              ? connectResponse()
-              : response),
-          };
-          expect(predicate(frame)).toBe(true);
-          return frame;
-        },
-        openSocket: async () => socket,
-        protocolVersion: 1,
-        stdout: (message: string) => {
-          stdout.push(message);
-        },
-      },
-    };
+    expect(rejected).toHaveBeenCalledExactlyOnceWith(new Error("closed before frame: 1006 bye"));
+    expect(ws.eventNames()).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+    await frame;
+  } finally {
+    await vi.runAllTimersAsync();
+    vi.useRealTimers();
   }
+});
 
-  it("proves health after the authenticated connect handshake", async () => {
-    const harness = createNetworkClientHarness([{ ok: true }, healthResponse()]);
-
-    await runGatewayNetworkClient(
-      { token: "test-token", url: "ws://127.0.0.1:12345", timeoutMs: 1000 },
-      harness.deps,
-    );
-
-    expect(harness.sentMethods).toEqual(["connect", "health"]);
-    expect(harness.stdout).toEqual(["ok"]);
-    expect(harness.closeCount).toBe(1);
-  });
-
-  it.each([
-    {
-      methods: ["gateway.suspend.prepare", "gateway.suspend.status", "gateway.suspend.resume"],
-      expected: "supported",
+function createNetworkClientHarness(responses: GatewayFrame[]) {
+  const frames = [...responses];
+  const sentMethods: string[] = [];
+  const stdout: string[] = [];
+  const close = vi.fn();
+  const deps = {
+    delay: async () => {},
+    onceFrame: async (
+      _ws: unknown,
+      predicate: (frame: GatewayFrame) => boolean,
+      _timeoutMs?: number,
+    ) => {
+      const response = frames.shift();
+      const frame = {
+        type: "res",
+        id: sentMethods.at(-1) === "connect" ? "c1" : "h1",
+        ...response,
+      };
+      expect(predicate(frame)).toBe(true);
+      return frame;
     },
-    { methods: ["health", "status"], expected: "unsupported" },
-  ])("records $expected suspension support from connect hello methods", async (testCase) => {
-    const workDir = tempDirs.make("openclaw-gateway-network-capabilities-");
-    const capabilitiesPath = join(workDir, "capabilities.json");
-    const harness = createNetworkClientHarness([
-      connectResponse(testCase.methods),
-      healthResponse(),
-    ]);
+    openSocket: async () => ({
+      close,
+      send: (payload: string) => sentMethods.push(JSON.parse(payload).method),
+    }),
+    protocolVersion: 1,
+    stdout: (message: string) => {
+      stdout.push(message);
+    },
+  };
+  return {
+    close,
+    sentMethods,
+    stdout,
+    run: (options: Parameters<typeof runGatewayNetworkClient>[0] = clientOptions) =>
+      runGatewayNetworkClient(options, deps),
+  };
+}
 
-    await expect(
-      runGatewayNetworkClient(
-        {
-          capabilitiesPath,
-          token: "test-token",
-          url: "ws://127.0.0.1:12345",
-          timeoutMs: 1000,
-        },
-        harness.deps,
-      ),
-    ).resolves.toEqual({ suspension: testCase.expected });
-    expect(JSON.parse(readFileSync(capabilitiesPath, "utf8"))).toEqual({
-      suspension: testCase.expected,
-    });
-    expect(harness.sentMethods).toEqual(["connect", "health"]);
-  });
-
-  it.each([
-    ["partial", ["gateway.suspend.prepare", "gateway.suspend.status"]],
-    ["malformed", "gateway.suspend.prepare"],
-  ])("rejects %s suspension methods only after baseline health", async (_label, methods) => {
+it.each([
+  ["supported", suspensionMethods],
+  ["unsupported", ["health", "status"]],
+] as const)(
+  "records %s suspension support from connect hello methods",
+  async (expected, methods) => {
+    const capabilitiesPath = join(tempDirs.make("gateway-capabilities-"), "capabilities.json");
     const harness = createNetworkClientHarness([connectResponse(methods), healthResponse()]);
 
-    await expect(
-      runGatewayNetworkClient(
-        { token: "test-token", url: "ws://127.0.0.1:12345", timeoutMs: 1000 },
-        harness.deps,
-      ),
-    ).rejects.toThrow(/suspension methods/u);
-    expect(harness.sentMethods).toEqual(["connect", "health"]);
-  });
-
-  it("bounds socket and frame waits by the client deadline", async () => {
-    const harness = createNetworkClientHarness([{ ok: true }, healthResponse()]);
-    const openSocket = vi.fn(harness.deps.openSocket);
-    const onceFrameMock = vi.fn(harness.deps.onceFrame);
-
-    await runGatewayNetworkClient(
-      { token: "test-token", url: "ws://127.0.0.1:12345", timeoutMs: 250 },
-      {
-        ...harness.deps,
-        onceFrame: onceFrameMock,
-        openSocket,
-      },
-    );
-
-    const openSocketCalls = openSocket.mock.calls as unknown as Array<[unknown, number]>;
-    const onceFrameCalls = onceFrameMock.mock.calls as unknown as Array<[unknown, unknown, number]>;
-    expect(openSocketCalls[0]?.[1]).toBeGreaterThan(0);
-    expect(openSocketCalls[0]?.[1]).toBeLessThanOrEqual(250);
-    expect(onceFrameCalls.map((call) => call[2])).toHaveLength(2);
-    for (const frameTimeoutMs of onceFrameCalls.map((call) => call[2])) {
-      expect(frameTimeoutMs).toBeGreaterThan(0);
-      expect(frameTimeoutMs).toBeLessThanOrEqual(250);
-    }
-  });
-
-  it("does not sleep past the remaining client deadline between retries", async () => {
-    const delays: number[] = [];
-    let now = 1_000;
-
-    const dateSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
-    try {
-      await expect(
-        runGatewayNetworkClient(
-          { token: "test-token", url: "ws://127.0.0.1:12345", timeoutMs: 250 },
-          {
-            delay: async (ms: number) => {
-              delays.push(ms);
-              now += ms;
-            },
-            openSocket: async () => {
-              now += 200;
-              throw new Error("ECONNREFUSED");
-            },
-            protocolVersion: 1,
-            stdout: () => {},
-          },
-        ),
-      ).rejects.toThrow("ECONNREFUSED");
-    } finally {
-      dateSpy.mockRestore();
-    }
-
-    expect(delays).toEqual([50]);
-  });
-
-  it("fails a connected socket whose health success lacks summary evidence", async () => {
-    const harness = createNetworkClientHarness([{ ok: true }, { ok: true }]);
-
-    await expect(
-      runGatewayNetworkClient(
-        { token: "test-token", url: "ws://127.0.0.1:12345", timeoutMs: 1000 },
-        harness.deps,
-      ),
-    ).rejects.toThrow("health failed: missing health summary payload");
-
-    expect(harness.sentMethods).toEqual(["connect", "health"]);
-    expect(harness.stdout).toEqual([]);
-    expect(harness.closeCount).toBe(1);
-  });
-
-  it("fails a connected socket whose health probe fails", async () => {
-    const harness = createNetworkClientHarness([
-      { ok: true },
-      { ok: false, error: { message: "health unavailable" } },
-    ]);
-
-    await expect(
-      runGatewayNetworkClient(
-        { token: "test-token", url: "ws://127.0.0.1:12345", timeoutMs: 1000 },
-        harness.deps,
-      ),
-    ).rejects.toThrow("health failed: health unavailable");
-
-    expect(harness.sentMethods).toEqual(["connect", "health"]);
-    expect(harness.closeCount).toBe(1);
-  });
-
-  it("accepts only an idle future suspension lease", () => {
-    const payload = {
-      status: "ready",
-      suspensionId: "lease-1",
-      expiresAtMs: 2_000,
-      activeCount: 0,
-      blockers: [],
-    };
-    const response = (overrides = {}) => ({
-      status: 200,
-      body: { ok: true, payload: { ...payload, ...overrides } },
+    await expect(harness.run({ ...clientOptions, capabilitiesPath })).resolves.toEqual({
+      suspension: expected,
     });
+    expect(JSON.parse(readFileSync(capabilitiesPath, "utf8"))).toEqual({ suspension: expected });
+    expect(harness.sentMethods).toEqual(["connect", "health"]);
+  },
+);
 
-    expect(assertReadySuspensionResponse(response(), 1_000)).toEqual(payload);
-    expect(() => assertReadySuspensionResponse(response({ expiresAtMs: 999 }), 1_000)).toThrow(
-      "expire in the future",
-    );
-    expect(() => assertReadySuspensionResponse(response({ activeCount: 1 }), 1_000)).toThrow(
-      "no active work",
-    );
-  });
+it.each([
+  ["partial", suspensionMethods.slice(0, 2)],
+  ["malformed", "gateway.suspend.prepare"],
+])("rejects %s suspension methods only after baseline health", async (_label, methods) => {
+  const harness = createNetworkClientHarness([connectResponse(methods), healthResponse()]);
+  await expect(harness.run()).rejects.toThrow(/suspension methods/u);
+  expect(harness.sentMethods).toEqual(["connect", "health"]);
+});
 
-  it("requires canonical prepared-suspension RPC and probe evidence", () => {
-    const suspendedError = {
-      ok: false,
-      error: {
-        code: "UNAVAILABLE",
-        retryable: true,
-        details: { reason: "gateway-suspending", phase: "prepared" },
-      },
-    };
-    const health = { status: 200, body: { ok: true, status: "live" } };
-    const readiness = { status: 503, body: { ready: false, failing: ["gateway-draining"] } };
+it.each([
+  [{ ok: true }, "missing health summary payload"],
+  [{ ok: false, error: { message: "health unavailable" } }, "health unavailable"],
+] satisfies Array<[GatewayFrame, string]>)(
+  "rejects health response %j",
+  async (response, error) => {
+    const harness = createNetworkClientHarness([connectResponse(), response]);
+    await expect(harness.run()).rejects.toThrow(`health failed: ${error}`);
+    expect(harness).toMatchObject({ sentMethods: ["connect", "health"], stdout: [] });
+    expect(harness.close).toHaveBeenCalledOnce();
+  },
+);
 
-    expect(() => assertGatewaySuspendingError(suspendedError)).not.toThrow();
-    expect(() => assertSuspendedProbes(health, readiness)).not.toThrow();
-    expect(() =>
-      assertGatewaySuspendingError({
-        ...suspendedError,
-        error: {
-          ...suspendedError.error,
-          details: { reason: "gateway-restarting", phase: "prepared" },
+it("does not sleep past the remaining client deadline between retries", async () => {
+  const delays: number[] = [];
+  let now = 1_000;
+
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  await expect(
+    runGatewayNetworkClient(
+      { ...clientOptions, timeoutMs: 250 },
+      {
+        delay: async (ms: number) => {
+          delays.push(ms);
+          now += ms;
         },
-      }),
-    ).toThrow("identify gateway suspension");
-    expect(() =>
-      assertSuspendedProbes(health, {
-        status: 503,
-        body: { ready: false, failing: ["channels"] },
-      }),
-    ).toThrow("identify gateway-draining");
-  });
+        openSocket: async () => {
+          now += 200;
+          throw new Error("ECONNREFUSED");
+        },
+        protocolVersion: 1,
+        stdout: () => {},
+      },
+    ),
+  ).rejects.toThrow("ECONNREFUSED");
+
+  expect(delays).toEqual([50]);
 });

@@ -46,17 +46,6 @@ extension OpenClawChatTranscriptCache {
     public func observeCanonicalMessageIdempotencyKeys(_: Set<String>) {}
 }
 
-/// Optional atomic merge seam for cache owners that also provide a durable
-/// outbox. Keeping this separate preserves source compatibility for read-only
-/// transcript-cache conformers.
-protocol OpenClawChatCanonicalTranscriptMerging: OpenClawChatTranscriptCache {
-    func mergeCanonicalTranscriptMessage(
-        sessionKey: String,
-        agentID: String?,
-        message: OpenClawChatMessage,
-        canonicalMessageIdempotencyKey: String) async
-}
-
 /// Durable branch ownership is scoped exactly like outbox delivery routing.
 public struct OpenClawChatOutboxScope: Hashable, Sendable {
     public let sessionKey: String
@@ -64,8 +53,7 @@ public struct OpenClawChatOutboxScope: Hashable, Sendable {
 
     public init(sessionKey: String, agentID: String?) {
         self.sessionKey = sessionKey
-        let normalizedAgentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        self.agentID = normalizedAgentID?.isEmpty == false ? normalizedAgentID : nil
+        self.agentID = ChatPayloadDecoding.trimmedNonEmptyString(agentID)?.lowercased()
     }
 }
 
@@ -169,6 +157,8 @@ public struct OpenClawChatOutboxCommand: Hashable, Sendable, Identifiable {
     /// Thinking level captured when the command was queued, so a later flush
     /// never borrows the setting of whichever session is visible then.
     public let thinking: String
+    /// A per-message choice; nil leaves the Gateway's session queue mode in charge.
+    public let queueMode: OpenClawChatQueueMode?
     /// Permission and tool state captured with this command. Durable replay
     /// must use this command-owned fence, never the currently visible session.
     public let expectedSessionSettings: OpenClawChatSessionSettingsExpectation?
@@ -192,6 +182,7 @@ public struct OpenClawChatOutboxCommand: Hashable, Sendable, Identifiable {
         text: String,
         attachments: [OpenClawChatOutboxAttachment] = [],
         thinking: String,
+        queueMode: OpenClawChatQueueMode? = nil,
         expectedSessionSettings: OpenClawChatSessionSettingsExpectation? = nil,
         createdAt: Double,
         status: Status,
@@ -201,20 +192,15 @@ public struct OpenClawChatOutboxCommand: Hashable, Sendable, Identifiable {
     {
         self.id = id
         self.sessionKey = sessionKey
-        if let deliverySessionKey {
-            self.deliverySessionKey = deliverySessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        } else {
-            self.deliverySessionKey = sessionKey
-        }
-        let normalizedRoutingContract = routingContract?.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.routingContract = normalizedRoutingContract?.isEmpty == false ? normalizedRoutingContract : nil
-        let normalizedAgentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        self.agentID = normalizedAgentID?.isEmpty == false ? normalizedAgentID : nil
+        self.deliverySessionKey = deliverySessionKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? sessionKey
+        self.routingContract = ChatPayloadDecoding.trimmedNonEmptyString(routingContract)
+        self.agentID = ChatPayloadDecoding.trimmedNonEmptyString(agentID)?.lowercased()
         self.branchEpoch = branchEpoch
         self.scopeBranchEpoch = scopeBranchEpoch ?? branchEpoch
         self.text = text
         self.attachments = attachments
         self.thinking = thinking
+        self.queueMode = queueMode
         self.expectedSessionSettings = expectedSessionSettings
         self.createdAt = createdAt
         self.status = status

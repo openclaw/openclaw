@@ -55,15 +55,12 @@ function microphone() {
 }
 
 const sessions: RealtimeTalkSession[] = [];
-function sessionFor(
-  request: ReturnType<typeof vi.fn>,
-  transport: "webrtc" | "provider-websocket" | "gateway-relay" = "webrtc",
-) {
+function sessionFor(request: ReturnType<typeof vi.fn>) {
   const session = new RealtimeTalkSession(
     { request } as never,
     "agent:main:main",
     {},
-    { transport },
+    {},
     { inputDeviceId: "selected-microphone" },
   );
   sessions.push(session);
@@ -99,18 +96,26 @@ describe("Realtime Talk microphone preparation", () => {
     async (transport) => {
       vi.useFakeTimers();
       const permission = createDeferred<MediaStream>();
+      const permissionRequested = createDeferred();
       const media = microphone();
-      const getUserMedia = vi.fn(() => permission.promise);
+      const getUserMedia = vi.fn(() => {
+        permissionRequested.resolve();
+        return permission.promise;
+      });
       vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
       const request = vi.fn(async (method: string) => {
+        if (method === "talk.config") {
+          return { config: { talk: { realtime: { transport } } } };
+        }
         if (method === "talk.client.create" && transport === "gateway-relay") {
           throw new Error("Use relay session creation");
         }
         return clientSession(transport);
       });
-      const session = sessionFor(request, transport);
+      const session = sessionFor(request);
       const starting = session.start();
       void starting.catch(() => undefined);
+      await permissionRequested.promise;
       await vi.advanceTimersByTimeAsync(65_000);
       expect(request).not.toHaveBeenCalled();
       expect(getUserMedia).toHaveBeenCalledOnce();
@@ -118,7 +123,7 @@ describe("Realtime Talk microphone preparation", () => {
       await starting;
       expect(request.mock.calls.map(([method]) => method)).toEqual(
         transport === "gateway-relay"
-          ? ["talk.client.create", "talk.session.create"]
+          ? ["talk.client.create", "talk.config", "talk.session.create"]
           : ["talk.client.create"],
       );
       expect(getUserMedia).toHaveBeenCalledOnce();

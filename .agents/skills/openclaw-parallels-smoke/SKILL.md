@@ -53,7 +53,7 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 - Do not run the aggregate `pnpm test:parallels:npm-update` wrapper in parallel with individual macOS/Windows/Linux smoke lanes; it touches the same guest families and snapshots.
 - Do not start Parallels lanes while any unrelated host command may rebuild, clean, or restage `dist` (`pnpm build`, `pnpm ui:build`, `pnpm release:check`, `pnpm test:install:smoke`, npm pack/install smoke, or Docker lanes that run package/build prep). Run unrelated build/package gates first, let them finish, then start the VM matrix. Concurrent `dist` mutation can make host `npm pack` fail with missing files and wastes a full VM cycle.
 - While running or optimizing the matrix, record wall-clock duration per lane and the slowest phase from `/tmp/openclaw-parallels-*` logs. Use that timing before changing smoke order, timeouts, or helper behavior.
-- If a host build changes tracked generated files such as `src/canvas-host/a2ui/.bundle.hash`, stop before spending VM time. Commit the generated artifact separately or fix the generator drift, then rerun the smallest affected lane.
+- If a host build changes tracked generated files, stop before spending VM time. Commit the generated artifact separately or fix the generator drift, then rerun the smallest affected lane.
 - If `main` is moving under active multi-agent work, prefer a detached worktree pinned to one commit for long Parallels suites. The smoke scripts now verify the packed tgz commit instead of live `git rev-parse HEAD`, but a pinned worktree still avoids noisy rebuild/version drift during reruns.
 - For `openclaw update --channel dev` lanes, remember the guest clones GitHub `main`, not your local worktree. If a local fix exists but the rerun still fails inside the cloned dev checkout, do not treat that as disproof of the fix until the branch has been pushed.
 - For `prlctl exec`, pass the VM name before `--current-user` (`prlctl exec "$VM" --current-user ...`), not the other way around.
@@ -108,7 +108,7 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 
 The macOS smoke and same-guest update lanes route guest commands through
 `scripts/e2e/parallels/parallels-exec.py`; macOS hosts need `python3` with its standard
-library. On the verified Parallels 27.0.0 (58628) Apple-silicon installation, the
+library. On verified Parallels 27.0.0 (58628) and 27.0.2 (58673) Apple-silicon installations, the
 client retains SDK login-job handles through result extraction, avoiding the
 host CLI's intermittent `PrlJob_GetRetCode: Invalid argument` failure. This error
 is not proof that the guest needs reinstallation or another Tools update.
@@ -117,7 +117,10 @@ Selection checks the actual `prlctl` on PATH and the installed CLI digest before
 execution. Other binaries retain ordinary `prlctl`; an SDK failure never retries
 through another transport. Root/current-user choice, raw shell-argument joining,
 stdin, stdout/stderr, and guest exit status are preserved. Callers still own shell
-quoting. Snapshot/start/stop/input/capture and Linux/Windows execution are unchanged.
+quoting. Bare UUIDs use the CLI's braced lookup form; when that UUID is absent,
+the client checks the original literal VM name once before any guest execution.
+Other lookup failures are terminal. Snapshot/start/stop/input/capture and
+Linux/Windows execution are unchanged.
 
 For an already-owned, running macOS guest, the same transport can be checked directly:
 

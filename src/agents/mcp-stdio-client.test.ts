@@ -1,10 +1,13 @@
-import { PassThrough, type Writable } from "node:stream";
-import { ReadBuffer } from "@modelcontextprotocol/sdk/shared/stdio.js";
-import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import { ReadBuffer, type JSONRPCMessage } from "@modelcontextprotocol/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { OwnedStdioProcess } from "../process/owned-stdio.js";
 import { createMcpStdioClient, type McpStdioClient } from "./mcp-stdio-client.js";
+import {
+  createStdioProcessFixture,
+  rejectStdioWrites,
+  waitForStdioCleanup,
+  writeRpc,
+} from "./mcp-stdio.test-support.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const closeMock = vi.hoisted(() => vi.fn());
@@ -22,12 +25,9 @@ const clients: McpStdioClient[] = [];
 const childCleanups: Array<() => void> = [];
 
 function createFixture(protocolVersion = "2025-06-18") {
-  const root = createDeferred<{ code: number | null; signal: NodeJS.Signals | null }>();
-  const extinction = createDeferred();
-  const requested = createDeferred();
-  const stdin = new PassThrough();
-  const stdout = new PassThrough();
-  const stderr = new PassThrough();
+  const fixture = createStdioProcessFixture();
+  const { child, root, extinction, stdin, stdout } = fixture;
+  const requested = createDeferred<string | number>();
   const messages: JSONRPCMessage[] = [];
   const buffer = new ReadBuffer();
   stdin.on("data", (chunk: Buffer) => {
@@ -36,51 +36,19 @@ function createFixture(protocolVersion = "2025-06-18") {
     while ((message = buffer.readMessage()) !== null) {
       messages.push(message);
       if ("method" in message && message.method === "initialize" && "id" in message) {
-        stdout.write(
-          `${JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { protocolVersion } })}\n`,
-        );
-      } else if ("method" in message && message.method === "tools/call") {
-        requested.resolve();
+        writeRpc(stdout, { jsonrpc: "2.0", id: message.id, result: { protocolVersion } });
+      } else if ("method" in message && message.method === "tools/call" && "id" in message) {
+        requested.resolve(message.id);
       }
     }
   });
-  const child = {
-    pid: 4321,
-    stdin,
-    supportsRawOutput: true,
-    onStdout: (_decoded: (text: string) => void, raw?: (chunk: Buffer) => void) => {
-      if (raw) {
-        stdout.on("data", raw);
-      }
-    },
-    onStderr: () => {},
-    onExit: () => {},
-    onError: () => {},
-    wait: () => root.promise,
-    waitForExtinction: () => extinction.promise,
-    kill: vi.fn((signal?: NodeJS.Signals) => {
-      root.resolve({ code: null, signal: signal ?? null });
-      extinction.resolve();
-    }),
-    dispose: vi.fn(),
-  } satisfies OwnedStdioProcess;
-  spawnMock.mockImplementation(async ({ stderrDestination }: { stderrDestination?: Writable }) => {
-    if (stderrDestination) {
-      stderr.pipe(stderrDestination, { end: false });
-    }
-    return child;
-  });
-  closeMock.mockImplementation(async (process: OwnedStdioProcess) => {
-    await process.wait();
-    await process.waitForExtinction?.();
-  });
-  childCleanups.push(() => {
-    root.resolve({ code: 0, signal: null });
+  child.kill.mockImplementation((signal) => {
+    root.resolve({ code: null, signal: signal ?? null });
     extinction.resolve();
-    stdin.destroy();
-    stdout.destroy();
-    stderr.destroy();
   });
+  spawnMock.mockImplementation(fixture.spawn);
+  closeMock.mockImplementation(waitForStdioCleanup);
+  childCleanups.push(fixture.cleanup);
   const client = createMcpStdioClient({
     command: "fixture-mcp-proxy",
     env: {},
@@ -95,7 +63,18 @@ function createFixture(protocolVersion = "2025-06-18") {
     },
   });
   clients.push(client);
-  return { client, child, stdin, messages, requested: requested.promise };
+  return {
+    ...fixture,
+    client,
+    requested: requested.promise,
+    sent: (method: string) =>
+      messages.some((message) => "method" in message && message.method === method),
+  };
+}
+
+function expectRetired({ client, child }: ReturnType<typeof createFixture>) {
+  expect(client.isAvailable()).toBe(false);
+  expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
 }
 
 afterEach(async () => {
@@ -110,6 +89,22 @@ afterEach(async () => {
 });
 
 describe("createMcpStdioClient", () => {
+  it("keeps the connection when one stdout chunk contains multiple bounded messages", async () => {
+    const { client, child, stdout, requested } = createFixture();
+    const pending = client.request("tools/call", {}, { timeoutMs: 1000 });
+    const id = await requested;
+    const result = { text: "x".repeat(700) };
+    writeRpc(
+      stdout,
+      { jsonrpc: "2.0", method: "notifications/message", params: { data: "n".repeat(700) } },
+      { jsonrpc: "2.0", id, result },
+    );
+
+    await expect(pending).resolves.toEqual(result);
+    expect(client.isAvailable()).toBe(true);
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
   it("preserves the cleanup owner's error as the cause of uncertain shutdown", async () => {
     const { client } = createFixture();
     await vi.waitFor(() => expect(client.isAvailable()).toBe(true));
@@ -124,21 +119,18 @@ describe("createMcpStdioClient", () => {
   });
 
   it("classifies an incompatible initialize version as a fatal protocol error", async () => {
-    const { client, child, messages } = createFixture("2024-11-05");
+    const fixture = createFixture("2024-11-05");
+    const { client, sent } = fixture;
     await expect(client.request("tools/call", {}, { timeoutMs: 1000 })).rejects.toThrow(
       "protocol: proxy returned an incompatible protocol version",
     );
-    expect(client.isAvailable()).toBe(false);
-    expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
-    expect(
-      messages.some(
-        (message) => "method" in message && message.method === "notifications/initialized",
-      ),
-    ).toBe(false);
+    expectRetired(fixture);
+    expect(sent("notifications/initialized")).toBe(false);
   });
 
   it("retires an SDK request timeout without writing a cancellation notification", async () => {
-    const { client, child, messages, requested } = createFixture();
+    const fixture = createFixture();
+    const { client, sent, requested } = fixture;
     await vi.waitFor(() => expect(client.isAvailable()).toBe(true));
     vi.useFakeTimers();
     const pending = client.request("tools/call", {}, { timeoutMs: 100 });
@@ -148,35 +140,43 @@ describe("createMcpStdioClient", () => {
     await requested;
     await vi.advanceTimersByTimeAsync(100);
     await rejected;
-    expect(client.isAvailable()).toBe(false);
-    expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
-    expect(
-      messages.some(
-        (message) => "method" in message && message.method === "notifications/cancelled",
-      ),
-    ).toBe(false);
+    expectRetired(fixture);
+    expect(sent("notifications/cancelled")).toBe(false);
   });
 
   it("classifies a failed stdin write as fatal unavailability", async () => {
-    const { client, child, stdin } = createFixture();
+    const fixture = createFixture();
+    const { client, stdin } = fixture;
     await vi.waitFor(() => expect(client.isAvailable()).toBe(true));
     const failure = new Error("write EPIPE");
-    vi.spyOn(stdin, "write").mockImplementation(
-      (
-        _data,
-        encodingOrCallback: BufferEncoding | ((error?: Error | null) => void),
-        callback?: (error?: Error | null) => void,
-      ) => {
-        const done = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
-        done?.(failure);
-        return false;
-      },
-    );
+    rejectStdioWrites(stdin, failure);
     await expect(client.request("tools/call", {}, { timeoutMs: 1000 })).rejects.toMatchObject({
       message: "unavailable: proxy write failed",
       cause: failure,
     });
-    expect(client.isAvailable()).toBe(false);
-    expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+    expectRetired(fixture);
+  });
+
+  it.each([
+    {
+      name: "keeps complete characters at the 32KiB tail boundary",
+      output: Buffer.from("你".repeat(20000)),
+      expected: /^unavailable: proxy exited \(1\): 你+$/,
+    },
+    {
+      name: "preserves malformed bytes when stderr was not truncated",
+      output: Buffer.from([0x80, 0x61]),
+      expected: /^unavailable: proxy exited \(1\): �a$/,
+    },
+  ])("$name", async ({ output, expected }) => {
+    const fixture = createFixture();
+    const { client, root, stderr, requested } = fixture;
+    const pending = client.request("tools/call", {}, { timeoutMs: 1000 });
+    const rejected = expect(pending).rejects.toThrow(expected);
+    await requested;
+    stderr.write(output);
+    root.resolve({ code: 1, signal: null });
+    await rejected;
+    expectRetired(fixture);
   });
 });

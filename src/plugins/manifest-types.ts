@@ -1,24 +1,32 @@
 import type { ModelPricingProvider } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import type { ModelCatalog } from "@openclaw/model-catalog-core/model-catalog-types";
+import type { ManifestModelIdNormalizationProvider } from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import type { PluginUiCapability } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
 import type { PluginCategorySlug } from "../../packages/plugin-package-contract/src/index.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";
-import type { ConfigUiPresentation, ConfigUiGroup } from "../shared/config-ui-hints-types.js";
+import type { ConfigUiHint, ConfigUiGroup } from "../shared/config-ui-hints-types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
+import type {
+  PLUGIN_MANIFEST_CONTRACT_KEYS,
+  TRANSCRIPT_SOURCE_LOCATOR_FIELDS,
+} from "./manifest-contract-keys.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 
 /** UI hint metadata for plugin config schema fields. */
-export type PluginConfigUiHint = {
-  label?: string;
-  help?: string;
-  tags?: string[];
-  advanced?: boolean;
-  sensitive?: boolean;
-  placeholder?: string;
-  presentation?: ConfigUiPresentation;
-};
+export type PluginConfigUiHint = Pick<
+  ConfigUiHint,
+  | "label"
+  | "help"
+  | "tags"
+  | "advanced"
+  | "sensitive"
+  | "placeholder"
+  | "presentation"
+  | "multiline"
+>;
 
 /** Static, portable palettes; no plugin JavaScript or native UI activation is required. */
 export type PluginManifestTheme = {
@@ -26,6 +34,10 @@ export type PluginManifestTheme = {
   name: string;
   description: string;
   source: string;
+  icons?: Record<string, string>;
+  hats?: Record<string, string>;
+  critters?: Record<string, { source: string; title?: string; crossMs?: number }>;
+  backgrounds?: Partial<Record<"light" | "dark", string>>;
 };
 
 /** Top-level plugin manifest format. */
@@ -44,13 +56,15 @@ export type PluginDiagnosticCode =
   | "configured-plugin-path-inspection-failed"
   | "configured-plugin-path-unavailable"
   | "dashboard-declaration-invalid"
+  | "explicit-config-plugin-selection"
+  | "plugin-state-migration"
   | "plugin-verification"
   | "sdk-incompatible"
   | "workspace-scope-omitted";
 
 /** Diagnostic emitted while discovering or validating plugins. */
 export type PluginDiagnostic = {
-  level: "warn" | "error";
+  level: "info" | "warn" | "error";
   message: string;
   pluginId?: string;
   source?: string;
@@ -94,23 +108,15 @@ export type PluginManifestModelSupport = {
   modelPatterns?: string[];
 };
 
-export type PluginManifestModelCatalog = ModelCatalog;
-
 export type PluginManifestModelPricing = {
   providers?: Record<string, ModelPricingProvider>;
 };
 
-export type PluginManifestModelIdPrefixRule = {
-  modelPrefix: string;
-  prefix: string;
-};
+export type PluginManifestModelIdPrefixRule = NonNullable<
+  PluginManifestModelIdNormalizationProvider["prefixWhenBareAfterAliasStartsWith"]
+>[number];
 
-export type PluginManifestModelIdNormalizationProvider = {
-  aliases?: Record<string, string>;
-  stripPrefixes?: string[];
-  prefixWhenBare?: string;
-  prefixWhenBareAfterAliasStartsWith?: PluginManifestModelIdPrefixRule[];
-};
+export type PluginManifestModelIdNormalizationProvider = ManifestModelIdNormalizationProvider;
 
 export type PluginManifestModelIdNormalization = {
   providers?: Record<string, PluginManifestModelIdNormalizationProvider>;
@@ -137,6 +143,8 @@ export type PluginManifestProviderEndpoint = {
 export type PluginManifestProviderRequestProvider = {
   family?: string;
   compatibilityFamily?: "moonshot";
+  /** Schema for this provider's per-model params; defaults are documentation only. */
+  modelParamsSchema?: JsonSchemaObject;
   openAICompletions?: {
     supportsStreamingUsage?: boolean;
   };
@@ -315,6 +323,9 @@ export type PluginManifestControlUi = {
   entry: string;
   /** Stylesheets in the same asset directory, loaded before activation. */
   styles?: string[];
+  /** Omission retains ordinary runtime activation. */
+  activation?: "settings-only";
+  settingsViews?: import("../../packages/gateway-protocol/src/plugin-control-ui-settings.js").ControlUiSettingsPlacement[];
 };
 
 export type PluginManifestMcpServer = Record<string, unknown>;
@@ -377,11 +388,10 @@ export type PluginManifestCatalog = {
   order?: number;
 };
 
-/** Static transcript setup metadata; runtime registration does not gate configuration. */
 export type PluginManifestTranscriptSource = {
   name?: string;
   autoStart?: Partial<
-    Record<"accountId" | "guildId" | "channelId" | "meetingUrl", "optional" | "required">
+    Record<(typeof TRANSCRIPT_SOURCE_LOCATOR_FIELDS)[number], "optional" | "required">
   >;
 };
 
@@ -390,12 +400,39 @@ export type PluginManifestBackupResource = {
   disposition: "include" | "regenerable";
   scope: "state" | "agent";
   relativePath: string;
+  /** Shared-state databases retained under this state-scoped resource. */
+  databaseFamily?: "state";
+};
+
+/** Provider-authored limits and result semantics available before runtime activation. */
+export type DecisionProviderCapabilities = {
+  questionTypes: ("boolean" | "choice" | "score")[];
+  maxQuestions?: number;
+  maxChoiceAlternatives?: number;
+  maxScoreLevels?: number;
+  maxInputTokens?: number;
+  /** Token accounting follows the provider encoder, including its rubric overhead. */
+  inputTokenScope?: "encoded-question" | "state-plus-each-criterion";
+  requiresBooleanCriteria?: boolean;
+  /** A provider metric is not a calibrated probability that the answer is correct. */
+  confidence?: "provider-specific" | "none";
 };
 
 export type PluginManifestDecisionModel = {
   provider: string;
   id: string;
   name: string;
+  capabilities?: DecisionProviderCapabilities;
+};
+
+/** Reload behavior a plugin opts in to; absent fields keep the default reload. */
+type PluginManifestReload = {
+  /**
+   * A reload hands running turns to the new generation at their next model step
+   * instead of waiting for them to finish. Opting in promises the plugin keeps no
+   * in-memory state that a later call in the same turn depends on.
+   */
+  turnHandover?: boolean;
 };
 
 export type PluginManifest = {
@@ -414,10 +451,16 @@ export type PluginManifest = {
   /** Provider ids that should auto-enable this plugin when referenced in auth/config/models. */
   autoEnableWhenConfiguredProviders?: string[];
   kind?: PluginKind | PluginKind[];
+  /** Context engine registration IDs owned by this plugin before runtime loading. */
+  contextEngineIds?: string[];
+  /** How a reload of this plugin treats agent turns that are running when it starts. */
+  reload?: PluginManifestReload;
   channels?: string[];
   /** Account-key selection rules available before channel runtime loads. */
   channelAccountKeyPolicies?: Record<string, ChannelAccountKeyPolicy>;
   providers?: string[];
+  /** The declared providers own transient rate-limit/overload recovery, never auth or billing. */
+  managesOwnAvailability?: boolean;
   /**
    * Optional lightweight module that exports provider plugin metadata for
    * auth/catalog discovery. It should not import the full plugin runtime.
@@ -434,7 +477,7 @@ export type PluginManifest = {
    * Declarative model catalog metadata used by future read-only listing,
    * onboarding, and model picker surfaces before provider runtime loads.
    */
-  modelCatalog?: PluginManifestModelCatalog;
+  modelCatalog?: ModelCatalog;
   /** Manifest-owned external pricing lookup policy for provider refs. */
   modelPricing?: PluginManifestModelPricing;
   /** Manifest-owned model-id normalization used before provider runtime loads. */
@@ -488,6 +531,8 @@ export type PluginManifest = {
   /** Widget data and action capabilities validated against runtime registrations. */
   dashboard?: PluginManifestDashboard;
   controlUi?: PluginManifestControlUi;
+  /** Static UI contributions; omission is unspecified and an empty list declares none. */
+  uiCapabilities?: PluginUiCapability[];
   themes?: PluginManifestTheme[];
   /** Static MCP servers contributed while this plugin is enabled. */
   mcpServers?: Record<string, PluginManifestMcpServer>;
@@ -526,37 +571,9 @@ export type PluginManifest = {
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
 };
 
-export type PluginManifestContracts = {
-  embeddedExtensionFactories?: string[];
-  agentToolResultMiddleware?: string[];
-  trustedToolPolicies?: string[];
-  /**
-   * Provider ids whose external auth profile hook can contribute runtime-only
-   * credentials. Declaring this lets auth-store overlays load only the owning
-   * plugin instead of every provider plugin.
-   */
-  externalAuthProviders?: string[];
-  decisionProviders?: string[];
-  embeddingProviders?: string[];
-  speechProviders?: string[];
-  realtimeTranscriptionProviders?: string[];
-  realtimeVoiceProviders?: string[];
-  mediaUnderstandingProviders?: string[];
-  transcriptSourceProviders?: string[];
-  documentExtractors?: string[];
-  imageGenerationProviders?: string[];
-  videoGenerationProviders?: string[];
-  musicGenerationProviders?: string[];
-  webContentExtractors?: string[];
-  webFetchProviders?: string[];
-  webSearchProviders?: string[];
-  workerProviders?: string[];
-  /** Provider ids whose plugin owns usage auth and snapshot hooks. */
-  usageProviders?: string[];
-  migrationProviders?: string[];
-  gatewayMethodDispatch?: string[];
-  tools?: string[];
-};
+export type PluginManifestContracts = Partial<
+  Record<(typeof PLUGIN_MANIFEST_CONTRACT_KEYS)[number], string[]>
+>;
 
 export type PluginManifestMediaUnderstandingCapability = "image" | "audio" | "video";
 
@@ -641,6 +658,8 @@ export type PluginManifestProviderAuthChoice = {
   icon?: string;
   /** Optional HTTPS product or installation URL for onboarding surfaces. */
   website?: string;
+  /** Optional HTTPS guide comparing this provider's connection methods. */
+  docsUrl?: string;
   /** Lower values sort earlier in interactive assistant pickers. */
   assistantPriority?: number;
   /** Keep the choice out of interactive assistant pickers while preserving manual CLI support. */

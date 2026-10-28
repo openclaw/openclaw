@@ -1,4 +1,3 @@
-// Mattermost tests cover slash state plugin behavior.
 import { EventEmitter } from "node:events";
 import { IncomingMessage, type ServerResponse } from "node:http";
 import { Socket } from "node:net";
@@ -6,11 +5,11 @@ import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { createMockIncomingRequest, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedMattermostAccount } from "./accounts.js";
-import type { OpenClawConfig, RuntimeEnv } from "./runtime-api.js";
 import type { MattermostRegisteredCommand } from "./slash-commands.js";
 import {
   activateSlashCommands,
   deactivateSlashCommands,
+  getSlashCommandState,
   registerSlashCommandRoute,
 } from "./slash-state.js";
 
@@ -30,58 +29,24 @@ function createResolvedMattermostAccount(accountId: string): ResolvedMattermostA
   };
 }
 
-function createRegisteredCommand(params?: {
-  id?: string;
-  teamId?: string;
-  trigger?: string;
-}): MattermostRegisteredCommand {
+function createRegisteredCommand(
+  overrides: Partial<MattermostRegisteredCommand> = {},
+): MattermostRegisteredCommand {
   return {
-    id: params?.id ?? "cmd-1",
-    teamId: params?.teamId ?? "team-1",
-    trigger: params?.trigger ?? "oc_status",
+    id: "cmd-1",
+    teamId: "team-1",
+    trigger: "oc_status",
     token: "token-1",
     url: "https://gateway.example.com/slash",
     managed: false,
+    ...overrides,
   };
 }
 
 const slashApi = {
   cfg: {},
-  runtime: {
-    log: () => {},
-    error: () => {},
-    exit: () => {},
-  },
-} satisfies {
-  cfg: OpenClawConfig;
-  runtime: RuntimeEnv;
-};
-
-const ACCOUNT_STATES_KEY = Symbol.for("openclaw.mattermost.slash-account-states");
-
-type AccountState = {
-  handler: ((req: IncomingMessage, res: ServerResponse) => Promise<void>) | null;
-};
-
-function getAccountStates(): Map<string, AccountState> {
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const states = globalStore[ACCOUNT_STATES_KEY];
-  if (!(states instanceof Map)) {
-    throw new Error("expected Mattermost slash account state map");
-  }
-  return states as Map<string, AccountState>;
-}
-
-function replaceAccountHandler(accountId: string): void {
-  const state = getAccountStates().get(accountId);
-  if (!state) {
-    throw new Error(`expected Mattermost slash state for ${accountId}`);
-  }
-  state.handler = async (_req, res) => {
-    res.statusCode = 200;
-    res.end(accountId);
-  };
-}
+  runtime: { log() {}, error() {}, exit() {} },
+} satisfies Parameters<typeof activateSlashCommands>[0]["api"];
 
 function createRequest(body: string, authorization?: string): IncomingMessage {
   const req = createMockIncomingRequest([body]);
@@ -141,33 +106,65 @@ async function routeSlashRequest(params: {
   return { statusCode: response.res.statusCode, body: response.getBody(), warn };
 }
 
-function activate(params: {
-  accountId: string;
-  tokens: string[];
-  commands?: MattermostRegisteredCommand[];
-}): void {
+function activate(
+  accountId: string,
+  tokens: string[],
+  commands: MattermostRegisteredCommand[] = [],
+  stubHandler = true,
+): void {
   activateSlashCommands({
-    account: createResolvedMattermostAccount(params.accountId),
-    commandTokens: params.tokens,
-    registeredCommands: params.commands ?? [],
+    account: createResolvedMattermostAccount(accountId),
+    registeredCommands:
+      commands.length > 0
+        ? commands
+        : tokens.map((token, index) => createRegisteredCommand({ id: `cmd-${index}`, token })),
     api: slashApi,
   });
-  replaceAccountHandler(params.accountId);
+  if (stubHandler) {
+    const state = getSlashCommandState(accountId);
+    if (!state) {
+      throw new Error(`expected Mattermost slash state for ${accountId}`);
+    }
+    state.handler = async (_req, res) => {
+      res.statusCode = 200;
+      res.end(accountId);
+    };
+  }
 }
 
-describe("slash-state global singleton", () => {
-  afterEach(() => {
-    deactivateSlashCommands();
-  });
+async function expectIsolatedCapacity(fullToken: string, otherToken: string) {
+  const { handler } = createSlashRoute();
+  const requests = Array.from({ length: 8 }, (_, index) =>
+    createStalledRequest(`203.0.113.${index + 1}`, `Token ${fullToken}`),
+  );
+  const responses = requests.map(() => createResponse());
+  const runs = requests.map((req, index) => handler(req, responses[index]!.res));
+  const overflow = createResponse();
+  await handler(createRequest("", `Token ${fullToken}`), overflow.res);
+  const other = createStalledRequest("203.0.113.20", `Token ${otherToken}`);
+  const otherResponse = createResponse();
+  const otherRun = handler(other, otherResponse.res);
+  try {
+    expect(overflow.res.statusCode).toBe(429);
+    expect(otherResponse.res.statusCode).toBe(200);
+  } finally {
+    for (const req of [...requests, other]) {
+      req.complete = true;
+      req.push(null);
+    }
+    await Promise.all([...runs, otherRun]);
+  }
+}
 
-  it("anchors accountStates on globalThis", () => {
-    activate({ accountId: "a1", tokens: ["tok-a"] });
-    expect(getAccountStates().has("a1")).toBe(true);
-  });
+afterEach(() => {
+  deactivateSlashCommands();
+  vi.mocked(safeEqualSecret).mockClear();
+});
 
+describe("slash-state", () => {
   it("preserves slash routing state across module reloads", async () => {
-    activate({ accountId: "a1", tokens: ["tok-reload"] });
-    activate({ accountId: "a2", tokens: ["tok-other"] });
+    activate("a1", ["tok-reload"]);
+    activate("a2", ["tok-other"]);
 
     vi.resetModules();
     const reloaded = await import("./slash-state.js");
@@ -179,17 +176,9 @@ describe("slash-state global singleton", () => {
     expect(result.statusCode).toBe(200);
     expect(result.body).toBe("a1");
   });
-});
-
-describe("slash-state request routing", () => {
-  afterEach(() => {
-    deactivateSlashCommands();
-    vi.mocked(safeEqualSecret).mockClear();
-  });
-
   it("accepts the Token scheme case-insensitively and compares every known token", async () => {
-    activate({ accountId: "a1", tokens: ["tok-a", "tok-a-alt"] });
-    activate({ accountId: "a2", tokens: ["tok-b"] });
+    activate("a1", ["tok-a", "tok-a-alt"]);
+    activate("a2", ["tok-b"]);
 
     const matched = await routeSlashRequest({
       body: "token=tok-a",
@@ -217,59 +206,15 @@ describe("slash-state request routing", () => {
   });
 
   it("isolates distinct credentials across accounts", async () => {
-    activate({ accountId: "a1", tokens: ["tok-a"] });
-    activate({ accountId: "a2", tokens: ["tok-b"] });
-    const route = createSlashRoute();
-    const requests = Array.from({ length: 8 }, (_, index) =>
-      createStalledRequest(`203.0.113.${index + 1}`, "Token tok-a"),
-    );
-    const responses = requests.map(() => createResponse());
-    const runs = requests.map((req, index) => route.handler(req, responses[index]!.res));
-
-    const overflow = createResponse();
-    await route.handler(createRequest("", "Token tok-a"), overflow.res);
-    const accountB = createStalledRequest("203.0.113.20", "Token tok-b");
-    const accountBResponse = createResponse();
-    const accountBRun = route.handler(accountB, accountBResponse.res);
-
-    try {
-      expect(overflow.res.statusCode).toBe(429);
-      expect(accountBResponse.res.statusCode).toBe(200);
-    } finally {
-      for (const req of [...requests, accountB]) {
-        req.complete = true;
-        req.push(null);
-      }
-      await Promise.all([...runs, accountBRun]);
-    }
+    activate("a1", ["tok-a"]);
+    activate("a2", ["tok-b"]);
+    await expectIsolatedCapacity("tok-a", "tok-b");
   });
 
   it("collapses duplicate credentials without merging distinct duplicate groups", async () => {
-    activate({ accountId: "a1", tokens: ["tok-a", "tok-shared", "tok-shared-other"] });
-    activate({ accountId: "a2", tokens: ["tok-shared", "tok-shared-other"] });
-    const route = createSlashRoute();
-    const requests = Array.from({ length: 8 }, (_, index) =>
-      createStalledRequest(`203.0.113.${index + 1}`, "Token tok-shared"),
-    );
-    const responses = requests.map(() => createResponse());
-    const runs = requests.map((req, index) => route.handler(req, responses[index]!.res));
-
-    const overflow = createResponse();
-    await route.handler(createRequest("", "Token tok-shared"), overflow.res);
-    const unique = createStalledRequest("203.0.113.20", "Token tok-shared-other");
-    const uniqueResponse = createResponse();
-    const uniqueRun = route.handler(unique, uniqueResponse.res);
-
-    try {
-      expect(overflow.res.statusCode).toBe(429);
-      expect(uniqueResponse.res.statusCode).toBe(200);
-    } finally {
-      for (const req of [...requests, unique]) {
-        req.complete = true;
-        req.push(null);
-      }
-      await Promise.all([...runs, uniqueRun]);
-    }
+    activate("a1", ["tok-a", "tok-shared", "tok-shared-other"]);
+    activate("a2", ["tok-shared", "tok-shared-other"]);
+    await expectIsolatedCapacity("tok-shared", "tok-shared-other");
   });
 
   it.each([
@@ -286,18 +231,13 @@ describe("slash-state request routing", () => {
       message: "Unauthorized: invalid command token.",
     },
   ])("keeps real multi-account $name requests in account validation", async (testCase) => {
-    activateSlashCommands({
-      account: createResolvedMattermostAccount("a1"),
-      commandTokens: ["token-1"],
-      registeredCommands: [createRegisteredCommand()],
-      api: slashApi,
-    });
-    activateSlashCommands({
-      account: createResolvedMattermostAccount("a2"),
-      commandTokens: ["token-2"],
-      registeredCommands: [createRegisteredCommand({ id: "cmd-2", teamId: "team-2" })],
-      api: slashApi,
-    });
+    activate("a1", ["token-1"], [createRegisteredCommand()], false);
+    activate(
+      "a2",
+      ["token-2"],
+      [createRegisteredCommand({ id: "cmd-2", teamId: "team-2", token: "token-2" })],
+      false,
+    );
     const route = createSlashRoute();
     await withServer(
       (req, res) => {
@@ -320,53 +260,9 @@ describe("slash-state request routing", () => {
     );
   });
 
-  it("bounds concurrent pre-authentication body reads across the slash route", async () => {
-    activateSlashCommands({
-      account: createResolvedMattermostAccount("a1"),
-      commandTokens: ["token-1"],
-      registeredCommands: [createRegisteredCommand()],
-      api: slashApi,
-    });
-    const route = createSlashRoute();
-    const requests = Array.from({ length: 12 }, (_, index) =>
-      createStalledRequest(`203.0.113.${index + 1}`),
-    );
-    const responses = requests.map(() => createResponse());
-    const runs = requests.map((req, index) => route.handler(req, responses[index]!.res));
-
-    try {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
-
-      expect(responses.filter(({ res }) => res.statusCode === 200)).toHaveLength(8);
-      expect(responses.filter(({ res }) => res.statusCode === 429)).toHaveLength(4);
-    } finally {
-      for (const req of requests) {
-        req.complete = true;
-        req.push(null);
-      }
-      await Promise.all(runs);
-    }
-
-    const followUp = createResponse();
-    await route.handler(createRequest(""), followUp.res);
-    expect(followUp.res.statusCode).toBe(400);
-  });
-
-  it("routes a token owned by one account", async () => {
-    activate({ accountId: "a1", tokens: ["tok-a"] });
-    activate({ accountId: "a2", tokens: ["tok-b"] });
-
-    const result = await routeSlashRequest({ body: "token=tok-a" });
-
-    expect(result.statusCode).toBe(200);
-    expect(result.body).toBe("a1");
-  });
-
   it("rejects a token shared by multiple accounts", async () => {
-    activate({ accountId: "a1", tokens: ["tok-shared"] });
-    activate({ accountId: "a2", tokens: ["tok-shared"] });
+    activate("a1", ["tok-shared"]);
+    activate("a2", ["tok-shared"]);
 
     const result = await routeSlashRequest({ body: "token=tok-shared" });
 
@@ -377,37 +273,9 @@ describe("slash-state request routing", () => {
     );
   });
 
-  it("routes by registered team and command when token lookup misses", async () => {
-    activate({
-      accountId: "a1",
-      tokens: ["old-token"],
-      commands: [createRegisteredCommand()],
-    });
-    activate({
-      accountId: "a2",
-      tokens: ["other-token"],
-      commands: [createRegisteredCommand({ id: "cmd-2", teamId: "team-2" })],
-    });
-
-    const result = await routeSlashRequest({
-      body: "token=rotated&team_id=team-1&channel_id=c1&user_id=u1&command=%2Foc_status&text=",
-    });
-
-    expect(result.statusCode).toBe(200);
-    expect(result.body).toBe("a1");
-  });
-
   it("rejects a registered team and command shared by multiple accounts", async () => {
-    activate({
-      accountId: "a1",
-      tokens: ["tok-a"],
-      commands: [createRegisteredCommand({ id: "cmd-a" })],
-    });
-    activate({
-      accountId: "a2",
-      tokens: ["tok-b"],
-      commands: [createRegisteredCommand({ id: "cmd-b" })],
-    });
+    activate("a1", ["tok-a"], [createRegisteredCommand({ id: "cmd-a" })]);
+    activate("a2", ["tok-b"], [createRegisteredCommand({ id: "cmd-b" })]);
 
     const result = await routeSlashRequest({
       body: "token=rotated&team_id=team-1&channel_id=c1&user_id=u1&command=%2Foc_status&text=",

@@ -1,4 +1,3 @@
-// Defines user-facing config field help text for docs and UI surfaces.
 export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   session:
     "Global session routing, reset, delivery policy, and maintenance controls for conversation history behavior. Keep defaults unless you need stricter isolation, retention, or delivery constraints.",
@@ -9,9 +8,9 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.groupScope":
     'Group/channel session scoping: "per-group" keeps rooms separate while the agent main session ambiently watches them, independently of dmScope; "main" merges room context into main and needs no watch. Use "main" only for trusted rooms.',
   "session.notifyOnCreate":
-    "Queue a system notice in the owning agent's Home session when a session is created (default: true). Notices include available title and creator metadata and are read on the next Home turn or heartbeat. Set false to disable; drafts, incognito, internal sessions, and scheduled cron runs are excluded.",
+    "Queue a system notice in the owning agent's Home session when a session is created (default: true). Notices include available title and creator metadata and are read on the next Home turn or scheduled automation. Set false to disable; drafts, incognito, internal sessions, and scheduled cron runs are excluded.",
   "session.identityLinks":
-    "Maps canonical identities to provider-prefixed peer IDs so equivalent users resolve to one DM thread (example: telegram:123456). Use this when the same human appears across multiple channels or accounts.",
+    "Maps shared identities to provider-prefixed peer IDs so equivalent users resolve to one DM thread (example: telegram:123456). Use this when the same human appears across multiple channels or accounts.",
   "session.resetTriggers":
     "Lists message triggers that force a session reset when matched in inbound content. Use sparingly for explicit reset phrases so context is not dropped unexpectedly during normal conversation.",
   "session.reset":
@@ -25,7 +24,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.resetByType":
     "Overrides reset behavior by chat type (direct, group, thread) when defaults are not sufficient. Use this when group/thread traffic needs different reset cadence than direct messages.",
   "session.resetByType.direct":
-    "Defines reset policy for direct chats and supersedes the base session.reset configuration for that type. Use this as the canonical direct-message override instead of the legacy dm alias.",
+    "Defines reset policy for direct chats and supersedes the base session.reset configuration for that type. Use this as the current direct-message override instead of the legacy dm alias.",
   "session.resetByType.group":
     "Defines reset policy for group chat sessions where continuity and noise patterns differ from DMs. Use shorter idle windows for busy groups if context drift becomes a problem.",
   "session.resetByType.thread":
@@ -37,7 +36,13 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.mainKey":
     'Accepted but ignored: the per-agent main session suffix is always "main". Omit this field; global session scope uses "global" instead.',
   "session.sendPolicy":
-    "Controls cross-session send permissions using allow/deny rules evaluated against channel, chatType, and key prefixes. Use this to fence where session tools can deliver messages in complex environments.",
+    "Controls session delivery using allow/deny rules evaluated against channel, chatType, and key prefixes. This is separate from incoming and outgoing peer-message admission; use session.communication for those defaults.",
+  "session.communication":
+    "Defaults for new messages between sessions. Each direction accepts always, ask, or never and defaults to always. Sessions inherit these values until a human selects an override; existing access restrictions still apply.",
+  "session.communication.send":
+    "Default for initiating messages to other sessions: always permits, ask requires human approval before sending, and never blocks. Requested replies and authorized delegated-task communication keep their existing authority.",
+  "session.communication.receive":
+    "Default for accepting new messages from other sessions: always permits, ask requires human approval before model input or new work, and never blocks. This does not change history visibility or human access.",
   "session.sendPolicy.default":
     'Sets fallback action when no sendPolicy rule matches: "allow" or "deny". Keep "allow" for simpler setups, or choose "deny" when you require explicit allow rules for every destination.',
   "session.sendPolicy.rules":
@@ -156,7 +161,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "hooks.allowedSessionKeyPrefixes":
     "Allowlist of accepted session-key prefixes for inbound hook requests when caller-provided keys are enabled. Use narrow prefixes to prevent arbitrary session-key injection.",
   "hooks.allowedAgentIds":
-    "Allowlist of effective agent IDs that hook requests and mappings are allowed to target, including default-agent routing when agentId is omitted. Use this to constrain automation events to dedicated service agents and reduce blast radius if a hook token is exposed.",
+    "Allowlist of effective agent IDs that hook requests and mappings are allowed to target, including default-agent routing when agentId is omitted. Use this to constrain automation events to dedicated service agents and limit the damage if a hook token is exposed.",
   "hooks.presets":
     "Named hook preset bundles applied at load time to seed standard mappings and behavior defaults. Keep preset usage explicit so operators can audit which automations are active.",
   "hooks.transformsDir":
@@ -170,11 +175,11 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "hooks.mappings[].match.path":
     "Path match condition for a hook mapping, usually compared against the inbound request path. Use this to split automation behavior by webhook endpoint path families.",
   "hooks.mappings[].match.source":
-    "Source match condition for a hook mapping, typically set by trusted upstream metadata or adapter logic. Use stable source identifiers so routing remains deterministic across retries.",
+    "Source match condition for a hook mapping, typically set by trusted upstream metadata or adapter logic. Use stable source identifiers so routing stays the same across retries.",
   "hooks.mappings[].action":
-    'Mapping action type: "wake" triggers agent wake flow, while "agent" sends directly to agent handling. Use "agent" for immediate execution and "wake" when heartbeat-driven processing is preferred.',
+    'Mapping action type: "wake" queues a notice for the owning session, while "agent" starts an independent agent turn. Session notices do not interrupt active work.',
   "hooks.mappings[].wakeMode":
-    'Wake scheduling mode: "now" wakes immediately, while "next-heartbeat" defers until the next heartbeat cycle. Use deferred mode for lower-priority automations that can tolerate slight delay.',
+    'Wake scheduling mode: "now" queues a session turn immediately, while "next-heartbeat" assigns the notice to the next eligible scheduled automation for that session. Deferred wakes require an enabled automation that can receive the notice.',
   "hooks.mappings[].name":
     "Human-readable mapping display name used in diagnostics and operator-facing config UIs. Keep names concise and descriptive so routing intent is obvious during incident review.",
   "hooks.mappings[].agentId":
@@ -184,7 +189,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "hooks.mappings[].sessionMode":
     'Controls mapping session continuity: "isolated" starts a fresh run session, while "persistent" reuses the resolved sessionKey. Keep isolated unless the integration intentionally needs durable context.',
   "hooks.mappings[].messageTemplate":
-    "Template for synthesizing structured mapping input into the final message content sent to the target action path. Keep templates deterministic so downstream parsing and behavior remain stable.",
+    "Template for synthesizing structured mapping input into the final message content sent to the target action path. Make the same inputs produce the same message so downstream parsing and behavior remain stable.",
   "hooks.mappings[].textTemplate":
     "Text-only fallback template used when rich payload rendering is not desired or not supported. Use this to provide a concise, consistent summary string for chat delivery surfaces.",
   "hooks.mappings[].forEach":
@@ -204,7 +209,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "hooks.mappings[].timeoutSeconds":
     "Maximum runtime allowed for mapping action execution before timeout handling applies. Use tighter limits for high-volume webhook sources to prevent queue pileups.",
   "hooks.mappings[].transform":
-    "Transform configuration block defining module/export preprocessing before mapping action handling. Use transforms only from reviewed code paths and keep behavior deterministic for repeatable automation.",
+    "Transform configuration block defining module/export preprocessing before mapping action handling. Use transforms only from reviewed code paths and keep behavior repeatable for repeatable automation.",
   "hooks.mappings[].transform.module":
     "Relative transform module path loaded from hooks.transformsDir to rewrite incoming payloads before delivery. Keep modules local, reviewed, and free of path traversal patterns.",
   "hooks.mappings[].transform.export":
@@ -216,7 +221,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "hooks.gmail.label":
     "Optional Gmail label filter limiting which labeled messages trigger hook events. Keep filters narrow to avoid flooding automations with unrelated inbox traffic.",
   "hooks.gmail.topic":
-    "Google Pub/Sub topic name used by Gmail watch to publish change notifications for this account. Ensure the topic IAM grants Gmail publish access before enabling watches.",
+    "Google Pub/Sub topic name used by Gmail watch to publish change notifications for this account. Check that the topic IAM grants Gmail publish access before enabling watches.",
   "hooks.gmail.subscription":
     "Pub/Sub subscription consumed by the gateway to receive Gmail change notifications from the configured topic. Keep subscription ownership clear so multiple consumers do not race unexpectedly.",
   "hooks.gmail.hookUrl":
@@ -274,7 +279,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "messages.groupChat.mentionPatterns":
     "Safe case-insensitive regex patterns used to detect explicit mentions/trigger phrases in group chats. Use precise patterns to reduce false positives in high-volume channels; invalid or unsafe nested-repetition patterns are ignored.",
   "messages.groupChat.historyLimit":
-    "Maximum number of prior group messages loaded as context per turn for group sessions. Use higher values for richer continuity, or lower values for faster and cheaper responses.",
+    "Maximum number of prior group messages loaded as context per turn for group sessions. Use higher values for richer continuity, or lower values for faster and cheaper responses. Automatic prompt history is capped at 200 messages. The JSON integer maximum selects the channel default window (50 for shared group history), not an unlimited window.",
   "messages.groupChat.unmentionedInbound":
     'Controls how unmentioned always-on group chatter is submitted. "user_request" treats it as a user request; "room_event" submits it as quiet context where visible output requires the message tool.',
   "messages.groupChat.visibleReplies":
@@ -283,10 +288,14 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Queue strategy for inbound messages that arrive while a session run is active. Use this to tune steering, deferred followups, batching, or interruption.",
   "messages.queue.mode":
     'Queue mode for active runs. Use "steer" to inject prompts into the active run, "followup" to run later, "collect" to batch compatible messages later, or "interrupt" to abort the active run before starting the newest prompt.',
+  "messages.queue.allowCollaborativeSteering":
+    "Allow admitted human input in the same conversation to steer under the active turn's unchanged identity and prepared permissions, even when its author has fewer permissions (personal preset default: true; corporate: false). When false, collaborativeSteeringFallback selects a quiet requester-owned queued turn (queue) or strict refusal (reject, the corporate default). Ordinary same-requester guidance retains the active execution’s prepared permissions. Current access, live execution authority, execution-setting checks, queue modes, and cross-session steering authorization still apply.",
+  "messages.queue.collaborativeSteeringFallback":
+    'What happens when another person cannot steer because collaborative steering is disabled: "queue" (personal default) runs their input as a separate turn without a status notice; "reject" (corporate default) preserves strict refusal and requires a fresh /followup request. Does not enable collaborative steering or bypass access checks.',
   "messages.queue.byChannel":
-    "Per-channel queue mode overrides keyed by provider id (for example telegram, discord, slack). Use this when one channel's traffic pattern needs different behavior than global defaults.",
+    "Per-channel queue mode overrides keyed by channel ID, including plugin channels (for example discord, telegram, x). Use this when one channel's traffic pattern needs different behavior than global defaults.",
   "messages.queue.debounceMsByChannel":
-    "Per-channel debounce overrides for queue behavior keyed by provider id. Use this to tune burst handling independently for chat surfaces with different pacing.",
+    "Per-channel debounce overrides for queue behavior keyed by channel ID, including plugin channels. Use this to tune burst handling independently for chat surfaces with different pacing.",
   "messages.queue.cap":
     "Maximum number of queued inbound items retained before drop policy applies. Default is 20; keep caps bounded in noisy channels so memory usage remains predictable.",
   "messages.queue.drop":
@@ -311,9 +320,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "tts.providers.*.apiKey":
     "Provider API key used by that speech provider when its plugin requires authenticated TTS access.", // pragma: allowlist secret
   channels:
-    "Channel provider configurations plus shared defaults that control access policies, heartbeat visibility, and per-surface behavior. Keep defaults centralized and override per provider only where required.",
-  "channels.mattermost":
-    "Mattermost channel provider configuration for bot credentials, base URL, and message trigger modes. Keep mention/trigger rules strict in high-volume team channels.",
+    "Channel provider configurations plus shared defaults that control access policies and per-surface behavior. Keep defaults centralized and override per provider only where required.",
   "channels.defaults":
     "Default channel behavior applied across providers when provider-specific settings are not set. Use this to enforce consistent baseline policy before per-provider tuning.",
   "channels.defaults.groupPolicy":
@@ -328,14 +335,6 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Treat quoted bot messages as implicit mentions by default. Defaults to true for backward compatibility.",
   "channels.defaults.implicitMentions.threadParticipation":
     "Treat follow-ups in threads where the bot participated as implicit mentions by default. Defaults to true for backward compatibility.",
-  "channels.defaults.heartbeatVisibility":
-    "Default heartbeat visibility settings for status messages emitted by providers/channels. Tune this globally to reduce noisy healthy-state updates while keeping alerts visible.",
-  "channels.defaults.heartbeatVisibility.showOk":
-    "Shows healthy/OK heartbeat status entries when true in channel status outputs. Keep false in noisy environments and enable only when operators need explicit healthy confirmations.",
-  "channels.defaults.heartbeatVisibility.showAlerts":
-    "Shows degraded/error heartbeat alerts when true so operator channels surface problems promptly. Keep enabled in production so broken channel states are visible.",
-  "channels.defaults.heartbeatVisibility.useIndicator":
-    "Enables concise indicator-style heartbeat rendering instead of verbose status text where supported. Use indicator mode for dense dashboards with many active channels.",
   "channels.defaults.botLoopProtection":
     "Default pair loop protection settings for channel providers that support bot-to-bot loop guards. Use provider-specific overrides only when one channel needs a different budget.",
   "channels.defaults.botLoopProtection.enabled":
@@ -346,12 +345,6 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Sliding window length in seconds for pair loop budgets. Default for supporting channels is 60.",
   "channels.defaults.botLoopProtection.cooldownSeconds":
     "Cooldown seconds applied to a pair after it exceeds the loop budget. Default for supporting channels is 60.",
-  "agents.defaults.heartbeat.directPolicy":
-    'Controls whether heartbeat delivery may target direct/DM chats: "allow" (default) permits DM delivery and "block" suppresses direct-target sends.',
-  "agents.entries.*.heartbeat.directPolicy":
-    'Per-agent override for heartbeat direct/DM delivery policy; use "block" for agents that should only send heartbeat alerts to non-DM destinations.',
-  "channels.mattermost.configWrites":
-    "Allow Mattermost to write config in response to channel events/commands (default: true).",
   "channels.modelByChannel":
     "Map provider -> channel id / DM peer id -> model override (values are provider/model or aliases).",
   "messages.ackReaction": "Emoji reaction used to acknowledge inbound messages (empty disables).",
@@ -362,5 +355,5 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "messages.statusReactions.enabled":
     "Enable lifecycle status reactions on supported channels. Discord treats unset as enabled when ack reactions are active; Slack, Signal, Telegram, and WhatsApp require this to be true before lifecycle reactions are used. Slack uses native assistant thread status for progress by default.",
   "messages.inbound.debounceMs":
-    "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
+    "Quiet window (ms) for batching rapid inbound messages from the same sender. Telegram defaults to 300ms when neither a global nor channel override is set; other channels default to 0. Zero disables ordinary burst batching, but Telegram still reassembles near-limit long-message chunks.",
 };

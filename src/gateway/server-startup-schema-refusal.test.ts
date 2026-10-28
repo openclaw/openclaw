@@ -28,9 +28,12 @@ afterEach(() => {
   resetLogger();
 });
 
-it.each([false, true])(
-  "reports the bootstrap schema refusal before exit 78 (backend logs only: %s)",
-  async (backendLogsOnly) => {
+it.each([
+  { backendLogsOnly: false, updateCanary: false },
+  { backendLogsOnly: true, updateCanary: true },
+])(
+  "reports the bootstrap schema refusal before exit 78 (backend logs only: $backendLogsOnly, candidate: $updateCanary)",
+  async ({ backendLogsOnly, updateCanary }) => {
     const state = await createOpenClawTestState({ label: "startup-schema-refusal" });
     try {
       await state.writeConfig({ plugins: { enabled: false } });
@@ -59,7 +62,7 @@ it.each([false, true])(
       try {
         await prepareGatewayServerBootstrap({
           port: 18789,
-          opts: {},
+          opts: { updateCanary },
           log,
           logSecrets: log,
           loadWorkerEnvironmentStartupModule: () =>

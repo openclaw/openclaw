@@ -1,448 +1,573 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { CreatedDetachedTaskRun } from "../../tasks/detached-task-runtime-contract.js";
-import type { TaskRunOwner } from "../../tasks/task-registry.process-state.js";
-import type { TaskRecord } from "../../tasks/task-registry.types.js";
-import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import { sanitizeAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
+import type { AgentCommandDeliveryResult } from "../../agents/command/delivery-result.js";
+import type { AgentCommandOpts } from "../../agents/command/types.js";
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import { SessionFollowupCompletion } from "../../agents/subagents/completion/session-followup-completion.js";
+import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
+import {
+  getRpcSourceIdentity,
+  getRpcSourceLifecycleGeneration,
+} from "../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
+import * as transcript from "../../sessions/user-turn-transcript-admission.js";
+import { createChatAbortOps } from "../chat-abort-ops.js";
+import { abortChatRunById } from "../chat-abort.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
+import { createGate, expectCalls } from "./agent-owner.test-support.js";
 import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
 import { createTrackedDispatch } from "./agent-run-dispatch.test-support.js";
+import {
+  createTestRpcSource,
+  setTestRpcSourceIdentity,
+  testRpcSourceController,
+} from "./rpc-source.test-support.js";
+
+type CommandResult = Pick<AgentCommandDeliveryResult, "payloads"> & {
+  meta: Partial<AgentCommandDeliveryResult["meta"]>;
+};
+type Entry = ReturnType<typeof createTrackedDispatch>["entry"];
+const commandResult = (
+  meta: CommandResult["meta"] = {},
+  payloads: CommandResult["payloads"] = [],
+) => ({ payloads, meta });
 
 const mocks = vi.hoisted(() => ({
-  createTaskReceipt:
-    vi.fn<(params: unknown, assertCurrent: () => void) => Promise<CreatedDetachedTaskRun | null>>(),
-  createRunningTaskRun: vi.fn<() => TaskRecord | null>(),
-  agentCommand: vi.fn(async (options: { onExecutionStarted?: () => void }) => {
-    options.onExecutionStarted?.();
-    return { payloads: [], meta: {} };
-  }),
-  taskRunOwners: new Map<string, TaskRunOwner>(),
-  bindTaskRunOwner: vi.fn<(task: TaskRecord, cancel: TaskRunOwner["cancel"]) => () => void>(),
-  getTaskRunOwner: vi.fn<(task: TaskRecord) => TaskRunOwner | undefined>(),
-  finalizeTrackedTask: vi.fn(),
+  agentCommand: vi.fn<(options: AgentCommandOpts) => Promise<CommandResult>>(),
   clearAgentRunContext: vi.fn(),
 }));
-
-vi.mock("../../commands/agent.js", () => ({
-  agentCommandFromGatewayIngress: mocks.agentCommand,
-}));
+vi.mock("../../commands/agent.js", () => ({ agentCommandFromGatewayIngress: mocks.agentCommand }));
 vi.mock("../../runtime.js", () => ({ defaultRuntime: {} }));
-vi.mock("../../tasks/detached-task-runtime.js", () => ({
-  prepareRunningTaskRun: (params: unknown, assertCurrent: () => void) => ({
-    kind: "receipt",
-    create: () => mocks.createTaskReceipt(params, assertCurrent),
-  }),
-  createRunningTaskRun: mocks.createRunningTaskRun,
-}));
-vi.mock("../../tasks/runtime-internal.js", () => ({ getTaskById: vi.fn() }));
-vi.mock("../../tasks/task-flow-registry.store.sqlite.js", () => ({
-  bindTaskFlowExecution: vi.fn(),
-}));
-vi.mock("../../tasks/task-registry.store.sqlite.js", () => ({
-  bindTaskRunExecution: vi.fn(),
-}));
-vi.mock("../../tasks/task-run-owner.js", () => ({
-  bindTaskRunOwner: mocks.bindTaskRunOwner,
-  getTaskRunOwner: mocks.getTaskRunOwner,
-}));
-vi.mock("../server-methods/agent-task-tracking.js", () => ({
-  tryFinalizeTrackedAgentTask: mocks.finalizeTrackedTask,
-}));
 vi.mock(import("../../infra/agent-run-registry.js"), async (importOriginal) => ({
   ...(await importOriginal()),
   clearAgentRunContext: mocks.clearAgentRunContext,
   validateAgentRunDelegatedAuthority: () => true,
 }));
-vi.mock(import("../../infra/agent-events.js"), async (importOriginal) => ({
-  ...(await importOriginal()),
-  isAgentEventLifecycleGenerationCurrent: () => true,
-}));
-vi.mock("../../agents/cron-creator-authority-context.js", () => ({
-  createCronCreatorAuthorityCapability: vi.fn(),
-  runWithCronCreatorAuthorityCapability: vi.fn(),
-}));
-vi.mock("../chat-abort-ops.js", () => ({ createChatAbortOps: vi.fn() }));
-vi.mock("../chat-abort.js", () => ({ abortChatRunById: vi.fn() }));
 vi.mock("./agent-dedupe.js", () => ({ setGatewayDedupeEntries: vi.fn() }));
 
-describe("Gateway dispatch task creation ownership", () => {
+describe("Gateway dispatch run ownership", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.taskRunOwners.clear();
-    mocks.finalizeTrackedTask.mockReset();
-    mocks.bindTaskRunOwner.mockImplementation((task, cancel) => {
-      const owner = { task, cancel };
-      mocks.taskRunOwners.set(task.taskId, owner);
-      return () => {
-        if (mocks.taskRunOwners.get(task.taskId) === owner) {
-          mocks.taskRunOwners.delete(task.taskId);
-        }
-      };
-    });
-    mocks.getTaskRunOwner.mockImplementation((task) => mocks.taskRunOwners.get(task.taskId));
-    mocks.agentCommand.mockImplementation(async (options) => {
-      options.onExecutionStarted?.();
-      return { payloads: [], meta: {} };
-    });
+    mocks.agentCommand.mockImplementation(async () => commandResult());
   });
 
-  it("keeps rejected pre-dispatch results with their admitted registration", async () => {
-    const { runId, sessionKey, context, entry, task } = createTrackedDispatch();
-    const successor: ChatAbortControllerEntry = {
-      ...entry,
-      controller: new AbortController(),
-      sessionId: "successor-session",
-      sessionKey: "agent:main:successor-session",
-      operationalRunInstance: { runId, instanceId: "successor-instance" },
-    };
-    context.chatAbortControllers.set(runId, successor);
-    const emitFinal = vi.fn();
-    await dispatchAgentRunFromGateway({
-      assertCurrent() {
-        if (context.chatAbortControllers.get(runId) !== entry) {
-          throw new Error("Gateway run owner replaced");
-        }
+  function createDispatch(terminalProducer = false) {
+    const f = createTrackedDispatch();
+    const params = {
+      admittedRunEntry: f.entry,
+      ingressOpts: {
+        message: "continue",
+        sessionKey: f.sessionKey,
+        allowModelOverride: false,
+        ...(terminalProducer ? { abortSignal: f.entry.input.abortSignal } : {}),
       },
-      admittedRunEntry: entry,
-      ingressOpts: { message: task.task, sessionKey, allowModelOverride: false },
-      runId,
-      dedupeKeys: [`agent:${runId}`],
-      abortController: entry.controller,
+      runId: f.runId,
+      dedupeKeys: [],
+      abortController: testRpcSourceController(f.entry),
       cleanupAbortController: vi.fn(),
-      io: { emitAcceptance: vi.fn(), emitFinal },
-      context,
-      taskTrackingMode: "none",
+      io: { emitAcceptance: vi.fn(), emitFinal: vi.fn() },
+      context: f.context,
+    };
+    return { ...f, params };
+  }
+
+  function createFollowupDispatch() {
+    const f = createDispatch(true);
+    const owner = SessionFollowupCompletion.bind({
+      runId: f.runId,
+      requesterSessionKey: "agent:main:parent",
+      requesterSessionId: "requester-session",
+      requesterAgentId: "main",
+      targetAgentId: "main",
+      targetSessionKey: f.sessionKey,
+      custody: {
+        run: (work) => work(),
+        assertCurrent: vi.fn(),
+        signal: new AbortController().signal,
+        release: vi.fn(),
+      },
     });
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
-    expect(mocks.clearAgentRunContext).not.toHaveBeenCalled();
-    expect(context.chatAbortControllers.get(runId)).toBe(successor);
+    onTestFinished(() => owner.close());
+    const dispatch = (
+      runId = f.runId,
+      entry = f.entry,
+      assertCurrent?: () => void,
+      onSettled?: Parameters<typeof dispatchAgentRunFromGateway>[0]["onSettled"],
+    ) => {
+      owner.markAccepted(runId);
+      return dispatchAgentRunFromGateway({
+        ...f.params,
+        assertCurrent,
+        admittedRunEntry: entry,
+        ingressOpts: {
+          ...f.params.ingressOpts,
+          message: "followup",
+          abortSignal: entry.input.abortSignal,
+        },
+        runId,
+        abortController: testRpcSourceController(entry),
+        followupCompletion: owner,
+        onSettled,
+      });
+    };
+    return { f, owner, dispatch };
+  }
+
+  function createSuccessor(
+    entry: Entry,
+    runId: string,
+    identity: Partial<Parameters<typeof createTestRpcSource>[0]> = {},
+    sameStore = false,
+  ) {
+    return createTestRpcSource(
+      {
+        ...entry.adapter,
+        ...getRpcSourceIdentity(entry),
+        ...identity,
+      },
+      runId,
+      sameStore ? entry.input.target?.storeScope : undefined,
+    );
+  }
+
+  function expectReplaySession(
+    entry: Entry,
+    sessionKey: string,
+    extra: Record<string, unknown> = {},
+  ) {
     expect(setGatewayDedupeEntries).toHaveBeenCalledWith(
       expect.objectContaining({
         session: {
           sessionKey,
-          sessionId: entry.sessionId,
-          agentId: entry.agentId,
-          lifecycleGeneration: entry.lifecycleGeneration,
+          sessionId: getRpcSourceIdentity(entry).sessionId,
+          agentId: getRpcSourceIdentity(entry).agentId,
+          lifecycleGeneration: getRpcSourceLifecycleGeneration(entry),
         },
-        entry: expect.objectContaining({ ok: false }),
+        ...extra,
       }),
     );
+  }
+
+  function releaseAfterTest(completion: Promise<unknown>, ...gates: { resolve: () => void }[]) {
+    onTestFinished(async () => {
+      for (const gate of gates) {
+        gate.resolve();
+      }
+      await completion;
+    });
+  }
+
+  function holdCommand(result: () => CommandResult = commandResult) {
+    const finish = createDeferred();
+    mocks.agentCommand.mockImplementationOnce(async () => {
+      await finish.promise;
+      return result();
+    });
+    return finish;
+  }
+
+  it.each(["command", "command-cleanup", "media"] as const)(
+    "joins a captured terminal save with the %s producer failure",
+    async (startup) => {
+      const { entry, params } = createDispatch(true);
+      const finishCommand = createDeferred();
+      const save = createGate();
+      const failure = new Error("Synthetic startup failure");
+      const failStartup = async (options?: AgentCommandOpts) => {
+        await finishCommand.promise;
+        if (startup === "command-cleanup") {
+          await options?.beforeTerminalDelivery?.(undefined, failure);
+        }
+        throw failure;
+      };
+      if (startup !== "media") {
+        mocks.agentCommand.mockImplementationOnce(failStartup);
+      }
+      const { emitFinal } = params.io;
+      const completion = dispatchAgentRunFromGateway({
+        ...params,
+        loadMedia: startup === "media" ? failStartup : undefined,
+      });
+      releaseAfterTest(completion, finishCommand, save);
+      const producer = entry.adapter.resolveTerminalProducer?.();
+      expect(
+        producer?.handoff(async (producerCompleted) => {
+          expect(await producerCompleted).toBe(failure);
+          await save.wait();
+        }),
+      ).toBe(true);
+      testRpcSourceController(entry).abort();
+      finishCommand.resolve();
+      await save.entered;
+      expect(emitFinal).not.toHaveBeenCalled();
+      save.resolve();
+      await completion;
+      expectCalls(1, emitFinal, params.cleanupAbortController);
+      expect(entry.adapter.resolveTerminalProducer?.()).toBeUndefined();
+    },
+  );
+
+  it.each([false, true])(
+    "publishes confirmed withdrawal after cleanup (late timeout: %s)",
+    async (late) => {
+      const { params, entry } = createDispatch(true);
+      const withdrawal = vi.spyOn(transcript, "readWithdrawnUserTurnInputId");
+      withdrawal.mockReturnValue(undefined);
+      onTestFinished(() => withdrawal.mockRestore());
+      const timeout = new Error("deadline elapsed");
+      timeout.name = "TimeoutError";
+      const abort = () => {
+        entry.adapter.abortStopReason = "timeout";
+        testRpcSourceController(entry).abort(timeout);
+      };
+      mocks.agentCommand.mockImplementation(async () => {
+        if (!late) {
+          abort();
+          throw timeout;
+        }
+        throw new Error("startup failed");
+      });
+      params.cleanupAbortController.mockImplementation(() => {
+        expectCalls(0, params.io.emitFinal, setGatewayDedupeEntries);
+        withdrawal.mockReturnValue("pending-input-1");
+      });
+
+      await dispatchAgentRunFromGateway({
+        ...params,
+        onSettled: async () => {
+          if (late) {
+            abort();
+          }
+          return true;
+        },
+      });
+
+      const payload = expect.objectContaining({
+        status: late ? "error" : "timeout",
+        stopReason: "timeout",
+        reason: "input_withdrawn_before_turn",
+        pendingInputId: "pending-input-1",
+        summary: expect.stringContaining("Raise --timeout and retry"),
+      });
+      expect(params.io.emitFinal).toHaveBeenCalledWith(
+        [!late, payload, late ? expect.objectContaining({ message: "startup failed" }) : undefined],
+        expect.any(Object),
+      );
+      expect(setGatewayDedupeEntries).toHaveBeenCalledWith(
+        expect.objectContaining({ entry: expect.objectContaining({ ok: !late, payload }) }),
+      );
+    },
+  );
+
+  it.each(["registration", "controller", "session", "instance"] as const)(
+    "rejects captured transcript custody after %s replacement",
+    async (replacement) => {
+      const { runId, entry, params } = createDispatch(true);
+      const finish = holdCommand();
+      const completion = dispatchAgentRunFromGateway(params);
+      releaseAfterTest(completion, finish);
+      const producer = entry.adapter.resolveTerminalProducer?.();
+      expect(producer).toBeDefined();
+      if (replacement === "registration") {
+        rpcSourceTesting.set(runId, { ...entry });
+      } else if (replacement === "controller") {
+        const successor = createSuccessor(entry, runId);
+        rpcSourceTesting.set(runId, successor);
+      } else if (replacement === "session") {
+        setTestRpcSourceIdentity(entry, { sessionId: "successor-session" });
+      } else {
+        entry.adapter.operationalRunInstance = { runId, instanceId: "successor-instance" };
+      }
+      const save = vi.fn(async () => {});
+      expect(producer?.handoff(save)).toBe(false);
+      expect(save).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps rejected pre-dispatch results with their admitted registration", async () => {
+    const { runId, sessionKey, entry, params } = createDispatch();
+    const successor = createSuccessor(entry, runId, {
+      sessionId: "successor-session",
+      sessionKey: "agent:main:successor-session",
+      operationalRunInstance: { runId, instanceId: "successor-instance" },
+    });
+    rpcSourceTesting.set(runId, successor);
+    const emitFinal = vi.fn();
+
+    await dispatchAgentRunFromGateway({
+      ...params,
+      assertCurrent() {
+        if (rpcSourceTesting.get(runId) !== entry) {
+          throw new Error("Gateway run owner replaced");
+        }
+      },
+      dedupeKeys: [`agent:${runId}`],
+      io: { ...params.io, emitFinal },
+    });
+    expectCalls(0, mocks.agentCommand, mocks.clearAgentRunContext);
+    expect(rpcSourceTesting.get(runId)).toBe(successor);
+    expectReplaySession(entry, sessionKey, { entry: expect.objectContaining({ ok: false }) });
     expect(emitFinal).toHaveBeenCalledOnce();
   });
 
-  it.each(["current", "different-session", "adopted-task"] as const)(
-    "waits for task creation before activation and respects owner replacement (%s)",
-    async (replacement) => {
-      const { runId, sessionKey, context, entry, task } = createTrackedDispatch();
-      const creation = createDeferred<CreatedDetachedTaskRun>();
-      const settleUnstarted = vi.fn<CreatedDetachedTaskRun["settleUnstarted"]>(
-        async (terminal, canSettle) => {
-          if (!canSettle(task)) {
-            return false;
-          }
-          Object.assign(task, terminal);
-          return true;
-        },
-      );
-      const receipt: CreatedDetachedTaskRun = { task, settleUnstarted };
-      mocks.createRunningTaskRun.mockReturnValue(task);
-      mocks.createTaskReceipt.mockImplementation((_params, assertCurrent) => {
-        assertCurrent();
-        return creation.promise;
-      });
-      const cleanupAbortController = vi.fn();
-      const emitFinal = vi.fn();
-      const onSettled = vi.fn(async () => true);
-      const completion = dispatchAgentRunFromGateway({
-        assertCurrent() {
-          if (context.chatAbortControllers.get(runId) !== entry) {
-            throw new Error("Gateway run owner replaced");
-          }
-        },
-        ingressOpts: {
-          message: task.task,
-          sessionKey,
-          allowModelOverride: false,
-        },
-        runId,
-        dedupeKeys: [`agent:${runId}`],
-        admittedRunEntry: entry,
-        abortController: entry.controller,
-        cleanupAbortController,
-        io: { emitAcceptance: vi.fn(), emitFinal },
-        context,
-        taskTrackingMode: "cli",
-        onSettled,
-      });
-      try {
-        expect(mocks.agentCommand).not.toHaveBeenCalled();
-        expect(mocks.bindTaskRunOwner).not.toHaveBeenCalled();
-        expect(emitFinal).not.toHaveBeenCalled();
-        const successor: ChatAbortControllerEntry = {
-          ...entry,
-          controller: new AbortController(),
-          operationalRunInstance: { runId, instanceId: "replacement-instance" },
-          sessionKey:
-            replacement === "different-session" ? "agent:main:successor-session" : sessionKey,
-        };
-        const successorTask: TaskRecord =
-          replacement === "adopted-task"
-            ? task
-            : { ...task, taskId: "successor-task", childSessionKey: successor.sessionKey };
-        if (replacement !== "current") {
-          context.chatAbortControllers.set(runId, successor);
-        }
-        // Return the acknowledged task even when its execution owner retired after commit.
-        creation.resolve(receipt);
-        await completion;
-
-        expect(cleanupAbortController).toHaveBeenCalledOnce();
-        expect(onSettled).toHaveBeenCalledOnce();
-        expect(emitFinal).toHaveBeenCalledOnce();
-        if (replacement !== "current") {
-          expect(mocks.agentCommand).not.toHaveBeenCalled();
-          expect(mocks.bindTaskRunOwner).not.toHaveBeenCalled();
-          expect(mocks.finalizeTrackedTask).not.toHaveBeenCalled();
-          expect(mocks.clearAgentRunContext).not.toHaveBeenCalled();
-          expect(context.chatAbortControllers.get(runId)).toBe(successor);
-          expect(settleUnstarted).toHaveBeenCalledOnce();
-          expect(successorTask.status).toBe("running");
-          expect(task.status).toBe(replacement === "different-session" ? "failed" : "running");
-          expect(emitFinal).toHaveBeenCalledWith(
-            [false, expect.objectContaining({ status: "error" }), expect.any(Object)],
-            expect.objectContaining({ runId, error: "Gateway run owner replaced" }),
-          );
-        } else {
-          expect(settleUnstarted).not.toHaveBeenCalled();
-          expect(mocks.agentCommand).toHaveBeenCalledOnce();
-          expect(mocks.bindTaskRunOwner).toHaveBeenCalledOnce();
-          expect(mocks.finalizeTrackedTask).toHaveBeenCalledWith(
-            expect.objectContaining({ runId, status: "succeeded" }),
-          );
-          expect(emitFinal).toHaveBeenCalledWith(
-            [true, expect.objectContaining({ status: "ok" }), undefined],
-            { runId },
-          );
-        }
-      } finally {
-        creation.resolve(receipt);
-        await completion;
-      }
-    },
-  );
-
-  it.each([
-    { phase: "admission", replacement: "none", failed: true },
-    { phase: "execution", replacement: "different-session", failed: false },
-    { phase: "execution", replacement: "different-session", failed: true },
-    { phase: "execution", replacement: "same-session", failed: false },
-    { phase: "execution", replacement: "task-owner", failed: false },
-  ] as const)(
-    "settles $phase after $replacement replacement (failed=$failed)",
-    async ({ phase, replacement, failed }) => {
-      const { runId, sessionKey, context, entry, task } = createTrackedDispatch();
-      const settleUnstarted = vi.fn<CreatedDetachedTaskRun["settleUnstarted"]>(
-        async (terminal, canSettle) => {
-          if (!canSettle(task)) {
-            return false;
-          }
-          Object.assign(task, terminal);
-          return true;
-        },
-      );
-      mocks.createTaskReceipt.mockResolvedValue({ task, settleUnstarted });
-      const adoptedOwner: TaskRunOwner = { task, cancel: vi.fn<TaskRunOwner["cancel"]>() };
-      const successor: ChatAbortControllerEntry = {
-        ...entry,
-        controller: new AbortController(),
-        operationalRunInstance: { runId, instanceId: "replacement-instance" },
-        sessionKey:
-          replacement === "different-session" ? "agent:main:successor-session" : sessionKey,
-      };
-      mocks.agentCommand.mockImplementationOnce(async (options) => {
-        if (phase === "execution") {
-          options.onExecutionStarted?.();
-        }
-        if (replacement === "different-session" || replacement === "same-session") {
-          context.chatAbortControllers.set(runId, successor);
-        }
-        if (replacement === "task-owner") {
-          mocks.taskRunOwners.set(task.taskId, adoptedOwner);
-        }
-        if (failed) {
-          throw new Error("Agent startup or execution failed");
-        }
-        return { payloads: [], meta: {} };
-      });
-      const cleanupAbortController = vi.fn();
-      const emitFinal = vi.fn();
-      await dispatchAgentRunFromGateway({
-        ingressOpts: { message: task.task, sessionKey, allowModelOverride: false },
-        runId,
-        dedupeKeys: [`agent:${runId}`],
-        admittedRunEntry: entry,
-        abortController: entry.controller,
-        cleanupAbortController,
-        io: { emitAcceptance: vi.fn(), emitFinal },
-        context,
-        taskTrackingMode: "cli",
-      });
-
-      expect(mocks.agentCommand).toHaveBeenCalledOnce();
-      expect(cleanupAbortController).toHaveBeenCalledOnce();
-      expect(emitFinal).toHaveBeenCalledOnce();
-      if (phase === "admission") {
-        expect(settleUnstarted).toHaveBeenCalledOnce();
-        expect(task.status).toBe("failed");
-        expect(mocks.finalizeTrackedTask).not.toHaveBeenCalled();
-      } else {
-        expect(settleUnstarted).not.toHaveBeenCalled();
-        if (replacement === "different-session") {
-          expect(mocks.finalizeTrackedTask).toHaveBeenCalledWith(
-            expect.objectContaining({
-              runId,
-              sessionKey,
-              status: failed ? "failed" : "succeeded",
-            }),
-          );
-          expect(context.chatAbortControllers.get(runId)).toBe(successor);
-          expect(mocks.clearAgentRunContext).not.toHaveBeenCalled();
-        } else {
-          expect(mocks.finalizeTrackedTask).not.toHaveBeenCalled();
-          expect(task.status).toBe("running");
-          if (replacement === "task-owner") {
-            expect(mocks.taskRunOwners.get(task.taskId)).toBe(adoptedOwner);
-          }
-        }
-      }
-    },
-  );
-
-  it.each([
-    { outcome: "success", replacement: "none", cleanupFails: false },
-    { outcome: "abort", replacement: "none", cleanupFails: false },
-    { outcome: "timeout", replacement: "none", cleanupFails: false },
-    { outcome: "timeout", replacement: "same-session", cleanupFails: false },
-    { outcome: "abort", replacement: "task-owner", cleanupFails: false },
-    { outcome: "success", replacement: "different-session", cleanupFails: false },
-    { outcome: "abort", replacement: "none", cleanupFails: true },
-  ] as const)(
-    "uses exact receipt for resolved $outcome before execution ($replacement, cleanupFails=$cleanupFails)",
-    async ({ outcome, replacement, cleanupFails }) => {
-      const { runId, sessionKey, context, entry, task } = createTrackedDispatch();
-      const sibling = { ...task, taskId: "run-sibling" };
-      const successor: ChatAbortControllerEntry = {
-        ...entry,
-        controller: new AbortController(),
-        operationalRunInstance: { runId, instanceId: "replacement-instance" },
-        sessionKey: replacement === "different-session" ? "agent:main:replacement" : sessionKey,
-      };
-      const adoptedOwner: TaskRunOwner = { task, cancel: vi.fn<TaskRunOwner["cancel"]>() };
-      const entered = createDeferred();
-      const resume = createDeferred();
-      const settleUnstarted = vi.fn<CreatedDetachedTaskRun["settleUnstarted"]>(
-        async (terminal, canSettle) => {
-          entered.resolve();
-          await resume.promise;
-          if (cleanupFails) {
-            throw new Error("Receipt settlement failed");
-          }
-          if (!canSettle(task)) {
-            return false;
-          }
-          Object.assign(task, terminal);
-          return true;
-        },
-      );
-      mocks.createTaskReceipt.mockResolvedValue({ task, settleUnstarted });
-      // A run-scoped finalizer would also write this unrelated matching sibling.
-      mocks.finalizeTrackedTask.mockImplementation((terminal: { status: TaskRecord["status"] }) => {
-        task.status = terminal.status;
-        sibling.status = terminal.status;
-      });
+  it.each(["success", "failure", "cancelled", "restart"] as const)(
+    "joins continuation and input settlement before publishing final or replay for %s",
+    async (outcome) => {
+      const { runId, entry, params } = createDispatch();
+      const settlement = createGate();
+      const cleanup = createGate();
+      let recover: (() => void) | undefined;
       mocks.agentCommand.mockImplementationOnce(async () => {
-        if (replacement === "same-session" || replacement === "different-session") {
-          context.chatAbortControllers.set(runId, successor);
-        } else if (replacement === "task-owner") {
-          mocks.taskRunOwners.set(task.taskId, adoptedOwner);
+        if (outcome === "failure") {
+          throw new Error("Synthetic active run failure");
         }
-        return {
-          payloads: [],
-          meta:
-            outcome === "abort"
-              ? { aborted: true, stopReason: "rpc" }
-              : outcome === "timeout"
-                ? { stopReason: "timeout", timeoutPhase: "preflight", providerStarted: false }
-                : {},
-        };
+        if (outcome === "restart") {
+          const reason = createAgentRunRestartAbortError();
+          testRpcSourceController(entry).abort(reason);
+          throw reason;
+        }
+        if (outcome === "cancelled") {
+          testRpcSourceController(entry).abort();
+          throw entry.input.abortSignal.reason;
+        }
+        return commandResult();
       });
-      const emitFinal = vi.fn();
-      const onSettled = vi.fn(() => true);
-      const completion = dispatchAgentRunFromGateway({
-        ingressOpts: { message: task.task, sessionKey, allowModelOverride: false },
+      const { emitFinal } = params.io;
+      const { cleanupAbortController } = params;
+      cleanupAbortController.mockImplementation(cleanup.wait);
+      const onSettled = vi.fn(async ({ onRecovered }: { onRecovered?: () => void }) => {
+        recover = onRecovered;
+        await settlement.wait();
+        return true;
+      });
+      const completion = dispatchAgentRunFromGateway({ ...params, onSettled });
+      releaseAfterTest(completion, settlement, cleanup);
+      await settlement.entered;
+      expectCalls(0, emitFinal, cleanupAbortController);
+      settlement.resolve();
+      await cleanup.entered;
+      expectCalls(0, emitFinal, setGatewayDedupeEntries);
+      recover?.();
+      expect(setGatewayDedupeEntries).not.toHaveBeenCalled();
+      cleanup.resolve();
+      await completion;
+      expectCalls(1, setGatewayDedupeEntries, cleanupAbortController);
+      expect(emitFinal).toHaveBeenCalledExactlyOnceWith(
+        [
+          outcome !== "failure",
+          expect.objectContaining({
+            status: outcome === "success" ? "ok" : outcome === "failure" ? "error" : "timeout",
+            ...(outcome === "restart" ? { stopReason: "restart" } : {}),
+          }),
+          outcome === "failure" ? expect.any(Object) : undefined,
+        ],
+        expect.objectContaining({ runId }),
+      );
+    },
+  );
+
+  it.each(["same-session", "different-session", "removed-by-abort", "mutated-entry"] as const)(
+    "settles retained followup custody without releasing a %s registration",
+    async (replacement) => {
+      const { f, owner, dispatch } = createFollowupDispatch();
+      const { runId, sessionKey, context, entry } = f;
+      const successor = createSuccessor(
+        entry,
         runId,
-        dedupeKeys: [],
-        admittedRunEntry: entry,
-        abortController: entry.controller,
-        cleanupAbortController: vi.fn(),
-        io: { emitAcceptance: vi.fn(), emitFinal },
-        context,
-        taskTrackingMode: "cli",
-        onSettled,
-      });
-      try {
-        await Promise.race([entered.promise, completion]);
-        expect(settleUnstarted).toHaveBeenCalledOnce();
-        expect(mocks.finalizeTrackedTask).not.toHaveBeenCalled();
-        expect(onSettled).not.toHaveBeenCalled();
-        expect(emitFinal).not.toHaveBeenCalled();
-        resume.resolve();
-        await completion;
-        const expectedStatus =
-          outcome === "success" ? "succeeded" : outcome === "abort" ? "cancelled" : "timed_out";
-        expect(task.status).toBe(
-          cleanupFails || replacement === "same-session" || replacement === "task-owner"
-            ? "running"
-            : expectedStatus,
-        );
-        expect(sibling.status).toBe("running");
-        expect(settleUnstarted).toHaveBeenCalledWith(
-          expect.objectContaining({ status: expectedStatus }),
-          expect.any(Function),
-        );
-        expect(mocks.finalizeTrackedTask).not.toHaveBeenCalled();
-        expect(onSettled).toHaveBeenCalledOnce();
-        expect(emitFinal).toHaveBeenCalledOnce();
-        expect(emitFinal).toHaveBeenCalledWith(
-          [
-            true,
-            expect.objectContaining({
-              status: outcome === "success" ? "ok" : "timeout",
-              summary: outcome === "success" ? "completed" : "aborted",
-              ...(outcome === "timeout"
-                ? { timeoutPhase: "preflight", providerStarted: false }
-                : {}),
-            }),
-            undefined,
-          ],
-          { runId },
-        );
-        if (replacement === "same-session" || replacement === "different-session") {
-          expect(context.chatAbortControllers.get(runId)).toBe(successor);
-          expect(mocks.clearAgentRunContext).not.toHaveBeenCalled();
-        }
-        if (replacement === "task-owner") {
-          expect(mocks.taskRunOwners.get(task.taskId)).toBe(adoptedOwner);
-        }
-        if (cleanupFails) {
-          expect(context.logGateway.warn).toHaveBeenCalledWith(
-            expect.stringContaining("failed to settle unstarted tracked task"),
-          );
-        }
-      } finally {
-        resume.resolve();
-        await completion;
+        {
+          operationalRunInstance: { runId, instanceId: "successor" },
+          sessionKey: replacement === "same-session" ? sessionKey : "agent:main:other",
+        },
+        replacement === "same-session",
+      );
+      const finishCommand = holdCommand(() =>
+        commandResult({
+          ...(entry.input.abortSignal.aborted ? { aborted: true, stopReason: "rpc" } : {}),
+          terminalReply: { disposition: "visible", text: "Original result" },
+        }),
+      );
+      const save = createGate();
+      const observed = vi.fn();
+      const reply = owner.take();
+      void reply.then(observed, observed);
+      const completion = dispatch();
+      releaseAfterTest(completion, finishCommand, save);
+      const producer = entry.adapter.resolveTerminalProducer?.();
+      expect(
+        producer?.handoff(async (producerCompleted) => {
+          await producerCompleted;
+          await save.wait();
+        }),
+      ).toBe(true);
+      if (replacement === "removed-by-abort") {
+        expect(
+          abortChatRunById(createChatAbortOps(context), { runId, sessionKey, stopReason: "rpc" }),
+        ).toEqual({ aborted: true });
+        expect(rpcSourceTesting.has(runId)).toBe(false);
+      } else if (replacement === "mutated-entry") {
+        setTestRpcSourceIdentity(entry, {
+          sessionKey: getRpcSourceIdentity(successor).sessionKey,
+        });
+      } else {
+        rpcSourceTesting.set(runId, successor);
       }
+      finishCommand.resolve();
+      await save.entered;
+      expect(observed).not.toHaveBeenCalled();
+      save.resolve();
+      await completion;
+      if (replacement === "same-session" || replacement === "mutated-entry") {
+        await expect(reply).rejects.toThrow("lost its Gateway registration");
+      } else {
+        await expect(reply).resolves.toMatchObject(
+          replacement === "removed-by-abort"
+            ? { status: "error", stopReason: "rpc" }
+            : { status: "ok", replyText: "Original result" },
+        );
+      }
+      if (replacement !== "removed-by-abort") {
+        expect(mocks.clearAgentRunContext).not.toHaveBeenCalled();
+        expect(rpcSourceTesting.get(runId)).toBe(
+          replacement === "mutated-entry" ? entry : successor,
+        );
+      }
+      expectReplaySession(
+        entry,
+        replacement === "mutated-entry" ? getRpcSourceIdentity(entry).sessionKey : sessionKey,
+      );
+    },
+  );
+
+  it.each(["Primitive command failure", 42])(
+    "retains the rendered message and original cause for synchronous throw %s",
+    async (failure) => {
+      const { params } = createDispatch();
+      mocks.agentCommand.mockImplementationOnce(() => {
+        // oxlint-disable-next-line typescript/only-throw-error -- Exercise JavaScript primitive throws at the dispatch boundary.
+        throw failure;
+      });
+      await dispatchAgentRunFromGateway(params);
+      expect(params.io.emitFinal).toHaveBeenCalledWith(
+        [
+          false,
+          expect.objectContaining({ status: "error", summary: String(failure) }),
+          expect.objectContaining({
+            message: String(failure),
+            cause: expect.objectContaining({ cause: failure }),
+          }),
+        ],
+        expect.objectContaining({ error: String(failure) }),
+      );
+    },
+  );
+  it("keeps one logical owner across yield and delivers only the admitted successor reply", async () => {
+    const fullReply = "B_YIELD_DONE ".repeat(400) + "SUCCESSOR_END…";
+    const terminalReply = sanitizeAgentRunTerminalReply(fullReply);
+    const { f, owner, dispatch } = createFollowupDispatch();
+    const settlement = createGate();
+    const finishExecution = vi.spyOn(owner, "finishExecution");
+    const entries: SubagentRunRecord[] = [
+      {
+        runId: "descendant",
+        childSessionKey: "agent:main:descendant",
+        requesterSessionKey: f.sessionKey,
+        requesterDisplayKey: f.sessionKey,
+        task: "descendant",
+        cleanup: "keep",
+        createdAt: 1,
+        execution: { status: "terminal" },
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 0,
+          rearmGeneration: 1,
+          requesterYieldBatch: true,
+        },
+      },
+    ];
+    owner.promoteYield(f.runId, entries, 1);
+    mocks.agentCommand.mockResolvedValueOnce(
+      commandResult({ yielded: true, terminalReply: { disposition: "empty" } }),
+    );
+    const predecessor = dispatch(f.runId, f.entry, undefined, async () => {
+      await settlement.wait();
+      return true;
+    });
+    releaseAfterTest(predecessor, settlement);
+    await Promise.race([settlement.entered, predecessor]);
+    expect(finishExecution).not.toHaveBeenCalled();
+    settlement.resolve();
+    await predecessor;
+    expect(finishExecution).toHaveBeenCalledWith(f.runId);
+    const successor = owner.successor(entries, "exact-successor", vi.fn());
+    await owner.prepareSuccessor(successor);
+    owner.adopt(successor);
+    const successorEntry = createSuccessor(f.entry, successor.runId, {
+      operationalRunInstance: { runId: successor.runId, instanceId: "successor-instance" },
+    });
+    rpcSourceTesting.set(successor.runId, successorEntry);
+    mocks.agentCommand.mockImplementationOnce(async (opts) => {
+      await opts.onExecutionStarted?.();
+      return commandResult({ terminalReply, finalAssistantVisibleText: fullReply }, [
+        { text: "not canonical", mediaUrl: null },
+      ]);
+    });
+    await dispatch(successor.runId, successorEntry);
+    await expect(owner.take()).resolves.toMatchObject({
+      status: "ok",
+      replyText: fullReply,
+      terminalReply,
+    });
+  });
+
+  it.each<[string, Partial<AgentCommandDeliveryResult["meta"]>, string, string | undefined]>([
+    [
+      "provider failure",
+      { error: { kind: "incomplete_turn", message: "provider failed" } },
+      "error",
+      undefined,
+    ],
+    ["RPC cancellation", { aborted: true, stopReason: "rpc" }, "error", "rpc"],
+    ["timeout", { aborted: true, stopReason: "timeout" }, "timeout", "timeout"],
+    ["silent reply", { terminalReply: { disposition: "silent" } }, "ok", undefined],
+    ["empty reply", { terminalReply: { disposition: "empty" } }, "ok", undefined],
+  ])(
+    "passes canonical %s rather than wire status to the completion owner",
+    async (_name, meta, status, stopReason) => {
+      const { owner, dispatch } = createFollowupDispatch();
+      mocks.agentCommand.mockResolvedValueOnce(
+        commandResult(meta, [{ text: "payload is not canonical", mediaUrl: null }]),
+      );
+      await dispatch();
+      const result = await owner.take();
+      expect(result).toMatchObject({ status, ...(stopReason ? { stopReason } : {}) });
+      if (meta.terminalReply) {
+        expect(result?.terminalReply).toEqual(meta.terminalReply);
+        expect(result?.replyText).toBeUndefined();
+      }
+    },
+  );
+
+  it.each(["replaced", "denied"] as const)(
+    "settles an admitted followup without invoking it when activation is %s",
+    async (outcome) => {
+      const { f, owner, dispatch } = createFollowupDispatch();
+      if (outcome === "replaced") {
+        const successor = createSuccessor(f.entry, f.runId, {}, true);
+        rpcSourceTesting.set(f.runId, successor);
+        await expect(dispatch()).rejects.toThrow("lost its Gateway registration");
+        expect(rpcSourceTesting.get(f.runId)).toBe(successor);
+        await expect(owner.take()).rejects.toThrow("lost its Gateway registration");
+      } else {
+        await dispatch(f.runId, f.entry, () => {
+          throw new Error("activation denied");
+        });
+        await expect(owner.take()).resolves.toMatchObject({
+          status: "error",
+          error: "activation denied",
+        });
+      }
+      expect(mocks.agentCommand).not.toHaveBeenCalled();
     },
   );
 });

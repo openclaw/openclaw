@@ -1,114 +1,173 @@
-/** Validate and transpile guest source in the execution worker. */
-import { parse, tokenizer } from "acorn";
-import {
-  buildCodeModeScriptParseSource,
-  parseCodeModeScriptSyntax,
-} from "./code-mode-script-syntax.js";
-import {
-  CODE_MODE_SHELL_SOURCE_ERROR,
-  isShellLikeCodeModeSource,
-} from "./code-mode-shell-source.js";
-import { loadCodeModeTypeScriptRuntime } from "./code-mode-typescript-runtime.js";
-import type { CodeModeConfig, CodeModeLanguage } from "./code-mode-worker-types.js";
+/** Validate guest JavaScript before execution. */
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { parseCodeModeScriptSyntax } from "./code-mode-script-syntax.js";
 import { ToolInputError } from "./tool-input-error.js";
 
-function maskCodeLiteralsAndComments(
-  code: string,
-  typescriptRuntime?: typeof import("typescript"),
-): string {
-  let masked = code.split("");
-  const maskRange = (start: number, end: number, offset = 0) => {
-    for (
-      let index = Math.max(start - offset, 0);
-      index < Math.min(end - offset, masked.length);
-      index += 1
-    ) {
-      if (masked[index] !== "\n" && masked[index] !== "\r") {
-        masked[index] = " ";
-      }
-    }
-  };
+const JAVASCRIPT_EXPORT =
+  /^export\s+(?:(?:abstract|as|async|class|const|declare|default|enum|function|import|interface|let|namespace|type|var)\b|[={*])/u;
+const JAVASCRIPT_KEYWORD =
+  /^(?:abstract|as|async|await|break|case|catch|class|const|continue|debugger|declare|default|delete|do|else|enum|export|extends|false|finally|for|function|if|implements|import|in|instanceof|interface|let|namespace|new|null|of|private|protected|public|return|satisfies|static|super|switch|this|throw|true|try|typeof|undefined|var|void|while|with|yield)$/u;
+const JAVASCRIPT_GLOBAL =
+  /^(?:API|MCP|AggregateError|Array|ArrayBuffer|BigInt|BigInt64Array|BigUint64Array|Boolean|DataView|Date|Error|EvalError|Float32Array|Float64Array|Function|Infinity|Int16Array|Int32Array|Int8Array|Intl|JSON|Map|Math|NaN|Number|Object|Promise|Proxy|RangeError|ReferenceError|Reflect|RegExp|Set|String|Symbol|SyntaxError|TypeError|URIError|Uint16Array|Uint32Array|Uint8Array|Uint8ClampedArray|WeakMap|WeakSet|catalog|clearTimeout|console|decodeURI|decodeURIComponent|encodeURI|encodeURIComponent|eval|globalThis|isFinite|isNaN|json|nodes|parseFloat|parseInt|setTimeout|skills|text|yield_control)$/u;
 
-  try {
-    const wrapped = buildCodeModeScriptParseSource(code);
-    parse(wrapped.source, {
-      ecmaVersion: "latest",
-      onComment: (_isBlock, _text, start, end) => maskRange(start, end, wrapped.codeOffset),
-      onToken: (token) => {
-        // Parse in the real async guest context: standalone tokenization can
-        // mistake executable division for a regex after contextual keywords.
-        if (
-          token.type.label === "string" ||
-          token.type.label === "regexp" ||
-          token.type.label === "template"
-        ) {
-          maskRange(token.start, token.end, wrapped.codeOffset);
-        }
-      },
-    });
-    return masked.join("");
-  } catch {
-    // Parser and tokenizer offsets are UTF-16 code units, not Unicode points.
-    masked = code.split("");
-    if (typescriptRuntime) {
-      try {
-        const sourceFile = typescriptRuntime.createSourceFile(
-          "code-mode.ts",
-          code,
-          typescriptRuntime.ScriptTarget.ES2022,
-          true,
-          typescriptRuntime.ScriptKind.TS,
-        );
-        const visit = (node: import("typescript").Node) => {
-          typescriptRuntime.forEachLeadingCommentRange(code, node.getFullStart(), (start, end) =>
-            maskRange(start, end),
-          );
-          typescriptRuntime.forEachTrailingCommentRange(code, node.getEnd(), (start, end) =>
-            maskRange(start, end),
-          );
-          if (
-            typescriptRuntime.isStringLiteralLike(node) ||
-            typescriptRuntime.isRegularExpressionLiteral(node) ||
-            typescriptRuntime.isTemplateHead(node) ||
-            typescriptRuntime.isTemplateMiddle(node) ||
-            typescriptRuntime.isTemplateTail(node)
-          ) {
-            maskRange(node.getStart(sourceFile), node.getEnd());
-          }
-          typescriptRuntime.forEachChild(node, visit);
-        };
-        visit(sourceFile);
-        return masked.join("");
-      } catch {
-        // A failed TypeScript parse must never expose a partially masked scan.
-        return code;
-      }
-    }
+const SHELL_COMMAND =
+  /^(?:\/(?:usr\/(?:local\/)?)?bin\/)?(alias|apt|awk|bash|bg|brew|builtin|bun|cargo|cat|cd|chmod|cmd|command|cp|curl|cut|date|declare|df|dir|docker|dotnet|du|echo|env|exec|exit|export|fg|file|find|getopts|git|go|gradle|grep|hash|head|help|hostname|id|java|javac|jobs|jq|kill|kubectl|ln|local|logout|ls|make|mkdir|mvn|mv|node|npm|npx|perl|php|pip|pip3|pnpm|poetry|popd|powershell|printf|ps|pushd|pwd|pwsh|pytest|python|python3|read|readonly|rg|rm|ruby|rustc|rustup|sed|set|sh|shift|sleep|sort|source|stat|sudo|swift|systemctl|tail|tar|tee|test|touch|trap|tree|type|ulimit|umask|uname|uniq|unset|unzip|uv|uvx|vitest|wait|wc|wget|which|whoami|xargs|yarn|zip|zsh)(?=$|[\s;&|<>])/u;
 
-    // Malformed JavaScript needs a conservative lexical pass: never trust a
-    // context-free regexp token to hide executable module access.
-    try {
-      for (const token of tokenizer(code, {
-        ecmaVersion: "latest",
-        onComment: (_isBlock, _text, start, end) => maskRange(start, end),
-      })) {
-        if (token.type.label === "string" || token.type.label === "template") {
-          maskRange(token.start, token.end);
-        }
-      }
-      return masked.join("");
-    } catch {
-      // Never inspect partially masked input after a tokenizer failure.
-      return code;
-    }
-  }
+const SHELL_IDENTIFIER = /^([A-Za-z_][\w-]*)(?=$|[\s;&|<>])/u;
+const SHELL_EXECUTABLE_PATH =
+  /^(?:(?:\.{1,2}|~)[\\/]|\/|[A-Za-z]:[\\/])[^\s;|&()]+(?=$|[\t \r\n;&|])/u;
+const SHELL_ARGUMENT =
+  /^(?:-{1,2}[a-z\d][\w-]*(?:[\t =;&|]|$)|(?:(?:\.{1,2}|~)[\\/]|\/|[A-Za-z]:[\\/])[^\s]+)/iu;
+const SHELL_CONTROL =
+  /^(?:(?:if|elif|while|until)[\t ]+(?:\[{1,2}(?=[\t ]|$)|test\b|[A-Za-z_][\w-]*(?=[\t ;]))|for[\t ]+(?:[A-Za-z_]\w*[\t ]+in\b|\(\([^\r\n]*\)\)[\t ]*;[\t ]*do\b)|case[\t ]+\S+[\t ]+in\b|function[\t ]+[A-Za-z_][\w-]*[\t ]*\{)/u;
+const SHELL_REDIRECTION = /^(?:\d*(?:>>?|<<?)|&>>?)/u;
+const LEADING_SOURCE_COMMENTS =
+  /^(?:(?:\/\/[^\r\n]*(?:\r?\n|$)|\/\*[\s\S]*?\*\/|#[^\r\n]*(?:\r?\n|$))[\t \r\n]*)+/u;
+
+function parsesAsGuestJavaScript(source: string, declaration = ""): boolean {
+  return parseCodeModeScriptSyntax(`${declaration}${source}`).ok;
 }
 
-function isModuleLoaderCallee(callee: import("acorn").Expression | import("acorn").Super): boolean {
-  if (callee.type === "ParenthesizedExpression") {
-    return isModuleLoaderCallee(callee.expression);
+function stripShellEnvAssignments(source: string): string {
+  const name = /[A-Za-z_]\w*=/uy;
+  if (!name.test(source)) {
+    return source;
   }
-  if (callee.type === "ChainExpression") {
+  // Each state stores the first successful endpoint in regex alternative order;
+  // zero means no match. Reverse evaluation visits each suffix once, including
+  // quoted fallbacks, instead of backtracking over overlapping alternatives.
+  const value = new Uint32Array(source.length + 3);
+  const doubleQuoted = new Uint32Array(source.length + 3);
+  const singleQuoted = new Uint32Array(source.length + 3);
+  let blanksEnd = 0;
+  let newlineEnd = 0;
+  for (let index = source.length - 1; index >= name.lastIndex; index -= 1) {
+    const character = source[index]!;
+    const blank = character === " " || character === "\t";
+    const whitespace = /\s/u.test(character);
+    const separator = blank
+      ? blanksEnd || newlineEnd
+      : character === "\n"
+        ? blanksEnd
+        : character === "\r" && source[index + 1] === "\n"
+          ? newlineEnd
+          : 0;
+    if (!blank) {
+      blanksEnd = whitespace ? 0 : index;
+      newlineEnd = separator;
+    }
+    // The original escape's dot consumes a Unicode point, excluding line breaks.
+    const escaped =
+      character === "\\" &&
+      index + 1 < source.length &&
+      !/[\r\n\u2028\u2029]/u.test(source[index + 1]!);
+    const afterEscape = index + (escaped && source.codePointAt(index + 1)! > 0xffff ? 3 : 2);
+    doubleQuoted[index] =
+      (escaped ? doubleQuoted[afterEscape]! : 0) ||
+      (character === '"' ? value[index + 1]! : doubleQuoted[index + 1]!);
+    singleQuoted[index] = character === "'" ? value[index + 1]! : singleQuoted[index + 1]!;
+    value[index] =
+      (character === '"' ? doubleQuoted[index + 1]! : 0) ||
+      (character === "'" ? singleQuoted[index + 1]! : 0) ||
+      (escaped ? value[afterEscape]! : 0) ||
+      (!whitespace && character !== ";" && character !== "&" && character !== "|"
+        ? value[index + 1]!
+        : 0) ||
+      separator;
+  }
+  let commandStart = 0;
+  // Reuse the suffix table across every leading assignment, rather than
+  // scanning the remaining command again for each NAME=value prefix.
+  do {
+    const end = value[name.lastIndex]!;
+    if (!end) {
+      break;
+    }
+    commandStart = end;
+    name.lastIndex = end;
+  } while (name.test(source));
+  return source.slice(commandStart);
+}
+
+/** Reject recognizable shell commands without guessing at JavaScript expressions. */
+function isShellLikeCodeModeSource(source: string): boolean {
+  const trimmed = source.trim();
+  if (trimmed.startsWith("#!")) {
+    return true;
+  }
+  const uncommented = trimmed.replace(LEADING_SOURCE_COMMENTS, "");
+  if (!uncommented || JAVASCRIPT_EXPORT.test(uncommented)) {
+    return false;
+  }
+  if (SHELL_CONTROL.test(uncommented)) {
+    return true;
+  }
+  // Shell environment prefixes cannot make a recognizable executable safe;
+  // strip them before deciding whether the guest worker should start.
+  const commandSource = stripShellEnvAssignments(uncommented);
+
+  const knownCommand = SHELL_COMMAND.exec(commandSource);
+  const unknownCommand = SHELL_IDENTIFIER.exec(commandSource);
+  const command =
+    knownCommand ??
+    (unknownCommand &&
+    !JAVASCRIPT_KEYWORD.test(unknownCommand[1] ?? "") &&
+    !JAVASCRIPT_GLOBAL.test(unknownCommand[1] ?? "")
+      ? unknownCommand
+      : null);
+  if (!command && !SHELL_EXECUTABLE_PATH.test(commandSource)) {
+    return false;
+  }
+
+  const commandTail = command ? commandSource.slice(command[0].length) : "";
+  const remainder = commandTail.trimStart();
+
+  if (command && !remainder) {
+    return knownCommand !== null;
+  }
+
+  // A binding only matters when the actual guest program parses.
+  if (!parsesAsGuestJavaScript(source)) {
+    return true;
+  }
+
+  const commandName = command?.[1];
+  // A lexical probe conflicts only with a real same-scope declaration; the
+  // matching var probe succeeds only when that declaration is hoisted.
+  if (
+    commandName &&
+    !parsesAsGuestJavaScript(source, `let ${commandName};\n`) &&
+    parsesAsGuestJavaScript(source, `var ${commandName};\n`)
+  ) {
+    return false;
+  }
+
+  if (/^[\t ]*(?:[;\r\n]|&&?|\|{1,2})/u.test(commandTail)) {
+    return knownCommand !== null;
+  }
+
+  if (
+    !command ||
+    (!SHELL_ARGUMENT.test(remainder) &&
+      !(knownCommand !== null && SHELL_REDIRECTION.test(remainder)) &&
+      !(commandName === "jq" && remainder.startsWith(".")))
+  ) {
+    return false;
+  }
+
+  // An unbound executable with flags or a path would only become a guest
+  // ReferenceError and trigger another model retry.
+  return true;
+}
+
+const CODE_MODE_SHELL_SOURCE_ERROR =
+  "code-mode exec runs JavaScript, not shell commands. " +
+  "Call an enabled async tool global from guest JavaScript; use " +
+  "catalog.search(query) when the bounded quick index omits it. " +
+  "Do not retry the same shell command as code.";
+
+function isModuleLoaderCallee(callee: import("acorn").Expression | import("acorn").Super): boolean {
+  if (callee.type === "ParenthesizedExpression" || callee.type === "ChainExpression") {
     return isModuleLoaderCallee(callee.expression);
   }
   if (callee.type === "SequenceExpression") {
@@ -120,166 +179,54 @@ function isModuleLoaderCallee(callee: import("acorn").Expression | import("acorn
 
 function containsModuleAccess(node: import("acorn").AnyNode): boolean {
   if (
-    node.type === "ImportDeclaration" ||
     node.type === "ImportExpression" ||
-    (node.type === "MetaProperty" && node.meta.name === "import") ||
     (node.type === "CallExpression" && isModuleLoaderCallee(node.callee))
   ) {
     return true;
   }
 
   for (const value of Object.values(node)) {
-    if (Array.isArray(value)) {
-      for (const child of value) {
-        if (
-          child !== null &&
-          typeof child === "object" &&
-          "type" in child &&
-          typeof child.type === "string" &&
-          // SAFETY: Children are taken directly from Acorn's parsed AST.
-          containsModuleAccess(child as import("acorn").AnyNode)
-        ) {
-          return true;
-        }
+    for (const child of Array.isArray(value) ? value : [value]) {
+      if (
+        child !== null &&
+        typeof child === "object" &&
+        "type" in child &&
+        typeof child.type === "string" &&
+        // SAFETY: Children are taken directly from Acorn's parsed AST.
+        containsModuleAccess(child as import("acorn").AnyNode)
+      ) {
+        return true;
       }
-      continue;
-    }
-    if (
-      value !== null &&
-      typeof value === "object" &&
-      "type" in value &&
-      typeof value.type === "string" &&
-      // SAFETY: Child fields are taken directly from Acorn's parsed AST.
-      containsModuleAccess(value as import("acorn").AnyNode)
-    ) {
-      return true;
     }
   }
   return false;
 }
 
-function typeScriptContainsModuleAccess(code: string, ts: typeof import("typescript")): boolean {
-  const source = ts.createSourceFile(
-    "code-mode.ts",
-    code,
-    ts.ScriptTarget.ES2022,
-    true,
-    ts.ScriptKind.TS,
-  );
+// Existing test assertions match the leading sentence; keep it verbatim.
+export const CODE_MODE_MODULE_ACCESS_ERROR =
+  "code mode module access is disabled. " +
+  "Call an enabled async tool global from guest JavaScript; use " +
+  "catalog.search(query) when the bounded quick index omits it. " +
+  "Do not retry the same source with require() or an import.";
 
-  const isLoaderCallee = (expression: import("typescript").Expression): boolean => {
-    if (ts.isParenthesizedExpression(expression)) {
-      return isLoaderCallee(expression.expression);
-    }
-    if (
-      ts.isBinaryExpression(expression) &&
-      expression.operatorToken.kind === ts.SyntaxKind.CommaToken
-    ) {
-      return isLoaderCallee(expression.right);
-    }
-    return ts.isIdentifier(expression) && expression.text === "require";
-  };
-
-  const visit = (node: import("typescript").Node): boolean => {
-    if (
-      ts.isImportDeclaration(node) ||
-      ts.isImportEqualsDeclaration(node) ||
-      (ts.isMetaProperty(node) && node.keywordToken === ts.SyntaxKind.ImportKeyword) ||
-      (ts.isCallExpression(node) &&
-        (node.expression.kind === ts.SyntaxKind.ImportKeyword || isLoaderCallee(node.expression)))
-    ) {
-      return true;
-    }
-    return ts.forEachChild(node, (child) => (visit(child) ? true : undefined)) === true;
-  };
-
-  return visit(source);
-}
-
-function rejectsModuleAccess(
-  code: string,
-  typescriptRuntime?: typeof import("typescript"),
-): boolean {
+export function prepareSource(code: string): string {
   const parsed = parseCodeModeScriptSyntax(code);
-  if (parsed.ok) {
-    // The WASI guest has no host module loader. Only executable module syntax
-    // belongs in this early check; ordinary guest methods are not capabilities.
-    return containsModuleAccess(parsed.program);
-  }
-  if (typescriptRuntime) {
-    try {
-      return typeScriptContainsModuleAccess(code, typescriptRuntime);
-    } catch {
-      // Keep malformed input on the conservative lexical fallback.
-    }
-  }
-  const source = maskCodeLiteralsAndComments(code, typescriptRuntime);
-  return /\bimport\b\s*(?:\.|\(|["'`{*]|\w)|\brequire\b\s*\(/u.test(source);
-}
-
-export async function prepareSource(input: {
-  code: string;
-  language?: CodeModeLanguage;
-  config: Pick<CodeModeConfig, "languages">;
-  onSourceMap?: (sourceMap: string) => void;
-  preflight?: { declarations: string; maxBytes: number };
-}): Promise<string> {
-  const language = input.language ?? "javascript";
-  if (!input.config.languages.includes(language)) {
-    throw new ToolInputError(`code mode ${language} input is disabled.`);
-  }
-  if (language === "javascript") {
-    if (rejectsModuleAccess(input.code)) {
-      throw new ToolInputError("code mode module access is disabled.");
-    }
-    if (isShellLikeCodeModeSource(input.code)) {
-      throw new ToolInputError(CODE_MODE_SHELL_SOURCE_ERROR);
-    }
-    return input.code;
-  }
-  const ts = await loadCodeModeTypeScriptRuntime();
-  if (rejectsModuleAccess(input.code, ts)) {
-    throw new ToolInputError("code mode module access is disabled.");
-  }
-  if (input.preflight) {
-    const { checkCodeModeTypes } = await import("./code-mode-typecheck.js");
-    await checkCodeModeTypes(ts, input.code, input.preflight);
-  }
-  const transformed = ts.transpileModule(input.code, {
-    compilerOptions: {
-      target: ts.ScriptTarget.ES2022,
-      module: ts.ModuleKind.ESNext,
-      importsNotUsedAsValues: ts.ImportsNotUsedAsValues.Remove,
-      sourceMap: true,
-    },
-    fileName: "user.ts",
-    reportDiagnostics: true,
-  });
-  const diagnostics = transformed.diagnostics ?? [];
-  if (diagnostics.some((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)) {
-    const message = diagnostics
-      .map((diagnostic) => {
-        const diagnosticMessage = ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n");
-        if (!diagnostic.file || diagnostic.start === undefined) {
-          return diagnosticMessage;
-        }
-        const position = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
-        return `openclaw-code-mode:user.ts:${position.line + 1}:${position.character + 1}: ${diagnosticMessage}`;
-      })
-      .join("\n");
-    throw new ToolInputError(`typescript transform failed: ${message}`);
-  }
-  if (rejectsModuleAccess(transformed.outputText, ts)) {
-    throw new ToolInputError("code mode module access is disabled.");
-  }
-  if (
-    isShellLikeCodeModeSource(input.code, transformed.outputText) ||
-    isShellLikeCodeModeSource(transformed.outputText)
-  ) {
+  if (isShellLikeCodeModeSource(code)) {
     throw new ToolInputError(CODE_MODE_SHELL_SOURCE_ERROR);
   }
-  if (transformed.sourceMapText) {
-    input.onSourceMap?.(transformed.sourceMapText);
+  if (!parsed.ok) {
+    // Keep parser text bounded: some diagnostics include a user-sized identifier.
+    const message = truncateUtf16Safe(parsed.message, 240);
+    throw new ToolInputError(
+      `SyntaxError at openclaw-code-mode:user.js:${parsed.line}:${parsed.column + 1}: ${message}. No tools were dispatched; correct the JavaScript source and submit it again.`,
+    );
   }
-  return transformed.outputText;
+  // Unicode escapes can spell a loader identifier without its literal name.
+  if (
+    (code.includes("import") || code.includes("require") || code.includes("\\u")) &&
+    containsModuleAccess(parsed.program)
+  ) {
+    throw new ToolInputError(CODE_MODE_MODULE_ACCESS_ERROR);
+  }
+  return code;
 }

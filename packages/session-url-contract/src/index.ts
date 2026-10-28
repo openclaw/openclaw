@@ -7,7 +7,7 @@ import {
   normalizeControlUiBasePath,
   parseShortSessionRef,
 } from "./grammar.js";
-import { parseAgentSessionKeyParts } from "./session-key.js";
+import { isIncognitoSessionKey, parseAgentSessionKeyParts } from "./session-key.js";
 
 export { controlUiSessionSlug, normalizeControlUiBasePath };
 export {
@@ -28,26 +28,6 @@ export {
 
 // Control UI session URL grammar shared by browser and plugin consumers.
 export type ControlUiSessionNamespace = "chat" | "dashboard";
-
-type BuildControlUiSessionPathParams = {
-  namespace: ControlUiSessionNamespace;
-  sessionKey: string;
-  fallbackAgentId?: string;
-  basePath?: string;
-  displayName?: string;
-  exactKey?: boolean;
-  mainKey?: string;
-  shortIdLength?: number;
-};
-
-type BuildControlUiCatalogSessionUrlParams = {
-  namespace: ControlUiSessionNamespace;
-  agentId: string;
-  basePath?: string;
-  catalog: string;
-  host: string;
-  thread: string;
-};
 
 export const SESSION_UUID_SUFFIX_RE =
   /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/iu;
@@ -75,7 +55,16 @@ function encodePathSegment(segment: string): string {
   return encoded.startsWith("~") ? `~${encoded}` : encoded;
 }
 
-export function buildControlUiSessionPath(params: BuildControlUiSessionPathParams): string | null {
+export function buildControlUiSessionPath(params: {
+  namespace: ControlUiSessionNamespace;
+  sessionKey: string;
+  fallbackAgentId?: string;
+  basePath?: string;
+  displayName?: string;
+  exactKey?: boolean;
+  mainKey?: string;
+  shortIdLength?: number;
+}): string | null {
   const rawKey = normalizeNullableString(params.sessionKey);
   const parsed = rawKey ? agentSessionKeyParts(rawKey) : null;
   const fallbackAgentId = normalizeNullableString(params.fallbackAgentId);
@@ -98,8 +87,9 @@ export function buildControlUiSessionPath(params: BuildControlUiSessionPathParam
   if (segments.some((segment) => !segment)) {
     return null;
   }
+  // Incognito is excluded from discovery, so its URLs must retain the exact key.
   // Qualified global keys are literal sessions, distinct from the unqualified home sentinel.
-  if (params.exactKey || normalizedRest === "global") {
+  if (params.exactKey || isIncognitoSessionKey(rawKey) || normalizedRest === "global") {
     const segment = segments[0] ?? "";
     return segments.length === 1 &&
       (isReservedSessionRest(segment, params.mainKey) || parseShortSessionRef(segment))
@@ -130,9 +120,14 @@ export function buildControlUiSessionPath(params: BuildControlUiSessionPathParam
   return `${namespace}/${encodedAgentId}/${segments.map(encodePathSegment).join("/")}`;
 }
 
-export function buildControlUiCatalogSessionUrl(
-  params: BuildControlUiCatalogSessionUrlParams,
-): string | null {
+export function buildControlUiCatalogSessionUrl(params: {
+  namespace: ControlUiSessionNamespace;
+  agentId: string;
+  basePath?: string;
+  catalog: string;
+  host: string;
+  thread: string;
+}): string | null {
   const catalog = normalizeNullableString(params.catalog);
   const host = normalizeNullableString(params.host);
   const thread = normalizeNullableString(params.thread);

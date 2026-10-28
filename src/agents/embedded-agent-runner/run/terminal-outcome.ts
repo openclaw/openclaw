@@ -5,13 +5,8 @@ import {
   projectAgentRunAttemptTerminal,
   type AgentRunTerminalOutcome,
 } from "../../agent-run-terminal-outcome.js";
-import { formatUserFacingAssistantErrorText } from "../../embedded-agent-helpers.js";
+import { formatUserFacingAssistantErrorText } from "../../embedded-agent-helpers/error-text.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
-
-type EmbeddedRunAttemptTerminalInput = Pick<
-  EmbeddedRunAttemptResult,
-  "terminal" | "promptTimeoutOutcome"
->;
 
 export type EmbeddedRunTerminalState = {
   outcome: AgentRunTerminalOutcome;
@@ -20,7 +15,7 @@ export type EmbeddedRunTerminalState = {
 
 /** Projects private attempt metadata into the canonical agent terminal outcome. */
 export function resolveEmbeddedRunAttemptTerminalOutcome(params: {
-  attempt: EmbeddedRunAttemptTerminalInput;
+  attempt: Pick<EmbeddedRunAttemptResult, "terminal" | "promptTimeoutOutcome">;
   assistant: EmbeddedRunAttemptResult["lastAssistant"];
   abortSignal?: AbortSignal;
 }): AgentRunTerminalOutcome {

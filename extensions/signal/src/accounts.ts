@@ -1,4 +1,3 @@
-// Signal plugin module implements accounts behavior.
 import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
@@ -15,6 +14,7 @@ import {
   assignSignalManagedNativePort,
   DEFAULT_SIGNAL_MANAGED_NATIVE_PORT,
   isSignalManagedNativeConnectionUrlForBind,
+  reserveSignalTransportPorts,
   resolveLocalSignalTransportPort,
 } from "./transport-policy.js";
 import {
@@ -106,7 +106,6 @@ function resolveSignalManagedNativePort(params: {
   transport: SignalTransportConfig | undefined;
 }): number {
   if (params.transport?.kind === "managed-native" && params.transport.socketPath !== undefined) {
-    assertSignalSocketTransport(params.transport);
     if (isSignalAccountEnabled(params.cfg, params.accountConfig)) {
       for (const accountId of listSignalAccountIds(params.cfg)) {
         if (normalizeAccountId(accountId) === params.accountId) {
@@ -159,18 +158,9 @@ function resolveSignalManagedNativePort(params: {
           `Signal managed native accounts "${params.accountId}" and "${accountId}" both bind port ${explicitPort}. Assign each account a distinct transport.httpPort.`,
         );
       }
-      const independentLocalUrl =
-        transport?.kind === "external-native" ||
-        transport?.kind === "container" ||
-        (transport?.kind === "managed-native" &&
-          Boolean(transport.url) &&
-          !isSignalManagedNativeConnectionUrlForBind(transport))
-          ? transport.url
-          : undefined;
-      if (
-        independentLocalUrl &&
-        resolveLocalSignalTransportPort(independentLocalUrl) === explicitPort
-      ) {
+      const siblingPorts = new Set<number>();
+      reserveSignalTransportPorts(transport, siblingPorts);
+      if (siblingPorts.has(explicitPort)) {
         throw new Error(
           `Signal managed native account "${params.accountId}" binds port ${explicitPort}, which conflicts with account "${accountId}" local transport endpoint. Assign a distinct transport.httpPort.`,
         );
@@ -191,32 +181,9 @@ function resolveSignalManagedNativePort(params: {
     ) {
       continue;
     }
-    const transport = accountConfig.transport;
-    if (transport?.kind === "external-native" || transport?.kind === "container") {
-      const localPort = resolveLocalSignalTransportPort(transport.url);
-      if (localPort !== undefined) {
-        reservedPorts.add(localPort);
-      }
-      continue;
+    if (reserveSignalTransportPorts(accountConfig.transport, reservedPorts)) {
+      implicitManagedAccountIds.push(accountId);
     }
-    if (transport?.kind === "managed-native") {
-      if (transport.socketPath !== undefined) {
-        continue;
-      }
-      if (transport.httpPort !== undefined) {
-        reservedPorts.add(transport.httpPort);
-      } else {
-        implicitManagedAccountIds.push(accountId);
-      }
-      if (transport.url && !isSignalManagedNativeConnectionUrlForBind(transport)) {
-        const localConnectionPort = resolveLocalSignalTransportPort(transport.url);
-        if (localConnectionPort !== undefined) {
-          reservedPorts.add(localConnectionPort);
-        }
-      }
-      continue;
-    }
-    implicitManagedAccountIds.push(accountId);
   }
 
   for (const accountId of implicitManagedAccountIds) {
@@ -268,7 +235,7 @@ export function resolveSignalTransport(
     httpPort,
     startupTimeoutMs: managedTransport?.startupTimeoutMs ?? 30_000,
     ...(managedTransport?.receiveMode ? { receiveMode: managedTransport.receiveMode } : {}),
-    ...(typeof managedTransport?.ignoreStories === "boolean"
+    ...(managedTransport?.ignoreStories !== undefined
       ? { ignoreStories: managedTransport.ignoreStories }
       : {}),
   };
@@ -281,10 +248,7 @@ export function resolveSignalAccount(params: {
   const accountId = normalizeAccountId(
     params.accountId ?? resolveDefaultSignalAccountId(params.cfg),
   );
-  const baseEnabled = params.cfg.channels?.signal?.enabled !== false;
   const merged = resolveSignalAccountConfig(params.cfg, accountId);
-  const accountEnabled = merged.enabled !== false;
-  const enabled = baseEnabled && accountEnabled;
   const transport = resolveSignalTransport(
     merged.transport,
     resolveSignalManagedNativePort({
@@ -294,15 +258,13 @@ export function resolveSignalAccount(params: {
       transport: merged.transport,
     }),
   );
-  const baseUrl = transport.baseUrl;
-  const configured = isSignalAccountConfigured(merged);
   return {
     accountId,
-    enabled,
+    enabled: isSignalAccountEnabled(params.cfg, merged),
     name: normalizeOptionalString(merged.name),
-    baseUrl,
+    baseUrl: transport.baseUrl,
     transport,
-    configured,
+    configured: isSignalAccountConfigured(merged),
     config: merged,
   };
 }
@@ -311,12 +273,6 @@ export function listEnabledSignalAccounts(cfg: OpenClawConfig): ResolvedSignalAc
   return listSignalAccountIds(cfg)
     .map((accountId) => resolveSignalAccount({ cfg, accountId }))
     .filter((account) => account.enabled);
-}
-
-function normalizeSignalReplyToMode(value: unknown): ReplyToMode | undefined {
-  return value === "off" || value === "first" || value === "all" || value === "batched"
-    ? value
-    : undefined;
 }
 
 export function resolveSignalReplyToMode(params: {
@@ -334,27 +290,11 @@ export function resolveSignalReplyToMode(params: {
   );
   const chatType =
     params.chatType === "direct" || params.chatType === "group" ? params.chatType : undefined;
-  if (chatType) {
-    const accountScoped = normalizeSignalReplyToMode(
-      accountConfig?.replyToModeByChatType?.[chatType],
-    );
-    if (accountScoped) {
-      return accountScoped;
-    }
-    const accountDefault = normalizeSignalReplyToMode(accountConfig?.replyToMode);
-    if (accountDefault) {
-      return accountDefault;
-    }
-    const channelScoped = normalizeSignalReplyToMode(
-      signalConfig?.replyToModeByChatType?.[chatType],
-    );
-    if (channelScoped) {
-      return channelScoped;
-    }
-  }
   return (
-    normalizeSignalReplyToMode(accountConfig?.replyToMode) ??
-    normalizeSignalReplyToMode(signalConfig?.replyToMode) ??
+    (chatType && accountConfig?.replyToModeByChatType?.[chatType]) ??
+    accountConfig?.replyToMode ??
+    (chatType && signalConfig?.replyToModeByChatType?.[chatType]) ??
+    signalConfig?.replyToMode ??
     "all"
   );
 }

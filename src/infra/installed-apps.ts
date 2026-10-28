@@ -1,9 +1,8 @@
 import { execFile } from "node:child_process";
-import type { Dirent } from "node:fs";
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { walkDirectory } from "@openclaw/fs-safe/walk";
 import pLimit from "p-limit";
 
 const execFileAsync = promisify(execFile);
@@ -35,26 +34,7 @@ export type InstalledApp = {
 
 export type InstalledAppsResult =
   | { status: "ok"; apps: InstalledApp[] }
-  | { status: "unsupported"; platform: NodeJS.Platform; apps: [] };
-
-type InstalledAppRoots = {
-  applications: string;
-  userApplications: string;
-  systemApplications: string;
-};
-
-type ScanInstalledAppsOptions = {
-  platform?: NodeJS.Platform;
-  roots?: InstalledAppRoots;
-};
-
-function defaultRoots(): InstalledAppRoots {
-  return {
-    applications: "/Applications",
-    userApplications: path.join(os.homedir(), "Applications"),
-    systemApplications: "/System/Applications",
-  };
-}
+  | { status: "unsupported"; apps: [] };
 
 function isBackupishBundle(label: string): boolean {
   return (
@@ -67,37 +47,18 @@ async function listAppPaths(
   root: string,
   system: boolean,
 ): Promise<Array<{ path: string; system: boolean }>> {
-  let entries: Dirent[];
-  try {
-    entries = await fs.readdir(root, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const results = await Promise.all(
-    entries.map(async (entry) => {
-      if (!entry.name.toLowerCase().endsWith(".app")) {
-        return [];
-      }
-      // Dirent.isDirectory() is false for symlinked bundles; /Applications
-      // commonly holds symlinks (brew cask, hand-linked apps) — stat through.
-      let isDirectory = entry.isDirectory();
-      if (!isDirectory && entry.isSymbolicLink()) {
-        isDirectory = await fs
-          .stat(path.join(root, entry.name))
-          .then((stats) => stats.isDirectory())
-          .catch(() => false);
-      }
-      if (!isDirectory) {
-        return [];
+  const { entries } = await walkDirectory(root, {
+    maxDepth: 1,
+    symlinks: "follow",
+    include: (entry) => {
+      if (entry.kind !== "directory" || !entry.name.toLowerCase().endsWith(".app")) {
+        return false;
       }
       const label = entry.name.slice(0, -4);
-      if (isBackupishBundle(label) || (system && !SYSTEM_APP_NAMES.has(label))) {
-        return [];
-      }
-      return [{ path: path.join(root, entry.name), system }];
-    }),
-  );
-  return results.flat();
+      return !isBackupishBundle(label) && (!system || SYSTEM_APP_NAMES.has(label));
+    },
+  });
+  return entries.map((entry) => ({ path: entry.path, system }));
 }
 
 async function readBundleIdWithPlutil(appPath: string): Promise<string | undefined> {
@@ -114,20 +75,16 @@ async function readBundleIdWithPlutil(appPath: string): Promise<string | undefin
   }
 }
 
-export async function scanInstalledApps(
-  options: ScanInstalledAppsOptions = {},
-): Promise<InstalledAppsResult> {
-  const platform = options.platform ?? process.platform;
-  if (platform !== "darwin") {
-    return { status: "unsupported", platform, apps: [] };
+export async function scanInstalledApps(): Promise<InstalledAppsResult> {
+  if (process.platform !== "darwin") {
+    return { status: "unsupported", apps: [] };
   }
 
-  const roots = options.roots ?? defaultRoots();
   const appPaths = (
     await Promise.all([
-      listAppPaths(roots.applications, false),
-      listAppPaths(roots.userApplications, false),
-      listAppPaths(roots.systemApplications, true),
+      listAppPaths("/Applications", false),
+      listAppPaths(path.join(os.homedir(), "Applications"), false),
+      listAppPaths("/System/Applications", true),
     ])
   ).flat();
   const limit = pLimit(PLIST_READ_CONCURRENCY);

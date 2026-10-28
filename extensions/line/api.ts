@@ -1,4 +1,3 @@
-// Line API module exposes the plugin public contract.
 export type {
   ChannelAccountSnapshot,
   ChannelPlugin,
@@ -7,6 +6,6 @@ export type {
   PluginRuntime,
 } from "openclaw/plugin-sdk/core";
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-export type { ResolvedLineAccount } from "./runtime-api.js";
+export type { ResolvedLineAccount } from "./src/types.js";
 export { linePlugin } from "./src/channel.js";
 export { lineSetupPlugin } from "./src/channel.setup.js";

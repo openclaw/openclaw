@@ -18,6 +18,13 @@ For numeric options such as `--location-timeout`, `--max-age`, and `--quality`, 
 the flag to use its default. An explicit empty or whitespace-only value is invalid
 and fails before node lookup or Gateway requests.
 
+For `camera clip` and `screen record`, `--duration` accepts milliseconds or unit
+suffixes such as `500ms`, `10s`, and `1m`. The parsed value must round to a positive
+safe integer in milliseconds (1–9007199254740991). Zero, negative, malformed, and
+sub-millisecond values that round to zero fail before node lookup or capture.
+Omitting the flag keeps the defaults: 3000ms for camera clips and 10000ms for screen
+recordings. Nodes may impose their own capture limits.
+
 ## Status
 
 ```bash
@@ -28,7 +35,7 @@ openclaw nodes list
 openclaw nodes describe --node <idOrNameOrIp>
 ```
 
-`status` and `list` both accept `--connected` (only connected nodes) and `--last-connected <duration>` (for example `24h` or `7d`, matching only nodes that connected within the duration). Both use the Gateway's recorded last connection time, including recent reconnects and disconnected nodes with known connection history. `list` shows pending and paired nodes in separate tables. Paired rows carry the most recent connect age (Last Connect). `status` shows one merged table with per-node capability, version, and last-input detail. A connected macOS node reports last input only after the user enables **Active computer detection** and grants Accessibility. The freshest row is marked `active`. See [Active computer presence](/nodes/presence). `describe` prints one node's capabilities, permissions, activity, and effective/pending invoke commands.
+`status` and `list` both accept `--connected` (only connected nodes) and `--last-connected <duration>` (for example `24h` or `7d`, matching only nodes that connected within the duration). Both use the Gateway's recorded last connection time, including recent reconnects and disconnected nodes with known connection history. `list` shows pending and paired nodes in separate tables. Paired rows carry the most recent connect age (Last Connect). `status` shows one merged table with per-node capability, version, and last-input detail. A connected macOS node reports activity from interaction with OpenClaw without extra permissions. Optional **System-wide presence detection** also reports physical activity in other apps and requires Accessibility. The freshest row is marked `active`. See [Active computer presence](/nodes/presence). `describe` prints one node's capabilities, permissions, activity, and effective/pending invoke commands.
 
 When host stats are available, `status` includes a detail fragment such as
 `load 3.2/24 · mem 151/192 GB · disk 1.2 TB free`. `describe` shows the same
@@ -38,7 +45,7 @@ Unavailable load or disk readings are omitted. Offline nodes show the saved
 snapshot with an age such as `(last known 27d ago)`, measured from the snapshot's
 original timestamp. See [Node host stats](/gateway/protocol/presence#node-host-stats).
 
-`--node` accepts an exact ID, IP address, display name, or ID prefix of at least six characters. Exact ID and IP matches take precedence over names and prefixes. Within the strongest match, connected nodes take precedence. If current clients share a name, use an exact ID to disambiguate. Client type does not choose the target. The legacy migration exception prefers a unique OpenClaw client only when every other tied entry is a known Clawdbot or Moldbot client.
+`--node` accepts an exact ID, IP address, display name, or ID prefix of at least six characters. Exact ID and IP matches take precedence over names and prefixes. Within the strongest match, connected nodes take precedence. If clients share a name, use an exact ID to disambiguate. Client type does not choose the target.
 
 ## Pairing
 
@@ -50,7 +57,12 @@ openclaw nodes remove --node <id|name|ip>
 openclaw nodes rename --node <id|name|ip> --name <displayName>
 ```
 
+`pending` and `list` show **Approval scopes**: the operator permissions required to approve each request, separate from the commands and capabilities granted to the node.
+
 These commands manage the node's approved command/capability surface on its paired-device record. Device pairing (`openclaw devices approve`) gates the node's WebSocket `connect` handshake.
+
+Rename/remove confirmations and command errors escape terminal control characters.
+JSON responses preserve the original values.
 
 For manual enrollment, first approve the device request, then restart or rerun
 a node paused on `PAIRING_REQUIRED`. Its reconnect creates the separate request
@@ -82,11 +94,11 @@ Flags:
 - `--params <json>`: JSON object string (default `{}`).
 - `--invoke-timeout <ms>`: node invoke timeout as a positive integer (default `15000`).
 - `--timeout <ms>`: Gateway transport timeout (default `30000`). For a positive invoke timeout, the effective transport timeout is `max(timeout, invokeTimeout + 10000)`, allowing transport grace beyond the node's invoke deadline.
-- `--idempotency-key <key>`: optional idempotency key.
+- `--idempotency-key <key>`: optional nonempty request key that prevents duplicate runs. An explicit empty value fails before node lookup or Gateway requests. Supplied keys retain their exact bytes, including whitespace; omitting the flag generates a key.
 
 The invocation timeout covers Gateway checks, node wake-up, readiness retries, and the node response. Clock adjustments do not reset or extend this elapsed-time budget.
 
-`system.run` and `system.run.prepare` are blocked here. Use the `exec` tool with `host=node` for shell execution instead. `system.which` is allowed through `invoke`.
+`system.run` and `system.run.prepare` are blocked here. Use the `exec` tool with `host=node` for shell execution instead. `system.which` is allowed through `invoke`. `fs.listDir` returns sub-directories only (the new-session folder picker contract); use the `exec` tool with `host=node` to list files or full directory contents.
 
 ## Notify, push, location, screen
 

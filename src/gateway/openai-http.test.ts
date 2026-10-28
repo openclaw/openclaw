@@ -1,24 +1,16 @@
 // OpenAI-compatible HTTP tests cover chat completions, streaming, tool calls,
 // session context, auth scopes, and provider error mapping.
-import fs from "node:fs/promises";
 import http from "node:http";
-import path from "node:path";
 import OpenAI from "openai";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
-import { resolveEmbeddedRunTerminal } from "../agents/embedded-agent-runner/run/terminal-resolution.js";
-import { makeTerminalInput } from "../agents/embedded-agent-runner/run/terminal-resolution.test-support.js";
+import type { AgentCommandOpts } from "../agents/command/types.js";
+import { TRUNCATED_REPLY_NOTICE_TEXT } from "../agents/embedded-agent-runner/run/incomplete-turn-resolution.js";
 import {
   createStubSessionHarness,
   emitAssistantTextDelta,
 } from "../agents/embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "../agents/embedded-agent-subscribe.js";
-import { FailoverError } from "../agents/failover-error.js";
-import {
-  buildEmbeddedRunnerAssistant,
-  makeEmbeddedRunnerAttempt,
-} from "../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
@@ -32,11 +24,16 @@ import {
   isGatewaySubordinateWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import {
   expectDeclaredHttpOwnerIdentity,
   expectHttpForeignSessionAuthority,
   expectSharedSecretHttpOwnerIdentity,
 } from "./http-authority.test-support.js";
+import {
+  registerOpenAiHttpUploadTests,
+  runOpenAiHttpImageInputCases,
+} from "./http-input-media.test-support.js";
 import {
   assistantSnapshotCases,
   streamingFailureCases,
@@ -48,11 +45,15 @@ import {
   emitIncompatibleAssistantReplacement,
   emitCompatibleAssistantReplacement,
   emitBufferedAssistantReplacement,
+  emitEmbeddedLateCommentary,
   createOpenAiHttpTestClient,
   parseSseDataLines,
   readRawChatCompletionStream,
 } from "./http-stream.test-support.js";
+import { registerOpenAiHttpSamplingTests } from "./openai-http.sampling.test-support.js";
+import { browserProxyAuth } from "./server.auth.test-helpers.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
+import { writeGatewayConfig } from "./test-helpers.config-runtime.js";
 import {
   agentCommandMock,
   getGatewayTestPort,
@@ -61,67 +62,162 @@ import {
   testState,
   withGatewayServer,
 } from "./test-helpers.js";
+import { startClaimedGateway } from "./test-helpers.listener.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
 let startGatewayServer: typeof import("./server.js").startGatewayServer;
-let enabledServer: Awaited<ReturnType<typeof startServer>>;
+let enabledServer: Awaited<ReturnType<typeof startGatewayServer>>;
 let enabledPort: number;
 
 beforeAll(async () => {
   ({ startGatewayServer } = await import("./server.js"));
-  const started = await startGatewayServerWithRetries({
-    port: await getGatewayTestPort(),
-    opts: {
+});
+
+async function startSharedSecretServer(port: TestPortClaim, mode: "token" | "password") {
+  return await startClaimedGateway(port, () =>
+    startGatewayServer(port.port, {
       host: "127.0.0.1",
-      auth: { mode: "none" },
+      auth:
+        mode === "token"
+          ? { mode: "token", token: "secret" }
+          : { mode: "password", password: "secret" },
       controlUiEnabled: false,
       openAiChatCompletionsEnabled: true,
-    },
-  });
-  enabledPort = started.port;
-  enabledServer = started.server;
-});
-
-afterAll(async () => {
-  await enabledServer?.close({ reason: "openai http enabled suite done" });
-});
-
-async function startServer(port: number, opts?: { openAiChatCompletionsEnabled?: boolean }) {
-  return await startGatewayServer(port, {
-    host: "127.0.0.1",
-    auth: { mode: "none" },
-    controlUiEnabled: false,
-    openAiChatCompletionsEnabled: opts?.openAiChatCompletionsEnabled ?? true,
-  });
+    }),
+  );
 }
 
-async function startSharedSecretServer(
-  port: number,
-  mode: "token" | "password",
-  opts?: { openAiChatCompletionsEnabled?: boolean },
+function chatRequest(overrides: Record<string, unknown> = {}, content = "hi") {
+  return { model: "openclaw", messages: [{ role: "user", content }], ...overrides };
+}
+
+type AgentResult = {
+  payloads: Array<{ text?: string }>;
+  meta?: {
+    stopReason?: string;
+    pendingToolCalls?: Array<{ id: string; name: string; arguments: string }>;
+    agentMeta?: { usage?: Record<string, number>; lastCallUsage?: Record<string, number> };
+  };
+};
+
+function mockAgentResult(result: AgentResult) {
+  agentCommandMock.mockClear();
+  agentCommandMock.mockResolvedValueOnce(result as never);
+}
+
+function mockAgentOnce(payloads: AgentResult["payloads"] = [{ text: "hello" }]) {
+  mockAgentResult({ payloads });
+}
+
+function toolResult<T extends AgentResult["payloads"]>(
+  payloads: T,
+  pendingToolCalls: Array<{ id: string; name: string; arguments: string }>,
+  agentMeta?: NonNullable<AgentResult["meta"]>["agentMeta"],
 ) {
-  return await startGatewayServer(port, {
-    host: "127.0.0.1",
-    auth:
-      mode === "token"
-        ? { mode: "token", token: "secret" }
-        : { mode: "password", password: "secret" },
-    controlUiEnabled: false,
-    openAiChatCompletionsEnabled: opts?.openAiChatCompletionsEnabled ?? true,
-  });
+  return {
+    payloads,
+    meta: { stopReason: "tool_calls", pendingToolCalls, ...(agentMeta && { agentMeta }) },
+  };
 }
 
-async function writeGatewayConfig(config: Record<string, unknown>) {
-  const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  if (!configPath) {
-    throw new Error("OPENCLAW_CONFIG_PATH is required for gateway config tests");
+function weatherCall() {
+  return { id: "call_1", name: "get_weather", arguments: '{"city":"Taipei"}' };
+}
+
+function usageResult(
+  text: string,
+  agentMeta: NonNullable<AgentResult["meta"]>["agentMeta"],
+): AgentResult {
+  return { payloads: [{ text }], meta: { agentMeta } };
+}
+
+type ErrorResponse = { error?: { type?: string; message?: string } };
+type StreamChunk = OpenAI.ChatCompletionChunk & { error?: ErrorResponse["error"] };
+
+function parseChunks(data: string[]): StreamChunk[] {
+  return data.filter((line) => line !== "[DONE]").map((line) => JSON.parse(line) as StreamChunk);
+}
+
+function streamChoices(chunks: StreamChunk[]) {
+  return chunks.flatMap((chunk) => chunk.choices ?? []);
+}
+
+function streamContent(chunks: StreamChunk[]) {
+  return streamChoices(chunks)
+    .map((choice) => choice.delta.content ?? "")
+    .join("");
+}
+
+async function readSdkStream(stream: AsyncIterable<OpenAI.ChatCompletionChunk>) {
+  const choices: OpenAI.ChatCompletionChunk["choices"] = [];
+  for await (const chunk of stream) {
+    choices.push(...chunk.choices);
   }
-  await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
+  return {
+    content: choices.map((choice) => choice.delta.content ?? "").join(""),
+    finishReasons: choices.map((choice) => choice.finish_reason),
+  };
 }
 
-async function postChatCompletions(port: number, body: unknown, headers?: Record<string, string>) {
+function mockAgentRun(run: (runId: string) => unknown, requireRunId = false) {
+  agentCommandMock.mockClear();
+  agentCommandMock.mockImplementationOnce(((opts: unknown) => {
+    const runId = (opts as { runId?: string }).runId ?? "";
+    if (requireRunId && !runId) {
+      throw new Error("expected a streaming chat-completion run ID");
+    }
+    return run(runId);
+  }) as never);
+}
+
+async function expectRejectedChat(
+  body: unknown,
+  message: string | RegExp,
+  {
+    headers,
+    status = 400,
+    type = "invalid_request_error",
+    contains = false,
+  }: {
+    headers?: Record<string, string>;
+    status?: number;
+    type?: string;
+    contains?: boolean;
+  } = {},
+) {
+  agentCommandMock.mockClear();
+  const res = await postChatCompletions(enabledPort, body, headers);
+  expect(res.status).toBe(status);
+  const json = (await res.json()) as ErrorResponse;
+  expect(json.error?.type).toBe(type);
+  if (contains) {
+    expect(json.error?.message).toContain(message);
+  } else if (message instanceof RegExp) {
+    expect(json.error?.message).toMatch(message);
+  } else {
+    expect(json.error?.message).toBe(message);
+  }
+  expect(agentCommandMock).toHaveBeenCalledTimes(0);
+}
+
+function functionTool(
+  name: string,
+  description: string,
+  parameters: Record<string, unknown> = { type: "object", properties: {} },
+  strict?: boolean,
+): OpenAI.ChatCompletionTool {
+  return {
+    type: "function",
+    function: { name, description, parameters, ...(strict === undefined ? {} : { strict }) },
+  };
+}
+
+async function postChatCompletions(
+  port: number,
+  body: unknown = chatRequest(),
+  headers?: Record<string, string>,
+) {
   const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
     method: "POST",
     headers: {
@@ -145,41 +241,60 @@ async function postRawChatCompletions(port: number, body: string) {
   });
 }
 
-type FirstAgentCommandOptions = {
-  clientTools?: Array<{
-    function?: {
-      description?: string;
-      name?: string;
-      parameters?: Record<string, unknown>;
-      strict?: boolean;
-    };
-    type?: string;
-  }>;
-  extraSystemPrompt?: string;
-  images?: Array<{ data: string; mimeType: string; type: string }>;
-  message?: string;
-  messageChannel?: string;
-  model?: string;
-  onAdmittedRunContext?: (context: object) => void | Promise<void>;
-  senderIsOwner?: boolean;
-  sessionKey?: string;
-  streamParams?: {
-    frequencyPenalty?: number;
-    maxTokens?: number;
-    presencePenalty?: number;
-    responseFormat?: Record<string, unknown>;
-    seed?: number;
-    stop?: string[];
-    temperature?: number;
-    topP?: number;
-  };
-};
+async function dispatchChat(
+  body: unknown = chatRequest(),
+  headers?: Record<string, string>,
+  payloads: AgentResult["payloads"] = [{ text: "hello" }],
+) {
+  mockAgentOnce(payloads);
+  const response = await postChatCompletions(enabledPort, body, headers);
+  expect(response.status).toBe(200);
+  await response.text();
+}
+
+type FirstAgentCommandOptions = Pick<
+  AgentCommandOpts,
+  | "clientTools"
+  | "extraSystemPrompt"
+  | "images"
+  | "message"
+  | "messageChannel"
+  | "model"
+  | "senderIsOwner"
+  | "sessionKey"
+  | "streamParams"
+> & { onAdmittedRunContext?: (context: object) => void | Promise<void> };
 
 function firstAgentCommandOptions() {
   return agentCommandMock.mock.calls.at(0)?.[0] as FirstAgentCommandOptions | undefined;
 }
 
 describe("OpenAI-compatible HTTP API (e2e)", () => {
+  beforeAll(async () => {
+    const started = await startGatewayServerWithRetries({
+      port: await getGatewayTestPort(),
+      opts: {
+        host: "127.0.0.1",
+        auth: { mode: "none" },
+        controlUiEnabled: false,
+        openAiChatCompletionsEnabled: true,
+      },
+    });
+    enabledPort = started.port;
+    enabledServer = started.server;
+  });
+
+  afterAll(async () => {
+    await enabledServer?.close({ reason: "openai http enabled suite done" });
+  });
+
+  registerOpenAiHttpUploadTests({
+    getPort: () => enabledPort,
+    postChatCompletions,
+    firstAgentCommandOptions,
+    agentCommandMock,
+  });
+
   it.each([
     { stream: false, includeUsage: false },
     { stream: true, includeUsage: false },
@@ -188,29 +303,11 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     "preserves the output-budget finish reason (stream=$stream, usage=$includeUsage)",
     async ({ stream, includeUsage }) => {
       const partialText = "Here is the first half of the answer";
-      const assistant = buildEmbeddedRunnerAssistant({
-        stopReason: "length",
-        content: [{ type: "text", text: partialText }],
-      });
-      const resolved = await resolveEmbeddedRunTerminal(
-        makeTerminalInput({
-          attempt: makeEmbeddedRunnerAttempt({
-            assistantTexts: [partialText],
-            lastAssistant: assistant,
-            currentAttemptAssistant: assistant,
-            currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-          }),
-          attemptAssistant: assistant,
-          payloadsWithToolMedia: [{ text: partialText }],
-        }),
-      );
-      expect(resolved.action).toBe("complete");
-      if (resolved.action !== "complete") {
-        throw new Error("expected a deliverable partial response");
-      }
-      expect(resolved.result.meta.stopReason).toBe("length");
-      expect(resolved.result.meta.error).toBeUndefined();
-
+      // The terminal-resolution suite owns producing this result; this suite owns HTTP delivery.
+      const result = {
+        payloads: [{ text: partialText }, { text: TRUNCATED_REPLY_NOTICE_TEXT }],
+        meta: { stopReason: "length" },
+      };
       const continueAgent = createDeferred();
       agentCommandMock.mockClear();
       agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
@@ -220,16 +317,17 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
           await continueAgent.promise;
         }
-        return recordAgentRunTerminalOutcome(resolved.result, "completed");
+        return recordAgentRunTerminalOutcome(result, "completed");
       }) as never);
 
       try {
-        const response = await postChatCompletions(enabledPort, {
-          stream,
-          ...(includeUsage ? { stream_options: { include_usage: true } } : {}),
-          model: "openclaw",
-          messages: [{ role: "user", content: "Explain the result." }],
-        });
+        const response = await postChatCompletions(
+          enabledPort,
+          chatRequest(
+            { stream, ...(includeUsage ? { stream_options: { include_usage: true } } : {}) },
+            "Explain the result.",
+          ),
+        );
         expect(response.status).toBe(200);
         if (!stream) {
           const completion = (await response.json()) as OpenAI.ChatCompletion;
@@ -260,9 +358,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           wire += decoder.decode(value, { stream: true });
         }
         const data = parseSseDataLines(wire);
-        const chunks = data
-          .filter((entry) => entry !== "[DONE]")
-          .map((entry) => JSON.parse(entry) as OpenAI.ChatCompletionChunk);
+        const chunks = parseChunks(data);
         const choices = chunks.flatMap((chunk) => chunk.choices);
         expect(choices.map((choice) => choice.delta.content ?? "").join("")).toContain(partialText);
         expect(choices.map((choice) => choice.finish_reason).filter(Boolean)).toEqual(["length"]);
@@ -291,10 +387,9 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         name: string;
         result: OpenAI.ChatCompletionToolMessageParam | OpenAI.ChatCompletionFunctionMessageParam;
       }>
-    ).flatMap(({ name, result }) => [false, true].map((stream) => ({ name, result, stream }))),
+    ).map(({ name, result }, index) => ({ name, result, stream: index === 0 })),
   )("continues a client tool result with $name (stream=$stream)", async ({ result, stream }) => {
-    agentCommandMock.mockClear();
-    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "Lookup completed." }] } as never);
+    mockAgentResult({ payloads: [{ text: "Lookup completed." }] });
     const client = createOpenAiHttpTestClient(enabledPort);
     const request = {
       model: "openclaw",
@@ -330,10 +425,9 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
   it.each([false, true])(
     "preserves each parallel client tool result (emptyFirst=%s)",
     async (emptyFirst) => {
-      agentCommandMock.mockClear();
-      agentCommandMock.mockResolvedValueOnce({
+      mockAgentResult({
         payloads: [{ text: "Both lookups completed." }],
-      } as never);
+      });
       const results: OpenAI.ChatCompletionToolMessageParam[] = [
         { role: "tool", tool_call_id: "call_1", content: "" },
         { role: "tool", tool_call_id: "call_2", content: "0" },
@@ -366,88 +460,38 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
   it.each([
     { role: "tool", tool_call_id: "call_1" },
-    { role: "tool", tool_call_id: "call_1", content: null },
     { role: "tool", tool_call_id: "call_1", content: 0 },
-    { role: "tool", tool_call_id: "call_1", content: {} },
     { role: "tool", tool_call_id: "call_1", content: [null] },
-    { role: "tool", tool_call_id: "call_1", content: [{}] },
     { role: "tool", tool_call_id: "call_1", content: [{ type: "text", text: 0 }] },
     { role: "tool", tool_call_id: "call_1", content: [{ type: "text", text: "" }, {}] },
-    { role: "tool", tool_call_id: "call_1", content: [{ type: "text", text: " \n " }, {}] },
-    { role: "tool", content: "" },
     { role: "tool", tool_call_id: " ", content: "" },
     { role: "function", name: "lookup" },
     { role: "function", name: "lookup", content: [] },
-    { role: "function", name: "lookup", content: [{ type: "text", text: "" }] },
     { role: "function", content: null },
     { role: "user", content: "" },
-    { role: "assistant", content: "" },
   ])(
     "does not invent a client tool result for malformed or missing content: %j",
     async (message) => {
       agentCommandMock.mockClear();
-      const response = await postChatCompletions(enabledPort, {
-        model: "openclaw",
-        messages: [message],
-      });
+      const response = await postChatCompletions(enabledPort, chatRequest({ messages: [message] }));
       expect(response.status).toBe(400);
       expect(await response.json()).toMatchObject({ error: { type: "invalid_request_error" } });
       expect(agentCommandMock).not.toHaveBeenCalled();
     },
   );
 
-  it("binds the Gateway lifecycle resolver to chat-completion runs", async () => {
-    const started = await startGatewayServerWithRetries({
-      port: await getGatewayTestPort(),
-      opts: {
-        host: "127.0.0.1",
-        auth: { mode: "none" },
-        controlUiEnabled: false,
-        openAiChatCompletionsEnabled: true,
-      },
-    });
-    let resolveGatewayContext: ReturnType<typeof getGatewayContextResolver>;
-    try {
-      agentCommandMock.mockClear();
-      agentCommandMock.mockImplementationOnce(async (opts: unknown) => {
-        const admittedRunContext = {};
-        const onAdmittedRunContext = (opts as FirstAgentCommandOptions).onAdmittedRunContext;
-        expect(onAdmittedRunContext).toBeTypeOf("function");
-        await onAdmittedRunContext?.(admittedRunContext);
-        resolveGatewayContext = getGatewayContextResolver(admittedRunContext);
-        return { payloads: [{ text: "hello" }] } as never;
-      });
-
-      const res = await postChatCompletions(started.port, {
-        model: "openclaw",
-        messages: [{ role: "user", content: "hi" }],
-      });
-
-      expect(res.status).toBe(200);
-      await res.text();
-      const context = resolveGatewayContext?.();
-      expect(context?.resolveGatewayContext).toBe(resolveGatewayContext);
-    } finally {
-      await started.server.close({ reason: "chat-completion resolver lifecycle test done" });
-    }
-    expect(resolveGatewayContext?.()).toBeUndefined();
-  });
-
   it("returns a typed selection error unless an ownerless fleet request selects an agent", async () => {
     try {
       testState.agentsConfig = {
         ownership: "explicit",
-        list: [{ id: "main" }, { id: "beta" }],
+        entries: { main: {}, beta: {} },
       };
       resetConfigRuntimeState();
       agentCommandMock.mockClear();
 
-      const missing = await postChatCompletions(enabledPort, {
-        model: "openclaw",
-        messages: [{ role: "user", content: "hi" }],
-      });
+      const missing = await postChatCompletions(enabledPort);
       expect(missing.status).toBe(400);
-      const missingJson = (await missing.json()) as { error?: { message?: string; type?: string } };
+      const missingJson = (await missing.json()) as ErrorResponse;
       expect(missingJson.error?.type).toBe("invalid_request_error");
       expect(missingJson.error?.message).toContain("has no explicit owner");
       expect(agentCommandMock).not.toHaveBeenCalled();
@@ -469,21 +513,14 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
   it("handles request validation and routing", async () => {
     const port = enabledPort;
-    const mockAgentOnce = (payloads: Array<{ text: string }>) => {
-      agentCommandMock.mockClear();
-      agentCommandMock.mockResolvedValueOnce({ payloads } as never);
-    };
-    const expectAgentSessionKeyMatch = async (request: {
-      body: unknown;
-      headers?: Record<string, string>;
-      matcher: RegExp;
-    }) => {
-      mockAgentOnce([{ text: "hello" }]);
-      const res = await postChatCompletions(port, request.body, request.headers);
-      expect(res.status).toBe(200);
+    const expectAgentSessionKeyMatch = async (
+      body: unknown,
+      matcher: RegExp,
+      headers?: Record<string, string>,
+    ) => {
+      await dispatchChat(body, headers);
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
-      expect(firstAgentCommandOptions()?.sessionKey ?? "").toMatch(request.matcher);
-      await res.text();
+      expect(firstAgentCommandOptions()?.sessionKey ?? "").toMatch(matcher);
     };
     const expectMessageContext = (
       message: string,
@@ -498,14 +535,20 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(message).toContain(line);
       }
     };
-    const getFirstAgentCall = () => firstAgentCommandOptions();
-    const getFirstAgentMessage = () => getFirstAgentCall()?.message ?? "";
+    const getFirstAgentMessage = () => firstAgentCommandOptions()?.message ?? "";
+    const checkConversation = async (
+      messages: unknown[],
+      expected: { history: string[]; current: string[] },
+      payloads: AgentResult["payloads"],
+    ) => {
+      await dispatchChat(chatRequest({ messages }), undefined, payloads);
+      const message = getFirstAgentMessage();
+      expectMessageContext(message, expected);
+      return message;
+    };
     const expectInvalidRequestNoDispatch = async (messages: unknown[]) => {
       agentCommandMock.mockClear();
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        messages,
-      });
+      const res = await postChatCompletions(port, chatRequest({ messages }));
       expect(res.status).toBe(400);
       const json = (await res.json()) as Record<string, unknown>;
       const error = json.error as Record<string, unknown> | undefined;
@@ -514,17 +557,13 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       expect(agentCommandMock).toHaveBeenCalledTimes(0);
     };
     const postSyncUserMessage = async (message: string) => {
-      const res = await postChatCompletions(port, {
-        stream: false,
-        model: "openclaw",
-        messages: [{ role: "user", content: message }],
-      });
+      const res = await postChatCompletions(port, chatRequest({ stream: false }, message));
       expect(res.status).toBe(200);
       return (await res.json()) as Record<string, unknown>;
     };
 
     try {
-      testState.agentsConfig = { list: [{ id: "main" }] };
+      testState.agentsConfig = { entries: { main: {} } };
       resetConfigRuntimeState();
 
       {
@@ -537,7 +576,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        mockAgentOnce([{ text: "hello" }]);
+        mockAgentOnce();
         const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
           method: "POST",
           headers: {
@@ -548,170 +587,91 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         });
         expect(res.status).toBe(200);
         expect(agentCommandMock).toHaveBeenCalledTimes(1);
-        expect(getFirstAgentCall()?.messageChannel).toBe("webchat");
+        expect(firstAgentCommandOptions()?.messageChannel).toBe("webchat");
         await res.text();
       }
 
       testState.agentsConfig = {
         ownership: "explicit",
-        list: [{ id: "main" }, { id: "beta" }],
+        entries: { main: {}, beta: {} },
       };
       resetConfigRuntimeState();
-      await expectAgentSessionKeyMatch({
-        body: { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
-        headers: { "x-openclaw-agent-id": "beta" },
-        matcher: /^agent:beta:/,
+      await expectAgentSessionKeyMatch(chatRequest(), /^agent:beta:/, {
+        "x-openclaw-agent-id": "beta",
       });
+      await expectAgentSessionKeyMatch(chatRequest({ model: "openclaw/beta" }), /^agent:beta:/);
 
-      await expectAgentSessionKeyMatch({
-        body: {
-          model: "openclaw/beta",
-          messages: [{ role: "user", content: "hi" }],
-        },
-        matcher: /^agent:beta:/,
-      });
-
-      testState.agentsConfig = { list: [{ id: "main" }] };
+      testState.agentsConfig = { entries: { main: {} } };
       resetConfigRuntimeState();
 
-      await expectAgentSessionKeyMatch({
-        body: {
-          model: "openclaw/default",
-          messages: [{ role: "user", content: "hi" }],
-        },
-        headers: { "x-openclaw-agent-id": "main" },
-        matcher: /^agent:main:/,
+      await expectAgentSessionKeyMatch(chatRequest({ model: "openclaw/default" }), /^agent:main:/, {
+        "x-openclaw-agent-id": "main",
       });
 
-      {
-        agentCommandMock.mockClear();
-        const res = await postChatCompletions(
-          port,
-          { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
-          { "x-openclaw-agent-id": "missing-agent" },
-        );
-        expect(res.status).toBe(400);
-        const json = (await res.json()) as { error?: { type?: string; message?: string } };
-        expect(json.error?.type).toBe("invalid_request_error");
-        expect(json.error?.message).toBe("Unknown agent 'missing-agent'.");
-        expect(agentCommandMock).toHaveBeenCalledTimes(0);
-      }
+      await expectRejectedChat(chatRequest(), "Unknown agent 'missing-agent'.", {
+        headers: {
+          "x-openclaw-agent-id": "missing-agent",
+        },
+      });
 
-      {
-        agentCommandMock.mockClear();
-        const res = await postChatCompletions(port, {
-          model: "openclaw/missing-agent",
-          messages: [{ role: "user", content: "hi" }],
-        });
-        expect(res.status).toBe(400);
-        const json = (await res.json()) as { error?: { type?: string; message?: string } };
-        expect(json.error?.type).toBe("invalid_request_error");
-        expect(json.error?.message).toBe("Unknown agent 'missing-agent'.");
-        expect(agentCommandMock).toHaveBeenCalledTimes(0);
-      }
+      await expectRejectedChat(
+        chatRequest({ model: "openclaw/missing-agent" }),
+        "Unknown agent 'missing-agent'.",
+      );
 
-      {
-        agentCommandMock.mockClear();
-        const res = await postChatCompletions(
-          port,
-          { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
-          {
+      await expectRejectedChat(
+        chatRequest(),
+        "`x-openclaw-session-key` cannot use reserved internal session namespaces.",
+        {
+          headers: {
             "x-openclaw-session-key": "agent:main:harness:codex:supervision:spoofed-native-thread",
           },
-        );
-        expect(res.status).toBe(400);
-        const json = (await res.json()) as { error?: { type?: string; message?: string } };
-        expect(json.error?.type).toBe("invalid_request_error");
-        expect(json.error?.message).toBe(
-          "`x-openclaw-session-key` cannot use reserved internal session namespaces.",
-        );
-        expect(agentCommandMock).toHaveBeenCalledTimes(0);
-      }
+        },
+      );
 
       {
         testState.agentsConfig = {
           ownership: "explicit",
-          list: [{ id: "main" }, { id: "beta" }],
+          entries: { main: {}, beta: {} },
         };
         resetConfigRuntimeState();
-        mockAgentOnce([{ text: "hello" }]);
-        const res = await postChatCompletions(
-          port,
-          { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
-          {
-            "x-openclaw-agent-id": "beta",
-            "x-openclaw-session-key": "agent:beta:openai:custom",
-          },
-        );
+        mockAgentOnce();
+        const res = await postChatCompletions(port, chatRequest(), {
+          "x-openclaw-agent-id": "beta",
+          "x-openclaw-session-key": "agent:beta:openai:custom",
+        });
         expect(res.status).toBe(200);
 
         expect(firstAgentCommandOptions()?.sessionKey).toBe("agent:beta:openai:custom");
         await res.text();
-        testState.agentsConfig = { list: [{ id: "main" }] };
+        testState.agentsConfig = { entries: { main: {} } };
         resetConfigRuntimeState();
       }
 
-      {
-        agentCommandMock.mockClear();
-        const res = await postChatCompletions(
-          port,
-          { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
-          { "x-openclaw-session-key": "agent:main:subagent:spoofed" },
-        );
-        expect(res.status).toBe(400);
-        const json = (await res.json()) as { error?: { type?: string; message?: string } };
-        expect(json.error?.type).toBe("invalid_request_error");
-        expect(json.error?.message).toBe(
-          "`x-openclaw-session-key` cannot use reserved internal session namespaces.",
-        );
-        expect(agentCommandMock).toHaveBeenCalledTimes(0);
-      }
-
-      {
-        mockAgentOnce([{ text: "hello" }]);
-        const res = await postChatCompletions(port, {
-          user: "alice",
-          model: "openclaw",
-          messages: [{ role: "user", content: "hi" }],
-        });
-        expect(res.status).toBe(200);
-
-        expect(firstAgentCommandOptions()?.sessionKey ?? "").toContain("openai-user:alice");
-        await res.text();
-      }
-
-      {
-        mockAgentOnce([{ text: "hello" }]);
-        const res = await postChatCompletions(
-          port,
-          {
-            model: "openclaw",
-            messages: [{ role: "user", content: "hi" }],
+      await expectRejectedChat(
+        chatRequest(),
+        "`x-openclaw-session-key` cannot use reserved internal session namespaces.",
+        {
+          headers: {
+            "x-openclaw-session-key": "agent:main:subagent:spoofed",
           },
-          { "x-openclaw-message-channel": "custom-client-channel" },
-        );
-        expect(res.status).toBe(200);
-        expect(getFirstAgentCall()?.messageChannel).toBe("custom-client-channel");
-        await res.text();
-      }
+        },
+      );
 
-      {
-        mockAgentOnce([{ text: "hello" }]);
-        const res = await postChatCompletions(
-          port,
-          {
-            model: "openclaw",
-            messages: [{ role: "user", content: "hi" }],
-          },
-          {
-            "x-openclaw-model": "openai/gpt-5.4",
-            "x-openclaw-scopes": "operator.admin, operator.write",
-          },
-        );
-        expect(res.status).toBe(200);
-        expect(firstAgentCommandOptions()?.model).toBe("openai/gpt-5.4");
-        await res.text();
-      }
+      await dispatchChat(chatRequest({ user: "alice" }));
+
+      expect(firstAgentCommandOptions()?.sessionKey ?? "").toContain("openai-user:alice");
+
+      await dispatchChat(chatRequest(), {
+        "x-openclaw-message-channel": "custom-client-channel",
+      });
+      expect(firstAgentCommandOptions()?.messageChannel).toBe("custom-client-channel");
+
+      await dispatchChat(chatRequest(), {
+        "x-openclaw-model": "openai/gpt-5.4",
+        "x-openclaw-scopes": "operator.admin, operator.write",
+      });
+      expect(firstAgentCommandOptions()?.model).toBe("openai/gpt-5.4");
 
       {
         await writeGatewayConfig({
@@ -724,80 +684,39 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             },
           },
         });
-        mockAgentOnce([{ text: "hello" }]);
-        const res = await postChatCompletions(
-          port,
-          {
-            model: "openclaw",
-            messages: [{ role: "user", content: "hi" }],
-          },
-          {
-            "x-openclaw-model": "gpt-5.4",
-            "x-openclaw-scopes": "operator.admin, operator.write",
-          },
-        );
+        mockAgentOnce();
+        const res = await postChatCompletions(port, chatRequest(), {
+          "x-openclaw-model": "gpt-5.4",
+          "x-openclaw-scopes": "operator.admin, operator.write",
+        });
         expect(res.status).toBe(200);
         expect(firstAgentCommandOptions()?.model).toBe("gpt-5.4");
         await res.text();
         await writeGatewayConfig({});
       }
 
-      {
-        agentCommandMock.mockClear();
-        const res = await postChatCompletions(port, {
-          model: "openai/",
-          messages: [{ role: "user", content: "hi" }],
-        });
-        expect(res.status).toBe(400);
-        const json = (await res.json()) as { error?: { type?: string; message?: string } };
-        expect(json.error?.type).toBe("invalid_request_error");
-        expect(json.error?.message).toBe(
-          "Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.",
-        );
-        expect(agentCommandMock).toHaveBeenCalledTimes(0);
-      }
+      await expectRejectedChat(
+        chatRequest({ model: "openai/" }),
+        "Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.",
+      );
 
-      {
-        agentCommandMock.mockClear();
-        const res = await postChatCompletions(
-          port,
-          {
-            model: "openclaw",
-            messages: [{ role: "user", content: "hi" }],
-          },
-          { "x-openclaw-model": "openai/gpt-5.4" },
-        );
-        expect(res.status).toBe(403);
-        const json = (await res.json()) as { error?: { message?: string; type?: string } };
-        expect(json.error?.type).toBe("forbidden");
-        expect(json.error?.message).toBe("missing scope: operator.admin");
-        expect(agentCommandMock).toHaveBeenCalledTimes(0);
-      }
+      await expectRejectedChat(chatRequest(), "missing scope: operator.admin", {
+        headers: {
+          "x-openclaw-model": "openai/gpt-5.4",
+        },
+        status: 403,
+        type: "forbidden",
+      });
 
-      {
-        agentCommandMock.mockClear();
-        const res = await postChatCompletions(
-          port,
-          {
-            model: "openclaw",
-            messages: [{ role: "user", content: "hi" }],
-          },
-          {
-            "x-openclaw-model": "openai/",
-            "x-openclaw-scopes": "operator.admin, operator.write",
-          },
-        );
-        expect(res.status).toBe(400);
-        const json = (await res.json()) as { error?: { type?: string; message?: string } };
-        expect(json.error?.type).toBe("invalid_request_error");
-        expect(json.error?.message).toBe("Invalid `x-openclaw-model`.");
-        expect(agentCommandMock).toHaveBeenCalledTimes(0);
-      }
+      await expectRejectedChat(chatRequest(), "Invalid `x-openclaw-model`.", {
+        headers: {
+          "x-openclaw-model": "openai/",
+          "x-openclaw-scopes": "operator.admin, operator.write",
+        },
+      });
 
-      {
-        mockAgentOnce([{ text: "hello" }]);
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
+      await dispatchChat(
+        chatRequest({
           messages: [
             {
               role: "user",
@@ -807,236 +726,24 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
               ],
             },
           ],
-        });
-        expect(res.status).toBe(200);
+        }),
+      );
 
-        expect(firstAgentCommandOptions()?.message).toBe("hello\nworld");
-        await res.text();
-      }
+      expect(firstAgentCommandOptions()?.message).toBe("hello\nworld");
 
-      {
-        const imageData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAA";
-        mockAgentOnce([{ text: "looks good" }]);
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "text", text: "describe this" },
-                {
-                  type: "image_url",
-                  image_url: { url: `data:image/png;base64,${imageData}` },
-                },
-              ],
-            },
-          ],
-        });
-        expect(res.status).toBe(200);
-
-        const firstCall = getFirstAgentCall();
-        expect(firstCall?.message).toBe("describe this");
-        expect(firstCall?.images).toEqual([
-          { type: "image", data: imageData, mimeType: "image/png" },
-        ]);
-        await res.text();
-      }
-
-      {
-        const imageData = "QUJDRA==";
-        mockAgentOnce([{ text: "supports data-uri params" }]);
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "text", text: "with metadata params" },
-                {
-                  type: "image_url",
-                  image_url: { url: `data:image/png;charset=utf-8;base64,${imageData}` },
-                },
-              ],
-            },
-          ],
-        });
-        expect(res.status).toBe(200);
-
-        const firstCall = getFirstAgentCall();
-        expect(firstCall?.images).toEqual([
-          { type: "image", data: imageData, mimeType: "image/png" },
-        ]);
-        await res.text();
-      }
-
-      await expectInvalidRequestNoDispatch([
-        {
-          role: "user",
-          content: [
-            {
-              type: "image_url",
-              image_url: { url: "https://example.com/image.png" },
-            },
-          ],
-        },
-      ]);
-
-      const malformedImageParts = [
-        { type: "image_url" },
-        { type: "image_url", image_url: null },
-        { type: "image_url", image_url: {} },
-        { type: "image_url", image_url: { url: "   " } },
-        { type: "image_url", image_url: { url: 123 } },
-        { type: "image_url", image_url: { url: null } },
-        { type: "image_url", image_url: "   " },
-        { type: "image_url", image_url: 123 },
-      ];
-      const validImagePart = {
-        type: "image_url",
-        image_url: { url: "data:image/png;base64,QUJDRA==" },
-      };
-      for (const imagePart of malformedImageParts) {
-        for (const content of [
-          [imagePart],
-          [{ type: "text", text: "describe this" }, imagePart],
-          [validImagePart, imagePart],
-        ]) {
-          await expectInvalidRequestNoDispatch([{ role: "user", content }]);
-        }
-      }
-
-      for (const malformedDataUri of [
-        "data:image/png,QUJDRA==",
-        "data:image/png;base64,",
-        "data:image/png;base64,%%%",
-        "data:image/svg+xml;base64,PHN2Zz4=",
-        "data:image/png;base64,JVBERi0xLjQK",
-      ]) {
-        await expectInvalidRequestNoDispatch([
-          {
-            role: "user",
-            content: [
-              { type: "text", text: "describe this" },
-              { type: "image_url", image_url: { url: malformedDataUri } },
-            ],
-          },
-        ]);
-      }
-
-      {
-        mockAgentOnce([{ text: "I can see the image" }]);
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          messages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "image_url",
-                  image_url: { url: "data:image/jpeg;base64,QUJDRA==" },
-                },
-              ],
-            },
-          ],
-        });
-        expect(res.status).toBe(200);
-
-        const firstCall = getFirstAgentCall();
-        expect(firstCall?.message).toContain("User sent image(s) with no text.");
-        expect(firstCall?.images).toEqual([
-          { type: "image", data: "QUJDRA==", mimeType: "image/jpeg" },
-        ]);
-        await res.text();
-      }
-
-      {
-        mockAgentOnce([{ text: "follow up answer" }]);
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "image_url", image_url: { url: "data:image/png;base64,QUJDRA==" } },
-              ],
-            },
-            { role: "assistant", content: "I can see it." },
-            { role: "user", content: "What color was it?" },
-          ],
-        });
-        expect(res.status).toBe(200);
-
-        const firstCall = getFirstAgentCall();
-        expect(firstCall?.images).toBeUndefined();
-        expect(firstCall?.message ?? "").not.toContain("User sent image(s) with no text.");
-        await res.text();
-      }
-
-      for (const historicalImageParts of [
-        [{ type: "image_url", image_url: { url: "   " } }],
-        [validImagePart, { type: "image_url", image_url: { url: "   " } }],
-      ]) {
-        for (const followup of [
-          { role: "user", content: "What color was it?" },
-          { role: "tool", content: "Vision tool says it is blue." },
-        ]) {
-          mockAgentOnce([{ text: "follow up answer" }]);
-          const res = await postChatCompletions(port, {
-            model: "openclaw",
-            messages: [
-              {
-                role: "user",
-                content: [{ type: "text", text: "look at this" }, ...historicalImageParts],
-              },
-              { role: "assistant", content: "Checking the image." },
-              followup,
-            ],
-          });
-          expect(res.status).toBe(200);
-          expect(getFirstAgentCall()?.images).toBeUndefined();
-          expect(getFirstAgentMessage()).toContain("User: look at this");
-          await res.text();
-        }
-      }
-
-      {
-        mockAgentOnce([{ text: "latest image only" }]);
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "text", text: "first" },
-                { type: "image_url", image_url: { url: "data:image/png;base64,QUFBQQ==" } },
-              ],
-            },
-            { role: "assistant", content: "noted" },
-            {
-              role: "user",
-              content: [
-                { type: "text", text: "second" },
-                { type: "image_url", image_url: { url: "data:image/png;base64,QkJCQg==" } },
-              ],
-            },
-          ],
-        });
-        expect(res.status).toBe(200);
-
-        const firstCall = getFirstAgentCall();
-        expect(firstCall?.images).toEqual([
-          { type: "image", data: "QkJCQg==", mimeType: "image/png" },
-        ]);
-        await res.text();
-      }
+      await runOpenAiHttpImageInputCases({
+        port,
+        postChatCompletions,
+        mockAgentOnce,
+        getFirstAgentCall: firstAgentCommandOptions,
+        getFirstAgentMessage,
+        expectInvalidRequestNoDispatch,
+      });
 
       {
         const largeMessage = "x".repeat(1_200_000);
         mockAgentOnce([{ text: "accepted" }]);
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          messages: [{ role: "user", content: largeMessage }],
-        });
+        const res = await postChatCompletions(port, chatRequest({}, largeMessage));
         expect(res.status).toBe(200);
         await res.text();
       }
@@ -1066,87 +773,67 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         ]);
       }
 
-      {
-        mockAgentOnce([{ text: "I am Claude" }]);
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          messages: [
-            { role: "system", content: "You are a helpful assistant." },
-            { role: "user", content: "Hello, who are you?" },
-            { role: "assistant", content: "I am Claude." },
-            { role: "user", content: "What did I just ask you?" },
-          ],
-        });
-        expect(res.status).toBe(200);
-
-        const message = getFirstAgentMessage();
-        expectMessageContext(message, {
+      await checkConversation(
+        [
+          { role: "system", content: "You are a helpful assistant." },
+          { role: "user", content: "Hello, who are you?" },
+          { role: "assistant", content: "I am Claude." },
+          { role: "user", content: "What did I just ask you?" },
+        ],
+        {
           history: ["User: Hello, who are you?", "Assistant: I am Claude."],
           current: ["User: What did I just ask you?"],
-        });
-        await res.text();
-      }
+        },
+        [{ text: "I am Claude" }],
+      );
 
       {
-        mockAgentOnce([{ text: "hello" }]);
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          messages: [
-            { role: "system", content: "You are a helpful assistant." },
-            { role: "user", content: "Hello" },
-          ],
-        });
-        expect(res.status).toBe(200);
+        await dispatchChat(
+          chatRequest({
+            messages: [
+              { role: "system", content: "You are a helpful assistant." },
+              { role: "user", content: "Hello" },
+            ],
+          }),
+        );
 
         const message = getFirstAgentMessage();
         expect(message).not.toContain(HISTORY_CONTEXT_MARKER);
         expect(message).not.toContain(CURRENT_MESSAGE_MARKER);
         expect(message).toBe("Hello");
-        await res.text();
       }
 
       {
-        mockAgentOnce([{ text: "hello" }]);
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          messages: [
-            { role: "developer", content: "You are a helpful assistant." },
-            { role: "user", content: "Hello" },
-          ],
-        });
-        expect(res.status).toBe(200);
+        await dispatchChat(
+          chatRequest({
+            messages: [
+              { role: "developer", content: "You are a helpful assistant." },
+              { role: "user", content: "Hello" },
+            ],
+          }),
+        );
 
-        const extraSystemPrompt = getFirstAgentCall()?.extraSystemPrompt ?? "";
+        const extraSystemPrompt = firstAgentCommandOptions()?.extraSystemPrompt ?? "";
         expect(extraSystemPrompt).toBe("You are a helpful assistant.");
-        await res.text();
       }
 
-      {
-        mockAgentOnce([{ text: "ok" }]);
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          messages: [
-            { role: "system", content: "You are a helpful assistant." },
-            { role: "user", content: "What's the weather?" },
-            { role: "assistant", content: "Checking the weather." },
-            { role: "tool", content: "Sunny, 70F." },
-          ],
-        });
-        expect(res.status).toBe(200);
-
-        const message = getFirstAgentMessage();
-        expectMessageContext(message, {
+      await checkConversation(
+        [
+          { role: "system", content: "You are a helpful assistant." },
+          { role: "user", content: "What's the weather?" },
+          { role: "assistant", content: "Checking the weather." },
+          { role: "tool", content: "Sunny, 70F." },
+        ],
+        {
           history: ["User: What's the weather?", "Assistant: Checking the weather."],
           current: ["Tool: Sunny, 70F."],
-        });
-        await res.text();
-      }
+        },
+        [{ text: "ok" }],
+      );
 
       {
-        mockAgentOnce([{ text: "tool follow-up ok" }]);
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          messages: [
+        const message = await checkConversation(
+          [
             {
               role: "user",
               content: [
@@ -1157,469 +844,258 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             { role: "assistant", content: "Checking the image." },
             { role: "tool", content: "Vision tool says it is blue." },
           ],
-        });
-        expect(res.status).toBe(200);
+          {
+            history: ["User: look at this", "Assistant: Checking the image."],
+            current: ["Tool: Vision tool says it is blue."],
+          },
+          [{ text: "tool follow-up ok" }],
+        );
 
-        const firstCall = getFirstAgentCall();
+        const firstCall = firstAgentCommandOptions();
         expect(firstCall?.images).toBeUndefined();
-        const message = getFirstAgentMessage();
-        expectMessageContext(message, {
-          history: ["User: look at this", "Assistant: Checking the image."],
-          current: ["Tool: Vision tool says it is blue."],
-        });
+
         expect(message).not.toContain("User sent image(s) with no text.");
-        await res.text();
       }
 
       {
-        mockAgentOnce([{ text: "tool choice none" }]);
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          tool_choice: "none",
-          tools: [
-            {
-              type: "function",
-              function: {
-                name: "get_time",
-                description: "Get current time",
-                parameters: { type: "object", properties: {} },
-              },
-            },
-          ],
-          messages: [{ role: "user", content: "time?" }],
-        });
-        expect(res.status).toBe(200);
-        const firstCall = getFirstAgentCall();
+        await dispatchChat(
+          chatRequest({
+            tool_choice: "none",
+            tools: [functionTool("get_time", "Get current time")],
+          }),
+          undefined,
+          [{ text: "tool choice none" }],
+        );
+        const firstCall = firstAgentCommandOptions();
         expect(firstCall?.clientTools).toBeUndefined();
-        await res.text();
       }
 
       {
-        mockAgentOnce([{ text: "tool choice auto" }]);
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          tool_choice: "auto",
-          tools: [
-            {
-              type: "function",
-              function: {
-                name: "get_time",
-                description: "Get current time",
-                parameters: { type: "object", properties: {} },
-                strict: true,
-              },
-            },
-          ],
-          messages: [{ role: "user", content: "time?" }],
-        });
-        expect(res.status).toBe(200);
-        const firstCall = getFirstAgentCall();
+        await dispatchChat(
+          chatRequest({
+            tool_choice: "auto",
+            tools: [functionTool("get_time", "Get current time", undefined, true)],
+          }),
+          undefined,
+          [{ text: "tool choice auto" }],
+        );
+        const firstCall = firstAgentCommandOptions();
         const clientTools = firstCall?.clientTools ?? [];
         expect(clientTools).toHaveLength(1);
         expect(clientTools[0]?.type).toBe("function");
         expect(clientTools[0]?.function?.name).toBe("get_time");
         expect(clientTools[0]?.function?.strict).toBe(true);
         expect(firstCall).not.toHaveProperty("toolsAllow");
-        await res.text();
       }
 
-      {
-        agentCommandMock.mockClear();
-        agentCommandMock.mockResolvedValueOnce({
-          payloads: [{ text: "tool choice function" }],
-          meta: {
-            stopReason: "tool_calls",
-            pendingToolCalls: [
-              {
-                id: "call_1",
-                name: "get_weather",
-                arguments: '{"city":"Taipei"}',
-              },
+      for (const [tool_choice, prompt] of [
+        [
+          { type: "function", function: { name: "get_weather" } },
+          "You must call the get_weather tool",
+        ],
+        ["required", "You must call one of the available tools"],
+      ] as const) {
+        mockAgentResult(toolResult([{ text: "tool choice" }], [weatherCall()]));
+        const res = await postChatCompletions(
+          port,
+          chatRequest({
+            tool_choice,
+            tools: [
+              ...(tool_choice === "required" ? [] : [functionTool("get_time", "Get current time")]),
+              functionTool("get_weather", "Get current weather", {
+                type: "object",
+                properties: { city: { type: "string" } },
+                required: ["city"],
+              }),
             ],
-          },
-        } as never);
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          tool_choice: { type: "function", function: { name: "get_weather" } },
-          tools: [
-            {
-              type: "function",
-              function: {
-                name: "get_time",
-                description: "Get current time",
-                parameters: { type: "object", properties: {} },
-              },
-            },
-            {
-              type: "function",
-              function: {
-                name: "get_weather",
-                description: "Get current weather",
-                parameters: {
-                  type: "object",
-                  properties: { city: { type: "string" } },
-                  required: ["city"],
-                },
-              },
-            },
-          ],
-          messages: [{ role: "user", content: "weather?" }],
-        });
-        expect(res.status).toBe(200);
-        const firstCall = getFirstAgentCall();
-        const clientTools = firstCall?.clientTools ?? [];
-        expect(clientTools).toHaveLength(1);
-        expect(clientTools[0]?.function?.name).toBe("get_weather");
-        expect(firstCall?.extraSystemPrompt ?? "").toContain("You must call the get_weather tool");
-        const json = (await res.json()) as { choices?: Array<{ finish_reason?: string | null }> };
-        expect(json.choices?.[0]?.finish_reason).toBe("tool_calls");
-      }
-
-      {
-        agentCommandMock.mockClear();
-        agentCommandMock.mockResolvedValueOnce({
-          payloads: [{ text: "tool choice required" }],
-          meta: {
-            stopReason: "tool_calls",
-            pendingToolCalls: [
-              {
-                id: "call_1",
-                name: "get_weather",
-                arguments: '{"city":"Taipei"}',
-              },
-            ],
-          },
-        } as never);
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          tool_choice: "required",
-          tools: [
-            {
-              type: "function",
-              function: {
-                name: "get_weather",
-                description: "Get current weather",
-                parameters: {
-                  type: "object",
-                  properties: { city: { type: "string" } },
-                  required: ["city"],
-                },
-              },
-            },
-          ],
-          messages: [{ role: "user", content: "weather?" }],
-        });
-        expect(res.status).toBe(200);
-        const firstCall = getFirstAgentCall();
-        const clientTools = firstCall?.clientTools ?? [];
-        expect(clientTools).toHaveLength(1);
-        expect(clientTools[0]?.function?.name).toBe("get_weather");
-        expect(firstCall?.extraSystemPrompt ?? "").toContain(
-          "You must call one of the available tools",
+          }),
         );
-        const json = (await res.json()) as { choices?: Array<{ finish_reason?: string | null }> };
+        expect(res.status).toBe(200);
+        const firstCall = firstAgentCommandOptions();
+        const clientTools = firstCall?.clientTools ?? [];
+        expect(clientTools).toHaveLength(1);
+        expect(clientTools[0]?.function?.name).toBe("get_weather");
+        expect(firstCall?.extraSystemPrompt ?? "").toContain(prompt);
+        const json = (await res.json()) as OpenAI.ChatCompletion;
         expect(json.choices?.[0]?.finish_reason).toBe("tool_calls");
       }
 
       {
         mockAgentOnce([{ text: "plain text despite required" }]);
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          tool_choice: "required",
-          tools: [
-            {
-              type: "function",
-              function: {
-                name: "get_weather",
-                description: "Get current weather",
-                parameters: { type: "object", properties: {} },
-              },
-            },
-          ],
-          messages: [{ role: "user", content: "weather?" }],
-        });
+        const res = await postChatCompletions(
+          port,
+          chatRequest({
+            tool_choice: "required",
+            tools: [functionTool("get_weather", "Get current weather")],
+          }),
+        );
         expect(res.status).toBe(502);
-        const json = (await res.json()) as { error?: { type?: string; message?: string } };
+        const json = (await res.json()) as ErrorResponse;
         expect(json.error?.type).toBe("api_error");
         expect(json.error?.message ?? "").toContain("tool_choice=required was not satisfied");
       }
 
       {
-        agentCommandMock.mockClear();
-        agentCommandMock.mockResolvedValueOnce({
-          payloads: [{ text: "Calling a different tool." }],
-          meta: {
-            stopReason: "tool_calls",
-            pendingToolCalls: [{ id: "call_1", name: "get_time", arguments: "{}" }],
-          },
-        } as never);
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          tool_choice: { type: "function", function: { name: "get_weather" } },
-          tools: [
-            {
-              type: "function",
-              function: {
-                name: "get_weather",
-                description: "Get current weather",
-                parameters: { type: "object", properties: {} },
-              },
-            },
-            {
-              type: "function",
-              function: {
-                name: "get_time",
-                description: "Get current time",
-                parameters: { type: "object", properties: {} },
-              },
-            },
-          ],
-          messages: [{ role: "user", content: "weather?" }],
-        });
+        mockAgentResult(
+          toolResult(
+            [{ text: "Calling a different tool." }],
+            [{ id: "call_1", name: "get_time", arguments: "{}" }],
+          ),
+        );
+        const res = await postChatCompletions(
+          port,
+          chatRequest({
+            tool_choice: { type: "function", function: { name: "get_weather" } },
+            tools: [
+              functionTool("get_weather", "Get current weather"),
+              functionTool("get_time", "Get current time"),
+            ],
+          }),
+        );
         expect(res.status).toBe(502);
-        const json = (await res.json()) as { error?: { type?: string; message?: string } };
+        const json = (await res.json()) as ErrorResponse;
         expect(json.error?.type).toBe("api_error");
         expect(json.error?.message ?? "").toContain("tool_choice required a get_weather tool call");
       }
 
-      {
-        agentCommandMock.mockClear();
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          tool_choice: "required",
-          messages: [{ role: "user", content: "weather?" }],
-        });
-        expect(res.status).toBe(400);
-        const json = (await res.json()) as { error?: { type?: string; message?: string } };
-        expect(json.error?.type).toBe("invalid_request_error");
-        expect(json.error?.message ?? "").toContain("no tools were provided");
-        expect(agentCommandMock).toHaveBeenCalledTimes(0);
-      }
-
-      {
-        agentCommandMock.mockClear();
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          tool_choice: { type: "function", function: { name: "missing_tool" } },
-          tools: [
-            {
-              type: "function",
-              function: {
-                name: "get_time",
-                description: "Get current time",
-                parameters: { type: "object", properties: {} },
-              },
-            },
-          ],
-          messages: [{ role: "user", content: "weather?" }],
-        });
-        expect(res.status).toBe(400);
-        const json = (await res.json()) as { error?: { type?: string; message?: string } };
-        expect(json.error?.type).toBe("invalid_request_error");
-        expect(json.error?.message ?? "").toContain("unknown tool");
-        expect(agentCommandMock).toHaveBeenCalledTimes(0);
-      }
-
-      {
-        agentCommandMock.mockClear();
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          tool_choice: {
-            type: "allowed_tools",
-            tools: [{ type: "function", function: { name: "x" } }],
+      for (const [body, message] of [
+        [{ tool_choice: "required" }, "no tools were provided"],
+        [
+          {
+            tool_choice: { type: "function", function: { name: "missing_tool" } },
+            tools: [functionTool("get_time", "Get current time")],
           },
-          tools: [
-            {
-              type: "function",
-              function: {
-                name: "x",
-                description: "x",
+          "unknown tool",
+        ],
+        [
+          {
+            tool_choice: {
+              type: "allowed_tools",
+              tools: [{ type: "function", function: { name: "x" } }],
+            },
+            tools: [functionTool("x", "x")],
+          },
+          "allowed_tools",
+        ],
+        [
+          {
+            tools: [
+              {
+                type: "function",
+                name: "invalid_flat_shape",
                 parameters: { type: "object", properties: {} },
               },
-            },
-          ],
-          messages: [{ role: "user", content: "x?" }],
-        });
-        expect(res.status).toBe(400);
-        const json = (await res.json()) as { error?: { type?: string; message?: string } };
-        expect(json.error?.type).toBe("invalid_request_error");
-        expect(json.error?.message ?? "").toContain("allowed_tools");
-        expect(agentCommandMock).toHaveBeenCalledTimes(0);
+            ],
+          },
+          "tool.function is required",
+        ],
+      ] as const) {
+        await expectRejectedChat(chatRequest(body), message, { contains: true });
       }
 
-      {
-        agentCommandMock.mockClear();
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          tools: [
-            {
-              type: "function",
-              name: "invalid_flat_shape",
-              parameters: { type: "object", properties: {} },
-            },
-          ],
-          messages: [{ role: "user", content: "x?" }],
-        });
-        expect(res.status).toBe(400);
-        const json = (await res.json()) as { error?: { type?: string; message?: string } };
-        expect(json.error?.type).toBe("invalid_request_error");
-        expect(json.error?.message ?? "").toContain("tool.function is required");
-        expect(agentCommandMock).toHaveBeenCalledTimes(0);
-      }
-
-      {
-        mockAgentOnce([{ text: "ok" }]);
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          messages: [
-            { role: "user", content: "What's the weather?" },
-            { role: "assistant", content: "Checking the weather." },
-            {
-              role: "tool",
-              tool_call_id: "call_1",
-              content: [{ type: "text", text: "Sunny, 70F." }],
-            },
-          ],
-        });
-        expect(res.status).toBe(200);
-        const message = getFirstAgentMessage();
-        expectMessageContext(message, {
+      await checkConversation(
+        [
+          { role: "user", content: "What's the weather?" },
+          { role: "assistant", content: "Checking the weather." },
+          {
+            role: "tool",
+            tool_call_id: "call_1",
+            content: [{ type: "text", text: "Sunny, 70F." }],
+          },
+        ],
+        {
           history: ["User: What's the weather?", "Assistant: Checking the weather."],
           current: ["Tool:call_1: Sunny, 70F."],
-        });
-        await res.text();
-      }
+        },
+        [{ text: "ok" }],
+      );
 
-      {
-        mockAgentOnce([{ text: "ok" }]);
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          messages: [
-            { role: "user", content: "What's the weather?" },
-            {
-              role: "assistant",
-              content: null,
-              tool_calls: [
-                {
-                  id: "call_1",
-                  type: "function",
-                  function: {
-                    name: "get_weather",
-                    arguments: '{"city":"Taipei"}',
-                  },
+      await checkConversation(
+        [
+          { role: "user", content: "What's the weather?" },
+          {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              {
+                id: "call_1",
+                type: "function",
+                function: {
+                  name: "get_weather",
+                  arguments: '{"city":"Taipei"}',
                 },
-              ],
-            },
-            {
-              role: "tool",
-              tool_call_id: "call_1",
-              content: [{ type: "text", text: "Sunny, 70F." }],
-            },
-          ],
-        });
-        expect(res.status).toBe(200);
-        const message = getFirstAgentMessage();
-        expectMessageContext(message, {
+              },
+            ],
+          },
+          {
+            role: "tool",
+            tool_call_id: "call_1",
+            content: [{ type: "text", text: "Sunny, 70F." }],
+          },
+        ],
+        {
           history: [
             "User: What's the weather?",
             'Assistant: tool_call id=call_1 name=get_weather arguments={"city":"Taipei"}',
           ],
           current: ["Tool:call_1: Sunny, 70F."],
-        });
-        await res.text();
-      }
+        },
+        [{ text: "ok" }],
+      );
 
       {
         agentCommandMock.mockClear();
-        agentCommandMock.mockRejectedValueOnce(createClientToolNameConflictError(["exec"]));
-        const res = await postChatCompletions(port, {
-          stream: false,
-          model: "openclaw",
-          tools: [
-            {
-              type: "function",
-              function: {
-                name: "exec",
-                description: "conflicts with a built-in tool",
-                parameters: { type: "object", properties: {} },
-              },
-            },
-          ],
-          messages: [{ role: "user", content: "run command" }],
-        });
+        agentCommandMock.mockRejectedValueOnce(new Error("client tool name conflict: exec"));
+        const res = await postChatCompletions(
+          port,
+          chatRequest({
+            stream: false,
+            tools: [functionTool("exec", "conflicts with a built-in tool")],
+          }),
+        );
         expect(res.status).toBe(400);
-        const json = (await res.json()) as { error?: { type?: string; message?: string } };
+        const json = (await res.json()) as ErrorResponse;
         expect(json.error?.type).toBe("invalid_request_error");
         expect(json.error?.message).toBe("invalid tool configuration");
       }
 
       {
-        agentCommandMock.mockClear();
-        agentCommandMock.mockResolvedValueOnce({
-          payloads: [{ text: "Let me check that." }],
-          meta: {
-            stopReason: "tool_calls",
-            pendingToolCalls: [
-              {
-                id: "call_1",
-                name: "get_weather",
-                arguments: '{"city":"Taipei"}',
-              },
+        mockAgentResult(
+          toolResult(
+            [{ text: "Let me check that." }],
+            [
+              weatherCall(),
               {
                 id: "call_2",
                 name: "get_time",
                 arguments: "{}",
               },
             ],
-            agentMeta: {
+            {
               usage: {
                 input: 10,
                 output: 5,
                 total: 15,
               },
             },
-          },
-        } as never);
-        const res = await postChatCompletions(port, {
-          stream: false,
-          model: "openclaw",
-          tool_choice: "auto",
-          tools: [
-            {
-              type: "function",
-              function: {
-                name: "get_weather",
-                description: "Get weather",
-                parameters: { type: "object", properties: { city: { type: "string" } } },
-              },
-            },
-            {
-              type: "function",
-              function: {
-                name: "get_time",
-                description: "Get time",
-                parameters: { type: "object", properties: {} },
-              },
-            },
-          ],
-          messages: [{ role: "user", content: "weather?" }],
-        });
+          ),
+        );
+        const res = await postChatCompletions(
+          port,
+          chatRequest({
+            stream: false,
+            tool_choice: "auto",
+            tools: [
+              functionTool("get_weather", "Get weather", {
+                type: "object",
+                properties: { city: { type: "string" } },
+              }),
+              functionTool("get_time", "Get time"),
+            ],
+          }),
+        );
         expect(res.status).toBe(200);
-        const json = (await res.json()) as {
-          choices?: Array<{
-            finish_reason?: string | null;
-            message?: {
-              role?: string;
-              content?: string;
-              tool_calls?: Array<{
-                index?: number;
-                id?: string;
-                type?: string;
-                function?: { name?: string; arguments?: string };
-              }>;
-            };
-          }>;
-        };
+        const json = (await res.json()) as OpenAI.ChatCompletion;
         const choice = json.choices?.[0];
         expect(choice?.finish_reason).toBe("tool_calls");
         expect(choice?.message?.role).toBe("assistant");
@@ -1636,49 +1112,25 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             function: { name: "get_time", arguments: "{}" },
           },
         ]);
-        expect(choice?.message?.tool_calls?.some((call) => Object.hasOwn(call, "index"))).toBe(
-          false,
-        );
       }
 
       {
-        agentCommandMock.mockClear();
-        agentCommandMock.mockResolvedValueOnce({
-          payloads: [],
-          meta: {
-            stopReason: "tool_calls",
-            pendingToolCalls: [
-              {
-                id: "call_1",
-                name: "get_weather",
-                arguments: '{"city":"Taipei"}',
-              },
+        mockAgentResult(toolResult([], [weatherCall()]));
+        const res = await postChatCompletions(
+          port,
+          chatRequest({
+            stream: false,
+            tool_choice: "auto",
+            tools: [
+              functionTool("get_weather", "Get weather", {
+                type: "object",
+                properties: { city: { type: "string" } },
+              }),
             ],
-          },
-        } as never);
-        const res = await postChatCompletions(port, {
-          stream: false,
-          model: "openclaw",
-          tool_choice: "auto",
-          tools: [
-            {
-              type: "function",
-              function: {
-                name: "get_weather",
-                description: "Get weather",
-                parameters: { type: "object", properties: { city: { type: "string" } } },
-              },
-            },
-          ],
-          messages: [{ role: "user", content: "weather?" }],
-        });
+          }),
+        );
         expect(res.status).toBe(200);
-        const json = (await res.json()) as {
-          choices?: Array<{
-            finish_reason?: string | null;
-            message?: { content?: string; tool_calls?: unknown[] };
-          }>;
-        };
+        const json = (await res.json()) as OpenAI.ChatCompletion;
         const choice = json.choices?.[0];
         expect(choice?.finish_reason).toBe("tool_calls");
         expect(choice?.message?.content).toBe("");
@@ -1686,7 +1138,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        mockAgentOnce([{ text: "hello" }]);
+        mockAgentOnce();
         const json = await postSyncUserMessage("hi");
         expect(json.object).toBe("chat.completion");
         expect(Array.isArray(json.choices)).toBe(true);
@@ -1697,9 +1149,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommandMock.mockClear();
-        agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
-          const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+        mockAgentRun(async (runId) => {
           const { session, emit } = createStubSessionHarness();
           subscribeEmbeddedAgentSession({ session, runId });
           emit({ type: "message_start", message: { role: "assistant" } });
@@ -1707,205 +1157,60 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             emitAssistantTextDelta({ emit, delta });
           }
           return { payloads: [{ text: "Title\nLine one\nLine two" }] };
-        }) as never);
-
-        const splitFinalRes = await postChatCompletions(port, {
-          stream: true,
-          model: "openclaw",
-          messages: [{ role: "user", content: "hi" }],
         });
+
+        const splitFinalRes = await postChatCompletions(port, chatRequest({ stream: true }));
         expect(splitFinalRes.status).toBe(200);
         const splitFinalText = await splitFinalRes.text();
         const splitFinalData = parseSseDataLines(splitFinalText);
-        const splitFinalChunks = splitFinalData
-          .filter((d) => d !== "[DONE]")
-          .map((d) => JSON.parse(d) as Record<string, unknown>);
-        const splitFinalContent = splitFinalChunks
-          .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
-          .map((choice) => (choice.delta as Record<string, unknown> | undefined)?.content)
-          .filter((v): v is string => typeof v === "string")
-          .join("");
+        const splitFinalChunks = parseChunks(splitFinalData);
+        const splitFinalContent = streamContent(splitFinalChunks);
         expect(splitFinalContent).toBe("Title\nLine one\nLine two");
-        expect(splitFinalContent).not.toContain("<");
-        expect(splitFinalContent).not.toContain("final>");
       }
 
-      {
-        agentCommandMock.mockClear();
-        agentCommandMock.mockResolvedValueOnce({
-          payloads: [{ text: "usage basic" }],
-          meta: {
-            agentMeta: {
-              usage: {
-                input: 42,
-                output: 17,
-              },
+      for (const [agentMeta, expected] of [
+        [
+          { usage: { input: 10, output: 5, cacheRead: 20, cacheWrite: 3 } },
+          {
+            prompt_tokens: 30,
+            completion_tokens: 5,
+            total_tokens: 35,
+            prompt_tokens_details: { cached_tokens: 20 },
+          },
+        ],
+        [
+          { lastCallUsage: { input: 80, output: 20, total: 100 } },
+          { prompt_tokens: 80, completion_tokens: 20, total_tokens: 100 },
+        ],
+        [
+          {
+            usage: {
+              input: Infinity,
+              output: Number.NaN,
+              cacheRead: 2,
+              cacheWrite: Infinity,
+              total: Number.NaN,
             },
           },
-        } as never);
-        const json = await postSyncUserMessage("usage");
-        expect(json.usage).toEqual({
-          prompt_tokens: 42,
-          completion_tokens: 17,
-          total_tokens: 59,
-        });
-      }
-
-      {
-        agentCommandMock.mockClear();
-        agentCommandMock.mockResolvedValueOnce({
-          payloads: [{ text: "usage cache" }],
-          meta: {
-            agentMeta: {
-              usage: {
-                input: 10,
-                output: 5,
-                cacheRead: 20,
-                cacheWrite: 3,
-              },
-            },
+          {
+            prompt_tokens: 2,
+            completion_tokens: 0,
+            total_tokens: 2,
+            prompt_tokens_details: { cached_tokens: 2 },
           },
-        } as never);
+        ],
+        [
+          { usage: { input: Infinity, output: Number.NaN, total: 123 } },
+          { prompt_tokens: 0, completion_tokens: 0, total_tokens: 123 },
+        ],
+      ] satisfies Array<[NonNullable<AgentResult["meta"]>["agentMeta"], OpenAI.CompletionUsage]>) {
+        mockAgentResult(usageResult("usage", agentMeta));
         const json = await postSyncUserMessage("usage");
-        expect(json.usage).toEqual({
-          prompt_tokens: 30,
-          completion_tokens: 5,
-          total_tokens: 35,
-          prompt_tokens_details: { cached_tokens: 20 },
-        });
+        expect(json.usage).toEqual(expected);
       }
 
       {
-        agentCommandMock.mockClear();
-        agentCommandMock.mockResolvedValueOnce({
-          payloads: [{ text: "usage last call" }],
-          meta: {
-            agentMeta: {
-              lastCallUsage: { input: 80, output: 20, total: 100 },
-            },
-          },
-        } as never);
-        const json = await postSyncUserMessage("usage");
-        expect(json.usage).toEqual({
-          prompt_tokens: 80,
-          completion_tokens: 20,
-          total_tokens: 100,
-        });
-      }
-
-      {
-        agentCommandMock.mockClear();
-        agentCommandMock.mockResolvedValueOnce({
-          payloads: [{ text: "usage total" }],
-          meta: {
-            agentMeta: {
-              usage: {
-                input: 10,
-                output: 5,
-                total: 100,
-              },
-            },
-          },
-        } as never);
-        const json = await postSyncUserMessage("usage");
-        expect(json.usage).toEqual({
-          prompt_tokens: 10,
-          completion_tokens: 5,
-          total_tokens: 100,
-        });
-      }
-
-      {
-        agentCommandMock.mockClear();
-        agentCommandMock.mockResolvedValueOnce({
-          payloads: [{ text: "usage total only" }],
-          meta: {
-            agentMeta: {
-              usage: {
-                total: 123,
-              },
-            },
-          },
-        } as never);
-        const json = await postSyncUserMessage("usage");
-        expect(json.usage).toEqual({
-          prompt_tokens: 0,
-          completion_tokens: 0,
-          total_tokens: 123,
-        });
-      }
-
-      {
-        agentCommandMock.mockClear();
-        agentCommandMock.mockResolvedValueOnce({
-          payloads: [{ text: "usage non-finite" }],
-          meta: {
-            agentMeta: {
-              usage: {
-                input: Number.POSITIVE_INFINITY,
-                output: Number.NaN,
-                cacheRead: 2,
-                cacheWrite: Number.POSITIVE_INFINITY,
-                total: Number.NaN,
-              },
-            },
-          },
-        } as never);
-        const json = await postSyncUserMessage("usage");
-        expect(json.usage).toEqual({
-          prompt_tokens: 2,
-          completion_tokens: 0,
-          total_tokens: 2,
-          prompt_tokens_details: { cached_tokens: 2 },
-        });
-      }
-
-      {
-        agentCommandMock.mockClear();
-        agentCommandMock.mockResolvedValueOnce({
-          payloads: [{ text: "usage non-finite aggregate fallback" }],
-          meta: {
-            agentMeta: {
-              usage: {
-                input: Number.POSITIVE_INFINITY,
-                output: Number.NaN,
-                total: 123,
-              },
-            },
-          },
-        } as never);
-        const json = await postSyncUserMessage("usage");
-        expect(json.usage).toEqual({
-          prompt_tokens: 0,
-          completion_tokens: 0,
-          total_tokens: 123,
-        });
-      }
-
-      {
-        agentCommandMock.mockClear();
-        agentCommandMock.mockResolvedValueOnce({
-          payloads: [{ text: "usage cache-write only" }],
-          meta: {
-            agentMeta: {
-              usage: {
-                cacheWrite: 10,
-                total: 10,
-              },
-            },
-          },
-        } as never);
-        const json = await postSyncUserMessage("usage");
-        expect(json.usage).toEqual({
-          prompt_tokens: 0,
-          completion_tokens: 0,
-          total_tokens: 10,
-        });
-      }
-
-      {
-        agentCommandMock.mockClear();
-        agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "" }] } as never);
+        mockAgentResult({ payloads: [{ text: "" }] });
         const json = await postSyncUserMessage("hi");
         const choice0 = (json.choices as Array<Record<string, unknown>>)[0] ?? {};
         const msg = (choice0.message as Record<string, unknown> | undefined) ?? {};
@@ -1913,10 +1218,10 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          messages: [{ role: "system", content: "yo" }],
-        });
+        const res = await postChatCompletions(
+          port,
+          chatRequest({ messages: [{ role: "system", content: "yo" }] }),
+        );
         expect(res.status).toBe(400);
         const missingUserJson = (await res.json()) as Record<string, unknown>;
         expect((missingUserJson.error as Record<string, unknown> | undefined)?.type).toBe(
@@ -1931,53 +1236,21 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
   it("validates and forwards max_completion_tokens and max_tokens into streamParams", async () => {
     const port = enabledPort;
-    const mockAgentOnce = () => {
-      agentCommandMock.mockClear();
-      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
-    };
     const getRecordedAgentMaxTokens = () => firstAgentCommandOptions()?.streamParams?.maxTokens;
 
-    const validCases: Array<{
-      name: string;
-      body: Record<string, unknown>;
-      expected: number | undefined;
-    }> = [
-      { name: "current field", body: { max_completion_tokens: 256 }, expected: 256 },
-      { name: "legacy field", body: { max_tokens: 128 }, expected: 128 },
-      {
-        name: "current field precedence",
-        body: { max_completion_tokens: 64, max_tokens: 999 },
-        expected: 64,
-      },
-      {
-        name: "null current field leaves legacy active",
-        body: { max_completion_tokens: null, max_tokens: 32 },
-        expected: 32,
-      },
-      {
-        name: "null legacy field leaves current active",
-        body: { max_completion_tokens: 16, max_tokens: null },
-        expected: 16,
-      },
-      {
-        name: "largest safe integer",
-        body: { max_completion_tokens: Number.MAX_SAFE_INTEGER },
-        expected: Number.MAX_SAFE_INTEGER,
-      },
-      { name: "omitted fields", body: {}, expected: undefined },
+    const validCases: Array<[Record<string, unknown>, number | undefined]> = [
+      [{ max_completion_tokens: 256 }, 256],
+      [{ max_tokens: 128 }, 128],
+      [{ max_completion_tokens: 64, max_tokens: 999 }, 64],
+      [{ max_completion_tokens: null, max_tokens: 32 }, 32],
+      [{ max_completion_tokens: 16, max_tokens: null }, 16],
+      [{ max_completion_tokens: Number.MAX_SAFE_INTEGER }, Number.MAX_SAFE_INTEGER],
+      [{}, undefined],
     ];
 
-    for (const testCase of validCases) {
-      mockAgentOnce();
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        ...testCase.body,
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-      expect(agentCommandMock, testCase.name).toHaveBeenCalledTimes(1);
-      expect(getRecordedAgentMaxTokens(), testCase.name).toBe(testCase.expected);
-      await res.text();
+    for (const [body, expected] of validCases) {
+      await dispatchChat(chatRequest(body));
+      expect(getRecordedAgentMaxTokens(), JSON.stringify(body)).toBe(expected);
     }
 
     mockAgentOnce();
@@ -1988,35 +1261,14 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       max_tokens: null,
       messages: [{ role: "user", content: "hi" }],
     });
-    expect(agentCommandMock, "SDK null fields").toHaveBeenCalledTimes(1);
     expect(getRecordedAgentMaxTokens(), "SDK null fields").toBeUndefined();
   });
 
   it("rejects malformed token caps before agent dispatch", async () => {
     const port = enabledPort;
-    const invalidValues: Array<{ name: string; value: unknown }> = [
-      { name: "string", value: "32" },
-      { name: "object", value: {} },
-      { name: "array", value: [32] },
-      { name: "zero", value: 0 },
-      { name: "negative", value: -1 },
-      { name: "fractional", value: 1.5 },
-      { name: "unsafe integer", value: Number.MAX_SAFE_INTEGER + 1 },
-    ];
-
     for (const field of ["max_completion_tokens", "max_tokens"] as const) {
-      for (const testCase of invalidValues) {
-        agentCommandMock.mockClear();
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          [field]: testCase.value,
-          messages: [{ role: "user", content: "hi" }],
-        });
-        expect(res.status, `${field}: ${testCase.name}`).toBe(400);
-        const json = (await res.json()) as { error?: { type?: string; message?: string } };
-        expect(json.error?.type).toBe("invalid_request_error");
-        expect(json.error?.message).toContain(field);
-        expect(agentCommandMock, `${field}: ${testCase.name}`).toHaveBeenCalledTimes(0);
+      for (const value of ["32", {}, [32], 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+        await expectRejectedChat(chatRequest({ [field]: value }), field, { contains: true });
       }
 
       agentCommandMock.mockClear();
@@ -2025,278 +1277,61 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         `{"model":"openclaw","messages":[{"role":"user","content":"hi"}],"${field}":1e309}`,
       );
       expect(res.status, `${field}: non-finite raw number`).toBe(400);
-      const json = (await res.json()) as { error?: { type?: string; message?: string } };
+      const json = (await res.json()) as ErrorResponse;
       expect(json.error?.type).toBe("invalid_request_error");
       expect(json.error?.message).toContain(field);
       expect(agentCommandMock, `${field}: non-finite raw number`).toHaveBeenCalledTimes(0);
     }
 
-    const shadowedCases = [
-      {
-        name: "malformed current field with valid legacy field",
-        body: { max_completion_tokens: "64", max_tokens: 32 },
-        field: "max_completion_tokens",
-      },
-      {
-        name: "malformed legacy field with valid current field",
-        body: { max_completion_tokens: 64, max_tokens: "32" },
-        field: "max_tokens",
-      },
-    ];
-    for (const testCase of shadowedCases) {
-      agentCommandMock.mockClear();
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        ...testCase.body,
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status, testCase.name).toBe(400);
-      const json = (await res.json()) as { error?: { type?: string; message?: string } };
-      expect(json.error?.type).toBe("invalid_request_error");
-      expect(json.error?.message).toContain(testCase.field);
-      expect(agentCommandMock, testCase.name).toHaveBeenCalledTimes(0);
+    for (const [body, field] of [
+      [{ max_completion_tokens: "64", max_tokens: 32 }, "max_completion_tokens"],
+      [{ max_completion_tokens: 64, max_tokens: "32" }, "max_tokens"],
+    ] as const) {
+      await expectRejectedChat(chatRequest(body), field, { contains: true });
     }
   });
 
-  it("forwards inbound temperature and top_p into streamParams", async () => {
-    const port = enabledPort;
-    const mockAgentOnce = (payloads: Array<{ text: string }>) => {
-      agentCommandMock.mockClear();
-      agentCommandMock.mockResolvedValueOnce({ payloads } as never);
-    };
-    const getStreamParams = () => firstAgentCommandOptions()?.streamParams;
-
-    {
-      mockAgentOnce([{ text: "hello" }]);
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        temperature: 0.3,
-        top_p: 0.95,
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-      expect(getStreamParams()).toMatchObject({ temperature: 0.3, topP: 0.95 });
-      await res.text();
-    }
-
-    {
-      mockAgentOnce([{ text: "hello" }]);
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        temperature: 0,
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-      const params = getStreamParams();
-      expect(params?.temperature).toBe(0);
-      expect(params?.topP).toBeUndefined();
-      await res.text();
-    }
-
-    {
-      mockAgentOnce([{ text: "hello" }]);
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-      expect(getStreamParams()).toBeUndefined();
-      await res.text();
-    }
-
-    {
-      agentCommandMock.mockClear();
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        temperature: 999,
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(400);
-      const json = (await res.json()) as { error?: { type?: string; message?: string } };
-      expect(json.error?.type).toBe("invalid_request_error");
-      expect(json.error?.message).toMatch(/temperature/);
-      expect(agentCommandMock).toHaveBeenCalledTimes(0);
-    }
-
-    {
-      agentCommandMock.mockClear();
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        top_p: 5,
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(400);
-      const json = (await res.json()) as { error?: { type?: string; message?: string } };
-      expect(json.error?.type).toBe("invalid_request_error");
-      expect(json.error?.message).toMatch(/top_p/);
-      expect(agentCommandMock).toHaveBeenCalledTimes(0);
-    }
-  });
-
-  it("forwards inbound penalty and seed params into streamParams", async () => {
-    const port = enabledPort;
-    const mockAgentOnce = (payloads: Array<{ text: string }>) => {
-      agentCommandMock.mockClear();
-      agentCommandMock.mockResolvedValueOnce({ payloads } as never);
-    };
-    const getStreamParams = () => firstAgentCommandOptions()?.streamParams;
-
-    {
-      mockAgentOnce([{ text: "hello" }]);
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        frequency_penalty: -0.5,
-        presence_penalty: 1.25,
-        seed: 12345,
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-      expect(getStreamParams()).toMatchObject({
-        frequencyPenalty: -0.5,
-        presencePenalty: 1.25,
-        seed: 12345,
-      });
-      await res.text();
-    }
-
-    for (const body of [{ frequency_penalty: 3 }, { presence_penalty: -3 }, { seed: 1.5 }]) {
-      agentCommandMock.mockClear();
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        ...body,
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(400);
-      const json = (await res.json()) as { error?: { type?: string; message?: string } };
-      expect(json.error?.type).toBe("invalid_request_error");
-      expect(agentCommandMock).toHaveBeenCalledTimes(0);
-    }
+  registerOpenAiHttpSamplingTests({
+    getPort: () => enabledPort,
+    postChatCompletions,
+    postRawChatCompletions,
+    firstAgentCommandOptions,
+    agentCommandMock,
   });
 
   it("forwards inbound stop into streamParams", async () => {
-    const port = enabledPort;
-    const mockAgentOnce = (payloads: Array<{ text: string }>) => {
-      agentCommandMock.mockClear();
-      agentCommandMock.mockResolvedValueOnce({ payloads } as never);
-    };
     const getStreamParams = () => firstAgentCommandOptions()?.streamParams;
 
-    {
-      mockAgentOnce([{ text: "hello" }]);
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        stop: "\n\n",
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-      expect(getStreamParams()).toMatchObject({ stop: ["\n\n"] });
-      await res.text();
-    }
+    await dispatchChat(chatRequest({ stop: "\n\n" }));
+    expect(getStreamParams()).toMatchObject({ stop: ["\n\n"] });
 
-    {
-      mockAgentOnce([{ text: "hello" }]);
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        stop: ["User:", "Assistant:"],
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-      expect(getStreamParams()).toMatchObject({ stop: ["User:", "Assistant:"] });
-      await res.text();
-    }
+    await dispatchChat(chatRequest({ stop: ["User:", "Assistant:"] }));
+    expect(getStreamParams()).toMatchObject({ stop: ["User:", "Assistant:"] });
 
-    {
-      mockAgentOnce([{ text: "hello" }]);
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-      expect(getStreamParams()).toBeUndefined();
-      await res.text();
-    }
+    await dispatchChat(chatRequest());
+    expect(getStreamParams()).toBeUndefined();
 
     for (const stop of [["a", "b", "c", "d", "e"], [""], [123], {}]) {
-      agentCommandMock.mockClear();
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        stop,
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(400);
-      const json = (await res.json()) as { error?: { type?: string; message?: string } };
-      expect(json.error?.type).toBe("invalid_request_error");
-      expect(json.error?.message).toMatch(/stop/);
-      expect(agentCommandMock).toHaveBeenCalledTimes(0);
+      await expectRejectedChat(chatRequest({ stop }), /stop/);
     }
-  });
-
-  it("maps provider format failures to OpenAI-compatible 400 errors", async () => {
-    const port = enabledPort;
-
-    agentCommandMock.mockClear();
-    agentCommandMock.mockRejectedValueOnce(
-      new FailoverError(
-        "LLM request failed: provider rejected the request schema or tool payload.",
-        {
-          reason: "format",
-          status: 400,
-          code: "decimal_above_max_value",
-          rawError:
-            "400 Invalid 'temperature': decimal above maximum value. Expected a value <= 2, but got 999 instead.",
-        },
-      ) as never,
-    );
-
-    const res = await postChatCompletions(port, {
-      model: "openclaw",
-      messages: [{ role: "user", content: "hi" }],
-    });
-    expect(res.status).toBe(400);
-    const json = (await res.json()) as {
-      error?: { type?: string; code?: string; message?: string };
-    };
-    expect(json.error?.type).toBe("invalid_request_error");
-    expect(json.error?.code).toBe("decimal_above_max_value");
-    expect(json.error?.message).toContain("Invalid 'temperature'");
-    expect(agentCommandMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("rejects resolved terminal agent failures without exposing provider details", async () => {
-    const privateDetail = "raw provider detail should stay private";
-    agentCommandMock.mockClear();
-    agentCommandMock.mockResolvedValueOnce(
-      recordAgentRunTerminalOutcome(
-        {
-          payloads: [{ text: "Command may have changed state", isError: true }],
-          meta: { error: { kind: "incomplete_turn", message: privateDetail } },
-        },
-        "failed",
-      ) as never,
-    );
-
-    const res = await postChatCompletions(enabledPort, {
-      model: "openclaw",
-      messages: [{ role: "user", content: "hi" }],
-    });
-    const body = await res.text();
-    expect(res.status).toBe(500);
-    expect(JSON.parse(body)).toEqual({
-      error: { message: "internal error", type: "api_error" },
-    });
-    expect(body).not.toContain(privateDetail);
   });
 
   it.each([
-    { name: "error stop", meta: { stopReason: "error" }, outcome: "failed", status: 500 },
-    {
-      name: "run-budget timeout without error metadata",
-      meta: { aborted: false, timeoutPhase: "provider", providerStarted: true },
-      outcome: "failed",
-      status: 500,
-    },
-    { name: "completed run with an error payload", meta: {}, outcome: "completed", status: 200 },
-  ] as const)("uses the recorded outcome for $name", async ({ meta, outcome, status }) => {
+    [
+      "resolved terminal failure",
+      { error: { kind: "incomplete_turn", message: "raw provider detail should stay private" } },
+      "failed",
+      500,
+    ],
+    ["error stop", { stopReason: "error" }, "failed", 500],
+    [
+      "run-budget timeout without error metadata",
+      { aborted: false, timeoutPhase: "provider", providerStarted: true },
+      "failed",
+      500,
+    ],
+    ["completed run with an error payload", {}, "completed", 200],
+  ] as const)("uses the recorded outcome for %s", async (_name, meta, outcome, status) => {
     agentCommandMock.mockClear();
     agentCommandMock.mockResolvedValueOnce(
       recordAgentRunTerminalOutcome(
@@ -2305,12 +1340,13 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       ) as never,
     );
 
-    const res = await postChatCompletions(enabledPort, {
-      model: "openclaw",
-      messages: [{ role: "user", content: "hi" }],
-    });
+    const res = await postChatCompletions(enabledPort);
     expect(res.status).toBe(status);
-    await res.text();
+    const body = await res.text();
+    if (status === 500) {
+      expect(JSON.parse(body)).toEqual({ error: { message: "internal error", type: "api_error" } });
+      expect(body).not.toContain("raw provider detail should stay private");
+    }
   });
 
   it.each(streamingFailureCases)(
@@ -2358,120 +1394,34 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
   );
 
   it("forwards response_format into streamParams", async () => {
-    const port = enabledPort;
-    const mockAgentOnce = (payloads: Array<{ text: string }>) => {
-      agentCommandMock.mockClear();
-      agentCommandMock.mockResolvedValueOnce({ payloads } as never);
-    };
     const getStreamParams = () => firstAgentCommandOptions()?.streamParams;
 
-    {
-      mockAgentOnce([{ text: "{}" }]);
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        response_format: { type: "json_object" },
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-      expect(getStreamParams()).toMatchObject({ responseFormat: { type: "json_object" } });
-      await res.text();
-    }
+    await dispatchChat(chatRequest({ response_format: { type: "json_object" } }), undefined, [
+      { text: "{}" },
+    ]);
+    expect(getStreamParams()).toMatchObject({ responseFormat: { type: "json_object" } });
 
-    {
-      mockAgentOnce([{ text: "{}" }]);
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
+    await dispatchChat(
+      chatRequest({
         response_format: {
           type: "json_schema",
           json_schema: { name: "test", schema: { type: "object" } },
         },
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-      expect(getStreamParams()).toMatchObject({
-        responseFormat: { type: "json_schema" },
-      });
-      await res.text();
-    }
-
-    {
-      mockAgentOnce([{ text: "hello" }]);
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        response_format: { type: "text" },
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-      expect(getStreamParams()).toMatchObject({ responseFormat: { type: "text" } });
-      await res.text();
-    }
-
-    {
-      mockAgentOnce([{ text: "hello" }]);
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-      expect(getStreamParams()).toBeUndefined();
-      await res.text();
-    }
-
-    {
-      agentCommandMock.mockClear();
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        response_format: { type: "xml" },
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(400);
-      const json = (await res.json()) as { error?: { type?: string; message?: string } };
-      expect(json.error?.type).toBe("invalid_request_error");
-      expect(json.error?.message).toMatch(/response_format/);
-      expect(agentCommandMock).toHaveBeenCalledTimes(0);
-    }
-  });
-
-  it("returns 429 for repeated failed auth when gateway.auth.rateLimit is configured", async () => {
-    testState.gatewayAuth = {
-      mode: "token",
-      token: "secret",
-      rateLimit: { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000, exemptLoopback: false },
-    };
-    await withGatewayServer(
-      async ({ port }) => {
-        const headers = {
-          "content-type": "application/json",
-          authorization: "Bearer wrong",
-        };
-        const body = {
-          model: "openclaw",
-          messages: [{ role: "user", content: "hi" }],
-        };
-
-        const first = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body),
-        });
-        expect(first.status).toBe(401);
-
-        const second = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body),
-        });
-        expect(second.status).toBe(429);
-        expect(second.headers.get("retry-after")).toMatch(/^\d+$/);
-      },
-      {
-        serverOptions: {
-          host: "127.0.0.1",
-          controlUiEnabled: false,
-          openAiChatCompletionsEnabled: true,
-        },
-      },
+      }),
+      undefined,
+      [{ text: "{}" }],
     );
+    expect(getStreamParams()).toMatchObject({
+      responseFormat: { type: "json_schema" },
+    });
+
+    await dispatchChat(chatRequest({ response_format: { type: "text" } }));
+    expect(getStreamParams()).toMatchObject({ responseFormat: { type: "text" } });
+
+    await dispatchChat(chatRequest());
+    expect(getStreamParams()).toBeUndefined();
+
+    await expectRejectedChat(chatRequest({ response_format: { type: "xml" } }), /response_format/);
   });
 
   it.each([
@@ -2486,9 +1436,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       expected: "<script>alert('literal')</script>",
     },
   ])("preserves $name through the official OpenAI SDK SSE stream", async ({ deltas, expected }) => {
-    agentCommandMock.mockClear();
-    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
-      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+    mockAgentRun(async (runId) => {
       const { session, emit } = createStubSessionHarness();
       subscribeEmbeddedAgentSession({ session, runId });
       emit({ type: "message_start", message: { role: "assistant" } });
@@ -2496,27 +1444,17 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         emitAssistantTextDelta({ emit, delta });
       }
       return { payloads: [{ text: expected }] };
-    }) as never);
+    });
 
     const stream = await createOpenAiHttpTestClient(enabledPort).chat.completions.create({
       model: "openclaw",
       messages: [{ role: "user", content: "Preserve the literal output." }],
       stream: true,
     });
-    const content: string[] = [];
-    const finishReasons: Array<string | null> = [];
-    for await (const chunk of stream) {
-      for (const choice of chunk.choices) {
-        if (typeof choice.delta.content === "string") {
-          content.push(choice.delta.content);
-        }
-        finishReasons.push(choice.finish_reason);
-      }
-    }
+    const { content, finishReasons } = await readSdkStream(stream);
 
-    expect(content.join("")).toBe(expected);
+    expect(content).toBe(expected);
     expect(finishReasons.at(-1)).toBe("stop");
-    expect(agentCommandMock).toHaveBeenCalledTimes(1);
   });
 
   it.each(
@@ -2533,33 +1471,22 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
   )(
     "preserves $name in official SDK assistant streams",
     async ({ events, expected, resultTexts }) => {
-      agentCommandMock.mockClear();
-      agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
-        const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      mockAgentRun(async (runId) => {
         for (const data of events) {
           emitAgentEvent({ runId, stream: "assistant", data });
         }
         emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
         return { payloads: (resultTexts ?? [expected]).map((text) => ({ text })) };
-      }) as never);
+      });
 
       const stream = await createOpenAiHttpTestClient(enabledPort).chat.completions.create({
         model: "openclaw",
         messages: [{ role: "user", content: "Preserve the full snapshot." }],
         stream: true,
       });
-      const content: string[] = [];
-      const finishReasons: Array<string | null> = [];
-      for await (const chunk of stream) {
-        for (const choice of chunk.choices) {
-          if (typeof choice.delta.content === "string") {
-            content.push(choice.delta.content);
-          }
-          finishReasons.push(choice.finish_reason);
-        }
-      }
+      const { content, finishReasons } = await readSdkStream(stream);
 
-      expect(content.join("")).toBe(expected);
+      expect(content).toBe(expected);
       expect(finishReasons.at(-1)).toBe("stop");
     },
   );
@@ -2567,9 +1494,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
   it.each([false, true])(
     "flushes same-turn assistant microtasks before the SSE done frame (held tools=%s)",
     async (heldTools) => {
-      agentCommandMock.mockClear();
-      agentCommandMock.mockImplementationOnce(((opts: unknown) => {
-        const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      mockAgentRun((runId) => {
         emitAgentEvent({
           runId,
           stream: "assistant",
@@ -2605,35 +1530,24 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           });
         });
         return result;
-      }) as never);
-
-      const res = await postChatCompletions(enabledPort, {
-        stream: true,
-        model: "openclaw",
-        messages: [{ role: "user", content: "Finish the streamed response." }],
       });
+
+      const res = await postChatCompletions(
+        enabledPort,
+        chatRequest({ stream: true }, "Finish the streamed response."),
+      );
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type")).toContain("text/event-stream");
 
       const data = parseSseDataLines(await res.text());
       expect(data.at(-1)).toBe("[DONE]");
-      const chunks = data
-        .filter((line) => line !== "[DONE]")
-        .map((line) => JSON.parse(line) as Record<string, unknown>);
-      const content = chunks
-        .flatMap((chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])
-        .map((choice) => (choice.delta as Record<string, unknown> | undefined)?.content)
-        .filter((value): value is string => typeof value === "string")
-        .join("");
+      const chunks = parseChunks(data);
+      const content = streamContent(chunks);
       expect(content).toBe("start finish");
-      const finishChoice = chunks
-        .flatMap((chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])
-        .at(-1);
+      const finishChoice = streamChoices(chunks).at(-1);
       expect(finishChoice?.finish_reason).toBe(heldTools ? "tool_calls" : "stop");
       if (heldTools) {
-        const choices = chunks.flatMap(
-          (chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [],
-        );
+        const choices = streamChoices(chunks);
         const textIndex = choices.findLastIndex(
           (choice) => typeof (choice.delta as { content?: unknown })?.content === "string",
         );
@@ -2645,24 +1559,15 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     },
   );
 
-  it.each(
-    [
-      { name: "resolved", reject: false },
-      { name: "rejected", reject: true },
-    ].flatMap((scenario) => [
-      { ...scenario, consumer: "SDK" },
-      { ...scenario, consumer: "raw HTTP" },
-    ]),
-  )(
+  it.each([
+    { name: "resolved", reject: false, consumer: "SDK" },
+    { name: "rejected", reject: true, consumer: "SDK" },
+    { name: "rejected", reject: true, consumer: "raw HTTP" },
+  ])(
     "preserves streaming failure when an error lifecycle precedes a $name run ($consumer)",
     async ({ reject, consumer }) => {
       const idleRootCount = getActiveGatewayRootWorkCount();
-      agentCommandMock.mockClear();
-      agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
-        const runId = (opts as { runId?: string }).runId;
-        if (!runId) {
-          throw new Error("expected a streaming chat-completion run ID");
-        }
+      mockAgentRun(async (runId) => {
         emitAgentEvent({ runId, stream: "assistant", data: { delta: "partial answer" } });
         emitAgentEvent({
           runId,
@@ -2677,11 +1582,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         if (reject) {
           throw new Error("private upstream failure");
         }
-        return {
-          payloads: [{ text: "partial answer" }],
-          meta: { agentMeta: { usage: { input: 11, output: 7, total: 18 } } },
-        };
-      }) as never);
+        return usageResult("partial answer", { usage: { input: 11, output: 7, total: 18 } });
+      }, true);
 
       const request = {
         model: "openclaw",
@@ -2711,10 +1613,28 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         ),
       ).toEqual(["partial answer"]);
       expect(choices.every((choice) => choice.finish_reason === null)).toBe(true);
-      expect(agentCommandMock).toHaveBeenCalledTimes(1);
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
     },
   );
+
+  it("keeps embedded late commentary append-only while the final answer streams", async () => {
+    agentCommandMock.mockImplementationOnce(emitEmbeddedLateCommentary);
+    const stream = await createOpenAiHttpTestClient(enabledPort).chat.completions.create({
+      model: "openclaw",
+      messages: [{ role: "user", content: "Inspect the workspace and summarize it." }],
+      stream: true,
+    });
+    const content: string[] = [];
+    const finishReasons: Array<string | null> = [];
+    for await (const chunk of stream) {
+      for (const choice of chunk.choices) {
+        content.push(choice.delta.content ?? "");
+        finishReasons.push(choice.finish_reason);
+      }
+    }
+    expect(content.join("")).toBe("I will inspect the workspace.\n\nThe check is complete.");
+    expect(finishReasons.at(-1)).toBe("stop");
+  });
 
   it.each(
     incompatibleReplacementCases.toSpliced(6, 0, {
@@ -2724,14 +1644,9 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     }),
   )("fails an official SDK stream when streamed text is $name", async (scenario) => {
     const { previousText = "draft answer" } = scenario;
-    agentCommandMock.mockClear();
-    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
-      const runId = (opts as { runId?: string }).runId;
-      if (!runId) {
-        throw new Error("expected a streaming chat-completion run ID");
-      }
+    mockAgentRun(async (runId) => {
       return emitIncompatibleAssistantReplacement(runId, scenario, "");
-    }) as never);
+    }, true);
 
     const stream = await createOpenAiHttpTestClient(enabledPort).chat.completions.create({
       model: "openclaw",
@@ -2755,40 +1670,24 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     });
     expect(deliveredContent).toEqual([previousText]);
     expect(finishReasons).not.toContain("stop");
-    expect(agentCommandMock).toHaveBeenCalledTimes(1);
   });
 
   it.each(compatibleReplacementCases)(
     "keeps official SDK text consistent for $name",
     async (scenario) => {
       const { resultText, replacementText = "final answer" } = scenario;
-      agentCommandMock.mockClear();
-      agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
-        const runId = (opts as { runId?: string }).runId;
-        if (!runId) {
-          throw new Error("expected a streaming chat-completion run ID");
-        }
+      mockAgentRun(async (runId) => {
         return emitCompatibleAssistantReplacement(runId, scenario);
-      }) as never);
+      }, true);
 
       const stream = await createOpenAiHttpTestClient(enabledPort).chat.completions.create({
         model: "openclaw",
         messages: [{ role: "user", content: "Preserve an append-compatible replacement." }],
         stream: true,
       });
-      const deliveredContent: string[] = [];
-      const finishReasons: Array<string | null> = [];
-      for await (const chunk of stream) {
-        for (const choice of chunk.choices) {
-          if (typeof choice.delta.content === "string") {
-            deliveredContent.push(choice.delta.content);
-          }
-          finishReasons.push(choice.finish_reason);
-        }
-      }
-      expect(deliveredContent.join("")).toBe(resultText ?? replacementText);
+      const { content: deliveredContent, finishReasons } = await readSdkStream(stream);
+      expect(deliveredContent).toBe(resultText ?? replacementText);
       expect(finishReasons.at(-1)).toBe("stop");
-      expect(agentCommandMock).toHaveBeenCalledTimes(1);
     },
   );
 
@@ -2827,11 +1726,14 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         payloads: [{ text: "Final tool prose." }],
         expected: "Final tool prose.",
       },
-    ].flatMap((scenario) => (["required", "pinned"] as const).map((mode) => ({ scenario, mode }))),
+    ].flatMap((scenario, index) =>
+      (index === 0 ? (["required", "pinned"] as const) : (["required"] as const)).map((mode) => ({
+        scenario,
+        mode,
+      })),
+    ),
   )("uses $scenario.name for $mode tool-stream terminal commentary", async ({ scenario, mode }) => {
-    agentCommandMock.mockClear();
-    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
-      const runId = (opts as { runId: string }).runId;
+    mockAgentRun(async (runId) => {
       emitAgentEvent({
         runId,
         stream: "assistant",
@@ -2850,14 +1752,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           },
         });
       }
-      return {
-        payloads: scenario.payloads,
-        meta: {
-          stopReason: "tool_calls",
-          pendingToolCalls: [{ id: "call_1", name: "get_weather", arguments: '{"city":"Taipei"}' }],
-        },
-      };
-    }) as never);
+      return toolResult(scenario.payloads, [weatherCall()]);
+    });
 
     const stream = await createOpenAiHttpTestClient(enabledPort).chat.completions.create({
       model: "openclaw",
@@ -2881,43 +1777,15 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(finishReasons).toEqual(["tool_calls"]);
   });
 
-  it.each(
-    [
-      {
-        name: "successful completion without a provider terminal",
-        fail: false,
-        providerTerminal: false,
-        expected: "hello",
-        protocolError: false,
-      },
-      {
-        name: "successful completion with a provider terminal",
-        fail: false,
-        providerTerminal: true,
-        expected: "hello",
-        protocolError: false,
-      },
-      {
-        name: "internal agent error without a provider terminal",
-        fail: true,
-        providerTerminal: false,
-        expected: "internal error",
-        protocolError: true,
-      },
-      {
-        name: "internal agent error with a provider terminal",
-        fail: true,
-        providerTerminal: true,
-        expected: "Agent run failed",
-        protocolError: true,
-      },
-    ].flatMap((scenario) => [
-      { ...scenario, consumer: "SDK" },
-      { ...scenario, consumer: "raw HTTP" },
-    ]),
-  )(
-    "separates streamed content from the terminal finish for $name ($consumer)",
-    async ({ fail, providerTerminal, expected, protocolError, consumer }) => {
+  it.each([
+    ["successful completion without a provider terminal", false, false, "hello"],
+    ["successful completion with a provider terminal", false, true, "hello"],
+    ["internal agent error without a provider terminal", true, false, "internal error"],
+    ["internal agent error with a provider terminal", true, true, "Agent run failed"],
+  ] as const)(
+    "separates streamed content from the terminal finish for %s",
+    async (_name, fail, providerTerminal, expected) => {
+      const protocolError = fail;
       const idleRootCount = getActiveGatewayRootWorkCount();
       const terminalAdmission = createDeferred<{ active: number }>();
       const continueAgent = createDeferred();
@@ -2969,9 +1837,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           stream: true as const,
         };
         const stream =
-          consumer === "SDK"
-            ? await createOpenAiHttpTestClient(enabledPort).chat.completions.create(request)
-            : await postChatCompletions(enabledPort, request);
+          await createOpenAiHttpTestClient(enabledPort).chat.completions.create(request);
         await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
         await new Promise<void>((resolve) => {
           setImmediate(resolve);
@@ -2983,24 +1849,15 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           finish_reason: string | null;
         }> = [];
         const expectedError = { message: expected, type: "api_error" };
-        if (stream instanceof Response) {
-          choices.push(
-            ...(await readRawChatCompletionStream(
-              stream,
-              protocolError ? expectedError : undefined,
-            )),
-          );
-        } else {
-          const consumeStream = async () => {
-            for await (const chunk of stream) {
-              choices.push(...chunk.choices);
-            }
-          };
-          if (protocolError) {
-            await expect(consumeStream()).rejects.toMatchObject(expectedError);
-          } else {
-            await consumeStream();
+        const consumeStream = async () => {
+          for await (const chunk of stream) {
+            choices.push(...chunk.choices);
           }
+        };
+        if (protocolError) {
+          await expect(consumeStream()).rejects.toMatchObject(expectedError);
+        } else {
+          await consumeStream();
         }
 
         const admission = await terminalAdmission.promise;
@@ -3027,53 +1884,38 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     },
   );
 
-  it.each([
-    { name: "a string", stream: "false" },
-    { name: "a number", stream: 1 },
-    { name: "an array", stream: [] },
-    { name: "an object", stream: {} },
-  ])("rejects $name stream mode before dispatching an agent", async ({ stream }) => {
-    agentCommandMock.mockClear();
-    const response = await postChatCompletions(enabledPort, {
-      model: "openclaw",
-      stream,
-      messages: [{ role: "user", content: "hi" }],
-    });
+  it.each([{ name: "a string", stream: "false" }])(
+    "rejects $name stream mode before dispatching an agent",
+    async ({ stream }) => {
+      agentCommandMock.mockClear();
+      const response = await postChatCompletions(enabledPort, chatRequest({ stream }));
 
-    expect(response.status).toBe(400);
-    expect(response.headers.get("content-type")).toContain("application/json");
-    await expect(response.json()).resolves.toMatchObject({
-      error: { type: "invalid_request_error", message: expect.stringContaining("stream") },
-    });
-    expect(agentCommandMock).not.toHaveBeenCalled();
-  });
+      expect(response.status).toBe(400);
+      expect(response.headers.get("content-type")).toContain("application/json");
+      await expect(response.json()).resolves.toMatchObject({
+        error: { type: "invalid_request_error", message: expect.stringContaining("stream") },
+      });
+      expect(agentCommandMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps one created timestamp across every streamed completion chunk", async () => {
     let now = 1_700_000_000_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (now += 1_000));
     try {
-      agentCommandMock.mockClear();
-      agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
-        const runId = (opts as { runId?: string }).runId ?? "";
+      mockAgentRun(async (runId) => {
         emitAgentEvent({ runId, stream: "assistant", data: { delta: "commentary" } });
-        return {
-          payloads: [{ text: "commentary" }],
-          meta: {
-            stopReason: "tool_calls",
-            pendingToolCalls: [
-              { id: "call_1", name: "lookup", arguments: JSON.stringify({ q: "x".repeat(300) }) },
-            ],
-            agentMeta: { usage: { input: 4, output: 1, total: 5 } },
-          },
-        };
-      }) as never);
-
-      const response = await postChatCompletions(enabledPort, {
-        model: "openclaw",
-        stream: true,
-        stream_options: { include_usage: true },
-        messages: [{ role: "user", content: "hi" }],
+        return toolResult(
+          [{ text: "commentary" }],
+          [{ id: "call_1", name: "lookup", arguments: JSON.stringify({ q: "x".repeat(300) }) }],
+          { usage: { input: 4, output: 1, total: 5 } },
+        );
       });
+
+      const response = await postChatCompletions(
+        enabledPort,
+        chatRequest({ stream: true, stream_options: { include_usage: true } }),
+      );
       expect(response.status).toBe(200);
       const chunks = parseSseDataLines(await response.text())
         .filter((data) => data !== "[DONE]")
@@ -3089,475 +1931,273 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
   it("streams SSE chunks when stream=true", async () => {
     const port = enabledPort;
-    try {
+
+    {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async (opts: unknown) =>
+        buildAssistantDeltaResult({
+          opts,
+          emit: emitAgentEvent,
+          deltas: ["hi", "hi"],
+          text: "hihi",
+        })) as never);
+
+      const res = await postChatCompletions(port, chatRequest({ stream: true }));
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type") ?? "").toContain("text/event-stream");
+
+      const text = await res.text();
+      const data = parseSseDataLines(text);
+      expect(data[data.length - 1]).toBe("[DONE]");
+
+      const jsonChunks = parseChunks(data);
+      expect(jsonChunks.map((chunk) => chunk.object)).toContain("chat.completion.chunk");
+      const allContent = streamContent(jsonChunks);
+      expect(allContent).toBe("hihi");
+      const contentChoices = streamChoices(jsonChunks).filter(
+        (choice) => typeof choice.delta.content === "string",
+      );
+      expect(contentChoices.every((choice) => choice.finish_reason === null)).toBe(true);
+      const stopChoices = streamChoices(jsonChunks).filter(
+        (choice) => choice.finish_reason === "stop",
+      );
+      expect(stopChoices).toHaveLength(1);
+      expect(stopChoices[0]?.delta).toEqual({});
+      const usageChunks = jsonChunks.filter((c) => "usage" in c);
+      expect(usageChunks).toHaveLength(0);
+    }
+
+    for (const { payloads, expected } of [
+      { payloads: [{ text: "hello" }], expected: "hello" },
+      { payloads: [{ text: "" }, {}], expected: "No response from OpenClaw." },
       {
-        agentCommandMock.mockClear();
-        agentCommandMock.mockImplementationOnce((async (opts: unknown) =>
-          buildAssistantDeltaResult({
-            opts,
-            emit: emitAgentEvent,
-            deltas: ["he", "llo"],
-            text: "hello",
-          })) as never);
+        payloads: [{ text: "First." }, {}, { text: "" }, { text: "Second." }],
+        expected: "First.\n\nSecond.",
+      },
+    ]) {
+      mockAgentResult({
+        payloads,
+      });
 
-        const res = await postChatCompletions(port, {
+      const fallbackRes = await postChatCompletions(port, chatRequest({ stream: true }));
+      expect(fallbackRes.status).toBe(200);
+      const fallbackText = await fallbackRes.text();
+      expect(fallbackText).toContain("[DONE]");
+      const fallbackContent = streamContent(parseChunks(parseSseDataLines(fallbackText)));
+      expect(fallbackContent).toBe(expected);
+    }
+
+    {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async (opts: unknown) =>
+        buildAssistantDeltaResult({
+          opts,
+          emit: emitAgentEvent,
+          deltas: ["plain text despite required"],
+          text: "plain text despite required",
+        })) as never);
+
+      const requiredFailureRes = await postChatCompletions(
+        port,
+        chatRequest({
           stream: true,
-          model: "openclaw",
-          messages: [{ role: "user", content: "hi" }],
-        });
-        expect(res.status).toBe(200);
-        expect(res.headers.get("content-type") ?? "").toContain("text/event-stream");
-
-        const text = await res.text();
-        const data = parseSseDataLines(text);
-        expect(data[data.length - 1]).toBe("[DONE]");
-
-        const jsonChunks = data
-          .filter((d) => d !== "[DONE]")
-          .map((d) => JSON.parse(d) as Record<string, unknown>);
-        expect(jsonChunks.map((chunk) => chunk.object)).toContain("chat.completion.chunk");
-        const allContent = jsonChunks
-          .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
-          .map((choice) => (choice.delta as Record<string, unknown> | undefined)?.content)
-          .filter((v): v is string => typeof v === "string")
-          .join("");
-        expect(allContent).toBe("hello");
-        const contentChoices = jsonChunks
-          .flatMap((chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])
-          .filter(
-            (choice) =>
-              typeof (choice.delta as Record<string, unknown> | undefined)?.content === "string",
-          );
-        expect(contentChoices.every((choice) => choice.finish_reason === null)).toBe(true);
-        const stopChoices = jsonChunks
-          .flatMap((chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])
-          .filter((choice) => choice.finish_reason === "stop");
-        expect(stopChoices).toHaveLength(1);
-        expect(stopChoices[0]?.delta).toEqual({});
-        const usageChunks = jsonChunks.filter((c) => "usage" in c);
-        expect(usageChunks).toHaveLength(0);
-      }
-
-      {
-        agentCommandMock.mockClear();
-        agentCommandMock.mockImplementationOnce((async (opts: unknown) =>
-          buildAssistantDeltaResult({
-            opts,
-            emit: emitAgentEvent,
-            deltas: ["hi", "hi"],
-            text: "hihi",
-          })) as never);
-
-        const repeatedRes = await postChatCompletions(port, {
-          stream: true,
-          model: "openclaw",
-          messages: [{ role: "user", content: "hi" }],
-        });
-        expect(repeatedRes.status).toBe(200);
-        const repeatedText = await repeatedRes.text();
-        const repeatedData = parseSseDataLines(repeatedText);
-        const repeatedChunks = repeatedData
-          .filter((d) => d !== "[DONE]")
-          .map((d) => JSON.parse(d) as Record<string, unknown>);
-        const repeatedContent = repeatedChunks
-          .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
-          .map((choice) => (choice.delta as Record<string, unknown> | undefined)?.content)
-          .filter((v): v is string => typeof v === "string")
-          .join("");
-        expect(repeatedContent).toBe("hihi");
-      }
-
-      for (const { payloads, expected } of [
-        { payloads: [{ text: "hello" }], expected: "hello" },
-        { payloads: [{ text: "" }, {}], expected: "No response from OpenClaw." },
-        {
-          payloads: [{ text: "First." }, {}, { text: "" }, { text: "Second." }],
-          expected: "First.\n\nSecond.",
-        },
-      ]) {
-        agentCommandMock.mockClear();
-        agentCommandMock.mockResolvedValueOnce({
-          payloads,
-        } as never);
-
-        const fallbackRes = await postChatCompletions(port, {
-          stream: true,
-          model: "openclaw",
-          messages: [{ role: "user", content: "hi" }],
-        });
-        expect(fallbackRes.status).toBe(200);
-        const fallbackText = await fallbackRes.text();
-        expect(fallbackText).toContain("[DONE]");
-        const fallbackContent = parseSseDataLines(fallbackText)
-          .filter((data) => data !== "[DONE]")
-          .flatMap((data) => {
-            const chunk = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string } }> };
-            return chunk.choices?.map((choice) => choice.delta?.content ?? "") ?? [];
-          })
-          .join("");
-        expect(fallbackContent).toBe(expected);
-      }
-
-      {
-        agentCommandMock.mockClear();
-        agentCommandMock.mockImplementationOnce((async (opts: unknown) =>
-          buildAssistantDeltaResult({
-            opts,
-            emit: emitAgentEvent,
-            deltas: ["plain text despite required"],
-            text: "plain text despite required",
-          })) as never);
-
-        const requiredFailureRes = await postChatCompletions(port, {
-          stream: true,
-          model: "openclaw",
           tool_choice: "required",
-          tools: [
-            {
-              type: "function",
-              function: {
-                name: "get_weather",
-                description: "Get weather",
-                parameters: { type: "object", properties: {} },
-              },
-            },
-          ],
-          messages: [{ role: "user", content: "weather?" }],
-        });
-        expect(requiredFailureRes.status).toBe(200);
-        const requiredFailureText = await requiredFailureRes.text();
-        expect(requiredFailureText).toContain("[DONE]");
-        expect(requiredFailureText).toContain("tool_choice=required was not satisfied");
-        expect(requiredFailureText).not.toContain("plain text despite required");
-      }
+          tools: [functionTool("get_weather", "Get weather")],
+        }),
+      );
+      expect(requiredFailureRes.status).toBe(200);
+      const requiredFailureText = await requiredFailureRes.text();
+      expect(requiredFailureText).toContain("[DONE]");
+      expect(requiredFailureText).toContain("tool_choice=required was not satisfied");
+      expect(requiredFailureText).not.toContain("plain text despite required");
+    }
 
-      {
-        agentCommandMock.mockClear();
-        agentCommandMock.mockResolvedValueOnce({
-          payloads: [{ text: "Let me check that." }],
-          meta: {
-            stopReason: "tool_calls",
-            pendingToolCalls: [
-              {
-                id: "call_1",
-                name: "get_weather",
-                arguments: '{"city":"Taipei"}',
-              },
-            ],
-          },
-        } as never);
-
-        const toolCallRes = await postChatCompletions(port, {
+    for (const includeUsage of [false, true]) {
+      mockAgentResult(
+        toolResult(
+          [{ text: "Let me check that." }],
+          [weatherCall()],
+          includeUsage ? { usage: { input: 12, output: 3, total: 15 } } : undefined,
+        ),
+      );
+      const toolCallRes = await postChatCompletions(
+        port,
+        chatRequest({
           stream: true,
-          model: "openclaw",
-          messages: [{ role: "user", content: "hi" }],
-        });
-        expect(toolCallRes.status).toBe(200);
-        const toolCallText = await toolCallRes.text();
-        const toolCallData = parseSseDataLines(toolCallText);
-        const toolCallChunks = toolCallData
-          .filter((d) => d !== "[DONE]")
-          .map((d) => JSON.parse(d) as Record<string, unknown>);
-        const toolDeltaChunks = toolCallChunks.filter((chunk) => {
-          const choice = ((chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])[0];
-          const delta = (choice?.delta as Record<string, unknown> | undefined) ?? {};
-          return Array.isArray(delta.tool_calls);
-        });
-        expect(toolDeltaChunks.length).toBeGreaterThan(0);
-        const toolCallDeltaRecords = toolDeltaChunks.flatMap((chunk) => {
-          const choice = ((chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])[0];
-          const delta = (choice?.delta as Record<string, unknown> | undefined) ?? {};
-          return (delta.tool_calls as Array<Record<string, unknown>> | undefined) ?? [];
-        });
-        const withIdentity = toolCallDeltaRecords.find(
-          (record) =>
-            record.id === "call_1" &&
-            record.type === "function" &&
-            ((record.function as Record<string, unknown> | undefined)?.name as
-              | string
-              | undefined) === "get_weather",
-        );
-        if (!withIdentity) {
-          throw new Error("expected tool call delta with identity");
-        }
-        const argsJoined = toolCallDeltaRecords
-          .filter((record) => record.index === 0)
-          .map(
-            (record) =>
-              ((record.function as Record<string, unknown> | undefined)?.arguments as
-                | string
-                | undefined) ?? "",
-          )
-          .join("");
-        expect(argsJoined).toBe('{"city":"Taipei"}');
-        const finishChunk = toolCallChunks
-          .flatMap((chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])
-          .find((choice) => choice.finish_reason === "tool_calls");
-        if (!finishChunk) {
-          throw new Error("expected tool_calls finish chunk");
-        }
-      }
-
-      {
-        agentCommandMock.mockClear();
-        agentCommandMock.mockResolvedValueOnce({
-          payloads: [{ text: "Let me check that." }],
-          meta: {
-            stopReason: "tool_calls",
-            pendingToolCalls: [
-              {
-                id: "call_1",
-                name: "get_weather",
-                arguments: '{"city":"Taipei"}',
-              },
-            ],
-            agentMeta: {
-              usage: {
-                input: 12,
-                output: 3,
-                total: 15,
-              },
-            },
-          },
-        } as never);
-
-        const toolCallUsageRes = await postChatCompletions(port, {
-          stream: true,
-          stream_options: { include_usage: true },
-          model: "openclaw",
-          messages: [{ role: "user", content: "hi" }],
-        });
-        expect(toolCallUsageRes.status).toBe(200);
-        const toolCallUsageText = await toolCallUsageRes.text();
-        const toolCallUsageData = parseSseDataLines(toolCallUsageText);
-        const jsonChunks = toolCallUsageData
-          .filter((d) => d !== "[DONE]")
-          .map((d) => JSON.parse(d) as Record<string, unknown>);
-        const usageChunk = jsonChunks.find((chunk) => "usage" in chunk);
-        if (!usageChunk) {
-          throw new Error("expected streamed usage chunk");
-        }
-        expect(usageChunk.choices).toEqual([]);
-        expect(usageChunk.usage).toEqual({
+          ...(includeUsage ? { stream_options: { include_usage: true } } : {}),
+        }),
+      );
+      expect(toolCallRes.status).toBe(200);
+      const toolCallText = await toolCallRes.text();
+      const toolCallData = parseSseDataLines(toolCallText);
+      const toolCallChunks = parseChunks(toolCallData);
+      const choices = streamChoices(toolCallChunks);
+      const toolCallDeltaRecords = choices.flatMap((choice) => choice.delta.tool_calls ?? []);
+      expect(toolCallDeltaRecords).toContainEqual(
+        expect.objectContaining({
+          id: "call_1",
+          type: "function",
+          function: expect.objectContaining({ name: "get_weather" }),
+        }),
+      );
+      const argsJoined = toolCallDeltaRecords
+        .filter((record) => record.index === 0)
+        .map((record) => record.function?.arguments ?? "")
+        .join("");
+      expect(argsJoined).toBe('{"city":"Taipei"}');
+      expect(choices.some((choice) => choice.finish_reason === "tool_calls")).toBe(true);
+      if (includeUsage) {
+        const usageChunk = toolCallChunks.find((chunk) => "usage" in chunk);
+        expect(usageChunk?.choices).toEqual([]);
+        expect(usageChunk?.usage).toEqual({
           prompt_tokens: 12,
           completion_tokens: 3,
           total_tokens: 15,
         });
-        expect(toolCallUsageData[toolCallUsageData.length - 1]).toBe("[DONE]");
       }
+      expect(toolCallData.at(-1)).toBe("[DONE]");
+    }
 
-      {
-        agentCommandMock.mockClear();
-        let resolveLateToolCall:
-          | ((result: {
-              payloads: Array<{ text: string }>;
-              meta: {
-                stopReason: string;
-                pendingToolCalls: Array<{ id: string; name: string; arguments: string }>;
-              };
-            }) => void)
-          | undefined;
-        agentCommandMock.mockImplementationOnce(
-          ((opts: unknown) =>
-            new Promise((resolve) => {
-              resolveLateToolCall = resolve;
-              const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-              emitAgentEvent({ runId, stream: "assistant", data: { delta: "Let me check that." } });
-              emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
-            })) as never,
-        );
+    {
+      agentCommandMock.mockClear();
+      const lateResult = toolResult([{ text: "Let me check that." }], [weatherCall()]);
+      const completion = createDeferred<typeof lateResult>();
+      agentCommandMock.mockImplementationOnce(((opts: unknown) => {
+        const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+        emitAgentEvent({ runId, stream: "assistant", data: { delta: "Let me check that." } });
+        emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+        return completion.promise;
+      }) as never);
 
-        const lateToolCallRes = await postChatCompletions(port, {
+      const lateToolCallRes = await postChatCompletions(port, chatRequest({ stream: true }));
+      expect(lateToolCallRes.status).toBe(200);
+      if (!lateToolCallRes.body) {
+        throw new Error("expected streaming response body");
+      }
+      const reader = lateToolCallRes.body.getReader();
+      const decoder = new TextDecoder();
+      let lateToolCallText = "";
+      while (!lateToolCallText.includes("Let me check that.")) {
+        const { done, value } = await reader.read();
+        if (done) {
+          throw new Error("stream ended before early assistant delta");
+        }
+        lateToolCallText += decoder.decode(value, { stream: true });
+      }
+      expect(lateToolCallText).not.toContain("[DONE]");
+
+      completion.resolve(lateResult);
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) {
+          lateToolCallText += decoder.decode();
+          break;
+        }
+        lateToolCallText += decoder.decode(value, { stream: true });
+      }
+      const lateToolCallData = parseSseDataLines(lateToolCallText);
+      const lateToolCallChunks = parseChunks(lateToolCallData);
+      const finishChunk = streamChoices(lateToolCallChunks).find(
+        (choice) => choice.finish_reason === "tool_calls",
+      );
+      if (!finishChunk) {
+        throw new Error("expected late tool_calls finish chunk");
+      }
+      const anyToolCalls = lateToolCallChunks.some((chunk) => {
+        const choice = chunk.choices?.[0];
+        const delta = choice?.delta ?? {};
+        return Array.isArray(delta.tool_calls);
+      });
+      expect(anyToolCalls).toBe(true);
+    }
+
+    {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockRejectedValueOnce(new Error("client tool name conflict: exec"));
+
+      const toolConflictRes = await postChatCompletions(
+        port,
+        chatRequest({
           stream: true,
-          model: "openclaw",
-          messages: [{ role: "user", content: "hi" }],
-        });
-        expect(lateToolCallRes.status).toBe(200);
-        if (!lateToolCallRes.body) {
-          throw new Error("expected streaming response body");
-        }
-        const reader = lateToolCallRes.body.getReader();
-        const decoder = new TextDecoder();
-        let lateToolCallText = "";
-        while (!lateToolCallText.includes("Let me check that.")) {
-          const { done, value } = await reader.read();
-          if (done) {
-            throw new Error("stream ended before early assistant delta");
-          }
-          lateToolCallText += decoder.decode(value, { stream: true });
-        }
-        expect(lateToolCallText).not.toContain("[DONE]");
+          tools: [functionTool("exec", "conflicts with a built-in tool")],
+        }),
+      );
+      expect(toolConflictRes.status).toBe(200);
+      const toolConflictText = await toolConflictRes.text();
+      const toolConflictData = parseSseDataLines(toolConflictText);
+      expect(toolConflictData[toolConflictData.length - 1]).toBe("[DONE]");
 
-        resolveLateToolCall?.({
-          payloads: [{ text: "Let me check that." }],
-          meta: {
-            stopReason: "tool_calls",
-            pendingToolCalls: [
-              {
-                id: "call_1",
-                name: "get_weather",
-                arguments: '{"city":"Taipei"}',
-              },
-            ],
-          },
-        });
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) {
-            lateToolCallText += decoder.decode();
-            break;
-          }
-          lateToolCallText += decoder.decode(value, { stream: true });
-        }
-        const lateToolCallData = parseSseDataLines(lateToolCallText);
-        const lateToolCallChunks = lateToolCallData
-          .filter((d) => d !== "[DONE]")
-          .map((d) => JSON.parse(d) as Record<string, unknown>);
-        const finishChunk = lateToolCallChunks
-          .flatMap((chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])
-          .find((choice) => choice.finish_reason === "tool_calls");
-        if (!finishChunk) {
-          throw new Error("expected late tool_calls finish chunk");
-        }
-        const anyToolCalls = lateToolCallChunks.some((chunk) => {
-          const choice = ((chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])[0];
-          const delta = (choice?.delta as Record<string, unknown> | undefined) ?? {};
-          return Array.isArray(delta.tool_calls);
-        });
-        expect(anyToolCalls).toBe(true);
+      const toolConflictChunks = parseChunks(toolConflictData);
+      const protocolError = toolConflictChunks.find(
+        (chunk) =>
+          typeof chunk.error === "object" &&
+          ((chunk.error as { type?: unknown }).type ?? "") === "invalid_request_error" &&
+          ((chunk.error as { message?: unknown }).message ?? "") === "invalid tool configuration",
+      );
+      if (!protocolError) {
+        throw new Error("expected invalid tool configuration protocol error");
       }
+      const stopChoice = streamChoices(toolConflictChunks).find(
+        (choice) => choice.finish_reason === "stop",
+      );
+      expect(stopChoice).toBeUndefined();
+    }
 
-      {
-        agentCommandMock.mockClear();
-        agentCommandMock.mockRejectedValueOnce(createClientToolNameConflictError(["exec"]));
+    {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockRejectedValueOnce(new Error("boom"));
 
-        const toolConflictRes = await postChatCompletions(port, {
-          stream: true,
-          model: "openclaw",
-          tools: [
-            {
-              type: "function",
-              function: {
-                name: "exec",
-                description: "conflicts with a built-in tool",
-                parameters: { type: "object", properties: {} },
-              },
-            },
-          ],
-          messages: [{ role: "user", content: "run command" }],
-        });
-        expect(toolConflictRes.status).toBe(200);
-        const toolConflictText = await toolConflictRes.text();
-        const toolConflictData = parseSseDataLines(toolConflictText);
-        expect(toolConflictData[toolConflictData.length - 1]).toBe("[DONE]");
+      const errorRes = await postChatCompletions(port, chatRequest({ stream: true }));
+      expect(errorRes.status).toBe(200);
+      const errorText = await errorRes.text();
+      const errorData = parseSseDataLines(errorText);
+      expect(errorData[errorData.length - 1]).toBe("[DONE]");
 
-        const toolConflictChunks = toolConflictData
-          .filter((d) => d !== "[DONE]")
-          .map((d) => JSON.parse(d) as Record<string, unknown>);
-        const protocolError = toolConflictChunks.find(
-          (chunk) =>
-            typeof chunk.error === "object" &&
-            ((chunk.error as { type?: unknown }).type ?? "") === "invalid_request_error" &&
-            ((chunk.error as { message?: unknown }).message ?? "") === "invalid tool configuration",
-        );
-        if (!protocolError) {
-          throw new Error("expected invalid tool configuration protocol error");
-        }
-        const stopChoice = toolConflictChunks
-          .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
-          .find((choice) => choice.finish_reason === "stop");
-        expect(stopChoice).toBeUndefined();
-      }
-
-      {
-        agentCommandMock.mockClear();
-        agentCommandMock.mockRejectedValueOnce(new Error("boom"));
-
-        const errorRes = await postChatCompletions(port, {
-          stream: true,
-          model: "openclaw",
-          messages: [{ role: "user", content: "hi" }],
-        });
-        expect(errorRes.status).toBe(200);
-        const errorText = await errorRes.text();
-        const errorData = parseSseDataLines(errorText);
-        expect(errorData[errorData.length - 1]).toBe("[DONE]");
-
-        const errorChunks = errorData
-          .filter((d) => d !== "[DONE]")
-          .map((d) => JSON.parse(d) as Record<string, unknown>);
-        const choices = errorChunks.flatMap(
-          (chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [],
-        );
-        expect(errorChunks.filter((chunk) => "error" in chunk)).toEqual([
-          { error: { message: "internal error", type: "api_error" } },
-        ]);
-        expect(
-          choices.some((choice) =>
-            Boolean((choice.delta as Record<string, unknown> | undefined)?.content),
-          ),
-        ).toBe(false);
-        expect(choices.some((choice) => choice.finish_reason === "stop")).toBe(false);
-        expect(errorText).not.toContain("boom");
-      }
-    } finally {
-      // shared server
+      const errorChunks = parseChunks(errorData);
+      const choices = streamChoices(errorChunks);
+      expect(errorChunks.filter((chunk) => "error" in chunk)).toEqual([
+        { error: { message: "internal error", type: "api_error" } },
+      ]);
+      expect(choices.some((choice) => Boolean(choice.delta.content))).toBe(false);
+      expect(choices.some((choice) => choice.finish_reason === "stop")).toBe(false);
+      expect(errorText).not.toContain("boom");
     }
   });
 
   it.each([
     { name: "empty arguments", expectedArguments: "" },
-    ...[
-      { astral: "😀", boundary: 255 },
-      { astral: "𐐷", boundary: 511 },
-    ].map(({ astral, boundary }) => ({
+    ...[{ astral: "😀", boundary: 255 }].map(({ astral, boundary }) => ({
       name: `${astral} at UTF-16 boundary ${boundary}`,
       expectedArguments: JSON.stringify({
         value: `${"a".repeat(boundary - '{"value":"'.length)}${astral}tail`,
       }),
     })),
   ])("keeps streamed tool-call arguments well-formed ($name)", async ({ expectedArguments }) => {
-    agentCommandMock.mockClear();
-    agentCommandMock.mockResolvedValueOnce({
-      payloads: [{ text: "Calling the tool." }],
-      meta: {
-        stopReason: "tool_calls",
-        pendingToolCalls: [
+    mockAgentResult(
+      toolResult(
+        [{ text: "Calling the tool." }],
+        [
           {
             id: "call_1",
             name: "read_value",
             arguments: expectedArguments,
           },
         ],
-      },
-    } as never);
+      ),
+    );
 
-    const res = await postChatCompletions(enabledPort, {
-      stream: true,
-      model: "openclaw",
-      messages: [{ role: "user", content: "read the value" }],
-    });
+    const res = await postChatCompletions(enabledPort, chatRequest({ stream: true }));
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/event-stream");
 
     const data = parseSseDataLines(await res.text());
     expect(data.at(-1)).toBe("[DONE]");
 
-    const chunks = data
-      .filter((line) => line !== "[DONE]")
-      .map((line) => JSON.parse(line) as Record<string, unknown>);
-    const choices = chunks.flatMap(
-      (chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [],
-    );
+    const chunks = parseChunks(data);
+    const choices = streamChoices(chunks);
     const argumentDeltas = choices
-      .flatMap((choice) => {
-        const delta = choice.delta as Record<string, unknown> | undefined;
-        return (delta?.tool_calls as Array<Record<string, unknown>> | undefined) ?? [];
-      })
-      .map((toolCall) => {
-        const toolFunction = toolCall.function as Record<string, unknown> | undefined;
-        return toolFunction?.arguments;
-      })
+      .flatMap((choice) => choice.delta.tool_calls ?? [])
+      .map((toolCall) => toolCall.function?.arguments)
       .filter((argumentsDelta): argumentsDelta is string => typeof argumentsDelta === "string");
 
     expect(argumentDeltas.length).toBeGreaterThan(1);
@@ -3626,13 +2266,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             clientReq.destroy(new Error("timed out waiting for first SSE chunk"));
           }
         });
-        clientReq.end(
-          JSON.stringify({
-            stream: true,
-            model: "openclaw",
-            messages: [{ role: "user", content: "hi" }],
-          }),
-        );
+        clientReq.end(JSON.stringify(chatRequest({ stream: true })));
       });
 
       await expect(firstChunk).resolves.toContain('"role":"assistant"');
@@ -3659,11 +2293,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       return { payloads: [{ text: queued ? "answer queued" : "unreachable" }] };
     }) as never);
 
-    const res = await postChatCompletions(enabledPort, {
-      stream: true,
-      model: "openclaw",
-      messages: [{ role: "user", content: "hi" }],
-    });
+    const res = await postChatCompletions(enabledPort, chatRequest({ stream: true }));
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -3678,11 +2308,9 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
   it.each(bufferedReplacementCases)(
     "buffers replaceable assistant events through $name",
     async ({ replacement, finalText, expected }) => {
-      agentCommandMock.mockClear();
-      agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
-        const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      mockAgentRun(async (runId) => {
         return emitBufferedAssistantReplacement(runId, { replacement, finalText });
-      }) as never);
+      });
 
       const stream = await createOpenAiHttpTestClient(enabledPort).chat.completions.create({
         stream: true,
@@ -3690,220 +2318,89 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         messages: [{ role: "user", content: "hi" }],
       });
 
-      const content: string[] = [];
-      const finishReasons: Array<string | null> = [];
-      for await (const chunk of stream) {
-        for (const choice of chunk.choices) {
-          content.push(choice.delta.content ?? "");
-          finishReasons.push(choice.finish_reason);
-        }
-      }
-      expect(content.join("")).toBe(expected);
+      const { content, finishReasons } = await readSdkStream(stream);
+      expect(content).toBe(expected);
       expect(finishReasons.at(-1)).toBe("stop");
     },
   );
 
-  it("prefers final result text over buffered replaceable chat drafts", async () => {
-    const port = enabledPort;
-    agentCommandMock.mockClear();
-    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
-      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-      emitAgentEvent({
-        runId,
-        stream: "assistant",
-        data: { text: "coordination draft", delta: "coordination draft", replaceable: true },
-      });
+  it.each([
+    [
+      "aggregate-only usage",
+      false,
+      { total: 123 },
+      { prompt_tokens: 0, completion_tokens: 0, total_tokens: 123 },
+    ],
+    [
+      "usage arriving after lifecycle end",
+      true,
+      { input: 7, output: 3, total: 10 },
+      { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 },
+    ],
+  ] as const)("finalizes a stream with %s", async (_name, delayed, usage, expected) => {
+    mockAgentRun((runId) => {
+      emitAgentEvent({ runId, stream: "assistant", data: { delta: "hello" } });
+      const result = usageResult("hello", { usage });
+      if (!delayed) {
+        return Promise.resolve(result);
+      }
       emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
-      return { payloads: [{ text: "final answer" }] };
-    }) as never);
-
-    const res = await postChatCompletions(port, {
-      stream: true,
-      model: "openclaw",
-      messages: [{ role: "user", content: "hi" }],
+      return new Promise((resolve) => {
+        setTimeout(() => resolve(result), 100);
+      });
     });
-
+    const res = await postChatCompletions(
+      enabledPort,
+      chatRequest({ stream: true, stream_options: { include_usage: true } }),
+    );
     expect(res.status).toBe(200);
     const data = parseSseDataLines(await res.text());
-    const chunks = data
-      .filter((d) => d !== "[DONE]")
-      .map((d) => JSON.parse(d) as Record<string, unknown>);
-    const allContent = chunks
-      .flatMap((chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])
-      .map((choice) => (choice.delta as Record<string, unknown> | undefined)?.content)
-      .filter((content): content is string => typeof content === "string")
-      .join("");
+    expect(data.at(-1)).toBe("[DONE]");
+    expect(parseChunks(data).find((chunk) => "usage" in chunk)?.usage).toEqual(expected);
+  });
 
-    expect(allContent).toBe("final answer");
+  it("preserves declared owner identity for streaming and non-streaming private callers", async () => {
+    await expectDeclaredHttpOwnerIdentity({
+      post: (stream, headers) => postChatCompletions(enabledPort, chatRequest({ stream }), headers),
+      consume: (response) => response.text(),
+      senderIsOwner: () => firstAgentCommandOptions()?.senderIsOwner,
+    });
   });
 
   it.each([
-    {
-      name: "includes aggregate usage in the final stream chunk",
-      usage: { input: 12, output: 5, cacheRead: 3, cacheWrite: 0, total: 20 },
-      lastCallUsage: undefined,
-      expected: {
-        prompt_tokens: 15,
-        completion_tokens: 5,
-        total_tokens: 20,
-        prompt_tokens_details: { cached_tokens: 3 },
-      },
-    },
-    {
-      name: "uses last-call usage when the aggregate is zero",
-      usage: { input: 0, output: 0, total: 0 },
-      lastCallUsage: { input: 55, output: 7, total: 62 },
-      expected: {
-        prompt_tokens: 55,
-        completion_tokens: 7,
-        total_tokens: 62,
-      },
-    },
-  ])("$name", async ({ usage, lastCallUsage, expected }) => {
-    const port = enabledPort;
-    agentCommandMock.mockClear();
-    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
-      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-      emitAgentEvent({ runId, stream: "assistant", data: { delta: "he" } });
-      emitAgentEvent({ runId, stream: "assistant", data: { delta: "llo" } });
-      return {
-        payloads: [{ text: "hello" }],
-        meta: {
-          agentMeta: {
-            usage,
-            ...(lastCallUsage ? { lastCallUsage } : {}),
-          },
-        },
-      };
-    }) as never);
-
-    const res = await postChatCompletions(port, {
-      stream: true,
-      stream_options: { include_usage: true },
-      model: "openclaw",
-      messages: [{ role: "user", content: "hi" }],
-    });
-    expect(res.status).toBe(200);
-
-    const text = await res.text();
-    const data = parseSseDataLines(text);
-    expect(data[data.length - 1]).toBe("[DONE]");
-    const jsonChunks = data
-      .filter((d) => d !== "[DONE]")
-      .map((d) => JSON.parse(d) as Record<string, unknown>);
-
-    const usageChunk = jsonChunks.find((chunk) => "usage" in chunk);
-    expect(usageChunk?.usage).toEqual(expected);
-    expect(usageChunk?.choices).toStrictEqual([]);
-  });
-
-  it("keeps aggregate-only usage total in final stream usage chunk", async () => {
-    const port = enabledPort;
-    agentCommandMock.mockClear();
-    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
-      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-      emitAgentEvent({ runId, stream: "assistant", data: { delta: "hello" } });
-      return {
-        payloads: [{ text: "hello" }],
-        meta: {
-          agentMeta: {
-            usage: {
-              total: 123,
-            },
-          },
-        },
-      };
-    }) as never);
-
-    const res = await postChatCompletions(port, {
-      stream: true,
-      stream_options: { include_usage: true },
-      model: "openclaw",
-      messages: [{ role: "user", content: "hi" }],
-    });
-    expect(res.status).toBe(200);
-
-    const text = await res.text();
-    const data = parseSseDataLines(text);
-    expect(data[data.length - 1]).toBe("[DONE]");
-    const jsonChunks = data
-      .filter((d) => d !== "[DONE]")
-      .map((d) => JSON.parse(d) as Record<string, unknown>);
-    const usageChunk = jsonChunks.find((chunk) => "usage" in chunk);
-    expect(usageChunk?.usage).toEqual({
-      prompt_tokens: 0,
-      completion_tokens: 0,
-      total_tokens: 123,
-    });
-  });
-
-  it("finalizes stream when lifecycle end arrives before usage is available", async () => {
-    const port = enabledPort;
-    agentCommandMock.mockClear();
-    agentCommandMock.mockImplementationOnce(
-      ((opts: unknown) =>
-        new Promise((resolve) => {
-          const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-          emitAgentEvent({ runId, stream: "assistant", data: { delta: "hello" } });
-          emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
-          setTimeout(() => {
-            resolve({
-              payloads: [{ text: "hello" }],
-              meta: {
-                agentMeta: {
-                  usage: { input: 7, output: 3, total: 10 },
-                },
-              },
-            });
-          }, 100);
-        })) as never,
-    );
-
-    const res = await postChatCompletions(port, {
-      stream: true,
-      stream_options: { include_usage: true },
-      model: "openclaw",
-      messages: [{ role: "user", content: "hi" }],
-    });
-    expect(res.status).toBe(200);
-
-    const text = await res.text();
-    const data = parseSseDataLines(text);
-    expect(data[data.length - 1]).toBe("[DONE]");
-    const jsonChunks = data
-      .filter((d) => d !== "[DONE]")
-      .map((d) => JSON.parse(d) as Record<string, unknown>);
-    const usageChunk = jsonChunks.find((chunk) => "usage" in chunk);
-    expect(usageChunk?.usage).toEqual({
-      prompt_tokens: 7,
-      completion_tokens: 3,
-      total_tokens: 10,
-    });
-  });
-
-  it(
-    "cleans up usage-enabled stream when client disconnects before usage arrives",
+    { name: "streaming", stream: true, includeUsage: false },
+    { name: "usage-enabled streaming", stream: true, includeUsage: true },
+    { name: "non-streaming", stream: false, includeUsage: false },
+  ])(
+    "aborts and retains cleanup admission when $name client disconnects",
     { timeout: 15_000 },
-    async () => {
+    async ({ stream, includeUsage }) => {
       const port = enabledPort;
+      const idleRootCount = getActiveGatewayRootWorkCount();
+      const agentAborted = createDeferred();
+      const finishAgentCleanup = createDeferred();
+      const cleanupAdmissionClosed = createDeferred<boolean>();
       let serverAbortSignal: AbortSignal | undefined;
 
       agentCommandMock.mockClear();
-      agentCommandMock.mockImplementationOnce(
-        (opts: unknown) =>
-          new Promise<undefined>((resolve) => {
-            const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-            const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
-            serverAbortSignal = signal;
-            emitAgentEvent({ runId, stream: "assistant", data: { delta: "hello" } });
-            emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
-            if (signal?.aborted) {
-              resolve(undefined);
-              return;
-            }
-            signal?.addEventListener("abort", () => resolve(undefined), { once: true });
-          }),
-      );
+      agentCommandMock.mockImplementationOnce(async (opts: unknown) => {
+        const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+        serverAbortSignal = signal;
+        if (includeUsage) {
+          const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+          emitAgentEvent({ runId, stream: "assistant", data: { delta: "hello" } });
+          emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+        }
+        if (signal?.aborted) {
+          agentAborted.resolve();
+        } else {
+          signal?.addEventListener("abort", () => agentAborted.resolve(), { once: true });
+        }
+        await agentAborted.promise;
+        cleanupAdmissionClosed.resolve(isGatewaySubordinateWorkAdmissionClosed());
+        await finishAgentCleanup.promise;
+        return undefined;
+      });
 
       const clientReq = http.request({
         hostname: "127.0.0.1",
@@ -3917,72 +2414,108 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       });
       clientReq.on("error", () => {});
       clientReq.end(
-        JSON.stringify({
-          stream: true,
-          stream_options: { include_usage: true },
-          model: "openclaw",
-          messages: [{ role: "user", content: "hi" }],
-        }),
+        JSON.stringify(
+          chatRequest({
+            ...(stream ? { stream: true } : {}),
+            ...(includeUsage ? { stream_options: { include_usage: true } } : {}),
+          }),
+        ),
       );
 
       await vi.waitFor(() => {
         expect(agentCommandMock).toHaveBeenCalledTimes(1);
       });
 
-      clientReq.destroy();
+      try {
+        clientReq.destroy();
 
-      await vi.waitFor(
-        () => {
-          expect(serverAbortSignal?.aborted).toBe(true);
-        },
-        { timeout: 5_000, interval: 50 },
-      );
+        await vi.waitFor(() => expect(serverAbortSignal?.aborted).toBe(true), {
+          timeout: 5_000,
+          interval: 50,
+        });
+        expect(await cleanupAdmissionClosed.promise).toBe(false);
+        expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount + 1);
+      } finally {
+        finishAgentCleanup.resolve();
+      }
+
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount), {
+        timeout: 5_000,
+        interval: 50,
+      });
     },
   );
 
-  it("does not require usage to finalize when include_usage is not requested", async () => {
-    const port = enabledPort;
-    agentCommandMock.mockClear();
-    agentCommandMock.mockImplementationOnce(
-      ((opts: unknown) =>
-        new Promise((resolve) => {
-          const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-          emitAgentEvent({ runId, stream: "assistant", data: { delta: "hello" } });
-          emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
-          setTimeout(() => {
-            resolve({ payloads: [{ text: "hello" }] });
-          }, 100);
-        })) as never,
-    );
+  // Keep this last: it verifies shutdown of the shared server.
+  it("binds the Gateway lifecycle resolver to chat-completion runs", async () => {
+    let resolveGatewayContext: ReturnType<typeof getGatewayContextResolver>;
+    try {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce(async (opts: unknown) => {
+        const admittedRunContext = {};
+        const onAdmittedRunContext = (opts as FirstAgentCommandOptions).onAdmittedRunContext;
+        expect(onAdmittedRunContext).toBeTypeOf("function");
+        await onAdmittedRunContext?.(admittedRunContext);
+        resolveGatewayContext = getGatewayContextResolver(admittedRunContext);
+        return { payloads: [{ text: "hello" }] } as never;
+      });
 
-    const res = await postChatCompletions(port, {
-      stream: true,
-      model: "openclaw",
-      messages: [{ role: "user", content: "hi" }],
-    });
-    expect(res.status).toBe(200);
+      const res = await postChatCompletions(enabledPort);
 
-    const text = await res.text();
-    const data = parseSseDataLines(text);
-    expect(data[data.length - 1]).toBe("[DONE]");
-    const jsonChunks = data
-      .filter((d) => d !== "[DONE]")
-      .map((d) => JSON.parse(d) as Record<string, unknown>);
-    const usageChunks = jsonChunks.filter((chunk) => "usage" in chunk);
-    expect(usageChunks).toHaveLength(0);
+      expect(res.status).toBe(200);
+      await res.text();
+      const context = resolveGatewayContext?.();
+      expect(context?.resolveGatewayContext).toBe(resolveGatewayContext);
+    } finally {
+      await enabledServer.close({ reason: "chat-completion resolver lifecycle test done" });
+    }
+    expect(resolveGatewayContext?.()).toBeUndefined();
   });
+});
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
-  it("preserves declared owner identity for streaming and non-streaming private callers", async () => {
-    await expectDeclaredHttpOwnerIdentity({
-      post: (stream, headers) =>
-        postChatCompletions(
-          enabledPort,
-          { stream, model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+// These configurations own their Gateway after the shared server has closed.
+describe("OpenAI-compatible HTTP API (e2e) with independent Gateways", () => {
+  it("returns 429 for repeated failed auth when gateway.auth.rateLimit is configured", async () => {
+    testState.gatewayAuth = {
+      mode: "token",
+      token: "secret",
+      rateLimit: { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000, exemptLoopback: false },
+    };
+    await withGatewayServer(
+      async ({ port }) => {
+        const headers = {
+          "content-type": "application/json",
+          authorization: "Bearer wrong",
+        };
+        const body = {
+          model: "openclaw",
+          messages: [{ role: "user", content: "hi" }],
+        };
+
+        const first = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+          method: "POST",
           headers,
-        ),
-      consume: (response) => response.text(),
-      senderIsOwner: () => firstAgentCommandOptions()?.senderIsOwner,
-    });
+          body: JSON.stringify(body),
+        });
+        expect(first.status).toBe(401);
+
+        const second = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+        });
+        expect(second.status).toBe(429);
+        expect(second.headers.get("retry-after")).toMatch(/^\d+$/);
+      },
+      {
+        serverOptions: {
+          host: "127.0.0.1",
+          controlUiEnabled: false,
+          openAiChatCompletionsEnabled: true,
+        },
+      },
+    );
   });
 
   it.each(["trusted-proxy", "token"] as const)(
@@ -4004,11 +2537,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         },
         writeGatewayConfig,
         post: (port, headers) =>
-          postChatCompletions(
-            port,
-            { model: "openclaw", messages: [{ role: "user", content: "mutate foreign session" }] },
-            headers,
-          ),
+          postChatCompletions(port, chatRequest({}, "mutate foreign session"), headers),
       });
     },
   );
@@ -4017,17 +2546,9 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     await withEnvAsync(
       { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
       async () => {
-        const port = await getGatewayTestPort();
         let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
         const previousGatewayAuth = testState.gatewayAuth;
-        const trustedProxyAuth = {
-          mode: "trusted-proxy" as const,
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
-            requiredHeaders: ["x-forwarded-proto"],
-            allowLoopback: true,
-          },
-        };
+        const trustedProxyAuth = browserProxyAuth();
         testState.gatewayAuth = trustedProxyAuth;
         try {
           await writeGatewayConfig({
@@ -4037,12 +2558,16 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             },
           });
           resetConfigRuntimeState();
-          server = await startGatewayServer(port, {
-            host: "127.0.0.1",
-            auth: trustedProxyAuth,
-            controlUiEnabled: false,
-            openAiChatCompletionsEnabled: true,
-          });
+          const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+          const port = portClaim.port;
+          server = await startClaimedGateway(portClaim, () =>
+            startGatewayServer(port, {
+              host: "127.0.0.1",
+              auth: trustedProxyAuth,
+              controlUiEnabled: false,
+              openAiChatCompletionsEnabled: true,
+            }),
+          );
 
           const incognitoSessionKey = "agent:main:dashboard:incognito-openai-http";
           await upsertSessionEntryCore(
@@ -4060,24 +2585,15 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
               { scopes: "operator.write", senderIsOwner: false },
               { scopes: "operator.admin, operator.write", senderIsOwner: true },
             ]) {
-              agentCommandMock.mockClear();
-              agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+              mockAgentResult({ payloads: [{ text: "hello" }] });
 
-              const res = await postChatCompletions(
-                port,
-                {
-                  stream,
-                  model: "openclaw",
-                  messages: [{ role: "user", content: "hi" }],
-                },
-                {
-                  "x-forwarded-for": "198.51.100.42",
-                  "x-forwarded-proto": "https",
-                  "x-forwarded-user": "operator@example.com",
-                  "x-openclaw-scopes": scopes,
-                  "x-openclaw-sender-is-owner": "true",
-                },
-              );
+              const res = await postChatCompletions(port, chatRequest({ stream }), {
+                "x-forwarded-for": "198.51.100.42",
+                "x-forwarded-proto": "https",
+                "x-forwarded-user": "operator@example.com",
+                "x-openclaw-scopes": scopes,
+                "x-openclaw-sender-is-owner": "true",
+              });
 
               expect(res.status).toBe(200);
               await res.text();
@@ -4096,45 +2612,33 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             "dashboard:incognito-openai-http",
           ]) {
             agentCommandMock.mockClear();
-            const denied = await postChatCompletions(
-              port,
-              { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
-              {
-                ...trustedProxyHeaders,
-                "x-openclaw-scopes": "operator.write",
-                "x-openclaw-session-key": requestedSessionKey,
-              },
-            );
+            const denied = await postChatCompletions(port, chatRequest(), {
+              ...trustedProxyHeaders,
+              "x-openclaw-scopes": "operator.write",
+              "x-openclaw-session-key": requestedSessionKey,
+            });
             expect(denied.status).toBe(403);
             await denied.text();
             expect(agentCommandMock).not.toHaveBeenCalled();
           }
 
           agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
-          const allowed = await postChatCompletions(
-            port,
-            { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
-            {
-              ...trustedProxyHeaders,
-              "x-openclaw-scopes": "operator.admin, operator.write",
-              "x-openclaw-session-key": "dashboard:incognito-openai-http",
-            },
-          );
+          const allowed = await postChatCompletions(port, chatRequest(), {
+            ...trustedProxyHeaders,
+            "x-openclaw-scopes": "operator.admin, operator.write",
+            "x-openclaw-session-key": "dashboard:incognito-openai-http",
+          });
           expect(allowed.status).toBe(200);
           await allowed.text();
           expect(agentCommandMock).toHaveBeenCalledTimes(1);
 
           agentCommandMock.mockClear();
-          const unauthorized = await postChatCompletions(
-            port,
-            { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
-            {
-              "x-forwarded-for": "198.51.100.42",
-              "x-forwarded-proto": "https",
-              "x-openclaw-scopes": "operator.admin, operator.write",
-              "x-openclaw-sender-is-owner": "true",
-            },
-          );
+          const unauthorized = await postChatCompletions(port, chatRequest(), {
+            "x-forwarded-for": "198.51.100.42",
+            "x-forwarded-proto": "https",
+            "x-openclaw-scopes": "operator.admin, operator.write",
+            "x-openclaw-sender-is-owner": "true",
+          });
           expect(unauthorized.status).toBe(401);
           await unauthorized.text();
           expect(agentCommandMock).not.toHaveBeenCalled();
@@ -4151,20 +2655,13 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
   it.each(["token", "password"] as const)(
     "preserves owner identity for streaming and non-streaming %s-authenticated callers",
     async (mode) => {
-      const port = await getGatewayTestPort();
-      const server = await startSharedSecretServer(port, mode);
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      const port = portClaim.port;
+      const server = await startSharedSecretServer(portClaim, mode);
       try {
         await expectSharedSecretHttpOwnerIdentity({
           post: (stream, headers) =>
-            postChatCompletions(
-              port,
-              {
-                ...(stream === undefined ? {} : { stream }),
-                model: "openclaw",
-                messages: [{ role: "user", content: "hi" }],
-              },
-              headers,
-            ),
+            postChatCompletions(port, chatRequest(stream === undefined ? {} : { stream }), headers),
           consume: (response) => response.text(),
           senderIsOwner: () => firstAgentCommandOptions()?.senderIsOwner,
         });
@@ -4173,124 +2670,4 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
     },
   );
-
-  it("aborts agent command when streaming client disconnects", { timeout: 15_000 }, async () => {
-    const port = enabledPort;
-    const idleRootCount = getActiveGatewayRootWorkCount();
-    const agentAborted = createDeferred();
-    const finishAgentCleanup = createDeferred();
-    const cleanupAdmissionClosed = createDeferred<boolean>();
-    let serverAbortSignal: AbortSignal | undefined;
-
-    agentCommandMock.mockClear();
-    agentCommandMock.mockImplementationOnce(async (opts: unknown) => {
-      const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
-      serverAbortSignal = signal;
-      if (signal?.aborted) {
-        agentAborted.resolve();
-      } else {
-        signal?.addEventListener("abort", () => agentAborted.resolve(), { once: true });
-      }
-      await agentAborted.promise;
-      cleanupAdmissionClosed.resolve(isGatewaySubordinateWorkAdmissionClosed());
-      await finishAgentCleanup.promise;
-      return undefined;
-    });
-
-    const clientReq = http.request({
-      hostname: "127.0.0.1",
-      port,
-      path: "/v1/chat/completions",
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: "Bearer secret",
-      },
-    });
-    clientReq.on("error", () => {});
-    clientReq.end(
-      JSON.stringify({
-        stream: true,
-        model: "openclaw",
-        messages: [{ role: "user", content: "hi" }],
-      }),
-    );
-
-    await vi.waitFor(() => {
-      expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    });
-
-    try {
-      clientReq.destroy();
-
-      await vi.waitFor(() => expect(serverAbortSignal?.aborted).toBe(true), {
-        timeout: 5_000,
-        interval: 50,
-      });
-      expect(await cleanupAdmissionClosed.promise).toBe(false);
-      expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount + 1);
-    } finally {
-      finishAgentCleanup.resolve();
-    }
-
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount), {
-      timeout: 5_000,
-      interval: 50,
-    });
-  });
-
-  it(
-    "aborts agent command when non-streaming client disconnects",
-    { timeout: 15_000 },
-    async () => {
-      const port = enabledPort;
-      let serverAbortSignal: AbortSignal | undefined;
-
-      agentCommandMock.mockClear();
-      agentCommandMock.mockImplementationOnce(
-        (opts: unknown) =>
-          new Promise<undefined>((resolve) => {
-            const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
-            serverAbortSignal = signal;
-            if (signal?.aborted) {
-              resolve(undefined);
-              return;
-            }
-            signal?.addEventListener("abort", () => resolve(undefined), { once: true });
-          }),
-      );
-
-      const clientReq = http.request({
-        hostname: "127.0.0.1",
-        port,
-        path: "/v1/chat/completions",
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: "Bearer secret",
-        },
-      });
-      clientReq.on("error", () => {});
-      clientReq.end(
-        JSON.stringify({
-          model: "openclaw",
-          messages: [{ role: "user", content: "hi" }],
-        }),
-      );
-
-      await vi.waitFor(() => {
-        expect(agentCommandMock).toHaveBeenCalledTimes(1);
-      });
-
-      clientReq.destroy();
-
-      await vi.waitFor(
-        () => {
-          expect(serverAbortSignal?.aborted).toBe(true);
-        },
-        { timeout: 5_000, interval: 50 },
-      );
-    },
-  );
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

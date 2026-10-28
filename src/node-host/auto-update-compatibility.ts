@@ -1,19 +1,23 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
-import { hasErrnoCode } from "../infra/errno.js";
+import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { tryReadJson } from "../infra/json-files.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { statIfExists } from "../infra/path-existence.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "../infra/runtime-process-url.js";
+import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import {
   resolveSqliteInspectionBudget,
   runSqliteReadOnlyWorker,
 } from "../infra/sqlite-readonly-worker.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
-import { checkGitCandidateNodeRuntime } from "../infra/update-runner-git-node-preflight.js";
+import { prepareGitCandidateNodeRuntime } from "../infra/update-runner-git-node-preflight.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
-import { readAgentDatabasePreflightTargets } from "../state/openclaw-agent-db-registry-listing.js";
+import { readAgentDatabasePreflightTargets } from "../state/openclaw-agent-db-registry.read.js";
 import { preflightOpenClawDatabaseSchemas } from "../state/openclaw-database-preflight.js";
 import {
   parsePackageOpenClawSchemaVersions,
@@ -65,14 +69,7 @@ export async function readNodeRuntimeUpdateManifest(packageRoot: string): Promis
   }
   const entrypoints = await Promise.all(
     ["dist/entry.js", "dist/entry.mjs"].map(async (relativePath) => {
-      try {
-        return (await fs.stat(path.join(packageRoot, relativePath))).isFile();
-      } catch (error) {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return false;
-        }
-        throw error;
-      }
+      return (await statIfExists(path.join(packageRoot, relativePath)))?.isFile() ?? false;
     }),
   );
   if (!entrypoints.some(Boolean)) {
@@ -88,8 +85,13 @@ export async function assertNodeRuntimeUpdateCompatible(params: {
   signal?: AbortSignal;
 }): Promise<void> {
   params.signal?.throwIfAborted();
-  const { version, schemaVersions } = await readNodeRuntimeUpdateManifest(params.packageRoot);
-  const nodeRuntimeFailure = await checkGitCandidateNodeRuntime(params.packageRoot, version);
+  const { schemaVersions } = await readNodeRuntimeUpdateManifest(params.packageRoot);
+  // A Bun host runs the candidate with the same Bun, so Node engines describe a
+  // runtime that is not involved; the candidate's runtime guard and the
+  // launcher's readiness fallback own that compatibility check.
+  const nodeRuntimeFailure = process.versions.bun
+    ? null
+    : (await prepareGitCandidateNodeRuntime(params.packageRoot, undefined, "current-runtime")).step;
   if (nodeRuntimeFailure) {
     throw new Error(
       nodeRuntimeFailure.stderrTail ?? "Node runtime is incompatible with the update.",
@@ -112,13 +114,8 @@ export async function assertNodeRuntimeUpdateCompatible(params: {
     );
   }
   const statePath = resolveOpenClawStateSqlitePath(env);
-  try {
-    await fs.stat(statePath);
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return;
-    }
-    throw error;
+  if (!(await statIfExists(statePath))) {
+    return;
   }
 
   const preflightCopy = async (sourcePath: string, agentId?: string) => {
@@ -140,18 +137,25 @@ export async function assertNodeRuntimeUpdateCompatible(params: {
         sourcePath,
         (await fs.stat(consolidated)).size,
       );
-      const result = await runCommandWithTimeout(
-        [
-          process.execPath,
-          path.join(params.packageRoot, "openclaw.mjs"),
+      const invocation = resolveOpenClawCliInvocation({
+        execArgv: resolveRuntimeArgs(),
+        entryPath: fileURLToPath(
+          resolveExternalPackageRuntimeEntrypointUrl("cliLauncher", params.packageRoot),
+        ),
+        args: [
           "database",
           agentId === undefined ? "preflight" : "preflight-agent",
           consolidated,
           ...(agentId === undefined ? [] : ["--agent-id", agentId]),
           "--json",
         ],
-        { timeoutMs, signal: params.signal, killProcessTree: true, env },
-      );
+      });
+      const result = await runCommandWithTimeout([invocation.command, ...invocation.args], {
+        timeoutMs,
+        signal: params.signal,
+        killProcessTree: true,
+        env,
+      });
       let report: Record<string, unknown> | null = null;
       try {
         report = asNullableRecord(JSON.parse(result.stdout));
@@ -202,13 +206,8 @@ export async function assertNodeRuntimeUpdateCompatible(params: {
   };
   const agents = await preflightCopy(statePath);
   for (const agent of agents) {
-    try {
-      await fs.stat(agent.path);
-    } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        continue;
-      }
-      throw error;
+    if (!(await statIfExists(agent.path))) {
+      continue;
     }
     await preflightCopy(agent.path, agent.agentId);
   }

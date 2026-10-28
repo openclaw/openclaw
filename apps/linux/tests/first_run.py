@@ -5,14 +5,17 @@ Run as a non-root user with python3-gi, gir1.2-atspi-2.0, at-spi2-core,
 libatk-adaptor, xvfb, xauth and dbus-x11 installed:
   xvfb-run -a dbus-run-session -- python3 apps/linux/tests/first_run.py BINARY
 
-Use the unbundled 0.1.0 development build: local setup on a release build
-intentionally starts installation instead of showing the channel chooser.
---local-start-failure uses a fixture CLI to exercise failed local startup.
+Use the unbundled development build; onboarding scenarios stage its verified
+runtime and a synthetic installer without installing a host Gateway service.
+--local-start-failure uses a fixture CLI to exercise automatic startup fallback.
 --inline-browser uses a synthetic saved Gateway to exercise native child WebViews
 and requires xdotool for real pointer input.
 --window-chrome checks dragging, resizing, and window controls with xdotool and Openbox.
 --gateway-switch checks saved connections, native windows and the private credential vault.
---gateway-onboarding checks native authority after local model setup under a Gateway base path.
+--gateway-onboarding checks automatic first run and native authority under a Gateway base path.
+--quick-chat checks real Quick Chat streaming, disclosure, drafts and agent selection
+and requires a private gnome-keyring-daemon.
+--desktop-sharing checks the real native settings bridge and an owned synthetic CLI process tree.
 """
 
 import argparse
@@ -29,8 +32,32 @@ import time
 START_FAILURE = "Fixture: systemd user service is unavailable."
 
 
-def exercise(app, Atspi, GLib, *, remote_only, local_start_failure, inline_fixture, binary, gateway_switch):
+def role_matches(actual_role, expected_role, attributes=None):
+    roles = expected_role if isinstance(expected_role, tuple) else (expected_role,)
+    # WebKitGTK versions expose the same button as either AT-SPI role name.
+    buttons = ("button", "push button")
+    if actual_role in roles or (
+        actual_role in buttons and any(role in buttons for role in roles)
+    ):
+        return True
+    # Some WebKitGTK builds shift AT-SPI roles but retain HTML semantics.
+    attributes = attributes or {}
+    tag = attributes.get("tag", "")
+    return (
+        "heading" in roles
+        and attributes.get("computed-role") == "heading"
+        and tag in ("h1", "h2", "h3", "h4", "h5", "h6")
+        and attributes.get("level") == tag[1:]
+    ) or (
+        "entry" in roles
+        and tag == "input"
+        and attributes.get("computed-role") == "textbox"
+    )
+
+
+def exercise(app, Atspi, GLib, *, remote_only, inline_fixture, binary, gateway_switch):
     last_headings = set()
+    last_controls = set()
 
     def text_content(node):
         text = node.get_text_iface()
@@ -71,11 +98,20 @@ def exercise(app, Atspi, GLib, *, remote_only, local_start_failure, inline_fixtu
                 raise RuntimeError(f"Native app exited with {app.returncode} waiting for {label!r}")
             try:
                 last_headings.clear()
+                last_controls.clear()
                 for node in nodes():
                     name = node.get_name()
                     # WebKitGTK 2.50.4 emits shifted numeric AT-SPI roles. Ask it
                     # for the role name instead; the child locale is C.UTF-8.
                     actual_role = node.get_localized_role_name()
+                    if name and actual_role not in ("application", "frame", "window"):
+                        states = node.get_state_set()
+                        last_controls.add((
+                            actual_role, name[:160],
+                            states.contains(Atspi.StateType.VISIBLE),
+                            states.contains(Atspi.StateType.SENSITIVE),
+                            states.contains(Atspi.StateType.SHOWING),
+                        ))
                     if actual_role == "heading":
                         last_headings.add(name)
                     if role is None:
@@ -84,10 +120,13 @@ def exercise(app, Atspi, GLib, *, remote_only, local_start_failure, inline_fixtu
                             content.startswith(label) if prefix else content == label
                         )
                     else:
+                        named = name.startswith(label) if prefix else name == label
+                        matches = named and role_matches(actual_role, role)
                         roles = role if isinstance(role, tuple) else (role,)
-                        matches = actual_role in roles and (
-                            name.startswith(label) if prefix else name == label
-                        )
+                        if named and not matches and any(
+                            expected in ("heading", "entry") for expected in roles
+                        ):
+                            matches = role_matches(actual_role, role, node.get_attributes())
                     # Application-root state queries can block in GTK; only
                     # inspect visibility on the semantic control being asserted.
                     if (
@@ -104,6 +143,7 @@ def exercise(app, Atspi, GLib, *, remote_only, local_start_failure, inline_fixtu
             time.sleep(0.1)
         raise RuntimeError(
             f"Timed out waiting for {label!r}; headings={sorted(last_headings)!r}; "
+            f"controls=(role, name, visible, sensitive, showing) {sorted(last_controls)[:80]!r}; "
             f"accessibility error={last_error}"
         )
 
@@ -115,7 +155,10 @@ def exercise(app, Atspi, GLib, *, remote_only, local_start_failure, inline_fixtu
 
     def empty_entry(label):
         node = wait(label, "entry")
-        if text_content(node):
+        content = text_content(node)
+        if content is None:
+            raise RuntimeError(f"Could not read {label!r}; refusing a remote connection")
+        if content:
             raise RuntimeError(f"Expected an empty {label!r}; refusing a remote connection")
 
     if inline_fixture is not None:
@@ -138,23 +181,6 @@ def exercise(app, Atspi, GLib, *, remote_only, local_start_failure, inline_fixtu
         return
 
     wait("Welcome to OpenClaw", "heading")
-    if local_start_failure:
-        for attempt in range(2):
-            click("Get started")
-            wait("Where should your assistant live?", "heading")
-            click("On this computer", "toggle button", prefix=True)
-            click("Continue")
-            wait("OpenClaw needs attention", "heading")
-            wait(START_FAILURE)
-            wait("Try again", "push button")
-            if attempt == 0:
-                click("Try again")
-                wait("Welcome to OpenClaw", "heading")
-        calls = Path("cli-calls.log").read_text().splitlines()
-        if calls.count("gateway install --json") != 2:
-            raise RuntimeError(f"Expected two failed Gateway installs, observed {calls!r}")
-        print("PASS: failed local startup reports its error and stays retryable", flush=True)
-        return
     click("Get started")
     wait("Where should your assistant live?", "heading")
     click("On another computer", "toggle button", prefix=True)
@@ -175,25 +201,17 @@ def exercise(app, Atspi, GLib, *, remote_only, local_start_failure, inline_fixtu
     wait("Welcome to OpenClaw", "heading")
     click("Get started")
     click("On this computer", "toggle button", prefix=True)
-    click("Continue")
-    # Keeping missingCli (not unconfigured) is what preserves local installation.
-    wait("Choose a release channel", "heading")
-    click("RELEASE CHANNEL", "combo box")
-    # WebKit exposes native options as menu items or table cells across distros.
-    # Their visible text and selected state express the channel choice directly.
-    wait(
-        "Development",
-        predicate=lambda node: node.get_state_set().contains(Atspi.StateType.SELECTED),
-    )
-    wait("Install OpenClaw", "push button")
-    print("PASS: native first-run remote choices and local development channel", flush=True)
+    # Stop before installation; the dedicated onboarding fixture owns that proof.
+    wait("Install bundled OpenClaw", "push button")
+    wait("Bundled with app v", prefix=True)
+    print("PASS: native first-run remote choices and bundled local installation", flush=True)
 
 
 def interrupted(signum, _frame):
     raise RuntimeError(f"Native first-run smoke interrupted by signal {signum}")
 
 
-def drive(binary, *, remote_only, local_start_failure, inline_browser, window_chrome, gateway_switch, gateway_onboarding, artifacts_dir):
+def drive(binary, *, remote_only, local_start_failure, inline_browser, window_chrome, gateway_switch, gateway_onboarding, quick_chat, desktop_sharing, artifacts_dir):
     try:
         import gi
 
@@ -210,7 +228,7 @@ def drive(binary, *, remote_only, local_start_failure, inline_browser, window_ch
     def capture(outcome):
         if artifacts_dir is None:
             return
-        if window_chrome or gateway_switch or gateway_onboarding:
+        if window_chrome or gateway_switch or gateway_onboarding or local_start_failure or quick_chat or desktop_sharing:
             if outcome == "failed" and inline_fixture is not None:
                 inline_fixture.capture("failed")
             return
@@ -242,7 +260,12 @@ def drive(binary, *, remote_only, local_start_failure, inline_browser, window_ch
             time.sleep(0.1)
 
     inline_fixture = None
-    if inline_browser:
+    if quick_chat:
+        from quick_chat import QuickChatFixture
+
+        inline_fixture = QuickChatFixture(artifacts_dir)
+        inline_fixture.start()
+    elif inline_browser:
         from inline_browser import GatewayFixture
 
         inline_fixture = GatewayFixture(artifacts_dir)
@@ -257,12 +280,19 @@ def drive(binary, *, remote_only, local_start_failure, inline_browser, window_ch
 
         inline_fixture = GatewaySwitchFixture(artifacts_dir)
         inline_fixture.start()
-    elif gateway_onboarding:
+    elif gateway_onboarding or local_start_failure:
         from gateway_switch import GatewayOnboardingFixture
 
-        inline_fixture = GatewayOnboardingFixture(artifacts_dir)
+        inline_fixture = GatewayOnboardingFixture(
+            artifacts_dir, install_error=START_FAILURE if local_start_failure else None,
+        )
         inline_fixture.start()
         binary = inline_fixture.stage_binary(binary)
+    elif desktop_sharing:
+        from desktop_sharing import DesktopSharingFixture
+
+        inline_fixture = DesktopSharingFixture(artifacts_dir)
+        inline_fixture.start()
 
     with Path("app.log").open("wb") as log:
         app = subprocess.Popen(
@@ -275,10 +305,9 @@ def drive(binary, *, remote_only, local_start_failure, inline_browser, window_ch
             exercise(
                 app, Atspi, GLib,
                 remote_only=remote_only,
-                local_start_failure=local_start_failure,
                 inline_fixture=inline_fixture,
                 binary=binary,
-                gateway_switch=gateway_switch or gateway_onboarding,
+                gateway_switch=gateway_switch or gateway_onboarding or local_start_failure or desktop_sharing,
             )
         except BaseException:
             try:
@@ -318,7 +347,7 @@ def main():
     scenarios.add_argument(
         "--local-start-failure",
         action="store_true",
-        help="Verify failed startup with an installed CLI remains visible and retryable",
+        help="Verify automatic startup falls back to manual choices with a visible, retryable error",
     )
     scenarios.add_argument(
         "--inline-browser",
@@ -336,7 +365,15 @@ def main():
     )
     scenarios.add_argument(
         "--gateway-onboarding", action="store_true",
-        help="Verify native controls survive local onboarding and remain within the Gateway base path",
+        help="Verify automatic local onboarding and native controls within the Gateway base path",
+    )
+    scenarios.add_argument(
+        "--quick-chat", action="store_true",
+        help="Verify native Quick Chat streaming, disclosure, drafts and agent selection",
+    )
+    scenarios.add_argument(
+        "--desktop-sharing", action="store_true",
+        help="Verify native desktop-sharing settings, persistence, selected auth, and child cleanup",
     )
     args = parser.parse_args()
     if sys.platform != "linux" or os.geteuid() == 0:
@@ -351,12 +388,12 @@ def main():
         parser.error("The minimal system PATH must not contain an OpenClaw CLI")
     if args.inline_browser and not os.access("/usr/bin/xdotool", os.X_OK):
         parser.error("Inline browser pointer proof requires xdotool")
-    if args.window_chrome or args.gateway_switch or args.gateway_onboarding:
+    if args.window_chrome or args.gateway_switch or args.gateway_onboarding or args.local_start_failure or args.quick_chat or args.desktop_sharing:
         for tool in ("xdotool", "wmctrl", "xprop", "xwininfo", "openbox"):
             if shutil.which(tool) is None:
                 parser.error(f"Window chrome proof requires {tool}")
-    if (args.gateway_switch or args.gateway_onboarding) and shutil.which("gnome-keyring-daemon") is None:
-        parser.error("Gateway switching proof requires a private gnome-keyring-daemon")
+    if (args.gateway_switch or args.gateway_onboarding or args.local_start_failure or args.quick_chat or args.desktop_sharing) and shutil.which("gnome-keyring-daemon") is None:
+        parser.error("Native Gateway proof requires a private gnome-keyring-daemon")
     if args.artifacts_dir:
         args.artifacts_dir = args.artifacts_dir.resolve()
         args.artifacts_dir.mkdir(parents=True, exist_ok=True)
@@ -372,6 +409,8 @@ def main():
             window_chrome=args.window_chrome,
             gateway_switch=args.gateway_switch,
             gateway_onboarding=args.gateway_onboarding,
+            quick_chat=args.quick_chat,
+            desktop_sharing=args.desktop_sharing,
             artifacts_dir=args.artifacts_dir,
         )
         return
@@ -408,26 +447,12 @@ def main():
             path = root / relative
             path.mkdir(mode=0o700, parents=True)
             env[variable] = str(path)
-        if args.local_start_failure:
-            cli = root / ".openclaw/bin/openclaw"
-            cli.parent.mkdir(mode=0o700, parents=True)
-            cli.write_text(
-                "#!/usr/bin/python3\n"
-                "import json, sys\n"
-                "from pathlib import Path\n"
-                "command = ' '.join(sys.argv[1:])\n"
-                "with Path('cli-calls.log').open('a') as log: log.write(command + '\\n')\n"
-                "if command == '--version':\n"
-                "    print('OpenClaw fixture')\n"
-                "elif command == 'gateway status --json':\n"
-                "    print(json.dumps({'service': {'loaded': False}, 'rpc': {'ok': False}}))\n"
-                "elif command == 'gateway install --json':\n"
-                f"    print({START_FAILURE!r}, file=sys.stderr)\n"
-                "    sys.exit(1)\n"
-                "else:\n"
-                "    raise RuntimeError('Unexpected CLI command: ' + command)\n"
-            )
-            cli.chmod(0o700)
+        if not any((args.local_start_failure, args.inline_browser, args.gateway_switch, args.gateway_onboarding,
+                      args.quick_chat, args.desktop_sharing)):
+            # A saved config preserves manual setup, including the window-chrome scenario.
+            config = root / ".openclaw/openclaw.json"
+            config.parent.mkdir(mode=0o700, parents=True)
+            config.write_text("{}\n")
         # Native AT-SPI calls can block Python signal handlers. Keep the deadline
         # and cleanup outside that process, with its app in the same owned group.
         command = [sys.executable, str(Path(__file__).resolve()), "--driver"]
@@ -443,6 +468,10 @@ def main():
             command.append("--gateway-switch")
         if args.gateway_onboarding:
             command.append("--gateway-onboarding")
+        if args.quick_chat:
+            command.append("--quick-chat")
+        if args.desktop_sharing:
+            command.append("--desktop-sharing")
         if args.artifacts_dir:
             command.extend(["--artifacts-dir", str(args.artifacts_dir)])
         command.append(str(binary))
@@ -456,9 +485,11 @@ def main():
         passed = False
         try:
             try:
-                code = worker.wait(timeout=120)
+                # Desktop sharing observes five complete app lifecycles, including native Quit.
+                timeout = 240 if args.desktop_sharing else 120
+                code = worker.wait(timeout=timeout)
             except subprocess.TimeoutExpired as error:
-                raise RuntimeError("Native first-run driver exceeded 120 seconds") from error
+                raise RuntimeError(f"Native first-run driver exceeded {timeout} seconds") from error
             if code:
                 raise RuntimeError(f"Native first-run driver exited with {code}")
             passed = True

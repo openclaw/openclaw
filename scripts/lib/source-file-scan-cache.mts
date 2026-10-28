@@ -50,16 +50,9 @@ async function walkFiles(params: SourceScanParams, rootDir: string): Promise<str
   return out;
 }
 
-function normalizeConcurrency(value = DEFAULT_SOURCE_FILE_READ_CONCURRENCY) {
-  if (!Number.isInteger(value) || value < 1) {
-    return DEFAULT_SOURCE_FILE_READ_CONCURRENCY;
-  }
-  return value;
-}
-
-function normalizeMaxFileBytes(value = DEFAULT_SOURCE_FILE_MAX_BYTES) {
-  if (!Number.isInteger(value) || value < 1) {
-    return DEFAULT_SOURCE_FILE_MAX_BYTES;
+function normalizePositiveInteger(value: number | undefined, fallback: number) {
+  if (value === undefined || !Number.isInteger(value) || value < 1) {
+    return fallback;
   }
   return value;
 }
@@ -85,7 +78,7 @@ export async function collectSourceFileContents(params: SourceScanParams) {
     ignoredDirNames: [...params.ignoredDirNames].toSorted((left, right) =>
       left.localeCompare(right),
     ),
-    maxFileBytes: normalizeMaxFileBytes(params.maxFileBytes),
+    maxFileBytes: normalizePositiveInteger(params.maxFileBytes, DEFAULT_SOURCE_FILE_MAX_BYTES),
   });
   if (useCache) {
     const cached = scanCache.get(cacheKey);
@@ -106,7 +99,10 @@ export async function collectSourceFileContents(params: SourceScanParams) {
 
     const readFile = params.readFile ?? fs.readFile;
     const statFile = params.statFile ?? fs.stat;
-    const maxFileBytes = normalizeMaxFileBytes(params.maxFileBytes);
+    const maxFileBytes = normalizePositiveInteger(
+      params.maxFileBytes,
+      DEFAULT_SOURCE_FILE_MAX_BYTES,
+    );
     return await pMap(
       files,
       async ({ filePath, relativeFile }) => {
@@ -117,7 +113,10 @@ export async function collectSourceFileContents(params: SourceScanParams) {
         return { filePath, relativeFile, content };
       },
       {
-        concurrency: normalizeConcurrency(params.maxConcurrentReads),
+        concurrency: normalizePositiveInteger(
+          params.maxConcurrentReads,
+          DEFAULT_SOURCE_FILE_READ_CONCURRENCY,
+        ),
         stopOnError: true,
       },
     );

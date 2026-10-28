@@ -1,109 +1,133 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { gitNullConfigPath } from "./git-exec.js";
-import { classifyPartialCloneGitFailure } from "./update-runner-git-target.js";
+import { withGitTargetInspectionRoot } from "./update-runner-git-target.js";
 import { prepareGitCandidateTransfer } from "./update-runner-git-transfer.js";
-import type { CommandRunner, RunStepOptions, UpdateStepResult } from "./update-runner-types.js";
+import type { CommandRunner, RunStepOptions } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
+const commandResult = (code = 0, stdout = "", stderr = "") => ({ code, stdout, stderr });
+const keepFiles = (root: string) =>
+  fs
+    .readdirSync(path.join(root, ".git", "objects", "pack"))
+    .filter((name) => name.endsWith(".keep"));
+const expectStep = (results: UpdateStepResult[], expected: Partial<UpdateStepResult>) =>
+  expect(results).toContainEqual(expect.objectContaining(expected));
+
+function transferStep(
+  runCommand: CommandRunner,
+  results: UpdateStepResult[],
+  cwd: string,
+  timeoutMs: number,
+): RunStepOptions {
+  return {
+    runCommand,
+    results,
+    cwd,
+    timeoutMs,
+    argv: [],
+    name: "transfer proof",
+    stepIndex: 0,
+    totalSteps: 1,
+  };
+}
+
+function payload(prefix: string, blocks: number) {
+  return Buffer.concat(
+    Array.from({ length: blocks }, (_, block) =>
+      createHash("sha256").update(`${prefix}:${block}`).digest(),
+    ),
+  );
+}
+
+it("rejects incomplete target inspection output even when Git exits zero", async () => {
+  const runCommand: CommandRunner = async (argv) => ({
+    ...commandResult(0, "a".repeat(40)),
+    ...(argv.includes("for-each-ref") ? { killed: true, termination: "signal" as const } : {}),
+  });
+  await expect(
+    withGitTargetInspectionRoot(
+      {
+        root: temporary.make("incomplete-git-inspection-"),
+        runCommand,
+        timeoutMs: 1_000,
+        onWarning: () => {},
+      },
+      async () => {},
+    ),
+  ).rejects.toThrow("Git target inspection for-each-ref failed");
+});
 
 it.each([
-  { state: "partial-clone", expected: "promised objects in this partial clone" },
   { state: "unverified", expected: "did not verify repository corruption" },
   { state: "corrupt", expected: "verified repository corruption" },
+  { state: "promisor", expected: "promised objects in this partial clone" },
 ])(
-  "classifies Git's unverified corruption claim from repository evidence ($state)",
+  "classifies transfer failures using installed repository evidence ($state)",
   async ({ state, expected }) => {
-    const stderr =
-      "fatal: object is in the commit graph file but not in the object database. This is probably due to repo corruption.";
-    const runCommand: CommandRunner = async (argv) => {
-      if (argv.includes("--get-regexp")) {
-        return {
-          code: state === "partial-clone" ? 0 : 1,
-          stdout: state === "partial-clone" ? "remote.origin.promisor true\n" : "",
-          stderr: "",
-        };
-      }
-      return {
-        code: state === "corrupt" ? 1 : 0,
-        stdout: "",
-        stderr: state === "corrupt" ? "missing blob 0123456789abcdef" : "",
-      };
-    };
-    const result = await classifyPartialCloneGitFailure({
-      result: { code: 128, stdout: "", stderr },
-      root: "/partial-clone",
-      runCommand,
-      timeoutMs: 1_000,
+    const results: UpdateStepResult[] = [];
+    const inspectionRunCommand: CommandRunner = async () =>
+      commandResult(
+        128,
+        "",
+        "fatal: object is in the commit graph file but not in the object database. " +
+          "This is probably due to repo corruption.",
+      );
+    const installedRunCommand: CommandRunner = async (argv) =>
+      argv.includes("--get-regexp")
+        ? commandResult(
+            state === "promisor" ? 0 : 1,
+            state === "promisor" ? "remote.origin.promisor true\n" : "",
+          )
+        : commandResult(
+            state === "corrupt" ? 1 : 0,
+            "",
+            state === "corrupt" ? "missing blob 0123456789abcdef" : "",
+          );
+
+    const transfer = await prepareGitCandidateTransfer({
+      candidateSha: "candidate",
+      beforeSha: null,
+      installedRoot: "/installed",
+      installedRunCommand,
+      probeTimeoutMs: 1_000,
+      step: transferStep(inspectionRunCommand, results, "/inspection", 1_000),
     });
-    expect(result.stderr).toContain(expected);
-    if (state === "partial-clone") {
-      expect(result.stderr).not.toContain("repo corruption");
-      expect(result.stderr).toContain("sed -n 's/^?//p'");
+
+    expect(transfer).toBeUndefined();
+    expect(results.at(-1)?.stderrTail).toContain(expected);
+    if (state === "promisor") {
+      expect(results.at(-1)?.stderrTail).not.toContain("repo corruption");
+      expect(results.at(-1)?.stderrTail).toContain("sed -n 's/^?//p'");
     }
   },
 );
-
-it("uses the installed checkout runner for partial-clone classification", async () => {
-  const results: UpdateStepResult[] = [];
-  const inspectionRunCommand: CommandRunner = async () => ({
-    code: 128,
-    stdout: "",
-    stderr:
-      "fatal: object is in the commit graph file but not in the object database. " +
-      "This is probably due to repo corruption.",
-  });
-  let installedConfigProbed = false;
-  const installedRunCommand: CommandRunner = async (argv) => {
-    installedConfigProbed = argv.includes("--get-regexp");
-    return {
-      code: 0,
-      stdout: "remote.origin.promisor true\n",
-      stderr: "",
-    };
-  };
-
-  const transfer = await prepareGitCandidateTransfer({
-    candidateSha: "candidate",
-    beforeSha: null,
-    installedRoot: "/installed",
-    installedRunCommand,
-    probeTimeoutMs: 1_000,
-    step: {
-      runCommand: inspectionRunCommand,
-      cwd: "/inspection",
-      argv: [],
-      name: "transfer proof",
-      timeoutMs: 1_000,
-      stepIndex: 0,
-      totalSteps: 1,
-      results,
-    },
-  });
-
-  expect(transfer).toBeUndefined();
-  expect(installedConfigProbed).toBe(true);
-  expect(results.at(-1)?.stderrTail).toContain("promised objects in this partial clone");
-});
 
 // Windows forcibly terminates children instead of delivering the handled POSIX signal.
 it
   .skipIf(process.platform === "win32")
   .each([
-    "none",
     "inventory",
-    "pack",
+    "inventory-closed",
+    "missing-pack",
+    "large-pack",
     "retry",
     "missing-before",
     "legacy-git",
     "configured-limit",
-  ] as const)("bounds transfer inventories and binary input (failure=%s)", async (failure) => {
-  const overflow = failure === "inventory";
-  const oversized = failure === "pack";
+    "cleanup-uncertain",
+    "cleanup-io",
+  ] as const)("transfers Git objects without buffering the pack (scenario=%s)", async (failure) => {
+  const overflow = failure === "inventory" || failure === "inventory-closed";
+  const missingPack = failure === "missing-pack";
+  const largePack = failure === "large-pack";
   const root = temporary.make("git-transfer-bounds-");
   const source = path.join(root, "source");
   const install = path.join(root, "install");
@@ -113,27 +137,27 @@ it
     GIT_CONFIG_GLOBAL: gitNullConfigPath(),
     GIT_CONFIG_NOSYSTEM: "1",
   };
+  const commandOptions = { timeoutMs: 15_000, env };
   const git = async (cwd: string, ...args: string[]) => {
-    const result = await runCommandWithTimeout(["git", "-C", cwd, ...args], {
-      timeoutMs: 15_000,
-      env,
-    });
+    const result = await runCommandWithTimeout(["git", "-C", cwd, ...args], commandOptions);
     expect(result.code, result.stderr).toBe(0);
     return result.stdout.trim();
   };
-  await git(source, "init", "-b", "main");
-  await git(source, "config", "user.name", "Transfer fixture");
-  await git(source, "config", "user.email", "fixture@example.invalid");
-  const baseBytes = Buffer.concat(
-    Array.from({ length: 4096 }, (_, index) =>
-      createHash("sha256").update(`base:${index}`).digest(),
-    ),
-  );
-  fs.writeFileSync(path.join(source, "base"), baseBytes);
-  await git(source, "add", ".");
-  await git(source, "commit", "-m", "base");
-  const beforeSha = await git(source, "rev-parse", "HEAD");
-  await git(source, "config", "uploadpack.allowFilter", "true");
+  const sourceGit = (...args: string[]) => git(source, ...args);
+  const write = (name: string, data: string | Buffer) =>
+    fs.writeFileSync(path.join(source, name), data);
+  const commit = async (message: string) => {
+    await sourceGit("add", ".");
+    await sourceGit("commit", "-m", message);
+    return sourceGit("rev-parse", "HEAD");
+  };
+  await sourceGit("init", "-b", "main");
+  await sourceGit("config", "user.name", "Transfer fixture");
+  await sourceGit("config", "user.email", "fixture@example.invalid");
+  const baseBytes = payload("base", 4096);
+  write("base", baseBytes);
+  const beforeSha = await commit("base");
+  await sourceGit("config", "uploadpack.allowFilter", "true");
   await git(
     root,
     "clone",
@@ -144,37 +168,44 @@ it
   if (failure === "missing-before") {
     const missing = await runCommandWithTimeout(
       ["git", "--no-lazy-fetch", "-C", install, "cat-file", "-e", `${beforeSha}:base`],
-      { timeoutMs: 15_000, env },
+      commandOptions,
     );
     expect(missing.code).not.toBe(0);
   }
   for (let index = 0; index < 250; index++) {
-    const bytes = Buffer.concat(
-      Array.from({ length: failure === "configured-limit" ? 320 : 8 }, (_, block) =>
-        createHash("sha256").update(`${index}:${block}`).digest(),
-      ),
-    );
-    fs.writeFileSync(path.join(source, `object-${index}`), bytes);
+    write(`object-${index}`, payload(String(index), failure === "configured-limit" ? 320 : 8));
   }
-  await git(source, "add", ".");
-  await git(source, "commit", "-m", "candidate");
-  const candidateSha = await git(source, "rev-parse", "HEAD");
+  if (largePack) {
+    // Uncompressed Git objects keep this sparse fixture above the old pack cap.
+    await sourceGit("config", "core.compression", "0");
+    write("large-payload", "");
+    fs.truncateSync(path.join(source, "large-payload"), 257 * 1024 * 1024);
+  }
+  const candidateSha = await commit("candidate");
   if (failure === "configured-limit") {
-    await git(source, "config", "pack.packSizeLimit", "1m");
+    await sourceGit("config", "pack.packSizeLimit", "1m");
   }
   const results: UpdateStepResult[] = [];
-  let inventoryBytes = 0;
   let packBytes = 0;
   let boundedExitObserved = false;
-  let historyInventoryAllowsMissingObjects = false;
   const runCommand: CommandRunner = async (argv, options) => {
-    if (argv.includes("rev-list") && argv.includes(candidateSha)) {
-      historyInventoryAllowsMissingObjects = argv.includes("--missing=allow-any");
-    }
     if (failure === "legacy-git" && argv.includes("--no-lazy-fetch") && argv.includes("version")) {
-      return { code: 129, stdout: "", stderr: "unknown option: --no-lazy-fetch" };
+      return commandResult(129, "", "unknown option: --no-lazy-fetch");
     }
-    if (overflow && argv.includes("rev-list")) {
+    if (overflow && argv.includes("rev-list") && argv.includes(candidateSha)) {
+      if (failure === "inventory-closed") {
+        const result = await runCommandWithTimeout(argv, {
+          ...options,
+          env,
+          maxOutputBytes: 1024 * 1024,
+          terminateOnOutputLimit: false,
+        });
+        expect(result.code).toBe(0);
+        expect(result.stdout.length).toBeGreaterThan(41 * 12);
+        boundedExitObserved = true;
+        // A bounded transport may report incomplete output after normal child closure.
+        return { ...result, stdout: result.stdout.slice(0, 41 * 12), outputLimitExceeded: true };
+      }
       // The child emits real Git output and handles termination with exit zero.
       // This is legal process behavior; exit status alone cannot admit its tail.
       const script = `const { spawnSync } = require("node:child_process");
@@ -187,93 +218,125 @@ it
         env,
         maxOutputBytes: 41 * 12,
       });
-      expect(result.code).toBe(0);
-      expect(result.outputLimitExceeded).toBe(true);
+      expect(result).toMatchObject({ code: 0, outputLimitExceeded: true });
       boundedExitObserved = true;
       return result;
     }
-    if (argv.includes("pack-objects")) {
-      inventoryBytes = Buffer.byteLength(options.input as string);
-    }
     if (argv.includes("index-pack")) {
-      packBytes = (options.input as Buffer).byteLength;
+      expect(options.input).toBeUndefined();
+      expect(options.stdinFileDescriptor).toBeTypeOf("number");
+      packBytes = fs.fstatSync(options.stdinFileDescriptor!).size;
     }
     const result = await runCommandWithTimeout(argv, { ...options, env });
-    if (oversized && argv.includes("pack-objects") && result.code === 0) {
-      // Grow a real staged pack sparsely; refusal must precede a large allocation.
-      const packPath = `${argv.at(-1)}-${result.stdout.trim()}.pack`;
-      fs.chmodSync(packPath, 0o600);
-      fs.truncateSync(packPath, 256 * 1024 * 1024 + 1);
+    if (missingPack && argv.includes("pack-objects") && result.code === 0) {
+      fs.unlinkSync(`${argv.at(-1)}-${result.stdout.trim()}.pack`);
     }
     return result;
   };
-  const step = (cwd: string): RunStepOptions => ({
-    runCommand,
-    cwd,
-    argv: [],
-    name: "transfer proof",
-    timeoutMs: 15_000,
-    stepIndex: 0,
-    totalSteps: 1,
-    results,
-  });
-  let transfer = await prepareGitCandidateTransfer({
-    candidateSha,
-    beforeSha,
-    installedRoot: install,
-    installedRunCommand: runCommand,
-    probeTimeoutMs: 15_000,
-    step: step(source),
-  });
-  expect(historyInventoryAllowsMissingObjects).toBe(true);
-  if (overflow || oversized) {
+  const step = (cwd: string) => transferStep(runCommand, results, cwd, 15_000);
+  const prepare = (cwd: string) =>
+    prepareGitCandidateTransfer({
+      candidateSha,
+      beforeSha,
+      installedRoot: install,
+      installedRunCommand: runCommand,
+      probeTimeoutMs: 15_000,
+      step: step(cwd),
+    });
+  let transfer = await prepare(source);
+  if (overflow || missingPack) {
     expect(transfer).toBeUndefined();
     if (overflow) {
       expect(boundedExitObserved).toBe(true);
-      expect(inventoryBytes).toBe(0);
     } else {
-      expect(results).toContainEqual(
-        expect.objectContaining({
-          exitCode: 1,
-          stderrTail: expect.stringContaining("file exceeds limit of 268435456 bytes"),
-        }),
-      );
+      expectStep(results, {
+        exitCode: 1,
+        name: "git-update-pack-read",
+        stderrTail: expect.stringContaining("Cannot stage the Git update pack"),
+      });
     }
     expect(await git(install, "rev-parse", "HEAD")).toBe(beforeSha);
     return;
   }
-  expect(transfer).toBeDefined();
-  expect(inventoryBytes).toBeGreaterThan(8000);
-  expect(await transfer!.importInto(step(install))).toBe(true);
-  expect(packBytes).toBeGreaterThan(8000);
-  if (failure === "none") {
+  assert(
+    transfer?.status === "ok",
+    JSON.stringify(results.filter((entry) => entry.exitCode !== 0)),
+  );
+  await using admitted = transfer;
+  // The pinned descriptor must outlive the staging pathname in every successful transfer.
+  const packName = fs.readdirSync(source).find((name) => name.endsWith(".pack"))!;
+  fs.unlinkSync(path.join(source, packName));
+  expect(await admitted.importInto(step(install))).toBe(true);
+  if (largePack) {
+    expect(packBytes).toBeGreaterThan(256 * 1024 * 1024);
+    expectStep(results, {
+      exitCode: 0,
+      warnings: [expect.stringContaining("Large Git update pack")],
+    });
+  }
+  if (!["large-pack", "missing-before", "legacy-git", "configured-limit"].includes(failure)) {
     expect(packBytes).toBeLessThan(baseBytes.length);
   }
   if (failure === "missing-before" || failure === "legacy-git") {
     expect(packBytes).toBeGreaterThan(baseBytes.length);
+  }
+  if (failure === "cleanup-uncertain" || failure === "cleanup-io") {
+    const error =
+      failure === "cleanup-uncertain"
+        ? new Error("Git cleanup did not join", { cause: new CommandProcessCleanupError() })
+        : Object.assign(new Error("Git cleanup probe denied"), { code: "EACCES" });
+    const recorded = results.length;
+    const retained = keepFiles(install);
+    expect(retained).toHaveLength(1);
+    const cleanup = admitted.cleanup({
+      ...step(install),
+      runCommand: async () => {
+        throw error;
+      },
+    });
+    if (failure === "cleanup-uncertain") {
+      await expect(cleanup).rejects.toBe(error);
+      expect(results.slice(recorded)).toEqual([]);
+    } else {
+      await expect(cleanup).resolves.toBeUndefined();
+      const advisory = {
+        kind: "recoverable-maintenance",
+        message: expect.stringContaining(error.message),
+      };
+      expect(results.slice(recorded)).toMatchObject([
+        { name: "git-update-pack-cleanup", advisory },
+      ]);
+    }
+    expect(keepFiles(install)).toEqual(retained);
   }
   if (failure === "retry") {
     await transfer!.cleanup(step(install));
     const inspection = path.join(root, "inspection.git");
     await git(root, "clone", "--mirror", "--shared", install, inspection);
     await git(inspection, "update-ref", "refs/heads/candidate", candidateSha);
-    transfer = await prepareGitCandidateTransfer({
-      candidateSha,
-      beforeSha,
-      installedRoot: install,
-      installedRunCommand: runCommand,
-      probeTimeoutMs: 15_000,
-      step: step(inspection),
-    });
-    expect(transfer).toBeDefined();
-    expect(await transfer!.importInto(step(install))).toBe(true);
+    transfer = await prepare(inspection);
+    assert(
+      transfer?.status === "ok",
+      JSON.stringify(results.filter((entry) => entry.exitCode !== 0)),
+    );
+    await using admittedRetryTransfer = transfer;
+    expect(await admittedRetryTransfer.importInto(step(install))).toBe(true);
     await git(install, "repack", "-a", "-d");
   }
   await git(install, "checkout", "--detach", candidateSha);
   await transfer!.cleanup(step(install));
+  if (failure === "cleanup-uncertain" || failure === "cleanup-io") {
+    expect(keepFiles(install)).toEqual([]);
+  }
   if (failure === "configured-limit") {
     expect(packBytes).toBeGreaterThan(1024 * 1024);
     expect(await git(source, "config", "pack.packSizeLimit")).toBe("1m");
+  }
+  if (largePack) {
+    expect(fs.statSync(path.join(install, "large-payload")).size).toBe(257 * 1024 * 1024);
+    expect(await git(install, "rev-parse", "HEAD:large-payload")).toBe(
+      await git(source, "rev-parse", "HEAD:large-payload"),
+    );
   }
   expect(fs.readFileSync(path.join(install, "base"))).toEqual(baseBytes);
   for (let index = 0; index < 250; index++) {

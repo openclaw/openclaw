@@ -1,41 +1,33 @@
-import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import { existsSync } from "node:fs";
 import {
-  clearNodeSqliteKyselyCacheForDatabase,
-  registerNodeSqliteKyselyQueryErrorHandler,
-} from "../infra/kysely-sync-cache-state.js";
+  assertStateDatabaseAccessAllowed,
+  assertStateDatabaseReadAllowed,
+} from "../infra/gateway-state-owner.js";
+import { registerNodeSqliteKyselyQueryErrorHandler } from "../infra/kysely-sync-cache-state.js";
+import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import {
+  isSqliteCorruptionError,
+  isSqliteLockError,
+  sqlitePrimaryResultCode,
+} from "../infra/sqlite-error-diagnostics.js";
 import {
   createSqliteLifecycleAggregateError,
-  runWithSqliteCoordinator,
   throwSqliteLifecycleErrors,
-} from "../infra/sqlite-coordinator.js";
-import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
-import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
-import {
-  confirmSqliteFileIntegrity,
-  type SqliteIntegrityConfirmation,
-} from "../infra/sqlite-integrity.js";
-import {
-  prepareSqliteReadOnlyLocationFromOwnedDatabase,
-  prepareSqliteReadOnlyLocationSyncInProcess,
-} from "../infra/sqlite-readonly-location.js";
+} from "../infra/sqlite-lifecycle-errors.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
-import { registerSqliteCacheExitClose, type SqliteWalHealth } from "../infra/sqlite-wal.js";
+import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
-import {
-  acquireStateDatabaseCoordinator,
-  acquireStateDatabaseHandleExclusion,
-} from "../infra/state-database-coordinator.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import {
-  createOpenClawDatabaseVerificationError,
-  readOpenClawDatabaseQuarantine,
-} from "./openclaw-quarantine-store.js";
+import { readGlobalSingleton, resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { OpenClawQuarantineReadCleanupError } from "./openclaw-quarantine-error.js";
+import { readOpenClawDatabaseQuarantineFailure } from "./openclaw-quarantine-store.js";
 import {
   createOpenClawStateDatabaseAsyncLifecycle,
   getOpenClawDatabaseMaintenanceScope,
+  isOpenClawDatabaseMaintenanceResourceOwned,
   observeOpenClawDatabaseMaintenanceResource,
-  type OpenClawStateDatabaseAsyncResource,
+  type OpenClawDatabaseMaintenanceScope,
   type OpenClawStateDatabaseReadAdmission,
 } from "./openclaw-state-db-async-lifecycle.js";
 import {
@@ -43,54 +35,71 @@ import {
   createStateDatabaseRetainer,
   type StateDatabaseBorrowers,
 } from "./openclaw-state-db-borrow.js";
+import { createStateDatabaseCacheAdmission } from "./openclaw-state-db-cache.admission.js";
+import { createStateDatabaseIdleRetirement } from "./openclaw-state-db-cache.idle.js";
 import type { StateDatabaseLifecycle } from "./openclaw-state-db-cache.types.js";
-import {
-  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-  type OpenClawStateDatabase,
-  type OpenClawStateDatabaseCloseOptions,
-  type OpenClawStateDatabaseLifecycleEvent,
-  type StateDatabaseHandle,
+import { createStateDatabaseWalOwner } from "./openclaw-state-db-cache.wal.js";
+import type {
+  OpenClawStateDatabase,
+  OpenClawStateDatabaseCloseOptions,
+  OpenClawStateDatabaseLifecycleEvent,
+  StateDatabaseHandle,
 } from "./openclaw-state-db-contract.js";
-import { closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
-import { createOpenClawStateDatabaseRuntimeFailureOwner } from "./openclaw-state-db-runtime-failure.js";
+import {
+  closeStateDatabaseHandle,
+  readTrackedStateDatabaseIdentity,
+} from "./openclaw-state-db-handle.js";
+import { invalidateOpenClawStateRuntimeIntegrity } from "./openclaw-state-db-integrity-admission.js";
 import { assertExistingOpenClawStateSchemaCacheAdmission } from "./openclaw-state-db-schema-policy.js";
 import { openClawStateSnapshotOwners } from "./openclaw-state-db-snapshot-owner.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
+const STATE_DATABASE_LIFECYCLE_KEY = Symbol.for("openclaw.stateDatabaseLifecycle");
 const stateDatabaseLifecycle = resolveGlobalSingleton<StateDatabaseLifecycle>(
-  Symbol.for("openclaw.stateDatabaseLifecycle"),
+  STATE_DATABASE_LIFECYCLE_KEY,
   () => ({
     cachedDatabases: new Map<string, OpenClawStateDatabase>(),
-    retainedDatabaseHandles: new Map<DatabaseSync, StateDatabaseHandle>(),
+    retainedDatabaseHandles: new Map<EngineConnection, StateDatabaseHandle>(),
+    idleTimers: new WeakMap(),
+    idleReferences: new WeakMap(),
     unregisterRetainedExitClose: undefined,
-    // The plain owner key must not retain the statement's own native database.
-    cachedDataVersionStatements: new WeakMap<
-      OpenClawStateDatabase,
-      ReturnType<DatabaseSync["prepare"]>
-    >(),
-    cachedDataVersions: new WeakMap<DatabaseSync, number>(),
-    databaseIdentities: new WeakMap<DatabaseSync, DatabasePathIdentity>(),
-    borrowers: new WeakMap<DatabaseSync, StateDatabaseBorrowers>(),
+    databaseIdentities: new WeakMap<EngineConnection, DatabasePathIdentity>(),
+    borrowers: new WeakMap<EngineConnection, StateDatabaseBorrowers>(),
     databaseLifecycleListeners: new Set<(event: OpenClawStateDatabaseLifecycleEvent) => void>(),
     terminalOpenLatch: createSqliteTerminalOpenLatch({
-      closeByPath: (pathname, error) => runtimeFailures.closeTerminalFailure(pathname, error),
+      closeByPath: (pathname, error) => cacheAdmission.closeTerminalFailure(pathname, error),
     }),
     asyncResources: createOpenClawStateDatabaseAsyncLifecycle(),
   }),
   () => closeOpenClawStateDatabaseAsync(),
+  "shared-state",
 );
 const {
   cachedDatabases,
   retainedDatabaseHandles,
-  cachedDataVersionStatements,
-  cachedDataVersions,
+  idleTimers,
+  idleReferences,
   databaseIdentities,
   borrowers,
   databaseLifecycleListeners,
   terminalOpenLatch,
   asyncResources,
 } = stateDatabaseLifecycle;
+
+const { touch: touchStateDatabase, retain: retainOpenClawStateDatabaseForIdle } =
+  createStateDatabaseIdleRetirement(stateDatabaseLifecycle, retireOpenClawStateDatabaseHandle);
+const {
+  register: registerStateDatabaseWalAdmission,
+  readHealth: readOpenClawStateWalHealth,
+  ownRetirement: ownStateDatabaseRetirement,
+  stop: stopOpenClawStateDatabaseMaintenance,
+} = createStateDatabaseWalOwner(
+  stateDatabaseLifecycle,
+  retainOpenClawStateDatabaseForIdle,
+  requireOpenClawStateDatabaseIdentity,
+);
+export { readOpenClawStateWalHealth, retainOpenClawStateDatabaseForIdle };
 
 function notifyOpenClawStateDatabaseLifecycle(event: OpenClawStateDatabaseLifecycleEvent): void {
   const notification =
@@ -110,7 +119,9 @@ function notifyOpenClawStateDatabaseClosed(database: StateDatabaseHandle): void 
   });
 }
 
-function requireOpenClawStateDatabaseIdentity(database: StateDatabaseHandle): DatabasePathIdentity {
+export function requireOpenClawStateDatabaseIdentity(
+  database: Pick<StateDatabaseHandle, "db">,
+): DatabasePathIdentity {
   const identity = databaseIdentities.get(database.db);
   if (!identity) {
     throw new Error("Published shared-state owner has no recorded database identity");
@@ -118,11 +129,8 @@ function requireOpenClawStateDatabaseIdentity(database: StateDatabaseHandle): Da
   return identity;
 }
 
-const runtimeFailures = createOpenClawStateDatabaseRuntimeFailureOwner({
+const cacheAdmission = createStateDatabaseCacheAdmission({
   cachedDatabases,
-  statements: cachedDataVersionStatements,
-  dataVersions: cachedDataVersions,
-  latch: terminalOpenLatch,
   evict: evictCachedOpenClawStateDatabase,
   invalidate: (pathname) => asyncResources.invalidate(pathname),
   notifyTerminalFailure: (pathname, error) =>
@@ -132,10 +140,6 @@ const runtimeFailures = createOpenClawStateDatabaseRuntimeFailureOwner({
       error,
       identity: asyncResources.knownIdentity(pathname),
     }),
-  recordSchemaFailure: (pathname, error) => {
-    terminalOpenLatch.record(pathname, error);
-    notifyOpenClawStateDatabaseLifecycle({ kind: "open-error", path: pathname, error });
-  },
 });
 
 export function registerOpenClawStateDatabaseLifecycleListener(
@@ -154,6 +158,21 @@ export function registerOpenClawStateDatabaseLifecycleListener(
   return () => databaseLifecycleListeners.delete(listener);
 }
 
+/** Invalidate path-scoped projections on non-open database lifecycle events. */
+export function registerOpenClawStatePathCacheInvalidation<Key, Value extends { path: string }>(
+  cache: Map<Key, Value>,
+): () => void {
+  return registerOpenClawStateDatabaseLifecycleListener((event) => {
+    if (event.kind !== "opened") {
+      for (const [key, value] of cache) {
+        if (value.path === (event.identity?.canonicalPath ?? event.path)) {
+          cache.delete(key);
+        }
+      }
+    }
+  });
+}
+
 function retainStateDatabaseClose(database: StateDatabaseHandle): void {
   retainedDatabaseHandles.set(database.db, database);
   stateDatabaseLifecycle.unregisterRetainedExitClose ??= registerSqliteCacheExitClose(
@@ -162,12 +181,23 @@ function retainStateDatabaseClose(database: StateDatabaseHandle): void {
 }
 
 function ownMaintenanceStateDatabaseHandle(database: StateDatabaseHandle): void {
-  getOpenClawDatabaseMaintenanceScope()?.own(database.db, "shared-handles", () => {
+  getOpenClawDatabaseMaintenanceScope()?.own(database.db, "shared-handles", async () => {
+    const closingScope = getOpenClawDatabaseMaintenanceScope();
+    if (!closingScope || !isOpenClawDatabaseMaintenanceResourceOwned(database.db, closingScope)) {
+      return;
+    }
     if (
       cachedDatabases.get(database.path) === database ||
       retainedDatabaseHandles.get(database.db) === database
     ) {
-      retireOpenClawStateDatabaseHandle(database, false);
+      await database.walMaintenance?.stop();
+      if (
+        isOpenClawDatabaseMaintenanceResourceOwned(database.db, closingScope) &&
+        (cachedDatabases.get(database.path) === database ||
+          retainedDatabaseHandles.get(database.db) === database)
+      ) {
+        retireOpenClawStateDatabaseHandle(database, false);
+      }
     }
   });
 }
@@ -186,13 +216,15 @@ export const {
   borrowForRead: borrowOpenClawStateDatabaseForAsyncRead,
   retainForIndependentRead: retainOpenClawStateDatabaseForIndependentRead,
 } = createStateDatabaseRetainer(stateDatabaseLifecycle, {
-  assertOpen(pathname) {
-    assertOpenClawStateDatabaseOpenAllowed(pathname);
+  assertOpen(pathname, ownership) {
+    assertOpenClawStateDatabaseOpenAllowed(pathname, ownership);
     assertExistingOpenClawStateSchemaCacheAdmission(pathname, stateDatabaseLifecycle);
   },
   capture: (pathname) => asyncResources.capture(pathname),
   retire: retireOpenClawStateDatabaseHandle,
   retainFailed: retainStateDatabaseClose,
+  ownRetirement: ownStateDatabaseRetirement,
+  touch: touchStateDatabase,
 });
 
 /** Close both physical-handle owners while retaining every cleanup failure. */
@@ -200,6 +232,8 @@ function closeOpenClawStateDatabaseHandle(
   database: StateDatabaseHandle,
   options?: Parameters<OpenClawStateDatabase["walMaintenance"]["close"]>[0],
 ): unknown[] {
+  clearTimeout(idleTimers.get(database.db));
+  idleTimers.delete(database.db);
   try {
     assertStateDatabaseBorrowersReleased(borrowers.get(database.db), database.path);
   } catch (error) {
@@ -223,49 +257,29 @@ function closeOpenClawStateDatabaseHandle(
     retainStateDatabaseClose(database);
     return [error];
   }
-  const errors: unknown[] = [];
+  idleReferences.delete(database.db);
   openClawStateSnapshotOwners.release(database.db);
-  try {
-    database.walMaintenance?.close(options);
-  } catch (error) {
-    errors.push(error);
-  }
-  try {
-    clearNodeSqliteKyselyCacheForDatabase(database.db);
-  } catch (error) {
-    errors.push(error);
-  }
-  try {
-    closeTrackedStateDatabase(database.db);
-  } catch (error) {
-    errors.push(error);
-  }
-  let cleanupPending = false;
-  if (!database.db.isOpen) {
-    try {
-      database.afterClose?.();
-    } catch (error) {
-      errors.push(error);
-      cleanupPending = true;
-    }
-  }
+  const { errors, cleanupPending } = closeStateDatabaseHandle(database, options);
   if (database.db.isOpen || cleanupPending) {
     retainStateDatabaseClose(database);
   } else {
     retainedDatabaseHandles.delete(database.db);
-    if (retainedDatabaseHandles.size === 0) {
-      stateDatabaseLifecycle.unregisterRetainedExitClose?.();
-      stateDatabaseLifecycle.unregisterRetainedExitClose = undefined;
-    }
   }
   // A failed native close retains physical custody, never a successful cache hit.
   if (cachedDatabases.get(database.path)?.db === database.db) {
     cachedDatabases.delete(database.path);
   }
+  if (retainedDatabaseHandles.size === 0) {
+    stateDatabaseLifecycle.unregisterRetainedExitClose?.();
+    stateDatabaseLifecycle.unregisterRetainedExitClose = undefined;
+  }
   return errors;
 }
 
 function evictCachedOpenClawStateDatabase(database: OpenClawStateDatabase): boolean {
+  if (!isPostgresSqlConnection(database.db)) {
+    invalidateOpenClawStateRuntimeIntegrity(database.db);
+  }
   if (cachedDatabases.get(database.path) !== database) {
     return false;
   }
@@ -289,37 +303,89 @@ function evictOpenClawStateDatabaseAfterCorruption(
 }
 
 /** Publish a fully opened handle and bind query corruption to its exact cache owner. */
-function publishOpenClawStateDatabase(database: OpenClawStateDatabase): OpenClawStateDatabase {
+function publishOpenClawStateDatabase(
+  database: OpenClawStateDatabase,
+  env: NodeJS.ProcessEnv,
+): OpenClawStateDatabase {
   const { db, path: pathname } = database;
-  const identity = asyncResources.publish(pathname);
-  databaseIdentities.set(db, identity);
-  runtimeFailures.recordPublishedVersion(database);
+  const { identity, admission } = asyncResources.publish(pathname);
+  // Lifecycle settlement retains this projection after native disposal clears its identity.
+  databaseIdentities.set(db, readTrackedStateDatabaseIdentity(db) ?? identity);
   cachedDatabases.set(pathname, database);
+  registerStateDatabaseWalAdmission(database, identity, admission, env);
+  touchStateDatabase(database);
   openClawStateSnapshotOwners.register(database, () => cachedDatabases.get(pathname));
   ownMaintenanceStateDatabaseHandle(database);
   notifyOpenClawStateDatabaseLifecycle({ kind: "opened", database, identity });
-  registerNodeSqliteKyselyQueryErrorHandler(db, (error) => {
-    // Write transactions own rollback and evict at their outer boundary.
-    if (!db.isTransaction && isSqliteCorruptionError(error)) {
-      evictCachedOpenClawStateDatabase(database);
-    }
-  });
+  if (!isPostgresSqlConnection(db)) {
+    registerNodeSqliteKyselyQueryErrorHandler(db, (error) => {
+      // Write transactions own rollback and evict at their outer boundary.
+      if (!db.isTransaction && isSqliteCorruptionError(error)) {
+        evictCachedOpenClawStateDatabase(database);
+      }
+    });
+  }
   terminalOpenLatch.clear(pathname);
   return database;
 }
 
-function getCachedOpenClawStateDatabase(pathname: string): OpenClawStateDatabase | undefined {
-  getOpenClawDatabaseMaintenanceScope()?.assertAdmission();
-  assertExistingOpenClawStateSchemaCacheAdmission(pathname, stateDatabaseLifecycle);
-  const runtimeFailure = runtimeFailures.get(pathname);
+/** Looking up an admitted handle does not consume schema or row facts. */
+function getCachedOpenClawStateDatabase(
+  pathname: string,
+  options?: { readOnly: true },
+): OpenClawStateDatabase | undefined {
+  const resolvedPath = resolveDatabasePath({ path: pathname });
+  const runtimeFailure = terminalOpenLatch.get(resolvedPath);
   if (runtimeFailure) {
     throw runtimeFailure;
   }
-  const database = cachedDatabases.get(path.resolve(pathname));
-  if (database && borrowers.get(database.db)?.retiring) {
-    throw new Error(`OpenClaw state database native borrower cleanup is pending: ${pathname}`);
+  return readCachedOpenClawStateDatabase(resolvedPath, options);
+}
+
+function readCachedOpenClawStateDatabase(
+  resolvedPath: string,
+  options?: { readOnly: true },
+): OpenClawStateDatabase | undefined {
+  const maintenance = getOpenClawDatabaseMaintenanceScope();
+  if (options?.readOnly) {
+    maintenance?.assertReadAdmission();
+  } else {
+    maintenance?.assertAdmission();
+  }
+  assertExistingOpenClawStateSchemaCacheAdmission(resolvedPath, stateDatabaseLifecycle);
+  const database = cachedDatabases.get(resolvedPath);
+  if (database) {
+    if (borrowers.get(database.db)?.retiring) {
+      throw new Error(
+        `OpenClaw state database native borrower cleanup is pending: ${resolvedPath}`,
+      );
+    }
+    touchStateDatabase(database);
   }
   return database;
+}
+
+/** Prepared host facts retain admission; native transactions still expose their staged facts. */
+export function prepareOpenClawStateCachedRead(pathname: string) {
+  const resolvedPath = resolveDatabasePath({ path: pathname });
+  const options = { readOnly: true } as const;
+  getCachedOpenClawStateDatabase(resolvedPath, options);
+  // Terminal failures invalidate this admission before closing the native owner.
+  const admission = asyncResources.capture(resolvedPath);
+  return () => {
+    admission.assertCurrent();
+    return readCachedOpenClawStateDatabase(resolvedPath, options);
+  };
+}
+
+/** Keep the admitted revision live while a synchronous reader consumes its row facts. */
+function withCachedOpenClawStateDatabase<T>(
+  pathname: string,
+  options: { readOnly: true } | undefined,
+  operation: (database: OpenClawStateDatabase) => T,
+): T | undefined {
+  const database = getCachedOpenClawStateDatabase(pathname, options);
+  return database && cacheAdmission.read(database, operation);
 }
 
 function getOpenClawStateDatabaseIfOpenAtPath(pathname: string): OpenClawStateDatabase | undefined {
@@ -342,18 +408,14 @@ function closeStaleCachedOpenClawStateDatabase(database: OpenClawStateDatabase):
   );
 }
 
-/** Latch background verification damage so later opens fail without rescanning. */
-export function recordOpenClawStateDatabaseOpenFailure(
-  pathname: string,
-  error: Error,
-  generation?: SqliteFileGeneration,
-): boolean {
-  return terminalOpenLatch.record(pathname, error, generation);
+/** Latch integrity refusals so later opens fail without rescanning. */
+export function recordOpenClawStateDatabaseOpenFailure(pathname: string, error: Error): void {
+  terminalOpenLatch.record(resolveDatabasePath({ path: pathname }), error);
 }
 
 /** Clear a terminal open failure after doctor rewrites the database file. */
 export function clearOpenClawStateDatabaseOpenFailure(pathname: string): void {
-  const resolvedPath = path.resolve(pathname);
+  const resolvedPath = resolveDatabasePath({ path: pathname });
   terminalOpenLatch.clear(resolvedPath);
   asyncResources.invalidate(resolvedPath);
   notifyOpenClawStateDatabaseLifecycle({
@@ -366,39 +428,28 @@ export function clearOpenClawStateDatabaseOpenFailure(pathname: string): void {
 /** Validate the canonical terminal fact before acquiring a domain-operation lease. */
 export async function getOpenClawStateDatabaseTerminalFailureAsync(
   context: OpenClawStateWorkerContext,
+  signal?: AbortSignal,
 ): Promise<Error | undefined> {
   context.admission.assertCurrent();
-  const failure = await terminalOpenLatch.getAsync(
-    context.admission.databasePath,
-    async (_path, generation) => {
-      const { inspectOpenClawStateDatabase } = await import("./openclaw-state-worker-store.js");
-      const matches = await inspectOpenClawStateDatabase(context, {
-        type: "database.generationMatches",
-        input: { generation },
-      });
-      if (matches === undefined) {
-        throw new Error("Recorded shared-state database generation is unavailable");
-      }
-      return matches;
-    },
-  );
-  context.admission.assertCurrent();
-  return failure;
+  signal?.throwIfAborted();
+  return terminalOpenLatch.get(context.admission.databasePath);
 }
 
 /** Reject shared-state access after a process-local terminal failure. */
-function assertOpenClawStateDatabaseOpenAllowed(pathname: string): void {
-  const identity = asyncResources.identity(pathname);
-  const terminalFailure = terminalOpenLatch.get(pathname);
+function assertOpenClawStateDatabaseOpenAllowed(pathname: string, ownership?: "cached-read"): void {
+  const resolvedPath = resolveDatabasePath({ path: pathname });
+  const assertAllowed =
+    ownership === "cached-read" ? assertStateDatabaseReadAllowed : assertStateDatabaseAccessAllowed;
+  assertAllowed(pathname);
+  const { identity } = asyncResources.capture(resolvedPath);
+  const terminalFailure = terminalOpenLatch.get(resolvedPath);
   if (terminalFailure) {
     throw terminalFailure;
   }
-  const resolvedPath = path.resolve(pathname);
   for (const database of retainedDatabaseHandles.values()) {
     if (
       borrowers.get(database.db)?.retiring &&
-      (database.path === resolvedPath ||
-        (identity !== undefined && databaseIdentities.get(database.db)?.key === identity.key))
+      (database.path === resolvedPath || databaseIdentities.get(database.db)?.key === identity.key)
     ) {
       throw new Error(`OpenClaw state database native borrower cleanup is pending: ${pathname}`);
     }
@@ -406,86 +457,69 @@ function assertOpenClawStateDatabaseOpenAllowed(pathname: string): void {
 }
 
 function recordOpenClawStateDatabaseLifecycleOpenError(pathname: string, error: unknown): void {
-  notifyOpenClawStateDatabaseLifecycle({ kind: "open-error", path: path.resolve(pathname), error });
+  const resolvedPath = resolveDatabasePath({ path: pathname });
+  notifyOpenClawStateDatabaseLifecycle({ kind: "open-error", path: resolvedPath, error });
 }
 
 /** Reject a fresh shared-state open after known corruption until repair clears it. */
 function assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
   pathname: string,
   env: NodeJS.ProcessEnv,
+  onNativeCleanupFailure?: (error: OpenClawQuarantineReadCleanupError) => void,
 ): void {
   assertOpenClawStateDatabaseOpenAllowed(pathname);
   let quarantineFailure: Error | undefined;
   try {
-    const quarantine = readOpenClawDatabaseQuarantine(pathname, { env });
-    if (quarantine) {
-      quarantineFailure = createOpenClawDatabaseVerificationError(
-        "state",
-        pathname,
-        quarantine.reason,
-      );
+    quarantineFailure = readOpenClawDatabaseQuarantineFailure("state", pathname, { env });
+  } catch (error) {
+    if (!(error instanceof OpenClawQuarantineReadCleanupError)) {
+      throw error;
     }
-  } catch {
-    // A broken quarantine store must not brick every state read.
-    // The process latch and daily verifier still cover known damage.
+    onNativeCleanupFailure?.(error);
+    return;
+  }
+  if (quarantineFailure?.cause instanceof OpenClawQuarantineReadCleanupError) {
+    onNativeCleanupFailure?.(quarantineFailure.cause);
   }
   if (quarantineFailure) {
+    // Another process can record quarantine. Revoke admitted owners without a
+    // process-local latch that could outlive the durable decision's generation.
+    cacheAdmission.closeTerminalFailure(pathname, quarantineFailure);
     throw quarantineFailure;
   }
 }
 
-/** Explicit retirement can checkpoint WAL and must join the lifecycle writer gate. */
+/** SQLite owns checkpoint exclusion; retirement joins the actual native handle. */
 function retireOpenClawStateDatabaseHandle(
   database: StateDatabaseHandle,
   retireAdmission = true,
   options?: OpenClawStateDatabaseCloseOptions,
 ): void {
+  // Retained native custody permits disposal after the caller loses admission.
   assertStateDatabaseBorrowersReleased(borrowers.get(database.db), database.path);
   const borrowedOwner = borrowers.get(database.db);
-  const { busyTimeoutMs = OPENCLAW_SQLITE_BUSY_TIMEOUT_MS, ...closeOptions } = options ?? {};
-  // Wait opportunistically within the budget; contended retirement must not write
-  // any database or sidecar bytes while a foreign lifecycle owner holds exclusion.
-  const coordinator =
-    borrowedOwner?.closeCoordinator ??
-    acquireStateDatabaseCoordinator({
-      databasePath: database.path,
-      busyTimeoutMs,
-      // Retirement releases physical custody, including an idle coordinator that
-      // would otherwise keep temporary or relocated Windows homes undeletable.
-      keepAlive: false,
-    });
-  if (borrowedOwner) {
-    borrowedOwner.closeCoordinator = coordinator;
-  }
   try {
-    runWithSqliteCoordinator(coordinator, "state database retirement", () => {
-      // Refused acquisition leaves both cache and physical ownership untouched.
-      const wasCached = cachedDatabases.get(database.path)?.db === database.db;
-      if (retireAdmission) {
-        asyncResources.invalidate(database.path);
+    const wasCached = cachedDatabases.get(database.path)?.db === database.db;
+    if (retireAdmission) {
+      asyncResources.invalidate(database.path);
+    }
+    const errors = closeOpenClawStateDatabaseHandle(database, options);
+    if (wasCached && retireAdmission) {
+      try {
+        notifyOpenClawStateDatabaseClosed(database);
+      } catch (error) {
+        errors.push(error);
       }
-      const errors = closeOpenClawStateDatabaseHandle(database, closeOptions);
-      if (wasCached && retireAdmission) {
-        try {
-          notifyOpenClawStateDatabaseClosed(database);
-        } catch (error) {
-          errors.push(error);
-        }
-      }
-      throwSqliteLifecycleErrors(
-        errors,
-        `OpenClaw state database cleanup failed for ${database.path}.`,
-      );
-    });
+    }
+    throwSqliteLifecycleErrors(
+      errors,
+      `OpenClaw state database cleanup failed for ${database.path}.`,
+    );
   } catch (error) {
     if (borrowedOwner) {
       retainStateDatabaseClose(database);
     }
     throw error;
-  } finally {
-    if (borrowedOwner && coordinator.closed) {
-      borrowedOwner.closeCoordinator = undefined;
-    }
   }
   if (borrowedOwner) {
     borrowedOwner.cleanupComplete = true;
@@ -524,39 +558,57 @@ function retireOpenClawStateDatabaseHandles(
   return found;
 }
 
-/** Close one cached shared state database handle by exact pathname. */
 export function closeOpenClawStateDatabaseByPath(
   pathname: string,
   options?: OpenClawStateDatabaseCloseOptions,
 ): boolean {
   return retireOpenClawStateDatabaseHandles(
-    path.resolve(pathname),
+    resolveDatabasePath({ path: pathname }),
     options,
     asyncResources.identity(pathname),
   );
 }
 
-/** Close all cached shared state database handles. */
 export function closeOpenClawStateDatabase(options?: OpenClawStateDatabaseCloseOptions): void {
   retireOpenClawStateDatabaseHandles(undefined, options);
 }
 
 /** Register a resource owner before it can admit any shared-state worker opens. */
-export function registerOpenClawStateDatabaseAsyncResource(
-  resource: OpenClawStateDatabaseAsyncResource,
+export const registerOpenClawStateDatabaseAsyncResource = asyncResources.register;
+
+/** Close the admitted file or its canonical path, retaining first-creation identity getters. */
+export function registerOpenClawStatePathAsyncResource(
+  admission: Pick<OpenClawStateDatabaseReadAdmission, "identity">,
+  close: () => Promise<void>,
 ): () => void {
-  return asyncResources.register(resource);
+  return registerOpenClawStateDatabaseAsyncResource({
+    close(identity) {
+      if (
+        !identity ||
+        identity.key === admission.identity.key ||
+        identity.canonicalPath === admission.identity.canonicalPath
+      ) {
+        return close();
+      }
+      return Promise.resolve();
+    },
+  });
 }
 
 /** Capture the canonical read generation before any asynchronous worker admission. */
 export const captureOpenClawStateDatabaseReadAdmission = asyncResources.capture;
 
+export const captureOpenClawStateIntegrityAdmission = asyncResources.integrity;
+
 /** Bind worker-created storage to its captured admission without publishing a native handle. */
 export function publishOpenClawStateDatabaseWorkerAdmission(
   admission: OpenClawStateDatabaseReadAdmission,
+  preparedIdentity?: DatabasePathIdentity,
 ): void {
-  admission.assertCurrent();
-  asyncResources.publish(admission.databasePath);
+  if (preparedIdentity) {
+    admission.assertCurrent();
+  }
+  asyncResources.publish(admission.databasePath, preparedIdentity);
   admission.assertCurrent();
 }
 
@@ -565,39 +617,51 @@ export function closeOpenClawStateDatabaseByPathAsync(
   pathname: string,
   options?: OpenClawStateDatabaseCloseOptions,
 ): Promise<boolean> {
-  const resolvedPath = path.resolve(pathname);
-  return asyncResources.close(resolvedPath, (identity) =>
-    retireOpenClawStateDatabaseHandles(resolvedPath, options, identity),
-  );
+  const resolvedPath = resolveDatabasePath({ path: pathname });
+  return asyncResources.close(resolvedPath, async (identity) => {
+    await stopOpenClawStateDatabaseMaintenance(resolvedPath, identity);
+    return retireOpenClawStateDatabaseHandles(resolvedPath, options, identity);
+  });
 }
 
 /** Orderly lifecycle close; synchronous close remains native/exit cleanup only. */
 export async function closeOpenClawStateDatabaseAsync(
   options?: OpenClawStateDatabaseCloseOptions,
 ): Promise<void> {
-  await asyncResources.close(undefined, () =>
-    retireOpenClawStateDatabaseHandles(undefined, options),
-  );
+  await asyncResources.close(undefined, async () => {
+    await stopOpenClawStateDatabaseMaintenance();
+    return retireOpenClawStateDatabaseHandles(undefined, options);
+  });
 }
 
-/** Test whether a cached shared state database handle is still open, optionally at one path. */
 export function isOpenClawStateDatabaseOpen(pathname?: string): boolean {
   if (pathname !== undefined) {
-    return cachedDatabases.get(path.resolve(pathname))?.db.isOpen === true;
+    return cachedDatabases.get(resolveDatabasePath({ path: pathname }))?.db.isOpen === true;
   }
   return Array.from(cachedDatabases.values()).some((database) => database.db.isOpen);
 }
 
-/** Report the live owner's last observation without opening or querying SQLite. */
-export function readOpenClawStateWalHealth(): SqliteWalHealth | undefined {
-  const database = cachedDatabases.get(path.resolve(resolveOpenClawStateSqlitePath()));
-  return database?.db.isOpen ? database.walMaintenance.health : undefined;
-}
-
-/** Close shared state handles and clear terminal failure latches for test isolation. */
+/**
+ * Close shared state handles and clear terminal failure latches for test isolation.
+ * Worker retirement continues after return; await closeOpenClawStateDatabaseAsync()
+ * before raw SQLite or file access to a database that workers have used.
+ */
 export function closeOpenClawStateDatabaseForTest(): void {
   closeOpenClawStateDatabase();
   terminalOpenLatch.clearAll();
+}
+
+/**
+ * Owners that register with this cache must serve only the published lifecycle.
+ * Every runtime chunk shares that lifecycle; only a retired module generation
+ * (a re-evaluated test graph whose detached work outlived its file) can differ.
+ */
+export function assertPublishedOpenClawStateDatabaseLifecycle(): void {
+  if (readGlobalSingleton(STATE_DATABASE_LIFECYCLE_KEY) !== stateDatabaseLifecycle) {
+    throw new Error(
+      "OpenClaw state database lifecycle is retired; its owners cannot serve the published lifecycle",
+    );
+  }
 }
 
 /** Process-wide owner for cached shared-state handles and terminal open failures. */
@@ -614,158 +678,123 @@ export const openClawStateDatabaseCache = {
   evictCachedOpenClawStateDatabase,
   evictOpenClawStateDatabaseAfterCorruption,
   getCachedOpenClawStateDatabase,
-  getOpenClawStateDatabaseRuntimeFailure: runtimeFailures.get,
+  // Identity only: re-enter retained transaction custody before ordinary access admission.
+  peekOpenClawStateDatabaseConnection: (pathname: string): EngineConnection | undefined =>
+    cachedDatabases.get(resolveDatabasePath({ path: pathname }))?.db,
+  withCachedOpenClawStateDatabase,
+  getOpenClawStateDatabaseRecordedFailure: terminalOpenLatch.peek,
   getOpenClawStateDatabaseIfOpenAtPath,
   getKnownOpenClawStateDatabaseIdentity: asyncResources.knownIdentity,
   isOpenClawStateDatabaseOpen,
+  /** Only the exact published, open owner carries canonical schema readiness. */
+  isOpenClawStateDatabaseSchemaReady: (database: OpenClawStateDatabase): boolean =>
+    cachedDatabases.get(database.path) === database && database.db.isOpen,
   publishOpenClawStateDatabase,
   recordOpenClawStateDatabaseOpenFailure,
   recordOpenClawStateDatabaseLifecycleOpenError,
+  touchStateDatabase,
 };
 
-/** Drain local cached owners before excluding participating foreign handles for file removal. */
-export async function acquireOpenClawStateDatabaseFileExclusion(pathname: string) {
-  const databasePath = path.resolve(pathname);
+/** Offline removal drains local work and refuses an active native SQLite owner. */
+export async function prepareOpenClawStateDatabaseRemoval(
+  pathname: string,
+  assertOwnerCurrent: () => void,
+) {
+  const databasePath = resolveDatabasePath({ path: pathname });
+  const maintenance = getOpenClawDatabaseMaintenanceScope();
+  if (!maintenance?.ownsSchemaMaintenance) {
+    throw new Error("State removal requires the installation's maintenance owner");
+  }
+  maintenance.assertAdmission();
   const releaseAdmission = asyncResources.holdExclusion(databasePath);
-  let lifecycle: ReturnType<typeof acquireStateDatabaseCoordinator> | undefined;
-  let handles: ReturnType<typeof acquireStateDatabaseHandleExclusion>;
   try {
-    // The admission seal spans drainage and acquisition; no worker can reopen
-    // between native retirement and the physical exclusion becoming current.
     await closeOpenClawStateDatabaseByPathAsync(databasePath);
-    lifecycle = acquireStateDatabaseCoordinator({ databasePath, busyTimeoutMs: 0 });
-    handles = acquireStateDatabaseHandleExclusion({ databasePath, busyTimeoutMs: 0 });
+    maintenance.assertOwnerCurrent();
+    retainSqliteDatabaseRemovalExclusion(databasePath, maintenance);
+    maintenance.assertOwnerCurrent();
   } catch (error) {
-    lifecycle?.release();
     releaseAdmission();
     throw error;
   }
-  const closeWriter = (errors: unknown[]) => {
-    const database = cachedDatabases.get(databasePath);
-    if (database) {
-      try {
-        // Physical custody permits closure after authority loss, not further mutation.
-        handles.runWithCanonicalWrites(handles.assertCurrent, () => {
-          errors.push(...closeOpenClawStateDatabaseHandle(database));
-        });
-        notifyOpenClawStateDatabaseClosed(database);
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-  };
+  let active = true;
   return {
-    assertCurrent: handles.assertCurrent,
-    runWithSourceReads: handles.runWithSourceReads,
-    assertMutationCurrent: handles.assertMutationCurrent,
-    async mutate<T>(assertCurrent: () => void, operation: () => Promise<T>): Promise<T> {
-      let outcome: { value: T } | { error: unknown };
-      try {
-        outcome = {
-          value: await handles.runWithCanonicalMutation(
-            assertCurrent,
-            operation,
-            async (assertInspection, signal) => {
-              signal?.throwIfAborted();
-              assertInspection();
-              const opened = getOpenClawStateDatabaseIfOpenAtPath(databasePath);
-              if (opened) {
-                return await prepareSqliteReadOnlyLocationFromOwnedDatabase(
-                  opened.db,
-                  () => {
-                    assertInspection();
-                    if (getOpenClawStateDatabaseIfOpenAtPath(databasePath) !== opened) {
-                      throw new Error("SQLite inspection lost its original native owner");
-                    }
-                  },
-                  signal,
-                );
-              }
-              // Before first open, no cached OR uncached source handle may exist.
-              handles.assertDrainedDuringMutation();
-              return await handles.runWithSourceReads(async () => {
-                assertInspection();
-                return prepareSqliteReadOnlyLocationSyncInProcess(databasePath);
-              });
-            },
-          ),
-        };
-      } catch (error) {
-        outcome = { error };
+    assertCurrent() {
+      if (!active) {
+        throw new Error("State removal admission has been released");
       }
-      const errors: unknown[] = "error" in outcome ? [outcome.error] : [];
-      closeWriter(errors);
-      try {
-        handles.assertNoPins();
-      } catch (error) {
-        errors.push(error);
-      }
-      if (errors.length > 1) {
-        throw createSqliteLifecycleAggregateError(
-          errors,
-          "SQLite mutation or drainage failed",
-          errors[0],
-        );
-      }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if ("error" in outcome) {
-        throw outcome.error;
-      }
-      return outcome.value;
+      assertOwnerCurrent();
     },
-    async bindCaptured(assertCurrent: () => void, operation: () => undefined): Promise<void> {
-      const errors: unknown[] = [];
-      let result: unknown;
-      try {
-        result = handles.runWithCanonicalWrites(assertCurrent, operation);
-      } catch (error) {
-        errors.push(error);
-      }
-      // Revoke issued raw SQLite capabilities before yielding to an invalid
-      // async binder. Keep the physical fence until that promise has settled.
-      closeWriter(errors);
-      if (result !== undefined) {
-        errors.push(new Error("checkpoint binding must complete synchronously with undefined"));
-        try {
-          await Promise.resolve(result);
-        } catch (error) {
-          errors.push(error);
-        }
-      }
-      try {
-        assertCurrent();
-      } catch (error) {
-        errors.push(error);
-      }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw createSqliteLifecycleAggregateError(
-          errors,
-          "checkpoint binding or writer closure failed",
-          errors[0],
-        );
-      }
-    },
-    release: () => {
-      try {
-        handles.release();
-      } finally {
-        lifecycle?.release();
+    release() {
+      if (active) {
+        active = false;
         releaseAdmission();
       }
     },
   };
 }
 
-/** Reconfirm an advisory worker failure on the live owner connection. */
-export async function confirmOpenClawStateDatabaseIntegrity(
-  pathname: string,
-): Promise<SqliteIntegrityConfirmation> {
-  const resolvedPath = path.resolve(pathname);
-  await closeOpenClawStateDatabaseByPathAsync(resolvedPath);
-  return confirmSqliteFileIntegrity(resolvedPath, resolvedPath);
+function retainSqliteDatabaseRemovalExclusion(
+  databasePath: string,
+  maintenance: OpenClawDatabaseMaintenanceScope,
+): void {
+  if (!existsSync(databasePath)) {
+    return;
+  }
+  const database = openNodeSqliteDatabase(resolveExistingSqliteFileUri(databasePath));
+  const close = () => {
+    if (!database.isOpen) {
+      return;
+    }
+    const errors: unknown[] = [];
+    try {
+      if (database.isTransaction) {
+        database.exec("ROLLBACK"); // sqlite-allow-raw -- Release the native removal exclusion before close.
+      }
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      database.close();
+    } catch (error) {
+      errors.push(error);
+    }
+    throwSqliteLifecycleErrors(errors, "SQLite state removal exclusion cleanup failed.");
+  };
+  try {
+    // The maintenance owner drains this handle after state removal. A failed
+    // close retains both native custody and the external process owner.
+    maintenance.own(database, "shared-handles", close);
+    // Exclusive connection mode obtains the main-file lock even in WAL mode.
+    // Do not change journal_mode: a refused removal must preserve recovery bytes.
+    database.exec("PRAGMA busy_timeout = 0; PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE;"); // sqlite-allow-raw -- Native file-removal exclusion, without mutating journal mode.
+  } catch (error) {
+    try {
+      close();
+    } catch (cleanupError) {
+      throw createSqliteLifecycleAggregateError(
+        [error, cleanupError],
+        "SQLite state removal admission and cleanup both failed.",
+        error,
+      );
+    }
+    if (isSqliteLockError(error)) {
+      throw new Error(
+        "Cannot remove OpenClaw state directory while another SQLite connection is active",
+        {
+          cause: error,
+        },
+      );
+    }
+    const code = sqlitePrimaryResultCode(error);
+    // Explicit reset may remove corrupt state after process ownership is established.
+    if (code !== 11 && code !== 26) {
+      throw error;
+    }
+    return;
+  }
+  if (process.platform === "win32") {
+    // WinVFS denies FILE_SHARE_DELETE: any peer handle prevents unlink. Our
+    // own probe must close so removal can proceed when no peer remains.
+    close();
+  }
 }

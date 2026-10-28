@@ -1,19 +1,190 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
-import { withWorkspaceHashMemo } from "./workspace-hash-memo.js";
 import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { withWorkspaceHashMemo } from "./workspace-hash-memo.js";
+import { useAgedWorkspaceHashClock } from "./workspace-hash-memo.test-support.js";
+import { sha256 as digest, workspaceFile } from "./workspace-manifest-fixtures.test-support.js";
+import {
+  captureWorkspaceManifest,
+  captureWorkspaceManifestDocument,
+  captureWorkspaceManifestReference,
   captureWorkspaceSnapshot,
   parseWorkspaceManifestPair,
+  prepareWorkspaceBaseRefresh,
+  workspaceManifestPaths,
+  workspaceSnapshotsEqual,
 } from "./workspace-manifest-worker.js";
-import { readActualWorkspaceManifest } from "./workspace-reconcile-core.js";
+import type { WorkerWorkspaceManifestEntry } from "./workspace-manifest.js";
+import { workspaceProcessTestEntrypoints } from "./workspace-process-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const adapterUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.manifestWorker);
+const limitsUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.inventoryLimits).href;
+useAgedWorkspaceHashClock();
 afterEach(() => vi.restoreAllMocks());
+
+const encode = (entries: WorkerWorkspaceManifestEntry[], baseCommit: string | null = null) => {
+  const raw = JSON.stringify({
+    version: 1,
+    baseCommit,
+    entries: entries.toSorted((left, right) => (left.path < right.path ? -1 : 1)),
+  });
+  return { raw, ref: `sha256:${digest(raw)}` };
+};
+const pair = (base: ReturnType<typeof encode>, current: ReturnType<typeof encode>) => ({
+  baseRaw: base.raw,
+  baseRef: base.ref,
+  currentRaw: current.raw,
+  currentRef: current.ref,
+});
+async function runScript(script: string, timeoutMs = 60_000, execArgv: string[] = []) {
+  const result = await runCommandWithTimeout(
+    [
+      process.execPath,
+      ...execArgv,
+      ...resolveRuntimeWorkerArgv(adapterUrl).slice(0, -1),
+      "--input-type=module",
+      "--eval",
+      script,
+    ],
+    { timeoutMs, maxOutputBytes: 64 * 1024, killProcessTree: true },
+  );
+  expect(result.code, result.stderr).toBe(0);
+  return JSON.parse(result.stdout);
+}
+
+it("releases decoded tree entries while their encoded worker operation is pending", async () => {
+  const result = await runScript(
+    `
+      import { setImmediate } from "node:timers/promises";
+      import { computeWorkspaceManifest, prepareWorkspaceTreeInput } from ${JSON.stringify(adapterUrl.href)};
+      await computeWorkspaceManifest({
+        type: "workspace.manifest.parse",
+        input: { raw: new TextEncoder().encode(JSON.stringify({ version: 1, baseCommit: null, entries: [] })) },
+      });
+      const pool = globalThis[Symbol.for("openclaw.gitOperations")].workspace;
+      const deferred = Promise.withResolvers();
+      let submitted;
+      // Hold execution after real broker admission so collection is independent of filesystem speed.
+      pool.run = (command) => {
+        submitted = JSON.parse(new TextDecoder().decode(command.input.payload));
+        return deferred.promise;
+      };
+      let inputRef;
+      let entriesRef;
+      const operation = (() => {
+        const input = {
+          inputPath: "/synthetic/snapshot-input",
+          ref: "refs/heads/snapshot",
+          source: { root: "/synthetic" },
+          entries: [{ path: "file.txt", type: "file", mode: 420, size: 0, sha256: "a".repeat(64) }],
+        };
+        inputRef = new WeakRef(input);
+        entriesRef = new WeakRef(input.entries);
+        return prepareWorkspaceTreeInput(input);
+      })();
+      let settled = false;
+      const outcome = operation.then(
+        () => { settled = true; return "unexpected success"; },
+        error => { settled = true; return error.message; },
+      );
+      for (let index = 0; index < 4; index++) {
+        await setImmediate();
+        global.gc();
+      }
+      const retained = { input: inputRef.deref() !== undefined, entries: entriesRef.deref() !== undefined };
+      const pending = !settled;
+      deferred.reject(new Error("worker failed"));
+      const failure = await outcome;
+      await pool.close();
+      process.stdout.write(JSON.stringify({ retained, pending, submitted, failure }));
+    `,
+    20_000,
+    ["--expose-gc"],
+  );
+  expect(result).toEqual({
+    retained: { input: false, entries: false },
+    pending: true,
+    submitted: {
+      inputPath: "/synthetic/snapshot-input",
+      ref: "refs/heads/snapshot",
+      source: { root: "/synthetic" },
+      entries: [{ path: "file.txt", type: "file", mode: 0o644, size: 0, sha256: "a".repeat(64) }],
+    },
+    failure: "worker failed",
+  });
+});
+
+it("settles private Git-input staging before a cancelled tree read returns", async () => {
+  const root = tempDirs.make("workspace-tree-input-cancel-");
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const controller = new AbortController();
+  const content = Buffer.from("snapshot");
+  const payload = new TextEncoder().encode(
+    JSON.stringify({
+      inputPath: path.join(root, "input"),
+      ref: "refs/heads/snapshot",
+      entries: [workspaceFile("file.txt", content)],
+      source: { root, tree: "a".repeat(40) },
+    }),
+  );
+  const outcome = runGitWorkerOperation(
+    { type: "workspace.manifest.tree-input", input: { payload } },
+    {
+      inputBytes: payload.byteLength,
+      signal: controller.signal,
+      git: {
+        text: async () => {
+          throw new Error("Unexpected text Git request");
+        },
+        buffered: async (_cwd, args) => {
+          const listing = args.includes("ls-tree");
+          if (!listing) {
+            expect(args[0]).toBe("cat-file");
+            entered.resolve();
+            await release.promise;
+          }
+          return {
+            stdout: listing ? Buffer.from(`100644 blob ${"b".repeat(40)}\tfile.txt\0`) : content,
+            stderr: Buffer.alloc(0),
+            code: 0,
+            signal: null,
+            killed: false,
+            termination: "exit",
+          };
+        },
+      },
+    },
+  ).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  try {
+    await Promise.race([
+      entered.promise,
+      outcome.then(() => {
+        throw new Error("Tree read ended before its blob request");
+      }),
+    ]);
+    controller.abort(new Error("cancel tree input"));
+    release.resolve();
+    expect(await outcome).toBeInstanceOf(Error);
+    expect(await fs.readdir(root)).toEqual([]);
+  } finally {
+    controller.abort();
+    release.resolve();
+    await outcome;
+  }
+});
 
 it("does not create or return an implicit hash memo for an uncached capture", async () => {
   const root = await fs.realpath(tempDirs.make("workspace-uncached-capture-"));
@@ -27,7 +198,6 @@ it("does not create or return an implicit hash memo for an uncached capture", as
   expect(result.hashes).toEqual([]);
   expect(result.metrics).toEqual({
     contentHashCount: 0,
-    contentHashDurationMs: 0,
     memoHitCount: 0,
   });
 });
@@ -51,19 +221,11 @@ it("captures eligible files outside the Gateway thread and returns the canonical
     return await lstat(...args);
   });
   const memo = new Map<string, string>();
-  const metrics = { contentHashCount: 0, contentHashDurationMs: 0, memoHitCount: 0 };
+  const metrics = { contentHashCount: 0, memoHitCount: 0 };
   const capture = () =>
-    withWorkspaceHashMemo(memo, () => readActualWorkspaceManifest(selection), metrics);
+    withWorkspaceHashMemo(memo, () => captureWorkspaceManifest(selection), metrics);
   const first = await capture();
-  expect(first.manifest.entries).toEqual([
-    {
-      path: "input.txt",
-      type: "file",
-      mode: 0o644,
-      size: Buffer.byteLength(content),
-      sha256: createHash("sha256").update(content).digest("hex"),
-    },
-  ]);
+  expect(first.manifest.entries).toEqual([workspaceFile("input.txt", content)]);
   expect(first.manifest.directories).toEqual(["preserved"]);
   expect(Object.hasOwn(first, "rawManifest")).toBe(false);
   const snapshot = await withWorkspaceHashMemo(
@@ -72,31 +234,37 @@ it("captures eligible files outside the Gateway thread and returns the canonical
     metrics,
   );
   expect({ manifest: snapshot.manifest, manifestRef: snapshot.manifestRef }).toEqual(first);
-  expect(snapshot.manifestRef).toBe(
-    `sha256:${createHash("sha256").update(snapshot.rawManifest).digest("hex")}`,
+  expect(snapshot.manifestRef).toBe(`sha256:${digest(snapshot.rawManifest)}`);
+  const document = await withWorkspaceHashMemo(
+    memo,
+    () => captureWorkspaceManifestDocument(selection),
+    metrics,
   );
-  const empty = await readActualWorkspaceManifest({
-    ...selection,
-    includePaths: new Set<string>(),
+  expect(document).toEqual({
+    manifestRef: snapshot.manifestRef,
+    rawManifest: snapshot.rawManifest,
   });
+  const reference = () =>
+    withWorkspaceHashMemo(memo, () => captureWorkspaceManifestReference(selection), metrics);
+  expect(await reference()).toBe(first.manifestRef);
+  const empty = await captureWorkspaceManifest({ ...selection, includePaths: new Set<string>() });
   expect(empty.manifest).toMatchObject({ entries: [], directories: [] });
-  expect(metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 1 });
+  expect(metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 3 });
+  await fs.unlink(path.join(root, "input.txt"));
+  expect(await reference()).not.toBe(first.manifestRef);
 });
 
 it("authenticates both manifests before selecting changed transfer payloads", async () => {
-  const encode = (entries: unknown[]) => {
-    const raw = JSON.stringify({ version: 1, baseCommit: null, entries });
-    return { raw, ref: `sha256:${createHash("sha256").update(raw).digest("hex")}` };
+  const entry = {
+    path: "input.txt",
+    type: "file" as const,
+    mode: 0o644,
+    size: 1,
+    sha256: "a".repeat(64),
   };
-  const entry = { path: "input.txt", type: "file", mode: 0o644, size: 1, sha256: "a".repeat(64) };
   const base = encode([entry]);
   const current = encode([{ ...entry, sha256: "b".repeat(64) }]);
-  const input = {
-    baseRaw: base.raw,
-    baseRef: base.ref,
-    currentRaw: current.raw,
-    currentRef: current.ref,
-  };
+  const input = pair(base, current);
   const compared = await parseWorkspaceManifestPair(input);
   expect(compared).toMatchObject({
     changed: true,
@@ -108,6 +276,152 @@ it("authenticates both manifests before selecting changed transfer payloads", as
   ).rejects.toThrow("digest");
 });
 
+it("prepares byte-exact base refresh contents while retaining saved workspace data", async () => {
+  const root = tempDirs.make("workspace-base-refresh-");
+  const beforeRoot = path.join(root, "before");
+  const afterRoot = path.join(root, "after");
+  await fs.mkdir(beforeRoot);
+  await fs.mkdir(afterRoot);
+  for (const directory of [beforeRoot, afterRoot]) {
+    await fs.writeFile(path.join(directory, "unchanged.txt"), "source");
+  }
+  await fs.writeFile(path.join(beforeRoot, "main.txt"), "old");
+  await fs.writeFile(path.join(beforeRoot, "removed.txt"), "gone");
+  await fs.writeFile(path.join(afterRoot, "main.txt"), "new");
+  await fs.chmod(path.join(afterRoot, "main.txt"), 0o755);
+  await fs.writeFile(path.join(afterRoot, "added.txt"), "added");
+  await fs.symlink("main.txt", path.join(afterRoot, "alias"));
+  await fs.mkdir(path.join(afterRoot, "empty"));
+  await fs.mkdir(path.join(afterRoot, ".artifacts/build-cache-inputs"), { recursive: true });
+  await fs.writeFile(path.join(afterRoot, ".artifacts/build-cache-inputs/upstream.json"), "input");
+  const savedInput = ".artifacts/build-cache-inputs/saved.json";
+  const directories = [
+    { path: ".artifacts", type: "directory", mode: 0o700 },
+    { path: ".artifacts/build-cache-inputs", type: "directory", mode: 0o700 },
+  ];
+  const baseRaw = JSON.stringify({
+    version: 1,
+    baseCommit: "a".repeat(40),
+    entries: [
+      ...directories,
+      workspaceFile(savedInput, "saved input"),
+      workspaceFile("main.txt", "old"),
+      workspaceFile("removed.txt", "gone"),
+      workspaceFile("saved.txt", "local only"),
+      workspaceFile("unchanged.txt", "guest edit"),
+    ],
+  });
+  const baseRef = `sha256:${digest(baseRaw)}`;
+  const baseCommit = "b".repeat(40);
+  const expectedRaw = JSON.stringify({
+    version: 1,
+    baseCommit,
+    entries: [
+      ...directories,
+      workspaceFile(savedInput, "saved input"),
+      workspaceFile(".artifacts/build-cache-inputs/upstream.json", "input"),
+      workspaceFile("added.txt", "added"),
+      { path: "alias", type: "symlink", mode: 0o777, target: "main.txt" },
+      { path: "empty", type: "directory", mode: 0o700 },
+      { ...workspaceFile("main.txt", "new"), mode: 0o755 },
+      workspaceFile("saved.txt", "local only"),
+      workspaceFile("unchanged.txt", "guest edit"),
+    ],
+  });
+  const refreshed = await prepareWorkspaceBaseRefresh({
+    beforeRoot,
+    afterRoot,
+    baseCommit,
+    baseRaw,
+    baseRef,
+    buildCacheInputs: [savedInput],
+    action: "refresh_base",
+  });
+  expect(refreshed).toEqual({
+    rawManifest: expectedRaw,
+    manifestRef: `sha256:${digest(expectedRaw)}`,
+    buildCacheInputs: [
+      savedInput,
+      ".artifacts/build-cache-inputs/upstream.json",
+      "added.txt",
+      "alias",
+      "main.txt",
+      "unchanged.txt",
+    ],
+  });
+  const compared = await parseWorkspaceManifestPair({
+    baseRaw,
+    baseRef,
+    currentRaw: refreshed.rawManifest,
+    currentRef: refreshed.manifestRef,
+  });
+  expect(compared.current.baseCommit).toBe(baseCommit);
+  expect(compared.paths).toEqual([
+    ".artifacts/build-cache-inputs/upstream.json",
+    "added.txt",
+    "alias",
+    "main.txt",
+  ]);
+});
+
+it("rejects source integration that replaces a saved-only path", async () => {
+  const beforeRoot = tempDirs.make("workspace-refresh-before-");
+  const afterRoot = tempDirs.make("workspace-refresh-after-");
+  await fs.writeFile(path.join(afterRoot, "saved.txt"), "upstream");
+  const baseline = encode([workspaceFile("saved.txt", "local only")]);
+  await expect(
+    prepareWorkspaceBaseRefresh({
+      beforeRoot,
+      afterRoot,
+      baseCommit: "b".repeat(40),
+      baseRaw: baseline.raw,
+      baseRef: baseline.ref,
+      buildCacheInputs: [],
+      action: "prepare_pr",
+    }),
+  ).rejects.toThrow(
+    "The selected base conflicts with saved workspace data at saved.txt; move that saved file before retrying prepare_pr.",
+  );
+});
+
+it("compares pristine workspace contents with the admitted build-cache policy", async () => {
+  const canonicalRoot = tempDirs.make("workspace-pristine-canonical-");
+  const projectionRoot = tempDirs.make("workspace-pristine-projection-");
+  const input = ".artifacts/build-cache-inputs/source.txt";
+  for (const root of [canonicalRoot, projectionRoot]) {
+    await fs.mkdir(path.dirname(path.join(root, input)), { recursive: true });
+    await fs.writeFile(path.join(root, input), "source");
+    await fs.writeFile(path.join(root, "file.txt"), "same");
+  }
+  await fs.writeFile(path.join(canonicalRoot, "unadmitted.txt"), "host only");
+  await fs.writeFile(
+    path.join(projectionRoot, ".artifacts/build-cache-inputs/generated.txt"),
+    "generated",
+  );
+  const canonical = {
+    root: canonicalRoot,
+    baseCommit: "a".repeat(40),
+    includePaths: new Set([".artifacts", ".artifacts/build-cache-inputs", input, "file.txt"]),
+    buildCacheInputs: new Set([input]),
+  };
+  const projection = {
+    root: projectionRoot,
+    baseCommit: "b".repeat(40),
+    buildCacheInputs: new Set([input]),
+  };
+  const canonicalDocument = await captureWorkspaceManifestDocument(canonical);
+  expect(await workspaceManifestPaths(canonicalDocument, [input])).toEqual(
+    new Set([".artifacts", ".artifacts/build-cache-inputs", input, "file.txt"]),
+  );
+  const compare = async () =>
+    workspaceSnapshotsEqual(canonicalDocument, await captureWorkspaceManifestDocument(projection), [
+      input,
+    ]);
+  expect(await compare()).toBe(true);
+  await fs.writeFile(path.join(projectionRoot, input), "changed source");
+  expect(await compare()).toBe(false);
+});
+
 it("admits a large rebase against its original synchronization manifest", async () => {
   const entries = (prefix: string, count: number, hash: string) =>
     Array.from({ length: count }, (_, index) => ({
@@ -117,23 +431,16 @@ it("admits a large rebase against its original synchronization manifest", async 
       size: 16 * 1024,
       sha256: hash.repeat(64),
     }));
-  const encode = (values: ReturnType<typeof entries>) => {
-    const raw = JSON.stringify({
-      version: 1,
-      baseCommit: "a".repeat(40),
-      entries: values.toSorted((left, right) => (left.path < right.path ? -1 : 1)),
-    });
-    return { raw, ref: `sha256:${createHash("sha256").update(raw).digest("hex")}` };
-  };
   // A rebase can leave Git clean while changing the full dispatched workspace.
-  const base = encode([...entries("modified", 18_407, "a"), ...entries("deleted", 3_103, "a")]);
-  const current = encode([...entries("modified", 18_407, "b"), ...entries("added", 17_395, "b")]);
-  const result = await parseWorkspaceManifestPair({
-    baseRaw: base.raw,
-    baseRef: base.ref,
-    currentRaw: current.raw,
-    currentRef: current.ref,
-  });
+  const base = encode(
+    [...entries("modified", 18_407, "a"), ...entries("deleted", 3_103, "a")],
+    "a".repeat(40),
+  );
+  const current = encode(
+    [...entries("modified", 18_407, "b"), ...entries("added", 17_395, "b")],
+    "a".repeat(40),
+  );
+  const result = await parseWorkspaceManifestPair(pair(base, current));
   expect(result.changed).toBe(true);
   expect(result.paths).toHaveLength(35_802);
   expect(
@@ -143,47 +450,26 @@ it("admits a large rebase against its original synchronization manifest", async 
 
 it("admits a pair of manifests at the exact supported byte limit", async () => {
   // Keep this legal 128 MiB request outside the shared Vitest heap.
-  const adapterUrl = new URL("./workspace-manifest-worker.ts", import.meta.url).href;
-  const limitsUrl = new URL("./workspace-inventory-limits.ts", import.meta.url).href;
-  const result = await runCommandWithTimeout(
-    [
-      process.execPath,
-      "--import",
-      "tsx/esm",
-      "--input-type=module",
-      "--eval",
-      `
+  const result = await runScript(`
       import { createHash } from "node:crypto";
-      import { parseWorkspaceManifestPair } from ${JSON.stringify(adapterUrl)};
+      import { parseWorkspaceManifestPair } from ${JSON.stringify(adapterUrl.href)};
       import { MAX_WORKSPACE_MANIFEST_BYTES } from ${JSON.stringify(limitsUrl)};
       const body = JSON.stringify({ version: 1, baseCommit: null, entries: [] });
       const raw = body + " ".repeat(MAX_WORKSPACE_MANIFEST_BYTES - Buffer.byteLength(body));
       const ref = "sha256:" + createHash("sha256").update(raw).digest("hex");
       const result = await parseWorkspaceManifestPair({ baseRaw: raw, baseRef: ref, currentRaw: raw, currentRef: ref });
       process.stdout.write(JSON.stringify({ changed: result.changed, paths: result.paths, entries: result.entries }));
-    `,
-    ],
-    { timeoutMs: 60_000, maxOutputBytes: 64 * 1024, killProcessTree: true },
-  );
-  expect(result.code, result.stderr).toBe(0);
-  expect(JSON.parse(result.stdout)).toEqual({ changed: false, paths: [], entries: [] });
+    `);
+  expect(result).toEqual({ changed: false, paths: [], entries: [] });
 }, 60_000);
 
 it("admits maximum legal path sets with a populated caller-owned hash memo", async () => {
   const root = tempDirs.make("workspace-path-boundary-");
-  const adapterUrl = new URL("./workspace-manifest-worker.ts", import.meta.url).href;
-  const memoUrl = new URL("./workspace-hash-memo.ts", import.meta.url).href;
-  const limitsUrl = new URL("./workspace-inventory-limits.ts", import.meta.url).href;
-  const result = await runCommandWithTimeout(
-    [
-      process.execPath,
-      "--import",
-      "tsx/esm",
-      "--input-type=module",
-      "--eval",
-      `
+  const memoUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.hashMemo).href;
+  const result = await runScript(
+    `
       import { createHash } from "node:crypto";
-      import { captureWorkspaceSnapshot } from ${JSON.stringify(adapterUrl)};
+      import { captureWorkspaceSnapshot } from ${JSON.stringify(adapterUrl.href)};
       import { withWorkspaceHashMemo, MAX_WORKSPACE_HASH_MEMO_BYTES } from ${JSON.stringify(memoUrl)};
       import { MAX_WORKSPACE_INVENTORY_ENTRIES, MAX_WORKSPACE_MANIFEST_BYTES } from ${JSON.stringify(limitsUrl)};
       const root = ${JSON.stringify(root)};
@@ -200,11 +486,9 @@ it("admits maximum legal path sets with a populated caller-owned hash memo", asy
         const canonical = snapshot.manifestRef === "sha256:" + createHash("sha256").update(snapshot.rawManifest).digest("hex");
         process.stdout.write(JSON.stringify({ entries: snapshot.manifest.entries.length, directories: snapshot.manifest.directories.length, unchanged, canonical, jsonBytes, memoBytes }));
     `,
-    ],
-    { timeoutMs: 120_000, maxOutputBytes: 64 * 1024, killProcessTree: true },
+    120_000,
   );
-  expect(result.code, result.stderr).toBe(0);
-  expect(JSON.parse(result.stdout)).toEqual({
+  expect(result).toEqual({
     entries: 0,
     directories: 0,
     unchanged: true,
@@ -217,19 +501,10 @@ it("admits maximum legal path sets with a populated caller-owned hash memo", asy
 it.each(["comparison", "overlay"] as const)(
   "admits maximum-entry decoded manifests for %s without an estimated-size rejection",
   async (operation) => {
-    const adapterUrl = new URL("./workspace-manifest-worker.ts", import.meta.url).href;
-    const limitsUrl = new URL("./workspace-inventory-limits.ts", import.meta.url).href;
-    const stagingUrl = new URL("./workspace-result-staging.ts", import.meta.url).href;
-    const result = await runCommandWithTimeout(
-      [
-        process.execPath,
-        "--import",
-        "tsx/esm",
-        "--input-type=module",
-        "--eval",
-        `
+    const stagingUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.resultStaging).href;
+    const result = await runScript(`
         import { createHash } from "node:crypto";
-        import { overlayWorkspaceManifest } from ${JSON.stringify(adapterUrl)};
+        import { overlayWorkspaceManifest } from ${JSON.stringify(adapterUrl.href)};
         import { workerWorkspaceTransferPaths } from ${JSON.stringify(stagingUrl)};
         import { MAX_WORKSPACE_INVENTORY_ENTRIES, MAX_WORKSPACE_MANIFEST_BYTES } from ${JSON.stringify(limitsUrl)};
         const digest = createHash("sha256").update("").digest("hex");
@@ -246,12 +521,8 @@ it.each(["comparison", "overlay"] as const)(
           ? { changed: paths.length > 0, count: paths.length, mode: current.entries.find(entry => entry.path === paths[0])?.mode }
           : await overlayWorkspaceManifest(base, copy(), current).then(result => ({ changed: true, count: result.manifest.entries.length, mode: result.manifest.entries.at(-1)?.mode }));
         process.stdout.write(JSON.stringify({ ...output, jsonBytes }));
-      `,
-      ],
-      { timeoutMs: 60_000, maxOutputBytes: 64 * 1024, killProcessTree: true },
-    );
-    expect(result.code, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({
+      `);
+    expect(result).toEqual({
       changed: true,
       count: operation === "comparison" ? 1 : 250_000,
       mode: 0o755,

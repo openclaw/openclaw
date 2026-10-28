@@ -1,21 +1,34 @@
 import type { NativeDeviceSettingsSnapshot } from "../app/native-device-settings.ts";
 
-type MacDeviceSettingsSnapshot = NativeDeviceSettingsSnapshot & {
-  app: NonNullable<NativeDeviceSettingsSnapshot["app"]>;
-  capabilities: NonNullable<NativeDeviceSettingsSnapshot["capabilities"]>;
-  browser: NonNullable<NativeDeviceSettingsSnapshot["browser"]>;
-  voice: NativeDeviceSettingsSnapshot["voice"] &
-    Required<Pick<NativeDeviceSettingsSnapshot["voice"], "microphone" | "locale">>;
-  updates: NonNullable<NativeDeviceSettingsSnapshot["updates"]>;
+type Present<T, K extends keyof T> = T & { [P in K]-?: NonNullable<T[P]> };
+const deviceInfo = { appVersion: "2026.9.3", appBuild: "42", profileName: null };
+
+function flags<const K extends string, const V extends boolean>(value: V, ...keys: K[]) {
+  // SAFETY: every supplied key is mapped once to the same literal boolean.
+  return Object.fromEntries(keys.map((key) => [key, value])) as Record<K, V>;
+}
+
+type NativeDeviceSettingsWithLocation = NativeDeviceSettingsSnapshot & {
+  permissions: Present<NativeDeviceSettingsSnapshot["permissions"], "location">;
+};
+
+type MacDeviceSettingsSnapshot = Present<
+  NativeDeviceSettingsWithLocation,
+  "app" | "capabilities" | "updates"
+> & {
+  browser: Present<NonNullable<NativeDeviceSettingsSnapshot["browser"]>, "cookieSync">;
+  voice: Present<NativeDeviceSettingsSnapshot["voice"], "microphone" | "locale">;
 };
 
 export function createNativeDeviceSettingsSnapshot(): MacDeviceSettingsSnapshot {
   return {
     contract: 1,
-    device: { platform: "macos", appVersion: "2026.9.3", appBuild: "42", profileName: null },
+    device: { ...deviceInfo, platform: "macos" },
     app: {
-      showDockIcon: true,
-      nativeExperienceEnabled: false,
+      ...flags(true, "showDockIcon", "iconAnimationsEnabled", "quickChatEnabled"),
+      ...flags(true, "launchAtLoginAvailable", "keepGatewayRunningAvailable"),
+      ...flags(false, "nativeExperienceEnabled", "launchAtLogin"),
+      ...flags(false, "keepGatewayRunning", "debugPaneEnabled"),
       iconStyle: {
         selectedId: "paper",
         available: [
@@ -27,25 +40,18 @@ export function createNativeDeviceSettingsSnapshot(): MacDeviceSettingsSnapshot 
           { id: "openC", name: "Open C" },
         ],
       },
-      iconAnimationsEnabled: true,
-      launchAtLogin: false,
-      launchAtLoginAvailable: true,
-      quickChatEnabled: true,
       quickChatShortcut: "⌥Space",
-      debugPaneEnabled: false,
     },
     capabilities: {
-      canvasEnabled: true,
-      cameraEnabled: true,
-      computerControlEnabled: true,
+      ...flags(true, "canvasEnabled", "cameraEnabled", "desktopSharingEnabled"),
+      ...flags(true, "computerControlEnabled", "peekabooBridgeEnabled"),
+      ...flags(false, "cuaDriverBundled", "activeComputerPresenceEnabled"),
+      ...flags(false, "unattendedDesktopEnabled"),
       computerControlProvider: "peekaboo",
-      cuaDriverBundled: false,
-      peekabooBridgeEnabled: true,
-      activeComputerPresenceEnabled: false,
-      unattendedDesktopEnabled: false,
     },
     desktopAvailability: { state: "unlocked" },
     browser: {
+      chromeSetupActions: ["inspect", "install", "verify"],
       importAvailable: true,
       cookieSync: {
         available: true,
@@ -65,20 +71,14 @@ export function createNativeDeviceSettingsSnapshot(): MacDeviceSettingsSnapshot 
         { id: "camera", status: "notDetermined" },
         { id: "speechRecognition", status: "granted" },
         { id: "location", status: "denied" },
-        { id: "automation", status: "unavailable" },
       ],
       location: { mode: "off", precise: false },
     },
     voice: {
-      supported: true,
-      wakeEnabled: false,
-      wakeTriggersTalkMode: true,
-      pushToTalkEnabled: true,
-      talkPhaseSoundsEnabled: true,
-      talkShiftToStopEnabled: true,
-      realtimeRelayEnabled: false,
-      triggerChime: true,
-      sendChime: true,
+      ...flags(true, "supported", "wakeTriggersTalkMode", "pushToTalkEnabled"),
+      ...flags(true, "talkPhaseSoundsEnabled", "talkShiftToStopEnabled"),
+      ...flags(true, "triggerChime", "sendChime"),
+      ...flags(false, "wakeEnabled", "realtimeRelayEnabled"),
       microphone: { selectedId: null, devices: [{ id: "builtin", name: "Built-in Microphone" }] },
       locale: {
         primary: "en-US",
@@ -93,23 +93,14 @@ export function createNativeDeviceSettingsSnapshot(): MacDeviceSettingsSnapshot 
   };
 }
 
-export function createIosNativeDeviceSettingsSnapshot(): NativeDeviceSettingsSnapshot {
+export function createIosNativeDeviceSettingsSnapshot(): NativeDeviceSettingsWithLocation {
   return {
     contract: 1,
-    device: {
-      platform: "ios",
-      formFactor: "phone",
-      modelName: "iPhone",
-      appVersion: "2026.9.3",
-      appBuild: "42",
-      profileName: null,
-    },
+    device: { ...deviceInfo, platform: "ios", formFactor: "phone", modelName: "iPhone" },
     app: { appearance: "system", notificationsEnabled: true },
     capabilities: {
-      cameraEnabled: true,
-      keepAwakeEnabled: false,
-      healthSummaryAvailable: true,
-      healthSummaryEnabled: false,
+      ...flags(true, "cameraEnabled", "healthSummaryAvailable"),
+      ...flags(false, "keepAwakeEnabled", "healthSummaryEnabled"),
     },
     permissions: {
       entries: [
@@ -126,12 +117,21 @@ export function createIosNativeDeviceSettingsSnapshot(): NativeDeviceSettingsSna
       location: { mode: "whileUsing", precise: true, preciseEditable: false },
     },
     voice: {
-      supported: true,
-      wakeEnabled: false,
-      talkEnabled: true,
-      talkButtonEnabled: true,
-      talkBackgroundEnabled: false,
-      speakerphoneEnabled: false,
+      ...flags(true, "supported", "talkEnabled", "talkButtonEnabled"),
+      ...flags(false, "wakeEnabled", "talkBackgroundEnabled", "speakerphoneEnabled"),
     },
   };
+}
+
+export function createTauriDeviceSettingsSnapshot(platform: "linux" | "windows" | "macos") {
+  return {
+    contract: 1,
+    revision: 1,
+    device: { ...deviceInfo, platform, formFactor: "desktop" },
+    browser: { chromeSetupActions: ["inspect", "install", "verify"] },
+    capabilities: { desktopSharingEnabled: true },
+    desktopSharing: { state: "running" },
+    permissions: { entries: [] },
+    voice: { supported: false, wakeEnabled: false },
+  } satisfies NativeDeviceSettingsSnapshot;
 }

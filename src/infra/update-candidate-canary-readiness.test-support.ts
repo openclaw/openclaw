@@ -1,34 +1,89 @@
 import { once } from "node:events";
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, type Server } from "node:http";
 import path from "node:path";
+import * as timerPromises from "node:timers/promises";
 import { getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { expect, it, onTestFinished, vi, type Mock } from "vitest";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { collectNestedErrorCandidates } from "./error-graph-internal.js";
+import {
+  registerActiveManagedProxyUrl,
+  stopActiveManagedProxyRegistration,
+} from "./net/proxy/active-proxy-state.js";
 import { startProxy, stopProxy, type ProxyHandle } from "./net/proxy/proxy-lifecycle.js";
+import {
+  observeUpdateCandidateStartup,
+  waitForUpdateCandidateReadiness,
+} from "./update-candidate-canary-readiness.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
-import { FakeChild } from "./update-candidate-canary.test-support.js";
-import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import {
+  canaryOutcomeStep,
+  FakeChild,
+  holdCanaryProgress,
+  stubHealthyGateway,
+} from "./update-candidate-canary.test-support.js";
+import * as rehearsals from "./update-candidate-rehearsal.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
-export function expectCanaryReadinessWarning(
-  step: UpdateStepResult | undefined,
-  check: string,
-  status: number,
-) {
-  expect(step).toMatchObject({
-    name: "Checking Gateway startup",
-    advisory: {
-      kind: "candidate-runtime-unavailable",
-      message: expect.stringContaining(`failed: HTTP ${status}`),
+async function listen(server: Server, port = 0) {
+  server.listen(port, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Expected a loopback HTTP listener");
+  }
+  return address.port;
+}
+
+async function closeServers(...servers: Server[]) {
+  for (const server of servers) {
+    server.closeAllConnections();
+    if (server.listening) {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  }
+}
+
+function stubFetch(fn: (url: string, options: RequestInit) => Promise<Response>) {
+  const fetch = vi.fn(fn);
+  vi.stubGlobal("fetch", fetch);
+  return fetch;
+}
+
+function deferredProbe() {
+  const fetching = createDeferredCore();
+  const response = createDeferredCore<Response>();
+  return {
+    fetching: fetching.promise,
+    response,
+    fetch: (options?: RequestInit) => {
+      options?.signal?.addEventListener("abort", () => response.reject(options.signal?.reason));
+      fetching.resolve();
+      return response.promise;
     },
-    failureFacts: [
-      {
-        check,
-        code: "candidate-readiness-probe-failed",
-        message: expect.stringContaining(`failed: HTTP ${status}`),
-      },
-    ],
-  });
+  };
+}
+
+const healthyResponse = () => Response.json({ status: "started" });
+const startingResponse = () => Response.json({ status: "starting" }, { status: 503 });
+const probeFailure = (message: unknown, code = "candidate-readiness-probe-failed") => [
+  { check: "startupz", code, message },
+];
+
+function waitForProbe(
+  probe: Promise<void>,
+  validation: ReturnType<typeof validateUpdateCandidateCanary>,
+) {
+  return Promise.race([
+    probe,
+    validation.then((result) => {
+      throw new Error(`Candidate did not reach probe: ${JSON.stringify(result)}`);
+    }),
+  ]);
 }
 
 export function registerCanaryReadinessBudgetTests(
@@ -40,15 +95,295 @@ export function registerCanaryReadinessBudgetTests(
     snapshot: Mock;
   },
 ) {
+  const validate = (options: Partial<Parameters<typeof validateUpdateCandidateCanary>[0]> = {}) =>
+    validateUpdateCandidateCanary({
+      root: root(),
+      stateDir: root(),
+      config: {},
+      env: {},
+      timeoutMs: 1_000,
+      ...options,
+    });
+  const captureGateway = () => {
+    let gateway: FakeChild | undefined;
+    const spawnNormally = mocks.spawn.getMockImplementation()!;
+    mocks.spawn.mockImplementation((command, args, options) => {
+      const child = spawnNormally(command, args, options);
+      if (args.includes("--update-canary")) {
+        gateway = child;
+      }
+      return child;
+    });
+    return () => gateway!;
+  };
+  const fakeTimersAfterRecovery = (step: UpdateStepResult) => {
+    if (step.name === "candidate-recovery") {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+    }
+  };
+  const progress = async (gateway: () => FakeChild, milestone: string, delay: number) => {
+    gateway().stderr.write(`openclaw-update-canary-progress: ${milestone}\n`);
+    await vi.advanceTimersByTimeAsync(delay);
+  };
+  it.each(["late-deadline", "cancelled-sleep"] as const)(
+    "preserves uncertain startup warning identity across %s",
+    async (ordering) => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.setSystemTime(0);
+      const probe = deferredProbe();
+      const receipt = createDeferredCore();
+      const sleeping = createDeferredCore();
+      const enteredSleep = createDeferredCore();
+      const sleep = vi.spyOn(timerPromises, "setTimeout").mockImplementation(() => {
+        enteredSleep.resolve();
+        return sleeping.promise;
+      });
+      const caller = new AbortController();
+      const uncertain = new CommandProcessCleanupError();
+      const cancellation = new Error("caller cancelled during readiness sleep");
+      let current = true;
+      const startup = observeUpdateCandidateStartup({ env: {}, stateDir: root() });
+      const onWarning = vi.fn(() => receipt.promise);
+      stubFetch(() => probe.fetch());
+      const pending = waitForUpdateCandidateReadiness({
+        port: 18789,
+        workDeadline: 900,
+        started: 0,
+        signal: caller.signal,
+        processExitSignal: new AbortController().signal,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("candidate authority revoked");
+          }
+        },
+        hasExited: () => false,
+        getExitReason: () => undefined,
+        startupProgress: startup.milestones,
+        onWarning,
+        onEndpoint: () => {},
+        capture: () => {},
+        env: {},
+        stateDir: root(),
+      });
+      const observed = pending.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await probe.fetching;
+        await vi.advanceTimersByTimeAsync(300);
+        startup.onLine("openclaw-update-canary-progress: config.snapshot");
+        if (ordering === "cancelled-sleep") {
+          await vi.advanceTimersByTimeAsync(550);
+          probe.response.resolve(Response.json({ status: "starting" }, { status: 503 }));
+          await enteredSleep.promise;
+          await vi.advanceTimersByTimeAsync(50);
+        } else {
+          await vi.advanceTimersByTimeAsync(600);
+        }
+        receipt.reject(uncertain);
+        await vi.advanceTimersByTimeAsync(0);
+        if (ordering === "late-deadline") {
+          current = false;
+          await vi.advanceTimersByTimeAsync(300);
+          probe.response.resolve(healthyResponse());
+        } else {
+          caller.abort(cancellation);
+          sleeping.reject(caller.signal.reason);
+        }
+        const failure = await observed;
+        if (ordering === "cancelled-sleep") {
+          expect(failure).toBeInstanceOf(AggregateError);
+          expect(failure).toHaveProperty("cause", cancellation);
+          const errors = collectNestedErrorCandidates(failure);
+          expect(errors).toContain(cancellation);
+          expect(errors).toContain(uncertain);
+        } else {
+          expect(failure).toBe(uncertain);
+        }
+      } finally {
+        caller.abort(new Error("readiness test cleanup"));
+        probe.response.resolve(healthyResponse());
+        receipt.resolve();
+        sleeping.resolve();
+        await pending.catch(() => undefined);
+        await observed;
+        sleep.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["write-failed", "authority-revoked"] as const)(
+    "joins a startup warning before more probes when %s",
+    async (outcome) => {
+      const probe = deferredProbe();
+      const { receipt, onProgress } = holdCanaryProgress(
+        (step) => step.step === "warning:candidate-gateway-startup",
+      );
+      let current = true;
+      const gateway = captureGateway();
+      const fetch = stubFetch(async (url) =>
+        url.endsWith("/startupz") ? probe.fetch() : Response.json({ ready: true }),
+      );
+      const pending = validate({
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("candidate authority revoked");
+          }
+        },
+        onStep: fakeTimersAfterRecovery,
+        onProgress,
+      });
+      await probe.fetching;
+      await vi.advanceTimersByTimeAsync(300);
+      await progress(gateway, "config.snapshot", 600);
+      probe.response.resolve(healthyResponse());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetch.mock.calls.some(([url]) => url.endsWith("/readyz"))).toBe(false);
+      if (outcome === "write-failed") {
+        receipt.reject(new Error("startup warning storage unavailable"));
+      } else {
+        current = false;
+        receipt.resolve();
+      }
+      const result = await pending;
+      expect(result).toMatchObject({ status: "error", phase: "startup" });
+      expect(canaryOutcomeStep(result.steps)?.failureFacts?.[0]?.message).toContain(
+        outcome === "write-failed"
+          ? "startup warning storage unavailable"
+          : "candidate authority revoked",
+      );
+      expect(fetch.mock.calls.some(([url]) => url.endsWith("/readyz"))).toBe(false);
+      expect(gateway().exitCode).toBe(0);
+    },
+  );
+
+  it.each([
+    "ready",
+    "stalled",
+    "unreachable",
+    "readiness-unreachable",
+    "exited",
+    "spam",
+    "ceiling",
+  ] as const)("follows completed startup milestones until the candidate is %s", async (outcome) => {
+    const startup = deferredProbe();
+    const readiness = deferredProbe();
+    let startupResponseSent = false;
+    const gateway = captureGateway();
+    stubFetch(async (url, options) => {
+      if (url.endsWith("/readyz")) {
+        if (outcome === "readiness-unreachable") {
+          return readiness.fetch(options);
+        }
+        return Response.json({ ready: true });
+      }
+      if (startupResponseSent) {
+        return startingResponse();
+      }
+      return startup.fetch(options);
+    });
+    const controller = new AbortController();
+    const result = validate({
+      signal: controller.signal,
+      onStep: fakeTimersAfterRecovery,
+    });
+    await waitForProbe(startup.fetching, result);
+    await vi.advanceTimersByTimeAsync(300);
+    await progress(gateway, "config.snapshot", 300);
+    await progress(gateway, "plugins.bootstrap", 600);
+    if (outcome === "spam" || outcome === "ceiling" || outcome === "ready") {
+      for (const [index, milestone] of [
+        "runtime.config",
+        "runtime.state",
+        "gateway.kernel-state",
+        "http.bound",
+      ].entries()) {
+        await progress(
+          gateway,
+          outcome === "spam" ? `tick.${index}` : milestone,
+          index === 3 ? 300 : 600,
+        );
+      }
+      // Readiness at 3.3 s is still inside the independent 3.6 s ceiling.
+      if (outcome === "ready") {
+        startup.response.resolve(healthyResponse());
+      } else {
+        await progress(gateway, outcome === "spam" ? "tick.4" : "runtime.post-attach", 300);
+        // Bound the negative control too: the old implementation is still waiting here.
+        controller.abort(new Error("Test reached the total wait ceiling without a refusal"));
+      }
+    } else if (outcome === "stalled" || outcome === "unreachable") {
+      // Repeating a completed milestone is not forward progress.
+      gateway().stderr.write("openclaw-update-canary-progress: plugins.bootstrap\n");
+      if (outcome === "stalled") {
+        startupResponseSent = true;
+        startup.response.resolve(startingResponse());
+      }
+      await vi.advanceTimersByTimeAsync(300);
+    } else {
+      if (outcome === "exited") {
+        gateway().stderr.write("[openclaw] Reason: candidate startup failed\n");
+        gateway().emit("exit", 78);
+      }
+      if (outcome === "readiness-unreachable") {
+        startup.response.resolve(healthyResponse());
+        await waitForProbe(readiness.fetching, result);
+        await vi.advanceTimersByTimeAsync(300);
+        controller.abort(new Error("Test reached the stall deadline without a refusal"));
+      }
+    }
+    const validation = await result;
+    const step = validation.steps.find((entry) => entry.name === "candidate-gateway-startup");
+    if (outcome === "ready") {
+      expect(validation).toMatchObject({ status: "ok", phase: "readiness" });
+      expect(step).toMatchObject({
+        exitCode: 0,
+        warnings: [expect.stringContaining("still progressing")],
+        durationMs: 3_300,
+      });
+    } else if (outcome === "ceiling") {
+      expect(validation.status).toBe("error");
+      expect(step?.advisory).toBeUndefined();
+      expect(step?.durationMs).toBe(3_600);
+      expect(step?.stderrTail).toContain(
+        "Candidate still starting after 3.6 s; milestones reached: config.snapshot, plugins.bootstrap, runtime.config, runtime.state, gateway.kernel-state, http.bound, runtime.post-attach",
+      );
+    } else {
+      expect(validation.status).toBe("error");
+      expect(step?.stderrTail).toContain(
+        outcome === "exited" ? "candidate startup failed" : "stalled",
+      );
+      expect(step?.durationMs).toBe(outcome === "exited" ? 1_200 : 1_500);
+    }
+    if (outcome !== "ready" && outcome !== "exited") {
+      expect(step).toMatchObject({
+        exitCode: null,
+        termination: "timeout",
+        failureFacts: probeFailure("readiness timeout", "candidate-startup-failed"),
+      });
+    }
+    if (outcome === "spam") {
+      expect(step?.stderrTail).toContain("after plugins.bootstrap");
+    }
+  });
+
   it.each(["gateway-only", "proxy", "block"] as const)(
     "probes the canary with managed proxy mode %s",
     async (loopbackMode) => {
-      const rehearsal = await prepareUpdateCandidateRehearsal({
+      const rehearsal = await rehearsals.prepareUpdateCandidateRehearsal({
         candidateRoot: root(),
         stateDir: root(),
         config: {},
         env: {},
       });
+      const prepare = vi
+        .spyOn(rehearsals, "prepareUpdateCandidateRehearsal")
+        .mockResolvedValueOnce(rehearsal);
       const requests: string[] = [];
       const proxyRequests: string[] = [];
       const server = createServer((request, response) => {
@@ -68,27 +403,14 @@ export function registerCanaryReadinessBudgetTests(
       const dispatcher = getGlobalDispatcher();
       let handle: ProxyHandle | null = null;
       try {
-        server.listen(rehearsal.port, "127.0.0.1");
-        await once(server, "listening");
-        proxy.listen(0, "127.0.0.1");
-        await once(proxy, "listening");
-        const address = proxy.address();
-        if (!address || typeof address === "string") {
-          throw new Error("Expected a loopback proxy listener");
-        }
+        await listen(server, rehearsal.port);
+        const proxyPort = await listen(proxy);
         vi.stubEnv("no_proxy", "localhost,127.0.0.1,::1");
         handle = await startProxy({
-          proxyUrl: `http://127.0.0.1:${address.port}`,
+          proxyUrl: `http://127.0.0.1:${proxyPort}`,
           loopbackMode,
         });
-        const result = await validateUpdateCandidateCanary({
-          root: root(),
-          stateDir: root(),
-          config: {},
-          env: {},
-          rehearsal,
-          timeoutMs: 1_000,
-        });
+        const result = await validate();
         if (loopbackMode === "gateway-only") {
           expect(
             result,
@@ -97,22 +419,23 @@ export function registerCanaryReadinessBudgetTests(
             status: "ok",
             phase: "readiness",
           });
-          expect(requests).toEqual(["/startupz", "/readyz"]);
-          expect(proxyRequests).toEqual([]);
-          // The canary releases its exception; unrelated traffic still uses the proxy.
-          for (const url of [
-            `http://127.0.0.1:${rehearsal.port}/readyz`,
-            "http://external.example/",
-          ]) {
+          // Default loopback stays direct for the managed proxy's whole lifetime.
+          for (const [url, status] of [
+            [`http://127.0.0.1:${rehearsal.port}/readyz`, 200],
+            ["http://external.example/", 502],
+          ] as const) {
             const response = await fetch(url);
-            expect(response.status).toBe(502);
+            expect(response.status).toBe(status);
             await response.body?.cancel();
           }
+          expect(requests).toEqual(["/startupz", "/readyz", "/readyz"]);
+          expect(proxyRequests).toEqual(["http://external.example/"]);
         } else if (loopbackMode === "proxy") {
-          const message = `Readiness probe http://127.0.0.1:${rehearsal.port}/startupz failed: HTTP 502 (via proxy http://127.0.0.1:${address.port}). Check Gateway logs and proxy.loopbackMode; rerun openclaw update.`;
-          expectCanaryReadinessWarning(result.steps.at(-1), "startupz", 502);
-          expect(result.steps.at(-1)).toMatchObject({
+          const message = `Readiness check http://127.0.0.1:${rehearsal.port}/startupz failed: HTTP 502 (via proxy http://127.0.0.1:${proxyPort}). Check Gateway logs and proxy.loopbackMode; rerun openclaw update.`;
+          expect(canaryOutcomeStep(result.steps)).toMatchObject({
+            name: "candidate-gateway-startup",
             advisory: { kind: "candidate-runtime-unavailable", message },
+            failureFacts: probeFailure(expect.stringContaining("failed: HTTP 502")),
           });
           expect(result.status).toBe("ok");
           expect(requests).toEqual([]);
@@ -124,115 +447,98 @@ export function registerCanaryReadinessBudgetTests(
           expect(proxyRequests).toEqual([]);
         }
       } finally {
+        prepare.mockRestore();
         await stopProxy(handle);
         setGlobalDispatcher(dispatcher);
         vi.unstubAllEnvs();
-        for (const listener of [server, proxy]) {
-          listener.closeAllConnections();
-          if (listener.listening) {
-            await new Promise<void>((resolve, reject) => {
-              listener.close((error) => (error ? reject(error) : resolve()));
-            });
-          }
-        }
+        await closeServers(server, proxy);
         await rehearsal.cleanup();
       }
     },
   );
 
   it("records transport causes without turning cancellation into an advisory", async () => {
+    const proxy = registerActiveManagedProxyUrl(new URL("http://proxy.example:3128"));
+    onTestFinished(() => stopActiveManagedProxyRegistration(proxy));
     const controller = new AbortController();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        throw new TypeError("fetch failed", { cause: new Error("connect ECONNREFUSED") });
-      }),
-    );
-    const params = { root: root(), stateDir: root(), config: {}, env: {}, timeoutMs: 250 };
-    const unavailable = await validateUpdateCandidateCanary(params);
+    stubFetch(async () => {
+      throw new TypeError("fetch failed", { cause: new Error("connect ECONNREFUSED") });
+    });
+    const params = { timeoutMs: 250 };
+    const unavailable = await validate(params);
     expect(unavailable.status).toBe("ok");
     expect(unavailable.logTail.join("\n")).toContain("Update checks reached their time limit");
-    expect(unavailable.steps.at(-1)?.advisory?.message).toContain("ECONNREFUSED");
-    expect(unavailable.steps.at(-1)?.failureFacts).toEqual([
-      {
-        check: "startupz",
-        code: "candidate-readiness-probe-failed",
-        message: expect.stringContaining("ECONNREFUSED"),
-      },
-    ]);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        controller.abort(new Error("operator cancelled"));
-        return Response.json({ status: "started" });
-      }),
+    const unavailableStep = canaryOutcomeStep(unavailable.steps);
+    expect(unavailableStep?.advisory?.message).toContain("ECONNREFUSED");
+    expect(unavailableStep?.advisory?.message).not.toContain("via proxy");
+    expect(unavailableStep?.failureFacts).toEqual(
+      probeFailure(expect.stringContaining("ECONNREFUSED")),
     );
-    const cancelled = await validateUpdateCandidateCanary({ ...params, signal: controller.signal });
+    stubFetch(async () => {
+      controller.abort(new Error("operator cancelled"));
+      return healthyResponse();
+    });
+    const cancelled = await validate({ ...params, signal: controller.signal });
     expect(cancelled.status).toBe("error");
-    expect(cancelled.steps.at(-1)?.advisory).toBeUndefined();
+    expect(canaryOutcomeStep(cancelled.steps)?.advisory).toBeUndefined();
     expect(cancelled.logTail.join("\n")).toContain("operator cancelled");
   });
 
   it.each([
-    ["lint", "Checking data migrations", "Checking update health"],
-    ["startup", "Checking update recovery", "Checking Gateway startup"],
-    ["config", undefined, "Checking configuration"],
-  ] as const)("attributes %s failures to their check", async (phase, previous, name) => {
-    let now = 2_000_000;
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-    onTestFinished(() => clock.mockRestore());
-    const spawnNormally = mocks.spawn.getMockImplementation()!;
-    mocks.spawn.mockImplementation((command, args, options) => {
-      const fails = phase === "config" && args.includes("validate");
-      if (!args.includes("--fix") && !fails) {
-        return spawnNormally(command, args, options);
-      }
-      const child = new FakeChild(42_000);
-      queueMicrotask(() => {
-        child.stderr.write(
-          fails ? "Configuration unavailable\n" : "Earlier check completed successfully\n",
-        );
-        now += fails ? 25 : 0;
-        child.emit("close", fails ? 1 : 0);
+    ["lint", "candidate-doctor", "candidate-doctor-lint"],
+    ["startup", "candidate-recovery", "candidate-gateway-startup"],
+    ["config", undefined, "candidate-config"],
+  ] as const)(
+    "gives %s a fresh budget while retaining its own failures",
+    async (phase, previous, name) => {
+      stubHealthyGateway();
+      let now = 2_000_000;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      onTestFinished(() => clock.mockRestore());
+      const spawnNormally = mocks.spawn.getMockImplementation()!;
+      mocks.spawn.mockImplementation((command, args, options) => {
+        const fails = phase === "config" && args.includes("validate");
+        if (!args.includes("--fix") && !fails) {
+          return spawnNormally(command, args, options);
+        }
+        const child = new FakeChild(42_000);
+        queueMicrotask(() => {
+          child.stderr.write(
+            fails ? "Configuration unavailable\n" : "Earlier check completed successfully\n",
+          );
+          now += fails ? 25 : 0;
+          child.emit("close", fails ? 1 : 0);
+        });
+        return child;
       });
-      return child;
-    });
-    const result = await validateUpdateCandidateCanary({
-      root: root(),
-      stateDir: root(),
-      config: {},
-      env: {},
-      timeoutMs: 1_000,
-      onStep: (step) => {
-        now += step.name === previous ? 1_000 : phase === "config" ? 100 : 0;
-      },
-    });
-    const failed = result.steps.at(-1);
-    const durationMs = phase === "config" ? 25 : 0;
-    expect(result).toMatchObject({ status: "error", phase });
-    expect(result.durationMs).toBe(phase === "config" ? 425 : 1_000);
-    expect(failed).toMatchObject({ name, durationMs, exitCode: 1 });
-    expect(failed?.failureFacts?.[0]?.message).toContain(
-      phase === "config" ? "Configuration unavailable" : "deadline exceeded",
-    );
-    expect(failed?.stderrTail).not.toContain("Earlier check");
-    expect(result.logTail.join("\n")).toContain("Earlier check completed successfully");
-  });
+      const result = await validate({
+        onStep: (step) => {
+          now += step.name === previous ? 1_000 : phase === "config" ? 100 : 0;
+        },
+      });
+      if (phase === "config") {
+        const failed = canaryOutcomeStep(result.steps);
+        expect(result).toMatchObject({ status: "error", phase, durationMs: 425 });
+        expect(failed).toMatchObject({ name, durationMs: 25, exitCode: 1 });
+        expect(failed?.failureFacts?.[0]?.message).toContain("Configuration unavailable");
+        expect(failed?.stderrTail).not.toContain("Earlier check");
+      } else {
+        expect(result).toMatchObject({ status: "ok", phase: "readiness", durationMs: 1_000 });
+        expect(result.steps).toContainEqual(expect.objectContaining({ name, exitCode: 0 }));
+        expect(result.logTail.join("\n")).toContain("readyz: ready");
+      }
+      expect(result.logTail.join("\n")).toContain("Earlier check completed successfully");
+    },
+  );
 
   it("reports a runtime inspection failure before preparing a snapshot", async () => {
     const directory = path.join(root(), "dist", "infra");
     await fs.rm(directory, { recursive: true });
     await fs.writeFile(directory, "not a directory");
-    const result = await validateUpdateCandidateCanary({
-      root: root(),
-      stateDir: root(),
-      config: {},
-      env: {},
-      timeoutMs: 3_000,
-    });
+    const result = await validate({ timeoutMs: 3_000 });
     expect(result).toMatchObject({ status: "error", phase: "runtime" });
     expect(result.steps).toEqual([
-      expect.objectContaining({ name: "Checking update runtime", exitCode: 1 }),
+      expect.objectContaining({ name: "candidate-runtime", exitCode: 1 }),
     ]);
     expect(result.steps[0]?.stderrTail).toContain("ENOTDIR");
     expect(mocks.snapshot).not.toHaveBeenCalled();
@@ -244,7 +550,6 @@ export function registerCanaryReadinessBudgetTests(
       ["headers", "body"].map((delay) => ({ endpoint, delay })),
     ),
   )("allows slow $endpoint $delay within the validation budget", async ({ endpoint, delay }) => {
-    const timers = new Set<NodeJS.Timeout>();
     const server = createServer((request, response) => {
       const body = JSON.stringify({ status: "started", ready: true });
       const headers = () => {
@@ -260,50 +565,26 @@ export function registerCanaryReadinessBudgetTests(
         headers();
       }
       const timer = setTimeout(() => {
-        timers.delete(timer);
         if (delay === "headers") {
           headers();
         }
         response.end(body);
       }, 1_200);
-      timers.add(timer);
-      response.once("close", () => {
-        clearTimeout(timer);
-        timers.delete(timer);
-      });
+      response.once("close", () => clearTimeout(timer));
     });
     const fetchHttp = globalThis.fetch;
     try {
-      server.listen(0, "127.0.0.1");
-      await once(server, "listening");
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Expected a loopback HTTP listener");
-      }
+      const port = await listen(server);
       vi.stubGlobal("fetch", (url: string, options: RequestInit) =>
-        fetchHttp(`http://127.0.0.1:${address.port}${new URL(url).pathname}`, options),
+        fetchHttp(`http://127.0.0.1:${port}${new URL(url).pathname}`, options),
       );
-      const result = await validateUpdateCandidateCanary({
-        root: root(),
-        stateDir: root(),
-        config: {},
-        env: {},
-        timeoutMs: 6_000,
-      });
+      const result = await validate({ timeoutMs: 6_000 });
       expect(result, result.logTail.join("\n")).toMatchObject({ status: "ok", phase: "readiness" });
       expect(result.logTail.join("\n")).toContain("startupz: started");
       expect(result.logTail.join("\n")).toContain("readyz: ready");
     } finally {
       vi.unstubAllGlobals();
-      for (const timer of timers) {
-        clearTimeout(timer);
-      }
-      server.closeAllConnections();
-      if (server.listening) {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
-      }
+      await closeServers(server);
     }
   });
 }

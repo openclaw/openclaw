@@ -2,10 +2,14 @@
 import { createHash } from "node:crypto";
 import type { VitestPretestBuildMode } from "./vitest-build-prerequisites.mts";
 
-// Separate build steps in runs 33364762120/33364935118: runtime median 100s;
-// private-QA 104s. Test-group measurements exclude this once-per-job prerequisite.
+export const COMPACT_GITHUB_GROUP_SECONDS_SCALE = 1.6;
+export const COMPACT_HYBRID_GROUP_SECONDS_SCALE = 0.87;
+
+// Five broad PR runs 36208291831..36208949888: 52 runtime builds on the
+// 8-class took 41–55s (median 47s). Retain five seconds above that maximum.
+// Private-QA retains its separate 104s sample; preparation is once per job.
 export const VITEST_PRETEST_BUILD_SECONDS: Record<VitestPretestBuildMode, number> = {
-  runtime: 100,
+  runtime: 60,
   "private-qa": 104,
 };
 
@@ -75,8 +79,19 @@ export function createCompactSplitTimingGeneration(params: CompactSplitTimingGen
   timingKeys: string[];
 } {
   const parentIncludePatterns = params.stripes.flat();
-  if (new Set(parentIncludePatterns).size !== parentIncludePatterns.length) {
-    throw new Error(`split timing generation repeats files for ${params.parentShardName}`);
+  const fileOwners = new Map<string, number>();
+  for (const [index, files] of params.stripes.entries()) {
+    const stripe = index + 1;
+    for (const file of files) {
+      const previousStripe = fileOwners.get(file);
+      if (previousStripe !== undefined) {
+        throw new Error(
+          `duplicate test ownership for ${file} in ${params.parentShardName} ` +
+            `(configs: ${params.configs.join(", ")}; stripes: ${previousStripe} and ${stripe})`,
+        );
+      }
+      fileOwners.set(file, stripe);
+    }
   }
   const selector = JSON.stringify({
     configs: [...params.configs],
@@ -123,6 +138,74 @@ export function resolveShardTimingKey(spec: VitestShardTimingSpec): string {
 // files use the default, which mostly reflects the per-file module-graph
 // re-evaluation cost that dominates these serial suites.
 const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
+  // Five broad green PR runs, 36208291831 through 36208949888: median case
+  // seconds balance files; complete shard spans still own elapsed admission.
+  ["src/gateway/server-methods/agent.test.ts", 82],
+  ["src/gateway/server-methods/chat.directive-tags.test.ts", 38],
+  ["src/gateway/server-methods/sessions-rewind.storage.test.ts", 33],
+  ["src/gateway/server-methods/sessions-rewind.test.ts", 32],
+  ["src/gateway/server-methods/session-catalog-privacy.test.ts", 24],
+  ["src/gateway/server-methods/chat.reset-visible-yield.test.ts", 24],
+  ["src/gateway/server-methods/task-history.test.ts", 24],
+  ["src/gateway/server-methods/question.session-access.test.ts", 23],
+  ["src/gateway/server-methods/board.approval.test.ts", 23],
+  ["src/gateway/server-methods/sessions-reset-subagent-cleanup.test.ts", 21],
+  ["src/gateway/server-methods/task-history.archived.test.ts", 21],
+  ["src/gateway/server-methods/artifacts.request-authority.test.ts", 20],
+  ["src/gateway/server-methods/sessions-create.child-custody.test.ts", 19],
+  ["src/gateway/server-methods/tasks.test.ts", 19],
+  ["src/gateway/server-methods/usage.sessions-usage-owner-attribution.integration.test.ts", 19],
+  ["src/gateway/server-methods/system-agent-approval.test.ts", 18],
+  ["src/gateway/server-methods/sessions-mutations.catalog-queue.test.ts", 18],
+  ["src/gateway/server-methods/chat-history-handler.test.ts", 17],
+  ["src/gateway/server-methods/board.test.ts", 16],
+  ["src/gateway/server-methods/chat-history-delta.test.ts", 15],
+  ["src/gateway/server-methods/sessions-mutations.owner.test.ts", 14],
+  ["src/gateway/server-methods/approval.test.ts", 14],
+  ["src/gateway/server-methods/users-github.test.ts", 13],
+  ["src/gateway/server-methods/chat-history-handler.cli-import.test.ts", 12],
+  ["src/gateway/server-methods/board.runtime-boundaries.test.ts", 12],
+  ["src/gateway/server-methods/models-auth-status.test.ts", 12],
+  ["src/gateway/server-methods/question.own-run.test.ts", 12],
+  ["src/gateway/server-methods/chat-send-compaction-handoff.test.ts", 11],
+  ["src/gateway/server-methods/chat.abort-errors.test.ts", 11],
+  ["src/gateway/server-methods/approval-shared.test.ts", 11],
+  ["src/gateway/server-methods/board.plugin-capabilities.test.ts", 11],
+  ["src/gateway/server-methods/plugin-approval.test.ts", 11],
+  // Healthy two-worker Gateway proof: native-fork case spans were 24.8-29.9s
+  // and 37.1s. Keep conservative serial floors; group weights retain import overhead.
+  ["src/gateway/server.sessions.fixture-lifecycle.test.ts", 30],
+  ["src/gateway/server.startup-fixture-lifetime.test.ts", 42],
+
+  // Main run 35468218069: command test-body seconds, lower bounds for each
+  // indivisible file when projecting the former serial groups onto two forks.
+  ["src/commands/agent.acp.test.ts", 37.2],
+  ["src/commands/agent.test.ts", 30.8],
+  ["src/commands/agents.roles.test.ts", 20.2],
+  ["src/commands/backup-capture-privacy.test.ts", 33.1],
+  ["src/commands/doctor-config-flow.billing-route.test.ts", 28.1],
+  ["src/commands/doctor-config-flow.canvas-migration.test.ts", 44.5],
+  ["src/commands/doctor-config-flow.legacy-composition.test.ts", 69.6],
+  ["src/commands/doctor-config-flow.test.ts", 21.1],
+  ["src/commands/doctor-config-flow.workspace-persistence.test.ts", 22.5],
+  ["src/commands/doctor-config-preflight.admission.process.test.ts", 23.7],
+  ["src/commands/doctor-config-preflight.plugin-deferral.test.ts", 79.4],
+  ["src/commands/doctor-config-preflight.pristine.process.test.ts", 32.1],
+  ["src/commands/doctor-config-preflight.process.test.ts", 37.4],
+  // Testbox run 35529032951: the expanded rollback corpus takes 194.3s serial.
+  ["src/commands/doctor-config-preflight.refusal.process.test.ts", 194.3],
+  ["src/commands/doctor-config-preflight.state-migration-input.test.ts", 27.5],
+  ["src/commands/doctor-config-preflight.test.ts", 55.4],
+  ["src/commands/doctor-lint.state-isolation.test.ts", 32.5],
+  ["src/commands/doctor-lint.test.ts", 26.9],
+  ["src/commands/doctor-maintenance.finish-revalidation.test.ts", 23.3],
+  ["src/commands/doctor-session-sqlite.deferred-plugin.test.ts", 31],
+  ["src/commands/doctor-session-sqlite.memory.test.ts", 45.1],
+  ["src/commands/doctor-state-migrations.test.ts", 20.4],
+  ["src/commands/doctor/cron/index.test.ts", 27.7],
+  ["src/commands/doctor/shared/legacy-config-migrate.validation.test.ts", 25.9],
+  ["src/commands/doctor/shared/legacy-config-migrations.runtime.system-agent.test.ts", 28.3],
+  ["src/commands/models/model-selection.runtime.test.ts", 21.6],
   // Serial file-boundary intervals from run 33364935118, including import/setup.
   // Runtime prerequisites are charged once per batch, separately from test work.
   ["test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts", 6],
@@ -179,9 +262,21 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/agents/embedded-agent-runner/run.harness-auth-failover.test.ts", 8],
   ["src/agents/embedded-agent-runner/run.shared-integration.test.ts", 77],
   ["src/gateway/dashboard-session-title.test.ts", 23],
+  // Three one-worker Testbox runs: rounded median case sums for relative packing.
+  ["src/gateway/server.sessions.create.accounts.test.ts", 20],
+  ["src/gateway/server.sessions.create.authority.test.ts", 13],
+  ["src/gateway/server.sessions.create.dispatch.test.ts", 14],
+  ["src/gateway/server.sessions.create.forks.test.ts", 19],
+  ["src/gateway/server.sessions.create.incognito.test.ts", 3],
+  ["src/gateway/server.sessions.create.lifecycle.test.ts", 4],
+  ["src/gateway/server.sessions.create.models.test.ts", 17],
+  ["src/gateway/server.sessions.create.spawn.test.ts", 11],
+  ["src/gateway/server.sessions.create.stores.test.ts", 14],
+  ["src/gateway/server.sessions.create.workspace-policy.test.ts", 24],
+  ["src/gateway/server.sessions.create.worktree-selection.test.ts", 22],
+  ["src/gateway/server.sessions.create.worktrees.test.ts", 23],
   // Two-run median case-body anchors from main runs 33504478720/33509347578.
   // These balance files; membership-specific wrapper spans own admission.
-  ["src/gateway/server.sessions.create.test.ts", 52],
   ["src/gateway/server.sessions.archive-worktree-lifecycle.test.ts", 34],
   ["src/gateway/server.sessions.delete-worktree-lifecycle.test.ts", 31],
   ["src/gateway/server.chat.gateway-server-chat-b.test.ts", 37],
@@ -191,7 +286,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   // these as relative LPT weights, not whole-parent admission.
   ["src/agents/worktrees/service.gc.test.ts", 41],
   ["src/agents/worktrees/service.test.ts", 43],
-  ["src/agents/worktrees/service.configured-root.test.ts", 24],
   ["src/agents/worktrees/service.input-files.test.ts", 21],
   ["src/agents/worktrees/service.canonical-paths.test.ts", 17],
   ["src/agents/worktrees/service.remove-lease.test.ts", 16],
@@ -208,9 +302,7 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/agents/subagents/spawn/subagent-spawn.authority.test.ts", 10],
   ["src/agents/worktrees/service.capacity.test.ts", 19],
   ["src/agents/worktrees/service.diagnostics.test.ts", 18],
-  ["src/agents/worktrees/service.naming.test.ts", 10],
   ["src/agents/worktrees/service.provisioned.test.ts", 24],
-  ["src/agents/worktrees/service.run-end-cleanup.test.ts", 11],
   // Storage-state stripe anchors: CI checkmark walls from compact run
   // 31814517685; without them the hosted split packs all three fat files
   // into one stripe (observed 204s vs the ~90s target in run 31856622489).
@@ -218,17 +310,40 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/infra/sqlite-snapshot.test.ts", 24],
   ["src/infra/session-cost-usage.test.ts", 10],
   ["src/infra/state-migrations.audit-logs.test.ts", 7],
+  // Serial case-cost sums from PR run 37678385185, rounded up. These process
+  // suites were packed together at the default weight; imports/setup remain separate.
+  ["src/cli/local-state-owner.process.test.ts", 296],
+  ["src/cli/update-cli.candidate-activation.test.ts", 149],
+  ["src/cli/update-cli.git-service.test.ts", 116],
+  ["src/cli/update-cli.target-schema.test.ts", 186],
+  ["test/scripts/pr-worktree-provision.test.ts", 206],
   ["src/gateway/managed-image-attachments.test.ts", 24],
   ["src/gateway/session-message-events.test.ts", 26],
   ["src/gateway/tool-resolution.test.ts", 43],
   ["test/scripts/test-projects-routing.test.ts", 21],
-  ["ui/src/components/app-sidebar.test.ts", 28],
+  // Single-worker Node file spans after splitting the sidebar's serial case groups.
+  ["ui/src/components/app-sidebar.catalog.test.ts", 4],
+  ["ui/src/components/app-sidebar.interactions.test.ts", 6],
+  ["ui/src/components/app-sidebar.people.test.ts", 13],
+  ["ui/src/components/app-sidebar.sessions.test.ts", 10],
   ["ui/src/pages/chat/chat-responsive.browser.test.ts", 30],
   // Focused cold proof is ~34s after right-sizing and concurrent crash phases.
   ["test/scripts/bench-sqlite-reliability.test.ts", 34],
   ["test/scripts/bundled-plugin-install-uninstall-probe.test.ts", 4],
   ["test/scripts/changed-lanes.test.ts", 5],
   // Updated process-fixture walls include imports/setup from run 33364935118.
+  // Preserved case maxima from PR runs 36394634707, 36394423189 and
+  // 36394835419, plus 20s for each newly split file's process/import overhead.
+  // Policy retains the tooling-owner table; process owners also cover leaf configs.
+  // Keep cold projections until complete split-file CI walls arrive.
+  ["test/scripts/ci-changed-node-test-plan.test.ts", 143],
+  ["test/scripts/ci-changed-node-test-plan.source-owners.test.ts", 130],
+  ["test/scripts/ci-changed-node-test-plan.policy.test.ts", 130],
+  // Two-CPU / 7.65-GiB native replay took 146.24s plus the outer shard wrapper.
+  ["test/scripts/ci-changed-node-test-plan.dependency-inputs.test.ts", 148],
+  ["test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts", 130],
+  ["test/scripts/ci-changed-node-test-plan.config-fallback.test.ts", 130],
+  ["test/scripts/ci-changed-node-test-plan.process-owners.test.ts", 143],
   ["test/scripts/ci-git-owner.test.ts", 187],
   // Blacksmith PR runs 33532741896/33545657559 recorded 127.288s/135.808s wrapper
   // spans; canonical push plans omit this tooling workload.
@@ -260,8 +375,15 @@ const DEFAULT_STRIPE_FILE_SECONDS = 3;
 // Run 33364935118: 494 unlisted tooling files used 945.94s including imports/setup.
 const DEFAULT_TOOLING_STRIPE_FILE_SECONDS = 2;
 
-export function estimateVitestToolingFileSeconds(file: string): number {
-  return STRIPE_FILE_SECONDS_HINTS.get(file) ?? DEFAULT_TOOLING_STRIPE_FILE_SECONDS;
+export function estimateVitestToolingFileSeconds(
+  file: string,
+  measuredSeconds?: Readonly<Record<string, number>>,
+): number {
+  return (
+    measuredSeconds?.[file] ??
+    STRIPE_FILE_SECONDS_HINTS.get(file) ??
+    DEFAULT_TOOLING_STRIPE_FILE_SECONDS
+  );
 }
 
 export function estimateVitestTestFileSeconds(file: string): number {

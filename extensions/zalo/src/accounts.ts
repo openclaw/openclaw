@@ -1,9 +1,8 @@
-// Zalo plugin module implements accounts behavior.
 import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { SecretInputStringResolutionMode } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { SecretInputStringResolutionMode } from "./secret-input.js";
 import { resolveZaloToken } from "./token.js";
 import type { ResolvedZaloAccount, ZaloAccountConfig, ZaloConfig } from "./types.js";
 

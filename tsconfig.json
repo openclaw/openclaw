@@ -30,12 +30,17 @@
       "@openclaw/ai/diagnostics": ["./packages/ai/src/utils/diagnostics.ts"],
       "@openclaw/ai/event-stream": ["./packages/ai/src/utils/event-stream.ts"],
       "@openclaw/ai/providers": ["./packages/ai/src/providers.ts"],
+      "@openclaw/ai/provider-types": ["./packages/ai/src/provider-types.ts"],
       "@openclaw/ai/transports": ["./packages/ai/src/transports.ts"],
       "@openclaw/ai/types": ["./packages/ai/src/types.ts"],
       "@openclaw/ai/validation": ["./packages/ai/src/validation.ts"],
       "@openclaw/ai/internal/anthropic": ["./packages/ai/src/internal/anthropic.ts"],
+      "@openclaw/ai/internal/google": ["./packages/ai/src/internal/google.ts"],
       "@openclaw/ai/internal/google-model-family": [
         "./packages/ai/src/internal/google-model-family.ts"
+      ],
+      "@openclaw/ai/internal/model-request-body": [
+        "./packages/ai/src/transports/model-request-body.ts"
       ],
       "@openclaw/ai/internal/openai": ["./packages/ai/src/internal/openai.ts"],
       "@openclaw/ai/internal/openai-completions-compat": [
@@ -106,6 +111,10 @@
         "./packages/gateway-protocol/src/frame-guards.ts"
       ],
       "@openclaw/gateway-protocol/schema": ["./packages/gateway-protocol/src/schema.ts"],
+      "@openclaw/gateway-protocol/session-row-deltas": ["./packages/gateway-protocol/src/session-row-deltas.ts"],
+      "@openclaw/gateway-protocol/restart-unavailable": [
+        "./packages/gateway-protocol/src/restart-unavailable.ts"
+      ],
       "@openclaw/gateway-protocol/startup-unavailable": [
         "./packages/gateway-protocol/src/startup-unavailable.ts"
       ],
@@ -190,6 +199,9 @@
       "@openclaw/normalization-core/json-schema": [
         "./packages/normalization-core/src/json-schema.ts"
       ],
+      "@openclaw/normalization-core/json-schema-validator": [
+        "./packages/normalization-core/src/json-schema-validator.ts"
+      ],
       "@openclaw/normalization-core/markdown-plain-text": [
         "./packages/normalization-core/src/markdown-plain-text.ts"
       ],
@@ -214,6 +226,9 @@
       "@openclaw/normalization-core/result": [
         "./packages/normalization-core/src/result.ts"
       ],
+      "@openclaw/normalization-core/session-key-comparison": [
+        "./packages/normalization-core/src/session-key-comparison.ts"
+      ],
       "@openclaw/normalization-core/stable-node-path": [
         "./packages/normalization-core/src/stable-node-path.ts"
       ],
@@ -229,14 +244,21 @@
       "@openclaw/normalization-core/utf16-slice": [
         "./packages/normalization-core/src/utf16-slice.ts"
       ],
+      "@openclaw/normalization-core/uuid": ["./packages/normalization-core/src/uuid.ts"],
       "@openclaw/normalization-core/home-dir": [
         "./packages/normalization-core/src/home-dir.ts"
       ],
       "@openclaw/normalization-core/*": ["./packages/normalization-core/src/*"],
       "@openclaw/retry": ["./packages/retry/src/index.ts"],
+      "@openclaw/worker-runtime": ["./packages/worker-runtime/src/index.ts"],
+      "@openclaw/worker-runtime/worker": ["./packages/worker-runtime/src/worker.ts"],
+      "@openclaw/worker-runtime/lifecycle": ["./packages/worker-runtime/src/lifecycle.ts"],
       "@openclaw/mermaid-renderer": ["./packages/mermaid-renderer/src/renderer.ts"],
       "@openclaw/session-url-contract": ["./packages/session-url-contract/src/index.ts"],
       "@openclaw/session-url-contract/parse": ["./packages/session-url-contract/src/parse.ts"],
+      "@openclaw/session-url-contract/session-key-normalization": [
+        "./packages/session-url-contract/src/session-key-normalization.ts"
+      ],
       "@openclaw/session-url-contract/share-build": [
         "./packages/session-url-contract/src/share-build.ts"
       ],
@@ -315,5 +337,5 @@
     }
   },
   "include": ["src/**/*", "ui/**/*", "extensions/**/*", "packages/**/*"],
-  "exclude": ["node_modules", "dist", "**/dist/**"]
+  "exclude": ["node_modules", "dist", "**/dist/**", "**/*.test-compat.d.ts"]
 }

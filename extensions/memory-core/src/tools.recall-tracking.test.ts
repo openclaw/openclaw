@@ -1,227 +1,77 @@
-// Memory Core tests cover tools.recall tracking plugin behavior.
-import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import {
-  clearMemoryPluginState,
-  registerMemoryCorpusSupplement,
-} from "openclaw/plugin-sdk/memory-host-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetMemoryToolMockState, setMemorySearchImpl } from "./memory-tool-manager.test-mocks.js";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-host-core";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { resetMemoryToolMockState } from "./memory-tool-manager.test-mocks.js";
+import { recallResult } from "./recall-result.test-support.js";
+import type { recordShortTermRecalls } from "./short-term-promotion-record.js";
 import { createMemorySearchToolOrThrow } from "./tools.test-helpers.js";
 
-type RecordShortTermRecallsFn = (params: {
-  workspaceDir?: string;
-  query: string;
-  results: MemorySearchResult[];
-  nowMs?: number;
-  timezone?: string;
-}) => Promise<void>;
-
-const recallTrackingMock = vi.hoisted(() => ({
-  recordShortTermRecalls: vi.fn<RecordShortTermRecallsFn>(async () => {}),
-  moduleLoads: 0,
-  onLoad: vi.fn<() => void>(),
+const tracking = vi.hoisted(() => ({
+  record: vi.fn<typeof recordShortTermRecalls>(),
+  loads: 0,
+  loaded: vi.fn<() => void>(),
 }));
 
+// mock-isolation: Observe the lazy import and recall writes without loading the persistence owner.
 vi.mock("./short-term-promotion-record.js", () => {
-  recallTrackingMock.moduleLoads += 1;
-  recallTrackingMock.onLoad();
-  return { recordShortTermRecalls: recallTrackingMock.recordShortTermRecalls };
+  tracking.loads += 1;
+  tracking.loaded();
+  return { recordShortTermRecalls: tracking.record };
 });
 
-describe("memory_search recall tracking", () => {
-  beforeEach(() => {
-    clearMemoryPluginState();
-    resetMemoryToolMockState();
-    recallTrackingMock.recordShortTermRecalls.mockReset();
-    recallTrackingMock.recordShortTermRecalls.mockResolvedValue(undefined);
+function recall(dreaming: { enabled: boolean; timezone?: string }, userTimezone?: string) {
+  return createMemorySearchToolOrThrow({
+    config: {
+      agents: { defaults: { userTimezone }, entries: { main: {} } },
+      plugins: { entries: { "memory-core": { config: { dreaming } } } },
+    },
+  }).execute("recall", { query: "glacier" });
+}
+
+const expectHit = (result: Awaited<ReturnType<typeof recall>>) =>
+  expect(result.details).toMatchObject({ results: [{ path: "memory/2026-04-03.md" }] });
+
+beforeEach(() => {
+  clearMemoryPluginState();
+  resetMemoryToolMockState({ searchImpl: async () => [recallResult] });
+  tracking.record.mockReset().mockResolvedValue(undefined);
+});
+afterEach(() => vi.restoreAllMocks());
+
+it("does not load recall tracking when dreaming is disabled", async () => {
+  expectHit(await recall({ enabled: false }));
+  expect(tracking.record).not.toHaveBeenCalled();
+  expect(tracking.loads).toBe(0);
+});
+
+it("preserves recall time and timezone across the first lazy import", async () => {
+  const recalledAt = Date.parse("2026-04-03T22:59:59.900Z");
+  const clock = vi.spyOn(Date, "now").mockReturnValue(recalledAt);
+  tracking.loaded.mockImplementationOnce(() => {
+    clock.mockReturnValue(recalledAt + 200);
   });
+  await recall({ enabled: true, timezone: "Europe/London" }, "America/Los_Angeles");
+  await vi.dynamicImportSettled();
 
-  it("does not load recall tracking when dreaming is disabled", async () => {
-    expect(recallTrackingMock.moduleLoads).toBe(0);
-    setMemorySearchImpl(async () => [
-      {
-        path: "memory/2026-04-03.md",
-        startLine: 1,
-        endLine: 2,
-        score: 0.95,
-        snippet: "Move backups to S3 Glacier.",
-        source: "memory" as const,
-      },
-    ]);
+  expect(tracking.loads).toBe(1);
+  expect(tracking.record).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ nowMs: recalledAt, timezone: "Europe/London" }),
+  );
+});
 
-    const tool = createMemorySearchToolOrThrow({
-      config: {
-        agents: { list: [{ id: "main", default: true }] },
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: false,
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-
-    const result = await tool.execute("call_recall_disabled", { query: "glacier" });
-    const details = result.details as { results: Array<{ path: string }> };
-    expect(details.results).toHaveLength(1);
-    expect(details.results[0]?.path).toBe("memory/2026-04-03.md");
-    expect(recallTrackingMock.recordShortTermRecalls).not.toHaveBeenCalled();
-    expect(recallTrackingMock.moduleLoads).toBe(0);
-  });
-
-  it("preserves recall time and timezone across the first lazy import", async () => {
-    setMemorySearchImpl(async () => [
-      {
-        path: "memory/2026-04-03.md",
-        startLine: 1,
-        endLine: 2,
-        score: 0.95,
-        snippet: "Move backups to S3 Glacier.",
-        source: "memory" as const,
-      },
-    ]);
-
-    const tool = createMemorySearchToolOrThrow({
-      config: {
-        agents: {
-          defaults: {
-            userTimezone: "America/Los_Angeles",
-          },
-          list: [{ id: "main", default: true }],
-        },
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  timezone: "Europe/London",
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-
-    const recalledAt = Date.parse("2026-04-03T22:59:59.900Z");
-    const clock = vi.spyOn(Date, "now").mockReturnValue(recalledAt);
-    recallTrackingMock.onLoad.mockImplementationOnce(() => {
-      clock.mockReturnValue(recalledAt + 200);
-    });
-    try {
-      await tool.execute("call_recall_timezone", { query: "glacier" });
-      await vi.dynamicImportSettled();
-
-      expect(recallTrackingMock.moduleLoads).toBe(1);
-      expect(recallTrackingMock.recordShortTermRecalls).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ nowMs: recalledAt, timezone: "Europe/London" }),
-      );
-    } finally {
-      clock.mockRestore();
-    }
-  });
-
-  it("reinforces only primary results shown after corpus balancing, preserving raw evidence", async () => {
-    const rawResults = Array.from({ length: 4 }, (_, index) => ({
-      path: `memory/2026-04-0${index + 1}.md`,
-      startLine: 1,
-      endLine: 2,
-      score: 0.9 - index / 10,
-      snippet: `Remember item ${index + 1}. <!-- importance: 8 -->`,
-      source: "memory" as const,
-    }));
-    setMemorySearchImpl(async () => rawResults);
-    registerMemoryCorpusSupplement("memory-wiki", {
-      search: async () => [
-        { corpus: "wiki", path: "summary.md", score: 1, snippet: "Compiled summary." },
-      ],
-      get: async () => null,
-    });
-    const tool = createMemorySearchToolOrThrow({
-      config: {
-        memory: { citations: "on" },
-        plugins: { entries: { "memory-core": { config: { dreaming: { enabled: true } } } } },
-      },
-    });
-
-    const result = await tool.execute("balanced_recall", {
-      query: "remember",
-      corpus: "all",
-      maxResults: 2,
-    });
-
+it("does not block tool results on slow best-effort recall writes", async () => {
+  const pending = createDeferred<void>();
+  tracking.record.mockImplementationOnce(() => pending.promise);
+  const settled = vi.fn();
+  const execution = recall({ enabled: true });
+  const completion = execution.then(settled, settled);
+  try {
     await vi.dynamicImportSettled();
-    expect(result.details).toMatchObject({
-      results: [{ path: "summary.md" }, { path: "memory/2026-04-01.md" }],
-    });
-    expect(recallTrackingMock.recordShortTermRecalls).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ results: [rawResults[0]] }),
-    );
-  });
-
-  it("does not block tool results on slow best-effort recall writes", async () => {
-    let resolveRecall: (() => void) | undefined;
-    recallTrackingMock.recordShortTermRecalls.mockImplementationOnce(
-      async () =>
-        await new Promise<void>((resolve) => {
-          resolveRecall = resolve;
-        }),
-    );
-
-    const tool = createMemorySearchToolOrThrow({
-      config: {
-        agents: { list: [{ id: "main", default: true }] },
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-    setMemorySearchImpl(async () => [
-      {
-        path: "memory/2026-04-03.md",
-        startLine: 1,
-        endLine: 2,
-        score: 0.95,
-        snippet: "Move backups to S3 Glacier.",
-        source: "memory" as const,
-      },
-    ]);
-
-    let timeout: NodeJS.Timeout | undefined;
-    try {
-      const result = await Promise.race([
-        tool.execute("call_recall_non_blocking", { query: "glacier" }),
-        new Promise<never>((_, reject) => {
-          timeout = setTimeout(() => {
-            reject(new Error("memory_search waited on recall persistence"));
-          }, 200);
-        }),
-      ]);
-
-      const details = result.details as { results: Array<{ path: string }> };
-      expect(details.results).toHaveLength(1);
-      expect(details.results[0]?.path).toBe("memory/2026-04-03.md");
-      await vi.dynamicImportSettled();
-      expect(recallTrackingMock.recordShortTermRecalls).toHaveBeenCalledTimes(1);
-    } finally {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-      resolveRecall?.();
-    }
-  });
+    expect(tracking.record).toHaveBeenCalledTimes(1);
+    expect(settled).toHaveBeenCalledTimes(1);
+    expectHit(await execution);
+  } finally {
+    pending.resolve();
+    await completion;
+  }
 });

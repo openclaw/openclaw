@@ -1,14 +1,15 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import { expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../state/openclaw-agent-db-resources.js";
 import {
-  closeOpenClawAgentDatabaseByPathAsync,
-  openOpenClawAgentDatabase,
+  closeOpenClawAgentDatabaseByPathAsync as closeDatabase,
+  openOpenClawAgentDatabase as openDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { retainGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
+import { retainGatewaySessionEntryReadOnly as retainRead } from "./session-utils-read-lifetime.js";
 
 it.each(["alias replacement", "cold-store close", "same-file reopen"] as const)(
   "rejects a retained metadata read after %s",
@@ -21,14 +22,12 @@ it.each(["alias replacement", "cold-store close", "same-file reopen"] as const)(
       const replacement = state.statePath("replacement", "catalog.sqlite");
       const alias = state.statePath("selected", "catalog.sqlite");
       const sessionKey = "agent:main:saved";
+      const entry = { sessionId: "same", lifecycleRevision: "same", updatedAt: 1 };
       for (const storePath of [original, replacement]) {
-        await upsertSessionEntryCore(
-          { agentId: "main", storePath, sessionKey },
-          { sessionId: "identical-session", updatedAt: 1 },
-        );
+        await upsertSessionEntryCore({ agentId: "main", storePath, sessionKey }, entry);
         // Settle seed workers, then restore the warm handle before testing read lifetime.
-        await closeOpenClawAgentDatabaseByPathAsync(storePath);
-        openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+        await closeDatabase(storePath);
+        openDatabase({ agentId: "main", path: storePath });
       }
       fs.symlinkSync(originalDirectory, aliasDirectory, "junction");
       const config = {
@@ -38,21 +37,21 @@ it.each(["alias replacement", "cold-store close", "same-file reopen"] as const)(
       await state.writeConfig(config);
       setRuntimeConfigSnapshot(config);
       if (change === "cold-store close") {
-        await closeOpenClawAgentDatabaseByPathAsync(original);
+        await closeDatabase(original);
       } else if (change === "same-file reopen") {
-        openOpenClawAgentDatabase({ agentId: "main", path: alias });
+        openDatabase({ agentId: "main", path: alias });
       }
-      const read = retainGatewaySessionEntryReadOnly(sessionKey, "main");
+      const read = await retainRead(sessionKey, "main");
       try {
-        expect(read.entry?.sessionId).toBe("identical-session");
+        expect(read.entry?.sessionId).toBe("same");
         expect(read.isCurrentAtResponse()).toBe(true);
         if (change === "alias replacement") {
           fs.rmSync(aliasDirectory, { recursive: true });
           fs.symlinkSync(replacementDirectory, aliasDirectory, "junction");
         } else {
-          await closeOpenClawAgentDatabaseByPathAsync(read.readSource!.path);
+          await closeDatabase(read.readSource!.path);
           if (change === "same-file reopen") {
-            const successor = retainGatewaySessionEntryReadOnly(sessionKey, "main");
+            const successor = await retainRead(sessionKey, "main");
             expect(successor.isCurrentAtResponse()).toBe(true);
             successor.release();
           }
@@ -61,6 +60,8 @@ it.each(["alias replacement", "cold-store close", "same-file reopen"] as const)(
       } finally {
         read.release();
       }
+      expect(read.isCurrent()).toBe(false);
+      await closeDatabase(read.readSource!.path);
       expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
     });
   },

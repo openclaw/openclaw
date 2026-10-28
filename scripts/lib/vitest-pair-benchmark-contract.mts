@@ -58,34 +58,12 @@ export type PackageManagerIdentity = {
   version: string;
 };
 
-type BenchmarkExecutionCounts = {
-  numTotalTestSuites: number;
-  numPassedTestSuites: number;
-  numFailedTestSuites: number;
-  numPendingTestSuites: number;
-  numTotalTests: number;
-  numPassedTests: number;
-  numFailedTests: number;
-  numPendingTests: number;
-  numTodoTests: number;
-};
+type BenchmarkExecutionCounts = Record<(typeof VITEST_EXECUTION_COUNT_KEYS)[number], number>;
 
-export type BenchmarkExecutionSummary = {
-  digest: string;
-  fileCount: number;
-  assertionCount: number;
-  counts: BenchmarkExecutionCounts;
-  success: true;
-};
+export type BenchmarkExecutionSummary = ReturnType<typeof parseVitestExecutionReport>;
 
-export type BenchmarkRunRecord = {
-  id: string;
-  phase: BenchmarkPhase;
-  side: BenchmarkSide;
+export type BenchmarkRunRecord = Omit<BenchmarkRunPlan, "lane"> & {
   lane: string;
-  round: number | null;
-  pair: string | null;
-  cacheMode: "fresh" | "warm";
   command: string[];
   packageManager: PackageManagerIdentity;
   startedAt: string;
@@ -97,33 +75,7 @@ export type BenchmarkRunRecord = {
   error?: string;
 };
 
-export type BenchmarkAnalysis = {
-  verdict: "pass" | "regression";
-  performance: "improved" | "no-material-change";
-  overall: {
-    measuredWallRatio: number;
-    coldWallRatio: number;
-    candidateImprovedPairs: number;
-    measuredPairCount: number;
-  };
-  lanes: Array<{
-    id: string;
-    critical: boolean;
-    measuredWallRatio: number;
-    measuredWallDeltaMs: number;
-    coldWallRatio: number;
-    candidateImprovedPairs: number;
-    measuredPairCount: number;
-    regressions: string[];
-  }>;
-  regressions: string[];
-  claim: string;
-};
-
-export type BenchmarkInventory = {
-  inventorySha256: string;
-  entries: Array<{ path: string; sha256: string; bytes: number }>;
-};
+export type BenchmarkInventory = ReturnType<typeof assertInventoryAvailable>;
 
 function assertFiniteRatio(value: unknown, name: string): asserts value is number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -244,7 +196,7 @@ const VITEST_EXECUTION_COUNT_KEYS = [
   "numFailedTests",
   "numPendingTests",
   "numTodoTests",
-] as const satisfies readonly (keyof BenchmarkExecutionCounts)[];
+] as const;
 const VITEST_ASSERTION_STATUSES = new Set(["failed", "passed", "pending", "skipped", "todo"]);
 
 function readNonNegativeInteger(value: unknown, name: string): number {
@@ -272,7 +224,7 @@ export function parseVitestExecutionReport(
   reportFile: string,
   checkoutRoot: string,
   lane: BenchmarkLane,
-): BenchmarkExecutionSummary {
+) {
   const report = JSON.parse(readFileSync(reportFile, "utf8")) as unknown;
   if (!isRecord(report)) {
     throw new Error("Vitest JSON report must be an object");
@@ -402,7 +354,7 @@ export function parseVitestExecutionReport(
     fileCount: files.length,
     assertionCount,
     counts,
-    success: true,
+    success: true as const,
   };
 }
 
@@ -422,10 +374,7 @@ function benchmarkInventoryDigest(manifest: BenchmarkManifest): string {
   return sha256(JSON.stringify(stableManifestValue(manifest)));
 }
 
-export function assertInventoryAvailable(
-  root: string,
-  manifest: BenchmarkManifest,
-): BenchmarkInventory {
+export function assertInventoryAvailable(root: string, manifest: BenchmarkManifest) {
   const canonicalRoot = realpathSync(root);
   const entries: Array<{ path: string; sha256: string; bytes: number }> = [];
   const paths = new Set<string>();
@@ -499,52 +448,38 @@ function rotated<T>(values: T[], offset: number): T[] {
 
 export function buildBenchmarkSchedule(manifest: BenchmarkManifest): BenchmarkRunPlan[] {
   const plans: BenchmarkRunPlan[] = [];
-  for (const lane of manifest.lanes) {
-    for (const side of ["baseline", "candidate"] as const) {
-      plans.push({
-        id: `warmup-${lane.id}-${side}`,
-        phase: "warmup",
-        side,
-        lane,
-        round: null,
-        pair: null,
-        cacheMode: "warm",
-      });
-    }
-  }
-  for (let round = 0; round < manifest.rounds; round += 1) {
-    const sides =
-      round % 2 === 0 ? (["baseline", "candidate"] as const) : (["candidate", "baseline"] as const);
-    for (const lane of rotated(manifest.lanes, round)) {
-      const pair = `measured-${round + 1}-${lane.id}`;
-      for (const side of sides) {
-        plans.push({
-          id: `${pair}-${side}`,
-          phase: "measured",
-          side,
-          lane,
-          round: round + 1,
-          pair,
-          cacheMode: "warm",
-        });
-      }
-    }
-  }
-  for (const [index, lane] of manifest.lanes.entries()) {
-    const sides =
-      index % 2 === 0 ? (["baseline", "candidate"] as const) : (["candidate", "baseline"] as const);
-    const pair = `cold-${lane.id}`;
+  const appendPair = (
+    phase: "warmup" | "measured" | "cold",
+    lane: BenchmarkLane,
+    round: number | null = null,
+    reverse = false,
+  ) => {
+    const pair = `${phase}-${round === null ? "" : `${round}-`}${lane.id}`;
+    const sides = reverse
+      ? (["candidate", "baseline"] as const)
+      : (["baseline", "candidate"] as const);
     for (const side of sides) {
       plans.push({
         id: `${pair}-${side}`,
-        phase: "cold",
+        phase,
         side,
         lane,
-        round: null,
-        pair,
-        cacheMode: "fresh",
+        round,
+        pair: phase === "warmup" ? null : pair,
+        cacheMode: phase === "cold" ? "fresh" : "warm",
       });
     }
+  };
+  for (const lane of manifest.lanes) {
+    appendPair("warmup", lane);
+  }
+  for (let round = 0; round < manifest.rounds; round += 1) {
+    for (const lane of rotated(manifest.lanes, round)) {
+      appendPair("measured", lane, round + 1, round % 2 !== 0);
+    }
+  }
+  for (const [index, lane] of manifest.lanes.entries()) {
+    appendPair("cold", lane, null, index % 2 !== 0);
   }
   return plans;
 }
@@ -558,20 +493,13 @@ function median(values: number[]): number {
   return sorted.length % 2 === 0 ? (sorted[middle - 1]! + sorted[middle]!) / 2 : sorted[middle]!;
 }
 
-type PairedMeasurement = {
-  lane: string;
-  round: number | null;
-  baselineDurationMs: number;
-  candidateDurationMs: number;
-  ratio: number;
-  deltaMs: number;
-};
+type PairedMeasurement = ReturnType<typeof pairedMeasurementsFor>[number];
 
 function pairedMeasurementsFor(
   records: BenchmarkRunRecord[],
   phase: "measured" | "cold",
   lane: string,
-): PairedMeasurement[] {
+) {
   const selected = records.filter((record) => record.phase === phase && record.lane === lane);
   const pairs = new Map<string, Partial<Record<BenchmarkSide, BenchmarkRunRecord>>>();
   for (const record of selected) {
@@ -654,10 +582,7 @@ function measuredAggregateRatios(
   });
 }
 
-export function analyzeBenchmark(
-  records: BenchmarkRunRecord[],
-  manifest: BenchmarkManifest,
-): BenchmarkAnalysis {
+export function analyzeBenchmark(records: BenchmarkRunRecord[], manifest: BenchmarkManifest) {
   const measuredMeasurements: PairedMeasurement[] = [];
   const coldMeasurements: PairedMeasurement[] = [];
   const lanes = manifest.lanes.map((lane) => {
@@ -713,10 +638,10 @@ export function analyzeBenchmark(
   );
   const performance =
     regressions.length === 0 && improvedLanes.length === lanes.length
-      ? "improved"
-      : "no-material-change";
+      ? ("improved" as const)
+      : ("no-material-change" as const);
   return {
-    verdict: regressions.length === 0 ? "pass" : "regression",
+    verdict: regressions.length === 0 ? ("pass" as const) : ("regression" as const),
     performance,
     overall: {
       measuredWallRatio: overallWallRatio,

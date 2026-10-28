@@ -9,7 +9,9 @@
     "../../src/cli/**/*.test.ts",
     "../../src/cli/**/*.test.tsx",
     "../../src/hooks/**/*.test.ts",
-    "../../src/hooks/**/*.test.tsx"
+    "../../src/hooks/**/*.test.tsx",
+    "../../src/security/**/*.test.ts",
+    "../../src/security/**/*.test.tsx"
   ],
   "exclude": [
     "../../node_modules",
@@ -20,6 +22,10 @@
     "../../src/cli/cron*.test.tsx",
     "../../src/cli/daemon-cli/**",
     "../../src/cli/program/**",
-    "../../src/config/sessions/**"
+    "../../src/config/sessions/**",
+    "../../src/cli/update-cli/**/*.test.ts",
+    "../../src/cli/update-cli/**/*.test.tsx",
+    "../../src/cli/update*.test.ts",
+    "../../src/cli/update*.test.tsx"
   ]
 }

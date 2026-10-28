@@ -1,25 +1,23 @@
-// Narrow session-store helpers for channel hot paths.
-
-import fs from "node:fs";
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import {
   readAmbientTranscriptWatermarkFromEntry,
   resolveAmbientTranscriptWatermarkKey,
-  updateAmbientTranscriptWatermark,
+  updateAmbientTranscriptWatermark as updateAccessorAmbientTranscriptWatermark,
   type AmbientTranscriptWatermarkScope,
 } from "../config/sessions/ambient-transcript-watermark.js";
 import { buildConversationIdentity } from "../config/sessions/conversation-identity.js";
-import { resolveCurrentConversationSession } from "../config/sessions/conversation-registry.js";
 import {
-  formatSqliteSessionFileMarker,
-  parseSqliteSessionFileMarker,
-} from "../config/sessions/legacy-sqlite-marker.js";
+  resolveCurrentConversationSession,
+  resolveCurrentConversationSessionAsync,
+} from "../config/sessions/conversation-registry.js";
 import {
-  resolveSessionFilePathCore,
+  resolveExplicitSessionStorePathForScope,
   resolveSessionStorePathCore,
 } from "../config/sessions/paths.js";
+import type { UpdateSessionLastRouteParams } from "../config/sessions/runtime-types.js";
 import {
-  applySessionStoreProjection as applyAccessorSessionStoreProjection,
   cleanupSessionLifecycleArtifactsCore as cleanupAccessorSessionLifecycleArtifacts,
   deleteSessionEntryLifecycle as deleteAccessorSessionEntryLifecycle,
   loadTranscriptEventsSync as loadAccessorTranscriptEventsSync,
@@ -27,68 +25,72 @@ import {
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
   patchSessionEntryCore as patchAccessorSessionEntry,
+  recordInboundSessionMeta,
   readSessionUpdatedAtCore as readAccessorSessionUpdatedAt,
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
   resolveTranscriptSessionKeyBySessionId as resolveAccessorTranscriptSessionKeyBySessionId,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import {
+  applySessionEntryOperation,
+  updateSessionLastRoute,
+  updateSessionLastRouteInScope,
+} from "../config/sessions/session-accessor.sqlite-entry.js";
+import {
+  assertSessionEntryPatchAuthority,
+  type SessionEntryPatchAuthority,
+} from "../config/sessions/session-entry-patch-authority.js";
+import { preserveGenerationPrivateFields } from "../config/sessions/session-entry-public-patch.js";
+import {
+  readSessionEntrySummariesInWorker,
+  readSessionUpdatedAtInWorker,
+  withSessionEntriesFromStoresInWorker,
+} from "../config/sessions/session-entry-read-runtime.js";
+import {
+  captureExternalSessionCommitGuard,
+  sessionEntryCommitGuardOptions,
+} from "../config/sessions/session-source-authority.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import { resolveSessionStoreEntryCore as resolveSessionStoreEntryFromStore } from "../config/sessions/store-entry.js";
+import { loadSessionTranscriptEvents } from "../config/sessions/session-transcript-events.js";
+import { readTranscriptStatsAsync as readAccessorTranscriptStatsAsync } from "../config/sessions/session-transcript-stats.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
-import type {
-  AmbientTranscriptWatermark,
-  InternalSessionEntry,
-  SessionEntry,
-} from "../config/sessions/types.js";
-import { replaceFileAtomicSync } from "../infra/replace-file.js";
+import type { AmbientTranscriptWatermark, SessionEntry } from "../config/sessions/types.js";
+import { filterSessionEntriesByProfile } from "../gateway/session-identity-projection.js";
+import { hasErrnoCode } from "../infra/errno.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { prepareCurrentUserProfileIdentity } from "../state/user-profile-reads.js";
 import {
-  clearGenerationPrivateFieldsForRotatedSessionPatch,
-  generationValidPrivateFieldsForSameSession,
+  copyMutableSessionEntry,
+  getSessionEntryAsync,
   projectPluginSessionEntry,
   projectPluginSessionEntryPatch,
-  projectPluginSessionStore,
-  reconcilePluginSessionStore,
+  type SessionStoreEntrySummary,
   type SessionStoreReadParams,
   toSessionAccessScope,
 } from "./session-store-runtime-internal.js";
 import type { SessionTranscriptEvent } from "./session-transcript-runtime.js";
+export {
+  getSessionEntryAsync,
+  getSessionEntryByIdAsync,
+} from "./session-store-runtime-internal.js";
 export { SessionStoreAgentIdRequiredError } from "../config/sessions/paths.js";
+export { rethrowIncognitoSessionError } from "../state/incognito-session-error.js";
 
 export {
   deliveryContextFromSession,
-  normalizeSessionDeliveryState,
-  projectSessionDeliveryFields,
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
   sessionDeliveryRoute,
+} from "../utils/delivery-context.read.js";
+export {
+  normalizeSessionDeliveryState,
+  projectSessionDeliveryFields,
 } from "../utils/delivery-context.shared.js";
 
 const SQLITE_SESSION_STORE_BACKUP_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
-const LEGACY_TRANSCRIPT_INSPECTION_MAX_BYTES = 16 * 1024 * 1024;
-// Beta.5 Codex resolves and loads synchronously; beta.5 Feishu dedupes targets
-// by path before load/update. Last selection therefore matches every shipped
-// caller. This map is not a general replacement for target-aware SDK methods.
-const legacyStoreAgentIds = new Map<string, string>();
-
 type SessionStoreListParams = Partial<Omit<SessionStoreReadParams, "sessionKey">>;
-
-type SessionStoreEntrySummary = {
-  sessionKey: string;
-  entry: SessionEntry;
-};
-
-export type LoadSessionStoreOptions = {
-  skipCache?: boolean;
-  hydrateSkillPromptRefs?: boolean;
-};
-
-export type UpdateSessionStoreOptions<T> = {
-  activeSessionKey?: string;
-  skipMaintenance?: boolean;
-  skipSaveWhenResult?: (result: T) => boolean;
-};
 
 export type SessionStoreTranscriptEvent = SessionTranscriptEvent;
 
@@ -113,6 +115,25 @@ type PatchSessionEntryParams = SessionStoreReadParams & {
   update: SessionStoreEntryPatch;
 };
 
+export type { SessionEntryPatchAuthority } from "../config/sessions/session-entry-patch-authority.js";
+export type { PreparedSessionSourceAssertion as SessionEntrySourceAuthority } from "../config/sessions/session-source-authority.js";
+
+export type PrepareSessionEntryPatchParams = Omit<
+  PatchSessionEntryParams,
+  "update" | "assertCommitAllowed"
+> & {
+  prepare: SessionStoreEntryPatch;
+  authority?: SessionEntryPatchAuthority;
+};
+
+export type ApplySessionEntryPatchParams = Omit<PrepareSessionEntryPatchParams, "prepare"> & {
+  patch: Partial<SessionEntry>;
+  /** null requires absence; an identity requires that exact live session generation. */
+  expected?:
+    | (Pick<SessionEntry, "sessionId"> & Partial<Pick<SessionEntry, "lifecycleRevision">>)
+    | null;
+};
+
 type UpdateSessionStoreEntryParams = {
   storePath: string;
   sessionKey: string;
@@ -130,6 +151,8 @@ type ReadAmbientTranscriptWatermarkParams = SessionStoreReadParams & {
 
 type DeleteSessionEntryParams = SessionStoreReadParams & {
   archiveTranscript?: boolean;
+  /** Doctor-only recovery snapshot in a fresh directory, completed before deletion. */
+  backupDir?: string;
   expectedSessionId?: string | null;
   expectedUpdatedAt?: number;
 };
@@ -147,252 +170,25 @@ type SessionLifecycleArtifactsCleanupParams = {
   nowMs?: number;
 };
 
-type SessionLifecycleArtifactsCleanupResult = {
-  archivedTranscriptArtifacts: number;
-  removedEntries: number;
-};
+type SessionLifecycleArtifactsCleanupResult = Awaited<
+  ReturnType<typeof cleanupAccessorSessionLifecycleArtifacts>
+>;
 
-function preserveGenerationPrivateFields(
-  persistedEntry: InternalSessionEntry,
-  publicPatch: Partial<SessionEntry>,
-): Partial<InternalSessionEntry> {
-  const nextSessionId = Object.hasOwn(publicPatch, "sessionId")
-    ? publicPatch.sessionId
-    : persistedEntry.sessionId;
-  const nextLifecycleRevision = Object.hasOwn(publicPatch, "lifecycleRevision")
-    ? publicPatch.lifecycleRevision
-    : persistedEntry.lifecycleRevision;
-  const privateFields = generationValidPrivateFieldsForSameSession(
-    persistedEntry,
-    nextSessionId,
-    nextLifecycleRevision,
-  );
-  return privateFields
-    ? {
-        ...publicPatch,
-        ...(!Object.hasOwn(publicPatch, "lifecycleRevision") &&
-        persistedEntry.lifecycleRevision !== undefined
-          ? { lifecycleRevision: persistedEntry.lifecycleRevision }
-          : {}),
-        ...privateFields,
-      }
-    : clearGenerationPrivateFieldsForRotatedSessionPatch(persistedEntry, publicPatch);
-}
+/** Resolves the configured session store path without selecting a row-operation agent. */
+export { resolveSessionStorePathCore as resolveStorePath } from "../config/sessions/paths.js";
 
-function resolveLegacySessionStoreTarget(storePath: string): {
-  agentId?: string;
-  storePath: string;
-} {
-  const resolvedStorePath = path.resolve(storePath);
-  const selectedAgentId = legacyStoreAgentIds.get(resolvedStorePath);
-  const target = resolveSqliteTargetFromSessionStorePath(resolvedStorePath, {
-    agentId: selectedAgentId,
-  });
-  const agentId = target.agentId ?? selectedAgentId;
-  return {
-    ...(agentId ? { agentId } : {}),
-    storePath: target.path ?? resolvedStorePath,
-  };
-}
-
-function materializeLegacyTranscriptFile(
-  sessionFile: string,
-  options?: { agentId?: string; sessionsDir?: string },
-): string {
-  const marker = parseSqliteSessionFileMarker(sessionFile);
-  if (!marker) {
-    return sessionFile;
-  }
-  const transcriptScope = {
-    agentId: marker.agentId,
-    sessionId: marker.sessionId,
-    storePath: marker.storePath,
-  } as const;
-  const transcriptPath = resolveSessionFilePathCore(marker.sessionId, undefined, {
-    agentId: marker.agentId,
-    ...(options?.sessionsDir ? { sessionsDir: options.sessionsDir } : {}),
-  });
-  const stats = readAccessorTranscriptStatsSync(transcriptScope);
-  const serializedSize = stats.sizeBytes + (stats.eventCount > 0 ? 1 : 0);
-  const isOversized = serializedSize > LEGACY_TRANSCRIPT_INSPECTION_MAX_BYTES;
-  const content = isOversized
-    ? ""
-    : (() => {
-        const events = loadAccessorTranscriptEventsSync(transcriptScope);
-        return events.length > 0
-          ? `${events.map((event) => JSON.stringify(event)).join("\n")}\n`
-          : "";
-      })();
-  replaceFileAtomicSync({
-    filePath: transcriptPath,
-    content,
-    dirMode: 0o700,
-    mode: 0o600,
-    tempPrefix: `${path.basename(transcriptPath)}.sqlite-compat`,
-    copyFallbackOnPermissionError: true,
-    syncParentDir: true,
-    syncTempFile: true,
-    ...(isOversized
-      ? {
-          beforeRename: ({ tempPath }: { tempPath: string }) => {
-            // Beta.5 Feishu only stats oversized transcripts before skipping
-            // inspection. SQLite remains canonical; this sparse sentinel is
-            // never parsed and keeps compatibility materialization bounded.
-            fs.truncateSync(tempPath, LEGACY_TRANSCRIPT_INSPECTION_MAX_BYTES + 1);
-            const fd = fs.openSync(tempPath, "r+");
-            try {
-              fs.fsyncSync(fd);
-            } finally {
-              fs.closeSync(fd);
-            }
-          },
-        }
-      : {}),
-  });
-  return transcriptPath;
-}
-
-/**
- * @deprecated Use getSessionEntry or listSessionEntries.
- *
- * Official plugins released with v2026.7.1-beta.5 import this symbol. Keep the
- * compatibility projection through 2026-10-12, then remove it only after the
- * minimum supported plugin version excludes that release.
- */
-export function loadSessionStore(
-  storePath: string,
-  options: LoadSessionStoreOptions = {},
-): Record<string, SessionEntry> {
-  // SQLite entry reads are direct and uncached, so beta.5's skipCache option
-  // is already the only available behavior.
-  void options.skipCache;
-  const target = resolveLegacySessionStoreTarget(storePath);
-  return Object.fromEntries(
-    listAccessorSessionEntries({
-      ...target,
-      // SDK callers must never receive entries owned by the accessor cache.
-      // Preserve the old wrapper's detached-result guarantee even when a
-      // legacy caller passes clone: false.
-      clone: true,
-      hydrateSkillPromptRefs: options.hydrateSkillPromptRefs,
-    }).map(({ sessionKey, entry }) => {
-      const sessionId = entry.sessionId?.trim();
-      const projectedEntry = projectPluginSessionEntry(entry as InternalSessionEntry);
-      if (!sessionId) {
-        return [sessionKey, projectedEntry];
-      }
-      return [
-        sessionKey,
-        {
-          ...projectedEntry,
-          // SQLite does not persist sessionFile. Beta.5 needs a locator only in
-          // this detached projection so its file-based doctor reaches the bridge.
-          sessionFile: formatSqliteSessionFileMarker({
-            agentId: target.agentId ?? resolveAgentIdFromSessionKey(sessionKey),
-            sessionId,
-            storePath: target.storePath,
-          }),
-        },
-      ];
-    }),
-  );
-}
-
-/**
- * @deprecated Use patchSessionEntry, upsertSessionEntry, or deleteSessionEntry.
- *
- * Official plugins released with v2026.7.1-beta.5 import this symbol. Keep the
- * compatibility bridge through 2026-10-12. The callback mutates a detached
- * projection; the resulting row diff commits through the SQLite accessor.
- * Beta.5 memory-core already uses cleanupSessionLifecycleArtifacts; this
- * whole-store callback remains only for Feishu doctor's explicit repair flow.
- */
-export async function updateSessionStore<T>(
-  storePath: string,
-  mutator: (store: Record<string, SessionEntry>) => Promise<T> | T,
-  options: UpdateSessionStoreOptions<T> = {},
-): Promise<T> {
-  const target = resolveLegacySessionStoreTarget(storePath);
-  return await applyAccessorSessionStoreProjection({
-    activeSessionKey: options.activeSessionKey,
-    ...(target.agentId ? { agentId: target.agentId } : {}),
-    storePath: target.storePath,
-    skipMaintenance: options.skipMaintenance,
-    update: async (store) => {
-      const internalStore = store as Record<string, InternalSessionEntry>;
-      const publicStore = projectPluginSessionStore(internalStore);
-      const result = await mutator(publicStore);
-      const persist = !options.skipSaveWhenResult?.(result);
-      if (persist) {
-        // The deprecated callback owns public row changes and deletions, but
-        // core recovery coordination remains invisible and non-overwritable.
-        reconcilePluginSessionStore({ internalStore, publicStore });
-      }
-      return {
-        persist,
-        result,
-      };
-    },
-  });
-}
-
-/**
- * @deprecated Resolve transcript identities with loadTranscriptEventsSync.
- *
- * Beta.5 Feishu doctor still inspects JSONL paths synchronously. SQLite
- * markers therefore materialize a bounded export at the canonical legacy path
- * rather than making the old doctor classify every healthy transcript as
- * missing. These files are durable because beta.5 renames repaired transcripts
- * to recovery archives; remove this bridge only after beta.5 is unsupported.
- */
-export function resolveSessionFilePath(
-  sessionId: string,
-  entry?: { sessionFile?: string },
-  options?: { agentId?: string; sessionsDir?: string },
-): string {
-  const resolved = resolveSessionFilePathCore(sessionId, entry, options);
-  return materializeLegacyTranscriptFile(resolved, options);
-}
-
-/**
- * Resolves the configured session store path.
- *
- * Beta.5 resolves a configured path with an agent id, then passes only the
- * path to loadSessionStore/updateSessionStore. Its shipped callers either
- * consume the selection synchronously or dedupe by path, so retaining the
- * latest selection preserves that bounded compatibility contract.
- */
-export function resolveStorePath(
-  store?: string,
-  options?: { agentId?: string; env?: NodeJS.ProcessEnv },
-): string {
-  const storePath = resolveSessionStorePathCore(store, options);
-  if (options?.agentId) {
-    legacyStoreAgentIds.set(path.resolve(storePath), options.agentId);
-  }
-  return storePath;
-}
-
-/**
- * @deprecated Use getSessionEntry with a storage-neutral session identity.
- *
- * Official plugins released with v2026.7.1-beta.5 import this whole-store
- * lookup helper. Keep it through 2026-10-12 with the other beta.5 bridge.
- */
-export function resolveSessionStoreEntry(params: {
-  store: Record<string, SessionEntry>;
-  sessionKey: string;
-}) {
-  return resolveSessionStoreEntryFromStore(params);
-}
-
-/** Loads one session entry by agent/session identity. */
+/** @deprecated Use getSessionEntryAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function getSessionEntry(params: SessionStoreReadParams): SessionEntry | undefined {
+  warnPluginSdkDeprecation({
+    family: "session-store",
+    method: "getSessionEntry",
+    replacement: "getSessionEntryAsync",
+  });
   const entry = loadSessionEntryReadOnly(toSessionAccessScope(params));
   return entry ? projectPluginSessionEntry(entry) : undefined;
 }
 
-/** Reads the current session binding of one canonical transport address. */
+/** @deprecated Use getConversationSessionAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function getConversationSession(params: {
   agentId: string;
   env?: NodeJS.ProcessEnv;
@@ -403,19 +199,39 @@ export function getConversationSession(params: {
   peerId: string;
   threadId?: string;
 }): { sessionKey: string; sessionId: string } | undefined {
+  warnPluginSdkDeprecation({
+    family: "session-conversation",
+    method: "getConversationSession",
+    replacement: "getConversationSessionAsync",
+  });
   const identity = buildConversationIdentity({ ...params, deliveryTarget: params.peerId });
   return identity ? resolveCurrentConversationSession(params, identity.conversationRef) : undefined;
+}
+
+/** Reads the current binding of one canonical transport address off the Gateway thread. */
+export async function getConversationSessionAsync(
+  params: Parameters<typeof getConversationSession>[0],
+): Promise<{ sessionKey: string; sessionId: string } | undefined> {
+  const identity = buildConversationIdentity({ ...params, deliveryTarget: params.peerId });
+  return identity
+    ? resolveCurrentConversationSessionAsync(params, identity.conversationRef)
+    : undefined;
 }
 
 /**
  * Lists session entries for one agent. `readOnly` reads without joining the
  * agent database writable lifecycle (no create/register/migrate) — required
  * for detection/introspection paths that may run across the whole fleet.
- * One flagged entry instead of a second export keeps the SDK surface budget flat.
+ * @deprecated Use listSessionEntriesAsync for metadata reads. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release.
  */
 export function listSessionEntries(
   params: SessionStoreListParams & { readOnly?: boolean } = {},
 ): SessionStoreEntrySummary[] {
+  warnPluginSdkDeprecation({
+    family: "session-store",
+    method: "listSessionEntries",
+    replacement: "listSessionEntriesAsync",
+  });
   const list = params.readOnly ? listAccessorSessionEntriesReadOnly : listAccessorSessionEntries;
   return list({
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
@@ -430,46 +246,184 @@ export function listSessionEntries(
   }));
 }
 
-/** Reads transcript events for a live SQLite-backed session identity. */
-export function loadTranscriptEventsSync(params: {
+/** Lists public session metadata without hydrating saved prompts or opening a writable database. */
+export async function listSessionEntriesAsync(params: {
+  agentId: string;
+  env?: NodeJS.ProcessEnv;
+  storePath?: string;
+  /** External readers cannot reuse the Gateway process's writer receipts. */
+  readConsistency?: "latest";
+}): Promise<SessionStoreEntrySummary[]> {
+  const entries = await readSessionEntrySummariesInWorker({
+    ...params,
+    storePath: params.storePath ?? resolveSessionStorePathCore(undefined, params),
+  });
+  return entries.map(({ sessionKey, entry }) => ({
+    sessionKey,
+    entry: projectPluginSessionEntry(entry),
+  }));
+}
+
+export type SessionStoreSelectedEntries = {
+  agentId: string;
+  storePath: string;
+  sessionKeys: readonly string[];
+};
+
+export type SessionStoreSelectedEntry = SessionStoreEntrySummary & {
+  agentId: string;
+  storePath: string;
+};
+
+/**
+ * Prepare selected stores and a fresh profile snapshot off-thread, then consume synchronously.
+ * Final native session guards observe cross-process commits; stores are not one atomic snapshot.
+ * Profile matching uses current canonical owners/direct participants, never display references.
+ * Returned data carries no authority after the callback; caller policy must be checked inside it.
+ */
+export async function withSessionEntriesAsync<T>(
+  params: {
+    stores: readonly SessionStoreSelectedEntries[];
+    env?: NodeJS.ProcessEnv;
+    involvingProfileId?: string;
+  },
+  consume: (entries: SessionStoreSelectedEntry[]) => T,
+): Promise<T> {
+  const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
+  const profileId = params.involvingProfileId;
+  const stores = params.stores.map((store) => ({
+    ...store,
+    sessionKeys: [...store.sessionKeys],
+  }));
+  let identity: Awaited<ReturnType<typeof prepareCurrentUserProfileIdentity>> | undefined;
+  return await withSessionEntriesFromStoresInWorker(
+    stores.map((store) => ({ ...store, env, projection: "list" as const })),
+    (reads) => {
+      identity?.assertCurrent();
+      // Writer queues cover this process only. Keep the selected-key native guard
+      // after all awaits so a separate Gateway's committed revocation is visible.
+      const entries = stores.flatMap((store) =>
+        listAccessorSessionEntriesReadOnly({
+          ...store,
+          env,
+          projection: "list",
+          includeParticipants: profileId !== undefined,
+        }).map(({ sessionKey, entry }) => ({
+          agentId: store.agentId,
+          storePath: store.storePath,
+          sessionKey,
+          entry: projectPluginSessionEntry(entry),
+        })),
+      );
+      const selected =
+        profileId !== undefined
+          ? filterSessionEntriesByProfile({
+              entries,
+              profile: identity?.profile,
+            })
+          : entries;
+      reads.forEach((read) => read.assertCurrent());
+      identity?.assertCurrent();
+      return consume(selected);
+    },
+    {
+      ordered: true,
+      ...(profileId !== undefined
+        ? {
+            prepareConsume: async () => {
+              identity = await prepareCurrentUserProfileIdentity(profileId, { env });
+            },
+          }
+        : {}),
+    },
+  );
+}
+
+type SessionStoreTranscriptReadParams = {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   sessionId: string;
   sessionKey?: string;
   storePath?: string;
-}): SessionStoreTranscriptEvent[] {
+};
+
+/** @deprecated Use loadTranscriptEvents. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
+function loadTranscriptEventsSyncLegacy(
+  params: SessionStoreTranscriptReadParams,
+): SessionStoreTranscriptEvent[] {
+  warnPluginSdkDeprecation({
+    family: "session-store",
+    method: "loadTranscriptEventsSync",
+    replacement: "loadTranscriptEvents",
+  });
   return loadAccessorTranscriptEventsSync(params);
 }
 
-/** Reads transcript freshness and byte size without materializing event rows. */
-export function readTranscriptStatsSync(params: {
+/** Reads ordered transcript events through the session owner's worker. */
+export function loadTranscriptEvents(
+  params: SessionStoreTranscriptReadParams,
+): Promise<SessionStoreTranscriptEvent[]> {
+  return loadSessionTranscriptEvents(params);
+}
+
+export { loadTranscriptEventsSyncLegacy as loadTranscriptEventsSync };
+
+/** @deprecated Use readTranscriptStatsAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
+function readSessionStoreTranscriptStatsSync(params: {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   sessionId: string;
   sessionKey?: string;
   storePath?: string;
 }): { eventCount: number; maxSeq: number; sizeBytes: number } {
+  if (isMainThread) {
+    warnPluginSdkDeprecation({
+      family: "session-store",
+      method: "readTranscriptStatsSync",
+      replacement: "readTranscriptStatsAsync",
+    });
+  }
   return readAccessorTranscriptStatsSync(params);
 }
 
-/** Resolves the persisted session key for one SQLite transcript identity. */
-export function resolveTranscriptSessionKeyBySessionId(params: {
-  agentId?: string;
-  env?: NodeJS.ProcessEnv;
-  sessionId: string;
-  storePath?: string;
-}): string | undefined {
+/** Reads transcript statistics through the existing session worker. */
+export const readTranscriptStatsAsync: (
+  params: Parameters<typeof readSessionStoreTranscriptStatsSync>[0],
+) => Promise<ReturnType<typeof readSessionStoreTranscriptStatsSync>> =
+  readAccessorTranscriptStatsAsync;
+
+export { readSessionStoreTranscriptStatsSync as readTranscriptStatsSync };
+
+/** @deprecated Await resolveTranscriptSessionKeyBySessionIdAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
+export function resolveTranscriptSessionKeyBySessionId(
+  params: Parameters<typeof resolveAccessorTranscriptSessionKeyBySessionId>[0],
+): string | undefined {
+  if (isMainThread) {
+    warnPluginSdkDeprecation({
+      family: "session-transcript-key",
+      method: "resolveTranscriptSessionKeyBySessionId",
+      replacement: "resolveTranscriptSessionKeyBySessionIdAsync",
+    });
+  }
   return resolveAccessorTranscriptSessionKeyBySessionId(params);
 }
 
-/** Patches one session entry by agent/session identity. */
+/** Resolves the exact persisted transcript window, including historical session identities. */
+export { resolveTranscriptSessionKeyBySessionIdAsync } from "../config/sessions/session-accessor.js";
+
+/** @deprecated Use prepareSessionEntryPatch or applySessionEntryPatch. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export async function patchSessionEntry(
   params: PatchSessionEntryParams,
 ): Promise<SessionEntry | null> {
+  warnPluginSdkDeprecation({
+    family: "session-store",
+    method: "patchSessionEntry",
+    replacement: "prepareSessionEntryPatch or applySessionEntryPatch",
+  });
   const entry = await patchAccessorSessionEntry(
     toSessionAccessScope(params),
     async (internalEntry, context) => {
-      const persistedEntry = internalEntry as InternalSessionEntry;
+      const persistedEntry = internalEntry;
       const patch = await params.update(projectPluginSessionEntry(internalEntry), {
         existingEntry: context.existingEntry
           ? projectPluginSessionEntry(context.existingEntry)
@@ -481,41 +435,143 @@ export async function patchSessionEntry(
       return preserveGenerationPrivateFields(persistedEntry, projectPluginSessionEntryPatch(patch));
     },
     {
-      assertCommitAllowed: params.assertCommitAllowed,
-      fallbackEntry: params.fallbackEntry
-        ? projectPluginSessionEntry(params.fallbackEntry)
-        : undefined,
-      maintenanceConfig:
-        params.maintenanceConfig !== undefined
-          ? normalizeResolvedMaintenanceConfigInput(params.maintenanceConfig)
-          : undefined,
-      preserveActivity: params.preserveActivity,
-      requireWriteSuccess: params.requireWriteSuccess,
-      replaceEntry: params.replaceEntry,
-      skipMaintenance: params.skipMaintenance,
+      ...sessionEntryCommitGuardOptions(
+        captureExternalSessionCommitGuard(params.assertCommitAllowed),
+      ),
+      ...sessionEntryPatchFields(params),
     },
   );
-  return entry ? projectPluginSessionEntry(entry) : null;
+  // Public results stay mutable; internal patches share frozen nested facts.
+  return entry ? copyMutableSessionEntry(projectPluginSessionEntry(entry)) : null;
 }
 
-/** Reads the last activity timestamp for one session entry. */
+/** Prepare outside SQLite, then compare the exact snapshot and commit once in its worker. */
+export async function prepareSessionEntryPatch(
+  params: PrepareSessionEntryPatchParams,
+): Promise<SessionEntry | null> {
+  const entry = await patchAccessorSessionEntry(
+    toSessionAccessScope(params),
+    async (existing, context) => {
+      if (params.authority?.kind === "host") {
+        params.authority.assertCurrent();
+      }
+      const patch = await params.prepare(projectPluginSessionEntry(existing), {
+        existingEntry: context.existingEntry
+          ? projectPluginSessionEntry(context.existingEntry)
+          : undefined,
+      });
+      if (params.authority?.kind === "host") {
+        params.authority.assertCurrent();
+      }
+      return patch
+        ? preserveGenerationPrivateFields(existing, projectPluginSessionEntryPatch(patch))
+        : null;
+    },
+    sessionEntryPatchOptions(params),
+  );
+  return entry ? copyMutableSessionEntry(projectPluginSessionEntry(entry)) : null;
+}
+
+/** Reduce a data-only patch against the authoritative entry in one worker command. */
+export async function applySessionEntryPatch(
+  params: ApplySessionEntryPatchParams,
+): Promise<SessionEntry | null> {
+  const entry = await applySessionEntryOperation(
+    toSessionAccessScope(params),
+    {
+      kind: "public-fields",
+      patch: projectPluginSessionEntryPatch(params.patch),
+      expected: params.expected,
+    },
+    sessionEntryPatchOptions(params),
+  );
+  return entry ? copyMutableSessionEntry(projectPluginSessionEntry(entry)) : null;
+}
+
+function sessionEntryPatchFields(params: Omit<PatchSessionEntryParams, "update">) {
+  return {
+    fallbackEntry: params.fallbackEntry
+      ? projectPluginSessionEntry(params.fallbackEntry)
+      : undefined,
+    maintenanceConfig:
+      params.maintenanceConfig !== undefined
+        ? normalizeResolvedMaintenanceConfigInput(params.maintenanceConfig)
+        : undefined,
+    preserveActivity: params.preserveActivity,
+    requireWriteSuccess: params.requireWriteSuccess,
+    replaceEntry: params.replaceEntry,
+    skipMaintenance: params.skipMaintenance,
+  };
+}
+
+function sessionEntryPatchOptions(params: Omit<PrepareSessionEntryPatchParams, "prepare">) {
+  const authority = params.authority;
+  assertSessionEntryPatchAuthority(authority);
+  return {
+    workerGuard: {
+      assertCurrent: authority?.kind === "host" ? () => authority.assertCurrent() : undefined,
+      source: authority?.kind === "source" ? authority.source : undefined,
+    },
+    ...sessionEntryPatchFields(params),
+  };
+}
+
+/** @deprecated Use readSessionUpdatedAtAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function readSessionUpdatedAt(params: SessionStoreReadParams): number | undefined {
+  warnPluginSdkDeprecation({
+    family: "session-store",
+    method: "readSessionUpdatedAt",
+    replacement: "readSessionUpdatedAtAsync",
+  });
   return readAccessorSessionUpdatedAt(toSessionAccessScope(params));
 }
 
-export { resolveAmbientTranscriptWatermarkKey, updateAmbientTranscriptWatermark };
+/** Reads the last activity timestamp without creating a missing session store. */
+export function readSessionUpdatedAtAsync(
+  params: SessionStoreReadParams,
+): Promise<number | undefined> {
+  return readSessionUpdatedAtInWorker(toSessionAccessScope(params));
+}
+
+async function updateSessionStoreAmbientTranscriptWatermark(
+  params: Parameters<typeof updateAccessorAmbientTranscriptWatermark>[0],
+): ReturnType<typeof updateAccessorAmbientTranscriptWatermark> {
+  return copyMutableSessionEntry(await updateAccessorAmbientTranscriptWatermark(params));
+}
+export {
+  resolveAmbientTranscriptWatermarkKey,
+  updateSessionStoreAmbientTranscriptWatermark as updateAmbientTranscriptWatermark,
+};
 export type { AmbientTranscriptWatermarkScope };
 
+/** @deprecated Use readAmbientTranscriptWatermarkAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function readAmbientTranscriptWatermark(
   params: ReadAmbientTranscriptWatermarkParams,
 ): AmbientTranscriptWatermark | undefined {
+  warnPluginSdkDeprecation({
+    family: "session-store",
+    method: "readAmbientTranscriptWatermark",
+    replacement: "readAmbientTranscriptWatermarkAsync",
+  });
   return readAmbientTranscriptWatermarkFromEntry(getSessionEntry(params), params.key);
 }
 
-/** Updates an existing session entry by store path and session key. */
+/** Reads the transcript watermark through the session owner's worker. */
+export async function readAmbientTranscriptWatermarkAsync(
+  params: ReadAmbientTranscriptWatermarkParams,
+): Promise<AmbientTranscriptWatermark | undefined> {
+  return readAmbientTranscriptWatermarkFromEntry(await getSessionEntryAsync(params), params.key);
+}
+
+/** @deprecated Use prepareSessionEntryPatch. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export async function updateSessionStoreEntry(
   params: UpdateSessionStoreEntryParams,
 ): Promise<SessionEntry | null> {
+  warnPluginSdkDeprecation({
+    family: "session-store",
+    method: "updateSessionStoreEntry",
+    replacement: "prepareSessionEntryPatch",
+  });
   const entry = await updateSessionEntry(
     { sessionKey: params.sessionKey, storePath: params.storePath },
     async (internalEntry) => {
@@ -523,7 +579,7 @@ export async function updateSessionStoreEntry(
       if (!patch) {
         return null;
       }
-      const persistedEntry = internalEntry as InternalSessionEntry;
+      const persistedEntry = internalEntry;
       return preserveGenerationPrivateFields(persistedEntry, projectPluginSessionEntryPatch(patch));
     },
     {
@@ -532,19 +588,16 @@ export async function updateSessionStoreEntry(
       requireWriteSuccess: params.requireWriteSuccess,
     },
   );
-  return entry ? projectPluginSessionEntry(entry) : null;
+  return entry ? copyMutableSessionEntry(projectPluginSessionEntry(entry)) : null;
 }
 
 /** Replaces or creates one session entry by agent/session identity. */
 export async function upsertSessionEntry(params: UpsertSessionEntryParams): Promise<void> {
   const publicEntry = projectPluginSessionEntry(params.entry);
-  await patchAccessorSessionEntry(
+  await applySessionEntryOperation(
     toSessionAccessScope(params),
-    (internalEntry) => {
-      const persistedEntry = internalEntry as InternalSessionEntry;
-      return preserveGenerationPrivateFields(persistedEntry, publicEntry);
-    },
-    { fallbackEntry: publicEntry, replaceEntry: true },
+    { kind: "public-fields", patch: publicEntry },
+    { result: "none", fallbackEntry: publicEntry, replaceEntry: true },
   );
 }
 
@@ -557,8 +610,12 @@ export async function deleteSessionEntry(params: DeleteSessionEntryParams): Prom
       agentId,
       env: params.env,
     });
+  if (params.backupDir !== undefined) {
+    await createSessionStoreBackup({ agentId, storePath, backupDir: params.backupDir });
+  }
   const result = await deleteAccessorSessionEntryLifecycle({
     ...(agentId !== undefined ? { agentId } : {}),
+    ...(params.env !== undefined ? { env: params.env } : {}),
     archiveTranscript: params.archiveTranscript ?? false,
     ...(params.expectedSessionId !== undefined
       ? { expectedSessionId: params.expectedSessionId }
@@ -575,7 +632,10 @@ export async function deleteSessionEntry(params: DeleteSessionEntryParams): Prom
   return result.deleted;
 }
 
-/** Resolves the file artifacts that should be backed up before mutating a session store. */
+/**
+ * Inventories session-store artifacts; this is not a safe live-file copy protocol.
+ * Use deleteSessionEntry's backupDir option for a verified pre-repair snapshot.
+ */
 export function resolveSessionStoreBackupPaths(params: {
   agentId?: string;
   storePath: string;
@@ -595,7 +655,58 @@ export function resolveSessionStoreBackupPaths(params: {
   return [...backupPaths];
 }
 
-/** Cleans stale lifecycle-owned session entries and orphan transcripts for one agent store. */
+/** Create a verified, standalone SQLite backup and preserve any legacy session index. */
+async function createSessionStoreBackup(params: {
+  agentId?: string;
+  storePath: string;
+  backupDir: string;
+}): Promise<void> {
+  const fs = await import("node:fs/promises");
+  const { createVerifiedSqliteSnapshot } = await import("../infra/sqlite-snapshot.js");
+  const { captureBackupSqliteSourceGroup, planBackupSqliteSourceGroups } =
+    await import("../infra/backup-sqlite-source-groups.js");
+  const { embedSessionColdArchivesInSnapshot } =
+    await import("../config/sessions/session-cold-storage-backup.js");
+  const storePath = path.resolve(params.storePath);
+  const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+    agentId: params.agentId,
+  }).path;
+
+  await fs.mkdir(params.backupDir, { recursive: true, mode: 0o700 });
+  for (const sourcePath of new Set([storePath, sqlitePath])) {
+    const identity = await fs.stat(sourcePath, { bigint: true }).catch((error: unknown) => {
+      if (hasErrnoCode(error, "ENOENT")) {
+        return undefined;
+      }
+      throw error;
+    });
+    if (!identity?.isFile()) {
+      continue;
+    }
+    const targetPath = path.join(params.backupDir, path.basename(sourcePath));
+    if (sourcePath !== sqlitePath) {
+      await fs.copyFile(sourcePath, targetPath, fs.constants.COPYFILE_EXCL);
+      continue;
+    }
+    const physicalPath = await fs.realpath(sourcePath);
+    const groups = await planBackupSqliteSourceGroups([{ path: physicalPath, identity }]);
+    await captureBackupSqliteSourceGroup(groups.get(physicalPath)!, () =>
+      createVerifiedSqliteSnapshot({
+        sourcePath: physicalPath,
+        targetPath,
+        preserveRowIds: true,
+        transform: (database) =>
+          embedSessionColdArchivesInSnapshot({ database, sourceStorePath: storePath }),
+      }),
+    );
+  }
+}
+
+/**
+ * Cleans stale lifecycle-owned session entries and orphan transcripts for one agent store.
+ * Joins pending startup preparation before capturing the database identity; failed preparation
+ * still surfaces through normal admission checks. Prepared agents do not wait.
+ */
 export async function cleanupSessionLifecycleArtifacts(
   params: SessionLifecycleArtifactsCleanupParams,
 ): Promise<SessionLifecycleArtifactsCleanupResult> {
@@ -605,9 +716,18 @@ export async function cleanupSessionLifecycleArtifacts(
       agentId: params.agentId,
       env: params.env,
     });
-  return await cleanupAccessorSessionLifecycleArtifacts({
+  const selection = {
+    agentId: params.agentId,
+    env: params.env,
     storePath,
+    sessionKey: params.agentId
+      ? `agent:${params.agentId}:${params.sessionKeySegmentPrefix.trim()}`
+      : undefined,
+  };
+  return await cleanupAccessorSessionLifecycleArtifacts({
+    storePath: resolveExplicitSessionStorePathForScope(selection) ?? storePath,
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+    ...(params.env !== undefined ? { env: params.env } : {}),
     archiveRemovedEntryTranscripts: params.archiveRemovedEntryTranscripts,
     ...(params.pluginOwnerId !== undefined ? { pluginOwnerId: params.pluginOwnerId } : {}),
     sessionKeySegmentPrefix: params.sessionKeySegmentPrefix,
@@ -634,10 +754,39 @@ export { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-s
 export { isValidAgentHarnessSessionStoreEntry } from "../sessions/agent-harness-session-key.js";
 // SDK-facing names are a shipped plugin contract; internals route through the
 // session accessor so the storage backend can change beneath them.
-export {
-  recordInboundSessionMeta as recordSessionMetaFromInbound,
-  updateSessionLastRoute as updateLastRoute,
-} from "../config/sessions/session-accessor.js";
+export async function recordSessionMetaFromInbound(
+  params: Parameters<typeof recordInboundSessionMeta>[0],
+): ReturnType<typeof recordInboundSessionMeta> {
+  return copyMutableSessionEntry(await recordInboundSessionMeta(params));
+}
+
+export function updateLastRoute(
+  params: UpdateSessionLastRouteParams & {
+    /** @deprecated Use updateLastRouteWithAuthority. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
+    assertCommitAllowed?: () => void;
+  },
+): Promise<SessionEntry | null> {
+  if (params.assertCommitAllowed) {
+    warnPluginSdkDeprecation({
+      family: "session-store",
+      method: "updateLastRoute.assertCommitAllowed",
+      replacement: "updateLastRouteWithAuthority",
+    });
+  }
+  return updateSessionLastRoute(params).then(copyMutableSessionEntry);
+}
+
+/** Route preparation runs before the worker's conditional commit. */
+export function updateLastRouteWithAuthority(
+  params: UpdateSessionLastRouteParams & {
+    authority: SessionEntryPatchAuthority;
+  },
+): Promise<SessionEntry | null> {
+  return updateSessionLastRouteInScope(
+    { sessionKey: params.sessionKey, storePath: params.storePath },
+    { ...params, workerGuard: sessionEntryPatchOptions(params).workerGuard },
+  ).then(copyMutableSessionEntry);
+}
 export {
   evaluateSessionFreshness,
   resolveChannelResetConfig,

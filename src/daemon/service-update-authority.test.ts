@@ -1,61 +1,114 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as processExec from "../process/exec.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { execFileUtf8 } from "./exec-file.js";
-import { publishLaunchAgentPlist } from "./launchd-service-files.js";
+import { resolveLaunchAgentPlistPath, writeLaunchAgentPlist } from "./launchd-service-files.js";
 import {
-  assertGatewayServiceUpdateCurrent,
-  withGatewayServiceUpdateAuthority,
+  assertGatewayServiceFallbackAllowed as assertFallbackAllowed,
+  assertGatewayServiceUpdateCurrent as assertUpdateCurrent,
+  isUpdateOwnedGatewayServiceCommand as isUpdateOwned,
+  readGatewayServiceUpdateOriginalRoot as readOriginalRoot,
+  withGatewayServiceInstallationRecovery as recoverInstallation,
+  withGatewayServiceUpdateAuthority as withUpdateAuthority,
 } from "./service-update-authority.js";
 
 vi.mock("./launchd-system.js", () => ({ assertNoSystemLaunchDaemonOwnership: async () => {} }));
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-it.skipIf(process.platform === "win32")(
-  "native client retains its registered receiver process group",
-  async () => {
-    const parentGroup = spawnSync("ps", ["-o", "pgid=", "-p", String(process.pid)], {
-      encoding: "utf8",
-    });
-    expect(parentGroup.status).toBe(0);
-    const result = await withGatewayServiceUpdateAuthority(
-      () => {},
-      () =>
-        execFileUtf8(process.execPath, [
-          "-e",
-          `const {spawnSync}=require("node:child_process"); process.stdout.write(spawnSync("ps",["-o","pgid=","-p",String(process.pid)],{encoding:"utf8"}).stdout);`,
-        ]),
-    );
-    expect(result.code, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe(parentGroup.stdout.trim());
+const retired = "fixture owner retired";
+const doctorAuthority = { updateOwned: false, assertRecoveryCurrent: () => {} };
+function asDoctor<T>(operation: () => Promise<T>, originalRoot?: string) {
+  return withUpdateAuthority(assertUpdateCurrent, operation, { ...doctorAuthority, originalRoot });
+}
+const owner = {
+  current: true,
+  assertCurrent: (): void => {
+    if (!owner.current) {
+      throw new Error(retired);
+    }
   },
-);
+  run<T>(operation: () => Promise<T>, options?: Parameters<typeof withUpdateAuthority>[2]) {
+    return withUpdateAuthority(owner.assertCurrent, operation, options);
+  },
+};
+beforeEach(() => {
+  owner.current = true;
+});
 
-it.each([false, true])("native subprocess refuses a revoked owner: revoked=%s", async (revoked) => {
-  const root = dirs.make("native-authority-");
-  const effect = path.join(root, "effect");
-  let current = true;
-  const run = withGatewayServiceUpdateAuthority(
-    () => {
-      if (!current) {
-        throw new Error("original update owner revoked");
-      }
-    },
-    async () => {
+it("retains the live original installation through nested guards and compensation", async () => {
+  await owner.run(
+    () =>
+      asDoctor(async () => {
+        expect(readOriginalRoot()).toBe("/original-install");
+        owner.current = false;
+        expect(readOriginalRoot).toThrow(retired);
+        owner.current = true;
+        await expect(
+          recoverInstallation(
+            () => Promise.reject(new Error("installation failed")),
+            async () => {
+              expect(readOriginalRoot()).toBe("/original-install");
+              return false;
+            },
+          ),
+        ).rejects.toThrow("installation failed");
+      }, "/replacement-install"),
+    { originalRoot: "/original-install" },
+  );
+  expect(readOriginalRoot()).toBeUndefined();
+});
+
+it("retains recovery material when a native writer has not settled", async () => {
+  vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue(
+    createCommandResult({ cleanup: "uncertain" }),
+  );
+  const restore = vi.fn(async () => true);
+  await expect(
+    owner.run(() =>
+      recoverInstallation(() => execFileUtf8(process.execPath, ["-e", "process.exit(0)"]), restore),
+    ),
+  ).rejects.toMatchObject({ code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" });
+  expect(restore).not.toHaveBeenCalled();
+});
+
+it.each([
+  [false, false],
+  [true, false],
+  [false, true],
+  [true, true],
+])("native subprocess retains its owner (revoked=%s, nested=%s)", async (revoked, nested) => {
+  const effect = path.join(dirs.make("native-authority-"), "effect");
+  const parentGroup =
+    process.platform === "win32" || revoked || nested
+      ? undefined
+      : spawnSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" });
+  if (parentGroup) {
+    expect(parentGroup.status).toBe(0);
+  }
+  const run = owner.run(async () => {
+    const invoke = async () => {
       await Promise.resolve();
-      current = !revoked;
+      owner.current = !revoked;
       const result = await execFileUtf8(process.execPath, [
         "-e",
-        `require("node:fs").writeFileSync(${JSON.stringify(effect)},"owned")`,
+        `require("node:fs").writeFileSync(${JSON.stringify(effect)},"owned");
+          if (${parentGroup !== undefined}) process.stdout.write(require("node:child_process").spawnSync("ps", ["-o", "pgid=", "-p", String(process.pid)], {encoding: "utf8"}).stdout);`,
       ]);
       expect(result.code, result.stderr).toBe(0);
-    },
-  );
+      if (parentGroup) {
+        expect(result.stdout.trim()).toBe(parentGroup.stdout.trim());
+      }
+    };
+    await (nested ? withUpdateAuthority(() => {}, invoke) : invoke());
+  });
   if (revoked) {
-    await expect(run).rejects.toThrow("original update owner revoked");
+    await expect(run).rejects.toThrow(retired);
     await expect(fs.stat(effect)).rejects.toMatchObject({ code: "ENOENT" });
   } else {
     await run;
@@ -63,47 +116,69 @@ it.each([false, true])("native subprocess refuses a revoked owner: revoked=%s", 
   }
 });
 
+it.each([true, false])("retains Doctor compensation custody (%s)", async (updater) => {
+  const ready = createDeferred();
+  let late!: Promise<void>;
+  const restore = vi.fn(async () => {
+    expect(() => assertFallbackAllowed("detached launch")).toThrow("not an update-owned");
+    late = ready.promise.then(() => {
+      assertUpdateCurrent();
+    });
+    return true;
+  });
+  const install = () =>
+    recoverInstallation(async () => {
+      expect(isUpdateOwned()).toBe(updater);
+      await Promise.resolve();
+      owner.current = false;
+    }, restore);
+  await expect(
+    owner.run(updater ? () => asDoctor(install) : install, updater ? undefined : doctorAuthority),
+  ).rejects.toMatchObject({
+    code: "service-authority-revoked",
+    outcome: updater ? "recovery-pending" : "restored",
+  });
+  if (updater) {
+    expect(restore).not.toHaveBeenCalled();
+  } else {
+    ready.resolve();
+    await expect(late).rejects.toThrow("has closed");
+  }
+});
+
 it("native plist publication rechecks after asynchronous preparation, without stale rollback", async () => {
-  const root = dirs.make("native-plist-authority-");
-  const plistPath = path.join(root, "test.plist");
+  const env = { HOME: dirs.make("native-plist-authority-") };
+  const plistPath = resolveLaunchAgentPlistPath(env);
+  await fs.mkdir(path.dirname(plistPath), { recursive: true });
   await fs.writeFile(plistPath, "original");
-  let current = true;
   const originalWrite = fs.writeFile;
   vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
     await originalWrite(...args);
-    current = false;
+    owner.current = false;
   });
   await expect(
-    withGatewayServiceUpdateAuthority(
-      () => {
-        if (!current) {
-          throw new Error("original update owner revoked");
-        }
-      },
-      () =>
-        publishLaunchAgentPlist({
-          label: "ai.openclaw.native-test",
-          plistPath,
-          contents: "replacement",
-        }),
+    owner.run(() =>
+      writeLaunchAgentPlist({ env, stdout: process.stdout, programArguments: [process.execPath] }),
     ),
-  ).rejects.toThrow("original update owner revoked");
+  ).rejects.toThrow(retired);
   expect(await fs.readFile(plistPath, "utf8")).toBe("original");
 });
 
-it("async work cannot retain an admitted native owner after command completion", async () => {
-  let release!: () => void;
-  const ready = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+it.each([true, false])("closes retained guards and async work (update=%s)", async (updateOwned) => {
+  const ready = createDeferred();
   let late!: Promise<void>;
-  await withGatewayServiceUpdateAuthority(
-    () => {},
-    async () => {
-      late = ready.then(() => assertGatewayServiceUpdateCurrent());
+  const retained = await withUpdateAuthority(
+    undefined,
+    async (assertCurrent) => {
+      await Promise.resolve();
+      assertCurrent();
+      late = ready.promise.then(() => assertFallbackAllowed("late detached launch"));
+      return assertCurrent;
     },
+    { ...doctorAuthority, updateOwned },
   );
-  release();
+  expect(retained).toThrow("has closed");
+  ready.resolve();
   await expect(late).rejects.toThrow("has closed");
-  expect(assertGatewayServiceUpdateCurrent).not.toThrow();
+  expect(assertUpdateCurrent).not.toThrow();
 });

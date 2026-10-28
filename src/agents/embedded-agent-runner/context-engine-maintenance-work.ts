@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { hasSameContextEngineInstance } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { AsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
@@ -15,6 +14,7 @@ export type ContextEngineMaintenanceResources = {
 export async function runContextEngineMaintenanceWork(
   run: () => Promise<void>,
   signal: AbortSignal,
+  releaseResources?: () => Promise<void>,
 ): Promise<void> {
   const work = new AsyncWorkScope();
   const context = work.run(() => AsyncLocalStorage.snapshot());
@@ -31,7 +31,19 @@ export async function runContextEngineMaintenanceWork(
       // Normal completion must not abort work that returned an early result.
       await AsyncWorkScope.runWhenAllIdle(
         () => [work],
-        () => context(() => work.drain()),
+        () => context(() => work.beginClose()),
+      );
+      // Abort descendants still own resources; lease release can then admit its cleanup here.
+      await AsyncWorkScope.runWhenAllIdle(
+        () => [work],
+        () =>
+          context(async () => {
+            try {
+              await releaseResources?.();
+            } finally {
+              await work.drain();
+            }
+          }),
       );
     } finally {
       signal.removeEventListener("abort", cancel);
@@ -48,65 +60,43 @@ export async function disposeDeferredMaintenanceContextEngine(
   maintenance: Pick<ReturnType<typeof createSessionMaintenanceOwner>, "run" | "signal">,
 ): Promise<void> {
   const failures: unknown[] = [];
+  const settle = async (work: Promise<unknown>[]) => {
+    for (const outcome of await Promise.allSettled(work)) {
+      if (outcome.status === "rejected") {
+        failures.push(outcome.reason);
+      }
+    }
+  };
   const resources = [...(params.factoryResourceOwners ?? [])];
+  let releasing: Promise<void> | undefined;
+  const releaseResources = () =>
+    (releasing ??= settle(resources.map(async (owner) => await owner.release())));
   try {
     await params.runInContext(() =>
       maintenance.run(() =>
-        runContextEngineMaintenanceWork(async () => {
-          const disposal = (async () => {
-            await params.contextEngine.dispose?.();
-          })();
-          const factoryWork = resources.map(({ closeFactoryWork }) =>
-            trackAsyncWork(closeFactoryWork),
-          );
-          const outcomes = await Promise.allSettled([disposal, ...factoryWork]);
-          for (const outcome of outcomes) {
-            if (outcome.status === "rejected") {
-              failures.push(outcome.reason);
-            }
-          }
-        }, maintenance.signal),
+        runContextEngineMaintenanceWork(
+          async () => {
+            const disposal = (async () => {
+              await params.contextEngine.dispose?.();
+            })();
+            const factoryWork = resources.map(({ closeFactoryWork }) =>
+              trackAsyncWork(closeFactoryWork),
+            );
+            await settle([disposal, ...factoryWork]);
+          },
+          maintenance.signal,
+          releaseResources,
+        ),
       ),
     );
   } catch (error) {
     failures.push(error);
   }
-  // The maintenance owner retains leases until engine and factory descendants have joined.
-  const releases = await Promise.allSettled(resources.map(async (owner) => await owner.release()));
-  for (const outcome of releases) {
-    if (outcome.status === "rejected") {
-      failures.push(outcome.reason);
-    }
-  }
+  // Admission failure still joins the same release, without repeating an admitted cleanup.
+  await releaseResources();
   for (const error of failures) {
     log.warn("context engine dispose failed after deferred maintenance", {
       errorMessage: formatErrorMessage(error),
     });
   }
-}
-
-type ContextEngineFactoryWork = {
-  contextEngine: ContextEngine;
-  factoryResourceOwners: Set<ContextEngineMaintenanceResources>;
-};
-
-/** Shared engine instances retain every factory lifetime until their final disposer starts. */
-export function mergeContextEngineFactoryWork(
-  params: ContextEngineFactoryWork,
-  activeEngine: ContextEngine,
-  activeResources: Set<ContextEngineMaintenanceResources>,
-  superseded?: ContextEngineFactoryWork,
-): Set<ContextEngineMaintenanceResources> {
-  if (superseded && hasSameContextEngineInstance(superseded.contextEngine, params.contextEngine)) {
-    for (const resources of superseded.factoryResourceOwners) {
-      params.factoryResourceOwners.add(resources);
-    }
-  }
-  if (hasSameContextEngineInstance(params.contextEngine, activeEngine)) {
-    for (const resources of params.factoryResourceOwners) {
-      activeResources.add(resources);
-    }
-    return activeResources;
-  }
-  return params.factoryResourceOwners;
 }

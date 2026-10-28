@@ -1,121 +1,87 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
-import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
-import { openSqliteWorkerStore } from "openclaw/plugin-sdk/sqlite-runtime";
-import type {
-  PersistedWorkboardAttachment,
-  PersistedWorkboardBoard,
-  WorkboardCardStore,
-  WorkboardKeyedStore,
-  WorkboardSubscriptionStore,
-} from "./persistence-types.js";
+import {
+  getDatabaseEngineInput,
+  openEngineWorkerStore,
+  runEngineStoreOperation,
+} from "openclaw/plugin-sdk/database-engine-runtime";
+import { readSqliteDatabaseWriteTokenForPath } from "openclaw/plugin-sdk/sqlite-runtime";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import type { WorkboardPersistence, WorkboardWriteAuthority } from "./persistence-types.js";
 import type {
   WorkboardSqliteOperations,
   WorkboardSqliteWorkerOperations,
 } from "./sqlite-store-contract.js";
 import { unwrapWorkboardSqliteResult } from "./sqlite-store-errors.js";
-import { resolveWorkboardSqlitePath } from "./sqlite-store-paths.js";
 
-type WorkboardSqliteStores = {
-  cards: WorkboardCardStore;
-  boards: WorkboardKeyedStore<PersistedWorkboardBoard>;
-  subscriptions: WorkboardSubscriptionStore;
-  attachments: WorkboardKeyedStore<PersistedWorkboardAttachment>;
-  ready: Promise<number>;
-  dataVersion(this: void): Promise<number>;
+type WorkboardSqliteStores = WorkboardPersistence & {
+  ready: Promise<void>;
+  readWriteToken(this: void): string | undefined;
   close(this: void): Promise<void>;
+  runWithWriteAuthority: WorkboardWriteAuthority;
 };
 
 export function createWorkboardSqliteStores(options: {
   dbPath?: string;
-  env?: NodeJS.ProcessEnv;
   workerModuleUrl: URL;
+  /** Schema discovery must not allocate a durable store before a tool executes. */
+  lazy?: boolean;
 }): WorkboardSqliteStores {
-  const databasePath = path.resolve(options.dbPath ?? resolveWorkboardSqlitePath(options.env));
-  const worker = openSqliteWorkerStore<WorkboardSqliteWorkerOperations>({
-    moduleUrl: options.workerModuleUrl,
-    databasePath,
-    input: undefined,
-  });
-  let ownedConnection: number | undefined;
-  let brokerClosed = false;
-  let brokerCleanup = false;
+  const databasePath = path.resolve(
+    options.dbPath ?? path.join(resolveStateDir(), "plugins", "workboard", "workboard.sqlite"),
+  );
+  const selectedDatabase = getDatabaseEngineInput("workboard");
+  const openWorker = () =>
+    openEngineWorkerStore<WorkboardSqliteWorkerOperations>(
+      {
+        moduleUrl: options.workerModuleUrl,
+        databasePath,
+        input: selectedDatabase,
+      },
+      selectedDatabase,
+    );
+  let worker = options.lazy ? undefined : openWorker();
   let sealed = false;
-  let openingFailure: { error: unknown } | undefined;
   let closing: Promise<void> | undefined;
   const operations = new Set<Promise<unknown>>();
-  async function cleanup() {
-    // Rejected admission stays broker-owned; this facade received no lease to release.
-    const store = await worker.catch(() => undefined);
-    if (!store) {
-      return;
-    }
-    if (ownedConnection !== undefined && !brokerCleanup) {
-      const result = await store
-        .execute({ type: "connection.close", input: { connection: ownedConnection } })
-        .catch((error: unknown) => {
-          const code = extractErrorCode(error);
-          if (code === "closed" || code === "unavailable" || code === "outcome-unknown") {
-            // Terminal transport cleanup belongs to the broker's joined retirement.
-            brokerCleanup = true;
-            return undefined;
-          }
-          throw error;
-        });
-      if (result !== undefined) {
-        unwrapWorkboardSqliteResult(result);
-        ownedConnection = undefined;
-      }
-    }
-    if (!brokerClosed) {
-      await store.close();
-      brokerClosed = true;
-      ownedConnection = undefined;
-    }
-  }
-  const opened = worker
-    .then(async (store) => {
-      const result = await store.execute({ type: "connection.open", input: undefined });
-      if (result.ok) {
-        ownedConnection = result.value.connection;
-        return result.value;
-      }
-      ownedConnection = result.failure.cleanupConnection;
-      return unwrapWorkboardSqliteResult<WorkboardSqliteOperations["connection.open"]["output"]>(
-        result,
-      );
-    })
-    .catch(async (error: unknown) => {
-      openingFailure = { error };
-      sealed = true;
-      if (ownedConnection === undefined) {
-        try {
-          await cleanup();
-        } catch {
-          /* Explicit close retains the failed broker cleanup. */
-        }
-      }
-      throw error;
-    });
-  const ready = opened.then((value) => value.dataVersion);
+  const writeAuthority = new AsyncLocalStorage<{ active: boolean; assertCurrent?: () => void }>();
+  const ready = worker ? worker.then(() => undefined) : Promise.resolve();
   void ready.catch(() => {});
   async function execute<K extends keyof WorkboardSqliteOperations>(
     type: K,
     input: WorkboardSqliteOperations[K]["input"],
+    writes = false,
   ): Promise<WorkboardSqliteOperations[K]["output"]> {
-    return unwrapWorkboardSqliteResult(await (await worker).execute({ type, input }));
-  }
-  async function run<Args, T>(
-    args: Args,
-    operation: (connection: number, captured: Args) => Promise<T>,
-  ): Promise<T> {
-    if (openingFailure) {
-      throw openingFailure.error;
+    const authority = writes ? writeAuthority.getStore() : undefined;
+    const store = await (worker ??= openWorker());
+    const result = unwrapWorkboardSqliteResult(
+      await runEngineStoreOperation(
+        store,
+        selectedDatabase,
+        writes,
+        (scope) => scope.execute({ type, input }),
+        authority
+          ? () => {
+              if (!authority.active) {
+                throw new Error("Workboard mutation authority has settled.");
+              }
+              authority.assertCurrent?.();
+            }
+          : undefined,
+        databasePath,
+      ),
+    );
+    // A rejected comparison has accepted no mutation; a retry still needs authority.
+    if (authority && result !== false && result !== "conflict" && result !== "owner_busy") {
+      authority.assertCurrent = undefined;
     }
+    return result;
+  }
+  async function run<T>(operation: () => Promise<T>): Promise<T> {
     if (sealed) {
       throw new Error("Workboard SQLite connection is closed.");
     }
-    const captured = structuredClone(args);
-    const pending = opened.then(({ connection }) => operation(connection, captured));
+    const pending = operation();
     operations.add(pending);
     try {
       return await pending;
@@ -123,112 +89,62 @@ export function createWorkboardSqliteStores(options: {
       operations.delete(pending);
     }
   }
+  function bindOperation<K extends keyof WorkboardSqliteOperations>(type: K, writes = false) {
+    return (...args: WorkboardSqliteOperations[K]["input"]["args"]) =>
+      run(() => execute(type, { args }, writes));
+  }
   return {
+    async runWithWriteAuthority(assertCurrent, operation) {
+      const authority: { active: boolean; assertCurrent?: () => void } = {
+        active: true,
+        assertCurrent,
+      };
+      try {
+        return await writeAuthority.run(authority, operation);
+      } finally {
+        authority.active = false;
+      }
+    },
     ready,
-    dataVersion: () => run(undefined, (connection) => execute("dataVersion", { connection })),
+    readWriteToken: () => readSqliteDatabaseWriteTokenForPath(databasePath),
     cards: {
-      register: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.register", { connection, args: captured }),
-        ),
-      registerIfAbsent: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.registerIfAbsent", { connection, args: captured }),
-        ),
-      registerIfUpdatedAt: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.registerIfUpdatedAt", { connection, args: captured }),
-        ),
-      claimIfOwnerAvailable: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.claimIfOwnerAvailable", { connection, args: captured }),
-        ),
-      deleteIfUpdatedAt: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.deleteIfUpdatedAt", { connection, args: captured }),
-        ),
-      lookup: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.lookup", { connection, args: captured }),
-        ),
-      delete: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.delete", { connection, args: captured }),
-        ),
-      entries: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.entries", { connection, args: captured }),
-        ),
-      listCardStatuses: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.listCardStatuses", { connection, args: captured }),
-        ),
-      listBoardAggregates: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.listBoardAggregates", { connection, args: captured }),
-        ),
-      listStatsAggregates: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.listStatsAggregates", { connection, args: captured }),
-        ),
-      hasCards: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.hasCards", { connection, args: captured }),
-        ),
+      register: bindOperation("cards.register", true),
+      registerIfAbsent: bindOperation("cards.registerIfAbsent", true),
+      registerIfUpdatedAt: bindOperation("cards.registerIfUpdatedAt", true),
+      claimIfOwnerAvailable: bindOperation("cards.claimIfOwnerAvailable", true),
+      deleteIfUpdatedAt: bindOperation("cards.deleteIfUpdatedAt", true),
+      lookup: bindOperation("cards.lookup"),
+      delete: bindOperation("cards.delete", true),
+      entries: bindOperation("cards.entries"),
+      listCardStatuses: bindOperation("cards.listCardStatuses"),
+      listBoardAggregates: bindOperation("cards.listBoardAggregates"),
+      listStatsAggregates: bindOperation("cards.listStatsAggregates"),
+      hasCards: bindOperation("cards.hasCards"),
     },
     boards: {
-      register: (...args) =>
-        run(args, (connection, captured) =>
-          execute("boards.register", { connection, args: captured }),
-        ),
-      lookup: (...args) =>
-        run(args, (connection, captured) =>
-          execute("boards.lookup", { connection, args: captured }),
-        ),
-      delete: (...args) =>
-        run(args, (connection, captured) =>
-          execute("boards.delete", { connection, args: captured }),
-        ),
-      entries: (...args) =>
-        run(args, (connection, captured) =>
-          execute("boards.entries", { connection, args: captured }),
-        ),
+      register: bindOperation("boards.register", true),
+      lookup: bindOperation("boards.lookup"),
+      delete: bindOperation("boards.delete", true),
+      entries: bindOperation("boards.entries"),
+    },
+    sessionsBoard: {
+      get: bindOperation("sessionsBoard.get"),
+      update: bindOperation("sessionsBoard.update", true),
+      listPlacements: bindOperation("sessionsBoard.listPlacements"),
+      repairPlacements: bindOperation("sessionsBoard.repairPlacements", true),
+      writePlacement: bindOperation("sessionsBoard.writePlacement", true),
     },
     subscriptions: {
-      register: (...args) =>
-        run(args, (connection, captured) =>
-          execute("subscriptions.register", { connection, args: captured }),
-        ),
-      lookup: (...args) =>
-        run(args, (connection, captured) =>
-          execute("subscriptions.lookup", { connection, args: captured }),
-        ),
-      delete: (...args) =>
-        run(args, (connection, captured) =>
-          execute("subscriptions.delete", { connection, args: captured }),
-        ),
-      entries: (...args) =>
-        run(args, (connection, captured) =>
-          execute("subscriptions.entries", { connection, args: captured }),
-        ),
+      register: bindOperation("subscriptions.register", true),
+      lookup: bindOperation("subscriptions.lookup"),
+      delete: bindOperation("subscriptions.delete", true),
+      entries: bindOperation("subscriptions.entries"),
     },
     attachments: {
-      register: (...args) =>
-        run(args, (connection, captured) =>
-          execute("attachments.register", { connection, args: captured }),
-        ),
-      lookup: (...args) =>
-        run(args, (connection, captured) =>
-          execute("attachments.lookup", { connection, args: captured }),
-        ),
-      delete: (...args) =>
-        run(args, (connection, captured) =>
-          execute("attachments.delete", { connection, args: captured }),
-        ),
-      entries: (...args) =>
-        run(args, (connection, captured) =>
-          execute("attachments.entries", { connection, args: captured }),
-        ),
+      register: bindOperation("attachments.register", true),
+      lookup: bindOperation("attachments.lookup"),
+      delete: bindOperation("attachments.delete", true),
+      entries: bindOperation("attachments.entries"),
     },
     close() {
       sealed = true;
@@ -237,8 +153,8 @@ export function createWorkboardSqliteStores(options: {
           while (operations.size) {
             await Promise.allSettled(operations);
           }
-          await opened.catch(() => undefined);
-          await cleanup();
+          const store = await worker?.catch(() => undefined);
+          await store?.close();
         })
         .catch((error: unknown) => {
           closing = undefined;

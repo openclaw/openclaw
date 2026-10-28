@@ -1,3 +1,4 @@
+import { isReplyPayloadTargetSuppressed } from "../../auto-reply/reply-payload.js";
 // Reply policy coordinates explicit and implicit reply-to ids across chunked or
 // multi-payload outbound delivery.
 import { isSingleUseReplyToMode } from "../../auto-reply/reply/reply-reference.js";
@@ -39,21 +40,16 @@ export function createReplyToFanout(params: {
   replyToMode?: ReplyToMode;
   replyToIdSource?: ReplyToResolution["source"];
 }): () => string | undefined {
-  const replyToId = params.replyToId ?? undefined;
-  if (!replyToId) {
-    return () => undefined;
-  }
+  let current = params.replyToId || undefined;
   const singleUse =
     params.replyToIdSource !== "explicit" &&
     params.replyToMode !== undefined &&
     isSingleUseReplyToMode(params.replyToMode);
-  if (!singleUse) {
-    return () => replyToId;
-  }
-  let current: string | undefined = replyToId;
   return () => {
     const value = current;
-    current = undefined;
+    if (singleUse) {
+      current = undefined;
+    }
     return value;
   };
 }
@@ -65,41 +61,34 @@ export function createReplyToDeliveryPolicy(params: {
   replyToMode?: ReplyToMode;
 }): {
   resolveCurrentReplyTo: (payload: ReplyPayload) => ReplyToResolution;
-  applyReplyToConsumption: <T extends ReplyToOverride>(
-    overrides: T,
-    options?: { consumeImplicitReply?: boolean },
-  ) => T;
+  applyReplyToConsumption: <T extends ReplyToOverride>(overrides: T) => T;
 } {
-  const reply = normalizeOutboundReplyFacts(params);
+  let reply = normalizeOutboundReplyFacts(params);
   const singleUseReplyTo = reply?.source === "implicit" && isSingleUseReplyToMode(reply.mode);
-  let replyToConsumed = false;
 
   const resolveCurrentReplyTo = (payload: ReplyPayload): ReplyToResolution => {
+    if (isReplyPayloadTargetSuppressed(payload)) {
+      return {};
+    }
     if (payload.replyToId != null) {
       return payload.replyToId ? { replyToId: payload.replyToId, source: "explicit" } : {};
     }
     if (!reply) {
       return {};
     }
-    if (reply.source === "explicit" || !singleUseReplyTo) {
-      return { replyToId: reply.replyToId, source: reply.source };
-    }
-    return replyToConsumed ? {} : { replyToId: reply.replyToId, source: "implicit" };
+    return { replyToId: reply.replyToId, source: reply.source };
   };
 
-  const applyReplyToConsumption = <T extends ReplyToOverride>(
-    overrides: T,
-    options?: { consumeImplicitReply?: boolean },
-  ): T => {
-    if (!options?.consumeImplicitReply || !overrides.replyToId || !singleUseReplyTo) {
+  const applyReplyToConsumption = <T extends ReplyToOverride>(overrides: T): T => {
+    if (overrides.replyToIdSource !== "implicit" || !overrides.replyToId || !singleUseReplyTo) {
       return overrides;
     }
-    if (replyToConsumed) {
+    if (!reply) {
       // Single-use implicit reply targets apply to the first delivered payload only;
       // later payloads must not accidentally thread into the same source message.
       return { ...overrides, replyToId: undefined };
     }
-    replyToConsumed = true;
+    reply = undefined;
     return overrides;
   };
 

@@ -1,16 +1,16 @@
-// Top-level text status scan entrypoint.
 // Human `status --all` and JSON status use their dedicated command paths.
 
 import { withProgress } from "../cli/progress.js";
+import type { StatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import { executeStatusScanFromOverview } from "./status.scan-execute.ts";
 import { collectStatusScanOverview } from "./status.scan-overview.ts";
 import type { StatusScanResult } from "./status.scan-result.ts";
 
-/** Runs the text status scan. */
-export async function scanStatus(opts: {
-  timeoutMs?: number;
-  deep?: boolean;
-}): Promise<StatusScanResult> {
+export async function scanStatus(
+  opts: StatusGatewayProbeBudget & {
+    deep?: boolean;
+  },
+): Promise<StatusScanResult> {
   return await withProgress(
     {
       label: "Scanning status…",
@@ -35,7 +35,7 @@ export async function scanStatus(opts: {
           checkingTailscale: "Checking Tailscale…",
           checkingForUpdates: "Checking for updates…",
           resolvingAgents: "Resolving agents…",
-          probingGateway: "Probing gateway…",
+          probingGateway: "Checking gateway…",
           queryingChannelStatus: "Querying channel status…",
           summarizingChannels: "Summarizing channels…",
         },
@@ -44,9 +44,6 @@ export async function scanStatus(opts: {
       progress.setLabel("Checking memory and sessions…");
       const result = await executeStatusScanFromOverview({
         overview,
-        resolveMemory: async () => null,
-        channelIssues: overview.channelIssues,
-        channels: overview.channels,
         pluginCompatibility: [],
       });
       progress.tick();

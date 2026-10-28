@@ -3,7 +3,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   SessionDiskBudgetSweepResult,
   SessionUnreferencedArtifactSweepResult,
-} from "./disk-budget.js";
+} from "./disk-budget.types.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionStoreTarget } from "./targets.js";
@@ -57,7 +57,7 @@ export class SessionsCleanupFailureError extends Error {
   }
 }
 
-export type SessionsCleanupPartialErrorDetail = {
+type SessionsCleanupPartialErrorDetail = {
   failingAgentId: string;
   failingStorePath: string;
   message: string;
@@ -71,7 +71,7 @@ type SessionsCleanupAggregateResult = {
   stores: SessionCleanupSummary[];
 };
 
-export type SessionsCleanupPartialResult = SessionsCleanupAggregateResult & {
+type SessionsCleanupPartialResult = SessionsCleanupAggregateResult & {
   partialError: SessionsCleanupPartialErrorDetail;
 };
 

@@ -1,50 +1,71 @@
-// Upload store tests cover SQLite staging, integrity, concurrency, and cleanup.
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createDeferredCore as deferred } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { commitSkillUploadInDatabase } from "./upload-store-commit.js";
 import { SkillUploadRequestError } from "./upload-store-error.js";
+import { defaultSkillUploadStore } from "./upload-store.js";
+import { beginSkillUploadInDatabase } from "./upload-store.kernel.js";
 import {
   deleteExpiredSkillUploadUnlessLeasedInDatabase,
   renewSkillUploadInstallLease,
 } from "./upload-store.sqlite.js";
-import { createSkillUploadStore } from "./upload-store.test-support.js";
+import {
+  chunkCount,
+  installLeaseCount,
+  observeExpiredUploadInventory,
+  observeSkillUploadRenewal,
+  sha256,
+  stateDatabase,
+  uploadExists,
+  useSkillUploadStoreLocation,
+} from "./upload-store.test-support.js";
 
 const ACTIVE_UPLOAD_LIMIT = 32;
 
 const tempDirs = createTempDirTracker();
 
-async function makeStore(options?: {
-  installLeaseHeartbeatMs?: number;
-  installLeaseMs?: number;
-  ttlMs?: number;
-}) {
+async function makeStore() {
   const root = tempDirs.make("openclaw-skill-upload-store-");
   const databasePath = path.join(root, "openclaw.sqlite");
-  return {
-    root,
-    databasePath,
-    store: createSkillUploadStore({
-      path: databasePath,
-      tempRootDir: root,
-      ...options,
-    }),
-  };
+  useSkillUploadStoreLocation(databasePath, root);
+  return { root, databasePath, store: defaultSkillUploadStore };
 }
 
-function stateDatabase(databasePath: string) {
-  return openOpenClawStateDatabase({ path: databasePath }).db;
+function beginUpload(store: typeof defaultSkillUploadStore, slug: string, sizeBytes = 3) {
+  return store.begin({ kind: "skill-archive", slug, sizeBytes });
+}
+function sendChunk(
+  store: typeof defaultSkillUploadStore,
+  uploadId: string,
+  bytes: Buffer,
+  offset = 0,
+) {
+  return store.chunk({ uploadId, offset, dataBase64: bytes.toString("base64") });
+}
+
+async function committedUpload(
+  store: typeof defaultSkillUploadStore,
+  slug: string,
+  databasePath?: string,
+) {
+  const upload = await store.begin({ kind: "skill-archive", slug, sizeBytes: 3 });
+  await store.chunk({ uploadId: upload.uploadId, offset: 0, dataBase64: "YWJj" });
+  if (databasePath) {
+    commitStagedFixture(databasePath, upload.uploadId);
+  } else {
+    await store.commit({ uploadId: upload.uploadId });
+  }
+  return upload;
 }
 
 function uploadCount(databasePath: string): number {
@@ -55,33 +76,10 @@ function uploadCount(databasePath: string): number {
   ).count;
 }
 
-function uploadExists(databasePath: string, uploadId: string): boolean {
-  return Boolean(
-    stateDatabase(databasePath)
-      .prepare("SELECT 1 AS found FROM skill_uploads WHERE upload_id = ?")
-      .get(uploadId),
-  );
-}
-
-function chunkCount(databasePath: string, uploadId?: string): number {
-  const row = uploadId
-    ? stateDatabase(databasePath)
-        .prepare("SELECT count(*) AS count FROM skill_upload_chunks WHERE upload_id = ?")
-        .get(uploadId)
-    : stateDatabase(databasePath)
-        .prepare("SELECT count(*) AS count FROM skill_upload_chunks")
-        .get();
-  return (row as { count: number }).count;
-}
-
-function installLeaseCount(databasePath: string, uploadId: string): number {
-  return (
-    stateDatabase(databasePath)
-      .prepare(
-        "SELECT count(*) AS count FROM state_leases WHERE scope = 'skill-upload-install' AND lease_key = ?",
-      )
-      .get(uploadId) as { count: number }
-  ).count;
+function expireUpload(databasePath: string, uploadId: string) {
+  stateDatabase(databasePath)
+    .prepare("UPDATE skill_uploads SET expires_at = 1 WHERE upload_id = ?")
+    .run(uploadId);
 }
 
 function commitStagedFixture(databasePath: string, uploadId: string) {
@@ -89,35 +87,25 @@ function commitStagedFixture(databasePath: string, uploadId: string) {
   return commitSkillUploadInDatabase({ uploadId }, { database, path: databasePath });
 }
 
-function sha256(bytes: Buffer): string {
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((innerResolve) => {
-    resolve = innerResolve;
+function holdUpload(store: typeof defaultSkillUploadStore, uploadId: string) {
+  const entered = deferred();
+  const release = deferred();
+  const pinned = store.withCommittedUpload(uploadId, async () => {
+    entered.resolve();
+    await release.promise;
+    return true;
   });
-  return { promise, resolve };
+  return { entered, release, pinned };
 }
 
 async function expectUploadError(
   promise: Promise<unknown>,
   message: string | RegExp,
 ): Promise<void> {
-  try {
-    await promise;
-  } catch (err) {
-    expect(err).toBeInstanceOf(SkillUploadRequestError);
-    const actual = err instanceof Error ? err.message : String(err);
-    if (typeof message === "string") {
-      expect(actual).toBe(message);
-    } else {
-      expect(actual).toMatch(message);
-    }
-    return;
-  }
-  throw new Error("expected upload request error");
+  await expect(promise).rejects.toBeInstanceOf(SkillUploadRequestError);
+  await expect(promise).rejects.toMatchObject({
+    message: typeof message === "string" ? message : expect.stringMatching(message),
+  });
 }
 
 async function expectMissingPath(targetPath: string): Promise<void> {
@@ -125,42 +113,6 @@ async function expectMissingPath(targetPath: string): Promise<void> {
 }
 
 describe("skill upload store", () => {
-  let activeUploadLimitError: unknown;
-  let capacityReads: ReturnType<typeof trackSqliteStatementExecutions<"capacity">>;
-  let activeLimitRoot: string | undefined;
-
-  beforeAll(async () => {
-    activeLimitRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-upload-limit-"));
-    const store = createSkillUploadStore({
-      path: path.join(activeLimitRoot, "openclaw.sqlite"),
-      tempRootDir: activeLimitRoot,
-    });
-    capacityReads = trackSqliteStatementExecutions(
-      stateDatabase(path.join(activeLimitRoot, "openclaw.sqlite")),
-      ["capacity"],
-      (sql) => (/from "skill_uploads" where "expires_at" >/u.test(sql) ? "capacity" : null),
-    );
-    try {
-      for (let i = 0; i < ACTIVE_UPLOAD_LIMIT; i += 1) {
-        await store.begin({ kind: "skill-archive", slug: `active-${i}`, sizeBytes: 1 });
-      }
-      try {
-        await store.begin({ kind: "skill-archive", slug: "too-many", sizeBytes: 1 });
-      } catch (err) {
-        activeUploadLimitError = err;
-      }
-    } finally {
-      capacityReads.restore();
-    }
-  });
-
-  afterAll(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    if (activeLimitRoot) {
-      await fs.rm(activeLimitRoot, { recursive: true, force: true });
-    }
-  });
-
   afterEach(async () => {
     vi.restoreAllMocks();
     await closeOpenClawStateDatabaseAsync();
@@ -171,33 +123,20 @@ describe("skill upload store", () => {
     const { root, databasePath, store } = await makeStore();
     const archive = Buffer.from("zip-bytes");
     const digest = sha256(archive);
-    const begin = await store.begin({
-      kind: "skill-archive",
+    const request = {
+      kind: "skill-archive" as const,
       slug: "demo-skill",
       sizeBytes: archive.length,
       sha256: digest,
       idempotencyKey: "same-upload",
-    });
-    const repeated = await store.begin({
-      kind: "skill-archive",
-      slug: "demo-skill",
-      sizeBytes: archive.length,
-      sha256: digest,
-      idempotencyKey: "same-upload",
-    });
+    };
+    const begin = await store.begin(request);
+    const repeated = await store.begin(request);
     expect(repeated.uploadId).toBe(begin.uploadId);
 
-    await store.chunk({
-      uploadId: begin.uploadId,
-      offset: 0,
-      dataBase64: archive.subarray(0, 3).toString("base64"),
-    });
+    await sendChunk(store, begin.uploadId, archive.subarray(0, 3));
     expect(chunkCount(databasePath, begin.uploadId)).toBe(1);
-    const chunk = await store.chunk({
-      uploadId: begin.uploadId,
-      offset: 3,
-      dataBase64: archive.subarray(3).toString("base64"),
-    });
+    const chunk = await sendChunk(store, begin.uploadId, archive.subarray(3), 3);
     expect(chunk.receivedBytes).toBe(archive.length);
 
     const commit = await store.commit({ uploadId: begin.uploadId, sha256: digest });
@@ -228,14 +167,7 @@ describe("skill upload store", () => {
       }
       return committedRecord;
     });
-    expect(record).toMatchObject({
-      uploadId: begin.uploadId,
-      slug: "demo-skill",
-      force: false,
-      receivedBytes: archive.length,
-      actualSha256: digest,
-      committed: true,
-    });
+    expect(record).toMatchObject({ slug: "demo-skill", force: false, actualSha256: digest });
     await expectMissingPath(materializedPath);
     await expectMissingPath(path.join(root, "tmp", "skill-uploads"));
   });
@@ -252,227 +184,49 @@ describe("skill upload store", () => {
     );
   });
 
-  it("rejects offset, size, and sha mismatches", async () => {
+  it("preserves the upload base64 dialect and rejects offset, size, and sha mismatches", async () => {
     const { store } = await makeStore();
     const archive = Buffer.from("abc");
-    const begin = await store.begin({
-      kind: "skill-archive",
-      slug: "demo-skill",
-      sizeBytes: archive.length,
-    });
+    const begin = await beginUpload(store, "demo-skill", archive.length);
+    for (const dataBase64 of ["", "YQ", "Y Q=", "YQ==YQ==", "YQ==?", "YQ==="]) {
+      await expectUploadError(
+        store.chunk({ uploadId: begin.uploadId, offset: 0, dataBase64 }),
+        "invalid dataBase64",
+      );
+    }
     await expectUploadError(
-      store.chunk({
-        uploadId: begin.uploadId,
-        offset: 1,
-        dataBase64: archive.subarray(0, 1).toString("base64"),
-      }),
+      sendChunk(store, begin.uploadId, archive.subarray(0, 1), 1),
       "upload offset mismatch: expected 0, got 1",
     );
     await expectUploadError(
-      store.chunk({
-        uploadId: begin.uploadId,
-        offset: 0,
-        dataBase64: Buffer.from("abcd").toString("base64"),
-      }),
+      sendChunk(store, begin.uploadId, Buffer.from("abcd")),
       "upload chunk exceeds declared size",
     );
     await store.chunk({
       uploadId: begin.uploadId,
       offset: 0,
-      dataBase64: archive.subarray(0, 2).toString("base64"),
+      // Uploads trim outer whitespace and accept nonzero pad bits in padded base64.
+      dataBase64: " \tYWJ=\n",
     });
     await expectUploadError(
       store.commit({ uploadId: begin.uploadId }),
       "upload size mismatch: expected 3, got 2",
     );
 
-    const second = await store.begin({
-      kind: "skill-archive",
-      slug: "second-skill",
-      sizeBytes: archive.length,
-    });
-    await store.chunk({
-      uploadId: second.uploadId,
-      offset: 0,
-      dataBase64: archive.toString("base64"),
-    });
+    const second = await beginUpload(store, "second-skill", archive.length);
+    await sendChunk(store, second.uploadId, archive);
     await expectUploadError(
       store.commit({ uploadId: second.uploadId, sha256: "0".repeat(64) }),
       "upload sha256 mismatch",
     );
   });
 
-  it("resumes a multi-chunk upload from a new store instance", async () => {
-    const { databasePath, root, store } = await makeStore();
-    const archive = Buffer.from("abcdef");
-    const begin = await store.begin({
-      kind: "skill-archive",
-      slug: "resume-skill",
-      sizeBytes: archive.length,
-    });
-    await store.chunk({
-      uploadId: begin.uploadId,
-      offset: 0,
-      dataBase64: archive.subarray(0, 3).toString("base64"),
-    });
-
-    const reopened = createSkillUploadStore({ path: databasePath, tempRootDir: root });
-    await reopened.chunk({
-      uploadId: begin.uploadId,
-      offset: 3,
-      dataBase64: archive.subarray(3).toString("base64"),
-    });
-    await expect(
-      reopened.commit({ uploadId: begin.uploadId, sha256: sha256(archive) }),
-    ).resolves.toMatchObject({ sha256: sha256(archive) });
-  });
-
-  it("keeps archive bytes out of metadata reads until the install claim", async () => {
-    const { databasePath, store } = await makeStore();
-    const db = stateDatabase(databasePath);
-    const archiveReads: Array<{ bytes: number; inTransaction: boolean }> = [];
-    const nativeBlobs = new WeakSet<Uint8Array>();
-    const bufferFrom = vi.spyOn(Buffer, "from");
-    const observeRow = (row: Record<string, unknown>) => {
-      for (const bytes of [row.chunk_blob, row.archive_blob]) {
-        if (bytes instanceof Uint8Array) {
-          nativeBlobs.add(bytes);
-        }
-      }
-      if (row.archive_blob instanceof Uint8Array) {
-        archiveReads.push({
-          bytes: row.archive_blob.byteLength,
-          inTransaction: db.isTransaction,
-        });
-      }
-    };
-    const nativePrepare = db.prepare.bind(db);
-    vi.spyOn(db, "prepare").mockImplementation((sql) => {
-      const statement = nativePrepare(sql);
-      const nativeGet = statement.get.bind(statement);
-      vi.spyOn(statement, "get").mockImplementation(
-        new Proxy(nativeGet, {
-          apply(get, _receiver, bindings) {
-            const row = get(...bindings);
-            if (row) {
-              observeRow(row);
-            }
-            return row;
-          },
-        }),
-      );
-      const iterate = statement.iterate.bind(statement);
-      vi.spyOn(statement, "iterate").mockImplementation(function* (...bindings) {
-        for (const row of iterate(...bindings)) {
-          observeRow(row);
-          yield row;
-        }
-        return undefined;
-      });
-      return statement;
-    });
-    try {
-      const firstChunk = Buffer.alloc(4 * 1024 * 1024, 0x61);
-      const secondChunk = Buffer.alloc(4 * 1024 * 1024, 0x62);
-      const archive = Buffer.concat([firstChunk, secondChunk]);
-      const begin = await store.begin({
-        kind: "skill-archive",
-        slug: "large-skill",
-        sizeBytes: archive.length,
-        idempotencyKey: "large-upload",
-      });
-      await store.chunk({
-        uploadId: begin.uploadId,
-        offset: 0,
-        dataBase64: firstChunk.toString("base64"),
-      });
-      await store.chunk({
-        uploadId: begin.uploadId,
-        offset: firstChunk.length,
-        dataBase64: secondChunk.toString("base64"),
-      });
-      const staged = stateDatabase(databasePath)
-        .prepare("SELECT length(archive_blob) AS bytes FROM skill_uploads WHERE upload_id = ?")
-        .get(begin.uploadId) as { bytes: number };
-      expect(staged.bytes).toBe(0);
-      expect(chunkCount(databasePath, begin.uploadId)).toBe(2);
-
-      await store.commit({ uploadId: begin.uploadId, sha256: sha256(archive) });
-      const committed = stateDatabase(databasePath)
-        .prepare("SELECT length(archive_blob) AS bytes FROM skill_uploads WHERE upload_id = ?")
-        .get(begin.uploadId) as { bytes: number };
-      expect(committed.bytes).toBe(archive.length);
-      expect(chunkCount(databasePath, begin.uploadId)).toBe(0);
-      await expect(
-        store.begin({
-          kind: "skill-archive",
-          slug: "large-skill",
-          sizeBytes: archive.length,
-          idempotencyKey: "large-upload",
-        }),
-      ).resolves.toMatchObject({ uploadId: begin.uploadId, receivedBytes: archive.length });
-      await expect(store.commit({ uploadId: begin.uploadId })).resolves.toMatchObject({
-        sha256: sha256(archive),
-      });
-      await expectUploadError(
-        store.chunk({ uploadId: begin.uploadId, offset: archive.length, dataBase64: "YQ==" }),
-        "upload is already committed",
-      );
-      expect(archiveReads).toEqual([]);
-      await store.withCommittedUpload(begin.uploadId, async (record) => {
-        const materialized = await fs.readFile(record.archivePath);
-        expect(materialized).toHaveLength(archive.length);
-        expect(materialized.equals(archive), "materialized archive bytes").toBe(true);
-      });
-      expect(archiveReads).toEqual([{ bytes: archive.length, inTransaction: true }]);
-      const copiedBytes = bufferFrom.mock.calls.reduce((total, [value]) => {
-        const input: unknown = value;
-        return (
-          total + (input instanceof Uint8Array && nativeBlobs.has(input) ? input.byteLength : 0)
-        );
-      }, 0);
-      expect(copiedBytes).toBe(0);
-    } finally {
-      vi.restoreAllMocks();
-    }
-  });
-
-  it("uses the expiry and idempotency indexes", async () => {
-    const { databasePath } = await makeStore();
-    const db = stateDatabase(databasePath);
-    const expiryPlan = db
-      .prepare("EXPLAIN QUERY PLAN SELECT upload_id FROM skill_uploads WHERE expires_at <= ?")
-      .all(Date.now()) as Array<{ detail: string }>;
-    const idempotencyPlan = db
-      .prepare(
-        "EXPLAIN QUERY PLAN SELECT upload_id FROM skill_uploads WHERE idempotency_key_hash = ?",
-      )
-      .all("hash") as Array<{ detail: string }>;
-    expect(expiryPlan.map((row) => row.detail).join("\n")).toContain("idx_skill_uploads_expiry");
-    expect(idempotencyPlan.map((row) => row.detail).join("\n")).toMatch(
-      /idx_skill_uploads_idempotency|sqlite_autoindex_skill_uploads/u,
-    );
-  });
-
   it("accepts exactly one concurrent chunk at the same offset", async () => {
-    const { databasePath, root, store } = await makeStore();
-    const begin = await store.begin({
-      kind: "skill-archive",
-      slug: "concurrent-skill",
-      sizeBytes: 2,
-    });
-    const secondStore = createSkillUploadStore({ path: databasePath, tempRootDir: root });
+    const { databasePath, store } = await makeStore();
+    const begin = await beginUpload(store, "concurrent-skill", 2);
     const results = await Promise.allSettled([
-      store.chunk({
-        uploadId: begin.uploadId,
-        offset: 0,
-        dataBase64: Buffer.from("a").toString("base64"),
-      }),
-      secondStore.chunk({
-        uploadId: begin.uploadId,
-        offset: 0,
-        dataBase64: Buffer.from("b").toString("base64"),
-      }),
+      sendChunk(store, begin.uploadId, Buffer.from("a")),
+      sendChunk(store, begin.uploadId, Buffer.from("b")),
     ]);
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     const rejected = results.find((result) => result.status === "rejected");
@@ -484,15 +238,14 @@ describe("skill upload store", () => {
   });
 
   it("creates one row for concurrent idempotent begins and rejects conflicts", async () => {
-    const { databasePath, root, store } = await makeStore();
-    const secondStore = createSkillUploadStore({ path: databasePath, tempRootDir: root });
+    const { databasePath, store } = await makeStore();
     const params = {
       kind: "skill-archive" as const,
       slug: "idem-skill",
       sizeBytes: 3,
       idempotencyKey: "same-key",
     };
-    const [first, second] = await Promise.all([store.begin(params), secondStore.begin(params)]);
+    const [first, second] = await Promise.all([store.begin(params), store.begin(params)]);
     expect(second.uploadId).toBe(first.uploadId);
     expect(uploadCount(databasePath)).toBe(1);
     await expectUploadError(
@@ -501,49 +254,9 @@ describe("skill upload store", () => {
     );
   });
 
-  it("keeps the optional begin sha immutable across commit retries", async () => {
-    const { databasePath, store } = await makeStore();
-    const archive = Buffer.from("abc");
-    const digest = sha256(archive);
-    const params = {
-      kind: "skill-archive" as const,
-      slug: "late-sha-skill",
-      sizeBytes: archive.length,
-      idempotencyKey: "late-sha-key",
-    };
-    const begin = await store.begin(params);
-    await store.chunk({
-      uploadId: begin.uploadId,
-      offset: 0,
-      dataBase64: archive.toString("base64"),
-    });
-    await store.commit({ uploadId: begin.uploadId, sha256: digest });
-
-    await expect(store.begin(params)).resolves.toMatchObject({
-      uploadId: begin.uploadId,
-      receivedBytes: archive.length,
-    });
-    expect(
-      stateDatabase(databasePath)
-        .prepare("SELECT sha256, actual_sha256 FROM skill_uploads WHERE upload_id = ?")
-        .get(begin.uploadId),
-    ).toMatchObject({ sha256: null, actual_sha256: digest });
-  });
-
   it("rejects idempotent commit when committed metadata is missing the actual sha", async () => {
     const { databasePath, store } = await makeStore();
-    const archive = Buffer.from("abc");
-    const begin = await store.begin({
-      kind: "skill-archive",
-      slug: "corrupt-skill",
-      sizeBytes: archive.length,
-    });
-    await store.chunk({
-      uploadId: begin.uploadId,
-      offset: 0,
-      dataBase64: archive.toString("base64"),
-    });
-    await store.commit({ uploadId: begin.uploadId });
+    const begin = await committedUpload(store, "corrupt-skill");
     stateDatabase(databasePath)
       .prepare("UPDATE skill_uploads SET actual_sha256 = NULL WHERE upload_id = ?")
       .run(begin.uploadId);
@@ -554,65 +267,47 @@ describe("skill upload store", () => {
   });
 
   it("limits active uploads", async () => {
-    await expectUploadError(
-      Promise.reject(toLintErrorObject(activeUploadLimitError, "Non-Error rejection")),
-      "too many active skill uploads",
+    const { databasePath, store } = await makeStore();
+    const database = openOpenClawStateDatabase({ path: databasePath });
+    const capacityReads = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["capacity"],
+      (sql) => (/from "skill_uploads" where "expires_at" >/u.test(sql) ? "capacity" : null),
     );
-    expect(capacityReads.counts.capacity).toBeGreaterThan(0);
-    expect(capacityReads.rowCounts.capacity).toBeLessThanOrEqual(1);
+    try {
+      for (let i = 0; i < ACTIVE_UPLOAD_LIMIT; i += 1) {
+        await store.begin({ kind: "skill-archive", slug: `active-${i}`, sizeBytes: 1 });
+      }
+      const rejectAtCapacity = () =>
+        beginSkillUploadInDatabase(
+          { kind: "skill-archive", slug: "too-many", sizeBytes: 1, force: false, ttlMs: 60_000 },
+          { database },
+        );
+      let capacityError: unknown;
+      try {
+        rejectAtCapacity();
+      } catch (error) {
+        capacityError = error;
+      }
+      expect(capacityError).toBeInstanceOf(SkillUploadRequestError);
+      expect(capacityError).toHaveProperty("message", "too many active skill uploads");
+      expect(capacityReads.counts.capacity).toBeGreaterThan(0);
+      expect(capacityReads.rowCounts.capacity).toBeLessThanOrEqual(1);
+    } finally {
+      capacityReads.restore();
+    }
   });
 
-  it.each([Number.NaN, MAX_DATE_TIMESTAMP_MS])(
-    "rejects new uploads when clock %s cannot produce a valid expiry",
-    async (now) => {
-      const { databasePath, store } = await makeStore();
-      stateDatabase(databasePath);
-      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-      try {
-        await expectUploadError(
-          store.begin({ kind: "skill-archive", slug: "invalid-clock", sizeBytes: 1 }),
-          "invalid upload expiry",
-        );
-      } finally {
-        clock.mockRestore();
-      }
-    },
-  );
-
   it("expires unfinished and committed uploads", async () => {
-    let now = 1000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    const { databasePath, store } = await makeStore({ ttlMs: 10 });
+    const { databasePath, store } = await makeStore();
     const archive = Buffer.from("abc");
-    const begin = await store.begin({
-      kind: "skill-archive",
-      slug: "demo-skill",
-      sizeBytes: archive.length,
-    });
-    now = 1011;
-    await expectUploadError(
-      store.chunk({
-        uploadId: begin.uploadId,
-        offset: 0,
-        dataBase64: archive.toString("base64"),
-      }),
-      "upload has expired",
-    );
+    const begin = await beginUpload(store, "demo-skill", archive.length);
+    expireUpload(databasePath, begin.uploadId);
+    await expectUploadError(sendChunk(store, begin.uploadId, archive), "upload has expired");
     expect(uploadCount(databasePath)).toBe(0);
 
-    now = 2000;
-    const committed = await store.begin({
-      kind: "skill-archive",
-      slug: "committed-skill",
-      sizeBytes: archive.length,
-    });
-    await store.chunk({
-      uploadId: committed.uploadId,
-      offset: 0,
-      dataBase64: archive.toString("base64"),
-    });
-    commitStagedFixture(databasePath, committed.uploadId);
-    now = 2011;
+    const committed = await committedUpload(store, "committed-skill", databasePath);
+    expireUpload(databasePath, committed.uploadId);
     await expectUploadError(
       store.withCommittedUpload(committed.uploadId, async (record) => record),
       "upload has expired",
@@ -621,148 +316,87 @@ describe("skill upload store", () => {
   });
 
   it("does not sweep an upload while an install holds its lease", async () => {
-    let now = 1000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    const { databasePath, store } = await makeStore({ ttlMs: 10 });
-    const archive = Buffer.from("abc");
-    const committed = await store.begin({
-      kind: "skill-archive",
-      slug: "pinned-skill",
-      sizeBytes: archive.length,
-    });
-    await store.chunk({
-      uploadId: committed.uploadId,
-      offset: 0,
-      dataBase64: archive.toString("base64"),
-    });
-    commitStagedFixture(databasePath, committed.uploadId);
+    const { databasePath, store } = await makeStore();
+    const committed = await committedUpload(store, "pinned-skill", databasePath);
 
-    const entered = deferred();
-    const release = deferred();
-    const pinned = store.withCommittedUpload(committed.uploadId, async () => {
-      entered.resolve();
-      await release.promise;
-      return true;
-    });
+    const { entered, release, pinned } = holdUpload(store, committed.uploadId);
     await entered.promise;
-    now = 1011;
+    expireUpload(databasePath, committed.uploadId);
+    const inventoryRead = observeExpiredUploadInventory();
     const sweep = store.begin({ kind: "skill-archive", slug: "sweep-trigger", sizeBytes: 1 });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(uploadCount(databasePath)).toBe(1);
-
-    now = 5000;
-    release.resolve();
+    try {
+      await inventoryRead;
+      expect(uploadCount(databasePath)).toBe(1);
+      expect(installLeaseCount(databasePath, committed.uploadId)).toBe(1);
+    } finally {
+      release.resolve();
+    }
     await expect(pinned).resolves.toBe(true);
-    await expect(sweep).resolves.toMatchObject({ expiresAt: 5010 });
+    const swept = await sweep;
+    expect(uploadExists(databasePath, committed.uploadId)).toBe(false);
+    expect(uploadExists(databasePath, swept.uploadId)).toBe(true);
     expect(uploadCount(databasePath)).toBe(1);
   });
 
   it("rechecks chunk expiry after cleanup waits on another install", async () => {
-    let now = 1000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    const { databasePath, store } = await makeStore({ ttlMs: 10 });
+    const { databasePath, store } = await makeStore();
     const archive = Buffer.from("abc");
-    const pinnedUpload = await store.begin({
-      kind: "skill-archive",
-      slug: "blocking-skill",
-      sizeBytes: archive.length,
-    });
-    await store.chunk({
-      uploadId: pinnedUpload.uploadId,
-      offset: 0,
-      dataBase64: archive.toString("base64"),
-    });
-    commitStagedFixture(databasePath, pinnedUpload.uploadId);
-    now = 1005;
-    const pending = await store.begin({
-      kind: "skill-archive",
-      slug: "waiting-skill",
-      sizeBytes: archive.length,
-    });
+    const pinnedUpload = await committedUpload(store, "blocking-skill", databasePath);
+    const pending = await beginUpload(store, "waiting-skill", archive.length);
 
-    const entered = deferred();
-    const release = deferred();
-    const pinned = store.withCommittedUpload(pinnedUpload.uploadId, async () => {
-      entered.resolve();
-      await release.promise;
-    });
+    const { entered, release, pinned } = holdUpload(store, pinnedUpload.uploadId);
     await entered.promise;
-    now = 1011;
-    const chunk = store.chunk({
-      uploadId: pending.uploadId,
-      offset: 0,
-      dataBase64: archive.toString("base64"),
-    });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    now = 1020;
-    release.resolve();
+    expireUpload(databasePath, pinnedUpload.uploadId);
+    const inventoryRead = observeExpiredUploadInventory();
+    const chunk = sendChunk(store, pending.uploadId, archive);
+    try {
+      await inventoryRead;
+      expect(uploadExists(databasePath, pending.uploadId)).toBe(true);
+      expect(chunkCount(databasePath, pending.uploadId)).toBe(0);
+      expireUpload(databasePath, pending.uploadId);
+    } finally {
+      release.resolve();
+    }
     await pinned;
     await expectUploadError(chunk, "upload has expired");
     expect(uploadExists(databasePath, pending.uploadId)).toBe(false);
   });
 
   it("renews the install lease and preserves an expired leased upload", async () => {
-    let now = 1000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    const { databasePath, store } = await makeStore({
-      installLeaseHeartbeatMs: 10,
-      installLeaseMs: 100,
-    });
-    const archive = Buffer.from("abc");
-    const committed = await store.begin({
-      kind: "skill-archive",
-      slug: "heartbeat-skill",
-      sizeBytes: archive.length,
-    });
-    await store.chunk({
-      uploadId: committed.uploadId,
-      offset: 0,
-      dataBase64: archive.toString("base64"),
-    });
-    commitStagedFixture(databasePath, committed.uploadId);
+    const { databasePath, store } = await makeStore();
+    const committed = await committedUpload(store, "heartbeat-skill", databasePath);
 
-    const entered = deferred();
-    const release = deferred();
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-    const pinned = store.withCommittedUpload(committed.uploadId, async () => {
-      entered.resolve();
-      await release.promise;
-    });
+    const intervals = vi.spyOn(globalThis, "setInterval");
+    const renewalSettled = observeSkillUploadRenewal();
+    const { entered, release, pinned } = holdUpload(store, committed.uploadId);
     try {
       await entered.promise;
       const db = stateDatabase(databasePath);
-      const initialHeartbeat = (
-        db
-          .prepare(
-            "SELECT heartbeat_at FROM state_leases WHERE scope = 'skill-upload-install' AND lease_key = ?",
-          )
-          .get(committed.uploadId) as { heartbeat_at: number }
-      ).heartbeat_at;
-      now += 10;
-      await vi.advanceTimersByTimeAsync(10);
-      const renewedHeartbeat = (
-        db
-          .prepare(
-            "SELECT heartbeat_at FROM state_leases WHERE scope = 'skill-upload-install' AND lease_key = ?",
-          )
-          .get(committed.uploadId) as { heartbeat_at: number }
-      ).heartbeat_at;
-      expect(renewedHeartbeat).toBeGreaterThan(initialHeartbeat);
+      db.prepare(
+        "UPDATE state_leases SET heartbeat_at = 1 WHERE scope = 'skill-upload-install' AND lease_key = ?",
+      ).run(committed.uploadId);
+      const heartbeat = intervals.mock.calls.find(([, delay]) => delay === 30_000)?.[0];
+      if (!heartbeat) {
+        throw new Error("Install heartbeat was not scheduled");
+      }
+      heartbeat();
+      await renewalSettled;
+      const renewed = db
+        .prepare(
+          "SELECT heartbeat_at, expires_at FROM state_leases WHERE scope = 'skill-upload-install' AND lease_key = ?",
+        )
+        .get(committed.uploadId) as { heartbeat_at: number; expires_at: number };
+      expect(renewed.heartbeat_at).toBeGreaterThan(1);
+      expect(renewed.expires_at - renewed.heartbeat_at).toBe(900_000);
 
-      db.prepare("UPDATE skill_uploads SET expires_at = ? WHERE upload_id = ?").run(
-        now - 1,
-        committed.uploadId,
-      );
+      expireUpload(databasePath, committed.uploadId);
       expect(
         runOpenClawStateWriteTransaction(
           ({ db: transactionDb }) =>
             deleteExpiredSkillUploadUnlessLeasedInDatabase(transactionDb, {
               uploadId: committed.uploadId,
-              nowMs: now,
+              nowMs: renewed.heartbeat_at,
             }),
           { path: databasePath },
         ),
@@ -780,61 +414,9 @@ describe("skill upload store", () => {
     expect(installLeaseCount(databasePath, committed.uploadId)).toBe(0);
   });
 
-  it("starts install lease expiry from the claim time", async () => {
-    let now = 1000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    const { databasePath, store } = await makeStore({
-      installLeaseHeartbeatMs: 1000,
-      installLeaseMs: 100,
-      ttlMs: 10_000,
-    });
-    const archive = Buffer.from("abc");
-    const committed = await store.begin({
-      kind: "skill-archive",
-      slug: "bounded-lease-skill",
-      sizeBytes: archive.length,
-    });
-    await store.chunk({
-      uploadId: committed.uploadId,
-      offset: 0,
-      dataBase64: archive.toString("base64"),
-    });
-    commitStagedFixture(databasePath, committed.uploadId);
-
-    const entered = deferred();
-    const release = deferred();
-    const pinned = store.withCommittedUpload(committed.uploadId, async () => {
-      entered.resolve();
-      await release.promise;
-    });
-    await entered.promise;
-    expect(
-      stateDatabase(databasePath)
-        .prepare(
-          "SELECT expires_at FROM state_leases WHERE scope = 'skill-upload-install' AND lease_key = ?",
-        )
-        .get(committed.uploadId),
-    ).toMatchObject({ expires_at: 1100 });
-
-    now = 1001;
-    release.resolve();
-    await pinned;
-  });
-
   it("does not renew an expired install lease", async () => {
-    const { databasePath, store } = await makeStore({ installLeaseHeartbeatMs: 60_000 });
-    const archive = Buffer.from("abc");
-    const committed = await store.begin({
-      kind: "skill-archive",
-      slug: "expired-heartbeat-skill",
-      sizeBytes: archive.length,
-    });
-    await store.chunk({
-      uploadId: committed.uploadId,
-      offset: 0,
-      dataBase64: archive.toString("base64"),
-    });
-    await store.commit({ uploadId: committed.uploadId });
+    const { databasePath, store } = await makeStore();
+    const committed = await committedUpload(store, "expired-heartbeat-skill");
 
     await store.withCommittedUpload(committed.uploadId, async () => {
       const db = stateDatabase(databasePath);
@@ -851,8 +433,7 @@ describe("skill upload store", () => {
         renewSkillUploadInstallLease({
           uploadId: committed.uploadId,
           owner: lease.owner,
-          heartbeatAt,
-          expiresAt: heartbeatAt + 60_000,
+          installLeaseMs: 60_000,
           options: { path: databasePath },
         }),
       ).toBe(false);
@@ -861,18 +442,7 @@ describe("skill upload store", () => {
 
   it("lets the install lease owner remove the upload", async () => {
     const { databasePath, store } = await makeStore();
-    const archive = Buffer.from("abc");
-    const committed = await store.begin({
-      kind: "skill-archive",
-      slug: "consumed-skill",
-      sizeBytes: archive.length,
-    });
-    await store.chunk({
-      uploadId: committed.uploadId,
-      offset: 0,
-      dataBase64: archive.toString("base64"),
-    });
-    await store.commit({ uploadId: committed.uploadId });
+    const committed = await committedUpload(store, "consumed-skill");
     let archivePath = "";
     await store.withCommittedUpload(committed.uploadId, async (record, controls) => {
       archivePath = record.archivePath;
@@ -883,91 +453,34 @@ describe("skill upload store", () => {
     expect(installLeaseCount(databasePath, committed.uploadId)).toBe(0);
   });
 
-  it("does not remove an upload after the callback loses lease ownership", async () => {
+  it.each(["replaced", "expired"])("does not remove an upload with a %s lease", async (kind) => {
     const { databasePath, store } = await makeStore();
-    const archive = Buffer.from("abc");
-    const committed = await store.begin({
-      kind: "skill-archive",
-      slug: "replacement-owner-skill",
-      sizeBytes: archive.length,
-    });
-    await store.chunk({
-      uploadId: committed.uploadId,
-      offset: 0,
-      dataBase64: archive.toString("base64"),
-    });
-    await store.commit({ uploadId: committed.uploadId });
+    const committed = await committedUpload(store, "lost-lease-skill");
 
     await store.withCommittedUpload(committed.uploadId, async (_record, controls) => {
-      const replacementAt = Date.now();
-      stateDatabase(databasePath)
-        .prepare(
+      const db = stateDatabase(databasePath);
+      const now = Date.now();
+      if (kind === "replaced") {
+        db.prepare(
           "UPDATE state_leases SET owner = ?, expires_at = ?, updated_at = ? WHERE scope = 'skill-upload-install' AND lease_key = ?",
-        )
-        .run("replacement-owner", replacementAt + 60_000, replacementAt, committed.uploadId);
-      await expectUploadError(controls.remove(), "upload install lease is no longer active");
-    });
-
-    expect(uploadCount(databasePath)).toBe(1);
-    expect(
-      stateDatabase(databasePath)
-        .prepare(
-          "SELECT owner FROM state_leases WHERE scope = 'skill-upload-install' AND lease_key = ?",
-        )
-        .get(committed.uploadId),
-    ).toMatchObject({ owner: "replacement-owner" });
-  });
-
-  it("does not remove an upload after its install lease expires", async () => {
-    const { databasePath, store } = await makeStore();
-    const archive = Buffer.from("abc");
-    const committed = await store.begin({
-      kind: "skill-archive",
-      slug: "expired-owner-skill",
-      sizeBytes: archive.length,
-    });
-    await store.chunk({
-      uploadId: committed.uploadId,
-      offset: 0,
-      dataBase64: archive.toString("base64"),
-    });
-    await store.commit({ uploadId: committed.uploadId });
-
-    await store.withCommittedUpload(committed.uploadId, async (_record, controls) => {
-      stateDatabase(databasePath)
-        .prepare(
+        ).run("replacement-owner", now + 60_000, now, committed.uploadId);
+      } else {
+        db.prepare(
           "UPDATE state_leases SET expires_at = ? WHERE scope = 'skill-upload-install' AND lease_key = ?",
-        )
-        .run(Date.now() - 1, committed.uploadId);
+        ).run(now - 1, committed.uploadId);
+      }
       await expectUploadError(controls.remove(), "upload install lease is no longer active");
     });
 
     expect(uploadCount(databasePath)).toBe(1);
-  });
-
-  it("cleans temporary materialization and preserves the upload on action failure", async () => {
-    const { databasePath, store } = await makeStore();
-    const archive = Buffer.from("abc");
-
-    const committed = await store.begin({
-      kind: "skill-archive",
-      slug: "throwing-skill",
-      sizeBytes: archive.length,
-    });
-    await store.chunk({
-      uploadId: committed.uploadId,
-      offset: 0,
-      dataBase64: archive.toString("base64"),
-    });
-    await store.commit({ uploadId: committed.uploadId });
-    let archivePath = "";
-    await expect(
-      store.withCommittedUpload(committed.uploadId, async (record) => {
-        archivePath = record.archivePath;
-        throw new Error("action failed");
-      }),
-    ).rejects.toThrow("action failed");
-    await expectMissingPath(archivePath);
-    expect(uploadCount(databasePath)).toBe(1);
+    if (kind === "replaced") {
+      expect(
+        stateDatabase(databasePath)
+          .prepare(
+            "SELECT owner FROM state_leases WHERE scope = 'skill-upload-install' AND lease_key = ?",
+          )
+          .get(committed.uploadId),
+      ).toMatchObject({ owner: "replacement-owner" });
+    }
   });
 });

@@ -26,6 +26,16 @@ Related: [Browser tool](/tools/browser)
   `openclaw browser status --json` also works when the selected child command does not
   define its own `--json`.
 
+With `--json`, local action-input, state, and viewport validation refusals write one JSON error document to
+stdout (`ok: false`, `error.type: "cli_error"`) and exit with status 1. Without
+`--json`, the diagnostic remains on stderr.
+
+Malformed request timeouts, invalid tab indexes, and Gateway request rejections
+also use this JSON failure envelope, including navigation, resize, and cookie requests.
+
+The CLI reserves 10 additional seconds beyond the request timeout for node and
+Gateway transport, allowing browser timeout diagnostics to reach the caller.
+
 ## Quick start (local)
 
 ```bash
@@ -64,7 +74,7 @@ openclaw browser stop
 openclaw browser --browser-profile openclaw reset-profile
 ```
 
-- `doctor --deep` adds a live snapshot probe: useful when basic CDP readiness is green but you want proof the current tab can be inspected.
+- `doctor --deep` adds a live snapshot check: useful when basic CDP readiness is green but you want proof the current tab can be inspected.
 - For a running local managed profile, `status` and `doctor` report cached
   graphics diagnostics from Chrome: hardware/software classification, renderer,
   backend, device/driver, feature and disabled-status details, and accelerated
@@ -72,7 +82,7 @@ openclaw browser --browser-profile openclaw reset-profile
   Passive status never launches Chrome just to collect these facts.
 - `stop` closes the active control session and clears temporary emulation overrides. This applies even to `attachOnly` and remote CDP profiles, where OpenClaw did not launch the browser process itself. For local managed profiles, `stop` also stops the spawned browser process.
 - `start --headless` applies only to that start request, and only when OpenClaw launches a local managed browser. It does not rewrite `browser.headless` or profile config, and is a no-op for an already-running browser.
-- On Linux hosts without `DISPLAY` or `WAYLAND_DISPLAY`, local managed profiles run headless automatically unless `OPENCLAW_BROWSER_HEADLESS=0`, `browser.headless=false`, or `browser.profiles.<name>.headless=false` explicitly requests a visible browser.
+- Local managed profiles run headless by default on every platform. `OPENCLAW_BROWSER_HEADLESS=0`, `browser.headless=false`, or `browser.profiles.<name>.headless=false` explicitly requests a visible browser; Linux then needs `DISPLAY` or `WAYLAND_DISPLAY`. Externally owned browsers keep their current mode.
 
 ## If the command is missing
 
@@ -114,6 +124,8 @@ Use a specific profile with `--browser-profile <name>` on any subcommand, for ex
 
 On macOS, `system-profiles` lists real Chrome, Brave, Edge, or Chromium profiles available on the host. `import-profile` decrypts their cookies after one macOS Keychain/Touch ID consent prompt and injects them into a fresh OpenClaw-managed profile. It imports cookies only. Local storage and IndexedDB are unchanged. Some Google sessions use device-bound session credentials (DBSC) and can still require re-authentication after import.
 
+Newer macOS versions can also ask whether the Gateway's Node process may access the browser's data. Until someone answers that prompt on the Gateway host, system-profile discovery and import time out while the rest of the Gateway keeps running.
+
 When the macOS app uses a local Gateway, it can offer this import once and make the isolated imported profile the default for agent browsing. Import always requires an explicit click. Successful import or dismissal suppresses later automatic prompts, and **Settings → General → Browser login** remains available for re-import.
 
 System-profile import is enabled by default. Set `browser.allowSystemProfileImport=false` to disable both CLI and agent-triggered imports. Import is host-local and cannot run through the browser node proxy.
@@ -139,6 +151,9 @@ The macOS app exposes the same capability under **Dashboard → Settings → Thi
 
 ```bash
 openclaw browser extension path
+openclaw browser extension setup --action inspect --json
+openclaw browser extension setup --action install --json
+openclaw browser extension setup --action verify --browser-profile chrome --json
 openclaw browser extension install
 openclaw browser extension install --no-store
 openclaw browser extension install --json --wait-ms 60000
@@ -152,14 +167,30 @@ openclaw browser extension cdp
 openclaw browser extension cdp --json
 ```
 
-- `extension install` pre-registers the origin-locked native bootstrap host in
-  existing Chrome-family user-data roots. On macOS, it then requests the official
-  Store installation in Google Chrome for all profiles in its user-data directory.
+- `extension setup` is the shared host-local controller for CLI, TUI, and native
+  desktop adapters. `inspect` is read-only installation discovery, `install`
+  prepares native bootstrap, and `verify` authenticates the selected local relay.
+  Its redacted JSON separates preparation, Chrome approval, and connection.
+  Valid pending/blocked states exit 0; execution failures exit nonzero. It never
+  treats a remote dashboard or SSH loopback URL as proof of a local browser host.
+- `extension install` pre-registers the origin-locked native bootstrap host.
+  Google Chrome on macOS can be prepared before its first launch; other supported
+  browsers need an existing user-data directory. On macOS, setup then requests
+  the official Store installation in Google Chrome for all profiles in that directory.
   Chrome discovers this at startup. Fully quit and reopen Chrome when convenient,
   then approve or enable OpenClaw. The command never restarts Chrome or bypasses
   approval. For other browsers and platforms,
   [add OpenClaw from the Chrome Web Store](https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig).
-  Linux supports automatic native pairing. Windows retains manual pairing.
+  Linux supports automatic native pairing. Windows uses the self-contained
+  `OpenClaw.BrowserBootstrap.exe` from the packaged CLI or Windows companion.
+  A portable/local installer can pass `--native-host-executable <absolute-path>`
+  to `extension setup --action install` or `extension install`. Setup checks owned
+  context/ACLs and actual framed subprocess responses before user-level registry
+  registration through the shared C# registration service. The CLI explicitly
+  selects native Windows context; the Companion owns its managed-WSL mode.
+  Conflicting contexts and unknown transport outcomes never trigger another
+  writer or mode fallback. No executable or no proof means no automatic bootstrap; it never
+  falls back to a script host or bypasses Chrome approval.
 - `extension install --no-store` copies the stable development extension and
   registers the native host without creating a Store request. Existing requests
   are unchanged. Use the printed path for **Load unpacked**.
@@ -169,14 +200,22 @@ openclaw browser extension cdp --json
   native-host registration health. Local installation status does not prove a
   live relay connection. JSON output never includes a pairing string or relay key.
 - `extension uninstall-host` removes only verified OpenClaw-owned native-host
-  manifests and launchers. It does not remove the extension from Chrome.
+  manifests and launchers. It does not remove the extension from Chrome. On
+  Windows it delegates to the same registration service; `--remove-store` removes
+  verified owned Store requests first. `--native-host-executable` and
+  `--browser-profile` select the same explicit local context for status/removal.
 - `extension uninstall-store` removes only OpenClaw-owned macOS Chrome Store
-  requests. Chrome may remove an externally installed extension at its next
+  requests (macOS only). Windows uses `uninstall-host --remove-store` rather than
+  a separate Store writer. Chrome may remove an externally installed extension at its next
   startup. Native-host registration and the development copy remain intact.
 - `extension path` is read-only. It prints the stable installed copy when
   present and the bundled source directory otherwise.
 - `extension pair` remains the advanced manual flow. `--gateway-url` creates a
   direct remote-Gateway pairing URL. Non-loopback URLs must use `wss://`.
+- `extension pair --local-gateway --json` lets desktop native helpers obtain
+  the existing local pairing through the Gateway’s `/browser/extension` wake-up
+  route. It requires a local Gateway configuration and cannot be combined with
+  `--gateway-url`. The JSON contains a credential: consume it privately, never log it.
 - `extension cdp` prints non-secret Browser Relay Authentication v2 metadata:
   the loopback browser/CDP endpoints, protocol version, key ID, and fixed
   challenge/complete binding. It never prints the relay key or an authorization
@@ -191,7 +230,8 @@ reported by `extension pair` or `extension cdp` after that wakeup. Browser-node
 pairings continue to use the relay on the browser-node host, while explicit
 `--gateway-url` pairings remain direct-remote and manual-only.
 
-The advanced manual `extension pair` command without `--gateway-url` retains
+The advanced manual `extension pair` command without `--gateway-url` or
+`--local-gateway` retains
 the host-local `/extension` relay URL. With the native host installed,
 **Automatic local setup** enabled, and an extension build that supports relay
 wake-up, reconnecting can start a standalone relay on the saved pairing's
@@ -232,6 +272,11 @@ openclaw browser close t1
 ```
 
 `tabs` returns `suggestedTargetId` first, then the stable `tabId` (such as `t1`), the optional label, and the raw `targetId`. Pass `suggestedTargetId` back into `focus`, `close`, snapshots, and actions. Assign a label with `open --label`, `tab new --label`, or `tab label`. Labels, tab ids, raw target ids, and unique target-id prefixes are all accepted. The request field is still named `targetId` for compatibility, but it accepts any of these tab references.
+
+For HTTP CDP profiles, `close` confirms that the tab disappears before reporting
+success. If a page prompt keeps it open, resolve the prompt and retry. If the tab
+list cannot be read after the close request, confirm the tab's state in the
+browser before retrying; the close may already have succeeded.
 
 Profiles configured with `driver: "extension"` can additionally return a numeric
 `webExtensionTabId`. It is scoped to the current browser runtime and is intended
@@ -306,6 +351,10 @@ openclaw browser dialog --dismiss --dialog-id d1
 
 Managed Chrome profiles save ordinary click-triggered downloads into the OpenClaw downloads directory (`/tmp/openclaw/downloads` by default, or the configured temp root). Use `waitfordownload` or `download` when the agent needs to wait for a specific file and return its path. Those explicit waiters own the next download. Uploads accept files from the OpenClaw temp uploads root and OpenClaw-managed inbound media, including `media://inbound/<id>` and sandbox-relative `media/inbound/<id>` references. Nested media refs, traversal, and arbitrary local paths are rejected.
 
+For remote browser nodes, OpenClaw stages private copies and normalizes filenames for portability, including Windows device names and trailing dots or spaces. File bytes remain unchanged.
+
+Explicit download paths and `trace stop --out` preserve filename whitespace where the filesystem supports it. Quote these paths, for example `openclaw browser download <ref> " report.pdf "`. Output paths must stay inside their managed download or trace directory.
+
 If saving a download fails, OpenClaw requests cancellation of the transfer and reports the original save error. Correct the output path or filesystem problem before starting a new download.
 
 When an action opens a modal dialog, text output reports the block and pending dialog IDs. The JSON response returns `blockedByDialog` with `browserState.dialogs.pending`. Pass `--dialog-id` to answer it directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
@@ -323,6 +372,13 @@ openclaw browser batch --actions-file - --continue
 If navigation or a closed page stops the batch, text output reports the action number and skipped count. Take a fresh snapshot before continuing with dependent actions.
 
 `--actions-file` and `--actions-file -` stdin input are capped at 1,000,000 bytes. Split larger plans into multiple `openclaw browser batch` commands.
+
+`fill --fields-file`, `batch --actions-file`, and batch stdin require valid UTF-8.
+Malformed bytes are rejected before any browser action runs. Save the input as
+UTF-8 and retry; valid Unicode values, including emoji and CJK text, are preserved.
+
+`fill --fields-file` requires a regular file or a symlink to one. Pipes and other
+special files are rejected before dispatch. Fields files have no size cap.
 
 ## State and storage
 
@@ -351,6 +407,11 @@ openclaw browser storage local get
 openclaw browser storage local set token abc123
 openclaw browser storage session clear
 ```
+
+Storage keys preserve surrounding whitespace. Quote the key in shell commands,
+for example `openclaw browser storage local get " account "`. Setting that key
+does not overwrite the separate `account` entry. Empty or whitespace-only keys
+remain invalid for `set`; omitting the key in `get` lists all entries.
 
 ## Debugging
 
@@ -400,7 +461,7 @@ Current existing-session limits:
 
 Existing-session action steps share one execution budget: filling and submitting with `type` do not each receive a fresh timeout. A conditional `wait` allows its explicit `timeMs` delay plus the action budget (with a 250 ms minimum) to satisfy the condition. A pure timer wait reserves the larger of `timeMs` and the action budget.
 
-Navigation verification has a separate shared allowance of the action budget plus 1250 ms for scheduled delays. `resize` and `close` skip verification. Browser and tab preparation, execution, and final URL lookup share the overall request deadline. Internal calls and navigation probes do not renew it.
+Navigation verification has a separate shared allowance of the action budget plus 1250 ms for scheduled delays. `resize` and `close` skip verification. Browser and tab preparation, execution, and final URL lookup share the overall request deadline. Internal calls and navigation checks do not renew it.
 
 ## Remote browser control (node host proxy)
 

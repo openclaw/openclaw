@@ -1,115 +1,82 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildControlUiChannelAvatarUrl,
-  buildControlUiResourcePath,
-  buildControlUiRootAssetPath,
-  buildControlUiUserAvatarPath,
-  canonicalizeControlUiUserAvatarPath,
-  CONTROL_UI_ROOT_PUBLIC_ASSETS,
-  matchControlUiResourceUrl,
-  parseControlUiUserAvatarPath,
-  parseControlUiResourcePath,
-  type ControlUiResourceRoute,
+  buildControlUiResourcePath as buildPath,
+  buildControlUiUserAvatarPath as buildAvatarPath,
+  canonicalizeControlUiUserAvatarPath as canonicalizeAvatar,
+  matchControlUiResourceUrl as matchUrl,
+  parseControlUiUserAvatarPath as parseAvatar,
+  parseControlUiResourcePath as parsePath,
 } from "./control-ui-contract.js";
 
-const ROUTES = [
-  ["agentAvatar", "ops/main", "/avatar/ops%2Fmain"],
-  [
-    "catalogIcon",
-    "https://cdn.example.test/icon.svg",
-    "/__openclaw__/catalog-icon/https%3A%2F%2Fcdn.example.test%2Ficon.svg",
-  ],
-  [
-    "channelAvatar",
-    "agent:main:discord:direct:user-1",
-    "/__openclaw__/channel-avatar/agent%3Amain%3Adiscord%3Adirect%3Auser-1",
-  ],
-  ["linkFavicon", "docs.example.test", "/__openclaw__/link-favicon/docs.example.test"],
-  ["pluginIcon", "@scope/plugin", "/__openclaw__/plugin-icon/%40scope%2Fplugin"],
-  ["pluginActivityIcon", "@scope/plugin", "/__openclaw__/plugin-activity-icon/%40scope%2Fplugin"],
-  ["userAvatar", "profile/a b", "/api/users/profile%2Fa%20b/avatar"],
-  ["workspaceIcon", "agent:main:one", "/__openclaw__/workspace-icon/agent%3Amain%3Aone"],
-] as const satisfies readonly (readonly [ControlUiResourceRoute, string, string])[];
+const matched = (value: string | null) => ({ matched: true, value });
+const urlMatch = (value: string, search = "", hash = "") => ({ value, search, hash });
 
 describe("Control UI resource route contract", () => {
-  it.each(ROUTES)("round-trips %s as one encoded segment", (route, value, path) => {
-    expect(buildControlUiResourcePath(route, "", value)).toBe(path);
-    expect(buildControlUiResourcePath(route, "control/", value)).toBe(`/control${path}`);
-    expect(parseControlUiResourcePath(route, path)).toEqual({ matched: true, value });
-    expect(parseControlUiResourcePath(route, `/control${path}`, "/control/")).toEqual({
-      matched: true,
-      value,
-    });
-  });
-
   it.each([
-    ["blank segment", "/__openclaw__/workspace-icon/"],
-    ["raw nested segment", "/__openclaw__/workspace-icon/agent/main"],
-    ["malformed escape", "/__openclaw__/workspace-icon/%zz"],
-  ])("claims a %s without producing a route value", (_label, pathname) => {
-    expect(parseControlUiResourcePath("workspaceIcon", pathname)).toEqual({
-      matched: true,
-      value: null,
+    ["agentAvatar", "ops/main", "/avatar/ops%2Fmain"],
+    ["userAvatar", "profile/a b", "/api/users/profile%2Fa%20b/avatar"],
+  ] as const)("round-trips %s as one encoded segment", (route, value, path) => {
+    expect(buildPath(route, "", value)).toBe(path);
+    expect(buildPath(route, "control/", value)).toBe(`/control${path}`);
+    expect(parsePath(route, path)).toEqual(matched(value));
+    expect(parsePath(route, `/control${path}`, "/control/")).toEqual(matched(value));
+  });
+
+  it("preserves scoped plugin IDs and artwork components", () => {
+    const pathname = "/control/__openclaw__/plugin-theme-art/%40scope%2Fpack/neon/hat/beret";
+    const segments = ["neon", "hat", "beret"];
+    expect(buildPath("pluginThemeArt", "/control", "@scope/pack", segments)).toBe(pathname);
+    expect(parsePath("pluginThemeArt", pathname, "/control")).toEqual({
+      ...matched("@scope/pack"),
+      segments,
     });
+    expect(matchUrl("pluginThemeArt", `${pathname}?v=123`, "/control")).toEqual(
+      urlMatch("@scope/pack", "?v=123"),
+    );
   });
 
-  it("does not claim another resource route", () => {
-    expect(
-      parseControlUiResourcePath("workspaceIcon", "/__openclaw__/plugin-icon/firecrawl"),
-    ).toEqual({ matched: false });
+  it.each(["", "agent/main", "%zz"])("claims malformed workspace icon suffix %j", (suffix) => {
+    expect(parsePath("workspaceIcon", `/__openclaw__/workspace-icon/${suffix}`)).toEqual(
+      matched(null),
+    );
   });
 
-  it("builds and canonicalizes cache-busted user avatar paths", () => {
-    expect(buildControlUiUserAvatarPath("profile/a b", "hash/image")).toBe(
+  it("builds cache-busted user avatar paths", () => {
+    expect(buildAvatarPath("profile/a b", "hash/image")).toBe(
       "/api/users/profile%2Fa%20b/avatar?v=hash%2Fimage",
     );
-    expect(buildControlUiUserAvatarPath("profile/a b", 1_725_000_123_456)).toBe(
+    expect(buildAvatarPath("profile/a b", 1_725_000_123_456)).toBe(
       "/api/users/profile%2Fa%20b/avatar?v=1725000123456",
     );
-    expect(
-      canonicalizeControlUiUserAvatarPath("/wilfred/api/users/profile%2F1/avatar", "/wilfred"),
-    ).toBe("/api/users/profile%2F1/avatar");
-    expect(
-      canonicalizeControlUiUserAvatarPath("/wilfred-other/api/users/profile-1/avatar", "/wilfred"),
-    ).toBeUndefined();
+  });
+
+  it.each<[string, string, string | undefined]>([
+    ["/api/users/a%2fb/avatar", "/control", "/api/users/a%2fb/avatar"],
+    ["/control/api/users/a%2Fb/avatar", "control/", "/api/users/a%2Fb/avatar"],
+    ["/control/api/users/%2F/avatar", "/control", "/api/users/%2F/avatar"],
+    ["/wilfred/api/users/profile%2F1/avatar", "/wilfred", "/api/users/profile%2F1/avatar"],
+    ["/wilfred-other/api/users/profile-1/avatar", "/wilfred", undefined],
+    ["/api/users/%zz/avatar", "", undefined],
+    ["/api/users//avatar", "", undefined],
+    ["/api/users/a/b/avatar", "", undefined],
+    ["/api/users/api/users/a/avatar", "/api/users", undefined],
+  ])("canonicalizes %s without rewriting encoded IDs", (pathname, base, expected) => {
+    expect(canonicalizeAvatar(pathname, base)).toBe(expected);
   });
 
   it("preserves malformed configured-base user avatar ownership", () => {
-    expect(
-      parseControlUiUserAvatarPath("/wilfred/api/users/profile-1/avatar/extra", "/wilfred"),
-    ).toEqual({ matched: true, value: null });
+    expect(parseAvatar("/wilfred/api/users/p/avatar/extra", "/wilfred")).toEqual(matched(null));
   });
 
-  it("builds revision-aware channel avatar paths through the route contract", () => {
-    expect(buildControlUiChannelAvatarUrl("/control", "agent:main/one", "hash/image")).toBe(
-      "/control/__openclaw__/channel-avatar/agent%3Amain%2Fone?v=hash%2Fimage",
-    );
-  });
-
-  it("matches exact same-origin resource URLs without parser reinterpretation", () => {
-    expect(matchControlUiResourceUrl("agentAvatar", "/avatar/main?v=2#profile")).toEqual({
-      value: "main",
-      search: "?v=2",
-      hash: "#profile",
-    });
-    expect(
-      matchControlUiResourceUrl("agentAvatar", "/control/avatar/main?v=2", "/control"),
-    ).toEqual({ value: "main", search: "?v=2", hash: "" });
-    for (const value of [
-      "//evil.example/avatar/main",
-      "//[",
-      "/avatar\\main",
-      "/avatar/main/extra",
-      "/avatar/%zz",
-    ]) {
-      expect(matchControlUiResourceUrl("agentAvatar", value), value).toBeUndefined();
-    }
-  });
-
-  it("builds every declared root asset under the normalized mount", () => {
-    expect(new Set(CONTROL_UI_ROOT_PUBLIC_ASSETS).size).toBe(CONTROL_UI_ROOT_PUBLIC_ASSETS.length);
-    for (const asset of CONTROL_UI_ROOT_PUBLIC_ASSETS) {
-      expect(buildControlUiRootAssetPath("/control/", asset)).toBe(`/control/${asset}`);
-    }
+  it.each([
+    ["/avatar/main?v=2#profile", "", urlMatch("main", "?v=2", "#profile")],
+    ["/control/avatar/main?v=2", "/control", urlMatch("main", "?v=2")],
+    ["//evil.example/avatar/main", "", undefined],
+    ["//[", "", undefined],
+    ["/avatar\\main", "", undefined],
+    ["/avatar/main/extra", "", undefined],
+    ["/avatar/%zz", "", undefined],
+  ] as const)("matches only exact same-origin URL %s", (value, base, expected) => {
+    expect(matchUrl("agentAvatar", value, base)).toEqual(expected);
   });
 });

@@ -1,14 +1,41 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import type { EmbeddedAgentEvent } from "./embedded-agent-subscribe.shared-types.js";
 
-type CallbackLogger = {
-  warn(message: string): void;
-};
+/** Shares callback ordering across every model call and subscription in one run. */
+export function serializeAgentEventCallback(
+  callback: ((event: EmbeddedAgentEvent) => void | Promise<void>) | undefined,
+) {
+  if (!callback) {
+    return undefined;
+  }
+  let pending: Promise<void> | undefined;
+  return (event: EmbeddedAgentEvent) => {
+    const result = pending ? pending.then(() => callback(event)) : callback(event);
+    if (!isPromiseLike(result)) {
+      return undefined;
+    }
+    const task = Promise.resolve(result);
+    const settled = task.then(
+      () => {},
+      () => {},
+    );
+    pending = settled;
+    void settled.then(() => {
+      if (pending === settled) {
+        pending = undefined;
+      }
+    });
+    return task;
+  };
+}
 
 /** Contains callback failures and tracks completion for delivery owners that join it. */
 export function runBestEffortCallback(params: {
   callback: () => unknown;
   label: string;
-  log: CallbackLogger;
+  log: {
+    warn(message: string): void;
+  };
   pending?: Set<Promise<void>>;
   onSuccess?: () => void;
   onError?: (error: unknown) => void;

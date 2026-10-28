@@ -3,8 +3,13 @@
  */
 import type { ChildProcess } from "node:child_process";
 
-const EXIT_STDIO_GRACE_MS = 100;
+export const EXIT_STDIO_GRACE_MS = 100;
 const EXIT_STDIO_MAX_DRAIN_MS = 1_000;
+
+/** Native and broker exit notifications can precede output EOF. */
+export function hasChildProcessExited(child: ChildProcess): boolean {
+  return child.exitCode != null || child.signalCode != null;
+}
 
 /**
  * Execa waits for stdout/stderr after the direct child exits. Bound that wait
@@ -60,7 +65,7 @@ export function releaseChildProcessOutputAfterExit(child: ChildProcess): () => v
   child.stdout?.on("data", onData);
   child.stderr?.on("data", onData);
   // A command deadline can transfer output here after the root has already exited.
-  if (child.exitCode != null || child.signalCode != null) {
+  if (hasChildProcessExited(child)) {
     onExit();
   } else {
     child.once("exit", onExit);

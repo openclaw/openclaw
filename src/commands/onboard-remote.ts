@@ -1,13 +1,11 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
-import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
-/**
- * Interactive remote gateway onboarding.
- *
- * It can discover gateways, validate remote WebSocket security, and store
- * a remote Gateway secret as plaintext or a secret reference.
- */
+import {
+  gatewayCredentialScope,
+  gatewayOriginScope,
+} from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
+import { preserveGatewaySshRemotePort } from "../gateway/connection-details.js";
 import { isSecureWebSocketUrl } from "../gateway/net.js";
 import { discoverGatewayBeacons, type GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
 import {
@@ -24,18 +22,6 @@ import type { SecretInputMode } from "./onboard-types.js";
 
 const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
 
-function buildLabel(beacon: GatewayBonjourBeacon): string {
-  return buildGatewayDiscoveryLabel(beacon);
-}
-
-function ensureWsUrl(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return DEFAULT_GATEWAY_URL;
-  }
-  return trimmed;
-}
-
 export function validateGatewayWebSocketUrl(value: string): string | undefined {
   const trimmed = value.trim();
   if (!trimmed.startsWith("ws://") && !trimmed.startsWith("wss://")) {
@@ -51,7 +37,6 @@ export function validateGatewayWebSocketUrl(value: string): string | undefined {
   return undefined;
 }
 
-/** Prompts for remote gateway connection and auth settings. */
 export async function promptRemoteGatewayConfig(
   cfg: OpenClawConfig,
   prompter: WizardPrompter,
@@ -101,7 +86,7 @@ export async function promptRemoteGatewayConfig(
         options: [
           ...beacons.map((beacon, index) => ({
             value: String(index),
-            label: buildLabel(beacon),
+            label: buildGatewayDiscoveryLabel(beacon),
           })),
           { value: "manual", label: t("wizard.remote.enterUrlManually") },
         ],
@@ -174,15 +159,19 @@ export async function promptRemoteGatewayConfig(
   const urlInput = await prompter.text({
     message: t("wizard.remote.websocketUrl"),
     initialValue: suggestedUrl,
-    validate: (value) => validateGatewayWebSocketUrl(value),
+    validate: validateGatewayWebSocketUrl,
   });
-  const url = ensureWsUrl(urlInput);
-  // Discovery choices belong only to the accepted URL, never a subsequent manual edit.
-  const selectedDiscovery = discoveryRemote?.url === url ? discoveryRemote : undefined;
+  const url = urlInput.trim() || DEFAULT_GATEWAY_URL;
+  // Equivalent spellings keep the selected transport; another endpoint clears it.
+  const selectedDiscovery =
+    discoveryRemote && gatewayCredentialScope(discoveryRemote.url) === gatewayCredentialScope(url)
+      ? discoveryRemote
+      : undefined;
 
   // A saved secret belongs to the selected endpoint, not a newly entered URL or tunnel.
   const existingSecret =
-    (!cfg.gateway?.remote?.url || url === cfg.gateway.remote.url.trim()) &&
+    (!cfg.gateway?.remote?.url ||
+      gatewayCredentialScope(url) === gatewayCredentialScope(cfg.gateway.remote.url)) &&
     selectedDiscovery?.transport !== "ssh"
       ? (cfg.gateway?.remote?.token ?? cfg.gateway?.remote?.password)
       : undefined;
@@ -254,6 +243,12 @@ export async function promptRemoteGatewayConfig(
     remoteOriginUrl && gatewayOriginScope(url) === gatewayOriginScope(remoteOriginUrl)
       ? cfg.gateway?.remote?.edgeAuth
       : undefined;
+  // A newly suggested manual tunnel can reach another host behind the same loopback URL.
+  const preservedRemote =
+    gatewayCredentialScope(url) === gatewayCredentialScope(remoteOriginUrl ?? "") &&
+    selectedDiscovery?.transport !== "ssh"
+      ? cfg.gateway?.remote
+      : undefined;
 
   return {
     ...cfg,
@@ -261,9 +256,9 @@ export async function promptRemoteGatewayConfig(
       ...cfg.gateway,
       mode: "remote",
       remote: {
-        // A newly suggested manual tunnel can reach another host behind the same loopback URL.
-        ...(url === remoteOriginUrl?.trim() && selectedDiscovery?.transport !== "ssh"
-          ? cfg.gateway?.remote
+        ...preservedRemote,
+        ...(preservedRemote && selectedDiscovery?.transport !== "direct"
+          ? preserveGatewaySshRemotePort(cfg, url, remoteOriginUrl)
           : {}),
         url,
         edgeAuth,

@@ -1,11 +1,32 @@
 package ai.openclaw.app.node
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.min
 
 class JpegSizeLimiterTest {
+  @Test
+  fun stopsWhenNeitherQualityNorDimensionsCanShrink() {
+    for (width in listOf(128, 256)) {
+      var encodes = 0
+      assertThrows(IllegalStateException::class.java) {
+        JpegSizeLimiter.compressToLimit(
+          initialWidth = width,
+          initialHeight = 256,
+          startQuality = 20,
+          maxBytes = 100,
+          encode = { _, _, _ ->
+            encodes += 1
+            ByteArray(101)
+          },
+        )
+      }
+      assertEquals(1, encodes)
+    }
+  }
+
   @Test
   fun compressesLargePayloadsUnderLimit() {
     val maxBytes = 5 * 1024 * 1024
@@ -49,14 +70,11 @@ class JpegSizeLimiterTest {
   fun triesFinalScaledImageBeforeFailing() {
     val result =
       JpegSizeLimiter.compressToLimit(
-        initialWidth = 1000,
-        initialHeight = 800,
+        initialWidth = 1326,
+        initialHeight = 1061,
         startQuality = 90,
         maxBytes = 100,
         minSize = 1,
-        scaleStep = 0.5,
-        maxScaleAttempts = 1,
-        maxQualityAttempts = 1,
         encode = { width, _, _ ->
           if (width == 500) ByteArray(80) else ByteArray(120)
         },

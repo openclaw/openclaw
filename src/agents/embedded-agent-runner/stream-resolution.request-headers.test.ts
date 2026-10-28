@@ -37,4 +37,28 @@ describe("embedded stream request headers", () => {
     });
     expect(providerStreamFn).toHaveBeenCalledTimes(1);
   });
+
+  it("forwards registry headers through a custom API stream fallback", async () => {
+    const customStreamFn = vi.fn(async (_model, _context, options) => options);
+    const model = {
+      api: "tenant-api",
+      provider: "tenant-provider",
+      id: "inherited-model",
+    } as never;
+    const { streamFn, strategy } = resolveEmbeddedAgentStream({
+      llmRuntime: defaultLlmRuntime,
+      currentStreamFn: customStreamFn,
+      sessionId: "secondary-session",
+      model,
+      requestHeaders: { "X-Tenant": "ops", "X-Request-Owner": "registry" },
+    });
+
+    expect(strategy).toBe("session-custom");
+    await expect(
+      streamFn(model, {} as never, { headers: { "X-Request-Owner": "caller" } }),
+    ).resolves.toMatchObject({
+      headers: { "X-Tenant": "ops", "X-Request-Owner": "caller" },
+    });
+    expect(customStreamFn).toHaveBeenCalledTimes(1);
+  });
 });

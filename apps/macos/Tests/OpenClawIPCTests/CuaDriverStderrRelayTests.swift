@@ -81,7 +81,6 @@ struct CuaDriverStderrRelayTests {
         let relay = CuaDriverStderrRelay { probe.append($0) }
         try relay.startReading()
         relay.reportManagedMode()
-        relay.reportManagedMode()
 
         let input = Pipe()
         let process = Process()

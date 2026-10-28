@@ -9,6 +9,7 @@ export const toolingDockerTestFiles = [
 export function createToolingDockerVitestConfig(env?: Record<string, string | undefined>) {
   return createScopedVitestConfig(toolingDockerTestFiles, {
     env,
+    // Retain the slow Docker helper process fixtures' separate serial budget.
     fileParallelism: false,
     name: "tooling-docker",
     passWithNoTests: true,

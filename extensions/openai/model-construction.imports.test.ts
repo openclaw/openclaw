@@ -27,13 +27,12 @@ describe("OpenAI model construction imports", () => {
     ).toEqual([]);
   });
 
-  it.each(["extensions/openai/shared.ts", "extensions/openai/prompt-overlay.ts"])(
+  it.each(["extensions/openai/shared.ts", "src/plugin-sdk/provider-model-metadata.ts"])(
     "%s keeps descriptor construction outside host normalization and discovery",
     async (entry) => {
       expect(
         await findSourceImportBackedges(entry, [
           "src/plugins/provider-model-compat.ts",
-          "src/plugins/provider-model-helpers.ts",
           "src/plugins/plugin-metadata-snapshot.ts",
           "src/agents/provider-attribution.ts",
         ]),

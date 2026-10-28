@@ -4,16 +4,12 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const ALLOWED_PLUGIN_SDK_FIXTURE_IMPORTS = new Set([
-  // Intentional jiti alias regression test.
-  'src/plugins/loader.git-path-regression.test.ts:`import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";',
-  'src/plugins/loader.git-path-regression.test.ts:          "openclaw/plugin-sdk/channel-outbound": ${JSON.stringify(copiedChannelRuntimeShim)},',
   // Intentional packaged bundled-plugin SDK alias regression tests.
   'src/plugins/loader.test.ts:`import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";`,',
 ]);
 
 const LOADER_FIXTURE_TEST_FILES = [
   "src/plugins/loader.cli-metadata.test.ts",
-  "src/plugins/loader.git-path-regression.test.ts",
   "src/plugins/loader.test.ts",
 ];
 

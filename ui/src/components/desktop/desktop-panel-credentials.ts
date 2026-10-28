@@ -11,12 +11,13 @@ export function fromForm(
   if (typeof password !== "string" || password.length === 0) {
     return undefined;
   }
-  const username = formData.get("username");
-  if (auth === "ard-account" && (typeof username !== "string" || username.trim().length === 0)) {
+  const rawUsername = formData.get("username");
+  const username = typeof rawUsername === "string" ? rawUsername.trim() : "";
+  if (auth === "ard-account" && !username) {
     return undefined;
   }
   return {
-    ...(typeof username === "string" && username.trim() ? { username: username.trim() } : {}),
+    ...(username ? { username } : {}),
     password,
   };
 }
@@ -33,17 +34,15 @@ export function forObserve(
     : undefined;
 }
 
-type DesktopConnectionAuthentication = {
+export function forConnection(
+  observed: DesktopObserveResult,
+  saved: DesktopCredentials | undefined,
+): {
   credentials: DesktopCredentials | undefined;
 } & (
   | { phase: "credentials"; auth: "vnc-password" }
   | { phase: "ready"; auth: "ard-account" | undefined }
-);
-
-export function forConnection(
-  observed: DesktopObserveResult,
-  saved: DesktopCredentials | undefined,
-): DesktopConnectionAuthentication {
+) {
   // Worker responses can carry a password without an auth discriminator.
   const credentials = observed.preauthenticated
     ? undefined

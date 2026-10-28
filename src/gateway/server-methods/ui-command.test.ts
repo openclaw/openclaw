@@ -1,13 +1,32 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { createGatewayToolCallerWrapper } from "../../agents/tools/gateway-caller-context.js";
+import {
+  type UiPortalPresentation,
+  validateUiCommandParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
+  createGatewayToolCallerWrapper,
+  getGatewayToolCallerIdentity,
+  withoutGatewayToolCallerIdentity,
+} from "../../agents/tools/gateway-caller-context.js";
+import * as gateway from "../../agents/tools/in-process-gateway.js";
 import { createScreenTool } from "../../agents/tools/screen-tool.js";
+import {
+  createPersonalToolParticipant as participant,
+  callPersonalToolUiCommand as call,
+  withPersonalToolTurn,
+} from "../../auto-reply/reply/personal-tool-turn.test-support.js";
+import type { GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
+import { createContext } from "../server-plugin-in-process-dispatch.test-support.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import type { GatewayClient } from "./types.js";
 import { uiCommandHandlers } from "./ui-command.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 function client(
   connId: string,
@@ -19,12 +38,7 @@ function client(
     connId,
     ...(profileId
       ? {
-          authenticatedUserProfile: {
-            profileId,
-            displayName: null,
-            hasAvatar: false,
-            updatedAt: 1,
-          },
+          authenticatedUserProfile: gatewayProfile(profileId),
         }
       : {}),
     connect: {
@@ -34,36 +48,44 @@ function client(
   } as GatewayClient;
 }
 
-async function call(params: unknown, clients: GatewayClient[], requester?: GatewayClient) {
-  const respond = vi.fn();
-  const broadcastToConnIds = vi.fn();
-  await expectDefined(
-    uiCommandHandlers["ui.command"],
-    "ui.command",
-  )({
-    params,
-    client: requester,
-    respond,
-    context: {
-      broadcastToConnIds,
-      getRuntimeConfig: () => ({}),
-      getClientConnIds: (filter?: (client: GatewayClient) => boolean) =>
-        new Set(
-          clients
-            .filter((entry) => filter?.(entry) !== false)
-            .flatMap((entry) => (entry.connId ? [entry.connId] : [])),
-        ),
+function captureScreenRequests(recipients: GatewayClient[]) {
+  const results: Awaited<ReturnType<typeof call>>[] = [];
+  vi.spyOn(gateway, "callInProcessGatewayTool").mockImplementation(
+    async <T>(_method: string, params: Record<string, unknown>): Promise<T> => {
+      await Promise.resolve();
+      results.push(await call(params, recipients));
+      return { ok: true } as T;
     },
-  } as never);
-  return { respond, broadcastToConnIds };
+  );
+  return results;
+}
+
+type CommandResult = Awaited<ReturnType<typeof call>>;
+
+function expectRejected(result: CommandResult, message?: string, code = "INVALID_REQUEST") {
+  expect(result.respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({
+      code,
+      ...(message ? { message: expect.stringContaining(message) } : {}),
+    }),
+  );
+  expect(result.broadcastToConnIds).not.toHaveBeenCalled();
+}
+
+function expectTarget(result: CommandResult, connId: string) {
+  expect(result.respond).toHaveBeenCalledWith(true, { ok: true });
+  expect(result.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+    "ui.command",
+    { command: { kind: "sidebar", visible: false } },
+    new Set([connId]),
+  );
 }
 
 describe("ui.command gateway method", () => {
   it("rejects invalid params", async () => {
-    const result = await call({ command: { kind: "sidebar", visible: "yes" } }, []);
-
-    expect(result.respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
-    expect(result.broadcastToConnIds).not.toHaveBeenCalled();
+    expectRejected(await call({ command: { kind: "sidebar", visible: "yes" } }, []));
   });
 
   it("reports when no capable Control UI client is connected", async () => {
@@ -74,12 +96,7 @@ describe("ui.command gateway method", () => {
       requester,
     );
 
-    expect(result.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
-    expect(result.broadcastToConnIds).not.toHaveBeenCalled();
+    expectRejected(result, undefined, "UNAVAILABLE");
   });
 
   it("navigates only the requester, even when another user and another tab share the session", async () => {
@@ -115,27 +132,155 @@ describe("ui.command gateway method", () => {
   it("keeps the agent screen tool bound to its requesting browser across async execution", async () => {
     const requester = client("requester");
     const recipients = [requester, client("bystander")];
-    const deliveries: Set<string>[] = [];
+    const results = captureScreenRequests(recipients);
     const screen = createGatewayToolCallerWrapper("main", {
       agentSessionKey: "agent:main:main",
       gatewayUiCommandTarget: { connId: requester.connId! },
     })(
       createScreenTool({
         agentSessionKey: "agent:main:main",
-        callGateway: async <T>(_method: string, params: Record<string, unknown>): Promise<T> => {
-          await Promise.resolve();
-          const result = await call(params, recipients);
-          expect(result.respond).toHaveBeenCalledWith(true, { ok: true });
-          const delivery = expectDefined(result.broadcastToConnIds.mock.calls[0], "UI delivery");
-          deliveries.push(delivery[2]);
-          return { ok: true } as T;
-        },
       }),
     );
 
     await screen.execute("select", { action: "navigate", sessionKey: "agent:main:selected" });
 
-    expect(deliveries).toEqual([new Set(["requester"])]);
+    expect(results).toHaveLength(1);
+    const result = expectDefined(results[0], "screen handler result");
+    expect(result.respond).toHaveBeenCalledWith(true, { ok: true });
+    expect(result.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+      "ui.command",
+      expect.any(Object),
+      new Set(["requester"]),
+    );
+  });
+
+  it.each([
+    { backendKind: "embedded", hiddenQuestion: false },
+    { backendKind: "cli", hiddenQuestion: false },
+    { backendKind: "embedded", hiddenQuestion: true },
+  ] as const)(
+    "routes personal screen requests only to the admitted $backendKind requester (hidden question: $hiddenQuestion)",
+    async ({ backendKind, hiddenQuestion }) => {
+      const owner = participant("alice", "Alice");
+      const steerer = participant("bob", "Bob");
+      const recipients = [
+        client("alice-tab", undefined, undefined, owner.profileId),
+        client("alice-other-tab", undefined, undefined, owner.profileId),
+        client("bob-tab", undefined, undefined, steerer.profileId),
+      ];
+      const results = captureScreenRequests(recipients);
+      const screen = createScreenTool();
+      const execute = async (user?: string) => {
+        await screen.execute("screen", { action: "sidebar_hide", ...(user ? { user } : {}) });
+        return expectDefined(results.at(-1), "screen handler result");
+      };
+      await withPersonalToolTurn({ owner, backendKind, hiddenQuestion }, async (turn) => {
+        expectTarget(await execute(), "alice-tab");
+        expectTarget(await execute(owner.profileId), "alice-tab");
+        expectRejected(await execute(owner.senderId), "Alice (user: alice)");
+        expectRejected(await execute(steerer.profileId));
+
+        expect(await turn.steer(owner, { scopes: ["operator.read"] })).toMatchObject({
+          status: "rejected",
+          reason: hiddenQuestion ? "input_visibility_mismatch" : "tool_authority_mismatch",
+        });
+        expectTarget(await execute(), "alice-tab");
+        expectRejected(await execute(steerer.profileId));
+        expect(await turn.steer(owner, { reject: true })).toMatchObject({
+          status: "rejected",
+          reason: "runtime_rejected",
+        });
+        expectTarget(await execute(), "alice-tab");
+
+        expect(await turn.steer(steerer)).toMatchObject({
+          status: "rejected",
+          reason: hiddenQuestion ? "input_visibility_mismatch" : "tool_authority_mismatch",
+        });
+        expectTarget(await execute(), "alice-tab");
+        expectRejected(await execute(steerer.profileId), "Alice (user: alice)");
+        expectRejected(await execute("nonparticipant"), "Alice (user: alice)");
+        expect(
+          await turn.steer({
+            ...owner,
+            senderId: "alice-reconnected",
+            gatewayUiCommandTarget: { connId: "alice-other-tab", profileId: owner.profileId },
+          }),
+        ).toMatchObject({
+          status: "accepted",
+        });
+        expectTarget(await execute(owner.profileId), "alice-tab");
+        turn.revoke(owner.profileId);
+        expectRejected(await execute(owner.profileId), "Alice's access changed; ask them again");
+        await turn.complete();
+        expect(turn.releaseCounts.get(owner.profileId)).toBe(1);
+        expectRejected(await execute(owner.profileId));
+      });
+      await withPersonalToolTurn({ owner: steerer, backendKind, hiddenQuestion }, async (turn) => {
+        expectTarget(await execute(), "bob-tab");
+        expectTarget(await execute(steerer.profileId), "bob-tab");
+        expectRejected(await execute(owner.profileId), "Bob (user: bob)");
+        expectRejected(await execute(steerer.senderId), "Bob (user: bob)");
+        await turn.complete();
+        expect(turn.releaseCounts.get(steerer.profileId)).toBe(1);
+        expectRejected(await execute(steerer.profileId));
+      });
+    },
+  );
+
+  it("resolves an identity-only request through its exact registered turn participant owner", async () => {
+    const owner = participant("alice", "Alice");
+    const steerer = participant("bob", "Bob");
+    const recipients = [
+      client("alice-tab", undefined, undefined, "alice"),
+      client("bob-tab", undefined, undefined, "bob"),
+    ];
+    await withPersonalToolTurn({ owner }, async (turn) => {
+      const runtimeClient = client("runtime", GATEWAY_CLIENT_IDS.GATEWAY_CLIENT);
+      runtimeClient.internal = {
+        syntheticClient: true,
+        agentRuntimeIdentity: turn.runtimeIdentity,
+      };
+      const request = () =>
+        withoutGatewayToolCallerIdentity(() => {
+          expect(getGatewayToolCallerIdentity()).toBeUndefined();
+          return call({ command: { kind: "sidebar", visible: false } }, recipients, runtimeClient);
+        });
+      const original = await request();
+      expect(original.broadcastToConnIds).toHaveBeenCalledWith(
+        "ui.command",
+        expect.any(Object),
+        new Set(["alice-tab"]),
+      );
+      for (const mismatch of [
+        { sessionKey: "agent:main:other" },
+        { agentId: "other" },
+        {
+          operationalRunInstance: {
+            ...turn.runtimeIdentity.operationalRunInstance,
+            instanceId: "other-instance",
+          },
+        },
+      ]) {
+        runtimeClient.internal.agentRuntimeIdentity = { ...turn.runtimeIdentity, ...mismatch };
+        const rejected = await request();
+        expectRejected(rejected);
+      }
+      runtimeClient.internal.agentRuntimeIdentity = turn.runtimeIdentity;
+      expect(await turn.steer(steerer)).toMatchObject({
+        status: "rejected",
+        reason: "tool_authority_mismatch",
+      });
+      const unchanged = await request();
+      expect(unchanged.respond).toHaveBeenCalledWith(true, { ok: true });
+      expect(unchanged.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+        "ui.command",
+        expect.any(Object),
+        new Set(["alice-tab"]),
+      );
+      await turn.complete();
+      const ended = await request();
+      expectRejected(ended);
+    });
   });
 
   it.each([
@@ -171,12 +316,7 @@ describe("ui.command gateway method", () => {
       state === "missing" ? undefined : requester,
     );
 
-    expect(result.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
-    expect(result.broadcastToConnIds).not.toHaveBeenCalled();
+    expectRejected(result, undefined, "UNAVAILABLE");
   });
 
   it("rejects caller-supplied browser targeting in RPC params", async () => {
@@ -190,11 +330,103 @@ describe("ui.command gateway method", () => {
       requester,
     );
 
-    expect(result.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
-    expect(result.broadcastToConnIds).not.toHaveBeenCalled();
+    expectRejected(result);
   });
+});
+
+describe("portal presentation feedback", () => {
+  function fixture() {
+    const requester = client("portal-requester");
+    const connection = new AbortController();
+    requester.connectionSignal = connection.signal;
+    const respond = vi.fn();
+    const dispatch = vi.fn<GatewayBroadcastToConnIdsFn>();
+    const context = {
+      ...createContext(),
+      getClientConnIds: (filter?: (entry: GatewayClient) => boolean) =>
+        new Set(filter?.(requester) ? [requester.connId!] : []),
+      broadcastToConnIds: dispatch,
+    };
+    const invoke = (
+      method: string,
+      params: Record<string, unknown>,
+      source = requester,
+      reply = respond,
+    ) =>
+      uiCommandHandlers[method]!({
+        req: { type: "req", id: "presentation", method, params },
+        params,
+        client: source,
+        context,
+        respond: reply,
+        isWebchatConnect: () => false,
+      });
+    const show = () =>
+      invoke("ui.command", {
+        command: { kind: "panel", panel: "portal", portalId: "app", open: true },
+      });
+    const report = (presentation: UiPortalPresentation, source = requester) => {
+      const payload = dispatch.mock.calls[0]?.[1];
+      if (!validateUiCommandParams(payload)) {
+        throw new Error("Expected a valid UI command broadcast");
+      }
+      const requestId = expectDefined(payload.requestId, "portal presentation request");
+      const reply = vi.fn();
+      return Promise.resolve(
+        invoke("ui.command.result", { requestId, presentation }, source, reply),
+      ).then(() => reply);
+    };
+    return { show, report, respond, connection };
+  }
+
+  it("returns the requesting browser's block, rejecting another browser and another portal", async () => {
+    const f = fixture();
+    const finished = f.show();
+    const blocked = {
+      portalId: "app",
+      status: "blocked",
+      reason: "remote-ingress-required",
+    } as const;
+    expect(await f.report(blocked, client("other-tab"))).toHaveBeenCalledWith(true, { ok: false });
+    expect(await f.report({ ...blocked, portalId: "other-app" })).toHaveBeenCalledWith(true, {
+      ok: false,
+    });
+    expect(f.respond).not.toHaveBeenCalled();
+    await f.report(blocked);
+    await finished;
+    expect(f.respond).toHaveBeenCalledWith(true, {
+      ok: true,
+      delivery: "dispatched",
+      presentation: blocked,
+    });
+    expect(await f.report(blocked)).toHaveBeenCalledWith(true, { ok: false });
+  });
+
+  it.each(["timeout", "disconnect"] as const)(
+    "never reports delivery verified after %s",
+    async (end) => {
+      vi.useFakeTimers();
+      try {
+        const f = fixture();
+        const finished = f.show();
+        if (end === "disconnect") {
+          f.connection.abort();
+        } else {
+          await vi.advanceTimersByTimeAsync(8_000);
+        }
+        await finished;
+        expect(f.respond).toHaveBeenCalledWith(true, {
+          ok: true,
+          delivery: "dispatched",
+          presentation: {
+            portalId: "app",
+            status: "unverified",
+            reason: end === "timeout" ? "client-timeout" : "client-disconnected",
+          },
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });

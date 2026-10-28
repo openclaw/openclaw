@@ -1,9 +1,14 @@
 /** Declares the explicitly approved, lazily loaded node-backed Codex exec-server. */
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+
+const loadNodeExecServerRuntime = createLazyRuntimeModule(
+  () => import("./node-exec-server.runtime.js"),
+);
 
 const CODEX_NODE_EXEC_SERVER_COMMAND = "codex.exec-server.stdio.v1";
 
@@ -36,7 +41,7 @@ function parseCodexNodePlacementWorkspace(value: unknown) {
     throw new Error("Codex node exec-server requires an exact managed placement workspace.");
   }
   return {
-    cwd: value.cwd,
+    workspaceDir: value.cwd,
     environmentId: value.environmentId,
     sessionId: value.sessionId,
     ownerEpoch: value.ownerEpoch,
@@ -75,10 +80,10 @@ export function createCodexNodeExecServerCommand(): OpenClawPluginNodeHostComman
           "Codex node exec-server requires an authorized managed placement workspace launch.",
         );
       }
-      const placement = parseCodexNodePlacementWorkspace(request.placement);
+      const workspaceRequest = parseCodexNodePlacementWorkspace(request.placement);
       if (
-        !context?.acquireManagedWorkspace ||
-        context.sessionKey !== placement.sessionKey ||
+        !context?.acquireManagedWorkspaceAsync ||
+        context.sessionKey !== workspaceRequest.sessionKey ||
         io.signal.aborted
       ) {
         throw new Error("Codex node exec-server requires active managed placement authority.");
@@ -88,17 +93,22 @@ export function createCodexNodeExecServerCommand(): OpenClawPluginNodeHostComman
           "Codex node execution requires node-local exec policy support; update the node.",
         );
       }
+      const runtimeIo = context.signal
+        ? { ...io, signal: AbortSignal.any([io.signal, context.signal]) }
+        : io;
       const assertExecAuthorized = context.prepareExecAuthorization(request.authorization);
-      const { runCodexNodeExecServer } = await import("./node-exec-server.runtime.js");
+      const { runCodexNodeExecServer } = await loadNodeExecServerRuntime();
+      runtimeIo.signal.throwIfAborted();
+      const workspace = await context.acquireManagedWorkspaceAsync(workspaceRequest);
+      try {
+        runtimeIo.signal.throwIfAborted();
+      } catch (error) {
+        workspace.release();
+        throw error;
+      }
       return await runCodexNodeExecServer({
-        workspace: context.acquireManagedWorkspace({
-          workspaceDir: placement.cwd,
-          environmentId: placement.environmentId,
-          sessionId: placement.sessionId,
-          ownerEpoch: placement.ownerEpoch,
-          sessionKey: placement.sessionKey,
-        }),
-        io,
+        workspace,
+        io: runtimeIo,
         activeProcesses,
         assertExecAuthorized,
       });
@@ -121,9 +131,9 @@ export function createCodexNodeExecServerInvokePolicy(): OpenClawPluginNodeInvok
           message: "Codex node execution requires an available approval reviewer.",
         };
       }
-      let placement: ReturnType<typeof parseCodexNodePlacementWorkspace>;
+      let workspace: ReturnType<typeof parseCodexNodePlacementWorkspace>;
       try {
-        placement = parseCodexNodePlacementWorkspace(context.params);
+        workspace = parseCodexNodePlacementWorkspace(context.params);
       } catch {
         return {
           ok: false,
@@ -131,12 +141,12 @@ export function createCodexNodeExecServerInvokePolicy(): OpenClawPluginNodeInvok
           message: "Codex node execution requires an exact managed placement workspace.",
         };
       }
-      const workspace = {
-        workspaceDir: placement.cwd,
-        environmentId: placement.environmentId,
-        sessionId: placement.sessionId,
-        ownerEpoch: placement.ownerEpoch,
-        sessionKey: placement.sessionKey,
+      const placement = {
+        cwd: workspace.workspaceDir,
+        environmentId: workspace.environmentId,
+        sessionId: workspace.sessionId,
+        ownerEpoch: workspace.ownerEpoch,
+        sessionKey: workspace.sessionKey,
       };
       const fullLaunch = await context.invokeNodeWithSessionFull?.({
         workspace,

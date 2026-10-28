@@ -30,11 +30,16 @@ openclaw channels logs --channel all
 openclaw channels dead-letters list --channel telegram --account default
 ```
 
-`channels status` keeps configured channels visible when their plugin fails to load or register. Affected accounts report `running: false`, `lifecycle: "blocked"`, and the plugin error instead of stale probe success. Run `openclaw doctor`, repair or update the plugin, and restart the Gateway before checking again.
+`channels status` keeps configured channels visible when their plugin fails to load or register. Affected accounts report `running: false`, `lifecycle: "blocked"`, and the plugin error instead of a stale successful check. Run `openclaw doctor`, repair or update the plugin, and restart the Gateway before checking again.
 
 `channels list` shows chat channels only: configured accounts by default, with `installed`, `configured`, and `enabled` status tags per account (`--json` for machine output). Pass `--all` to also surface bundled channels that have no configured account yet and installable catalog channels that are not yet on disk. Provider auth and model usage live elsewhere: `openclaw models auth list` for provider auth profiles, `openclaw status` or `openclaw models list` for usage/quota.
 
+Human-readable catalog labels neutralize terminal control sequences and display
+embedded tabs and line breaks as visible escapes. JSON preserves the original labels.
+
 `--json` returns a local account inventory from plugin metadata without contacting the Gateway or executing channel setup/runtime code. Configured accounts remain visible even when their plugin has a setup entry. Use `channels status --probe` for live checks.
+
+Disabling a plugin does not uninstall it. Its channels remain `installed: true` in the inventory; with `--all`, an installed channel without configured accounts has `origin: "available"` even when its plugin is disabled.
 
 In an explicit multi-agent setup, workspace-scoped channel plugins come from
 `agents.defaults.systemAgent.agentId`. Without that owner, `channels list`
@@ -59,28 +64,47 @@ With `--json`, every channel entry includes `label` alongside its accounts, inst
 
 ## Status / capabilities / resolve / logs
 
+Human-readable capability probe and diagnostic lines neutralize terminal control
+sequences. `--json` preserves the original values.
+
 `capabilities` and `resolve` reject explicitly empty or whitespace-only `--account`
 values. Omit the option to keep each command's default or broader account scope;
 do not pass an empty shell variable to request that scope.
 
-- `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>` (default `10000`), `--json`
+- `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>` (default `60000`), `--json`
 - `channels capabilities`: `--channel <name>`, `--agent <id>`, `--account <id>` (requires `--channel`), `--target <dest>` (requires `--channel`), `--timeout <ms>` (default `10000`, capped at `30000`), `--json`
 - `channels resolve <entries...>`: `--channel <name>`, `--account <id>`, `--agent <id>`, `--kind <auto|user|group|channel>` (default `auto`), `--json`
 - `channels logs`: `--channel <name|all>` (default `all`), `--lines <n>` (default `200`), `--json`
 
 `channels logs --lines` requires a positive integer. Omit `--lines` to use the default of `200`; explicitly empty values are rejected.
 
-`channels logs --channel <name>` matches subsystem or module names rooted at `<name>`
-or `gateway/channels/<name>`, including slash-separated descendants. Similar names
+`channels logs --channel <name>` matches subsystem or module names rooted at `<name>`,
+`channels/<name>`, or `gateway/channels/<name>`, including slash-separated descendants. Similar names
 such as `discord-archive` do not match `discord`.
+
+`channels status` reads the Gateway's recorded channel lifecycle and health facts,
+plus secret-free account metadata. It does not resolve operational credentials or
+run live status hooks. Unknown configuration and stale connections remain visible;
+provider details not recorded by the channel may require an explicit probe.
+WhatsApp's recorded authentication age refreshes with the channel heartbeat.
 
 `channels status --probe` is the live path: on a reachable gateway it runs per-account
 `probeAccount` and optional `auditAccount` checks, so output can include transport
-state plus probe results such as `works`, `probe failed`, `audit ok`, or `audit failed`.
+state plus successful or failed account checks and audits. Channels are checked
+concurrently with a bounded deadline per channel, including account resolution and
+status hooks. A timed-out channel returns its recorded state with a warning instead
+of preventing healthy channels from returning their results.
 If the gateway is unreachable, `channels status` falls back to config-only summaries
-instead of live probe output.
+instead of live check output.
 
-`channels status` does not support `--deep`; use `openclaw channels status --probe` for channel checks. The separate top-level `openclaw status --deep` command provides a broader status probe.
+If the Gateway answers with an error, such as an unknown `--channel`, the command
+reports that error and exits nonzero instead of showing an unreachable fallback.
+
+Before checking channels, the command waits for local Gateway startup using the shared readiness budget and reports its observed phase. Startup still in progress at the deadline is a non-failing result, not an unreachable Gateway. In that case `--json` returns `{ "status": "starting", "startupPhase": "…" }`; rerun after startup to collect channel results.
+
+The command reads existing local device authentication without creating an identity or persisting tokens returned by the Gateway, including when `--probe` is enabled.
+
+`channels status` does not support `--deep`; use `openclaw channels status --probe` for channel checks. The separate top-level `openclaw status --deep` command provides a broader status check.
 
 ## Inbound dead letters
 
@@ -104,6 +128,8 @@ openclaw channels dead-letters resubmit <event-id> --channel telegram --account 
 Run these commands on the Gateway host so they access the same shared state database as the channel runtime. Resubmission preserves the payload, metadata, and lane, but resets the attempt counter and queue age. It atomically replaces that event's failed marker, so repeating the command while the event is pending or claimed refuses instead of creating a second dispatch. The running channel picks it up on its next ingress drain. Completed events remain terminal and cannot be resubmitted. Failed rows created before payload retention was added can still appear in the list, but resubmission refuses them because their payload is unavailable.
 
 `openclaw health` reports dead-letter counts and oldest failure age per channel account. `openclaw doctor` names affected accounts and points back to the inspection command.
+
+Resubmission writes directly to the queue without waking the channel. A running channel picks it up on its next recovery sweep, within five minutes by default plus scheduling and execution time (longer if its plugin configures a larger interval). A stopped channel sweeps immediately when it starts.
 
 Do not use `openclaw sessions`, Gateway `sessions.list`, or the agent
 `sessions_list` tool as a channel socket-health signal. Those surfaces report
@@ -165,6 +191,16 @@ If a channel plugin needs to be installed during a flag-driven add command, Open
 
 Both guided setup and flag-driven setup pass through the selected channel's parser, validation, account resolution, config writer, and post-write hooks. Unsupported flags fail with the owning channel's setup error instead of being accepted through a global input bag.
 
+New or changed SecretRef-supported channel credentials are saved as protected
+entries in the [shared secret store](/gateway/secrets/secret-store-and-egress).
+`openclaw.json` keeps a `store` SecretRef instead of the credential. Existing
+references, environment-backed setup, and token-file choices are preserved.
+Store writes use the local Gateway when it is running, or exclusive offline
+ownership when it is stopped. If config publication fails, setup retains saved
+entries and reports their names so you can inspect the config before cleanup.
+Unchanged plaintext credentials are left for the existing Doctor and secrets
+migration workflows; upgrading does not silently rewrite them.
+
 When you run `openclaw channels add` with no direct account, credential, or channel-config flags, the interactive wizard can prompt. A positional channel id and `--channel <id>` both open that channel's guided setup immediately. Back returns to the full channel picker:
 
 ```bash
@@ -172,7 +208,7 @@ openclaw channels add telegram
 openclaw channels add --channel telegram
 ```
 
-Guided setup requires an interactive terminal. In a non-TTY shell, OpenClaw exits immediately instead of waiting for input; use `openclaw channels add --channel <id> --use-env` or pass the selected plugin's credential flags.
+Guided setup requires an interactive terminal. In a non-TTY shell, OpenClaw exits immediately instead of waiting for input. Run `openclaw channels add --channel <id> --help` to list the setup flags that channel declares, then pass them for non-interactive setup. `--use-env` appears there only where it is registered: a modern channel declares the matching field in its setup contract, and a plugin still on the legacy shared setup adapter gets it from the compatibility set described above. When the selected channel leaves `--use-env` out, the exit message points at that channel's `--help` instead of at `--use-env`.
 
 The wizard can prompt for:
 
@@ -237,17 +273,24 @@ Host-thaw recovery detects maintenance gaps at least 45 seconds beyond the norma
 - `{ status: "retry", reason }`: an existing task, start, or stop still owns the account (`task-owned`, `start-in-flight`, or `stop-in-flight`). A running account can return `task-owned` with `started: true`; another start was unnecessary. Wait for an in-flight stop to finish before starting again.
 - `{ status: "skipped", reason }`: startup was skipped, for example because the account is `disabled`, `unconfigured`, or `unlinked`. Repair the named account condition before retrying. Other manager reasons are `unsupported`, `autostart-suppressed`, `ambient-suppressed`, `secret-unavailable`, and `manual-stop`; the manual RPC bypasses automatic-start suppression but does not bypass account configuration or secret checks.
 
+If a manual stop times out because an account task ignores cancellation,
+`channels.start` can recover that timed-out slot after cleanup succeeds.
+Automatic restarts remain suppressed until the manual start; failed cleanup
+still reports an error.
+
 Accounts explicitly disabled in channel or account configuration are skipped without resolving inactive credentials. An unavailable configured secret on an enabled account still returns an RPC error instead of starting with another credential.
 
 Unlike this recovery path, `openclaw channels logout` clears the account's credentials and requires login again; `openclaw gateway restart` restarts the whole Gateway. See [Restart recovery](/gateway/restart-recovery) for the crash-loop breaker and its manual `channels.start` override.
 
 ## Troubleshooting
 
-- Run `openclaw status --deep` for a broad probe.
+- Run `openclaw status --deep` for a broad check.
 - Use `openclaw doctor` for guided fixes.
 - `openclaw channels status` falls back to config-only summaries when the gateway is unreachable. If a supported channel credential is configured via SecretRef but unavailable in the current command path, it reports that account as configured with degraded notes instead of showing it as not configured.
 
-## Capabilities probe
+<a id="capabilities-probe" />
+
+## Capabilities check
 
 Fetch provider capability hints (intents/scopes where available) plus static feature support:
 
@@ -260,9 +303,9 @@ Notes:
 
 - `--channel` is optional; omit it to list every channel (including plugin-provided channels).
 - `--account` is only valid with `--channel`.
-- Each account probe and diagnostics step has its own timeout. A stalled step is reported in both text and JSON output, and the command continues with the remaining accounts.
+- Each account check and diagnostics step has its own timeout. A stalled step is reported in both text and JSON output, and the command continues with the remaining accounts.
 - `--target` accepts `channel:<id>` or a raw numeric channel id and only applies to Discord. For Discord voice channels, the permission check flags missing `ViewChannel`, `Connect`, `Speak`, `SendMessages`, and `ReadMessageHistory`.
-- Probes are provider-specific: Discord bot identity + intents plus optional channel permissions; Slack bot + user scopes; Telegram bot flags + webhook; Signal daemon version; Microsoft Teams app token + Graph roles/scopes (annotated where known). Channels without probes report `Probe: unavailable`.
+- Checks are provider-specific: Discord bot identity + intents plus optional channel permissions; Slack bot + user scopes; Telegram bot flags + webhook; Signal daemon version; Microsoft Teams app token + Graph roles/scopes (annotated where known). Channels without checks report that the live check is unavailable.
 
 ## Resolve names to IDs
 

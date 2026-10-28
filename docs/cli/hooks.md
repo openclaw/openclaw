@@ -65,6 +65,10 @@ Human output is a table with Status, Hook, Description, and Source columns,
 preceded by `Hooks (<ready>/<total> ready)`. Plugin-managed sources appear as
 `plugin:<id>`.
 
+Human-readable `list`, `info`, and `check` output neutralizes terminal control
+sequences in hook metadata before styling. JSON output retains the original
+descriptor values.
+
 <Note>
 `ready`, `eligible`, and `loadable` are inventory results, not a live handler
 registration check. The report does not apply the Gateway's master switch or
@@ -134,6 +138,10 @@ Discovers the hook locally, then writes
 `hooks.internal.enabled = true` in local config. Other fields in that entry are
 preserved. Exact hook names take precedence over matching keys. Ambiguous key
 matches fail without writing.
+
+Enable and disable confirmations neutralize terminal controls in hook names and
+custom emoji. Embedded line breaks and tabs appear as visible escapes; stored
+hook keys and metadata retain their original values.
 
 Enable fails for a missing hook, a plugin-managed hook, or unmet runtime
 requirements. It can enable a currently disabled workspace hook. This does not

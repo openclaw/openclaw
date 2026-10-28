@@ -15,7 +15,7 @@ Search the live OpenClaw docs index from the terminal.
 ```bash
 openclaw docs                              # print docs entrypoint and example search
 openclaw docs --json                       # print the same guidance as JSON
-openclaw docs <query...> [--json] [--limit <count>]
+openclaw docs [query...] [--json] [--limit <count>]
 ```
 
 | Argument/option   | Description                                                                        |

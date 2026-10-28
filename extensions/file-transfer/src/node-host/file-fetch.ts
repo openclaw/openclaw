@@ -1,9 +1,17 @@
-// File Transfer plugin module implements file fetch behavior.
 import crypto from "node:crypto";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { readFileHandleBounded } from "openclaw/plugin-sdk/file-access-runtime";
 import { detectMime } from "openclaw/plugin-sdk/media-mime";
+import type { OpenClawPluginNodeHostCommandIo } from "openclaw/plugin-sdk/node-host";
+import { asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { FsSafeError, root } from "openclaw/plugin-sdk/security-runtime";
+import {
+  FILE_FETCH_CHUNK_BYTES,
+  FILE_FETCH_DEFAULT_MAX_BYTES,
+  FILE_FETCH_HARD_MAX_BYTES,
+  readFileFetchBinaryMaxBytes,
+} from "../shared/file-fetch-protocol.js";
 import {
   fileIdentity,
   matchesFileIdentity,
@@ -11,14 +19,12 @@ import {
   type PathBinding,
 } from "../shared/path-binding.js";
 import {
-  classifyFsSafeReadError,
+  createReadErrorClassifier,
   readAbsolutePath,
   rejectCanonicalPathChange,
   resolveCanonicalReadPath,
 } from "./path-errors.js";
 
-const FILE_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
-const FILE_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 const TEXT_SNIFF_MAX_BYTES = 8192;
 
 type FileFetchParams = {
@@ -26,72 +32,26 @@ type FileFetchParams = {
   /** Optional canonical root: follow parent aliases within it, never the final file. */
   rootPath?: unknown;
   maxBytes?: unknown;
+  transport?: unknown;
   followSymlinks?: unknown;
   preflightOnly?: unknown;
   expectedCanonicalPath?: unknown;
   expectedBinding?: unknown;
 };
 
-type FileFetchOk = {
-  ok: true;
-  path: string;
-  size: number;
-  mimeType: string;
-  base64: string;
-  sha256: string;
-  preflightOnly?: boolean;
-  binding: PathBinding;
-};
+const classifyReadError = createReadErrorClassifier({
+  FILE_TOO_LARGE: "FILE_TOO_LARGE",
+  "not-file": "IS_DIRECTORY",
+  ENOENT: "NOT_FOUND",
+  EACCES: "PERMISSION_DENIED",
+  EPERM: "PERMISSION_DENIED",
+  EISDIR: "IS_DIRECTORY",
+} as const);
 
-type FileFetchErrCode =
-  | "INVALID_PATH"
-  | "NOT_FOUND"
-  | "PERMISSION_DENIED"
-  | "IS_DIRECTORY"
-  | "FILE_TOO_LARGE"
-  | "PATH_TRAVERSAL"
-  | "SYMLINK_REDIRECT"
-  | "CANONICAL_PATH_CHANGED"
-  | "READ_ERROR";
-
-type FileFetchErr = {
-  ok: false;
-  code: FileFetchErrCode;
-  message: string;
-  canonicalPath?: string;
-};
-
-type FileFetchResult = FileFetchOk | FileFetchErr;
-
-function clampMaxBytes(input: unknown): number {
-  if (typeof input !== "number" || !Number.isFinite(input) || input <= 0) {
-    return FILE_FETCH_DEFAULT_MAX_BYTES;
-  }
-  return Math.min(Math.floor(input), FILE_FETCH_HARD_MAX_BYTES);
-}
-
-function classifyFsError(err: unknown): FileFetchErrCode {
-  if (err instanceof FsSafeError && err.code === "too-large") {
-    return "FILE_TOO_LARGE";
-  }
-  const safeCode = classifyFsSafeReadError(err);
-  if (safeCode) {
-    return safeCode;
-  }
-  const code = (err as { code?: string } | null)?.code;
-  if (code === "not-file") {
-    return "IS_DIRECTORY";
-  }
-  if (code === "ENOENT") {
-    return "NOT_FOUND";
-  }
-  if (code === "EACCES" || code === "EPERM") {
-    return "PERMISSION_DENIED";
-  }
-  if (code === "EISDIR") {
-    return "IS_DIRECTORY";
-  }
-  return "READ_ERROR";
+function classifyFsError(error: unknown) {
+  return error instanceof FsSafeError && error.code === "too-large"
+    ? "FILE_TOO_LARGE"
+    : classifyReadError(error);
 }
 
 function isLikelyPlainText(buffer: Buffer): boolean {
@@ -116,24 +76,27 @@ function isLikelyPlainText(buffer: Buffer): boolean {
   return controlBytes / sample.byteLength < 0.01;
 }
 
-async function detectFetchedFileMime(params: {
-  buffer: Buffer;
-  filePath: string;
-}): Promise<string> {
-  const detected = await detectMime(params);
-  if (detected) {
-    return detected;
-  }
-  return isLikelyPlainText(params.buffer) ? "text/plain" : "application/octet-stream";
-}
-
-export async function handleFileFetch(params: FileFetchParams): Promise<FileFetchResult> {
+export async function handleFileFetch(
+  params: FileFetchParams,
+  io?: OpenClawPluginNodeHostCommandIo,
+) {
   const requestedPath = readAbsolutePath(params.path);
   if (typeof requestedPath !== "string") {
     return requestedPath;
   }
 
-  const maxBytes = clampMaxBytes(params.maxBytes);
+  let binaryMax: number | undefined;
+  try {
+    binaryMax = readFileFetchBinaryMaxBytes(params);
+  } catch (error) {
+    return { ok: false as const, code: "INVALID_PARAMS", message: String(error) };
+  }
+  const maxBytes =
+    binaryMax ??
+    Math.min(
+      Math.floor(asPositiveFiniteNumber(params.maxBytes) ?? FILE_FETCH_DEFAULT_MAX_BYTES),
+      FILE_FETCH_HARD_MAX_BYTES,
+    );
   const followSymlinks = params.followSymlinks === true;
   const preflightOnly = params.preflightOnly === true;
 
@@ -167,7 +130,7 @@ export async function handleFileFetch(params: FileFetchParams): Promise<FileFetc
   } catch (err) {
     const code = classifyFsError(err);
     return {
-      ok: false,
+      ok: false as const,
       code,
       message: code === "IS_DIRECTORY" ? "path is a directory" : `open failed: ${String(err)}`,
       canonicalPath: canonical,
@@ -191,7 +154,7 @@ export async function handleFileFetch(params: FileFetchParams): Promise<FileFetc
       (expectedBinding?.kind === "existing" && !matchesFileIdentity(identityStats, expectedBinding))
     ) {
       return {
-        ok: false,
+        ok: false as const,
         code: "CANONICAL_PATH_CHANGED",
         message: "filesystem identity differs from the authorized target",
         canonicalPath: opened.realPath,
@@ -199,7 +162,7 @@ export async function handleFileFetch(params: FileFetchParams): Promise<FileFetc
     }
     if (stats.size > maxBytes) {
       return {
-        ok: false,
+        ok: false as const,
         code: "FILE_TOO_LARGE",
         message: `file size ${stats.size} exceeds limit ${maxBytes}`,
         canonicalPath: opened.realPath,
@@ -208,36 +171,114 @@ export async function handleFileFetch(params: FileFetchParams): Promise<FileFetc
 
     if (preflightOnly) {
       return {
-        ok: true,
+        ok: true as const,
         path: opened.realPath,
         size: stats.size,
         mimeType: "",
         base64: "",
         sha256: "",
         preflightOnly: true,
-        binding: { kind: "existing", ...identity },
+        binding: { kind: "existing", ...identity } satisfies PathBinding,
       };
+    }
+
+    if (binaryMax !== undefined) {
+      if (!io?.frames || expectedBinding?.kind !== "existing") {
+        return {
+          ok: false as const,
+          code: "INVALID_PARAMS",
+          message: "binary file.fetch requires duplex IO and an authorized filesystem binding",
+        };
+      }
+      const frames = io.frames;
+      if (!frames) {
+        throw new Error("binary file.fetch requires framed duplex IO");
+      }
+      io.signal.throwIfAborted();
+      let expected: "start" | "ack" | undefined = "start";
+      let receipt = createDeferred<void>();
+      void receipt.promise.catch(() => {});
+      const onAbort = () => receipt.reject(io.signal.reason);
+      io.signal.addEventListener("abort", onAbort, { once: true });
+      let unsubscribe: (() => void) | undefined;
+      try {
+        unsubscribe = frames.onMessage((message) => {
+          if (!expected || Buffer.from(message).toString("utf8") !== expected) {
+            const error = new Error("Unexpected file.fetch stream control");
+            receipt.reject(error);
+            throw error;
+          }
+          expected = undefined;
+          receipt.resolve();
+        });
+        // Readiness is sent by onMessage. Do not send bytes until the caller subscribes.
+        io.signal.throwIfAborted();
+        await receipt.promise;
+        const chunk = Buffer.allocUnsafe(FILE_FETCH_CHUNK_BYTES);
+        const hash = crypto.createHash("sha256");
+        let size = 0;
+        while (true) {
+          io.signal.throwIfAborted();
+          const { bytesRead } = await opened.handle.read(
+            chunk,
+            0,
+            Math.min(chunk.length, maxBytes - size + 1),
+          );
+          io.signal.throwIfAborted();
+          if (!bytesRead) {
+            return {
+              ok: true as const,
+              path: opened.realPath,
+              size,
+              sha256: hash.digest("hex"),
+              transport: "binary" as const,
+              mimeType: "",
+              base64: "",
+              binding: { kind: "existing", ...identity } satisfies PathBinding,
+            };
+          }
+          size += bytesRead;
+          if (size > maxBytes) {
+            throw Object.assign(new Error("file grew beyond the authorized byte limit"), {
+              code: "FILE_TOO_LARGE",
+            });
+          }
+          const bytes = chunk.subarray(0, bytesRead);
+          hash.update(bytes);
+          receipt = createDeferred<void>();
+          // Observe rejection if abort happens while send is still pending.
+          void receipt.promise.catch(() => {});
+          expected = "ack";
+          await frames.send(bytes);
+          await receipt.promise;
+        }
+      } finally {
+        unsubscribe?.();
+        io.signal.removeEventListener("abort", onAbort);
+      }
     }
 
     const buffer = await readFileHandleBounded(opened.handle, maxBytes);
 
     const sha256 = crypto.createHash("sha256").update(buffer).digest("hex");
     const base64 = buffer.toString("base64");
-    const mimeType = await detectFetchedFileMime({ buffer, filePath: opened.realPath });
+    const detectedMime = await detectMime({ buffer, filePath: opened.realPath });
+    const mimeType =
+      detectedMime || (isLikelyPlainText(buffer) ? "text/plain" : "application/octet-stream");
 
     return {
-      ok: true,
+      ok: true as const,
       path: opened.realPath,
       size: buffer.byteLength,
       mimeType,
       base64,
       sha256,
-      binding: { kind: "existing", ...identity },
+      binding: { kind: "existing", ...identity } satisfies PathBinding,
     };
   } catch (err) {
     const code = classifyFsError(err);
     return {
-      ok: false,
+      ok: false as const,
       code,
       message: `read failed: ${String(err)}`,
       canonicalPath: opened.realPath,

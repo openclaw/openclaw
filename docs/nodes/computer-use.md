@@ -8,13 +8,13 @@ title: "Computer use"
 doc-schema-version: 1
 ---
 
-Computer use lets an agent see and control the Gateway's own desktop or a paired node's desktop through one built-in `computer` tool. Both hosts use the same `computer.act` and `screen.snapshot` contracts; CUA reuses the same provider implementation on either host. The provider's descriptor identifies the supported v2 action, target, observation, and delivery families, so the tool exposes only what that provider can faithfully execute. Coordinate actions bind to a provider-issued reference frame; capable providers can also address windows and elements, request background delivery, and return structured effect or refusal evidence. A vision-capable model drives the surface.
+Computer use lets an agent see and control the Gateway's own desktop or a paired node's desktop through one built-in `computer` tool. Both hosts use the same `computer.act` and `screen.snapshot` contracts; CUA reuses the same provider implementation on either host. The provider's descriptor identifies the supported v2 action, target, observation, and delivery families, and execution accepts only what that provider can faithfully execute. The session retains the initial capability-driven tool description and schema across target discovery and reconnects; observation results report the selected desktop’s current capabilities. Unavailable actions return a structured refusal with the currently available action list. Coordinate actions bind to a provider-issued reference frame; capable providers can also address windows and elements, request background delivery, and return structured effect or refusal evidence. A vision-capable model drives the surface.
 
 For [cloud sessions](/gateway/cloud-sessions#desktop-and-computer-control), the tool is bound to the session's own desktop instead of searching paired nodes. Desktop-enabled Crabbox workers provision CUA in the same desktop session shown by the web Desktop panel. Their private computer endpoint is not exposed as an ordinary paired computer, and tool arguments cannot change its node or Gateway.
 
 A conversation can also attach a temporary Crabbox while its agent stays on the Gateway. Select the `environmentId` returned by the environment tool on the first `computer` call; later calls retain that desktop. The agent sees and controls the same desktop shown in the chat sidebar. The environment must belong to the current conversation, and its lease, connection, and admitted agent run must remain current. A missing or stopped attachment never redirects input to the Gateway or another computer. See [Cloud Worker Desktop](/gateway/cloud-workers/desktop) for the complete “open in Crabbox and show me” workflow.
 
-Taking control of a cloud environment in the Desktop panel pauses agent input and cancels pending input. The agent can still observe the screen. Release control to allow new agent input; interrupted actions are not automatically replayed. This arbitration applies to cloud environment desktops, including conversation attachments and cloud sessions.
+Taking control of a cloud environment in the Desktop panel pauses agent input and cancels pending input. The agent can still observe the screen. When asked to resume, it can call `computer` with `action: "take_control"` to switch the controlling viewer to view-only and capture a fresh screenshot. This explicit handoff uses the admitted run’s existing computer-control authority; it does not require a separate viewer-issued handoff token. You can take control again at any time, or release control yourself. Ordinary input never takes over automatically, and interrupted actions are not replayed. Takeover invalidates earlier coordinate and window/browser observations; use the returned screenshot or take a fresh targeted observation before input. This arbitration applies to cloud environment desktops, including conversation attachments and cloud sessions, not ordinary Gateway or paired-node desktops.
 
 The agent emits one uniform command, `computer.act`; it cannot choose how a node fulfills it. On macOS, **Dashboard → Settings → This Mac → Capabilities** selects the node-local provider: Peekaboo is the default and preserves the existing in-process coordinate-action path, while CUA uses a driver daemon embedded in `OpenClaw.app`. The app spawns that daemon directly so it inherits OpenClaw's Accessibility and Screen Recording grants, and the app-owned node worker connects through a private socket. Windows and Linux can use the optional, experimental `cua-computer` plugin, which calls the packaged CUA Driver SDK directly.
 
@@ -50,6 +50,12 @@ For an existing native desktop, the provider uses the Gateway process's desktop 
 
 The built-in tool uses the Gateway desktop from an agent run hosted by that Gateway. Remote Gateway URL/token overrides remain supported for paired node targets.
 
+Tool discovery reads declared capabilities and recorded runtime health without starting a desktop or waiting for its helper. The first computer action probes the selected Gateway and binds to the resulting live provider generation. A declared action list alone does not mean the desktop is ready.
+
+Hosted agent turns reuse the Gateway's prepared node catalog and computer-provider declarations. Pairing and connection changes, command-policy updates, and provider/configuration changes update those owner-held facts before the next turn assembles its tool surface. Discovery remains bound to the agent's Gateway; a retired Gateway binding cannot borrow another Gateway's inventory.
+
+For RPC clients, `computer.status` with `probe: false` performs this passive read. `probe: true` prepares the computer and waits for readiness; omitting `probe` preserves that behavior for existing clients. Concurrent probes share preparation, and helper startup remains bounded by its one-minute timeout. Passive reads never extend the desktop's idle lifetime or retry a failed startup.
+
 ### Linux Gateway live proof
 
 From a built source checkout on Linux, install the managed desktop prerequisites plus `mousepad`, then run:
@@ -61,11 +67,15 @@ node --import ./scripts/tsx.mjs scripts/dev/computer-use-gateway-live-proof.ts \
 
 Use an empty output directory. The proof starts an isolated Gateway and managed desktop with no paired nodes, captures screenshots, types into Mousepad and reads the text back, then verifies generation fencing and joined process cleanup. It requires no model credentials and leaves screenshots, a redacted log, and `result.json` in the output directory.
 
+Add `--runtime <executable>` to start the built Gateway on another runtime, such as Bun, and run the proof with no `node` on `PATH`. The proof fails if the Gateway or its computer helper runs on another executable or any owned process runs Node, and records each owned process's executable in `result.json`.
+
 ## The `computer` agent tool
 
-The built-in `computer` tool takes one action per call. Choose `target: "gateway"` for the Gateway desktop or `target: "node"` for a paired node. Supplying `node` also selects the node route. With neither selector, the first call uses the configured Gateway computer, otherwise the sole connected computer-capable node. A configured but unavailable Gateway computer reports its error; it never silently redirects input to a node. Later calls retain the selected host unless explicitly changed. Cloud sessions retain their fixed desktop and reject host overrides.
+The built-in `computer` tool takes one action per call. Choose `target: "gateway"` for the Gateway desktop or `target: "node"` for a paired node. Supplying `node` also selects the node route. With neither selector, the first call uses the configured Gateway computer, otherwise the sole connected computer-capable node. When the Gateway has no computer provider configured, the tool schema omits `target: "gateway"` and the guidance asks the model to omit `target` or use `target: "node"`; an explicit `target: "gateway"` reports the missing provider and names the paired-node retry instead of silently redirecting input. A configured but unavailable Gateway computer reports its error; it never silently redirects input to a node. Later calls retain the selected host unless explicitly changed. Cloud sessions retain their fixed desktop and reject host overrides.
 
-Coordinates are non-negative integer pixels in the most recent screenshot; the provider maps them to display points. Coordinate actions must echo the screenshot result's `frameId`, and an explicit `screenIndex` must match that frame. OpenClaw also carries a provider-issued display identity from the screenshot into the action, so a display reconnect or geometry change fails closed instead of silently retargeting the same index. These checks reject guessed tokens and tokens from another delivered frame or display. A token is not a freshness guarantee: apps can change pixels on the same display after capture, so take a new screenshot whenever the scene may have changed.
+On the MCP tool path, computer control belongs to the admitted agent run and is released when that run ends. A later run can then use the same computer. Recording and file-transfer actions remain unavailable on this path.
+
+Coordinates are non-negative integer pixels in the most recent screenshot; the provider maps them to display points. Coordinate actions must echo the screenshot result's `frameId`, and an explicit `screenIndex` must match that frame. OpenClaw also carries a provider-issued display identity from the screenshot into the action, so a display reconnect or geometry change blocks the action instead of silently retargeting the same index. These checks reject guessed tokens and tokens from another delivered frame or display. A token is not a freshness guarantee: apps can change pixels on the same display after capture, so take a new screenshot whenever the scene may have changed.
 
 - Reads: `screenshot` captures a desktop screen and returns `frameId`. It does not accept window, browser, element, or observation references.
 - Pointer: `left_click`, `right_click`, `middle_click`, `double_click`, `triple_click`, `mouse_move`, `left_click_drag` (with `startCoordinate`), `left_mouse_down`, `left_mouse_up`.
@@ -73,13 +83,15 @@ Coordinates are non-negative integer pixels in the most recent screenshot; the p
 - Keyboard: `type` (text), `key` (combo such as `cmd+shift+t` or `Return`), `hold_key` (`text` combo held for `duration` seconds).
 - Pacing: `wait` (`duration` seconds), followed by a screenshot. This action runs locally and is available whenever the selected provider supports screenshots; it does not require a native wait command.
 
-Providers with the v2 window/element family can additionally expose `list_apps`, `list_windows`, `get_accessibility_tree`, `get_cursor_position`, `get_window_state`, `launch_app`, `kill_app`, `bring_to_front`, `set_value`, `zoom`, `escalate_scope`, and `invoke_menu`. The provider descriptor is authoritative; unavailable actions are omitted rather than emulated through another provider.
+Providers with the v2 window/element family can additionally expose `list_apps`, `list_windows`, `get_accessibility_tree`, `get_cursor_position`, `get_window_state`, `launch_app`, `kill_app`, `bring_to_front`, `set_value`, `zoom`, `escalate_scope`, and `invoke_menu`. The provider descriptor is authoritative; unavailable actions are rejected rather than emulated through another provider.
 
 Window input coordinates follow the observation's `details.coordinateSpace`. CUA reports `image-pixels`: use pixels in the delivered image, including when OpenClaw resized it. Peekaboo reports `global-logical-points`: use desktop logical points. Accessibility element bounds retain their native screen coordinates; prefer `elementRef` when targeting those elements. Browser coordinate inputs use viewport CSS pixels.
 
+On macOS, Peekaboo omits the hosting OpenClaw process from `list_windows` and reports a warning. It also refuses accessibility-tree inspection of that process. Use the CUA provider to inspect or control OpenClaw's own windows.
+
 For a window image, use `get_window_state` with `windowRef` and `includeScreenshot: true`, then pass the returned `observationId` with window input. With CUA, `includeScreenshot: false` skips capture and refreshes accessibility elements and their references. This opt-out requires an updated node; default and `true` observations remain compatible with older nodes. Use those references for element actions; window pixel input still requires an observation with a delivered image. The native macOS Peekaboo provider rejects `includeScreenshot: false` because its window observations require capture. A desktop `frameId` cannot replace a window observation: the images can use different coordinate spaces. Like `screenshot`, `wait` returns a desktop capture and rejects target and observation references.
 
-The CUA provider also exposes the v2 browser family: `get_browser_state`, `browser_prepare`, `browser_navigate`, `browser_click`, `browser_type`, `browser_dialog`, `browser_set_input_files`, `browser_download`, and `browser_pointer`. Bind a discovered native browser window with `get_browser_state`, then use the returned opaque `browserRef`, `pageRef`, observation, and element references. These references belong to one Computer Use execution and driver generation; navigation invalidates page-element observations, and a driver restart invalidates the complete browser reference set.
+The CUA provider also exposes the v2 browser family: `get_browser_state`, `browser_prepare`, `browser_navigate`, `browser_click`, `browser_type`, `browser_dialog`, `browser_set_input_files`, `browser_download`, and `browser_pointer`. Use `list_windows` to discover a native browser's `windowRef`, then pass it to `get_browser_state` to obtain an opaque `browserRef` and page references. Subsequent `get_browser_state` page snapshots and browser actions require both `browserRef` and `pageRef`; snapshots return the observation and element references needed for input. `browser_prepare` also requires the discovered `windowRef`, even for an isolated profile. These references belong to one Computer Use execution and driver generation; navigation invalidates page-element observations, and a driver restart invalidates the complete browser reference set.
 
 CUA additionally exposes `get_recording_state`, `start_recording`, `stop_recording`, and `replay_trajectory`. Recording and browser file operations use opaque `openclaw:computer-resource` handles. The selected computer host creates and validates the underlying files and directories; agent actions never accept native paths, output roots, or helper executable paths. Handles belong to one Computer Use execution and cannot be reused by another execution.
 
@@ -117,7 +129,7 @@ The CUA descriptor advertises window, element, and browser targets; background a
 
 CUA desktop input uses the foreground desktop route. `deliveryMode` selects a route only for window-targeted input; switching it on a desktop action does not change how that action is delivered. Desktop results preserve native effect and escalation evidence, identify their desktop scope, and indicate when a requested delivery mode is not applicable. An acknowledged input is not proof that the application responded: verify the intended visible change before repeating it.
 
-The pinned CUA driver supports key taps, not sustained keyboard holds. Its Linux `left_mouse_down` and `left_mouse_up` actions require a background window pixel target with `windowRef` and a current image-bearing `observationId`; desktop and element targets do not support those holds. Use only actions exposed by the selected node. For interactive applications, first verify that movement, activation, or another intended control changes the observed state before attempting a longer task.
+The pinned CUA driver supports key taps, not sustained keyboard holds. Linux X11 key taps include a short press interval so applications that poll key state can observe them. Its Linux `left_mouse_down` and `left_mouse_up` actions require a background window pixel target with `windowRef` and a current image-bearing `observationId`; desktop and element targets do not support those holds. Use only actions exposed by the selected node. For interactive applications, first verify that movement, activation, or another intended control changes the observed state before attempting a longer task.
 
 #### Browser profiles
 
@@ -195,7 +207,7 @@ After either proof, stop only the Gateway, app/node, and fixture processes you l
 
 ### Windows and Linux (experimental, direct SDK)
 
-The bundled `cua-computer` plugin loads its Gateway policy by default on every platform. Local computer control remains opt-in on Windows and Linux; loading the policy alone does not start a native driver, register local computer commands, or probe local driver artifacts. macOS keeps its default CUA integration with the app-owned daemon. Explicitly disabling the plugin also disables its cloud computer policy.
+The bundled `cua-computer` plugin loads its Gateway policy by default on every platform. Local computer control remains opt-in on Windows and Linux; loading the policy alone does not start a native driver, register local computer commands, or check local driver artifacts. macOS keeps its default CUA integration with the app-owned daemon. Explicitly disabling the plugin also disables its cloud computer policy.
 
 To enable the experimental Windows or Linux node fulfiller, which uses the pinned CUA Driver SDK contract directly:
 
@@ -246,6 +258,8 @@ Updates preserve existing desktop configuration, explicit plugin enablement or d
 
 Provider descriptors declare `contractVersion: 2`. Invalid capability descriptors or `computer.act` result envelopes are rejected with `COMPUTER_CONTRACT_MISMATCH`.
 
+The receiver accepts optional numeric `cursorX` and `cursorY` receipt fields from independently updated paired macOS nodes, including `v2026.8.1`. Unknown fields and invalid field types remain rejected.
+
 Direct `node.invoke` calls to the provider-backed `computer.act` command must include an `executionId` UUID in the action parameters. The built-in `computer` tool supplies it automatically.
 
 For CUA, use the same `executionId` for the preceding `screen.snapshot` call. Copy its `displayFrameId` into the action and its returned `width` into `refWidth`; coordinates refer to pixels within that returned bitmap. CUA limits both image dimensions to `maxWidth` without enlarging smaller displays, so direct snapshots and the built-in tool share one coordinate space.
@@ -278,6 +292,13 @@ On macOS, default-on means a paired gateway can drive pointer and keyboard input
 
 ## Safety
 
+OpenClaw hides its native macOS human-approval panels from Peekaboo screen snapshots
+and refuses native computer input while an approval panel or menu-bar approval is
+pending. Human clicks and **Command-Return** still work. These native guards do not
+cover browser automation, the separate CUA driver, or third-party automation on
+the same machine. This is hardening, not an isolation boundary. Do not combine
+ask-mode exec with unrestricted computer use for a model you do not trust.
+
 - Tool policy, local provider enablement, and platform permissions must agree. Node targets also require Gateway command policy, pairing, and node-app settings. On macOS that includes **Allow Computer Control**, Accessibility, and Screen Recording; the native Peekaboo path also requires Event Posting. Actions execute while those durable controls remain enabled; there is no per-action confirmation.
 - The macOS fulfiller posts text one grapheme at a time, so cancellation, disconnect, pause, disable, or endpoint replacement stops it before the next grapheme. The experimental CUA Driver fulfiller passes node cancellation to the SDK for each call.
 - On macOS, capture and input require a verified unlocked desktop. Temporary keep-awake covers an active Computer execution, including background actions, for at most one hour. Manual lock, logout, or unknown state releases assertions and retires the execution; a later unlock requires a new execution. Optional [Keep computer awake](/platforms/mac/permissions#desktop-availability-and-keeping-awake) keeps a connected host awake between jobs without changing persistent macOS power or lock settings.
@@ -289,7 +310,7 @@ On macOS, default-on means a paired gateway can drive pointer and keyboard input
 
 ### Gateway computer unavailable
 
-Enable `cua-computer` on the Gateway host, verify the focused artifact check, and check the Gateway logs for the provider's startup error. For managed Linux desktops, install the required TigerVNC, XFCE, and D-Bus binaries and confirm that an external VNC listener has not selected attach mode. For an existing desktop, ensure the Gateway starts in the intended graphical session with its display environment and permissions. Enabling the Desktop panel alone does not enable CUA.
+Enable `cua-computer` on the Gateway host, verify the focused artifact check, and check the Gateway logs for the provider's startup error. For managed Linux desktops, install the required TigerVNC, XFCE, and D-Bus binaries and confirm that an external VNC listener has not selected attach mode. For an existing desktop, check that the Gateway starts in the intended graphical session with its display environment and permissions. Enabling the Desktop panel alone does not enable CUA.
 
 If you intended to control a paired desktop, select `target: "node"` and its `node` explicitly. An unavailable Gateway target never redirects a possibly completed action to a different computer.
 

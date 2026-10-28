@@ -6,9 +6,11 @@
 // the WS handshake anyway), and archives the legacy files so the migration
 // never repeats. Pending rows are 5-minute transients and are not migrated;
 // connecting nodes re-request their surface.
-import fs from "node:fs/promises";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preserveLegacyDesktopStreamOptOut } from "./device-pairing-node-desktop-migration.js";
 import { withPairedDeviceRecords, listApprovedPairedDeviceRoles } from "./device-pairing.js";
 import {
+  archiveLegacyPairingFile,
   coercePairingStateRecord,
   readJsonIfExists,
   resolvePairingPaths,
@@ -35,14 +37,6 @@ type LegacyNodePairingMigrationResult = {
   orphaned: number;
 };
 
-async function archiveLegacyFile(path: string): Promise<void> {
-  try {
-    await fs.rename(path, `${path}.migrated`);
-  } catch {
-    // Missing file or a racing second gateway process; nothing left to archive.
-  }
-}
-
 /**
  * Fold legacy nodes/paired.json rows into device-record node surfaces, then
  * archive the legacy files. Idempotent: after the first run the files carry a
@@ -50,6 +44,7 @@ async function archiveLegacyFile(path: string): Promise<void> {
  */
 export async function migrateLegacyNodePairingStore(params?: {
   baseDir?: string;
+  cfg?: OpenClawConfig;
   log?: { info: (message: string) => void; warn: (message: string) => void };
 }): Promise<LegacyNodePairingMigrationResult | null> {
   const { pendingPath, pairedPath } = resolvePairingPaths(params?.baseDir, "nodes");
@@ -91,13 +86,14 @@ export async function migrateLegacyNodePairingStore(params?: {
           lastConnectedAtMs:
             typeof row.lastConnectedAtMs === "number" ? row.lastConnectedAtMs : undefined,
         };
+        preserveLegacyDesktopStreamOptOut(device, params?.cfg ?? {}, now);
         migrated += 1;
       }
       return { value: undefined, persist: migrated > 0 };
     });
   }
 
-  await Promise.all([archiveLegacyFile(pairedPath), archiveLegacyFile(pendingPath)]);
+  await Promise.all([archiveLegacyPairingFile(pairedPath), archiveLegacyPairingFile(pendingPath)]);
   const result = { migrated, orphaned };
   params?.log?.info(
     `node pairing store migrated: folded ${migrated} node surface(s) into device records, dropped ${orphaned} orphan row(s)`,

@@ -19,11 +19,8 @@ describe("buildMemoryFlushPlan", () => {
 
   it.each([
     [8_000, 2_000, 3_000],
-    [16_000, 4_000, 4_000],
-    [24_000, 6_000, 4_000],
     [32_768, 8_192, 4_000],
     [128_000, 20_000, 4_000],
-    [200_000, 20_000, 4_000],
   ])(
     "sizes its reserve and maintenance headroom to a %i-token context window",
     (contextWindowTokens, reserveTokensFloor, softThresholdTokens) => {

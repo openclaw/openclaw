@@ -290,7 +290,7 @@ defineDiscordVoiceTests((harness) => {
       try {
         await vi.waitFor(() => expect(authorize).toHaveBeenCalledOnce());
         expect(f.streams.size).toBe(0);
-        f.entry.connection.receiver.speaking.users.set(userId, Date.now());
+        f.entry.audio.speakingUsers.add(userId);
         await startTranscripts(f.manager, f.sink);
         await vi.waitFor(() => expect(f.streams.has(userId)).toBe(true));
         f.streams.get(userId)!.end(Buffer.alloc(96_000, 8));

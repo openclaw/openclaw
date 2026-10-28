@@ -1,8 +1,7 @@
-// Detects and formats plugin install path warnings.
-import fs from "node:fs/promises";
 import path from "node:path";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { canAccess } from "./path-existence.js";
 
 type PluginInstallPathIssue = {
   kind: "custom-path" | "missing-path";
@@ -10,37 +9,28 @@ type PluginInstallPathIssue = {
   path: string;
 };
 
-function resolvePluginInstallCandidatePaths(
-  install: PluginInstallRecord | null | undefined,
-): string[] {
-  if (!install || install.source !== "path") {
-    return [];
-  }
-
-  return [install.sourcePath, install.installPath]
-    .map((value) => normalizeOptionalString(value) ?? "")
-    .filter(Boolean);
-}
-
 export async function detectPluginInstallPathIssue(params: {
   pluginId: string;
   install: PluginInstallRecord | null | undefined;
 }): Promise<PluginInstallPathIssue | null> {
-  const candidatePaths = resolvePluginInstallCandidatePaths(params.install);
+  if (params.install?.source !== "path") {
+    return null;
+  }
+  const candidatePaths = normalizeTrimmedStringList([
+    params.install.sourcePath,
+    params.install.installPath,
+  ]);
   if (candidatePaths.length === 0) {
     return null;
   }
 
   for (const candidatePath of candidatePaths) {
-    try {
-      await fs.access(path.resolve(candidatePath));
+    if (await canAccess(path.resolve(candidatePath))) {
       return {
         kind: "custom-path",
         pluginId: params.pluginId,
         path: candidatePath,
       };
-    } catch {
-      // Keep checking remaining candidate paths before warning about a stale install.
     }
   }
 

@@ -1,17 +1,11 @@
-/**
- * OpenAI Codex (ChatGPT OAuth) flow
- *
- * NOTE: This module uses Node.js crypto and http for the OAuth callback.
- * It is only intended for CLI use, not browser environments.
- */
-
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { resolveOpenAICodexAuthIdentity } from "openclaw/plugin-sdk/provider-auth";
 import {
   createOAuthLoginCancelledError,
+  createOAuthRefreshError,
   oauthErrorHtml,
   oauthSuccessHtml,
   parseOAuthAuthorizationInput,
+  resolveOpenAICodexAuthIdentity,
   throwIfOAuthLoginAborted,
   withOAuthLoginAbort,
   type OAuthCredentials,
@@ -27,37 +21,14 @@ import {
   refreshOpenAIAccessToken,
 } from "./openai-chatgpt-oauth-token.runtime.js";
 
-const CALLBACK_PORT = 1455;
 const CALLBACK_HOST = resolveOpenAICallbackHost();
 const REDIRECT_URI = resolveOpenAIRedirectUri(CALLBACK_HOST);
-const MANUAL_PROMPT_FALLBACK_MS = 15_000;
 
-const loadNodeOAuthHttp = createLazyRuntimeModule(() => import("node:http"));
-
-function waitForManualPromptFallback(signal?: AbortSignal): Promise<null> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(createOAuthLoginCancelledError());
-      return;
-    }
-
-    const cleanup = () => {
-      signal?.removeEventListener("abort", abort);
-    };
-    const abort = () => {
-      clearTimeout(timeout);
-      cleanup();
-      reject(createOAuthLoginCancelledError());
-    };
-    const timeout = setTimeout(() => {
-      cleanup();
-      resolve(null);
-    }, MANUAL_PROMPT_FALLBACK_MS);
-
-    signal?.addEventListener("abort", abort, { once: true });
-    timeout.unref?.();
-  });
-}
+const loadOAuthCallbackServer = createLazyRuntimeModule(() =>
+  import("openclaw/plugin-sdk/provider-auth-runtime").then(
+    ({ startProviderOAuthLoopbackCallbackServer }) => startProviderOAuthLoopbackCallbackServer,
+  ),
+);
 
 function parseAuthorizationCode(input: string, state: string): string | undefined {
   const parsed = parseOAuthAuthorizationInput(input);
@@ -77,99 +48,6 @@ async function promptForAuthorizationCode(
   );
 }
 
-type OAuthServerInfo = {
-  close: () => void;
-  cancelWait: () => void;
-  waitForCode: () => Promise<{ code: string } | null>;
-};
-
-function sendOAuthHtmlResponse(
-  res: import("node:http").ServerResponse,
-  statusCode: number,
-  html: string,
-): void {
-  res.statusCode = statusCode;
-  // Callback browsers may reuse HTTP/1.1 connections. Force disconnect after
-  // the response so an accepted socket cannot keep the auth process alive.
-  res.setHeader("Connection", "close");
-  res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.end(html);
-}
-
-async function startLocalOAuthServer(
-  state: string,
-  assertCurrent?: () => void,
-): Promise<OAuthServerInfo> {
-  const http = await loadNodeOAuthHttp();
-  assertCurrent?.();
-  let settleWait: ((value: { code: string } | null) => void) | undefined;
-  const waitForCodePromise = new Promise<{ code: string } | null>((resolve) => {
-    settleWait = resolve;
-  });
-
-  const server = http.createServer((req, res) => {
-    try {
-      const url = new URL(req.url || "", "http://localhost");
-      if (url.pathname !== "/auth/callback") {
-        sendOAuthHtmlResponse(res, 404, oauthErrorHtml("Callback route not found."));
-        return;
-      }
-      if (url.searchParams.get("state") !== state) {
-        sendOAuthHtmlResponse(res, 400, oauthErrorHtml("State mismatch."));
-        return;
-      }
-      const code = url.searchParams.get("code");
-      if (!code) {
-        sendOAuthHtmlResponse(res, 400, oauthErrorHtml("Missing authorization code."));
-        return;
-      }
-      sendOAuthHtmlResponse(
-        res,
-        200,
-        oauthSuccessHtml("OpenAI authentication completed. You can close this window."),
-      );
-      settleWait?.({ code });
-    } catch {
-      sendOAuthHtmlResponse(
-        res,
-        500,
-        oauthErrorHtml("Internal error while processing OAuth callback."),
-      );
-    }
-  });
-
-  return new Promise((resolve) => {
-    server
-      .listen(CALLBACK_PORT, CALLBACK_HOST, () => {
-        resolve({
-          close: () => {
-            server.close();
-            // Force-close preconnected sockets so they cannot pin the CLI process.
-            server.closeAllConnections();
-          },
-          cancelWait: () => {
-            settleWait?.(null);
-          },
-          waitForCode: () => waitForCodePromise,
-        });
-      })
-      .on("error", () => {
-        settleWait?.(null);
-        resolve({
-          close: () => {
-            try {
-              server.close();
-            } catch {
-              // ignore
-            }
-          },
-          cancelWait: () => {},
-          waitForCode: async () => null,
-        });
-      });
-  });
-}
-
 function resolveOpenAICredentials(
   result: Awaited<ReturnType<typeof refreshOpenAIAccessToken>>,
 ): OAuthCredentials {
@@ -187,6 +65,7 @@ function resolveOpenAICredentials(
         ? `OpenAI Codex token ${result.operation} failed (${facts.join("; ")}).`
         : undefined;
     throw Object.assign(new Error([result.summary, diagnostic].filter(Boolean).join("\n\n")), {
+      ...(result.oauthRefreshOutcome ? { oauthRefreshOutcome: result.oauthRefreshOutcome } : {}),
       oauthRefreshFailure: {
         summary: result.summary,
         ...(result.errorType ? { errorType: result.errorType } : {}),
@@ -197,7 +76,11 @@ function resolveOpenAICredentials(
   }
   const accountId = resolveOpenAICodexAuthIdentity({ access: result.access }).accountId;
   if (!accountId) {
-    throw new Error("Failed to extract accountId from token");
+    throw createOAuthRefreshError("Failed to extract accountId from token. Sign in again.", {
+      version: 1,
+      phase: "after-token-response",
+      outcome: "unknown",
+    });
   }
   return {
     access: result.access,
@@ -207,22 +90,11 @@ function resolveOpenAICredentials(
   };
 }
 
-/**
- * Login with OpenAI Codex OAuth
- *
- * @param options.onAuth - Called with URL and instructions when auth starts
- * @param options.onPrompt - Called to prompt user for manual code paste (fallback if no onManualCodeInput)
- * @param options.onProgress - Optional progress messages
- * @param options.onManualCodeInput - Optional promise that resolves with user-pasted code.
- *                                    Races with browser callback - whichever completes first wins.
- *                                    Useful for showing paste input immediately alongside browser flow.
- * @param options.originator - OAuth originator parameter (defaults to "openclaw")
- */
 export async function loginOpenAICodex(options: {
   onAuth: (info: { url: string; instructions?: string }) => Promise<void> | void;
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
-  onProgress?: (message: string) => void;
-  onManualCodeInput?: () => Promise<string>;
+  // Manual entry races the browser callback; either can complete the login.
+  onManualCodeInput: () => Promise<string>;
   originator?: string;
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -233,87 +105,64 @@ export async function loginOpenAICodex(options: {
     options.originator ?? "openclaw",
     REDIRECT_URI,
   );
-  const server = await startLocalOAuthServer(state, options.assertCurrent);
-
+  const startCallbackServer = await loadOAuthCallbackServer();
+  options.assertCurrent?.();
+  throwIfOAuthLoginAborted(options.signal);
+  let server: Awaited<ReturnType<typeof startCallbackServer>> | undefined;
+  try {
+    server = await startCallbackServer({
+      redirectUrl: REDIRECT_URI,
+      expectedState: state,
+      bindOnlyHostname: CALLBACK_HOST,
+      signal: options.signal,
+      renderSuccess: () => ({
+        body: oauthSuccessHtml("OpenAI authentication completed. You can close this window."),
+        contentType: "text/html; charset=utf-8",
+      }),
+      renderError: (message) => ({
+        body: oauthErrorHtml(message),
+        contentType: "text/html; charset=utf-8",
+      }),
+    });
+  } catch {
+    // An unavailable callback port still permits manual entry; retired owners do not.
+    options.assertCurrent?.();
+    throwIfOAuthLoginAborted(options.signal);
+  }
+  const waitForLogin = <T>(promise: Promise<T>) => withOAuthLoginAbort(promise, options.signal);
   let code: string | undefined;
   try {
     options.assertCurrent?.();
     throwIfOAuthLoginAborted(options.signal);
-    await withOAuthLoginAbort(
+    await waitForLogin(
       Promise.resolve(
         options.onAuth({
           url,
           instructions: "A browser window should open. Complete login to finish.",
         }),
       ),
-      options.signal,
-      server.cancelWait,
     );
     throwIfOAuthLoginAborted(options.signal);
-
-    if (options.onManualCodeInput) {
-      // Race between browser callback and manual input
-      let manualCode: string | undefined;
-      let manualError: Error | undefined;
-      const manualPromise = options
-        .onManualCodeInput()
-        .then((input) => {
-          manualCode = input;
-          server.cancelWait();
-        })
-        .catch((err: unknown) => {
-          manualError = err instanceof Error ? err : new Error(String(err));
-          server.cancelWait();
-        });
-
-      const result = await withOAuthLoginAbort(
-        server.waitForCode(),
-        options.signal,
-        server.cancelWait,
-      );
-
-      if (!result?.code && !manualCode && !manualError) {
-        await withOAuthLoginAbort(manualPromise, options.signal, server.cancelWait);
+    const callbackPromise = server?.waitForCallback().then((result) => {
+      if (result.type === "oauth_error") {
+        throw new Error("OpenAI authorization was not completed.");
       }
-      if (manualError) {
-        throw manualError;
-      }
-      if (result?.code) {
-        code = result.code;
-      } else if (manualCode) {
-        code = parseAuthorizationCode(manualCode, state);
-      }
-    } else {
-      const callbackPromise = server.waitForCode();
-      const result = await withOAuthLoginAbort(
-        Promise.race([callbackPromise, waitForManualPromptFallback(options.signal)]),
-        options.signal,
-        server.cancelWait,
-      );
-      if (result?.code) {
-        code = result.code;
-      } else {
-        const promptCodePromise = promptForAuthorizationCode(options.onPrompt, state).then(
-          (promptCode) => {
-            server.cancelWait();
-            return promptCode;
-          },
-        );
-        code = await withOAuthLoginAbort(
-          Promise.race([callbackPromise.then((callback) => callback?.code), promptCodePromise]),
-          options.signal,
-          server.cancelWait,
-        );
-      }
-    }
+      return result.code;
+    });
+    // Closing the server after manual entry can reject the losing callback wait.
+    void callbackPromise?.catch(() => undefined);
+    const manualPromise = options.onManualCodeInput().then(
+      (input) => parseAuthorizationCode(input, state),
+      (err: unknown) => {
+        throw err instanceof Error ? err : new Error(String(err));
+      },
+    );
+    code = await waitForLogin(
+      callbackPromise ? Promise.race([callbackPromise, manualPromise]) : manualPromise,
+    );
 
-    // Fallback to onPrompt if still no code
     if (!code) {
-      code = await withOAuthLoginAbort(
-        promptForAuthorizationCode(options.onPrompt, state),
-        options.signal,
-        server.cancelWait,
-      );
+      code = await waitForLogin(promptForAuthorizationCode(options.onPrompt, state));
     }
 
     if (!code) {
@@ -327,13 +176,10 @@ export async function loginOpenAICodex(options: {
       }),
     );
   } finally {
-    server.close();
+    await server?.close();
   }
 }
 
-/**
- * Refresh OpenAI Codex OAuth token
- */
 export async function refreshOpenAICodexToken(refreshToken: string): Promise<OAuthCredentials> {
   return resolveOpenAICredentials(await refreshOpenAIAccessToken(refreshToken));
 }

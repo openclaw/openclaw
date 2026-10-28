@@ -2,25 +2,35 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspect } from "node:util";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { listDirectoryTreeStrict } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "openclaw/plugin-sdk/process-runtime";
+import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
 import {
   openOpenClawAgentDatabase,
   openOpenClawStateDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { qaGatewayCleanupRuntimeEntrypoint } from "./gateway-child-artifacts-runtime.test-support.js";
-import { cleanupQaGatewayTempRoots } from "./gateway-child-artifacts.js";
+import {
+  cleanupQaGatewayTempRoots,
+  preserveQaGatewayDebugArtifacts,
+} from "./gateway-child-artifacts.js";
+import { createQaGatewaySetupHarness } from "./gateway-child-setup.test-support.js";
+import { resolveQaNodeExecPath } from "./node-exec.js";
 import { readQaAuthProfiles, writeQaAuthProfiles } from "./providers/shared/auth-store.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 import { runQaScenarioCommandLifecycle } from "./test-file-scenario-command-lifecycle.js";
 
 const dirs = createTempDirHarness();
+const setup = createQaGatewaySetupHarness();
 const runtimeRoots: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
+  await setup.cleanup();
   for (const tempRoot of runtimeRoots.splice(0)) {
     await cleanupQaGatewayTempRoots({ tempRoot });
   }
@@ -28,6 +38,85 @@ afterEach(async () => {
 });
 
 describe("cleanupQaGatewayTempRoots", () => {
+  it("removes child scratch and compiler caches without touching the parent temp directory", async () => {
+    const parentTemp = await fs.realpath(await dirs.makeTempDir("qa-parent-temp-"));
+    const inheritedTemp = { TMPDIR: parentTemp, TMP: parentTemp, TEMP: parentTemp };
+    const { tempRoot, env, lifetime } = await setup.prepare(
+      { runtimeEnvPatch: inheritedTemp },
+      { ...inheritedTemp, NODE_DISABLE_COMPILE_CACHE: undefined, NODE_COMPILE_CACHE: undefined },
+    );
+    const result = await runQaScenarioCommandLifecycle({
+      command: await resolveQaNodeExecPath(),
+      args: [
+        "--input-type=module",
+        "-e",
+        `
+import fs from "node:fs";
+import { enableCompileCache, flushCompileCache } from "node:module";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+// openclaw-temp-dir: allow verifies child scratch containment and cleanup
+const scratch = fs.mkdtempSync(path.join(tmpdir(), "qa-child-"));
+const source = path.join(scratch, "fixture.mjs");
+fs.writeFileSync(source, "export const value = 42;\\n");
+const cache = enableCompileCache(path.join(tmpdir(), "node-compile-cache"));
+await import(pathToFileURL(source).href);
+flushCompileCache();
+console.log(JSON.stringify({ scratch, cache }));
+`,
+      ],
+      cwd: tempRoot,
+      env,
+    });
+    expect(result, result.failureMessage).toMatchObject({ exitCode: 0, stderr: "" });
+    const { scratch, cache } = JSON.parse(result.stdout) as {
+      scratch: string;
+      cache: { directory: string };
+    };
+    expect(await fs.realpath(path.dirname(scratch))).toBe(tempRoot);
+    expect(path.relative(tempRoot, await fs.realpath(cache.directory))).not.toMatch(/^\.\./u);
+    const cacheEntries = (await listDirectoryTreeStrict(cache.directory)).map(
+      (walkEntry) => walkEntry.dirent,
+    );
+    expect(cacheEntries.some((entry) => entry.isFile())).toBe(true);
+    expect(await lifetime.stop()).toEqual({ process: "never-spawned", errors: [] });
+    await expect(fs.stat(tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readdir(parentTemp)).toEqual([]);
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "does not inspect child-private state before startup or boundary cleanup",
+    async () => {
+      const tempRoot = await dirs.makeTempDir("qa-cleanup-private-state-");
+      const stateDir = path.join(tempRoot, "state");
+      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+      await fs.mkdir(path.dirname(databasePath), { recursive: true });
+      await fs.writeFile(databasePath, "child-owned state");
+      // Reproduce the runner's filesystem boundary without privileged chown:
+      // no parent handles exist, and traversal is denied after SUT auth staging.
+      await fs.chmod(stateDir, 0);
+      const cleanupTempRoot = vi.fn(async () => {
+        await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "EACCES" });
+        await fs.chmod(stateDir, 0o700);
+        await fs.rm(tempRoot, { recursive: true, force: true });
+      });
+      try {
+        await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "EACCES" });
+        // prepareAttempt invokes this after the packaged auth subprocess exits.
+        await closeQaRuntimeStores(tempRoot);
+        await cleanupQaGatewayTempRoots({ tempRoot, cleanupTempRoot });
+        expect(cleanupTempRoot).toHaveBeenCalledOnce();
+        await expect(fs.stat(tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        await fs.chmod(stateDir, 0o700).catch((error: unknown) => {
+          if (extractErrorCode(error) !== "ENOENT") {
+            throw error;
+          }
+        });
+      }
+    },
+  );
   it("does not recreate disposed state at natural parent exit or close sibling stores", async () => {
     const root = await fs.realpath(await dirs.makeTempDir("qa-cleanup-parent-stores-"));
     const tempRoot = path.join(root, "runtime");
@@ -73,9 +162,12 @@ describe("cleanupQaGatewayTempRoots", () => {
     expect(JSON.parse(result.stdout)).toEqual({ targetClosed: true, siblingUsable: true });
   }, 120_000);
 
-  it.each(["agent", "shared"] as const)(
+  it.each([
+    ["agent", "tempRoot: Agent database close failed"],
+    ["shared", "tempRoot: close failed"],
+  ] as const)(
     "retains runtime on %s close failure, removes staging, and permits cleanup retry",
-    async (failedStore) => {
+    async (failedStore, expectedDiagnostic) => {
       const tempRoot = await dirs.makeTempDir("qa-cleanup-store-failure-");
       runtimeRoots.push(tempRoot);
       const stagedBundledPluginsRoot = await dirs.makeTempDir("qa-cleanup-store-plugins-");
@@ -87,7 +179,7 @@ describe("cleanupQaGatewayTempRoots", () => {
         stateDir,
         profiles: { fake: { type: "api_key", provider: "openai", key: "qa-synthetic" } },
       });
-      readQaAuthProfiles(agentDir);
+      await readQaAuthProfiles(agentDir);
       const agent = openOpenClawAgentDatabase({
         agentId: "qa",
         env,
@@ -106,7 +198,7 @@ describe("cleanupQaGatewayTempRoots", () => {
         stagedBundledPluginsRoot,
       }).catch((error: unknown) => error);
       expect(outcome).toBeInstanceOf(AggregateError);
-      expect(inspect(outcome, { depth: null })).toContain("tempRoot: close failed");
+      expect(inspect(outcome, { depth: null })).toContain(expectedDiagnostic);
       expect(inspect(outcome, { depth: null })).not.toMatch(
         /synthetic-close-secret|synthetic-close-cause/,
       );
@@ -188,4 +280,104 @@ describe("cleanupQaGatewayTempRoots", () => {
       ).resolves.toBeUndefined();
     },
   );
+});
+
+describe("preserveQaGatewayDebugArtifacts", () => {
+  it("preserves only sanitized gateway debug artifacts", async () => {
+    const tempRoot = await dirs.makeTempDir("qa-gateway-preserve-src-");
+    const repoRoot = await dirs.makeTempDir("qa-gateway-preserve-repo-");
+
+    const stdoutLogPath = path.join(tempRoot, "gateway.stdout.log");
+    const stderrLogPath = path.join(tempRoot, "gateway.stderr.log");
+    const artifactDir = path.join(repoRoot, ".artifacts", "qa-e2e", "gateway-runtime");
+    await fs.mkdir(path.dirname(artifactDir), { recursive: true });
+    await fs.writeFile(
+      stdoutLogPath,
+      [
+        "OPENCLAW_GATEWAY_TOKEN=qa-suite-token",
+        'OPENAI_API_KEY="openai-live"',
+        "OPENROUTER_API_KEY=openrouter-live",
+        'CUSTOM_API_KEYS="custom-a,custom-b"',
+        "CUSTOM_API_KEY_2=custom-b",
+        "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN=qa-token",
+        "OPENCLAW_LIVE_SETUP_TOKEN_VALUE=qa-token-alias",
+        "OPENCLAW_QA_CONVEX_SECRET_CI=convex-ci-secret",
+        "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER=convex-maintainer-secret",
+        "OPENCLAW_LIVE_CODEX_API_KEY=codex-live-secret",
+        "botToken=12345:AbCdEfGhIjKl",
+        "--botToken=12345:flag-secret",
+        '"driverToken":"12345:driver-secr3t"',
+        "sutToken='12345:sut-secr3t'",
+        "leaseToken=lease-12345",
+        '"apiKey":"secret-json-api-key"',
+        "clientSecret=secret-client-secret&secret-tail",
+        "url=http://127.0.0.1:18789/#token=abc123",
+        "callback=https://gateway.example.test/callback?access_token=secret-access-token&ok=1",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      stderrLogPath,
+      [
+        "Authorization: Bearer secret+/token=123456",
+        "Cookie: qa_session=secret-cookie; theme=dark",
+        "Set-Cookie: qa_session=secret-cookie; HttpOnly",
+        "x-api-key: secret-header-api-key",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.mkdir(path.join(tempRoot, "state"), { recursive: true });
+    await fs.writeFile(path.join(tempRoot, "state", "secret.txt"), "do-not-copy", "utf8");
+
+    await preserveQaGatewayDebugArtifacts({
+      preserveToDir: artifactDir,
+      stdoutLogPath,
+      stderrLogPath,
+      tempRoot,
+      repoRoot,
+    });
+
+    expect((await fs.readdir(artifactDir)).toSorted()).toEqual([
+      "README.txt",
+      "gateway.stderr.log",
+      "gateway.stdout.log",
+    ]);
+    await expect(fs.readFile(path.join(artifactDir, "gateway.stdout.log"), "utf8")).resolves.toBe(
+      [
+        "OPENCLAW_GATEWAY_TOKEN=<redacted>",
+        "OPENAI_API_KEY=<redacted>",
+        "OPENROUTER_API_KEY=<redacted>",
+        "CUSTOM_API_KEYS=<redacted>",
+        "CUSTOM_API_KEY_2=<redacted>",
+        "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN=<redacted>",
+        "OPENCLAW_LIVE_SETUP_TOKEN_VALUE=<redacted>",
+        "OPENCLAW_QA_CONVEX_SECRET_CI=<redacted>",
+        "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER=<redacted>",
+        "OPENCLAW_LIVE_CODEX_API_KEY=<redacted>",
+        "botToken=<redacted>",
+        "--botToken=<redacted>",
+        '"driverToken":"<redacted>"',
+        "sutToken=<redacted>",
+        "leaseToken=<redacted>",
+        '"apiKey":"<redacted>"',
+        "clientSecret=<redacted>",
+        "url=http://127.0.0.1:18789/#token=<redacted>",
+        "callback=https://gateway.example.test/callback?access_token=<redacted>&ok=1",
+      ].join("\n"),
+    );
+    await expect(fs.readFile(path.join(artifactDir, "gateway.stderr.log"), "utf8")).resolves.toBe(
+      [
+        "Authorization: Bearer <redacted>",
+        "Cookie: <redacted>",
+        "Set-Cookie: <redacted>",
+        "x-api-key: <redacted>",
+      ].join("\n"),
+    );
+    await expect(fs.readFile(path.join(artifactDir, "README.txt"), "utf8")).resolves.toContain(
+      "was not copied because it may contain credentials or auth tokens",
+    );
+    await expect(fs.readFile(path.join(artifactDir, "README.txt"), "utf8")).resolves.not.toContain(
+      tempRoot,
+    );
+  });
 });

@@ -1,4 +1,5 @@
 // Line tests cover which channels the bundled /card registration is offered on.
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import type { OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it } from "vitest";

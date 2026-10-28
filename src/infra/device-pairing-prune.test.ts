@@ -1,6 +1,6 @@
 // Covers silent-pairing approval provenance and superseded-record pruning.
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
@@ -28,7 +28,7 @@ async function makeBaseDir(): Promise<string> {
 
 async function cleanupSuite(): Promise<void> {
   for (const baseDir of suiteStateDirs) {
-    closeOpenClawStateDatabaseByPath(
+    await closeOpenClawStateDatabaseByPathAsync(
       resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: baseDir }),
     );
   }
@@ -117,6 +117,7 @@ describe("device pairing approval provenance", () => {
     const bootstrapApproved = await approveBootstrapDevicePairing(
       bootstrapRequest.request.requestId,
       { roles: ["node"], scopes: [] },
+      {},
       baseDir,
     );
     expect(bootstrapApproved?.status === "approved" && bootstrapApproved.device.approvedVia).toBe(
@@ -251,6 +252,7 @@ describe("pruneSupersededSilentPairedDevices", () => {
       deviceId: anchor.deviceId,
       baseDir,
       nowMs: agedNowMs(),
+      protectedDeviceIds: ["live"],
       isDeviceConnected: (deviceId) => deviceId === "live",
     });
 
@@ -258,6 +260,29 @@ describe("pruneSupersededSilentPairedDevices", () => {
     const list = await listDevicePairing(baseDir);
     expect(list.paired.map((device) => device.deviceId).toSorted()).toEqual(["anchor", "live"]);
     expect(list.pending).toHaveLength(0);
+  });
+
+  test("keeps the prune batch when a candidate connects after the snapshot", async () => {
+    const baseDir = await makeBaseDir();
+    await pairDevice({ baseDir, deviceId: "stale", approvedVia: "silent" });
+    await pairDevice({ baseDir, deviceId: "live", approvedVia: "silent" });
+    const anchor = await pairDevice({ baseDir, deviceId: "anchor", approvedVia: "silent" });
+
+    const removed = await pruneSupersededSilentPairedDevices({
+      deviceId: anchor.deviceId,
+      baseDir,
+      nowMs: agedNowMs(),
+      protectedDeviceIds: [],
+      isDeviceConnected: (deviceId) => deviceId === "live",
+    });
+
+    expect(removed).toEqual([]);
+    const list = await listDevicePairing(baseDir);
+    expect(list.paired.map((device) => device.deviceId).toSorted()).toEqual([
+      "anchor",
+      "live",
+      "stale",
+    ]);
   });
 
   test("does not prune when the anchor was not silent-approved", async () => {

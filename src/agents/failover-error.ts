@@ -4,37 +4,45 @@ import {
   readStringField,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import { isChannelRunAuthorizationError } from "../channels/message-access/run-authorization-error.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { isSqliteTranscriptMutationConflict } from "../config/sessions/session-mutation-conflict-error.js";
+import { isSessionWorkStartInvalidatedError } from "../config/sessions/work-start-error.js";
 import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
-import { collectErrorGraphCandidates, formatErrorMessage, readErrorName } from "../infra/errors.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { collectErrorGraphCandidates, readErrorName } from "../infra/errors.js";
+import { isLocalStorageOutcomeError } from "../infra/sqlite-error-diagnostics.js";
 import { failoverReasonFromClassification } from "./failover/classification-rules.js";
 import {
   classifyFailoverSignal,
   extractFailoverSignalDetails,
-  isProviderRequestSizeCeilingError,
   isUnclassifiedNoBodyHttpSignal,
 } from "./failover/classify.js";
 import {
   FailoverError,
   findErrorProperty,
-  getErrorMessage,
   isFailoverError,
   isTimeoutError,
   readDirectErrorCode,
   readDirectErrorMessage,
   type CliTimeoutContext,
 } from "./failover/error.js";
+import { findLocalWorkerTaskFailure } from "./failover/local-preparation-error.js";
+import { resolveExecutionApprovalFailureMessage } from "./failover/message-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./failover/signal.js";
+import { renderRateLimitRetryExhaustion } from "./failover/user-copy.js";
 import {
   AgentHarnessSessionSupersededError,
   isAgentHarnessPreflightError,
 } from "./harness/errors.js";
+import { isRecordedModelFallbackStop } from "./model-fallback-stop.js";
+import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.errors.js";
 import {
   isSessionPlacementSettlementClosedError,
   isAgentRunSupersededAbortReason,
 } from "./run-termination.js";
+import { isSessionTranscriptTurnMismatchErrorMessage } from "./sessions/transcript-turn-error.js";
 
 export {
   FailoverError,
@@ -49,22 +57,22 @@ const MAX_FAILOVER_CAUSE_DEPTH = 25;
 const MISSING_TOOL_RESULT_REASON = "missing_tool_result";
 const MISSING_TOOL_RESULT_TEXT_RE = /native Codex tool\.call without a matching tool\.result/i;
 const RUNTIME_COORDINATION_ERROR_NAMES = new Set([
+  "CodexNodeExecServerDisconnectedError",
   "GatewayDrainingError",
+  "NodeRunnerUpdateRequiredError",
   "WorkerRunnerUnavailableError",
   "WorkerRunnerCapacityError",
   "WorkerWorkspaceReconciliationError",
   "ActiveTurnClaimError",
+  "CliHistoryOwnerChangedError",
+  "SessionTranscriptReadFenceError",
+  "SqliteWorkerError",
 ]);
 
-// Failed owned cleanup stops replay even for frozen errors crossing bundled chunks.
-// Keep the fact weakly keyed to the original error, never inferred from display text.
-const modelFallbackStops = resolveGlobalSingleton(
-  Symbol.for("openclaw.modelFallbackStops"),
-  () => new WeakSet<Error>(),
-);
+export { recordModelFallbackStop } from "./model-fallback-stop.js";
 
-export function recordModelFallbackStop(error: Error): void {
-  modelFallbackStops.add(error);
+export function hasRecordedModelFallbackStop(error: unknown): boolean {
+  return collectErrorGraphCandidates(error, resolveNestedErrors).some(isRecordedModelFallbackStop);
 }
 
 export function hasModelFallbackStop(error: unknown): boolean {
@@ -73,7 +81,8 @@ export function hasModelFallbackStop(error: unknown): boolean {
     isAgentRunSupersededAbortReason(error) ||
     collectErrorGraphCandidates(error, resolveNestedErrors).some(
       (candidate) =>
-        (candidate instanceof Error && modelFallbackStops.has(candidate)) ||
+        isRecordedModelFallbackStop(candidate) ||
+        isSessionTranscriptTurnMismatchErrorMessage(readDirectErrorMessage(candidate)) ||
         (isFailoverError(candidate) && isCliTerminalStopCode(candidate.code)),
     )
   );
@@ -88,15 +97,6 @@ function resolveNestedErrors(candidate: Record<string, unknown>): unknown[] {
     // An opaque disposal branch must not hide the other recorded CLI facts.
   }
   return nested;
-}
-
-/** Distinguishes the provider's request ceiling from context pressure and bucket state. */
-export function hasProviderRequestSizeCeiling(err: unknown): boolean {
-  return collectErrorGraphCandidates(err, resolveNestedErrors).some((candidate) =>
-    isFailoverError(candidate)
-      ? candidate.requestSizeCeiling
-      : isProviderRequestSizeCeilingError(formatErrorMessage(candidate)),
-  );
 }
 
 function findCliFailoverError<T extends FailoverError>(
@@ -167,8 +167,12 @@ export function findCliTimeoutError(
 }
 
 /** Map a failover reason to the closest HTTP-like status code. */
-export function resolveFailoverStatus(reason: FailoverReason): number | undefined {
-  return FAILOVER_STATUS.get(reason);
+export function resolveFailoverStatus(reason: FailoverReason, code?: string): number | undefined {
+  return normalizeFailoverStatus(FAILOVER_STATUS.get(reason), code);
+}
+
+function normalizeFailoverStatus(status: number | undefined, code?: string): number | undefined {
+  return code === "selected_auth_profile_unavailable" ? undefined : status;
 }
 
 const FAILOVER_STATUS = new Map<FailoverReason, number>([
@@ -245,18 +249,6 @@ function readDirectErrorDetails(err: unknown): string[] | undefined {
   );
 }
 
-function normalizeDirectErrorSignal(err: unknown): FailoverSignal {
-  const message = readDirectErrorMessage(err);
-  return {
-    status: readDirectStatusCode(err),
-    code: readDirectErrorCode(err),
-    errorType: readDirectErrorType(err),
-    message: message || undefined,
-    provider: readDirectProvider(err),
-    details: readDirectErrorDetails(err),
-  };
-}
-
 function hasSessionTranscriptWriterClaimRebound(
   err: unknown,
   seen: Set<object> = new Set(),
@@ -312,8 +304,20 @@ function hasStaleAgentRunLifecycleFailure(err: unknown): boolean {
 }
 
 function hasRuntimeCoordinationFailure(err: unknown): boolean {
-  return collectErrorGraphCandidates(err, resolveNestedErrors).some((candidate) =>
-    RUNTIME_COORDINATION_ERROR_NAMES.has(readErrorName(candidate)),
+  if (isChannelRunAuthorizationError(err) || isLocalStorageOutcomeError(err)) {
+    return true;
+  }
+  return collectErrorGraphCandidates(err, resolveNestedErrors).some(
+    (candidate) =>
+      isSessionWorkStartInvalidatedError(candidate) ||
+      RUNTIME_COORDINATION_ERROR_NAMES.has(readErrorName(candidate)) ||
+      resolveExecutionApprovalFailureMessage(readDirectErrorMessage(candidate)) !== undefined,
+  );
+}
+
+function hasPreparedModelRuntimeOwnerNotPublished(err: unknown): boolean {
+  return collectErrorGraphCandidates(err, resolveNestedErrors).some(
+    (candidate) => candidate instanceof PreparedModelRuntimeOwnerNotPublishedError,
   );
 }
 
@@ -321,7 +325,7 @@ function hasDirectProviderFailureIdentity(err: unknown): boolean {
   if (isFailoverError(err)) {
     return true;
   }
-  const signal = normalizeDirectErrorSignal(err);
+  const signal = normalizeErrorSignal(err, undefined, "direct");
   return Boolean(signal.status || signal.code || signal.errorType || signal.provider);
 }
 
@@ -330,14 +334,21 @@ export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
   return resolveModelFallbackError(err).kind === "coordination";
 }
 
-function normalizeErrorSignal(err: unknown, providerHint?: string): FailoverSignal {
-  const message = getErrorMessage(err);
+function normalizeErrorSignal(
+  err: unknown,
+  providerHint?: string,
+  scope: "direct" | "nested" = "nested",
+): FailoverSignal {
+  const read = <T>(reader: (candidate: unknown) => T | undefined) =>
+    scope === "direct" ? reader(err) : findErrorProperty(err, reader);
+  const message = read(readDirectErrorMessage);
+  const code = read(readDirectErrorCode);
   return {
-    status: findErrorProperty(err, readDirectStatusCode),
-    code: findErrorProperty(err, readDirectErrorCode),
-    errorType: findErrorProperty(err, readDirectErrorType),
+    status: normalizeFailoverStatus(read(readDirectStatusCode), code),
+    code,
+    errorType: read(readDirectErrorType),
     message: message || undefined,
-    provider: findErrorProperty(err, readDirectProvider) ?? providerHint,
+    provider: read(readDirectProvider) ?? providerHint,
     details: readDirectErrorDetails(err),
   };
 }
@@ -369,7 +380,7 @@ function decideNestedFormatOverride(
     seen.add(candidate);
   }
 
-  const directSignal = normalizeDirectErrorSignal(candidate);
+  const directSignal = normalizeErrorSignal(candidate, undefined, "direct");
   const nestedCandidates = getNestedErrorCandidates(candidate);
   const nestedStatus = directSignal.status ?? inheritedStatus;
   const hasDirectMessage = Boolean(directSignal.message?.trim());
@@ -407,6 +418,13 @@ function resolveFailoverClassificationFromErrorInternal(
     seen.add(err);
   }
   if (isFailoverError(err)) {
+    const classification = classifyFailoverSignal({
+      ...normalizeErrorSignal(err, providerHint),
+      message: err.rawError ?? err.message,
+    });
+    if (classification?.kind === "reason" && classification.sameModelRetry === false) {
+      return { kind: "reason", reason: err.reason, sameModelRetry: false };
+    }
     return {
       kind: "reason",
       reason: err.reason,
@@ -460,19 +478,22 @@ function resolveFailoverClassificationFromErrorInternal(
   return null;
 }
 
-function resolveFailoverClassificationFromError(
+export function resolveFailoverClassificationFromError(
   err: unknown,
   providerHint?: string,
 ): FailoverClassification | null {
   // A direct preflight owns the refusal; its cause is diagnostic, not a failed
   // provider attempt that may rotate credentials or replay the turn.
-  if (isAgentHarnessPreflightError(err)) {
+  if (isAgentHarnessPreflightError(err) || findLocalWorkerTaskFailure(err)) {
+    return null;
+  }
+  // Local coordination codes such as SQLite "overloaded" are not provider signals.
+  if (!isFailoverError(err) && hasRuntimeCoordinationFailure(err)) {
     return null;
   }
   return resolveFailoverClassificationFromErrorInternal(err, new Set<object>(), 0, providerHint);
 }
 
-/** Resolve the failover reason represented by an unknown provider/runtime error. */
 export function resolveFailoverReasonFromError(
   err: unknown,
   providerHint?: string,
@@ -484,7 +505,7 @@ export function resolveFailoverReasonFromError(
 
 /** Build a copy-pasteable reauthentication hint for attributed auth failures. */
 export function buildFailoverRemediationHint(err: unknown): string | undefined {
-  if (!isFailoverError(err)) {
+  if (!isFailoverError(err) || err.code === "selected_auth_profile_unavailable") {
     return undefined;
   }
   if (err.reason !== "auth" && err.reason !== "auth_permanent") {
@@ -505,13 +526,12 @@ function quotePosixShellArg(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-/** Build the operator command for reauthenticating one provider. */
 export function buildProviderReauthCommand(
   provider: string,
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
 ): string | undefined {
   const trimmed = provider.trim();
-  if (!trimmed || hasControlCharacter(trimmed)) {
+  if (!trimmed || containsAsciiControlCharacter(trimmed)) {
     return undefined;
   }
   return formatCliCommand(
@@ -520,20 +540,10 @@ export function buildProviderReauthCommand(
   );
 }
 
-function hasControlCharacter(value: string): boolean {
-  for (let i = 0; i < value.length; i += 1) {
-    const code = value.charCodeAt(i);
-    if (code < 0x20 || code === 0x7f) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/** Convert a failover or raw error into structured fields for logs/UI. */
 export function describeFailoverError(err: unknown): {
   message: string;
   rawError?: string;
+  rateLimitRetriesExhausted?: number;
   reason?: FailoverReason;
   status?: number;
   code?: string;
@@ -544,6 +554,10 @@ export function describeFailoverError(err: unknown): {
   sessionId?: string;
   lane?: string;
 } {
+  const localFailure = findLocalWorkerTaskFailure(err);
+  if (localFailure) {
+    return { message: localFailure.message };
+  }
   if (isAgentHarnessPreflightError(err)) {
     return { message: err.message };
   }
@@ -551,8 +565,9 @@ export function describeFailoverError(err: unknown): {
     return {
       message: err.message,
       rawError: err.rawError,
+      rateLimitRetriesExhausted: err.rateLimitRetriesExhausted,
       reason: err.reason,
-      status: err.status,
+      status: normalizeFailoverStatus(err.status, err.code),
       code: err.code,
       provider: err.provider,
       model: err.model,
@@ -574,6 +589,7 @@ export function describeFailoverError(err: unknown): {
 }
 
 type FailoverErrorContext = {
+  rateLimitRetriesExhausted?: number;
   provider?: string;
   model?: string;
   profileId?: string;
@@ -595,27 +611,43 @@ export function coerceToFailoverError(
   context?: FailoverErrorContext,
 ): FailoverError | null {
   if (isFailoverError(err)) {
-    if ((context?.authMode && !err.authMode) || (context?.timeout && !err.timeout)) {
+    if (findLocalWorkerTaskFailure(err)) {
+      return null;
+    }
+    const status = normalizeFailoverStatus(err.status, err.code);
+    if (
+      !Object.is(status, err.status) ||
+      (context?.authMode && !err.authMode) ||
+      (context?.timeout && !err.timeout) ||
+      context?.rateLimitRetriesExhausted !== undefined
+    ) {
       const message = typeof err.message === "string" ? err.message : String(err);
-      const enriched = new FailoverError(message, {
-        reason: err.reason,
-        provider: err.provider,
-        model: err.model,
-        profileId: err.profileId,
-        authMode: err.authMode ?? context.authMode,
-        status: err.status,
-        code: err.code,
-        rawError: err.rawError,
-        authProfileFailure: err.authProfileFailure,
-        sessionId: err.sessionId,
-        lane: err.lane,
-        cause: err.cause,
-        suspend: err.suspend,
-        cliTimeout: err.cliTimeout,
-        timeout: err.timeout ?? context.timeout,
-        attempts: err.attempts,
-        soonestCooldownExpiry: err.soonestCooldownExpiry,
-      });
+      const enriched = new FailoverError(
+        renderRateLimitRetryExhaustion(context?.rateLimitRetriesExhausted) ?? message,
+        {
+          reason: err.reason,
+          provider: err.provider,
+          model: err.model,
+          profileId: err.profileId,
+          authMode: err.authMode ?? context?.authMode,
+          status,
+          code: err.code,
+          rawError:
+            err.rawError ??
+            (context?.rateLimitRetriesExhausted !== undefined ? message : undefined),
+          rateLimitRetriesExhausted:
+            context?.rateLimitRetriesExhausted ?? err.rateLimitRetriesExhausted,
+          authProfileFailure: err.authProfileFailure,
+          sessionId: err.sessionId,
+          lane: err.lane,
+          cause: err.cause,
+          suspend: err.suspend,
+          cliTimeout: err.cliTimeout,
+          timeout: err.timeout ?? context?.timeout,
+          attempts: err.attempts,
+          soonestCooldownExpiry: err.soonestCooldownExpiry,
+        },
+      );
       copyErrorDiagnostic(err, enriched);
       return enriched;
     }
@@ -628,28 +660,32 @@ export function coerceToFailoverError(
 
   const signal = normalizeErrorSignal(err);
   const message = signal.message ?? String(err);
-  const status = signal.status ?? resolveFailoverStatus(reason);
   const code = signal.code;
+  const status = signal.status ?? resolveFailoverStatus(reason, code);
 
   // Suspend when hitting rate limits or billing issues in an attributed session
   const shouldSuspend =
     Boolean(context?.sessionId) && (reason === "rate_limit" || reason === "billing");
 
-  return new FailoverError(message, {
-    reason,
-    provider: context?.provider ?? signal.provider,
-    model: context?.model,
-    profileId: context?.profileId,
-    authMode: context?.authMode,
-    sessionId: context?.sessionId,
-    lane: context?.lane,
-    status,
-    code,
-    rawError: message,
-    cause: err instanceof Error ? err : undefined,
-    timeout: context?.timeout,
-    suspend: shouldSuspend,
-  });
+  return new FailoverError(
+    renderRateLimitRetryExhaustion(context?.rateLimitRetriesExhausted) ?? message,
+    {
+      reason,
+      rateLimitRetriesExhausted: context?.rateLimitRetriesExhausted,
+      provider: context?.provider ?? signal.provider,
+      model: context?.model,
+      profileId: context?.profileId,
+      authMode: context?.authMode,
+      sessionId: context?.sessionId,
+      lane: context?.lane,
+      status,
+      code,
+      rawError: message,
+      cause: err instanceof Error ? err : undefined,
+      timeout: context?.timeout,
+      suspend: shouldSuspend,
+    },
+  );
 }
 
 /** Classify one candidate failure once so fallback routing and diagnostics share it. */
@@ -657,12 +693,20 @@ export function resolveModelFallbackError(
   err: unknown,
   context?: FailoverErrorContext,
 ): ModelFallbackErrorResolution {
-  if (err instanceof AgentHarnessSessionSupersededError) {
+  if (
+    err instanceof AgentHarnessSessionSupersededError ||
+    isSqliteTranscriptMutationConflict(err)
+  ) {
+    return { kind: "coordination", error: err };
+  }
+  // Prepared-owner publication is an OpenClaw runtime fact, not a provider
+  // failure. Changing models cannot republish the current owner (#156975).
+  if (hasPreparedModelRuntimeOwnerNotPublished(err)) {
     return { kind: "coordination", error: err };
   }
   // Gateway admission can fail before any provider turn starts. Preserve that
   // identity through wrappers and aggregates so fallback cannot blame a model.
-  if (hasRuntimeCoordinationFailure(err)) {
+  if (hasRuntimeCoordinationFailure(err) || findLocalWorkerTaskFailure(err)) {
     return { kind: "coordination", error: err };
   }
   const staleLifecycleFailure = hasStaleAgentRunLifecycleFailure(err);

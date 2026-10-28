@@ -1,6 +1,7 @@
 import type { Command } from "commander";
-import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
 import { hasCommanderOptionToken } from "./program/commander-parse-facts.js";
+
+export { getRootOptionAwareCommandPath as getMachineOutputCommandPath } from "../infra/cli-root-options.js";
 
 export type MachineOutputResolverParams = {
   argv: readonly string[];
@@ -11,18 +12,6 @@ export type MachineOutputResolver = (params: MachineOutputResolverParams) => boo
 
 export const MACHINE_OUTPUT_JSON_OPTION_DESCRIPTION =
   "Explicit machine-output spelling (command results are JSON by default)";
-
-/** Normalize Node's absent `isTTY` property to the public resolver's boolean contract. */
-export function isMachineOutputStdoutTTY(
-  stdout: { readonly isTTY?: boolean } = process.stdout,
-): boolean {
-  return stdout.isTTY === true;
-}
-
-/** Read positional command tokens after supported root options, without importing CLI catalogs. */
-export function getMachineOutputCommandPath(argv: readonly string[], depth: number): string[] {
-  return getRootOptionAwareCommandPath(argv, depth);
-}
 
 /** Prefer registered option roles; early discovery falls back to literal option spellings. */
 export function hasMachineOutputOption(

@@ -1,20 +1,40 @@
-// Skill command spec helpers expose skill-provided commands to model/tool surfaces.
+import fs from "node:fs";
+import path from "node:path";
+import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import {
+  parseFrontmatterBlock,
+  stripFrontmatterBlock,
+} from "../../../packages/markdown-core/src/frontmatter.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { walkDirectorySync } from "../../infra/fs-safe.js";
+import { readRootJsonObjectSync } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { loadEnabledClaudeBundleCommands } from "../../plugins/bundle-commands.js";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { resolveSkillTelemetrySource } from "../loading/source.js";
 import {
-  filterWorkspaceSkills,
-  loadVisibleSkills,
-  prepareWorkspaceSkills,
-} from "../loading/workspace-skill-loader.js";
+  CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
+  mergeBundlePathLists,
+} from "../../plugins/bundle-manifest.js";
+import {
+  hasExplicitPluginConfig,
+  normalizePluginsConfig,
+  resolveEffectivePluginActivationState,
+} from "../../plugins/config-state.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry-contributions.js";
+import { isPathInsideWithRealpath } from "../../security/scan-paths.js";
+import { parseFrontmatterBool } from "../../shared/frontmatter.js";
+import { resolveSkillTelemetrySource } from "../loading/source.js";
+import { filterSkillEntries } from "../loading/workspace-skill-filter.js";
+import { loadVisibleSkills, prepareWorkspaceSkills } from "../loading/workspace-skill-loader.js";
+import { resolveSkillFileHost } from "../skill-file-host.js";
 import type {
   SkillEligibilityContext,
   SkillCommandSpec,
@@ -23,53 +43,85 @@ import type {
 } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
 import { sanitizeSkillCommandName, SKILL_COMMAND_MAX_LENGTH } from "./command-name.js";
-import { filterUserInvocableSkillEntries, isSkillPromptVisible } from "./skill-index.js";
+import { recordSkillCommandFileHost } from "./skill-command-provenance.js";
+import { isSkillPromptVisible, isSkillUserInvocable } from "./skill-index.js";
 
 const skillsLogger = createSubsystemLogger("skills");
 const skillCommandDebugOnce = createDedupeCache({ ttlMs: 0, maxSize: 1024 });
+const BUNDLE_COMMAND_MAX_BYTES = 1 * 1024 * 1024;
+const bundleCommandsLogger = createSubsystemLogger("plugins/bundle-commands");
 
-// De-duplicate noisy skill command diagnostics across large workspace scans.
-function debugSkillCommandOnce(
-  messageKey: string,
-  message: string,
-  meta?: Record<string, unknown>,
-) {
-  if (skillCommandDebugOnce.check(messageKey)) {
-    return;
-  }
-  skillsLogger.debug(message, meta);
+function readClaudeBundleManifest(rootDir: string): Record<string, unknown> {
+  const result = readRootJsonObjectSync({
+    rootDir,
+    relativePath: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
+    boundaryLabel: "plugin root",
+    rejectHardlinks: true,
+  });
+  return result.ok ? result.value : {};
 }
 
-function traceSkillCommandOnce(
+function resolveClaudeCommandRootDirs(rootDir: string): string[] {
+  const raw = readClaudeBundleManifest(rootDir);
+  const declared = normalizeUniqueSingleOrTrimmedStringList(raw.commands);
+  const defaults = fs.existsSync(path.join(rootDir, "commands")) ? ["commands"] : [];
+  return mergeBundlePathLists(defaults, declared);
+}
+
+function listMarkdownFilesRecursive(rootDir: string): string[] {
+  return walkDirectorySync(rootDir, {
+    symlinks: "skip",
+    descend: ({ name }) => !name.startsWith("."),
+    include: ({ kind, name }) =>
+      kind === "file" &&
+      !name.startsWith(".") &&
+      Boolean(normalizeOptionalLowercaseString(name)?.endsWith(".md")),
+  })
+    .entries.map((entry) => entry.path)
+    .toSorted((a, b) => a.localeCompare(b));
+}
+
+function toDefaultCommandName(rootDir: string, filePath: string): string {
+  const relativePath = path.relative(rootDir, filePath);
+  const withoutExt = relativePath.replace(/\.[^.]+$/u, "");
+  return withoutExt.split(path.sep).join(":");
+}
+
+function toDefaultDescription(promptTemplate: string): string {
+  // stripFrontmatterBlock already normalized line endings and trimmed the nonempty body.
+  const lineEnd = promptTemplate.indexOf("\n");
+  return (lineEnd < 0 ? promptTemplate : promptTemplate.slice(0, lineEnd)).trimEnd();
+}
+
+// De-duplicate noisy skill command diagnostics across large workspace scans.
+function logSkillCommandOnce(
   messageKey: string,
   message: string,
   meta?: Record<string, unknown>,
+  level: "debug" | "trace" = "debug",
 ) {
   if (skillCommandDebugOnce.check(messageKey)) {
     return;
   }
-  skillsLogger.trace(message, meta);
+  skillsLogger[level](message, meta);
 }
 
 function resolveUniqueSkillCommandName(base: string, used: Set<string>): string {
-  const normalizedBase = normalizeLowercaseStringOrEmpty(base);
-  if (!used.has(normalizedBase)) {
+  if (!used.has(base)) {
     return base;
   }
   for (let index = 2; index < 1000; index += 1) {
     const suffix = `_${index}`;
-    const maxBaseLength = Math.max(1, SKILL_COMMAND_MAX_LENGTH - suffix.length);
-    const trimmedBase = base.slice(0, maxBaseLength);
-    const candidate = `${trimmedBase}${suffix}`;
-    const candidateKey = normalizeLowercaseStringOrEmpty(candidate);
-    if (!used.has(candidateKey)) {
+    const candidate = `${base.slice(0, SKILL_COMMAND_MAX_LENGTH - suffix.length)}${suffix}`;
+    if (!used.has(candidate)) {
       return candidate;
     }
   }
-  return `${base.slice(0, Math.max(1, SKILL_COMMAND_MAX_LENGTH - 2))}_x`;
+  return `${base.slice(0, SKILL_COMMAND_MAX_LENGTH - 2)}_x`;
 }
 
 type WorkspaceSkillCommandOptions = {
+  bundledSkillName?: string;
   config?: OpenClawConfig;
   managedSkillsDir?: string;
   bundledSkillsDir?: string;
@@ -81,10 +133,12 @@ type WorkspaceSkillCommandOptions = {
   eligibility?: SkillEligibilityContext;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   reservedNames?: Set<string>;
+  gatewayOnly?: boolean;
 };
 
 function resolveCommandSkillLoadOptions(opts?: WorkspaceSkillCommandOptions) {
   return {
+    bundledSkillName: opts?.bundledSkillName,
     config: opts?.config,
     managedSkillsDir: opts?.managedSkillsDir,
     bundledSkillsDir: opts?.bundledSkillsDir,
@@ -96,6 +150,7 @@ function resolveCommandSkillLoadOptions(opts?: WorkspaceSkillCommandOptions) {
       : (opts?.skillFilter ?? resolveEffectiveAgentSkillFilter(opts?.config, opts?.agentId)),
     eligibility: opts?.eligibility,
     pluginMetadataSnapshot: opts?.pluginMetadataSnapshot,
+    gatewayOnly: opts?.gatewayOnly,
   };
 }
 
@@ -106,11 +161,7 @@ export function buildWorkspaceSkillCommandSpecs(
 ): SkillCommandSpec[] {
   const loadOptions = resolveCommandSkillLoadOptions(opts);
   const eligible = opts?.entries
-    ? filterWorkspaceSkills(opts.entries, {
-        config: opts?.config,
-        skillFilter: loadOptions.skillFilter,
-        eligibility: opts?.eligibility,
-      })
+    ? filterSkillEntries(opts.entries, loadOptions)
     : loadVisibleSkills(workspaceDir, loadOptions);
   return assembleWorkspaceSkillCommandSpecs(workspaceDir, eligible, opts);
 }
@@ -121,11 +172,14 @@ export async function prepareWorkspaceSkillCommandSpecs(
   opts: Omit<WorkspaceSkillCommandOptions, "entries" | "eligibility"> & {
     eligibility: SkillEligibilityContext;
   },
+  assertCurrent?: () => void,
 ): Promise<SkillCommandSpec[]> {
-  const eligible = await prepareWorkspaceSkills(workspaceDir, {
-    ...resolveCommandSkillLoadOptions(opts),
-    eligibility: opts.eligibility,
-  });
+  const eligible = await prepareWorkspaceSkills(
+    workspaceDir,
+    resolveCommandSkillLoadOptions(opts),
+    assertCurrent,
+  );
+  assertCurrent?.();
   return assembleWorkspaceSkillCommandSpecs(workspaceDir, eligible, opts);
 }
 
@@ -134,52 +188,56 @@ function assembleWorkspaceSkillCommandSpecs(
   eligible: SkillEntry[],
   opts?: WorkspaceSkillCommandOptions,
 ): SkillCommandSpec[] {
-  const userInvocable = filterUserInvocableSkillEntries(eligible);
+  const userInvocable = eligible.filter(isSkillUserInvocable);
   const used = new Set<string>();
   for (const reserved of opts?.reservedNames ?? []) {
     used.add(normalizeLowercaseStringOrEmpty(reserved));
+    used.add(sanitizeSkillCommandName(reserved));
   }
 
   const specs: SkillCommandSpec[] = [];
-  for (const entry of userInvocable) {
-    const rawName = entry.skill.name;
+  const claimName = (rawName: string, bundle = false) => {
+    const prefix = bundle ? "bundle-" : "";
+    const label = bundle ? "bundle" : "skill";
+    const level = bundle ? "debug" : "trace";
     const base = sanitizeSkillCommandName(rawName);
     if (base !== rawName) {
-      traceSkillCommandOnce(
-        `sanitize:${rawName}:${base}`,
-        `Sanitized skill command name "${rawName}" to "/${base}".`,
+      logSkillCommandOnce(
+        `${prefix}sanitize:${rawName}:${base}`,
+        `Sanitized ${label} command name "${rawName}" to "/${base}".`,
         { rawName, sanitized: `/${base}` },
+        level,
       );
     }
     const unique = resolveUniqueSkillCommandName(base, used);
     if (unique !== base) {
-      traceSkillCommandOnce(
-        `dedupe:${rawName}:${unique}`,
-        `De-duplicated skill command name for "${rawName}" to "/${unique}".`,
+      logSkillCommandOnce(
+        `${prefix}dedupe:${rawName}:${unique}`,
+        `De-duplicated ${label} command name for "${rawName}" to "/${unique}".`,
         { rawName, deduped: `/${unique}` },
+        level,
       );
     }
-    used.add(normalizeLowercaseStringOrEmpty(unique));
+    used.add(unique);
+    return unique;
+  };
+  for (const entry of userInvocable) {
+    const rawName = entry.skill.name;
+    const unique = claimName(rawName);
     const description = entry.skill.description?.trim() || rawName;
     const dispatch = entry.disableCommandDispatch
       ? undefined
       : (() => {
-          const kindRaw = normalizeLowercaseStringOrEmpty(
-            entry.frontmatter?.["command-dispatch"] ??
-              entry.frontmatter?.["command_dispatch"] ??
-              "",
-          );
-          if (!kindRaw || kindRaw !== "tool") {
+          const readCommandField = (key: string) =>
+            entry.frontmatter?.[key] ?? entry.frontmatter?.[key.replaceAll("-", "_")] ?? "";
+          const kindRaw = normalizeLowercaseStringOrEmpty(readCommandField("command-dispatch"));
+          if (kindRaw !== "tool") {
             return undefined;
           }
 
-          const toolName = (
-            entry.frontmatter?.["command-tool"] ??
-            entry.frontmatter?.["command_tool"] ??
-            ""
-          ).trim();
+          const toolName = readCommandField("command-tool").trim();
           if (!toolName) {
-            debugSkillCommandOnce(
+            logSkillCommandOnce(
               `dispatch:missingTool:${rawName}`,
               `Skill command "/${unique}" requested tool dispatch but did not provide command-tool. Ignoring dispatch.`,
               { skillName: rawName, command: unique },
@@ -187,14 +245,9 @@ function assembleWorkspaceSkillCommandSpecs(
             return undefined;
           }
 
-          const argModeRaw = normalizeOptionalLowercaseString(
-            entry.frontmatter?.["command-arg-mode"] ??
-              entry.frontmatter?.["command_arg_mode"] ??
-              "",
-          );
-          const argMode = !argModeRaw || argModeRaw === "raw" ? "raw" : null;
-          if (!argMode) {
-            debugSkillCommandOnce(
+          const argModeRaw = normalizeOptionalLowercaseString(readCommandField("command-arg-mode"));
+          if (argModeRaw && argModeRaw !== "raw") {
+            logSkillCommandOnce(
               `dispatch:badArgMode:${rawName}:${argModeRaw}`,
               `Skill command "/${unique}" requested tool dispatch but has unknown command-arg-mode. Falling back to raw.`,
               { skillName: rawName, command: unique, argMode: argModeRaw },
@@ -204,7 +257,7 @@ function assembleWorkspaceSkillCommandSpecs(
           return { kind: "tool", toolName, argMode: "raw" } as const;
         })();
 
-    specs.push({
+    const spec: SkillCommandSpec = {
       name: unique,
       displayName: entry.skill.displayName ?? rawName,
       skillFile: canonicalizePath(entry.skill.filePath),
@@ -213,39 +266,88 @@ function assembleWorkspaceSkillCommandSpecs(
       modelVisible: isSkillPromptVisible(entry),
       skillSource: resolveSkillTelemetrySource(entry.skill),
       ...(dispatch ? { dispatch } : {}),
-    });
+    };
+    const fileHost = resolveSkillFileHost(entry.skill);
+    if (fileHost) {
+      recordSkillCommandFileHost(spec, fileHost);
+    }
+    specs.push(spec);
   }
 
-  const bundleCommands = loadEnabledClaudeBundleCommands({
-    workspaceDir,
-    cfg: opts?.config,
-  });
-  for (const entry of bundleCommands) {
-    const base = sanitizeSkillCommandName(entry.rawName);
-    if (base !== entry.rawName) {
-      debugSkillCommandOnce(
-        `bundle-sanitize:${entry.rawName}:${base}`,
-        `Sanitized bundle command name "${entry.rawName}" to "/${base}".`,
-        { rawName: entry.rawName, sanitized: `/${base}` },
-      );
-    }
-    const unique = resolveUniqueSkillCommandName(base, used);
-    if (unique !== base) {
-      debugSkillCommandOnce(
-        `bundle-dedupe:${entry.rawName}:${unique}`,
-        `De-duplicated bundle command name for "${entry.rawName}" to "/${unique}".`,
-        { rawName: entry.rawName, deduped: `/${unique}` },
-      );
-    }
-    used.add(normalizeLowercaseStringOrEmpty(unique));
-    specs.push({
-      name: unique,
-      skillName: entry.rawName,
-      description: entry.description,
-      modelVisible: false,
-      promptTemplate: entry.promptTemplate,
-      sourceFilePath: entry.sourceFilePath,
+  if (hasExplicitPluginConfig(opts?.config?.plugins)) {
+    const registry = loadPluginManifestRegistryForPluginRegistry({
+      workspaceDir,
+      config: opts?.config,
+      includeDisabled: true,
     });
+    const normalizedPlugins = normalizePluginsConfig(opts?.config?.plugins);
+    for (const record of registry.plugins) {
+      if (
+        record.format !== "bundle" ||
+        record.bundleFormat !== "claude" ||
+        !(record.bundleCapabilities ?? []).includes("commands")
+      ) {
+        continue;
+      }
+      const activationState = resolveEffectivePluginActivationState({
+        id: record.id,
+        origin: record.origin,
+        channelIds: record.channels,
+        config: normalizedPlugins,
+        rootConfig: opts?.config,
+      });
+      if (!activationState.activated) {
+        continue;
+      }
+      for (const relativeRoot of resolveClaudeCommandRootDirs(record.rootDir)) {
+        const commandRoot = path.resolve(record.rootDir, relativeRoot);
+        if (!fs.existsSync(commandRoot)) {
+          continue;
+        }
+        if (!isPathInsideWithRealpath(record.rootDir, commandRoot, { requireRealpath: true })) {
+          continue;
+        }
+        for (const filePath of listMarkdownFilesRecursive(commandRoot)) {
+          let raw: string;
+          try {
+            raw = readRegularFileSync({
+              filePath,
+              maxBytes: BUNDLE_COMMAND_MAX_BYTES,
+            }).buffer.toString("utf-8");
+          } catch (error) {
+            bundleCommandsLogger.warn(
+              `skipping unreadable bundle command file ${filePath}: ${formatErrorMessage(error)}`,
+            );
+            continue;
+          }
+          const frontmatter = parseFrontmatterBlock(raw);
+          if (!parseFrontmatterBool(frontmatter["user-invocable"], true)) {
+            continue;
+          }
+          const promptTemplate = stripFrontmatterBlock(raw);
+          if (!promptTemplate) {
+            continue;
+          }
+          const rawName =
+            normalizeOptionalString(frontmatter.name) ||
+            toDefaultCommandName(commandRoot, filePath);
+          if (!rawName) {
+            continue;
+          }
+          const description =
+            normalizeOptionalString(frontmatter.description) ||
+            toDefaultDescription(promptTemplate);
+          specs.push({
+            name: claimName(rawName, true),
+            skillName: rawName,
+            description,
+            modelVisible: false,
+            promptTemplate,
+            sourceFilePath: filePath,
+          });
+        }
+      }
+    }
   }
   return specs;
 }

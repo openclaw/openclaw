@@ -24,12 +24,6 @@ type UpgradeOperation = {
   requestId?: string;
 };
 
-type UpgradeRequester = (
-  method: string,
-  params?: unknown,
-  options?: GatewayProtocolRequestOptions,
-) => Promise<unknown>;
-
 function readRequestId(value: unknown): string {
   const requestId =
     value && typeof value === "object" && "requestId" in value
@@ -80,7 +74,11 @@ export class GatewayScopeUpgrade {
 
   constructor(
     private readonly deps: {
-      request: UpgradeRequester;
+      request: (
+        method: string,
+        params?: unknown,
+        options?: GatewayProtocolRequestOptions,
+      ) => Promise<unknown>;
       tokenStore: GatewayBrowserDeviceTokenStore;
       reconnect: () => void;
     },
@@ -120,9 +118,11 @@ export class GatewayScopeUpgrade {
       { scopes: [...options.scopes] },
       { signal: operation.controller.signal },
     );
+    this.assertCurrent(operation);
     const requestId = readRequestId(registration);
     operation.requestId = requestId;
     options.onPending?.(requestId);
+    this.assertCurrent(operation);
     const result = readUpgradeResult(
       await this.deps.request(
         "device.scopes.waitUpgrade",
@@ -132,8 +132,11 @@ export class GatewayScopeUpgrade {
       requestId,
     );
     if (result.status !== "approved") {
+      this.assertCurrent(operation);
       return result;
     }
+    // Approval has already rotated the token. Persist the received receipt even
+    // after local cancellation; only the active operation may reconnect.
     await this.deps.tokenStore.store({
       clientId: options.binding.clientId,
       deviceId: options.binding.deviceId,
@@ -141,7 +144,14 @@ export class GatewayScopeUpgrade {
       token: result.deviceToken,
       scopes: result.scopes,
     });
+    this.assertCurrent(operation);
     this.deps.reconnect();
     return { status: "approved", requestId, scopes: result.scopes };
+  }
+
+  private assertCurrent(operation: UpgradeOperation): void {
+    if (this.active !== operation) {
+      throw new DOMException("scope upgrade cancelled", "AbortError");
+    }
   }
 }

@@ -72,16 +72,6 @@ function expectCompletedTool(
   );
   expect(result, `chat.history omitted completed result for ${params.name}`).toBeDefined();
 }
-function assistantText(message: HistoryMessage): string {
-  if (typeof message.content === "string") {
-    return message.content.trim();
-  }
-  const content = Array.isArray(message.content) ? message.content : [];
-  const text = content.find(
-    (block) => isRecord(block) && block.type === "text" && typeof block.text === "string",
-  );
-  return isRecord(text) && typeof text.text === "string" ? text.text.trim() : "";
-}
 describe.skipIf(!LIVE_ENABLED)("OpenAI cross-placement MCP model proof", () => {
   it(
     "calls one Gateway MCP tool and one node MCP tool in a real agent turn",
@@ -245,7 +235,12 @@ describe.skipIf(!LIVE_ENABLED)("OpenAI cross-placement MCP model proof", () => {
           { runId, timeoutMs: REQUEST_TIMEOUT_MS },
           { timeoutMs: REQUEST_TIMEOUT_MS + 5_000 },
         );
-        expect(terminal, gateway.logs()).toMatchObject({ runId, status: "ok" });
+        // The run owner records the final reply; history below proves both MCP tool results.
+        expect(terminal, gateway.logs()).toMatchObject({
+          runId,
+          status: "ok",
+          terminalReply: { disposition: "visible", text: expectedToken },
+        });
         const history = (await gateway.call("chat.history", {
           sessionKey,
           limit: 50,
@@ -262,12 +257,6 @@ describe.skipIf(!LIVE_ENABLED)("OpenAI cross-placement MCP model proof", () => {
           marker: nodeMarker,
           label: "node-live",
         });
-        expect(
-          messages.some(
-            (message) => message.role === "assistant" && assistantText(message) === expectedToken,
-          ),
-          "chat.history omitted the exact final expected token",
-        ).toBe(true);
       } catch (error) {
         proofError = error;
       } finally {

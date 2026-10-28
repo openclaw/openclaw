@@ -6,6 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { collectRootPackageExcludedExtensionDirs } from "../scripts/lib/bundled-plugin-build-entries.mjs";
+import { vitestWorkerRuntimeAssets } from "../scripts/lib/vitest-worker-declarations.mts";
 import { isLiveTestEnabled } from "../src/agents/live-test-helpers.js";
 import type { AgentExecEnvelope } from "../src/commands/agent-exec-result.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
@@ -15,7 +16,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const openAiApiKey = process.env.OPENAI_API_KEY?.trim() ?? "";
 const describeLive = isLiveTestEnabled() && openAiApiKey.length > 0 ? describe : describe.skip;
 
-describeLive("agent exec Code Mode with environment authentication", () => {
+describeLive("agent exec Codex runtime with environment authentication", () => {
   it("starts without configuration and completes dependent filesystem calls", async () => {
     const root = tempDirs.make("openclaw-agent-exec-code-mode-live-");
     const home = path.join(root, "home");
@@ -28,10 +29,9 @@ describeLive("agent exec Code Mode with environment authentication", () => {
     const sourceDist = path.join(repoRoot, "dist");
     const excludedPlugins = collectRootPackageExcludedExtensionDirs({ cwd: repoRoot });
     await fs.mkdir(installedRoot, { recursive: true });
-    await fs.copyFile(
-      path.join(repoRoot, "package.json"),
-      path.join(installedRoot, "package.json"),
-    );
+    for (const filename of ["package.json", ...vitestWorkerRuntimeAssets]) {
+      await fs.copyFile(path.join(repoRoot, filename), path.join(installedRoot, filename));
+    }
     // A source checkout discovers external plugins beside dist. Copy the built
     // distribution with its package exclusions so discovery sees a clean install.
     await fs.cp(sourceDist, path.join(installedRoot, "dist"), {
@@ -74,15 +74,12 @@ describeLive("agent exec Code Mode with environment authentication", () => {
           path.join(installedRoot, "dist", "entry.js"),
           "agent",
           "exec",
-          "Use Code Mode and the filesystem read and write tools to read input.txt, then write " +
+          "Use the filesystem read and write tools to read input.txt, then write " +
             "output.txt containing exactly the input bytes followed by processed and a newline. " +
             "Do not use a shell command. Reply with exactly DONE after the write completes.",
           "--auth-env-only",
           "--model",
           "openai/gpt-5.6-luna",
-          "--code-mode",
-          "code",
-          "--local-model-lean",
           "--thinking",
           "low",
           "--cwd",
@@ -116,11 +113,12 @@ describeLive("agent exec Code Mode with environment authentication", () => {
       status: "ok",
       provider: "openai",
       model: "gpt-5.6-luna",
-      codeModeEngaged: true,
+      // OpenClaw Code Mode is not the Codex harness's tool surface.
+      codeModeEngaged: false,
       final: "DONE",
     });
-    expect(result.toolSummary?.tools).toContain("exec");
-    expect(result.bridgeCalls?.call).toBeGreaterThanOrEqual(2);
+    expect(result.toolSummary?.tools).toEqual(expect.arrayContaining(["read", "write"]));
+    expect(result.toolSummary?.failures).toBe(0);
     await expect(fs.readFile(path.join(workspace, "output.txt"), "utf8")).resolves.toBe(
       `${input}processed\n`,
     );

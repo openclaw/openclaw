@@ -11,7 +11,7 @@ import path from "node:path";
 import YAML from "yaml";
 import { createRuntimeProcessBuildEntries } from "../scripts/lib/runtime-process-core-build-entries.mts";
 import {
-  legacyFinalizerBuildSources,
+  preservedModuleBuildSources,
   vitestWorkerBuildEntries,
 } from "../scripts/lib/vitest-worker-build-entries.mts";
 import { vitestWorkerDeclarationEntries } from "../scripts/lib/vitest-worker-declarations.mts";
@@ -23,7 +23,7 @@ const nativeSchtasksAuditEntries = createRuntimeProcessBuildEntries(
   Object.values(schtasksNativeEntrypoints),
 );
 
-const TEST_ENTRY_GLOB = "**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!";
+const TEST_ENTRY_GLOB = "**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!";
 
 function listQaScenarioExecutionEntries(dir = "qa/scenarios"): string[] {
   const entries = fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -47,26 +47,48 @@ function listQaScenarioExecutionEntries(dir = "qa/scenarios"): string[] {
 
 const QA_SCENARIO_EXECUTION_ENTRIES = listQaScenarioExecutionEntries();
 const ROOT_TEST_ENTRY_GLOBS = [
-  "*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
-  "src/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
-  "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
-  "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
+  "*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
+  "src/**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
+  "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
+  "test/**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
   // The PR artifact Vitest suite launches this standalone Node regression by path.
   "test/scripts/pr-review-artifacts.node.mjs!",
+  // The Gateway profiler tests launch these subprocess fixtures through a computed path.
+  "test/scripts/fixtures/gateway-bench-cpu-usage.mjs!",
+  "test/scripts/fixtures/gateway-bench-profile-startup.mjs!",
+  // SHA-pinned dispatch tests load this admission transport by a generated file URL.
+  "test/scripts/full-release-validation-at-sha.admission-fixture.mjs!",
+  // The locale finalizer harness preloads this provider through NODE_OPTIONS.
+  "test/scripts/control-ui-locale-provider.fixture.mjs!",
+  // The state-reader build test launches this native dependency fixture by path.
+  "test/scripts/state-read-worker-dependency.test-support.mts!",
+  // The relay artifact test launches this emitted-source fixture by path.
+  "test/scripts/service-relay-artifact.test-support.mjs!",
   // tsgo:test:root checks these compile-only contracts without runtime imports.
   "test/type-contracts/**/*.ts!",
   // The module-generation test launches this Bun regression directly from its source path.
   "src/plugins/plugin-module-generation.bun.test-support.ts!",
+  // The deprecated-import test launches this isolated SDK caller by path.
+  "src/plugins/plugin-sdk-deprecated-member.test-support.ts!",
+  // The existing-store Bun regression launches this source fixture directly by path.
+  "src/infra/sqlite-existing-database.bun.test-support.ts!",
+  // The plugin artifact suite launches these Node tests with the native tooling preload.
+  "src/cli/plugins-feature-artifact.native.test-support.ts!",
   // ExecHostTransportProofTests.swift launches this isolated native client by path.
   "src/infra/exec-host.native.test-support.ts!",
+  // The authority retention test launches this isolated V8 heap proof by path.
+  "src/agents/harness/tool-authority.runtime.retention.test-support.ts!",
+  // Generated handoff preload and resolver shims import this helper by URL.
+  "test/helpers/managed-handoff-isolation.ts!",
   // The Windows CLI lifetime test launches this isolated probe by path.
   "test/helpers/openclaw-test-instance.cli.test-support.mjs!",
   // The public QA Gateway child launches this transport proxy by path.
   "test/fixtures/qa-gateway-rpc-proxy.mjs!",
-  // ClawSweeper's paired consumer proof launches this cross-repository fixture by path.
-  "test/fixtures/mantis-request-producer.mts!",
   // Prior-release fixture generation invokes this CLI from the selected release checkout.
   "test/fixtures/state-corpus/generate.mjs!",
+  // The prerelease manifest runs this frozen planner and checks its historical config is present.
+  "test/fixtures/plugin-prerelease-frozen-target/scripts/lib/extension-test-plan.mjs!",
+  "test/fixtures/plugin-prerelease-frozen-target/test/vitest/vitest.extension-telegram.config.mjs!",
   // Vitest loads these by configuration or module alias rather than imports.
   "test/setup*.ts!",
   "test/non-isolated-runner.ts!",
@@ -74,30 +96,55 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/vitest/vitest*.config.ts!",
   "test/vitest/vitest*.setup.ts!",
   "test/vitest/vitest*.global-setup.ts!",
+  // Worker execArgv imports this before Vitest creates the test environment.
+  "test/vitest/vitest.jsdom-preload.mts!",
   // Test drivers and Docker fixtures are executed by path from package scripts
   // and the test-project registry.
+  // The published-driver lifecycle runner copies this executable into its Docker image.
+  "scripts/e2e/lib/upgrade-survivor/published-driver-process-fixture.mjs!",
   "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts!",
   "test/e2e/qa-lab/runtime/docker-e2e-lane.ts!",
   "test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts!",
   // The Gateway/node MCP parity tests spawn this transport fixture by path.
   "test/e2e/qa-lab/runtime/gateway-node-mcp.fixture.mjs!",
+  // The Codex isolated-completion adapter test spawns this stdio app-server by path.
+  "test/e2e/qa-lab/runtime/codex-isolated-app-server.fixture.mjs!",
+  // The physical-admission test resolves this worker from physicalFactsTestEntrypoint.
+  "src/infra/database-engine/physical-facts-worker.test-support.ts!",
+  // The PostgreSQL namespace isolation test resolves this worker through resolveRuntimeWorkerUrl.
+  "src/infra/database-engine/multi-namespace.worker.test-support.ts!",
+  // The state-read admission test launches this Worker from computed source and dist paths.
+  "src/infra/database-engine/state-read-admission.worker.test-support.ts!",
+  // The proxy owner test spawns this capture child through resolveRuntimeWorkerUrl.
+  "src/proxy-capture/child-transport.process.test-support.ts!",
+  // The PostgreSQL state owner test resolves this worker through resolveRuntimeWorkerUrl.
+  "src/state/openclaw-state-db.postgres.test-support.ts!",
+  // `pnpm ui:parity` runs this opt-in Vitest config by path; it includes the capture suite.
+  "scripts/control-ui-parity/vitest.config.ts!",
+  "scripts/control-ui-parity/capture-suite.ts!",
+  // The cold-load benchmark README invokes this standalone driver by path.
+  "scripts/bench-control-ui-cold-load.ts!",
   // The hot-reload scenario passes this isolated upstream preload to the Gateway CLI.
   "test/e2e/qa-lab/runtime/gateway-config-hot-reload-upstream.mjs!",
   // The identity scenario spawns this process-isolated repeated-turn driver by path.
   "test/e2e/qa-lab/runtime/agent-run-identity-repeated-turn-child.ts!",
+  // The Slack requester flow seeds its stopped Gateway through this isolated process.
+  "test/e2e/qa-lab/slack-requester-profile.fixture.ts!",
   // Invoked directly by the Docker image-auth scenario.
   "test/e2e/qa-lab/runtime/openai-image-auth-docker-client.ts!",
   "test/e2e/qa-lab/runtime/system-agent-first-run-docker-client.ts!",
   // QA scenario YAML dispatches these scripts/tests by path rather than import.
   ...QA_SCENARIO_EXECUTION_ENTRIES,
-  // Invoked directly by the sandbox bind-conflict E2E verification script.
-  "scripts/e2e-sandbox-bind-conflict.mts!",
   // The Voice Call QA scenario loads this fixture through a generated plugin directory.
   "test/e2e/qa-lab/runtime/fixtures/voice-call-runtime-plugin/index.js!",
   // The topology analyzer owns these as an intentionally self-contained graph.
-  "test/fixtures/ts-topology/basic/**/*.{js,mjs,cjs,ts,mts,cts}!",
+  "test/fixtures/ts-topology/basic/**/*.{js,mjs,cjs,ts,tsx,mts,cts}!",
   // The focused Oxlint test invokes these deliberate violations by path.
   "test/fixtures/oxlint-boundary-guards/*.ts!",
+  // The boundary test passes these files to Oxlint by path; remove with those cases.
+  "test/fixtures/forced-process-exit.test-support.cjs!",
+  "test/fixtures/oxlint-boundary-guards/forced-process-exit-violation.cjs!",
+  "test/fixtures/oxlint-boundary-guards/forced-process-exit-violation.mjs!",
   // The ACP reset proof spawns this adapter by path from the proof driver.
   "test/fixtures/acp-reset-timeout-adapter.ts!",
 ] as const;
@@ -120,6 +167,15 @@ const workspaces = Object.fromEntries(
         : {}),
       entry: [
         ...settings.entry,
+        // The presentation HTML and projection benchmark builder load these browser entries.
+        ...(workspace === "ui"
+          ? [
+              "src/test-helpers/presentation-primitives-solid.tsx!",
+              "src/test-helpers/control-ui-projection-fixture.tsx!",
+            ]
+          : []),
+        // Native builds load this private entry through the generator's temporary bundle.
+        ...(workspace === "packages/gateway-protocol" ? ["scripts/native-codegen.ts!"] : []),
         // Compiler registries emit entry modules, including declarations
         // imported by generated child scripts. Keep workspace-relative entries.
         ...[
@@ -128,27 +184,64 @@ const workspaces = Object.fromEntries(
             ...vitestWorkerBuildEntries,
             ...vitestWorkerDeclarationEntries,
           }),
-          ...legacyFinalizerBuildSources,
+          ...preservedModuleBuildSources,
         ].flatMap((source) => {
           const relative = path.relative(workspace, source).replaceAll("\\", "/");
           return relative.startsWith("../") ? [] : [`${relative}!`];
         }),
         ...(workspace === "."
-          ? [".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!", ...ROOT_TEST_ENTRY_GLOBS]
+          ? [
+              ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,tsx,mts,cts}!",
+              ...ROOT_TEST_ENTRY_GLOBS,
+              // Tests spawn these fixtures through computed source and emitted paths.
+              "src/infra/database-engine/state-read-admission-publication.worker.test-support.ts!",
+              "test/scripts/state-read-worker-stream.test-support.ts!",
+            ]
           : [
               TEST_ENTRY_GLOB,
+              // Realtime codec tests spawn these fixtures by basename.
+              ...(workspace === "extensions/openai"
+                ? [
+                    "test-support/realtime-dtls-codecs.mjs!",
+                    "test-support/realtime-numeric-codecs.mjs!",
+                  ]
+                : []),
+              // The plugin README documents this standalone fixture benchmark command.
+              ...(workspace === "extensions/team-reports"
+                ? [
+                    "src/report-run.benchmark.test-support.ts!",
+                    // Collection tests load this transport fixture through a module specifier.
+                    "src/run-worker.collection-fixtures.test-support.ts!",
+                  ]
+                : []),
+              // extensions/diagnostics-prometheus/benchmarks/README.md invokes this Node benchmark by path.
+              ...(workspace === "extensions/diagnostics-prometheus"
+                ? ["src/metric-store.benchmark.test-support.ts!"]
+                : []),
+              // The PostgreSQL fixture resolves this backend through openEngineWorkerStore.
+              ...(workspace === "extensions/workboard"
+                ? ["src/test/postgres-fixture-worker.test-support.ts!"]
+                : []),
               // Vitest's root aliases execute these Discord-owned runtime adapters.
               ...(workspace === "extensions/discord" ? ["test/*-runtime.ts!"] : []),
+              // Core owner tests load this Telegram fixture through the bundled facade loader.
+              ...(workspace === "extensions/telegram" ? ["native-command.test-support.ts!"] : []),
               // QA Lab loads these plugin fixtures by path during the Gateway
               // E2E, so nothing imports their entry files. Matched as a group:
               // a per-fixture list silently rots into a knip failure the next
               // time a scenario needs its own fixture plugin.
-              ...(workspace === "extensions/qa-lab" ? ["test-fixtures/*/index.js!"] : []),
+              ...(workspace === "extensions/qa-lab"
+                ? [
+                    "test-fixtures/*/index.js!",
+                    // The lifecycle test spawns this suite fixture as a separate Node process.
+                    "src/suite-process-lifecycle.test-support.ts!",
+                  ]
+                : []),
             ]),
       ],
       project:
         workspace === "."
-          ? [...settings.project, ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!"]
+          ? [...settings.project, ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,tsx,mts,cts}!"]
           : settings.project,
     },
   ]),

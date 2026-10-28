@@ -1,29 +1,36 @@
 // Code Mode model matrix tests cover repeatable small-model acceptance evidence.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { useAutoCleanupTempDirTracker, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildCodeModeMatrixAgentEnv,
   classifyCodeModeMatrixCell,
   modelCellPrefix,
   parseCodeModeMatrixOptions,
-  reserveCodeModeMatrixOutputDir,
-  resolveCodeModeMatrixOutputDir,
   runCodeModeModelMatrix,
-  validateQaEvidenceSummaryJson,
   type CodeModeMatrixCellResult,
   type CodeModeMatrixTask,
 } from "../../../scripts/code-mode-model-matrix.ts";
-import { getEffectiveQaEvidenceEntries, projectQaEvidenceScenarioOutcomes } from "../api.js";
+import {
+  getEffectiveQaEvidenceEntries,
+  projectQaEvidenceScenarioOutcomes,
+  validateQaEvidenceSummaryJson,
+} from "../api.js";
+import {
+  matrixArtifactOptions,
+  matrixDependencies,
+  matrixResult,
+  matrixSourceIdentity,
+} from "./code-mode-model-matrix.test-support.js";
 
 const extendedTasks = [
   "large-result-reduction",
   "parallel-independent-reads",
   "dependent-chain",
 ] as const satisfies readonly CodeModeMatrixTask[];
+const fixtureArgs = ["--model", "fixture/model", "--mode", "code", "--repetitions", "1"];
 
 // A synthetic CLI, not a model or Code Mode runtime: exercise the real runner's
 // fixture preparation, process envelope, effect oracle, and artifact projection.
@@ -33,6 +40,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 const option = (name) => process.argv[process.argv.indexOf(name) + 1];
 const workspace = option("--cwd");
+if (process.argv.includes("--local-model-lean")) throw new Error("unexpected lean profile");
+const config = JSON.parse(await fs.readFile(option("--config"), "utf8"));
+if (config.agents.defaults.models[option("--model")].agentRuntime.id !== "openclaw"
+  || config.agents.defaults.fastModeDefault !== false
+  || config.tools.codeMode.executor !== "node"
+  || config.tools.toolSearch !== undefined) throw new Error("benchmark controls drifted");
 const prompt = process.argv[4];
 let calls = 0;
 const read = async (name) => {
@@ -83,190 +96,70 @@ console.log(JSON.stringify({
 `;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const readArtifact = (dir: string, name: string) => fs.readFile(path.join(dir, name), "utf8");
+const missing = (file: string) => expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
+const metric = (value?: number) =>
+  value === undefined
+    ? { samples: 0, total: null, p50: null }
+    : { samples: 1, total: value, p50: value };
 
-describe("Code Mode model matrix options", () => {
-  it("defaults to the complete bounded matrix", () => {
-    expect(parseCodeModeMatrixOptions(["--model", "ollama/qwen3.5:9b"], "/repo")).toMatchObject({
-      models: ["ollama/qwen3.5:9b"],
-      modes: ["direct", "auto", "code"],
-      tasks: ["read", "dependent-read-write"],
-      repetitions: 3,
-      timeoutSeconds: 180,
-      thinking: "off",
-      repoRoot: "/repo",
-    });
-  });
-
-  it("rejects invalid and duplicate extended task selectors", () => {
-    for (const tasks of [["unknown"], ["dependent-chain", "dependent-chain"]]) {
-      expect(() =>
-        parseCodeModeMatrixOptions([
-          "--model",
-          "fixture/model",
-          ...tasks.flatMap((task) => ["--task", task]),
-        ]),
-      ).toThrow(tasks.length === 1 ? "--task must be one of" : "Duplicate --task");
-    }
-  });
-
-  it("keeps Gateway interviews opt-in and resolves comparison inputs independently of output storage", () => {
-    const selection = ["--model", "openai/gpt-5.6-luna", "--task", "inventory-join"];
-    expect(() => parseCodeModeMatrixOptions(selection, "/harness")).toThrow("--mode code");
-    expect(
-      parseCodeModeMatrixOptions(
-        [
-          ...selection,
-          "--mode",
-          "code",
-          "--runtime-dir",
-          "../baseline",
-          "--baseline-results",
-          "artifacts/previous/results.jsonl",
-          "--repetitions",
-          "1",
-        ],
-        "/harness",
-      ),
-    ).toMatchObject({
-      repoRoot: "/harness",
-      runtimeDir: "/baseline",
-      baselineResults: "/harness/artifacts/previous/results.jsonl",
-      tasks: ["inventory-join"],
-      modes: ["code"],
-      repetitions: 1,
-    });
-    expect(() =>
-      parseCodeModeMatrixOptions([
-        "--model",
-        "fixture/model",
-        "--mode",
-        "code",
-        "--task",
-        "partial-failure",
-      ]),
-    ).toThrow("OpenAI models");
-  });
-
-  it("rejects a dirty frozen runtime before building or dispatching any model", async () => {
-    const root = tempDirs.make("openclaw-code-mode-frozen-runtime-");
-    const options = parseCodeModeMatrixOptions(
-      [
-        "--model",
-        "openai/gpt-5.6-luna",
-        "--runtime-dir",
-        root,
-        "--output-dir",
-        "artifacts/frozen",
-        "--dry-run",
-      ],
-      root,
-    );
-    await expect(
-      runCodeModeModelMatrix(options, {
-        readSourceIdentity: async () => ({
-          gitSha: "dirty",
-          sourceDirty: true,
-          sourcePatchSha256: "patch",
-        }),
-        buildCliArtifacts: async () => {
-          throw new Error("must not build a frozen runtime");
-        },
-        runCell: async () => {
-          throw new Error("must not dispatch a dirty runtime");
-        },
-      }),
-    ).rejects.toThrow("clean committed checkout");
-    await expect(fs.stat(path.join(root, "artifacts/frozen"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
-
-  it("rejects ambiguous selectors and output paths", () => {
-    expect(() => parseCodeModeMatrixOptions([])).toThrow("At least one --model");
-    expect(() => parseCodeModeMatrixOptions(["--model", "qwen3.5:9b"])).toThrow("provider/model");
-    expect(() =>
-      parseCodeModeMatrixOptions(["--model", "ollama/qwen3.5:9b", "--skip-build"]),
-    ).toThrow("Unknown argument");
-    expect(() =>
-      parseCodeModeMatrixOptions([
-        "--model",
-        "ollama/qwen3.5:9b",
-        "--mode",
-        "code",
-        "--mode",
-        "code",
-      ]),
-    ).toThrow("Duplicate --mode");
-    expect(() =>
-      resolveCodeModeMatrixOutputDir("/repo", "../outside", new Date("2026-07-28T12:00:00Z")),
-    ).toThrow("within the repository");
-    expect(() =>
-      resolveCodeModeMatrixOutputDir("/repo", "/tmp/out", new Date("2026-07-28T12:00:00Z")),
-    ).toThrow("repo-relative");
-    expect(() =>
-      resolveCodeModeMatrixOutputDir("/repo", ".", new Date("2026-07-28T12:00:00Z")),
-    ).toThrow("within the repository");
-  });
-
-  it("reserves a fresh output path without symlink traversal", async () => {
-    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-output-test-"));
-    try {
-      const existing = path.join(repoRoot, "existing");
-      await fs.mkdir(existing);
-      await expect(reserveCodeModeMatrixOutputDir(repoRoot, existing)).rejects.toThrow(
-        "must not already exist",
-      );
-
-      const outside = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-outside-test-"));
-      const linked = path.join(repoRoot, "linked");
-      await fs.symlink(outside, linked, process.platform === "win32" ? "junction" : "dir");
-      await expect(
-        reserveCodeModeMatrixOutputDir(repoRoot, path.join(linked, "results")),
-      ).rejects.toThrow("must not traverse symlinks");
-      await fs.rm(outside, { force: true, recursive: true });
-    } finally {
-      await fs.rm(repoRoot, { force: true, recursive: true });
-    }
-  });
-
-  it("allows only one concurrent run to reserve an output path", async () => {
-    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-reserve-test-"));
-    try {
-      const outputDir = path.join(repoRoot, "nested", "results");
-      const attempts = await Promise.allSettled([
-        reserveCodeModeMatrixOutputDir(repoRoot, outputDir),
-        reserveCodeModeMatrixOutputDir(repoRoot, outputDir),
-      ]);
-
-      expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
-      const rejected = attempts.find((attempt) => attempt.status === "rejected");
-      expect(rejected).toMatchObject({
-        status: "rejected",
-        reason: expect.objectContaining({
-          message: expect.stringContaining("must not already exist"),
-        }),
-      });
-    } finally {
-      await fs.rm(repoRoot, { force: true, recursive: true });
-    }
-  });
-});
+async function readEvidence(dir: string) {
+  const evidence = validateQaEvidenceSummaryJson(
+    JSON.parse(await readArtifact(dir, "qa-evidence.json")),
+  );
+  expect(evidence.schemaVersion).toBe(3);
+  if (evidence.schemaVersion !== 3) {
+    throw new Error("expected invocation-owned evidence");
+  }
+  return evidence;
+}
 
 describe("Code Mode model matrix provider setup", () => {
+  const envFor = (model: string, env: NodeJS.ProcessEnv = {}) =>
+    buildCodeModeMatrixAgentEnv(model, "/runtime", env);
+
   it("adds the documented non-secret marker only for local Ollama runs", () => {
-    expect(buildCodeModeMatrixAgentEnv("ollama/qwen3.5:9b", "/runtime", {})).toMatchObject({
+    expect(envFor("ollama/qwen3.5:9b")).toMatchObject({
       NODE_DISABLE_COMPILE_CACHE: "1",
       OLLAMA_API_KEY: "ollama-local",
       OPENCLAW_BUNDLED_PLUGINS_DIR: path.join("/runtime", "dist", "extensions"),
     });
-    expect(
-      buildCodeModeMatrixAgentEnv("ollama/qwen3.5:9b", "/runtime", {
-        OLLAMA_API_KEY: "configured-value",
-      }).OLLAMA_API_KEY,
-    ).toBe("configured-value");
-    expect(buildCodeModeMatrixAgentEnv("huggingface/model", "/runtime", {}).OLLAMA_API_KEY).toBe(
-      undefined,
+    expect(envFor("ollama/qwen3.5:9b", { OLLAMA_API_KEY: "configured-value" }).OLLAMA_API_KEY).toBe(
+      "configured-value",
     );
+    expect(envFor("huggingface/model").OLLAMA_API_KEY).toBe(undefined);
+    const isolated = envFor("ollama/fixture", {
+      HOME: "/operator",
+      CODEX_HOME: "/operator/codex",
+      OPENCLAW_CONFIG_PATH: "/operator/config",
+      UNRELATED_TOKEN: "synthetic-unrelated-value",
+      PATH: "/bin",
+    });
+    expect(isolated.PATH).toBe("/bin");
+    expect(isolated).not.toHaveProperty("HOME");
+    expect(isolated).not.toHaveProperty("CODEX_HOME");
+    expect(isolated).not.toHaveProperty("OPENCLAW_CONFIG_PATH");
+    expect(isolated).not.toHaveProperty("UNRELATED_TOKEN");
+  });
+
+  it("rejects competing credentials and non-API-key provider routes", () => {
+    expect(() =>
+      envFor("openai/fixture", {
+        OPENAI_API_KEY: "synthetic-primary",
+        CODEX_API_KEY: "synthetic-competitor",
+      }),
+    ).toThrow("Ambiguous benchmark authentication");
+    expect(() =>
+      envFor("anthropic/fixture", {
+        ANTHROPIC_OAUTH_TOKEN: "synthetic-oauth",
+      }),
+    ).toThrow("requires an API-key environment input");
+    const env = envFor("anthropic/fixture", {
+      ANTHROPIC_API_KEY: "synthetic-selected",
+      OPENAI_API_KEY: "synthetic-unrelated",
+    });
+    expect(env.ANTHROPIC_API_KEY).toBe("synthetic-selected");
+    expect(env).not.toHaveProperty("OPENAI_API_KEY");
   });
 });
 
@@ -290,94 +183,97 @@ describe("Code Mode model matrix classification", () => {
     sessionId: "session",
   } satisfies Parameters<typeof classifyCodeModeMatrixCell>[0]["envelope"];
 
-  it("requires engagement, tool execution, effect, and exact final text", () => {
-    expect(
-      classifyCodeModeMatrixCell({
-        diagnostics: "",
-        effectPassed: true,
-        envelope: successEnvelope,
-        expected: "CM-EXPECTED",
-        mode: "code",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
-      }),
-    ).toEqual({
-      failureCategory: null,
-      passed: true,
-      oracle: {
-        answer: true,
-        effect: true,
-        engagement: true,
-        identity: true,
-        toolExecution: true,
-      },
+  type Classification = Parameters<typeof classifyCodeModeMatrixCell>[0];
+  function classify({
+    envelope,
+    ...overrides
+  }: Partial<Omit<Classification, "envelope">> & {
+    envelope?: Partial<Classification["envelope"]>;
+  }) {
+    return classifyCodeModeMatrixCell({
+      diagnostics: "",
+      effectPassed: true,
+      envelope: { ...successEnvelope, ...envelope },
+      expected: "CM-EXPECTED",
+      mode: "code",
+      model: "ollama/qwen3.5:9b",
+      ...overrides,
     });
-  });
+  }
 
-  it("keeps provider failures distinct from model task failures", () => {
+  it.each([
+    ["HTTP 402 payment required", "credits depleted", "provider_billing"],
+    ["HTTP 403", "You do not have access to this model", "model_unavailable"],
+    ["HTTP 403", "Invalid API key", "provider_auth"],
+    ["HTTP 403", "Forbidden", "provider_auth"],
+  ])("classifies %s with %s as %s", (diagnostics, message, category) => {
     expect(
-      classifyCodeModeMatrixCell({
-        diagnostics: "HTTP 402 payment required",
+      classify({
+        diagnostics,
         effectPassed: false,
         envelope: {
-          ...successEnvelope,
           ok: false,
           status: "error",
           final: "",
-          error: { kind: "error_payload", message: "credits depleted" },
+          error: { kind: "error_payload", message },
         },
-        expected: "CM-EXPECTED",
-        mode: "code",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
       }).failureCategory,
-    ).toBe("provider_billing");
+    ).toBe(category);
   });
 
-  it("does not fail a successful run because diagnostics mention a recovered provider error", () => {
-    expect(
-      classifyCodeModeMatrixCell({
-        diagnostics: "recovered after a transient network socket error",
-        effectPassed: true,
-        envelope: successEnvelope,
-        expected: "CM-EXPECTED",
-        mode: "code",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
-      }).failureCategory,
-    ).toBeNull();
-  });
-
-  it("fails a successful envelope when JSON stdout has trailing output", () => {
-    expect(
-      classifyCodeModeMatrixCell({
-        diagnostics: "unexpected stdout after JSON: noisy log",
-        effectPassed: true,
-        envelope: successEnvelope,
-        expected: "CM-EXPECTED",
-        mode: "code",
-        model: "ollama/qwen3.5:9b",
-        stdoutContractValid: false,
-        task: "read",
-      }).failureCategory,
-    ).toBe("harness_error");
-  });
+  it.each([
+    [
+      "recovered provider diagnostic",
+      { diagnostics: "recovered after a transient network socket error" },
+      null,
+    ],
+    [
+      "trailing stdout",
+      { diagnostics: "unexpected stdout after JSON: noisy log", stdoutContractValid: false },
+      "harness_error",
+    ],
+    [
+      "missing nested bridge call",
+      {
+        envelope: {
+          bridgeCalls: { search: 1, describe: 1, call: 0 },
+          toolSummary: { calls: 1, tools: ["exec"] },
+        },
+      },
+      "tool_execution",
+    ],
+    ["missing forced engagement", { envelope: { codeModeEngaged: false } }, "activation"],
+    ["different model route", { envelope: { model: "fallback-model" } }, "model_mismatch"],
+    [
+      "agent error before activation",
+      {
+        effectPassed: false,
+        envelope: {
+          ok: false,
+          status: "error",
+          final: "",
+          codeModeEngaged: undefined,
+          error: { kind: "agent_error", message: "run failed" },
+        },
+      },
+      "agent_error",
+    ],
+  ] satisfies Array<[string, Parameters<typeof classify>[0], string | null]>)(
+    "classifies %s",
+    (_name, input, category) => {
+      expect(classify(input).failureCategory).toBe(category);
+    },
+  );
 
   it("classifies a direct read with extra prose as an answer mismatch", () => {
     expect(
-      classifyCodeModeMatrixCell({
-        diagnostics: "",
-        effectPassed: true,
+      classify({
         envelope: {
-          ...successEnvelope,
           bridgeCalls: { search: 0, describe: 0, call: 0 },
           codeModeEngaged: false,
           final: "The value is CM-EXPECTED.",
         },
-        expected: "CM-EXPECTED",
         mode: "direct",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
       }),
     ).toMatchObject({
       failureCategory: "answer_mismatch",
@@ -388,18 +284,12 @@ describe("Code Mode model matrix classification", () => {
   it("requires outer tool-call evidence for direct and automatic cells", () => {
     for (const mode of ["direct", "auto"] as const) {
       expect(
-        classifyCodeModeMatrixCell({
-          diagnostics: "",
-          effectPassed: true,
+        classify({
           envelope: {
-            ...successEnvelope,
             codeModeEngaged: mode === "auto",
             toolSummary: { calls: 0, tools: [] },
           },
-          expected: "CM-EXPECTED",
           mode,
-          model: "ollama/qwen3.5:9b",
-          task: "read",
         }).failureCategory,
       ).toBe("tool_execution");
     }
@@ -407,92 +297,19 @@ describe("Code Mode model matrix classification", () => {
 
   it("uses outer tool-call evidence for automatic cells that engage Code Mode", () => {
     expect(
-      classifyCodeModeMatrixCell({
-        diagnostics: "",
-        effectPassed: true,
+      classify({
         envelope: {
-          ...successEnvelope,
           bridgeCalls: { search: 1, describe: 1, call: 0 },
           codeModeEngaged: true,
           toolSummary: { calls: 1, tools: ["exec"] },
         },
-        expected: "CM-EXPECTED",
         mode: "auto",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
       }),
     ).toMatchObject({
       failureCategory: null,
       oracle: { toolExecution: true },
       passed: true,
     });
-  });
-
-  it("keeps nested bridge-call evidence mandatory for forced Code Mode", () => {
-    expect(
-      classifyCodeModeMatrixCell({
-        diagnostics: "",
-        effectPassed: true,
-        envelope: {
-          ...successEnvelope,
-          bridgeCalls: { search: 1, describe: 1, call: 0 },
-          toolSummary: { calls: 1, tools: ["exec"] },
-        },
-        expected: "CM-EXPECTED",
-        mode: "code",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
-      }).failureCategory,
-    ).toBe("tool_execution");
-  });
-
-  it("rejects forced Code Mode runs that never engaged", () => {
-    expect(
-      classifyCodeModeMatrixCell({
-        diagnostics: "",
-        effectPassed: true,
-        envelope: { ...successEnvelope, codeModeEngaged: false },
-        expected: "CM-EXPECTED",
-        mode: "code",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
-      }).failureCategory,
-    ).toBe("activation");
-  });
-
-  it("rejects a successful response from a different model route", () => {
-    expect(
-      classifyCodeModeMatrixCell({
-        diagnostics: "",
-        effectPassed: true,
-        envelope: { ...successEnvelope, model: "fallback-model" },
-        expected: "CM-EXPECTED",
-        mode: "code",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
-      }).failureCategory,
-    ).toBe("model_mismatch");
-  });
-
-  it("reports an agent error before evaluating missing activation metadata", () => {
-    expect(
-      classifyCodeModeMatrixCell({
-        diagnostics: "",
-        effectPassed: false,
-        envelope: {
-          ...successEnvelope,
-          ok: false,
-          status: "error",
-          final: "",
-          codeModeEngaged: undefined,
-          error: { kind: "agent_error", message: "run failed" },
-        },
-        expected: "CM-EXPECTED",
-        mode: "code",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
-      }).failureCategory,
-    ).toBe("agent_error");
   });
 });
 
@@ -511,13 +328,10 @@ describe("Code Mode model matrix extended fixtures", () => {
       await fs.writeFile(path.join(repoRoot, "dist", "entry.js"), fixtureCli);
       const options = parseCodeModeMatrixOptions(
         [
-          "--model",
-          "fixture/model",
-          "--repetitions",
+          ...fixtureArgs,
+          "--concurrency",
           "1",
           "--keep-state",
-          "--mode",
-          "code",
           ...(failureCategory ? [] : ["--mode", "direct"]),
           ...extendedTasks.flatMap((task) => ["--task", task]),
           "--thinking",
@@ -527,24 +341,28 @@ describe("Code Mode model matrix extended fixtures", () => {
         ],
         repoRoot,
       );
-      const result = await runCodeModeModelMatrix(options, {
-        buildCliArtifacts: async () => {},
-        readBuildSha256: async () => "fixture-build",
-        readGitSha: async () => "fixture-source",
-      });
-      const readArtifact = async (name: string) =>
-        await fs.readFile(path.join(result.outputDir, name), "utf8");
-      const rows = (await readArtifact("results.jsonl"))
+      const result = await runCodeModeModelMatrix(
+        options,
+        matrixDependencies({
+          readBuildSha256: async () => "fixture-build",
+          readSourceIdentity: matrixSourceIdentity("fixture-source"),
+        }),
+      );
+      const read = (name: string) => readArtifact(result.outputDir, name);
+      const rows = (await read("results.jsonl"))
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line) as CodeModeMatrixCellResult);
       expect(result.exitCode).toBe(failureCategory ? 1 : 0);
       expect(rows).toHaveLength(failureCategory ? 3 : 6);
-      expect(JSON.parse(await readArtifact("manifest.json"))).toMatchObject({
+      const manifest = JSON.parse(await read("manifest.json"));
+      expect(manifest).toMatchObject({
         tasks: extendedTasks,
         cells: rows.map((row) => row.id),
       });
+      expect(manifest).not.toHaveProperty("gatewayExecutor");
       for (const row of rows) {
+        expect(row).not.toHaveProperty("executor");
         expect(row).toMatchObject({
           failureCategory,
           passed: failureCategory === null,
@@ -560,9 +378,7 @@ describe("Code Mode model matrix extended fixtures", () => {
         expect(row.elapsedMs).toBeGreaterThanOrEqual(0);
         const workspace = path.join(result.outputDir, "state", row.id, "workspace");
         if (thinking === "missing-effect") {
-          await expect(fs.access(path.join(workspace, "result.txt"))).rejects.toMatchObject({
-            code: "ENOENT",
-          });
+          await missing(path.join(workspace, "result.txt"));
         } else {
           expect(await fs.readFile(path.join(workspace, "result.txt"), "utf8")).toBe(row.expected);
         }
@@ -580,13 +396,7 @@ describe("Code Mode model matrix extended fixtures", () => {
           }
         }
       }
-      const evidence = validateQaEvidenceSummaryJson(
-        JSON.parse(await readArtifact("qa-evidence.json")),
-      );
-      expect(evidence.schemaVersion).toBe(3);
-      if (evidence.schemaVersion !== 3) {
-        throw new Error("expected invocation-owned evidence");
-      }
+      const evidence = await readEvidence(result.outputDir);
       expect(evidence.entries).toHaveLength(rows.length);
       const outcomes = projectQaEvidenceScenarioOutcomes(evidence);
       expect(outcomes.map((outcome) => outcome.scenarioId)).toEqual(rows.map((row) => row.id));
@@ -633,41 +443,24 @@ describe("Code Mode model matrix extended fixtures", () => {
   it("plans extended tasks without building, executing, or fabricating passing evidence", async () => {
     const repoRoot = tempDirs.make("openclaw-matrix-plan-");
     const options = parseCodeModeMatrixOptions(
-      [
-        "--model",
-        "fixture/model",
-        "--mode",
-        "code",
-        "--repetitions",
-        "1",
-        "--dry-run",
-        ...extendedTasks.flatMap((task) => ["--task", task]),
-      ],
+      [...fixtureArgs, "--dry-run", ...extendedTasks.flatMap((task) => ["--task", task])],
       repoRoot,
     );
     const forbidden = async (): Promise<never> => {
       throw new Error("dry run must not execute");
     };
     const result = await runCodeModeModelMatrix(options, {
-      readGitSha: async () => "fixture-source",
+      readSourceIdentity: matrixSourceIdentity("fixture-source"),
       buildCliArtifacts: forbidden,
       readBuildSha256: forbidden,
       runCell: forbidden,
     });
     expect(result.summary).toEqual({ status: "dry-run", total: 3 });
-    const manifest = JSON.parse(
-      await fs.readFile(path.join(result.outputDir, "manifest.json"), "utf8"),
-    );
+    const manifest = JSON.parse(await readArtifact(result.outputDir, "manifest.json"));
     expect(manifest).toMatchObject({ tasks: extendedTasks, buildSha256: null });
     expect(manifest.cells).toHaveLength(3);
-    const evidence = validateQaEvidenceSummaryJson(
-      JSON.parse(await fs.readFile(path.join(result.outputDir, "qa-evidence.json"), "utf8")),
-    );
+    const evidence = await readEvidence(result.outputDir);
     expect(evidence.entries).toEqual([]);
-    expect(evidence.schemaVersion).toBe(3);
-    if (evidence.schemaVersion !== 3) {
-      throw new Error("expected scheduled evidence");
-    }
     expect(evidence.occurrences).toHaveLength(3);
     expect(evidence.occurrences.map((occurrence) => occurrence.scenario)).toEqual(
       manifest.cells.map(() => ({ kind: "instance", resultOccurrenceId: null })),
@@ -677,52 +470,29 @@ describe("Code Mode model matrix extended fixtures", () => {
       null,
       null,
     ]);
-    await expect(fs.access(path.join(result.outputDir, "results.jsonl"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await missing(path.join(result.outputDir, "results.jsonl"));
   });
 });
 
 describe("Code Mode model matrix artifacts", () => {
+  async function rejectOutput(repoRoot: string, output: string, category: string) {
+    await expect(
+      runCodeModeModelMatrix(matrixArtifactOptions(repoRoot, output, { dryRun: true }), {
+        readSourceIdentity: matrixSourceIdentity("abc123"),
+      }),
+    ).rejects.toThrow(`must not overlap ${category}`);
+  }
+
   it("rejects output inside Git metadata", async () => {
-    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-git-test-"));
-    try {
+    await withTempDir("openclaw-code-mode-git-test-", async (repoRoot) => {
       await fs.mkdir(path.join(repoRoot, ".git"));
-      await expect(
-        runCodeModeModelMatrix(
-          {
-            allowFailures: false,
-            dryRun: true,
-            keepState: false,
-            models: ["ollama/qwen3.5:9b"],
-            modes: ["code"],
-            outputDir: path.join(".git", "refs", "evidence"),
-            repetitions: 1,
-            repoRoot,
-            tasks: ["read"],
-            thinking: "off",
-            timeoutSeconds: 10,
-          },
-          {
-            readSourceIdentity: async () => ({
-              gitSha: "abc123",
-              sourceDirty: false,
-              sourcePatchSha256: null,
-            }),
-          },
-        ),
-      ).rejects.toThrow("must not overlap Git metadata");
-      await expect(fs.access(path.join(repoRoot, ".git", "refs"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-    } finally {
-      await fs.rm(repoRoot, { force: true, recursive: true });
-    }
+      await rejectOutput(repoRoot, path.join(".git", "refs", "evidence"), "Git metadata");
+      await missing(path.join(repoRoot, ".git", "refs"));
+    });
   });
 
   it("rejects case aliases of missing runtime artifacts", async () => {
-    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-case-test-"));
-    try {
+    await withTempDir("openclaw-code-mode-case-test-", async (repoRoot) => {
       const canonicalRoot = await fs.realpath(repoRoot);
       const rootName = path.basename(canonicalRoot);
       const letterIndex = rootName.search(/[a-z]/iu);
@@ -741,97 +511,31 @@ describe("Code Mode model matrix artifacts", () => {
         return;
       }
 
-      await expect(
-        runCodeModeModelMatrix(
-          {
-            allowFailures: false,
-            dryRun: true,
-            keepState: false,
-            models: ["ollama/qwen3.5:9b"],
-            modes: ["code"],
-            outputDir: path.join("DIST", "evidence"),
-            repetitions: 1,
-            repoRoot,
-            tasks: ["read"],
-            thinking: "off",
-            timeoutSeconds: 10,
-          },
-          {
-            readSourceIdentity: async () => ({
-              gitSha: "abc123",
-              sourceDirty: false,
-              sourcePatchSha256: null,
-            }),
-          },
-        ),
-      ).rejects.toThrow("must not overlap runtime artifacts");
-      await expect(fs.access(path.join(repoRoot, "DIST", "evidence"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-    } finally {
-      await fs.rm(repoRoot, { force: true, recursive: true });
-    }
+      await rejectOutput(repoRoot, path.join("DIST", "evidence"), "runtime artifacts");
+      await missing(path.join(repoRoot, "DIST", "evidence"));
+    });
   });
 
   it("rejects package artifact namespaces before reservation creates them", async () => {
-    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-package-test-"));
-    try {
+    await withTempDir("openclaw-code-mode-package-test-", async (repoRoot) => {
       await fs.mkdir(path.join(repoRoot, "packages"));
-      await expect(
-        runCodeModeModelMatrix(
-          {
-            allowFailures: false,
-            dryRun: true,
-            keepState: false,
-            models: ["ollama/qwen3.5:9b"],
-            modes: ["code"],
-            outputDir: path.join("packages", "new-package", "dist", "evidence"),
-            repetitions: 1,
-            repoRoot,
-            tasks: ["read"],
-            thinking: "off",
-            timeoutSeconds: 10,
-          },
-          {
-            readSourceIdentity: async () => ({
-              gitSha: "abc123",
-              sourceDirty: false,
-              sourcePatchSha256: null,
-            }),
-          },
-        ),
-      ).rejects.toThrow("must not overlap runtime artifacts");
-      await expect(fs.access(path.join(repoRoot, "packages", "new-package"))).rejects.toMatchObject(
-        {
-          code: "ENOENT",
-        },
+      await rejectOutput(
+        repoRoot,
+        path.join("packages", "new-package", "dist", "evidence"),
+        "runtime artifacts",
       );
-    } finally {
-      await fs.rm(repoRoot, { force: true, recursive: true });
-    }
+      await missing(path.join(repoRoot, "packages", "new-package"));
+    });
   });
 
   it.each(["dist", path.join("packages", "agent-core", "dist")])(
     "rejects output inside build-created runtime artifacts: %s",
     async (artifactDir) => {
-      const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-build-test-"));
-      let hashed = false;
-      try {
+      await withTempDir("openclaw-code-mode-build-test-", async (repoRoot) => {
+        let hashed = false;
         await expect(
           runCodeModeModelMatrix(
-            {
-              allowFailures: false,
-              dryRun: false,
-              keepState: false,
-              models: ["ollama/qwen3.5:9b"],
-              modes: ["code"],
-              outputDir: path.join(artifactDir, "evidence"),
-              repetitions: 1,
-              repoRoot,
-              tasks: ["read"],
-              thinking: "off",
-              timeoutSeconds: 10,
-            },
+            matrixArtifactOptions(repoRoot, path.join(artifactDir, "evidence")),
             {
               buildCliArtifacts: async () => {
                 await fs.mkdir(path.join(repoRoot, artifactDir), { recursive: true });
@@ -840,144 +544,159 @@ describe("Code Mode model matrix artifacts", () => {
                 hashed = true;
                 return "build123";
               },
-              readSourceIdentity: async () => ({
-                gitSha: "abc123",
-                sourceDirty: false,
-                sourcePatchSha256: null,
-              }),
+              readSourceIdentity: matrixSourceIdentity("abc123"),
             },
           ),
         ).rejects.toThrow("must not overlap runtime artifacts");
         expect(hashed).toBe(false);
-        await expect(fs.access(path.join(repoRoot, artifactDir, "evidence"))).rejects.toMatchObject(
-          {
-            code: "ENOENT",
-          },
-        );
-      } finally {
-        await fs.rm(repoRoot, { force: true, recursive: true });
-      }
+        await missing(path.join(repoRoot, artifactDir, "evidence"));
+      });
     },
   );
 
-  it("continues after cell crashes and reports first-pass versus eventual success", async () => {
-    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-matrix-test-"));
-    try {
-      let calls = 0;
-      const result = await runCodeModeModelMatrix(
-        {
-          allowFailures: false,
-          dryRun: false,
-          keepState: false,
-          models: ["ollama/qwen3.5:9b"],
-          modes: ["code"],
-          outputDir: "artifacts",
-          repetitions: 2,
-          repoRoot,
-          tasks: ["read"],
-          thinking: "off",
-          timeoutSeconds: 10,
+  it.each([
+    ["aggregate only", 9, undefined],
+    ["outer only, including zero", undefined, 0],
+    ["both scopes", 9, 4],
+    ["unavailable", undefined, undefined],
+  ] as const)("keeps tool summary scopes separate: %s", async (_name, calls, outerCalls) => {
+    const repoRoot = tempDirs.make("openclaw-code-mode-metrics-");
+    const result = await runCodeModeModelMatrix(
+      matrixArtifactOptions(repoRoot, "artifacts", { models: ["ollama/fixture"] }),
+      matrixDependencies({
+        readBuildSha256: async () => "build123",
+        readSourceIdentity: matrixSourceIdentity("abc123"),
+        runCell: async (params) =>
+          matrixResult(params.cell, {
+            buildSha256: params.buildSha256,
+            gitSha: params.gitSha,
+            // This envelope models mixed outer/nested terminals, not nine outer calls.
+            ...(calls !== undefined
+              ? {
+                  toolSummary: { calls, tools: ["exec", "read", "write"] },
+                  bridgeCalls: { search: 0, describe: 0, call: 5 },
+                }
+              : {}),
+            ...(outerCalls !== undefined
+              ? {
+                  gateway: {
+                    outerCalls,
+                    promptSha256: "prompt123",
+                    fixtureSha256: "fixture123",
+                    settings: {
+                      executor: "node",
+                      thinking: "off",
+                      timeoutSeconds: 10,
+                      execTimeoutMs: 10,
+                      maxOutputBytes: 1024,
+                      maxModelOutputTokens: 128,
+                      runtime: "openclaw",
+                      fast: false,
+                      allowedTools: ["read"],
+                    },
+                    behavior: {},
+                    startupMs: 0,
+                    traceAvailable: true,
+                    interview: {
+                      traceAvailable: false,
+                      answer: null,
+                      rationaleReview: "required",
+                      checks: {},
+                    },
+                    artifacts: {
+                      taskTrace: "task.json",
+                      interviewTrace: "interview.json",
+                      receipts: "receipts.json",
+                      taskReceipts: "task-receipts.json",
+                      interviewReceipts: "interview-receipts.json",
+                      log: "gateway.log",
+                    },
+                  },
+                }
+              : {}),
+          }),
+      }),
+    );
+    expect(result.exitCode).toBe(0);
+    const summary = JSON.parse(await readArtifact(result.outputDir, "summary.json"));
+    expect(summary.groups).toMatchObject([
+      {
+        metrics: {
+          toolCalls: metric(calls),
+          outerToolCalls: metric(outerCalls),
+          bridgeToolCalls: metric(calls === undefined ? undefined : 5),
         },
-        {
-          buildCliArtifacts: async () => {},
+      },
+    ]);
+  });
+
+  it("continues after cell crashes and reports first-pass versus eventual success", async () => {
+    await withTempDir("openclaw-code-mode-matrix-test-", async (repoRoot) => {
+      let calls = 0;
+      let initialBuildRead = true;
+      const result = await runCodeModeModelMatrix(
+        matrixArtifactOptions(repoRoot, "artifacts", { repetitions: 2 }),
+        matrixDependencies({
           now: () => new Date("2026-07-28T12:00:00Z"),
           readBuildSha256: async () => {
-            const entries = await fs.readdir(path.join(repoRoot, "artifacts"));
-            expect(entries).toEqual([]);
+            if (initialBuildRead) {
+              expect(await fs.readdir(path.join(repoRoot, "artifacts"))).toEqual([]);
+              initialBuildRead = false;
+            }
             return "build123";
           },
-          readGitSha: async () => "abc123",
+          readSourceIdentity: matrixSourceIdentity("abc123"),
           runCell: async ({ cell, gitSha }) => {
             calls += 1;
-            const before = validateQaEvidenceSummaryJson(
-              JSON.parse(
-                await fs.readFile(path.join(repoRoot, "artifacts", "qa-evidence.json"), "utf8"),
-              ),
-            );
+            const before = await readEvidence(path.join(repoRoot, "artifacts"));
             expect(
               projectQaEvidenceScenarioOutcomes(before).map((outcome) => outcome.status),
             ).toEqual(calls === 1 ? [null, null] : ["fail", null]);
             if (cell.repetition === 1) {
               throw new Error("fixture exploded");
             }
-            return {
+            return matrixResult(cell, {
               buildSha256: "build123",
               bridgeCalls: { search: 0, describe: 0, call: 1 },
-              codeModeEngaged: true,
               elapsedMs: 10,
-              expected: "CM-EXPECTED",
-              failureCategory: null,
-              final: "CM-EXPECTED",
               gitSha,
-              id: cell.id,
-              mode: cell.mode,
-              model: cell.model,
-              observedModel: "qwen3.5:9b",
-              observedProvider: "ollama",
-              oracle: {
-                answer: true,
-                effect: true,
-                engagement: true,
-                identity: true,
-                toolExecution: true,
-              },
-              passed: true,
-              repetition: cell.repetition,
-              sourceDirty: false,
-              sourcePatchSha256: null,
-              status: "ok",
-              task: cell.task,
-              timestamp: "2026-07-28T12:00:00.000Z",
               toolSummary: { calls: 1, tools: ["exec"] },
-            } satisfies CodeModeMatrixCellResult;
+            });
           },
-        },
+        }),
       );
 
       expect(calls).toBe(2);
       expect(result.exitCode).toBe(1);
-      const summary = JSON.parse(
-        await fs.readFile(path.join(repoRoot, "artifacts", "summary.json"), "utf8"),
-      ) as {
+      const summary = JSON.parse(await readArtifact(result.outputDir, "summary.json")) as {
         counts: { total: number; passed: number; failed: number };
         groupCounts: { total: number; firstPassPassed: number; eventualPassed: number };
         groups: Array<{ firstPassPassed: boolean; eventualPassed: boolean }>;
       };
       expect(summary.counts).toEqual({ total: 2, passed: 1, failed: 1 });
-      expect(summary.groupCounts).toEqual({
-        total: 1,
-        firstPassPassed: 0,
-        eventualPassed: 1,
-      });
+      expect(summary.groupCounts).toEqual({ total: 1, firstPassPassed: 0, eventualPassed: 1 });
       expect(summary.groups).toMatchObject([
         {
           firstPassPassed: false,
           eventualPassed: true,
           metrics: {
-            assistantTurns: { samples: 0, total: null, p50: null },
-            costUsd: { samples: 0, total: null, p50: null },
-            outerToolCalls: { samples: 1, total: 1, p50: 1 },
-            bridgeToolCalls: { samples: 1, total: 1, p50: 1 },
-            bridgeSearchCalls: { samples: 1, total: 0, p50: 0 },
-            bridgeDescribeCalls: { samples: 1, total: 0, p50: 0 },
+            assistantTurns: metric(),
+            costUsd: metric(),
+            toolCalls: metric(1),
+            outerToolCalls: metric(),
+            bridgeToolCalls: metric(1),
+            bridgeSearchCalls: metric(0),
+            bridgeDescribeCalls: metric(0),
           },
         },
       ]);
-      const lines = (await fs.readFile(path.join(repoRoot, "artifacts", "results.jsonl"), "utf8"))
-        .trim()
-        .split("\n");
+      const lines = (await readArtifact(result.outputDir, "results.jsonl")).trim().split("\n");
       expect(lines).toHaveLength(2);
       expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
         failureCategory: "harness_error",
         error: { kind: "harness_error", message: "fixture exploded" },
       });
-      const evidence = validateQaEvidenceSummaryJson(
-        JSON.parse(await fs.readFile(path.join(repoRoot, "artifacts", "qa-evidence.json"), "utf8")),
-      );
-      expect(evidence.schemaVersion).toBe(3);
-      if (evidence.schemaVersion !== 3) {
-        throw new Error("expected independently scheduled cells");
-      }
+      const evidence = await readEvidence(result.outputDir);
       expect(evidence.occurrences).toHaveLength(4);
       expect(new Set(evidence.occurrences.map((occurrence) => occurrence.id)).size).toBe(4);
       expect(evidence.occurrences.every((occurrence) => occurrence.retryOf === null)).toBe(true);
@@ -1016,8 +735,6 @@ describe("Code Mode model matrix artifacts", () => {
       expect(evidence.entries[1]).toMatchObject({
         result: { status: "pass", timing: { wallMs: 10 } },
       });
-    } finally {
-      await fs.rm(repoRoot, { force: true, recursive: true });
-    }
+    });
   });
 });

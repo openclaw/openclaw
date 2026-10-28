@@ -1,4 +1,4 @@
-// Reset preservation keeps user-selected model/auth overrides while dropping automatic fallbacks.
+// Reset preservation keeps explicit model/auth and communication choices, not automatic fallbacks.
 import { resolveSessionAuthProfileOverrideSource } from "./auth-profile-override-provenance.js";
 import { resolveSessionModelOverrideSource } from "./model-override-provenance.js";
 import type { SessionEntry } from "./types.js";
@@ -9,9 +9,12 @@ type ResetPreservedSelectionState = Pick<
   | "modelOverride"
   | "modelOverrideSource"
   | "modelOverrideRouteResolution"
+  | "agentRuntimeOverride"
   | "authProfileOverride"
   | "authProfileOverrideSource"
   | "authProfileOverrideCompactionCount"
+  | "communication"
+  | "cyberAccessProgram"
 >;
 
 /**
@@ -34,6 +37,12 @@ export function resolveResetPreservedSelection(params: {
   }
 
   const preserved: Partial<ResetPreservedSelectionState> = {};
+  if (entry.cyberAccessProgram !== undefined) {
+    preserved.cyberAccessProgram = entry.cyberAccessProgram;
+  }
+  if (entry.communication) {
+    preserved.communication = { ...entry.communication };
+  }
   if (entry.modelOverrideSource === "default") {
     preserved.modelOverrideSource = "default";
   }
@@ -41,13 +50,16 @@ export function resolveResetPreservedSelection(params: {
     preserved.providerOverride = entry.providerOverride;
     preserved.modelOverride = entry.modelOverride;
     preserved.modelOverrideSource = "user";
+    if (entry.agentRuntimeOverride !== undefined) {
+      preserved.agentRuntimeOverride = entry.agentRuntimeOverride;
+    }
     if (entry.modelOverrideRouteResolution) {
       preserved.modelOverrideRouteResolution = entry.modelOverrideRouteResolution;
     }
   }
 
   const authProfileOverrideSource = resolveSessionAuthProfileOverrideSource(entry);
-  if (authProfileOverrideSource === "user" && entry.authProfileOverride) {
+  if (authProfileOverrideSource === "user" || authProfileOverrideSource === "user-link") {
     preserved.authProfileOverride = entry.authProfileOverride;
     preserved.authProfileOverrideSource = authProfileOverrideSource;
     if (entry.authProfileOverrideCompactionCount !== undefined) {

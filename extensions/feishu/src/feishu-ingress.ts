@@ -1,4 +1,3 @@
-// Feishu plugin owns raw Lark event admission, replay, and turn adoption.
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
@@ -23,7 +22,7 @@ const FEISHU_DURABLE_EVENT_TYPES = new Set([
 ]);
 
 export type FeishuIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission"> & {
-  registerAbandonHandler?: (handler: () => void | Promise<void>) => () => void;
+  onBeforeAbandon?: () => void | Promise<void>;
 };
 
 type FeishuIngressPayload = {
@@ -34,7 +33,6 @@ type FeishuIngressPayload = {
 
 type FeishuIngressFacts = {
   eventId: string;
-  eventType: string;
   laneKey: string;
 };
 
@@ -55,16 +53,6 @@ export type FeishuWebhookInvoker = (
   data: unknown,
   params?: { needCheck?: boolean },
 ) => Promise<{ kind: "durable" | "non-durable"; value: unknown }>;
-
-type FeishuDurableIngress = {
-  invoke: Lark.EventDispatcher["invoke"];
-  invokeWebhook: FeishuWebhookInvoker;
-  resolveLifecycle: (data: unknown) => FeishuIngressLifecycle | undefined;
-  setSocketTerminator: (terminate: (() => void) | undefined) => void;
-  start: () => void;
-  stop: () => Promise<void>;
-  waitForIdle: () => Promise<void>;
-};
 
 type FeishuLifecycleSource = {
   lifecycle?: FeishuIngressLifecycle;
@@ -150,33 +138,27 @@ function inspectFeishuIngressEnvelope(
     );
   }
   const event = nestedEvent ?? envelope;
+  const missingLane = (message: string): FeishuIngressFacts => {
+    if (allowInvalidLane) {
+      return { eventId, laneKey: `invalid:${eventType}:${eventId}` };
+    }
+    throw new FeishuIngressPermanentError("invalid-event", message);
+  };
   if (eventType === "im.message.receive_v1") {
     const message = isRecord(event.message) ? event.message : null;
     const chatId = normalizeNullableString(message?.chat_id);
     if (!chatId) {
-      if (allowInvalidLane) {
-        return { eventId, eventType, laneKey: `invalid:${eventType}:${eventId}` };
-      }
-      throw new FeishuIngressPermanentError(
-        "invalid-event",
-        "Feishu message ingress envelope is missing event.message.chat_id.",
-      );
+      return missingLane("Feishu message ingress envelope is missing event.message.chat_id.");
     }
-    return { eventId, eventType, laneKey: `chat:${chatId}` };
+    return { eventId, laneKey: `chat:${chatId}` };
   }
   const noticeMeta = isRecord(event.notice_meta) ? event.notice_meta : null;
   const fileType = normalizeNullableString(noticeMeta?.file_type);
   const documentId = normalizeNullableString(noticeMeta?.file_token);
   if (!fileType || !documentId) {
-    if (allowInvalidLane) {
-      return { eventId, eventType, laneKey: `invalid:${eventType}:${eventId}` };
-    }
-    throw new FeishuIngressPermanentError(
-      "invalid-event",
-      "Feishu comment ingress envelope is missing its document identity.",
-    );
+    return missingLane("Feishu comment ingress envelope is missing its document identity.");
   }
-  return { eventId, eventType, laneKey: `comment-doc:${fileType}:${documentId}` };
+  return { eventId, laneKey: `comment-doc:${fileType}:${documentId}` };
 }
 
 function resolveFeishuIngressNonRetryableFailure(error: unknown) {
@@ -198,7 +180,10 @@ function resolveFeishuIngressNonRetryableFailure(error: unknown) {
 /** Fan one merged Feishu turn's adoption across every transport and logical claim. */
 export function buildFeishuFlushIngressLifecycle(
   sources: readonly FeishuLifecycleSource[],
-  options?: { onReplayCommitError?: (error: unknown) => void },
+  options?: {
+    onReplayCommitError?: (error: unknown) => void;
+    trackTask?: (task: Promise<void>) => void;
+  },
 ): {
   lifecycle: FeishuIngressLifecycle | undefined;
   settle: () => Promise<void>;
@@ -218,90 +203,39 @@ export function buildFeishuFlushIngressLifecycle(
     return { lifecycle: undefined, settle: async () => {} };
   }
   let handedOff = false;
-  let terminal: "adopted" | "abandoned" | undefined;
-  let adopting: Promise<void> | undefined;
-  let abandoning: Promise<void> | undefined;
+  let settled = false;
   const releaseReplayClaims = () => {
     for (const claim of replayClaims) {
       claim.release({ error: new Error("feishu-ingress-not-adopted") });
     }
   };
-  const runAbandon = async () => {
-    if (terminal) {
+  const abandonAll = async () => {
+    if (settled) {
       return;
     }
+    settled = true;
     releaseReplayClaims();
     await transportLifecycle.onAbandoned();
-    terminal = "abandoned";
-  };
-  const ensureAbandoned = async () => {
-    if (terminal) {
-      return;
-    }
-    const activeAbandonment = abandoning ?? runAbandon();
-    abandoning = activeAbandonment;
-    try {
-      await activeAbandonment;
-    } finally {
-      if (abandoning === activeAbandonment && terminal !== "abandoned") {
-        abandoning = undefined;
-      }
-    }
-  };
-  const abandonAll = async () => {
-    if (terminal) {
-      return;
-    }
-    if (adopting) {
-      await adopting.catch(() => undefined);
-      if (terminal) {
-        return;
-      }
-    }
-    await ensureAbandoned();
   };
   const adoptAll = async () => {
-    if (terminal) {
+    if (settled) {
       return;
     }
-    if (abandoning) {
-      await abandoning.catch(() => undefined);
-      if (terminal) {
-        return;
-      }
-    }
-    const activeAdoption =
-      adopting ??
-      (async () => {
-        try {
-          await transportLifecycle.onAdopted();
-          terminal = "adopted";
-          // Queue adoption is authoritative. Logical twin guards commit only
-          // afterward: partial best-effort guard writes may admit a duplicate,
-          // but can never split or suppress recovery of an unadopted turn.
-          const results = await Promise.allSettled(
-            replayClaims.map(async (claim) => claim.commit()),
-          );
-          for (const result of results) {
-            if (result.status === "rejected") {
-              try {
-                options?.onReplayCommitError?.(result.reason);
-              } catch {
-                // Reporting cannot undo an already adopted durable turn.
-              }
-            }
-          }
-        } catch (error) {
-          await ensureAbandoned().catch(() => undefined);
-          throw error;
-        }
-      })();
-    adopting = activeAdoption;
+    // A flush chooses adoption or abandonment once. Overlapping callbacks are
+    // best effort; the durable queue remains the recovery owner.
+    settled = true;
     try {
-      await activeAdoption;
-    } finally {
-      if (adopting === activeAdoption && terminal !== "adopted") {
-        adopting = undefined;
+      await transportLifecycle.onAdopted();
+    } catch (error) {
+      releaseReplayClaims();
+      await Promise.resolve(transportLifecycle.onAbandoned()).catch(() => undefined);
+      throw error;
+    }
+    // Commit twin suppression only after the durable turn is adopted.
+    const results = await Promise.allSettled(replayClaims.map((claim) => claim.commit()));
+    for (const result of results) {
+      if (result.status === "rejected") {
+        options?.onReplayCommitError?.(result.reason);
       }
     }
   };
@@ -310,7 +244,9 @@ export function buildFeishuFlushIngressLifecycle(
       abortSignal: transportLifecycle.abortSignal,
       onAdopted: async () => {
         handedOff = true;
-        await adoptAll();
+        const adoption = adoptAll();
+        options?.trackTask?.(adoption);
+        await adoption;
       },
       onDeferred: () => {
         handedOff = true;
@@ -337,16 +273,16 @@ export function buildFeishuFlushIngressLifecycle(
       try {
         transportLifecycle.onAdoptionFinalizing();
         await transportLifecycle.onAdopted();
-        terminal = "adopted";
+        settled = true;
       } catch (error) {
-        await ensureAbandoned().catch(() => undefined);
+        await abandonAll().catch(() => undefined);
         throw error;
       }
     },
   };
 }
 
-export function createFeishuDurableIngress(options: FeishuIngressOptions): FeishuDurableIngress {
+export function createFeishuDurableIngress(options: FeishuIngressOptions) {
   let socketTerminator: (() => void) | undefined;
   const activeLifecycles = new Map<string, FeishuIngressLifecycle>();
 
@@ -361,14 +297,8 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions): Feish
         getFeishuRuntime().state.openChannelIngressQueue<FeishuIngressPayload>({
           accountId: options.accountId,
         })),
-    inspect: (rawEnvelope, context) => {
-      const facts = inspectFeishuIngressEnvelope(
-        rawEnvelope,
-        options.encryptKey,
-        context.phase === "admission",
-      );
-      return facts ? { eventId: facts.eventId, laneKey: facts.laneKey } : null;
-    },
+    inspect: (rawEnvelope, context) =>
+      inspectFeishuIngressEnvelope(rawEnvelope, options.encryptKey, context.phase === "admission"),
     payload: {
       version: FEISHU_INGRESS_PAYLOAD_VERSION,
       serialize: (rawEnvelope, { receivedAt }) => ({ receivedAt, rawEnvelope }),
@@ -387,19 +317,14 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions): Feish
         ),
     },
     deliver: async (rawEnvelope, lifecycle, claim) => {
-      const abandonHandlers = new Set<() => void | Promise<void>>();
-      // Feishu handlers can defer transport settlement across broadcast lanes.
-      // Keep their lifecycle registry local while the monitor owns the durable claim.
+      // The message debounce owner releases its logical claim before transport abandonment.
       const wrappedLifecycle: FeishuIngressLifecycle = {
         ...lifecycle,
-        onAdopted: lifecycle.onAdopted,
         onAbandoned: async () => {
-          await Promise.allSettled([...abandonHandlers].map(async (handler) => await handler()));
+          await Promise.resolve()
+            .then(() => wrappedLifecycle.onBeforeAbandon?.())
+            .catch(() => undefined);
           await lifecycle.onAbandoned();
-        },
-        registerAbandonHandler: (handler) => {
-          abandonHandlers.add(handler);
-          return () => abandonHandlers.delete(handler);
         },
       };
       activeLifecycles.set(claim.id, wrappedLifecycle);
@@ -469,9 +394,7 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions): Feish
       };
     }
     try {
-      await monitor.admit(rawEnvelope, {
-        facts: { eventId: facts.eventId, laneKey: facts.laneKey },
-      });
+      await monitor.admit(rawEnvelope, { facts });
     } catch (error) {
       socketTerminator?.();
       throw error;
@@ -484,11 +407,11 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions): Feish
   return {
     invoke,
     invokeWebhook,
-    resolveLifecycle: (data) => {
+    resolveLifecycle: (data: unknown) => {
       const eventId = isRecord(data) ? normalizeNullableString(data.event_id) : null;
       return eventId ? activeLifecycles.get(eventId) : undefined;
     },
-    setSocketTerminator: (terminate) => {
+    setSocketTerminator: (terminate: (() => void) | undefined) => {
       socketTerminator = terminate;
     },
     start: monitor.start,

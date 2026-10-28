@@ -1,4 +1,5 @@
 /** Lightweight direct loader for bundled provider policy public artifacts. */
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { getPluginCache } from "./plugin-cache.js";
 import { getPluginValueInstance } from "./plugin-instance-scope.js";
@@ -9,6 +10,7 @@ import type {
 import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "./public-surface-loader.js";
 import { getPluginRegistryState, getPluginRegistryVersion } from "./runtime-state.js";
 import { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js";
+import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
 
 export type {
   BundledProviderPolicySurface,
@@ -21,12 +23,16 @@ export type {
 export const PROVIDER_POLICY_ARTIFACT = "provider-policy-api.js";
 
 const PROVIDER_POLICY_HOOK_KEYS = [
+  "resolveModelAuthPolicy",
   "resolveFastModeSupport",
+  "resolveServiceTiers",
   "normalizeConfig",
   "applyConfigDefaults",
+  "resolveProactiveCadenceMs",
   "resolveConfigApiKey",
   "resolveThinkingProfile",
   "resolveToolSearchMode",
+  "resolveNativeWebSearch",
   "resolveModelRoutes",
   "normalizeModelCatalogId",
   "isResponseModelEquivalent",
@@ -37,10 +43,7 @@ export function extractProviderPolicySurface(
   mod: Record<string, unknown>,
 ): ProviderPolicySurface | null {
   const surface: ProviderPolicySurface = {};
-  if (
-    Array.isArray(mod.deprecatedProfileIds) &&
-    mod.deprecatedProfileIds.every((value) => typeof value === "string")
-  ) {
+  if (isStringArray(mod.deprecatedProfileIds)) {
     surface.deprecatedProfileIds = mod.deprecatedProfileIds;
   }
   for (const key of PROVIDER_POLICY_HOOK_KEYS) {
@@ -56,10 +59,6 @@ function extractBundledProviderPolicySurface(
   mod: Record<string, unknown>,
 ): BundledProviderPolicySurface | null {
   const surface: BundledProviderPolicySurface = extractProviderPolicySurface(mod) ?? {};
-  if (typeof mod.projectConfiguredModelRow === "function") {
-    surface.projectConfiguredModelRow =
-      mod.projectConfiguredModelRow as BundledProviderPolicySurface["projectConfiguredModelRow"];
-  }
   if (typeof mod.projectRealtimeVoicePublicProjection === "function") {
     Object.assign(surface, {
       projectRealtimeVoicePublicProjection: mod.projectRealtimeVoicePublicProjection,
@@ -85,19 +84,19 @@ export function resolveDirectBundledProviderPolicySurface(
   }
   const registry = getPluginRegistryForContext();
   const version = getPluginRegistryVersion(registry);
-  // Registration and unpublished registries can still change their source owners.
+  // Private registries become immutable when their loader publishes its identity.
   const cacheable =
-    !getPluginRegistryState()?.registrationContext && (!registry || version !== undefined);
+    !getPluginRegistryState()?.registrationContext &&
+    (!registry ||
+      version !== undefined ||
+      getPluginRuntimeLoadContextState(registry)?.loaderCacheIdentity !== undefined);
   const metadata = getPluginCache().metadata;
   resolveBundledPluginsDir();
   const selection = metadata.bundledPluginsDir;
-  const cached = cacheable ? metadata.bundledProviderPolicySurfaces.get(pluginId) : undefined;
-  if (
-    cached &&
-    cached.registry === registry &&
-    cached.version === version &&
-    cached.selection === selection
-  ) {
+  const owner = registry ?? metadata;
+  let surfaces = metadata.bundledProviderPolicySurfaces.get(owner);
+  const cached = cacheable ? surfaces?.get(pluginId) : undefined;
+  if (cached && cached.version === version && cached.selection === selection) {
     return cached.read();
   }
   const mod = loadBundledPluginPublicArtifactModuleFromCandidatesSync<Record<string, unknown>>({
@@ -106,9 +105,12 @@ export function resolveDirectBundledProviderPolicySurface(
   });
   const surface = mod ? extractBundledProviderPolicySurface(mod) : null;
   if (cacheable) {
+    if (!surfaces) {
+      surfaces = new Map();
+      metadata.bundledProviderPolicySurfaces.set(owner, surfaces);
+    }
     const instance = mod ? getPluginValueInstance(mod) : undefined;
-    metadata.bundledProviderPolicySurfaces.set(pluginId, {
-      registry,
+    surfaces.set(pluginId, {
       version,
       selection,
       read: instance ? () => instance.run(() => surface) : () => surface,

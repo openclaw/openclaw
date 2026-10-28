@@ -1,18 +1,7 @@
-/**
- * Security module: token validation, rate limiting, input sanitization, user allowlist.
- */
-
-import {
-  resolveStableChannelMessageIngress,
-  type ChannelIngressContextBinding,
-} from "openclaw/plugin-sdk/channel-ingress-runtime";
-import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
+import type { ChannelIngressContextBinding } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import {
-  createFixedWindowRateLimiter,
-  type FixedWindowRateLimiter,
-} from "openclaw/plugin-sdk/webhook-ingress";
+import { getSynologyRuntime } from "./runtime.js";
 
 /**
  * Validate webhook token using constant-time comparison.
@@ -32,7 +21,7 @@ export async function authorizeUserForDmWithIngress(params: {
   allowedUserIds: string[];
   contextBinding?: ChannelIngressContextBinding;
 }) {
-  return await resolveStableChannelMessageIngress({
+  return await getSynologyRuntime().channel.inbound.ingress.resolveStable({
     channelId: "synology-chat",
     accountId: params.accountId,
     identity: {
@@ -74,42 +63,4 @@ export function sanitizeInput(text: string): string {
   }
 
   return sanitized;
-}
-
-/**
- * Sliding window rate limiter per user ID.
- */
-export class RateLimiter {
-  private readonly limiter: FixedWindowRateLimiter;
-  private readonly limit: number;
-
-  constructor(limit = 30, windowSeconds = 60, maxTrackedUsers = 5_000) {
-    this.limit = limit;
-    const windowMs = finiteSecondsToTimerSafeMilliseconds(windowSeconds) ?? 1;
-    this.limiter = createFixedWindowRateLimiter({
-      windowMs,
-      maxRequests: Math.max(1, Math.floor(limit)),
-      maxTrackedKeys: Math.max(1, Math.floor(maxTrackedUsers)),
-    });
-  }
-
-  /** Returns true if the request is allowed, false if rate-limited. */
-  check(userId: string): boolean {
-    return !this.limiter.isRateLimited(userId);
-  }
-
-  /** Exposed for tests and diagnostics. */
-  size(): number {
-    return this.limiter.size();
-  }
-
-  /** Exposed for tests and account lifecycle cleanup. */
-  clear(): void {
-    this.limiter.clear();
-  }
-
-  /** Exposed for tests. */
-  maxRequests(): number {
-    return this.limit;
-  }
 }

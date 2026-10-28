@@ -1,18 +1,20 @@
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
-  readChannelPairingState,
-  sqliteOptionsForEnv,
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
+import {
+  readChannelPairingSnapshotFromDatabase,
   writeChannelPairingStateToDatabase,
 } from "./pairing-store-sqlite.js";
 import type { PairingChannel } from "./pairing-store.types.js";
 
-type ChannelPairingState = ReturnType<typeof readChannelPairingState>;
+type ChannelPairingState = ReturnType<typeof readChannelPairingSnapshotFromDatabase>["state"];
 
 export function readChannelPairingStateSnapshot(
   channel: PairingChannel,
   env: NodeJS.ProcessEnv = process.env,
 ): ChannelPairingState {
-  return readChannelPairingState(channel, env);
+  return readChannelPairingSnapshotFromDatabase(openOpenClawStateDatabase({ env }), channel).state;
 }
 
 export function writeChannelPairingStateSnapshot(
@@ -22,6 +24,6 @@ export function writeChannelPairingStateSnapshot(
 ): void {
   runOpenClawStateWriteTransaction(
     (database) => writeChannelPairingStateToDatabase(database, channel, state),
-    sqliteOptionsForEnv(env),
+    { env },
   );
 }

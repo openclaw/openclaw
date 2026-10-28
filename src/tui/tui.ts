@@ -1,14 +1,8 @@
-// Runs the interactive TUI loop and coordinates backend, input, and rendering.
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
-import {
-  Container,
-  Loader,
-  matchesKey,
-  ProcessTerminal,
-  Text,
-  TuiMainScreen,
-} from "@earendil-works/pi-tui";
+import { Container, Loader, matchesKey, Text, TuiMainScreen } from "@earendil-works/pi-tui";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyGatewayConnectFailure } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
@@ -22,13 +16,13 @@ import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-res
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, type OpenClawConfig } from "../config/config.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
-import type { EmbeddedStateSignalProcess } from "../infra/embedded-state-lock.js";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
-import type { GatewayLockIdentity, GatewayLockOptions } from "../infra/gateway-lock.js";
+import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
 import { resolveCurrentOpenClawCliInvocation } from "../infra/openclaw-cli-invocation.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
@@ -51,8 +45,12 @@ import {
 import { getSlashCommands, shouldSubmitExactArgumentCompletion } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
-import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
 import { editorTheme, tuiTheme as theme } from "./theme/theme.js";
+import {
+  createTuiProgramStatusReporter,
+  isTuiBusyActivityStatus,
+  type TuiRunOutcome,
+} from "./tui-activity-status.js";
 import { createTuiAuthChildOwner } from "./tui-auth-child.js";
 import { createTuiAutocompleteProvider } from "./tui-autocomplete.js";
 import type { TuiBackend } from "./tui-backend.js";
@@ -63,20 +61,21 @@ import {
   formatTuiFooter,
   sanitizeRenderableLine,
 } from "./tui-formatters.js";
+import { createTuiLastSessionRestore } from "./tui-last-session-restore.js";
 import {
   buildTuiLastSessionScopeKey,
   createRememberSessionKeyWriter,
-  readTuiLastSessionKey,
-  resolveRememberedTuiSessionKey,
   writeTuiLastSessionKey,
 } from "./tui-last-session.js";
+import { createTuiLocalCliRunner } from "./tui-local-cli.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
 import { createTuiPluginApprovalController } from "./tui-plugin-approvals.js";
+import { TuiProcessTerminal } from "./tui-process-terminal.js";
 import { createTuiQuestionController } from "./tui-questions.js";
 import { createSessionActions } from "./tui-session-actions.js";
-import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import { createTuiRunIdTracker } from "./tui-session-run-coordinator.js";
+import { beginTuiShutdown } from "./tui-shutdown.js";
 import {
   createEditorSubmitHandler,
   createSubmitBurstCoalescer,
@@ -85,22 +84,14 @@ import {
 } from "./tui-submit.js";
 import { createTuiTaskSuggestionController } from "./tui-task-suggestions.js";
 import type {
-  SessionInfo,
   SessionScope,
+  TuiBoundGateway,
   TuiHistoryRunOutcome,
   TuiOptions,
   TuiResult,
   TuiStateAccess,
 } from "./tui-types.js";
 import { buildWaitingStatusMessage, defaultWaitingPhrases } from "./tui-waiting.js";
-
-export { resolveFinalAssistantText } from "./tui-formatters.js";
-export type { TuiOptions } from "./tui-types.js";
-export {
-  createEditorSubmitHandler,
-  createSubmitBurstCoalescer,
-  shouldEnableWindowsGitBashPasteFallback,
-} from "./tui-submit.js";
 
 const OPENAI_CODEX_PROVIDER = "openai";
 const CODEX_CLI_LOOKUP_TIMEOUT_MS = 5_000;
@@ -114,15 +105,9 @@ type RunTuiOptions = TuiOptions & {
   agentId?: string;
   backend?: TuiBackend;
   submitBurstWindowMs?: number;
-  ctrlCExitWindowMs?: number;
   onSubmitBurstCaptured?: (value: string) => void;
   /** Exact pre-probed remote target for an in-process setup handoff. */
-  boundGateway?: {
-    url: string;
-    token?: string;
-    password?: string;
-    tlsFingerprint?: string;
-  };
+  boundGateway?: TuiBoundGateway;
   config?: OpenClawConfig;
   title?: string;
 };
@@ -151,23 +136,18 @@ export async function resolveCodexCliBin(): Promise<string | null> {
     if (result.code !== 0 || result.termination !== "exit") {
       return null;
     }
-    // `where` on Windows can return multiple matches; use PATH order.
     return result.stdout.trim().split(/\r?\n/)[0]?.trim() || null;
   } catch {
     return null;
   }
 }
 
-export function resolveLocalAuthSpawnInvocation(params: {
-  command: string;
-  args: string[];
-  platform?: NodeJS.Platform;
-}): {
+export function resolveLocalAuthSpawnInvocation(params: { command: string; args: string[] }): {
   args: string[];
   command: string;
   options: { windowsHide?: true; windowsVerbatimArguments?: true };
 } {
-  const platform = params.platform ?? process.platform;
+  const platform = process.platform;
   if (!isWindowsBatchCommand(params.command.trim(), platform)) {
     return { command: params.command, args: params.args, options: {} };
   }
@@ -178,17 +158,14 @@ export function resolveLocalAuthSpawnInvocation(params: {
   };
 }
 
-export function resolveTuiLocalAuthCliInvocation(params: {
-  provider?: string;
-  execArgv?: readonly string[];
-}) {
+export function resolveTuiLocalAuthCliInvocation(params: { provider?: string }) {
   const provider = params.provider?.trim();
-  return resolveCurrentOpenClawCliInvocation(
-    ["models", "auth", "login", ...(provider ? ["--provider", provider] : [])],
-    {
-      execArgv: params.execArgv ?? process.execArgv,
-    },
-  );
+  return resolveCurrentOpenClawCliInvocation([
+    "models",
+    "auth",
+    "login",
+    ...(provider ? ["--provider", provider] : []),
+  ]);
 }
 
 export function formatTuiAuthCommandArgv(command: string, args: readonly string[]): string {
@@ -205,20 +182,14 @@ export function resolveTuiSessionKey(params: {
   sessionMainKey: string;
 }) {
   const trimmed = (params.raw ?? "").trim();
-  if (!trimmed) {
+  if (!trimmed || trimmed.toLowerCase() === "global") {
     return resolveCanonicalMainSessionKey({
       agentId: params.currentAgentId,
       mainKey: params.sessionMainKey,
       sessionScope: params.sessionScope,
     });
   }
-  const parsed = parseAgentSessionKey(trimmed);
-  if (parsed?.rest === "global") {
-    // Initial agent selection already consumed the explicit owner prefix. TUI operations
-    // need the literal sentinel so they carry that owner separately as agentId.
-    return "global";
-  }
-  if (trimmed === "global" || trimmed === "unknown") {
+  if (trimmed === "unknown") {
     return trimmed;
   }
   return toAgentStoreSessionKey({
@@ -255,7 +226,7 @@ export function resolveTuiSessionSelection(params: {
   const keepDurableBareKey =
     !parsed &&
     persistedOwner?.kind === "configured" &&
-    trimmed !== "global" &&
+    trimmed.toLowerCase() !== "global" &&
     trimmed !== "unknown" &&
     trimmed.toLowerCase() !== "main" &&
     trimmed.toLowerCase() !== mainKey;
@@ -277,7 +248,6 @@ export function resolveInitialTuiAgentId(params: {
   fallbackAgentId?: string;
   initialSessionInput?: string;
   agentId?: string;
-  cwd?: string;
 }) {
   const initialSessionInput = (params.initialSessionInput ?? "").trim();
   const explicitAgentId = resolveExplicitInitialTuiAgentId(params);
@@ -297,7 +267,7 @@ export function resolveInitialTuiAgentId(params: {
     });
   }
 
-  const cwd = params.cwd ?? tryProcessCwd();
+  const cwd = tryProcessCwd();
   const inferredFromWorkspace = cwd ? resolveAgentIdByWorkspacePath(params.cfg, cwd) : null;
   if (inferredFromWorkspace) {
     return inferredFromWorkspace;
@@ -341,37 +311,23 @@ export function resolveGatewayDisconnectState(
   const failure = classifyGatewayConnectFailure(input);
   const reasonLabel =
     failure.userMessage === "gateway unreachable" ? "closed" : failure.userMessage;
-  if (failure.kind === "pairing-required") {
-    return {
-      connectionStatus: `gateway disconnected: ${reasonLabel}`,
-      activityStatus: "device approval needed: preview latest request",
-      remediation: failure.remediation,
-    };
-  }
-  if (failure.kind === "rate-limited") {
-    return {
-      connectionStatus: `gateway disconnected: ${reasonLabel}`,
-      activityStatus: "gateway authentication temporarily rate-limited",
-      remediation: failure.remediation,
-    };
-  }
-  if (failure.kind === "identity-proxy") {
-    return {
-      connectionStatus: `gateway disconnected: ${reasonLabel}`,
-      activityStatus: "identity-aware proxy rejected connection",
-      remediation: failure.remediation,
-    };
-  }
   return {
     connectionStatus: `gateway disconnected: ${reasonLabel}`,
-    activityStatus: failure.remediation ? "gateway authentication needs attention" : "idle",
+    activityStatus:
+      failure.kind === "pairing-required"
+        ? "device approval needed: preview latest request"
+        : failure.kind === "rate-limited"
+          ? "gateway authentication temporarily rate-limited"
+          : failure.kind === "identity-proxy"
+            ? "identity-aware proxy rejected connection"
+            : failure.remediation
+              ? "gateway authentication needs attention"
+              : "idle",
     remediation: failure.remediation,
   };
 }
 
-export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?: () => number }) {
-  const dedupeWindowMs = Math.max(0, Math.floor(params?.dedupeWindowMs ?? 8));
-  const now = params?.now ?? (() => Date.now());
+export function createBackspaceDeduper() {
   let previousBackspace: { data: string; at: number } | undefined;
 
   return (data: string): string => {
@@ -379,28 +335,23 @@ export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?:
       previousBackspace = undefined;
       return data;
     }
-    const at = now();
+    const at = Date.now();
     // SSH can emit both legacy encodings for one press; matching bytes are real repeats.
     const isDuplicate =
       previousBackspace !== undefined &&
       previousBackspace.data !== data &&
-      at - previousBackspace.at <= dedupeWindowMs;
+      at - previousBackspace.at <= 8;
     previousBackspace = isDuplicate ? undefined : { data, at };
     return isDuplicate ? "" : data;
   };
 }
 
 export function isIgnorableTuiStopError(error: unknown): boolean {
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-  const err = error as { code?: unknown; syscall?: unknown; message?: unknown };
-  const code = typeof err.code === "string" ? err.code : "";
-  const syscall = typeof err.syscall === "string" ? err.syscall : "";
-  const message = typeof err.message === "string" ? err.message : "";
-  if (code === "EBADF" && syscall === "setRawMode") {
+  const err = asOptionalObjectRecord(error);
+  if (err?.code === "EBADF" && err.syscall === "setRawMode") {
     return true;
   }
+  const message = typeof err?.message === "string" ? err.message : "";
   return /setRawMode/i.test(message) && /EBADF/i.test(message);
 }
 
@@ -414,34 +365,20 @@ export function stopTuiSafely(stop: () => void): void {
   }
 }
 
-type TerminalLossEmitter = {
-  on(event: "close" | "end", listener: () => void): unknown;
-  off(event: "close" | "end", listener: () => void): unknown;
-};
-
 export function isTuiTerminalLossError(error: unknown): boolean {
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-  const err = error as { code?: unknown; message?: unknown; syscall?: unknown };
-  const code = typeof err.code === "string" ? err.code : "";
-  const message = typeof err.message === "string" ? err.message : "";
-  const syscall = typeof err.syscall === "string" ? err.syscall : "";
-  if (code === "EIO" || code === "EPIPE") {
+  const err = asOptionalObjectRecord(error);
+  if (err?.code === "EIO" || err?.code === "EPIPE") {
     return true;
   }
+  const message = typeof err?.message === "string" ? err.message : "";
+  const syscall = typeof err?.syscall === "string" ? err.syscall : "";
   return (
     /\b(EIO|EPIPE)\b/i.test(message) && /\b(read|write|TTY|stdin|stdout)\b/i.test(message + syscall)
   );
 }
 
-export function installTuiTerminalLossExitHandler(
-  requestExit: () => void,
-  targets: { stdin?: TerminalLossEmitter; stdout?: TerminalLossEmitter } = {
-    stdin: process.stdin,
-    stdout: process.stdout,
-  },
-): () => void {
+export function installTuiTerminalLossExitHandler(requestExit: () => void): () => void {
+  const { stdin, stdout } = process;
   let requested = false;
   const requestOnce = (): void => {
     if (requested) {
@@ -457,15 +394,14 @@ export function installTuiTerminalLossExitHandler(
     requestOnce();
     return true;
   });
-  const onClose = (): void => requestOnce();
-  targets.stdin?.on("end", onClose);
-  targets.stdin?.on("close", onClose);
-  targets.stdout?.on("close", onClose);
+  stdin.on("end", requestOnce);
+  stdin.on("close", requestOnce);
+  stdout.on("close", requestOnce);
   return () => {
     removeUncaughtExceptionHandler();
-    targets.stdin?.off("end", onClose);
-    targets.stdin?.off("close", onClose);
-    targets.stdout?.off("close", onClose);
+    stdin.off("end", requestOnce);
+    stdin.off("close", requestOnce);
+    stdout.off("close", requestOnce);
   };
 }
 
@@ -506,78 +442,6 @@ type DrainableTui = {
 
 const TUI_SHUTDOWN_DRAIN_MAX_MS = 500;
 const TUI_SHUTDOWN_DRAIN_IDLE_MS = 100;
-const TUI_SHUTDOWN_HARD_EXIT_MS = 2000;
-const TUI_PROCESS_EXIT_AFTER_RETURN_MS = 2000;
-
-type TuiShutdownTask = () => void | Promise<void>;
-
-export function beginTuiShutdown(params: {
-  stopCommandScopes?: TuiShutdownTask;
-  stopClient: TuiShutdownTask;
-  stopTui: TuiShutdownTask;
-  disposeStatus: () => void;
-  requestFinish: () => void;
-  forceExit: () => void;
-  hardExitMs: number;
-  keepHardExitArmed?: boolean;
-  onError: (error: unknown) => void;
-}): ReturnType<typeof setTimeout> {
-  const hardExitTimer = setTimeout(params.forceExit, params.hardExitMs);
-  hardExitTimer.unref();
-  // Stop referenced animations before transport teardown can stall or redraw.
-  params.disposeStatus();
-  void Promise.resolve()
-    .then(async () => {
-      const errors: unknown[] = [];
-      const runtimeTasks = [params.stopCommandScopes, params.stopClient].map(async (task) =>
-        task?.(),
-      );
-      for (const result of await Promise.allSettled(runtimeTasks)) {
-        if (result.status === "rejected") {
-          errors.push(result.reason);
-        }
-      }
-      // Terminal ownership must be released even when transport teardown fails.
-      try {
-        await params.stopTui();
-      } catch (error) {
-        errors.push(error);
-      }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "TUI shutdown failed");
-      }
-    })
-    .finally(() => {
-      if (params.keepHardExitArmed !== true) {
-        clearTimeout(hardExitTimer);
-      }
-      params.disposeStatus();
-    })
-    .catch(params.onError)
-    .finally(params.requestFinish);
-
-  // For the standalone command, settled teardown is not proof that runTui
-  // returned. Its unref keeps clean exits fast while preserving the deadline.
-  return hardExitTimer;
-}
-
-export function createTuiSignalHandlers(params: {
-  handleCtrlC: () => void;
-  requestExit: () => void;
-}): {
-  sigintHandler: () => void;
-  sigtermHandler: () => void;
-  sighupHandler: () => void;
-} {
-  return {
-    sigintHandler: params.handleCtrlC,
-    sigtermHandler: params.requestExit,
-    sighupHandler: params.requestExit,
-  };
-}
 
 export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
   if (typeof tui.terminal?.drainInput === "function") {
@@ -588,19 +452,6 @@ export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
     }
   }
   stopTuiSafely(() => tui.stop());
-}
-
-const TUI_BUSY_ACTIVITY_STATUSES = new Set([
-  "sending",
-  "waiting",
-  "streaming",
-  "running",
-  "finishing context",
-  "starting up",
-]);
-
-export function isTuiBusyActivityStatus(status: string): boolean {
-  return TUI_BUSY_ACTIVITY_STATUSES.has(status);
 }
 
 export function resolveTuiToolsToggleActivityStatus(params: {
@@ -614,54 +465,22 @@ export function resolveTuiToolsToggleActivityStatus(params: {
   return toolsStatus;
 }
 
-export function resolveTuiShutdownHardExitMs(params: { localMode?: boolean } = {}): number {
-  return TUI_SHUTDOWN_HARD_EXIT_MS + (params.localMode ? resolveLocalRunShutdownGraceMs() : 0);
-}
-
-export function scheduleProcessExitAfterTuiReturn(
-  params: { delayMs?: number } = {},
-): ReturnType<typeof setTimeout> {
-  const delayMs = Math.max(0, Math.floor(params.delayMs ?? TUI_PROCESS_EXIT_AFTER_RETURN_MS));
-  const timer = setTimeout(() => {
-    try {
-      process.stderr.write("openclaw tui forcing process exit after return\n");
-    } catch {
-      // Best effort only; forced exit must not depend on stderr.
-    }
-    process.exit(0);
-  }, delayMs);
-  timer.unref();
-  return timer;
-}
-
-export function cancelProcessExitAfterTuiReturn(timer: ReturnType<typeof setTimeout>): void {
-  clearTimeout(timer);
-}
-
 type CtrlCAction = "clear" | "warn" | "exit";
-type TuiCtrlCAction = CtrlCAction | "force-exit";
+type TuiCtrlCAction = CtrlCAction | "closing";
 
 export function resolveCtrlCAction(params: {
   hasInput: boolean;
   now: number;
   lastCtrlCAt: number;
-  exitWindowMs?: number;
 }): { action: CtrlCAction; nextLastCtrlCAt: number } {
-  const exitWindowMs = Math.max(1, Math.floor(params.exitWindowMs ?? 1000));
-  if (params.hasInput) {
-    return {
-      action: "clear",
-      nextLastCtrlCAt: params.now,
-    };
-  }
-  if (params.now - params.lastCtrlCAt <= exitWindowMs) {
+  if (!params.hasInput && params.now - params.lastCtrlCAt <= 1000) {
     return {
       action: "exit",
       nextLastCtrlCAt: params.lastCtrlCAt,
     };
   }
   return {
-    action: "warn",
+    action: params.hasInput ? "clear" : "warn",
     nextLastCtrlCAt: params.now,
   };
 }
@@ -672,42 +491,30 @@ export function resolveTuiCtrlCAction(params: {
   lastCtrlCAt: number;
   exitRequested?: boolean;
   wasDisconnected?: boolean;
-  exitWindowMs?: number;
 }): { action: TuiCtrlCAction; nextLastCtrlCAt: number } {
   if (params.exitRequested === true) {
-    return { action: "force-exit", nextLastCtrlCAt: params.lastCtrlCAt };
+    return { action: "closing", nextLastCtrlCAt: params.lastCtrlCAt };
   }
-  if (params.hasInput) {
-    return resolveCtrlCAction(params);
-  }
-  if (params.wasDisconnected === true) {
+  if (!params.hasInput && params.wasDisconnected === true) {
     return { action: "exit", nextLastCtrlCAt: params.lastCtrlCAt };
   }
   return resolveCtrlCAction(params);
 }
 
 export function createTuiConnectionLineage() {
-  let hasConnected = false;
-  let wasDisconnected = false;
+  let phase: "initial" | "connected" | "disconnected" = "initial";
   return {
     connect: () => {
-      const reconnected = wasDisconnected;
-      hasConnected = true;
-      wasDisconnected = false;
+      const reconnected = phase === "disconnected";
+      phase = "connected";
       return reconnected;
     },
     disconnect: () => {
-      if (hasConnected) {
-        wasDisconnected = true;
+      if (phase !== "initial") {
+        phase = "disconnected";
       }
     },
-    wasDisconnected: () => wasDisconnected,
-  };
-}
-
-function resolveEmptySessionInfoDefaults(config: OpenClawConfig): SessionInfo {
-  return {
-    verboseLevel: config.agents?.defaults?.verboseDefault,
+    wasDisconnected: () => phase === "disconnected",
   };
 }
 
@@ -718,25 +525,23 @@ function formatActiveGatewayTuiRefusal(identity: GatewayLockIdentity): string {
 /** Hold canonical state ownership for the complete lifetime of a local TUI. */
 export async function withEmbeddedTuiStateLock<T>(
   run: (signal: AbortSignal) => Promise<T>,
-  deps: {
-    gatewayLockOptions?: GatewayLockOptions;
-    process?: EmbeddedStateSignalProcess;
-  } = {},
 ): Promise<T> {
   const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
     await import("../infra/embedded-state-lock.js");
-  const signalBridge = createEmbeddedStateSignalBridge(deps.process ?? process);
+  const signalBridge = createEmbeddedStateSignalBridge();
   let stateLock: Awaited<ReturnType<typeof acquireEmbeddedStateLock>> | undefined;
   try {
     stateLock = await acquireEmbeddedStateLock({
-      options: deps.gatewayLockOptions,
       signal: signalBridge.signal,
       formatActiveGatewayRefusal: formatActiveGatewayTuiRefusal,
     });
     return await run(signalBridge.signal);
   } finally {
-    await stateLock?.release();
-    signalBridge.dispose();
+    try {
+      await stateLock?.release();
+    } finally {
+      signalBridge.dispose();
+    }
   }
 }
 
@@ -747,25 +552,15 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   return await runTuiUnlocked(opts);
 }
 
-class TuiSessionIdentityState {
-  sessionKey = "";
-  sessionId: string | null = null;
-  readonly generations = new Map<string, number>();
-  readonly sessionIds = new Map<string, string>();
-  constructor(public agentId: string) {}
-  generationKey() {
-    return JSON.stringify([this.agentId, this.sessionKey]);
-  }
-}
-
 async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   const isLocalMode = opts.local === true || opts.backend !== undefined;
-  const config = opts.config ?? getRuntimeConfig({ skipPluginValidation: !isLocalMode });
+  const config =
+    opts.config ??
+    (await captureRuntimeConfigAsyncReader({ skipPluginValidation: !isLocalMode })());
   const cliInvocation = resolveCurrentOpenClawCliInvocation([]);
   const resolveUsableCwd = () => tryProcessCwd() ?? cliInvocation.cwd;
-  const emptySessionInfoDefaults = resolveEmptySessionInfoDefaults(config);
   const initialSessionInput = (opts.session ?? "").trim();
-  const sessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
+  const sessionScope = config.session?.scope ?? "per-sender";
   const sessionMainKey = normalizeMainKey(config.session?.mainKey);
   const configuredDefaultAgentId = tryResolveDefaultAgentId(config);
   const initialAgentId = resolveInitialTuiAgentId({
@@ -776,7 +571,6 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   });
   const agentDefaultId = configuredDefaultAgentId ?? initialAgentId;
   const agentNames = new Map<string, string>();
-  let rememberedSessionApplied = false;
   let connectionGeneration = 0;
   const connectionLineage = createTuiConnectionLineage();
   let remediationShown = false;
@@ -796,66 +590,69 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   let exitResult: TuiResult = { exitReason: "exit" };
   const authChild = createTuiAuthChildOwner();
   let statusTimer: NodeJS.Timeout | null = null;
+  let statusIntervalMs = 0;
   let statusStartedAt: number | null = null;
   let lastActivityStatus = "idle";
   let invalidateSessionRunOwnership: () => void = () => undefined;
   let notifySessionChanged: () => void = () => undefined;
   let reconcileReconnectRun: (_outcome: TuiHistoryRunOutcome) => void = () => undefined;
 
-  const state: TuiStateAccess & {
-    sessionGeneration: number;
-    sessionIdentity: TuiSessionIdentityState;
-  } = {
-    sessionIdentity: new TuiSessionIdentityState(initialAgentId),
+  let currentAgentId = initialAgentId;
+  let currentSessionKey = "";
+  let currentSessionId: string | null = null;
+  const sessionGenerations = new Map<string, number>();
+  const sessionIds = new Map<string, string>();
+  const generationKey = () => JSON.stringify([currentAgentId, currentSessionKey]);
+  const state: TuiStateAccess & { sessionGeneration: number } = {
     agentDefaultId,
     sessionMainKey,
     sessionScope,
     agents: [],
     get currentAgentId() {
-      return this.sessionIdentity.agentId;
+      return currentAgentId;
     },
     set currentAgentId(value: string) {
-      if (this.sessionIdentity.agentId === value) {
+      if (currentAgentId === value) {
         return;
       }
-      this.sessionIdentity.agentId = value;
+      currentAgentId = value;
       invalidateSessionRunOwnership();
       notifySessionChanged();
     },
     get currentSessionKey() {
-      return this.sessionIdentity.sessionKey;
+      return currentSessionKey;
     },
     set currentSessionKey(value: string) {
-      this.sessionIdentity.sessionKey = value;
+      currentSessionKey = value;
       notifySessionChanged();
     },
     get currentSessionId() {
-      return this.sessionIdentity.sessionId;
+      return currentSessionId;
     },
     set currentSessionId(value: string | null) {
       if (value) {
-        const generationKey = this.sessionIdentity.generationKey();
-        const previousSessionId = this.sessionIdentity.sessionIds.get(generationKey);
+        const key = generationKey();
+        const previousSessionId = sessionIds.get(key);
         // The first ID binds an unresolved selection; reset/replacement owners bump explicitly.
         if (previousSessionId && previousSessionId !== value) {
           this.sessionGeneration += 1;
         }
-        this.sessionIdentity.sessionIds.set(generationKey, value);
+        sessionIds.set(key, value);
       }
-      this.sessionIdentity.sessionId = value;
+      currentSessionId = value;
     },
     get sessionGeneration() {
-      const generationKey = this.sessionIdentity.generationKey();
-      return this.sessionIdentity.generations.get(generationKey) ?? 0;
+      const key = generationKey();
+      return sessionGenerations.get(key) ?? 0;
     },
     set sessionGeneration(value: number) {
-      const generationKey = this.sessionIdentity.generationKey();
-      this.sessionIdentity.generations.set(generationKey, Math.max(this.sessionGeneration, value));
+      const key = generationKey();
+      sessionGenerations.set(key, Math.max(this.sessionGeneration, value));
     },
     activeChatRunId: null,
     pendingSubmit: null,
     historyLoaded: false,
-    sessionInfo: { ...emptySessionInfoDefaults },
+    sessionInfo: { verboseLevel: config.agents?.defaults?.verboseDefault },
     initialSessionApplied: false,
     isConnected: false,
     autoMessageSent: false,
@@ -893,7 +690,8 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     setConsoleSubsystemFilter(["__openclaw_tui_quiet__"]);
   }
 
-  const tui = new TuiMainScreen(new ProcessTerminal());
+  const tui = new TuiMainScreen(new TuiProcessTerminal());
+  const programStatus = createTuiProgramStatusReporter(tui.terminal);
   const dedupeBackspace = createBackspaceDeduper();
   tui.addInputListener((data) => {
     const next = dedupeBackspace(data);
@@ -932,18 +730,13 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   };
   const editor = new CustomEditor(tui, editorTheme);
   const root = new Container();
-  root.addChild(header);
-  root.addChild(chatLog);
-  root.addChild(statusContainer);
-  root.addChild(footer);
-  root.addChild(questionStatus);
-  root.addChild(editor);
-
-  const resolveDynamicSlashCommandsKey = () => state.currentAgentId;
+  for (const component of [header, chatLog, statusContainer, footer, questionStatus, editor]) {
+    root.addChild(component);
+  }
 
   let autocompleteFdPath: string | undefined;
   const applyAutocompleteProvider = () => {
-    const dynamicKey = resolveDynamicSlashCommandsKey();
+    const dynamicKey = state.currentAgentId;
     const slashCommands = getSlashCommands({
       cfg: config,
       local: isLocalMode,
@@ -960,27 +753,26 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     );
   };
 
-  void import("../agents/utils/tools-manager.js")
-    .then(({ ensureTool }) => ensureTool("fd", true))
+  const autocompleteReady = import("../agents/utils/tools-manager.js")
+    .then(({ ensureTool }) => ensureTool("fd"))
     .then((fdPath) => {
-      if (fdPath) {
+      if (fdPath && !exitRequested) {
         autocompleteFdPath = fdPath;
         applyAutocompleteProvider();
       }
-    });
+    })
+    .catch(() => undefined);
 
   const clearDynamicSlashCommandsRefreshTimer = () => {
-    if (!dynamicSlashCommandsRefreshTimer) {
-      return;
-    }
-    clearTimeout(dynamicSlashCommandsRefreshTimer);
+    clearTimeout(dynamicSlashCommandsRefreshTimer ?? undefined);
     dynamicSlashCommandsRefreshTimer = null;
   };
 
   const refreshDynamicSlashCommands = () => {
     clearDynamicSlashCommandsRefreshTimer();
-    const key = resolveDynamicSlashCommandsKey();
+    const key = state.currentAgentId;
     if (
+      exitRequested ||
       !dynamicSlashCommandsReady ||
       !state.isConnected ||
       !client.listCommands ||
@@ -999,10 +791,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
         includeArgs: false,
       })
       .then((commands) => {
-        if (
-          requestId !== dynamicSlashCommandsRequestId ||
-          key !== resolveDynamicSlashCommandsKey()
-        ) {
+        if (requestId !== dynamicSlashCommandsRequestId || key !== state.currentAgentId) {
           return;
         }
         dynamicSlashCommands = commands;
@@ -1021,7 +810,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     if (
       !dynamicSlashCommandsReady ||
       dynamicSlashCommandsRefreshTimer ||
-      dynamicSlashCommandsKey === resolveDynamicSlashCommandsKey()
+      dynamicSlashCommandsKey === state.currentAgentId
     ) {
       return;
     }
@@ -1038,11 +827,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   tui.setFocus(editor);
 
   const formatSessionKey = (key: string) => {
-    if (key === "global" || key === "unknown") {
-      return key;
-    }
-    const parsed = parseAgentSessionKey(key);
-    return parsed?.rest ?? key;
+    return parseAgentSessionKey(key)?.rest ?? key;
   };
 
   const formatAgentLabel = (id: string) => {
@@ -1061,32 +846,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   // Initial selection predates controller construction, so it intentionally does not notify.
-  state.sessionIdentity.sessionKey = resolveSessionSelection(initialSessionInput).key;
-
-  // Presentation-only label shown before the remembered session is remotely
-  // validated. Cleared once restoreRememberedSession confirms or rejects it.
-  let provisionalSessionLabel: string | null = null;
-
-  // Shared candidate resolution so the pre-connect label and the post-connect
-  // restore flow read the same SQLite key and apply the same eligibility rules.
-  const resolveRememberedCandidate = async (): Promise<{ key: string } | null> => {
-    const remembered = await readTuiLastSessionKey({
-      scopeKey: buildLastSessionScopeKeyFor(),
-    });
-    if (!remembered) {
-      return null;
-    }
-    const selection = resolveSessionSelection(remembered);
-    const key = selection?.key ?? null;
-    if (!key || key === state.currentSessionKey) {
-      return null;
-    }
-    const agentId = selection?.agentId;
-    if (agentId && normalizeAgentId(agentId) !== state.currentAgentId) {
-      return null;
-    }
-    return { key };
-  };
+  currentSessionKey = resolveSessionSelection(initialSessionInput).key;
 
   const buildLastSessionScopeKeyFor = (sessionKey = state.currentSessionKey) => {
     const parsed = parseAgentSessionKey(sessionKey);
@@ -1097,66 +857,32 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     });
   };
 
-  const rememberCurrentSessionKey = createRememberSessionKeyWriter({
+  const sessionMemory = createRememberSessionKeyWriter({
     buildScopeKey: buildLastSessionScopeKeyFor,
     reportFailure: (message) => {
-      chatLog.addSystem(`session memory write failed: ${message}`);
-      tui.requestRender();
+      if (exitRequested) {
+        process.stderr.write(`session memory write failed: ${message}\n`);
+      } else {
+        chatLog.addSystem(`session memory write failed: ${message}`);
+        tui.requestRender();
+      }
     },
     write: writeTuiLastSessionKey,
   });
 
-  const restoreRememberedSession = async (expectedConnectionGeneration: number) => {
-    if (initialSessionInput || rememberedSessionApplied) {
-      return;
-    }
-    const candidate = await resolveRememberedCandidate();
-    if (expectedConnectionGeneration !== connectionGeneration || exitRequested) {
-      return;
-    }
-    if (!candidate) {
-      provisionalSessionLabel = null;
-      rememberedSessionApplied = true;
-      return;
-    }
-    const rememberedKey = candidate.key;
-    const sessions = await client
-      .listSessions({
-        limit: TUI_SESSION_LOOKUP_LIMIT,
-        search: rememberedKey,
-        includeGlobal: rememberedKey === "global",
-        includeUnknown: false,
-        agentId: state.currentAgentId,
-      })
-      .catch(() => null);
-    if (expectedConnectionGeneration !== connectionGeneration || exitRequested) {
-      return;
-    }
-    if (!sessions) {
-      // A failed lookup clears the preview, but leaves restoration eligible
-      // for a later connection to validate the remembered session.
-      provisionalSessionLabel = null;
-      return;
-    }
-    // An abandoned connection must leave restoration eligible for the next handshake.
-    rememberedSessionApplied = true;
-    const restored = resolveRememberedTuiSessionKey({
-      rememberedKey,
-      currentAgentId: state.currentAgentId,
-      sessions: sessions.sessions,
-    });
-    if (!restored || restored === state.currentSessionKey) {
-      provisionalSessionLabel = null;
-      return;
-    }
-    state.currentSessionKey = restored;
-    provisionalSessionLabel = null;
-    updateHeader();
-    updateFooter();
-  };
+  const sessionRestore = createTuiLastSessionRestore({
+    explicitSession: Boolean(initialSessionInput),
+    state,
+    buildScopeKey: buildLastSessionScopeKeyFor,
+    resolveSelection: resolveSessionSelection,
+    describeSession: (params) => client.describeSession(params),
+    ownsConnection: (generation) => generation === connectionGeneration && !exitRequested,
+  });
 
   const updateHeader = () => {
-    const sessionLabel = provisionalSessionLabel ?? formatSessionKey(state.currentSessionKey);
+    const sessionLabel = formatSessionKey(
+      sessionRestore.provisionalSessionKey ?? state.currentSessionKey,
+    );
     const agentLabel = formatAgentLabel(state.currentAgentId);
     const title = opts.title ?? "openclaw tui";
     const text = `${title} - ${client.connection.url} - agent ${agentLabel} - session ${sessionLabel}`;
@@ -1181,8 +907,6 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       return;
     }
     statusContainer.clear();
-    statusLoader?.stop();
-    statusLoader = null;
     statusText = new Text("", 1, 0);
     statusContainer.addChild(statusText);
   };
@@ -1203,7 +927,6 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   let waitingTick = 0;
-  let waitingTimer: NodeJS.Timeout | null = null;
   let waitingPhrase: string | null = null;
 
   const updateBusyStatusMessage = () => {
@@ -1229,67 +952,41 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     statusLoader.setMessage(`${state.activityStatus} • ${elapsed} | ${state.connectionStatus}`);
   };
 
-  const startStatusTimer = () => {
-    if (statusTimer) {
-      return;
-    }
-    statusTimer = setInterval(() => {
-      if (!isTuiBusyActivityStatus(state.activityStatus)) {
-        return;
-      }
-      updateBusyStatusMessage();
-    }, 1000);
+  const stopStatusTimer = () => {
+    clearInterval(statusTimer ?? undefined);
+    statusTimer = null;
+    statusIntervalMs = 0;
+    waitingPhrase = null;
   };
 
-  const stopStatusTimer = () => {
-    if (!statusTimer) {
+  const startStatusTimer = (waiting: boolean) => {
+    const intervalMs = waiting ? 120 : 1000;
+    if (statusIntervalMs === intervalMs) {
       return;
     }
-    clearInterval(statusTimer);
-    statusTimer = null;
+    stopStatusTimer();
+    if (waiting) {
+      const idx = Math.floor(Math.random() * defaultWaitingPhrases.length);
+      waitingPhrase = defaultWaitingPhrases[idx] ?? defaultWaitingPhrases[0] ?? "waiting";
+      waitingTick = 0;
+    }
+    statusIntervalMs = intervalMs;
+    statusTimer = setInterval(() => {
+      if (
+        waiting ? state.activityStatus === "waiting" : isTuiBusyActivityStatus(state.activityStatus)
+      ) {
+        updateBusyStatusMessage();
+      }
+    }, intervalMs);
   };
 
   const stopStatusTimeout = () => {
-    if (!state.statusTimeout) {
-      return;
-    }
-    clearTimeout(state.statusTimeout);
+    clearTimeout(state.statusTimeout ?? undefined);
     state.statusTimeout = null;
-  };
-
-  const startWaitingTimer = () => {
-    if (waitingTimer) {
-      return;
-    }
-
-    // Pick a phrase once per waiting session.
-    if (!waitingPhrase) {
-      const idx = Math.floor(Math.random() * defaultWaitingPhrases.length);
-      waitingPhrase = defaultWaitingPhrases[idx] ?? defaultWaitingPhrases[0] ?? "waiting";
-    }
-
-    waitingTick = 0;
-
-    waitingTimer = setInterval(() => {
-      if (state.activityStatus !== "waiting") {
-        return;
-      }
-      updateBusyStatusMessage();
-    }, 120);
-  };
-
-  const stopWaitingTimer = () => {
-    if (!waitingTimer) {
-      return;
-    }
-    clearInterval(waitingTimer);
-    waitingTimer = null;
-    waitingPhrase = null;
   };
 
   const disposeStatus = () => {
     stopStatusTimer();
-    stopWaitingTimer();
     stopStatusTimeout();
     clearDynamicSlashCommandsRefreshTimer();
     dynamicSlashCommandsRequestId += 1;
@@ -1297,25 +994,26 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     statusLoader = null;
   };
 
-  const renderStatus = () => {
+  const renderStatus = (runOutcome?: TuiRunOutcome) => {
+    if (exitRequested) {
+      return;
+    }
     const isBusy = isTuiBusyActivityStatus(state.activityStatus);
+    programStatus.update({
+      activityStatus: state.activityStatus,
+      isConnected: state.isConnected,
+      runOutcome,
+    });
     if (isBusy) {
       if (!statusStartedAt || lastActivityStatus !== state.activityStatus) {
         statusStartedAt = Date.now();
       }
       ensureStatusLoader();
-      if (state.activityStatus === "waiting") {
-        stopStatusTimer();
-        startWaitingTimer();
-      } else {
-        stopWaitingTimer();
-        startStatusTimer();
-      }
+      startStatusTimer(state.activityStatus === "waiting");
       updateBusyStatusMessage();
     } else {
       statusStartedAt = null;
       stopStatusTimer();
-      stopWaitingTimer();
       statusLoader?.stop();
       statusLoader = null;
       ensureStatusText();
@@ -1330,10 +1028,8 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   const setConnectionStatus = (text: string, ttlMs?: number) => {
     state.connectionStatus = sanitizeRenderableLine(text);
     renderStatus();
-    if (state.statusTimeout) {
-      stopStatusTimeout();
-    }
-    if (ttlMs && ttlMs > 0) {
+    stopStatusTimeout();
+    if (!exitRequested && ttlMs && ttlMs > 0) {
       state.statusTimeout = setTimeout(() => {
         state.connectionStatus = state.isConnected
           ? isLocalMode
@@ -1347,9 +1043,9 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     }
   };
 
-  const setActivityStatus = (text: string) => {
+  const setActivityStatus = (text: string, runOutcome?: TuiRunOutcome) => {
     state.activityStatus = text;
-    renderStatus();
+    renderStatus(runOutcome);
   };
 
   const withTuiSuspended = async <T>(work: () => Promise<T>): Promise<T> => {
@@ -1409,7 +1105,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
             if (result.exitCode === 0 && !result.signal) {
               tuiAuthLog.info(`auth child finished: ${outcome}`);
               if (!codexBin) {
-                reloadSharedAuthStoreOwnership();
+                await reloadSharedAuthStoreOwnership();
                 // The auth child persisted outside this process. Invalidate the
                 // published generation so retained local runtimes rebuild from it.
                 clearRuntimeAuthProfileStoreSnapshots();
@@ -1428,7 +1124,9 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     : undefined;
 
   const updateFooter = () => {
-    const sessionKeyLabel = provisionalSessionLabel ?? formatSessionKey(state.currentSessionKey);
+    const sessionKeyLabel = formatSessionKey(
+      sessionRestore.provisionalSessionKey ?? state.currentSessionKey,
+    );
     const sessionLabel = state.sessionInfo.displayName
       ? `${sessionKeyLabel} (${state.sessionInfo.displayName})`
       : sessionKeyLabel;
@@ -1448,7 +1146,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   const { openOverlay, closeOverlay } = createOverlayHandlers(tui, editor);
-  const questions = createTuiQuestionController({
+  const promptContext = {
     client,
     chatLog,
     getAgentId: () => state.currentAgentId,
@@ -1456,28 +1154,17 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     openOverlay,
     closeOverlay,
     requestRender: () => tui.requestRender(),
+  };
+  const questions = createTuiQuestionController({
+    ...promptContext,
     onPendingChange: (text) => questionStatus.setText(theme.accent(text)),
   });
   const reportQuestionRefreshError = () => {
     chatLog.addSystem("question refresh failed; reconnect or use /question to retry");
     tui.requestRender();
   };
-  const refreshQuestions = async () => {
-    try {
-      await questions.refresh();
-    } catch {
-      reportQuestionRefreshError();
-    }
-  };
-  const pluginApprovals = createTuiPluginApprovalController({
-    client,
-    chatLog,
-    getAgentId: () => state.currentAgentId,
-    getSessionKey: () => state.currentSessionKey,
-    openOverlay,
-    closeOverlay,
-    requestRender: () => tui.requestRender(),
-  });
+  const refreshQuestions = () => questions.refresh().catch(reportQuestionRefreshError);
+  const pluginApprovals = createTuiPluginApprovalController(promptContext);
   const btw = {
     showResult: (params: { question: string; text: string; isError?: boolean }) => {
       chatLog.showBtw(params);
@@ -1505,11 +1192,18 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     setActivityStatus,
     invalidateRunOwnership: () => invalidateSessionRunOwnership(),
     clearLocalRunIds: localRunIds.clear,
-    rememberSessionKey: rememberCurrentSessionKey,
+    rememberSessionKey: sessionMemory.remember,
+    onSessionSelection: () => {
+      sessionRestore.supersede();
+      updateHeader();
+      updateFooter();
+      tui.requestRender();
+    },
   });
   const {
     refreshAgents,
     refreshSessionInfo,
+    applySessionEventRow,
     applySessionInfoFromPatch,
     applySessionMutationResult,
     loadHistory: loadHistorySnapshot,
@@ -1535,15 +1229,28 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     return result;
   };
   const taskSuggestions = createTuiTaskSuggestionController({
-    client,
-    chatLog,
-    getAgentId: () => state.currentAgentId,
-    getSessionKey: () => state.currentSessionKey,
-    openOverlay,
-    closeOverlay,
-    requestRender: () => tui.requestRender(),
+    ...promptContext,
     onAccepted: setSession,
   });
+  const promptControllers = [pluginApprovals, questions, taskSuggestions];
+  const refreshPendingPrompts = async (ownsConnection: () => boolean = () => true) => {
+    for (const [label, controller] of [
+      ["plugin approval", pluginApprovals],
+      ["task suggestion", taskSuggestions],
+    ] as const) {
+      try {
+        await controller.refresh();
+      } catch (err) {
+        if (!ownsConnection()) {
+          return;
+        }
+        chatLog.addSystem(`${label} refresh failed: ${formatTuiErrorMessage(err)}`);
+      }
+      if (!ownsConnection()) {
+        return;
+      }
+    }
+  };
   notifySessionChanged = () => {
     pluginApprovals.sessionChanged();
     void questions.sessionChanged().catch(reportQuestionRefreshError);
@@ -1573,6 +1280,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     setActivityStatus,
     updateFooter,
     refreshSessionInfo,
+    applySessionEventRow,
     loadHistory,
     noteLocalRunId: localRunIds.note,
     isLocalRunId: localRunIds.has,
@@ -1583,6 +1291,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     clearLocalBtwRunIds: localBtwRunIds.clear,
   });
   reconcileReconnectRun = reconnectStreamingWatchdog;
+  const localCli = createTuiLocalCliRunner();
   const localShell = createLocalShellRunner({
     chatLog,
     tui,
@@ -1598,21 +1307,14 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   const deferredFinish = createDeferredTuiFinish();
   // The backend can own requestExit before the editor/coalescer exists.
   let disposeSubmitBurst = () => {};
-  const forceExit = () => {
-    try {
-      process.stderr.write("openclaw tui forcing exit\n");
-    } catch {
-      // Best effort only; force exit must not depend on stderr.
-    }
-    process.exit(130);
-  };
+  let shutdownError: Error | undefined;
   const requestExit = (result?: Partial<TuiResult>) => {
     if (exitRequested) {
-      forceExit();
       return;
     }
     exitRequested = true;
-    authChild.close();
+    const sessionMemoryClosed = sessionMemory.close();
+    const authChildClosed = authChild.close();
     // Exit owns the input boundary before transport teardown can race a buffered submit.
     disposeSubmitBurst();
     connectionGeneration += 1;
@@ -1621,21 +1323,26 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       ...(result?.systemAgentMessage ? { systemAgentMessage: result.systemAgentMessage } : {}),
     };
     disposeEventHandlers();
-    pluginApprovals?.dispose();
-    questions.dispose();
-    taskSuggestions?.dispose();
+    promptControllers.forEach((controller) => controller.dispose());
     chatLog.dispose();
-    beginTuiShutdown({
-      stopCommandScopes: () => localShell.shutdown(),
+    void beginTuiShutdown({
+      stopCommandScopes: async () => {
+        const results = await Promise.allSettled([
+          localShell.shutdown(),
+          localCli.shutdown(),
+          sessionMemoryClosed,
+          authChildClosed,
+          autocompleteReady,
+        ]);
+        throwSettledAggregate(results, "TUI command cleanup failed");
+      },
       stopClient: () => client.stop(),
       stopTui: () => drainAndStopTuiSafely(tui),
       disposeStatus,
       requestFinish: deferredFinish.requestFinish,
-      forceExit,
-      hardExitMs: resolveTuiShutdownHardExitMs({ localMode: isLocalMode }),
-      keepHardExitArmed: opts.forceProcessExitOnReturn === true,
       onError: (err) => {
         if (!isTuiTerminalLossError(err)) {
+          shutdownError = toErrorObject(err, "TUI shutdown failed");
           try {
             process.stderr.write(`openclaw tui shutdown failed: ${formatTuiErrorMessage(err)}\n`);
           } catch {
@@ -1676,7 +1383,6 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     refreshAgents,
     abortActive,
     setActivityStatus,
-    formatSessionKey,
     noteLocalRunId: localRunIds.note,
     noteLocalBtwRunId: localBtwRunIds.note,
     forgetLocalRunId: localRunIds.forget,
@@ -1685,6 +1391,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     isRunObserved,
     flushPendingHistoryRefreshIfIdle,
     runAuthFlow,
+    localCli,
     reopenQuestion: () => questions.reopen().catch(reportQuestionRefreshError),
     requestExit,
   });
@@ -1720,6 +1427,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       tui.requestRender();
       return;
     }
+    localCli.cancel();
     void abortActive();
   };
   const handleCtrlC = () => {
@@ -1730,10 +1438,8 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       lastCtrlCAt: state.lastCtrlCAt,
       exitRequested,
       wasDisconnected: connectionLineage.wasDisconnected(),
-      exitWindowMs: opts.ctrlCExitWindowMs,
     });
-    if (decision.action === "force-exit") {
-      forceExit();
+    if (decision.action === "closing") {
       return;
     }
     state.lastCtrlCAt = decision.nextLastCtrlCAt;
@@ -1750,12 +1456,8 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     chatLog.addSystem("press ctrl+c again to exit");
     tui.requestRender();
   };
-  editor.onCtrlC = () => {
-    handleCtrlC();
-  };
-  editor.onCtrlD = () => {
-    requestExit();
-  };
+  editor.onCtrlC = handleCtrlC;
+  editor.onCtrlD = requestExit;
   editor.onCtrlO = () => {
     state.toolsExpanded = !state.toolsExpanded;
     chatLog.setToolsExpanded(state.toolsExpanded);
@@ -1769,9 +1471,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     );
     tui.requestRender();
   };
-  editor.onCtrlL = () => {
-    void openModelSelector();
-  };
+  editor.onCtrlL = openModelSelector;
   editor.onCtrlG = () => {
     void openAgentSelector();
   };
@@ -1799,28 +1499,19 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     return undefined;
   });
 
+  const eventHandlers = new Map([
+    ["chat", handleChatEvent],
+    ["chat.side_result", handleBtwEvent],
+    ["agent", handleAgentEvent],
+    ["sessions.changed", handleSessionsChangedEvent],
+    ["session.message", handleSessionMessageEvent],
+  ]);
   client.onEvent = (evt) => {
     if (exitRequested) {
       return;
     }
-    pluginApprovals?.handleEvent(evt.event, evt.payload);
-    questions.handleEvent(evt.event, evt.payload);
-    taskSuggestions?.handleEvent(evt.event, evt.payload);
-    if (evt.event === "chat") {
-      handleChatEvent(evt.payload);
-    }
-    if (evt.event === "chat.side_result") {
-      handleBtwEvent(evt.payload);
-    }
-    if (evt.event === "agent") {
-      handleAgentEvent(evt.payload);
-    }
-    if (evt.event === "sessions.changed") {
-      handleSessionsChangedEvent(evt.payload);
-    }
-    if (evt.event === "session.message") {
-      handleSessionMessageEvent(evt.payload);
-    }
+    promptControllers.forEach((controller) => controller.handleEvent(evt.event, evt.payload));
+    eventHandlers.get(evt.event)?.(evt.payload);
   };
 
   client.onConnected = () => {
@@ -1870,45 +1561,22 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       if (reconnected) {
         reconnectStreamingWatchdog();
       }
-      await refreshAgents();
-      if (!ownsConnection()) {
-        return;
-      }
-      await restoreRememberedSession(connectedGeneration);
-      if (!ownsConnection()) {
-        return;
-      }
-      updateHeader();
-      updateAutocompleteProvider();
-      await refreshQuestions();
-      if (!ownsConnection()) {
-        return;
-      }
-      try {
-        await pluginApprovals?.refresh();
-      } catch (err) {
+      for (const initialize of [
+        refreshAgents,
+        () => sessionRestore.restore(connectedGeneration),
+        () => {
+          updateHeader();
+          updateFooter();
+          updateAutocompleteProvider();
+          return refreshQuestions();
+        },
+        () => refreshPendingPrompts(ownsConnection),
+        () => loadHistory(reconnected),
+      ]) {
+        await initialize();
         if (!ownsConnection()) {
           return;
         }
-        chatLog.addSystem(`plugin approval refresh failed: ${formatTuiErrorMessage(err)}`);
-      }
-      if (!ownsConnection()) {
-        return;
-      }
-      try {
-        await taskSuggestions?.refresh();
-      } catch (err) {
-        if (!ownsConnection()) {
-          return;
-        }
-        chatLog.addSystem(`task suggestion refresh failed: ${formatTuiErrorMessage(err)}`);
-      }
-      if (!ownsConnection()) {
-        return;
-      }
-      await loadHistory(reconnected);
-      if (!ownsConnection()) {
-        return;
       }
       state.isConnected = true;
       if (state.activityStatus === "starting up") {
@@ -1926,9 +1594,13 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       scheduleDynamicSlashCommandsRefresh();
       if (!state.autoMessageSent && autoMessage) {
         state.autoMessageSent = true;
-        await sendMessage(autoMessage, opts.initialMessageTimeoutMs);
-        if (!ownsConnection()) {
-          return;
+        if (resolveMessageAdmission(autoMessage).status === "blocked") {
+          chatLog.addSystem("initial message not sent — retry it after the session is ready");
+        } else {
+          await sendMessage(autoMessage, opts.initialMessageTimeoutMs);
+          if (!ownsConnection()) {
+            return;
+          }
         }
       }
       updateFooter();
@@ -1995,75 +1667,51 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     addConnectionNotice(`gateway event gap: expected ${info.expected}, got ${info.received}`);
     reconcileHistoryAfterGap();
     void refreshQuestions();
-    void (async () => {
-      try {
-        await pluginApprovals?.refresh();
-      } catch (err) {
-        chatLog.addSystem(`plugin approval refresh failed: ${formatTuiErrorMessage(err)}`);
-      }
-      try {
-        await taskSuggestions?.refresh();
-      } catch (err) {
-        chatLog.addSystem(`task suggestion refresh failed: ${formatTuiErrorMessage(err)}`);
-      }
-    })();
+    void refreshPendingPrompts();
     tui.requestRender();
   };
 
-  if (!initialSessionInput && !rememberedSessionApplied) {
-    // Pre-render read is best-effort: a corrupt or inaccessible state DB must
-    // not reject runTui() before the terminal UI and its startup-failure path
-    // are active. The post-connect restoreRememberedSession flow re-reads the
-    // key and owns the established error-handling path.
-    try {
-      const candidate = await resolveRememberedCandidate();
-      if (candidate) {
-        provisionalSessionLabel = formatSessionKey(candidate.key);
-      }
-    } catch {
-      provisionalSessionLabel = null;
-    }
-  }
-
-  updateHeader();
-  setConnectionStatus(isLocalMode ? "starting local runtime" : "connecting");
-  updateFooter();
-  const { sigintHandler, sigtermHandler, sighupHandler } = createTuiSignalHandlers({
-    handleCtrlC,
-    requestExit,
-  });
-  process.on("SIGINT", sigintHandler);
-  process.on("SIGTERM", sigtermHandler);
-  process.on("SIGHUP", sighupHandler);
-  let cleanupTerminalLossHandler: (() => void) | null = installTuiTerminalLossExitHandler(() =>
+  process.on("SIGINT", handleCtrlC);
+  process.on("SIGTERM", requestExit);
+  process.on("SIGHUP", requestExit);
+  let cleanupTerminalLossHandler: (() => void) | undefined = installTuiTerminalLossExitHandler(() =>
     requestExit(),
   );
-  tui.start();
-  client.start();
-  await new Promise<void>((resolve) => {
-    const finish = () => {
+  const finished = new Promise<void>((resolve) => {
+    deferredFinish.setFinish(() => {
       disposeStatus();
       disposeEventHandlers();
-      pluginApprovals?.dispose();
-      questions.dispose();
-      taskSuggestions?.dispose();
+      promptControllers.forEach((controller) => controller.dispose());
       if (isLocalMode) {
         setConsoleSubsystemFilter(previousConsoleSubsystemFilter);
       }
       cleanupTerminalLossHandler?.();
-      cleanupTerminalLossHandler = null;
-      process.removeListener("SIGINT", sigintHandler);
-      process.removeListener("SIGTERM", sigtermHandler);
-      process.removeListener("SIGHUP", sighupHandler);
-      process.removeListener("exit", finish);
+      cleanupTerminalLossHandler = undefined;
+      process.off("SIGINT", handleCtrlC);
+      process.off("SIGTERM", requestExit);
+      process.off("SIGHUP", requestExit);
       deferredFinish.clearFinish();
       resolve();
-    };
-    process.once("exit", finish);
-    deferredFinish.setFinish(finish);
+    });
   });
-  if (opts.forceProcessExitOnReturn === true) {
-    scheduleProcessExitAfterTuiReturn();
+  try {
+    if (!exitRequested) {
+      await sessionRestore.preview();
+    }
+    if (!exitRequested) {
+      updateHeader();
+      setConnectionStatus(isLocalMode ? "starting local runtime" : "connecting");
+      updateFooter();
+      tui.start();
+      client.start();
+    }
+  } catch (error) {
+    shutdownError = toErrorObject(error, "TUI startup failed");
+    requestExit();
+  }
+  await finished;
+  if (shutdownError) {
+    throw shutdownError;
   }
   return exitResult;
 }

@@ -1,22 +1,21 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { SpawnResult } from "../process/exec-result.js";
-import { runCommandWithTimeout } from "../process/exec.js";
+import * as processExec from "../process/exec.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { statusCommand } from "./status.command.js";
 import { createStatusScanCoreBootstrap } from "./status.scan.bootstrap-shared.js";
 import { baseStatusServices, createStatusScanResultFixture } from "./status.test-support.js";
-import { getUpdateCheckResult } from "./status.update.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
-vi.mock("../process/exec.js", async (original) => ({
-  ...(await original<typeof import("../process/exec.js")>()),
-  runCommandWithTimeout: vi.fn(),
-}));
+const gitFixture = vi.hoisted(() => ({ root: "" }));
+
 vi.mock("../infra/openclaw-root.js", async (original) => ({
   ...(await original<typeof import("../infra/openclaw-root.js")>()),
-  resolveOpenClawPackageRoot: async () => "/repo",
+  resolveOpenClawPackageRoot: async () => gitFixture.root,
 }));
 vi.mock("../infra/detect-package-manager.js", () => ({ detectPackageManager: async () => "pnpm" }));
 vi.mock("../infra/update-run-ledger.js", () => ({ getLatestUpdateFetchFailure: () => undefined }));
@@ -39,68 +38,62 @@ vi.mock("./status.scan.shared.js", async (original) => ({
 vi.mock("./status.scan.js", () => ({ scanStatus: scanWithGitProbe }));
 vi.mock("./status.scan.fast-json.js", () => ({ scanStatusJsonFast: scanWithGitProbe }));
 
-async function scanWithGitProbe(opts: { timeoutMs?: number; all?: boolean }) {
+async function scanWithGitProbe(opts: Parameters<typeof createStatusScanCoreBootstrap>[0]["opts"]) {
   const fixture = createStatusScanResultFixture({
     env: { OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR },
   });
   const bootstrap = await createStatusScanCoreBootstrap({
     coldStart: false,
     cfg: fixture.cfg,
-    configPath: "/repo/openclaw.json",
+    configPath: path.join(gitFixture.root, "openclaw.json"),
     env: fixture.env ?? {},
     hasConfiguredChannels: true,
     opts,
     fetchGitUpdate: opts.all === true,
     includeRegistryUpdate: opts.all === true,
-    getTailnetHostname: async () => null,
-    getUpdateCheckResult,
     getAgentLocalStatuses: async () => fixture.agentStatus,
   });
   return { ...fixture, update: await bootstrap.updatePromise };
 }
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const successfulGit: SpawnResult = {
-  pid: 1,
-  stdout: "",
-  stderr: "",
-  code: 0,
-  signal: null,
-  killed: false,
-  termination: "exit",
-};
+const successfulGit = createCommandResult({ pid: 1 });
 
 beforeEach(() => {
-  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-status-git-probe-"));
-  vi.mocked(runCommandWithTimeout)
-    .mockReset()
-    .mockImplementation(async (argv) => ({
-      ...successfulGit,
-      stdout: argv.includes("--show-toplevel")
-        ? "/repo"
-        : argv.includes("--abbrev-ref")
-          ? "main"
-          : argv.includes("--count")
-            ? "0\t0"
-            : argv.includes("--format=%ct")
-              ? "1700000000"
-              : argv.includes("--porcelain")
-                ? ""
-                : "abc123",
-    }));
+  vi.useFakeTimers();
+  const stateDir = tempDirs.make("openclaw-status-git-probe-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  gitFixture.root = path.join(stateDir, "repo");
+  fs.mkdirSync(path.join(gitFixture.root, ".git"), { recursive: true });
+  // Concurrent lazy imports must share this runner spy, not a manual mock factory.
+  vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv) => ({
+    ...successfulGit,
+    stdout:
+      (
+        [
+          ["--show-toplevel", gitFixture.root],
+          ["--abbrev-ref", "main"],
+          ["--count", "0\t0"],
+          ["--format=%ct", "1700000000"],
+          ["--porcelain", ""],
+          ["--is-shallow-repository", "false"],
+        ] as const
+      ).find(([flag]) => argv.includes(flag))?.[1] ?? "abc123",
+  }));
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllEnvs();
 });
 
 function delayGitProbe(probe: string, delayMs: number | null, failure?: string) {
   const started = createDeferred();
-  const run = vi.mocked(runCommandWithTimeout).getMockImplementation();
+  const run = vi.mocked(processExec.runCommandWithTimeout).getMockImplementation();
   if (!run) {
     throw new Error("Git runner was not initialized");
   }
-  vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
+  vi.mocked(processExec.runCommandWithTimeout).mockImplementation(async (argv, options) => {
     if (!argv.includes(probe)) {
       return run(argv, options);
     }
@@ -125,6 +118,7 @@ function delayGitProbe(probe: string, delayMs: number | null, failure?: string) 
 async function runStatusProbe(
   params: { json: boolean; all?: boolean; timeoutMs?: number },
   started: Promise<void>,
+  advanceMs: number,
 ) {
   const runtime = createTestRuntime();
   const pending = statusCommand(params, runtime);
@@ -133,8 +127,12 @@ async function runStatusProbe(
     () => "completed",
     (error: unknown) => error,
   );
-  await started;
-  await vi.runAllTimersAsync();
+  await awaitGateBeforeSettlement(
+    started,
+    pending,
+    "Status settled without starting the requested Git probe",
+  );
+  await vi.advanceTimersByTimeAsync(advanceMs);
   expect(await outcome).toBe("completed");
   expect(runtime.exit).not.toHaveBeenCalled();
   expect(runtime.error).not.toHaveBeenCalled();
@@ -152,8 +150,7 @@ async function runStatusProbe(
 
 describe("status optional Git probes", () => {
   it.each([false, true])("allows a cold 4 s local probe (JSON: %s)", async (json) => {
-    vi.useFakeTimers();
-    const result = await runStatusProbe({ json }, delayGitProbe("--show-toplevel", 4000));
+    const result = await runStatusProbe({ json }, delayGitProbe("--show-toplevel", 4000), 4000);
     expect(result.output).not.toContain("update status unknown");
     if (json) {
       expect(result.update.installKind).toBe("git");
@@ -174,11 +171,10 @@ describe("status optional Git probes", () => {
   ])(
     "keeps the report after $probe times out (JSON: $json, budget: $budgetMs)",
     async ({ probe, budgetMs, ...opts }) => {
-      vi.useFakeTimers();
       const startedAt = Date.now();
-      const { output, update } = await runStatusProbe(opts, delayGitProbe(probe, null));
+      const { output, update } = await runStatusProbe(opts, delayGitProbe(probe, null), budgetMs);
       expect(Date.now() - startedAt).toBe(budgetMs);
-      expect(output).toContain(`git probe did not finish within ${budgetMs / 1000} s (slow host)`);
+      expect(output).toContain(`git check did not finish within ${budgetMs / 1000} s (slow host)`);
       expect(output).not.toContain("remote reachability");
       if (opts.json) {
         expect(update.error).toMatchObject({ status: "unknown", timeoutMs: budgetMs });
@@ -193,10 +189,10 @@ describe("status optional Git probes", () => {
   it.each([false, true])(
     "keeps a genuine Git error inside the update section (JSON: %s)",
     async (json) => {
-      vi.useFakeTimers();
       const { output, update } = await runStatusProbe(
         { json },
         delayGitProbe("--abbrev-ref", 1, "fatal: permission denied"),
+        1,
       );
       expect(output).toContain("fatal: permission denied");
       expect(output).not.toContain("slow host");

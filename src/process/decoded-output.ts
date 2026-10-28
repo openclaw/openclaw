@@ -83,7 +83,11 @@ export function createAwaitedDecodedOutput(stream: Readable, onFailure: (error: 
   stream.once("close", onSourceClose);
   const done = (async () => {
     try {
-      await finished(sink, { cleanup: true });
+      // A queued finish can precede destroy's error event; retain its listener through close.
+      await finished(sink);
+      if (sink.errored) {
+        throw sink.errored;
+      }
     } catch (error) {
       if (!closed) {
         closed = true;

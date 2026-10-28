@@ -124,8 +124,10 @@ handshake does not report an error.
 </Warning>
 
 Capability-gated agent tools are a separate use of the same declaration. If an
-agent tool requires a client capability, the Gateway omits that tool unless the
-originating client advertised every required capability.
+agent tool requires a client capability, the Gateway lists it using the operator
+capabilities recorded for that session. Internal wakes and restart recovery retain
+that declaration. Current client capabilities still gate calls, and tools that
+act on a browser require their bound, connected recipient at execution.
 
 ## Validate attachments before sending
 
@@ -205,7 +207,7 @@ assistant, plan, tool, and other stream events.
 
 ## Render generated image artifacts
 
-Assistant-generated images arrive as canonical `type: "image"` content blocks.
+Assistant-generated images arrive as standard `type: "image"` content blocks.
 Managed blocks include a stable `artifactId`, a Gateway-relative `url`, MIME
 type, dimensions, size, and accessible alt text. Keep that reference in the
 transcript cache; do not persist downloaded bytes or temporary download URLs.
@@ -226,6 +228,45 @@ Resolve the image through the authenticated WebSocket connection:
 Older image blocks without `artifactId` remain displayable by existing Control
 UI clients, but native clients should show a readable attachment fallback rather
 than forward a shared owner credential.
+
+## Download inline artifacts over HTTPS
+
+For artifacts embedded in transcripts, `artifacts.download` normally returns
+`encoding: "base64"` and `data` over the existing connection. Clients that can
+reach the Gateway's HTTPS routes can pass `transport: "http"` to receive a
+Gateway-relative `url` and `expiresAt` instead, then fetch the original bytes
+with `GET`. The route also supports `HEAD` and single byte ranges. Managed media
+keeps its existing URL download path.
+
+Append `?variant=thumbnail` to an inline HTTPS download URL for a best-effort
+PNG preview, bounded to 1200 pixels on its longest side without upscaling.
+Only identified still PNG, JPEG, and WebP images are eligible. GIFs, APNGs,
+animated WebP, other formats, unknown variants, and encoding failures retain
+the original bytes, as do PNG previews that are not smaller than the source.
+Check the response MIME type: a thumbnail is `image/png` even when the
+artifact uses another image format. Omit the query for full-size downloads;
+the RPC schema and WebSocket base64 response are unchanged.
+
+Use the active Gateway's HTTPS origin and configured Control UI base path. TLS
+can terminate at the Gateway or its reverse proxy; the proxy must forward
+`/api/artifacts/download/` as well as WebSocket upgrades. A `wss://` endpoint
+alone does not establish HTTP reachability. WebSocket-only clients should omit
+`transport`; a client whose HTTP route is unavailable can repeat the same RPC
+without `transport`, preserving every session, run, task, and role filter.
+
+Inline download links expire after five minutes and belong to the issuing live
+connection and exact artifact. Reads recheck access, transcript membership,
+session generation, and content identity. Expiry, disconnection, revocation, or
+replacement makes the link unavailable. Reconnect and request a fresh download
+instead of retaining links across connections. The links contain no reusable
+Gateway credential, and responses disable caching and active document execution.
+
+The Control UI opts in for image and text previews when served from the active
+Gateway's HTTPS origin. If the HTTP fetch fails, it retries through the inline
+RPC on that same connection. Other connections retain their existing transfer
+behavior. Binary artifact previews keep a Download action rather than an
+expiring link. Each click requests fresh download authority; changing the
+connection or closing the preview cancels an in-flight download.
 
 ## Use history metadata and stable anchors
 
@@ -280,6 +321,10 @@ connection and carry current row metadata, usage, and active-run state.
 Apply snapshots to existing roster members locally. Refresh `sessions.list`
 when a row is missing or the notification is a broad, keyless invalidation.
 Delete events retain the removed session ID and do not carry a replacement row.
+Notifications for aliases of the same session share publication order. Rapid
+replacement can coalesce intermediate notifications; a broad invalidation follows
+condensed updates so clients refresh the authoritative roster. The same refresh
+notification is sent when row metadata cannot be prepared.
 Do not poll `usage.cost` or `sessions.usage` to keep a live session list current;
 reserve those methods for on-demand aggregate or detailed reports.
 
@@ -295,7 +340,7 @@ transition racing the list request is neither lost nor resurrected.
 
 The current wire version is `4`. General operator and WebChat clients must
 negotiate the exact current version with `minProtocol: 4` and `maxProtocol: 4`.
-Only authenticated node clients and lightweight probes have the N-1 acceptance
+Only authenticated node clients and lightweight checks have the N-1 acceptance
 window, currently protocol `3` through `4`.
 
 Protocol changes are additive first. `protocol.schema.json` includes `since`

@@ -1,8 +1,9 @@
-import { html, nothing } from "lit";
-import "../../../components/image-lightbox.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
-import { t } from "../../../i18n/index.ts";
-import { openResolvedImage } from "./chat-message-image-open.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
+import { openResolvedImage } from "./chat-image-presentation.ts";
+
+registerChatMediaEnglish();
 
 export function isImageLightboxEvent(event: Event): boolean {
   return event
@@ -44,23 +45,4 @@ export function openInlineChatImage(
   const title = image.alt.trim() || t("chat.imageLightbox.untitled");
   openResolvedImage(onOpenImage, src, title);
   return true;
-}
-
-export function renderChatImageLightbox(
-  item: ImageLightboxItem | null | undefined,
-  onClose: () => void,
-) {
-  if (!item) {
-    return nothing;
-  }
-  return html`
-    <openclaw-image-lightbox
-      .mediaKind=${item.kind ?? "image"}
-      .gallery=${item.gallery}
-      src=${item.src}
-      .originalSrc=${item.originalSrc ?? ""}
-      .imageTitle=${item.title}
-      @image-lightbox-close=${onClose}
-    ></openclaw-image-lightbox>
-  `;
 }

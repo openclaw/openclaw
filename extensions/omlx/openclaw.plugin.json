@@ -1,0 +1,34 @@
+{
+  "id": "omlx",
+  "categories": ["models"],
+  "activation": { "onStartup": false },
+  "enabledByDefault": true,
+  "providers": ["omlx"],
+  "providerCatalogEntry": "./provider-discovery.ts",
+  "modelCatalog": { "discovery": { "omlx": "refreshable" } },
+  "providerRequest": {
+    "providers": { "omlx": { "openAICompletions": { "supportsStreamingUsage": true } } }
+  },
+  "modelPricing": { "providers": { "omlx": { "external": false } } },
+  "nonSecretAuthMarkers": ["omlx-local"],
+  "syntheticAuthRefs": ["omlx"],
+  "setup": { "providers": [{ "id": "omlx", "envVars": ["OMLX_API_KEY"] }] },
+  "providerAuthChoices": [
+    {
+      "provider": "omlx",
+      "method": "local",
+      "choiceId": "omlx",
+      "choiceLabel": "oMLX",
+      "choiceHint": "Local Apple Silicon server",
+      "appGuidedDiscovery": true,
+      "appGuidedActionLabel": "Connect server",
+      "appGuidedSecret": true,
+      "website": "https://github.com/jundot/omlx",
+      "groupId": "omlx",
+      "groupLabel": "oMLX",
+      "groupHint": "Local chat and memory embeddings"
+    }
+  ],
+  "contracts": { "embeddingProviders": ["omlx"] },
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+}

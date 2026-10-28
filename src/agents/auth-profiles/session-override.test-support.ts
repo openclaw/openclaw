@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import { afterEach, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   ProviderModelRouteAuthRequirement,
   ProviderModelRouteCandidate,
@@ -11,52 +10,61 @@ import {
   type OpenClawTestState,
   withOpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import type { AuthProfileStore } from "./types.js";
 
 export const TEST_PRIMARY_PROFILE_ID = "openai:primary@example.test";
 export const TEST_SECONDARY_PROFILE_ID = "openai:secondary@example.test";
 
 const authStoreMocks = vi.hoisted(() => {
-  const state: {
-    hasSource: boolean;
-    routeResolutions: Map<string, ProviderModelRouteResolution>;
-    store: AuthProfileStore;
-  } = {
+  const emptyStore = (): AuthProfileStore => ({ version: 1, profiles: {} });
+  const state = {
     hasSource: false,
-    routeResolutions: new Map(),
-    store: { version: 1, profiles: {} },
+    routeResolutions: new Map<string, ProviderModelRouteResolution>(),
+    store: emptyStore(),
   };
-  return {
-    state,
-    ensureAuthProfileStore: vi.fn(() => state.store),
-    hasAnyAuthProfileStoreSource: vi.fn(() => state.hasSource),
+  const calls = {
+    ensureAuthProfileStoreAsync: vi.fn(async () => state.store),
+    hasAnyAuthProfileStoreSourceAsync: vi.fn(() => state.hasSource),
     isProfileInCooldown: vi.fn((_store: AuthProfileStore, _profileId: string) => false),
     resolveProviderModelRoutes: vi.fn(
       ({ provider, modelId }: { provider: string; modelId?: string }) =>
         state.routeResolutions.get(`${provider}\0${modelId ?? ""}`) ?? null,
     ),
+  };
+  return {
+    state,
+    ...calls,
     reset() {
       state.hasSource = false;
       state.routeResolutions.clear();
-      state.store = { version: 1, profiles: {} };
+      state.store = emptyStore();
+      Object.values(calls).forEach((mock) => mock.mockReset());
+      vi.clearAllMocks();
     },
   };
 });
+
+export { authStoreMocks };
 
 vi.mock("./store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./store.js")>()),
   getRuntimeAuthProfileStoreSnapshot: () => authStoreMocks.state.store,
   findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
     authStoreMocks.state.store.profiles[profileId],
-  hasAnyAuthProfileStoreSource: authStoreMocks.hasAnyAuthProfileStoreSource,
 }));
+vi.mock("./source-check.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./source-check.js")>()),
+  hasAnyAuthProfileStoreSourceAsync: authStoreMocks.hasAnyAuthProfileStoreSourceAsync,
+}));
+// mock-isolation: Session override cases use the fixture store without loading host credentials.
 vi.mock("./store-runtime.js", () => ({
-  ensureAuthProfileStore: authStoreMocks.ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync: authStoreMocks.ensureAuthProfileStoreAsync,
+  loadAuthProfileStoreForRuntimeAsync: async () => authStoreMocks.state.store,
 }));
 
-vi.mock("./usage.js", () => ({
-  isProfileInCooldown: authStoreMocks.isProfileInCooldown,
-}));
+// mock-isolation: Session selection uses controlled cooldown state without runtime usage writes.
+vi.mock("./usage.js", () => ({ isProfileInCooldown: authStoreMocks.isProfileInCooldown }));
 
 vi.mock("../../plugins/provider-model-routes.js", () => ({
   // Synthetic route IDs in this fixture are already canonical.
@@ -66,107 +74,72 @@ vi.mock("../../plugins/provider-model-routes.js", () => ({
   resolveProviderModelRoutes: authStoreMocks.resolveProviderModelRoutes,
 }));
 
-export const { clearSessionAuthProfileOverride, resolveSessionAuthSelection } =
-  await import("./session-override.js");
-export { authStoreMocks };
-
-afterEach(() => {
-  authStoreMocks.reset();
-  vi.clearAllMocks();
-});
+const { resolveSessionAuthSelection } = await import("./session-override.js");
+afterEach(() => authStoreMocks.reset());
 
 export async function withAuthState<T>(run: (state: OpenClawTestState) => Promise<T>): Promise<T> {
-  return await withOpenClawTestState(
-    {
-      layout: "state-only",
-      prefix: "openclaw-auth-",
-    },
-    run,
-  );
+  return await withOpenClawTestState({ layout: "state-only", prefix: "openclaw-auth-" }, run);
 }
 
-export function createAuthStoreWithProfiles(params: {
-  profiles: AuthProfileStore["profiles"];
-  order?: Record<string, string[]>;
-}): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: params.profiles,
-    ...(params.order ? { order: params.order } : {}),
-  };
-}
-
-export function configureProviderRoutes(params: {
-  provider: string;
-  modelId: string;
-  requirements: ProviderModelRouteAuthRequirement[];
-}): void {
-  const routes = params.requirements.map<ProviderModelRouteCandidate>((authRequirement, index) => ({
+export function configureProviderRoutes(
+  requirements: ProviderModelRouteAuthRequirement[],
+  modelId = "gpt-5.6-sol",
+): void {
+  const routes = requirements.map<ProviderModelRouteCandidate>((authRequirement, index) => ({
     api: authRequirement === "api-key" ? "openai-responses" : "openai-chatgpt-responses",
     baseUrl: `https://route-${index}.example.test`,
     authRequirement,
     requestTransportOverrides: "none",
   }));
   const first = routes[0];
-  if (!first) {
-    return;
+  if (first) {
+    authStoreMocks.state.routeResolutions.set(`openai\0${modelId}`, {
+      kind: "routes",
+      routes: [first, ...routes.slice(1)],
+    });
   }
-  authStoreMocks.state.routeResolutions.set(`${params.provider}\0${params.modelId}`, {
-    kind: "routes",
-    routes: [first, ...routes.slice(1)],
-  });
 }
 
 export async function prepareCooldownAuthState(
   state: OpenClawTestState,
-  options: {
-    profileIds?: string[];
-    usageStats?: AuthProfileStore["usageStats"];
-  } = {},
+  options: { profileIds?: string[] } & Pick<AuthProfileStore, "usageStats"> = {},
 ): Promise<string> {
   const agentDir = state.agentDir();
   await fs.mkdir(agentDir, { recursive: true });
   authStoreMocks.state.hasSource = true;
   const profileIds = options.profileIds ?? [TEST_PRIMARY_PROFILE_ID];
   authStoreMocks.state.store = {
-    ...createAuthStoreWithProfiles({
-      profiles: Object.fromEntries(
-        profileIds.map((profileId) => [
-          profileId,
-          { type: "api_key" as const, provider: "openai", key: "sk-test" },
-        ]),
-      ),
-      order: { openai: profileIds },
-    }),
+    version: 1,
+    profiles: Object.fromEntries(
+      profileIds.map((profileId) => [profileId, createApiKeyCredential("openai", "sk-test")]),
+    ),
+    order: { openai: profileIds },
     ...(options.usageStats ? { usageStats: options.usageStats } : {}),
   };
   authStoreMocks.isProfileInCooldown.mockReturnValue(true);
   return agentDir;
 }
 
-export async function resolveSession(params: {
-  agentDir: string;
-  sessionEntry: SessionEntry;
-  sessionStore: Record<string, SessionEntry>;
-  cfg?: OpenClawConfig;
-  provider?: string;
-  sessionKey?: string;
-  storePath?: string;
-  isNewSession?: boolean;
-}): Promise<string | undefined> {
-  return (
-    await resolveSessionAuthSelection({
-      cfg: params.cfg ?? ({} as OpenClawConfig),
-      provider: params.provider ?? "openai",
-      modelId: params.sessionEntry.model ?? "model-x",
-      agentDir: params.agentDir,
-      sessionEntry: params.sessionEntry,
-      sessionStore: params.sessionStore,
-      sessionKey: params.sessionKey ?? "agent:main:main",
-      storePath: params.storePath,
-      isNewSession: params.isNewSession ?? false,
-    })
-  )?.profileId;
+type SelectionOptions = Partial<Parameters<typeof resolveSessionAuthSelection>[0]>;
+export function resolveSessionSelection(
+  params: SelectionOptions & { agentDir: string; sessionEntry: SessionEntry },
+) {
+  return resolveSessionAuthSelection({
+    ...params,
+    sessionStore: params.sessionStore ?? {
+      [params.sessionKey ?? "agent:main:main"]: params.sessionEntry,
+    },
+    agentId: params.agentId ?? "main",
+    cfg: params.cfg ?? {},
+    provider: params.provider ?? "openai",
+    modelId: params.modelId ?? params.sessionEntry.model ?? "model-x",
+    sessionKey: params.sessionKey ?? "agent:main:main",
+    isNewSession: params.isNewSession ?? false,
+  });
+}
+
+export async function resolveSession(params: Parameters<typeof resolveSessionSelection>[0]) {
+  return (await resolveSessionSelection(params))?.profileId;
 }
 
 export function createAutomaticSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {

@@ -1,31 +1,30 @@
 import { randomUUID } from "node:crypto";
-import { triageAfterFailure } from "../../commands/triage-failure.js";
-import {
-  sanitizeTriageUpdateFailure,
-  writeTriageUpdateFailure,
-} from "../../commands/triage-update.js";
+import { sanitizeTriageUpdateFailure } from "../../commands/triage-update.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveInstallationTarget } from "../../infra/installation-target-context.js";
 import { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-plane-sentinel.js";
 import { preparePublicUpdateFailureIdentifiers } from "../../infra/update-failure-public-identifiers.js";
+import { writeTriageUpdateFailure } from "../../infra/update-failure-report-artifact.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateTriageTarget as TriageTarget } from "../../infra/update-triage.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
-import { defaultRuntime } from "../../runtime.js";
-import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
+import { defaultRuntime, ExitError } from "../../runtime.js";
+import { classifyUpdateOutcome } from "../../shared/update-outcome-classification.js";
+import { isVerifiedUpdateRollback } from "../../shared/update-outcome.js";
+import { formatInstallationTargetCommand } from "../installation-target-format.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { isTerminalInteractive } from "../terminal-interactivity.js";
 import { resolveNodeRunner, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";
 import { runInteractiveUpdateFailureAction } from "./update-command-report.js";
 import {
-  isVerifiedUpdateRollback,
   reportUpdateCommandPendingRecovery,
   UpdateCommandFailure,
   UpdateCommandFinalizedRecoveryFailure,
   UpdateCommandPendingRecoveryFailure,
 } from "./update-command-result.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
 export type UpdateTriageTarget = TriageTarget & { failureResult?: UpdateRunResult };
 
@@ -72,16 +71,24 @@ export async function prepareUpdateCommandFailureTriage(
     invocationCwd: opts.invocationCwd,
   });
   return async (error) => {
+    if (error instanceof ExitError) {
+      throw error;
+    }
     // Recovery can replace files still owned by an uncertain command. Preserve
     // the original failure and retained executor for its recovery owner.
     if (hasCommandProcessCleanupError(error)) {
       throw error;
     }
-    if (error instanceof UpdateCommandFinalizedRecoveryFailure) {
-      return exitCliAfterOutput(defaultRuntime, error.exitCode);
+    const causes = collectNestedErrorCandidates(error);
+    const finalized = causes.find(
+      (cause) => cause instanceof UpdateCommandFinalizedRecoveryFailure,
+    );
+    if (finalized) {
+      return exitCliAfterOutput(defaultRuntime, finalized.exitCode);
     }
-    if (error instanceof UpdateCommandPendingRecoveryFailure) {
-      return reportUpdateCommandPendingRecovery(error, opts);
+    const pending = causes.find((cause) => cause instanceof UpdateCommandPendingRecoveryFailure);
+    if (pending) {
+      return reportUpdateCommandPendingRecovery(pending, opts);
     }
     const reportedFailure = error instanceof UpdateCommandFailure;
     if (reportedFailure && error.result.reason === "invalid-dev-target") {
@@ -110,33 +117,30 @@ export async function prepareUpdateCommandFailureTriage(
             ...(target.failureResult ? { result: target.failureResult } : {}),
             error: formatErrorMessage(error),
           };
-      const automatic =
-        mode !== "interactive" && reportedFailure ? error.automaticTriage : undefined;
-      if (automatic || target.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1") {
-        let updateResultPath: string | undefined;
+      if (target.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1") {
         try {
           const meta = await readControlPlaneUpdateSentinelMeta(target.env);
-          if (!automatic && !meta?.triageContextPath) {
+          if (!meta?.triageContextPath) {
             throw new Error("Managed update triage context path is unavailable.", { cause: error });
           }
-          updateResultPath = await writeTriageUpdateFailure(failure, {
+          const updateResultPath = await writeTriageUpdateFailure(failure, {
             env: target.env,
             ...(meta?.triageContextPath ? { outputPath: meta.triageContextPath } : {}),
           });
+          defaultRuntime.error(
+            `To start a repair agent, run ${formatInstallationTargetCommand(
+              ["openclaw", "triage", "--run", "--update-result", updateResultPath],
+              resolveInstallationTarget(target.env),
+              { env: target.env },
+            )}`,
+          );
         } catch (exportError) {
           const diagnostic = sanitizeTriageUpdateFailure(
             { error: formatErrorMessage(exportError) },
             { env: target.env, stateDir: resolveStateDir(target.env) },
           );
           defaultRuntime.error(
-            `${automatic ? "Update" : "Managed update"} failure diagnostics could not be saved: ${diagnostic.error}`,
-          );
-        }
-        // Finalization records eligibility. The outer owner starts one repair only
-        // after locks and service compensation unwind; otherwise the helper owns diagnostics.
-        if (automatic) {
-          await withOwnedManagedUpdateEnv(target.env, () =>
-            triageAfterFailure(defaultRuntime, automatic, undefined, updateResultPath),
+            `Managed update failure diagnostics could not be saved: ${diagnostic.error}`,
           );
         }
       } else {

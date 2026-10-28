@@ -1,129 +1,77 @@
-import type { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
-import { getRuntimeConfig } from "../../../config/config.js";
+import type { AgentWaitParams } from "../../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ResolveContextEngineOptions } from "../../../context-engine/registry.js";
-import type { ContextEngine } from "../../../context-engine/types.js";
 import type { callGateway } from "../../../gateway/call.js";
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
-import { onAgentEvent, type AgentEventPayload } from "../../../infra/agent-events.js";
 import type { PluginRegistry } from "../../../plugins/registry-types.js";
 import { createLazyImportLoader, createLazyPromiseLoader } from "../../../shared/lazy-promise.js";
 import { importRuntimeModule } from "../../../shared/runtime-import.js";
-import { resolveAgentTimeoutMs } from "../../timeout.js";
-import {
-  persistSubagentRunsToDisk,
-  persistSubagentRunsToDiskOrThrow,
-  restoreSubagentRunsFromDisk,
-} from "./subagent-registry-state.js";
 
-type SubagentAnnounceModule = Pick<
-  typeof import("../announce/subagent-announce.js"),
-  "captureSubagentCompletionReply" | "runSubagentAnnounceFlow"
->;
-type RequesterSettleWakeModule = Pick<
-  typeof import("../announce/subagent-announce.requester-settle-wake.js"),
-  "maybeWakeRequesterAfterAllChildrenSettled"
->;
-type BrowserCleanupModule = Pick<
-  typeof import("../../../browser-lifecycle-cleanup.js"),
-  "cleanupBrowserSessionsForLifecycleEnd"
->;
-
-export type SubagentRegistryDeps = {
-  callGateway: typeof callGateway;
-  captureSubagentCompletionReply: SubagentAnnounceModule["captureSubagentCompletionReply"];
-  cleanupBrowserSessionsForLifecycleEnd: typeof cleanupBrowserSessionsForLifecycleEnd;
-  getRuntimeConfig: typeof getRuntimeConfig;
-  onAgentEvent: (listener: (event: AgentEventPayload) => void) => () => void;
-  persistSubagentRunsToDisk: typeof persistSubagentRunsToDisk;
-  persistSubagentRunsToDiskOrThrow: typeof persistSubagentRunsToDiskOrThrow;
-  resolveAgentTimeoutMs: typeof resolveAgentTimeoutMs;
-  restoreSubagentRunsFromDisk: typeof restoreSubagentRunsFromDisk;
-  runSubagentAnnounceFlow: SubagentAnnounceModule["runSubagentAnnounceFlow"];
-  maybeWakeRequesterAfterAllChildrenSettled: RequesterSettleWakeModule["maybeWakeRequesterAfterAllChildrenSettled"];
-  ensureContextEnginesInitialized?: () => void;
-  loadAgentRuntimePluginRegistryHandle?: (params: {
-    config: OpenClawConfig;
-    workspaceDir?: string;
-    allowGatewaySubagentBinding?: boolean;
-  }) => PluginRegistry | undefined;
-  resolveContextEngine?: (
-    cfg?: OpenClawConfig,
-    options?: ResolveContextEngineOptions,
-  ) => Promise<ContextEngine>;
-};
-
-const subagentAnnounceLoader = createLazyImportLoader<SubagentAnnounceModule>(
+const subagentAnnounceLoader = createLazyImportLoader(
   () => import("../announce/subagent-announce.js"),
 );
-const browserCleanupLoader = createLazyImportLoader<BrowserCleanupModule>(
+const browserCleanupLoader = createLazyImportLoader(
   () => import("../../../browser-lifecycle-cleanup.js"),
 );
-
-async function loadSubagentAnnounceModule(): Promise<SubagentAnnounceModule> {
-  return await subagentAnnounceLoader.load();
-}
-
-async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
-  BrowserCleanupModule["cleanupBrowserSessionsForLifecycleEnd"]
-> {
-  return (await browserCleanupLoader.load()).cleanupBrowserSessionsForLifecycleEnd;
-}
-
-const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
-  callGateway: (request) => bindGatewayLifecycleRequest()(request),
-  captureSubagentCompletionReply: async (sessionKey, options) =>
-    (await loadSubagentAnnounceModule()).captureSubagentCompletionReply(sessionKey, options),
-  cleanupBrowserSessionsForLifecycleEnd: async (params) =>
-    (await loadCleanupBrowserSessionsForLifecycleEnd())(params),
-  getRuntimeConfig,
-  onAgentEvent,
-  persistSubagentRunsToDisk,
-  persistSubagentRunsToDiskOrThrow,
-  resolveAgentTimeoutMs,
-  restoreSubagentRunsFromDisk,
-  runSubagentAnnounceFlow: async (params) =>
-    (await loadSubagentAnnounceModule()).runSubagentAnnounceFlow(params),
-  maybeWakeRequesterAfterAllChildrenSettled: async (params) =>
-    (
-      await import("../announce/subagent-announce.requester-settle-wake.js")
-    ).maybeWakeRequesterAfterAllChildrenSettled(params),
-};
-
-export let subagentRegistryDeps: SubagentRegistryDeps = defaultSubagentRegistryDeps;
-type SubagentRegistryRuntimeModule = {
-  ensureContextEnginesInitialized: () => void;
-  resolveContextEngine: (
-    cfg?: OpenClawConfig,
-    options?: ResolveContextEngineOptions,
-  ) => Promise<ContextEngine>;
-};
-
-const SUBAGENT_REGISTRY_RUNTIME_SPEC = ["./subagent-registry.runtime", ".js"] as const;
-
-// All three capabilities belong to the same lazy runtime module and lifecycle.
 const subagentRegistryRuntimeLoader = createLazyPromiseLoader(() =>
-  importRuntimeModule<SubagentRegistryRuntimeModule>(
-    import.meta.url,
-    SUBAGENT_REGISTRY_RUNTIME_SPEC,
-  ),
+  importRuntimeModule<typeof import("./subagent-registry.runtime.js")>(import.meta.url, [
+    "./subagent-registry.runtime",
+    ".js",
+  ]),
 );
 const subagentRegistryPluginRuntimeLoader = createLazyPromiseLoader(
   () => import("../../runtime-plugins.js"),
 );
+const preparedRuntimeLoader = createLazyPromiseLoader(
+  () => import("../../prepared-model-runtime.js"),
+);
+
+export const loadSubagentAnnounceModule = subagentAnnounceLoader.load;
+export const loadSubagentBrowserCleanupModule = browserCleanupLoader.load;
+export const callSubagentRegistryGateway: typeof callGateway = (request) =>
+  bindGatewayLifecycleRequest()(request);
+
+export function createSubagentRegistryGatewayCaller(
+  getGatewayContextResolver: () => GatewayContextResolver | undefined,
+): typeof callGateway {
+  return async <T>(request: Parameters<typeof callGateway>[0]) => {
+    if (request.method === "agent.wait") {
+      const gatewayRuntime = getGatewayContextResolver()?.()?.recoveryRuntime;
+      if (gatewayRuntime) {
+        // Registry waits are Gateway-owned lifecycle work. Keep them on the
+        // owning instance when one exists; standalone processes authenticate normally.
+        return await gatewayRuntime.waitForAgent<T>(
+          // SAFETY: the instance-owned wait facade validates AgentWaitParams before execution.
+          (request.params ?? {}) as AgentWaitParams,
+          request.timeoutMs ?? undefined,
+        );
+      }
+    }
+    return await callSubagentRegistryGateway<T>(request);
+  };
+}
 
 export async function loadSubagentRegistryPluginRuntimeHandle(params: {
   config: OpenClawConfig;
+  agentId?: string;
+  agentDir?: string;
   workspaceDir?: string;
   allowGatewaySubagentBinding?: boolean;
 }): Promise<PluginRegistry | undefined> {
-  const configuredLoader = subagentRegistryDeps.loadAgentRuntimePluginRegistryHandle;
-  if (configuredLoader) {
-    return configuredLoader(params);
+  if (params.allowGatewaySubagentBinding && params.agentDir) {
+    const prepared = await preparedRuntimeLoader.load();
+    const registry = prepared.getPreparedInboundPluginRegistry({
+      ...params,
+      agentDir: params.agentDir,
+    });
+    if (registry) {
+      return registry;
+    }
   }
-  return (await subagentRegistryPluginRuntimeLoader.load()).loadAgentRuntimePluginRegistryHandle(
-    params,
-  );
+  return (
+    await subagentRegistryPluginRuntimeLoader.load()
+  ).loadAgentRuntimePluginRegistryHandleAsync(params);
 }
 
 export async function resolveSubagentRegistryContextEngine(
@@ -131,23 +79,8 @@ export async function resolveSubagentRegistryContextEngine(
   options?: ResolveContextEngineOptions,
 ) {
   const runtime = await subagentRegistryRuntimeLoader.load();
-  const ensureContextEnginesInitialized =
-    subagentRegistryDeps.ensureContextEnginesInitialized ?? runtime.ensureContextEnginesInitialized;
-  const resolveContextEngine =
-    subagentRegistryDeps.resolveContextEngine ?? runtime.resolveContextEngine;
-  ensureContextEnginesInitialized();
-  return await resolveContextEngine(cfg, options);
-}
-
-export function setSubagentRegistryDepsForTest(overrides?: Partial<SubagentRegistryDeps>) {
-  subagentRegistryDeps = overrides
-    ? { ...defaultSubagentRegistryDeps, ...overrides }
-    : defaultSubagentRegistryDeps;
-}
-
-export function resetSubagentRegistryRuntimeLoadersForTests() {
-  subagentRegistryRuntimeLoader.clear();
-  subagentRegistryPluginRuntimeLoader.clear();
-  subagentAnnounceLoader.clear();
-  browserCleanupLoader.clear();
+  return await runtime.resolveContextEngine(cfg, {
+    ...options,
+    initialize: runtime.ensureContextEnginesInitialized,
+  });
 }

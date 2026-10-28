@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" fill="none">
+  <defs>
+    <linearGradient id="ink" x1="0" y1="1000" x2="1600" y2="0" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#3d6d88"/>
+      <stop offset="0.7" stop-color="#1f6f8f"/>
+      <stop offset="1" stop-color="#3d6d88"/>
+    </linearGradient>
+    <radialGradient id="quiet">
+      <stop offset="0.15" stop-color="white" stop-opacity="0"/>
+      <stop offset="0.8" stop-color="white" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="white"/>
+    </radialGradient>
+    <mask id="edges"><path fill="url(#quiet)" d="M0 0h1600v1000H0z"/></mask>
+  </defs>
+  <g stroke="url(#ink)" stroke-width="2" opacity="0.035" mask="url(#edges)">
+    <path d="M850-30C1000 170 1210-110 1390 90S1710 130 1780 290M835 10C985 210 1195-70 1375 130S1695 170 1765 330M820 50C970 250 1180-30 1360 170S1680 210 1750 370M805 90C955 290 1165 10 1345 210S1665 250 1735 410M790 130C940 330 1150 50 1330 250S1650 290 1720 450"/><path d="M-100 700C100 560 240 960 440 810S800 930 910 1060M-100 740C100 600 240 1000 440 850S800 970 910 1100M-100 780C100 640 240 1040 440 890S800 1010 910 1140M-100 820C100 680 240 1080 440 930S800 1050 910 1180"/>
+  </g>
+</svg>

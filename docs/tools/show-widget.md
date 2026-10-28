@@ -22,7 +22,9 @@ non-code visualizations that belong together.
 
 ## How widgets work
 
-For HTML widgets, OpenClaw core validates `widget_code` by parsing every inline JavaScript `<script>` (classic and module), skipping scripts with `src` or a non-JavaScript `type`, then wraps it once in the canonical HTML document. Core rejects the call with the line and column of the first syntax error, so a widget with a broken script is never hosted. For an inline client, core stores that document as a Canvas document and returns a preview handle. The Control UI reads the document over its authenticated Gateway connection and renders it through the dedicated-origin, double-iframe sandbox used by dashboard widgets and MCP Apps. The widget frame does not need its own login session. iOS, Android, macOS, and Linux Quick Chat use isolated web views. Full chat clients restore the widget after history reload. Quick Chat keeps the widget for its active reply.
+For HTML widgets, OpenClaw core validates `widget_code` by parsing every inline JavaScript `<script>` (classic and module), skipping scripts with `src` or a non-JavaScript `type`, then wraps it once in the standard HTML document. Core rejects the call with the line and column of the first syntax error, so a widget with a broken script is never hosted. For an inline client, core stores that document as a Canvas document and returns a preview handle. The Control UI reads the document over its authenticated Gateway connection and renders it through the dedicated-origin, double-iframe sandbox used by dashboard widgets and MCP Apps. In the Control UI, conversation readers, including guests, can view its saved inline widgets. [Public conversation links](/web/urls#public-session-transcripts) show the same saved inline widgets read-only in a sandboxed frame, without prompts or host APIs. New widgets appear automatically when their result is saved; conversation access is checked again when loading them. The widget frame does not need its own login session. iOS, Android, macOS, and Linux Quick Chat use isolated web views. Full chat clients restore the widget after history reload. Quick Chat keeps the widget for its active reply.
+
+Syntax-error snippets and parser messages preserve complete Unicode code points when clipped to their existing UTF-16 limits.
 
 Channel plugins can register a contextual presenter behind the same core tool. In a configured Discord session, core hands the composed document to the Discord presenter, which stores it and posts the Activity button in the current channel. The model still makes one `show_widget` call. There is no transport-specific widget tool or content kind.
 
@@ -30,9 +32,9 @@ In Control UI sessions, a Canvas widget can also be pinned to the session dashbo
 
 For browser embedding, the wrapper document injects six small host bridges around the widget code:
 
-- A size reporter posts the rendered content height to the embedding chat. The chat clamps that height and fits the iframe (48 to 8000 pixels).
+- A size reporter posts the rendered content height, including child margins and floats, to the embedding chat. The chat clamps that height and fits the iframe (48 to 8000 pixels).
 - A host bridge defines a global `sendPrompt(text)` helper plus the structured `openclaw.prompt`, `openclaw.state`, `openclaw.data`, and `openclaw.cron` APIs. `sendPrompt(text)` is the fire-and-forget form of `openclaw.prompt.send`. Inline chat prompts retain their private message channel. Dashboard APIs use a view-ticket-bound request channel. See [Interactive widgets](#interactive-widgets) and [Dashboard capabilities](#dashboard-capabilities).
-- An error reporter captures uncaught script and event-handler exceptions and unhandled promise rejections. It sends at most three distinct messages per document load, with messages capped at 500 UTF-16 units, source basenames at 200, and optional integer line and column numbers. The Control UI shows a notice and forwards one report per document and chat session per page load to the Gateway as a session wake event, with an additional shared limit of 10 reports per key per 60 seconds (up to 100 tracked keys). Reports are forwarded to the agent only for widgets rendered within ten minutes of their message. Older restored history shows the notice without waking the agent. If the session already has an active run, the event stays queued and the immediate wake retries until the session lane is free, so the model sees it on its next available turn. The wake turn runs without the originating client capabilities, so `show_widget` can be unavailable there. The report asks the model to reply with the corrected code and show it on the next turn. Native apps do not report runtime errors yet.
+- An error reporter captures uncaught script and event-handler exceptions and unhandled promise rejections. It sends at most three distinct messages per document load, with messages capped at 500 UTF-16 units, source basenames at 200, and optional integer line and column numbers. The Control UI shows a notice and forwards one report per document and chat session per page load to the Gateway as a session wake event, with an additional shared limit of 10 reports per key per 60 seconds (up to 100 tracked keys). Reports are forwarded to the agent only for widgets rendered within ten minutes of their message. Older restored history shows the notice without waking the agent. If the session already has an active run, the event stays queued and the immediate wake retries until the session lane is free, so the model sees it on its next available turn. The wake turn retains the session's tool listing, but has no originating inline renderer, so inline `show_widget` calls are refused with guidance to retry from the open Control UI. The report asks the model to reply with the corrected code and show it on the next turn. Native apps do not report runtime errors yet.
 - A theme bridge listens for the Control UI's current design tokens and applies them as CSS variables. It does this on load and again on every theme change.
 - A snapshot bridge renders the current widget document as a PNG when the embedding chat requests an export.
 - A chat-host bridge hides embedded scrollbar chrome when the widget runs inline while preserving scrolling behavior.
@@ -47,7 +49,7 @@ When the Gateway automatically resumes an interrupted Control UI turn after a re
 
 A `status: "pinned"` tool result means the widget is on the session dashboard. Open that dashboard tab in the Control UI, or use `dashboard` with `action: "focus_tab"` and the saved widget's `tabId` when the tool is available. Widget hosting URLs are internal rendering resources and should not be opened in the Browser panel to substitute for widget presentation.
 
-Capability transport covers embedded, Codex app-server, and CLI-backed model backends. Grant-authenticated MCP callers without `inline-widgets` remain fail closed unless their trusted run context matches a presenter. Authenticated direct HTTP `tools/invoke` requests cannot request inline rendering, but a request carrying eligible current-channel context can use the matching presenter. Authentication never bypasses presenter or route eligibility.
+Capability transport covers embedded, Codex app-server, and CLI-backed model backends. Grant-authenticated MCP callers without `inline-widgets` are rejected unless their trusted run context matches a presenter. Authenticated direct HTTP `tools/invoke` requests cannot request inline rendering, but a request carrying eligible current-channel context can use the matching presenter. Authentication never bypasses presenter or route eligibility.
 
 ## Design system
 
@@ -143,19 +145,19 @@ choose libraries accordingly. CDN requests reveal the client's IP and requested
 asset to the CDN; widget documents use a no-referrer policy.
 
 Existing stored inline documents retain their original document policy. Recreate
-an older widget to use external libraries; changing the host policy does not
+an older widget to use external libraries or HTTPS media; changing the host policy does not
 rewrite chat history.
 
 ## Use the tool
 
-The core tool requires `title` and one content input: `widget_code` for HTML or registered source, or `report` for a native dashboard report.
+The core tool requires `title` and one content input: `widget_code` for HTML or SVG, or `report` for a native dashboard report.
 
 <ParamField path="title" type="string" required>
   Short widget title shown by the destination surface. HTML documents also use it as the document title. Discord accepts up to 80 characters.
 </ParamField>
 
 <ParamField path="widget_code" type="string">
-  Required for HTML, SVG, or registered source. Omit when providing `report`. For HTML, core parses every inline JavaScript `<script>` (classic and module), skipping scripts with `src` or a non-JavaScript `type`. The call is rejected with the line and column of the first syntax error, so a widget with a broken script is never hosted. For inline-widget clients, input beginning with `<svg` after trimming is rendered in SVG mode. Maximum length is 262,144 characters. The Discord presenter accepts HTML source up to 48 KiB. A Discord-only route does not advertise or accept registered non-HTML content kinds.
+  Required for HTML or SVG. Omit when providing `report`. For HTML, core parses every inline JavaScript `<script>` (classic and module), skipping scripts with `src` or a non-JavaScript `type`. The call is rejected with the line and column of the first syntax error, so a widget with a broken script is never hosted. For inline-widget clients, input beginning with `<svg` after trimming is rendered in SVG mode. HTML and SVG accept up to 10 MiB of UTF-8 data, including OpenClaw's wrapper in the final document. The Discord presenter accepts HTML source up to 48 KiB.
 </ParamField>
 
 <ParamField path="report" type="object">
@@ -166,8 +168,8 @@ Discord also accepts optional `button_label` text for the Activity launch button
 
 The core `show_widget` tool also accepts these optional dashboard placement fields, including when Discord is the presentation destination:
 
-- `kind`: `html` by default, plus active registered source kinds when available. Applies to `widget_code`. Omit with `report`.
-- `pin`: also place an HTML or registered widget on the session dashboard. Required for reports and on the pinned-only scheduled surface.
+- `kind`: `html` (the default). Applies to `widget_code`. Omit with `report`.
+- `pin`: also place an HTML widget on the session dashboard. Required for reports and on the pinned-only scheduled surface.
 - `name`: stable widget name. Defaults to a slug of `title`.
 - `tab`: destination tab slug.
 - `size`: one of `sm`, `md`, `lg`, `xl`, or `full`.
@@ -214,7 +216,7 @@ Use a report for a pinned summary made of text, metrics, tables, simple charts, 
 }
 ```
 
-The result names the pinned board widget. It creates no inline preview, native device panel, or Discord Activity. Do not combine `report` with `widget_code`, `kind`, `capabilities`, or device presentation. The report field does not change the registered source-kind namespace.
+The result names the pinned board widget. It creates no inline preview, native device panel, or Discord Activity. Do not combine `report` with `widget_code`, `kind`, `capabilities`, or device presentation.
 
 Each block has a required `type`:
 
@@ -236,6 +238,56 @@ When a widget presenter plugin is active, `presentation.target` also offers `nod
 
 If no eligible Mac is connected or the node command fails, the widget still appears inline in chat and the result explains how to recover. Pair a Mac running OpenClaw or open the macOS app, then retry. Widgets shown in a native panel are render-only. Widget actions are disabled there.
 
+## Audio and video
+
+HTML widgets can play direct HTTPS audio and video URLs in `<audio>` or `<video>`
+elements. This works in inline previews, pinned dashboards, and native panels.
+Small embedded `data:` clips and generated `blob:` media are also supported.
+Include playback controls so the user can start playback when the browser blocks
+autoplay. The format must be supported by the browser or native web view.
+In Control UI chat and pinned dashboards, the native video controls support fullscreen.
+
+```html
+<video controls playsinline preload="auto" src="https://example.com/video.mp4"></video>
+```
+
+In chat, scrolling over a video or other widget content continues through the
+conversation. A scrollable region inside the widget consumes the gesture until
+it reaches its edge, then passes the remaining movement to chat.
+
+The tool's authoring default is `preload="auto"`, which lets the browser load a
+first frame before playback without autoplaying. This can download media before
+the user presses Play; choose `metadata` or `none` explicitly when conserving
+bandwidth is more important than an initial frame. Browsers may limit preloading.
+Existing saved widgets keep their authored preload attributes.
+
+For a chosen cover image, supply a `poster` containing an embedded `data:` image.
+Widgets do not generate thumbnails automatically, and HTTPS poster images are
+blocked by the image policy. With `preload="none"` and no poster, browsers may
+show a black player until playback starts. YouTube page URLs are not direct video
+files, and YouTube iframes remain blocked inside widgets. In the Control UI, use a
+dedicated [YouTube card](/web/control-ui/chat#youtube-videos) instead:
+
+```text
+[embed url="https://www.youtube.com/watch?v=VIDEO_ID" title="Trailer" /]
+```
+
+Put this shortcode in the assistant reply, not in `widget_code`. It needs no
+`show_widget` call. On other surfaces, use a regular YouTube link.
+
+Media playback has its own content policy. It does not grant `fetch`, WebSocket,
+remote images, external scripts, or nested frames. API connections, including
+script-driven streaming that fetches media segments, still need the existing
+pinned-widget `capabilities.netOrigins` declaration and grant. Ordinary HTTP
+media URLs are not allowed; use HTTPS, including across redirects. Media hosts
+receive the client's request; keep private data and credentials out of media
+URLs. Widget documents use a no-referrer policy.
+
+Embedded media counts toward the 10 MiB UTF-8 HTML limit, including base64
+encoding, the surrounding HTML, and OpenClaw's wrapper. The same document limit
+applies to inline widgets and pinned dashboards. For larger clips, use a direct
+HTTPS URL or a normal media attachment instead of base64.
+
 ## Interactive widgets
 
 In the Control UI, widget scripts can drive the conversation. The wrapper document defines a global `sendPrompt(text)` function. Calling it submits `text` to the chat as if the user had typed and sent the message. Wire it to buttons or other controls to build interactive flows such as pickers, quizzes, or drill-down dashboards. Native apps render interactive widget code but do not expose this chat prompt bridge.
@@ -246,7 +298,7 @@ In the Control UI, widget scripts can drive the conversation. The wrapper docume
 
 Every prompt is validated on both sides of the frame boundary:
 
-- `sendPrompt` requires [transient user activation](https://developer.mozilla.org/en-US/docs/Web/Security/User_activation) inside the widget: it only works in the few seconds after the user clicks or presses a key in the widget, so wire it to buttons and other click targets — calling it automatically on load does nothing. The bridge keeps the sending endpoint private to itself and fails closed in browsers that do not expose user activation, so widget code cannot bypass the check.
+- `sendPrompt` requires [transient user activation](https://developer.mozilla.org/en-US/docs/Web/Security/User_activation) inside the widget: it only works in the few seconds after the user clicks or presses a key in the widget, so wire it to buttons and other click targets — calling it automatically on load does nothing. The bridge keeps the sending endpoint private to itself and rejects prompts in browsers that do not expose user activation, so widget code cannot bypass the check.
 - Prompt authority belongs to the original widget document only. The trusted bridge offers its channel endpoint to the chat before widget code can run or navigate the frame, the chat adopts only that first offer, and the channel dies with the document on navigation. Externally allowed embed URLs are never adopted.
 - The widget frame must be visible in the chat transcript and hold focus. That is an additional host-observed signal that the user is actually interacting with this widget.
 - The text must be non-empty after trimming and at most 4,000 characters.
@@ -257,7 +309,11 @@ Accepted prompts appear in the transcript as regular user messages and start a n
 
 ## Dashboard capabilities
 
-Pinned HTML and registered-source widgets expose one ticket-bound host API. An explicit [session permission mode](/gateway/permission-modes) determines how declared capabilities are approved: **Full access** grants them immediately. **Workspace** uses an AI reviewer and rejects anything it does not allow. **Guarded** shows an **Allow** / **Reject** card. **Read only** rejects them. Without an explicit session mode, the equivalent configured exec approval policy applies.
+Pinned HTML widgets expose one ticket-bound host API. An explicit [session permission mode](/gateway/permission-modes) determines how declared capabilities are approved: **Full access** grants them immediately. **Workspace** uses an AI reviewer and rejects anything it does not allow. **Guarded** shows an **Allow** / **Reject** card. **Read only** rejects them. Without an explicit session mode, the equivalent configured exec approval policy applies.
+
+To inspect a widget's approved network origins and host tools, hover over its
+**Granted** badge or reach the badge with **Tab**. **Escape** dismisses the
+capabilities tooltip; **Enter** reopens it without changing the grant.
 
 - `openclaw.host.controlUiBaseUrl` exposes the Control UI origin plus its configured base path after the dashboard host initializes. It is `null` before initialization and outside the dashboard, so read it in the link's click handler rather than when the widget script first runs.
 - `openclaw.prompt.send(text)` requires transient user activation and posts a visible composer message. Declaring and receiving the `prompt` tool grant skips the extra per-click confirmation. Validation, focus checks, and rate limits still apply.
@@ -316,10 +372,10 @@ including metadata from private repositories accessible to the selected agent
 identity.** The host selects the agent override, then the configured System
 identity, then native GitHub authentication. It never uses the Control UI
 preview credential or a human's publication-only **My GitHub** connection.
-A configured but unavailable identity fails closed with reconnect guidance.
+A configured but unavailable identity blocks the request with reconnect guidance.
 It does not retry anonymously or fall through to another account.
 
-Before saving an HTML or registered widget declaring this binding, the Gateway
+Before saving an HTML widget declaring this binding, the Gateway
 verifies the selected identity. An unavailable identity or retired caller fails
 without replacing an existing widget, creating a pending grant, or broadcasting
 a change. Reconnect the agent's GitHub identity in Settings and retry. Pinning
@@ -337,23 +393,29 @@ read. Ordinary widgets and MCP App tool names do not trigger this identity check
 | `excludePullRequests` | Boolean; default `true`. GitHub omits embedded pull-request objects, not pull-request-triggered runs.                                                                                  |
 
 Other fields, including identity overrides, URLs, headers, and methods, are
-rejected. The result keeps GitHub's `{ total_count, workflow_runs }` shape.
+rejected. The result keeps GitHub's `{ total_count, workflow_runs }` fields.
 Each run contains only `id`, `name`, `display_title`, `head_branch`, `status`,
 `conclusion`, `html_url`, `run_started_at`, `created_at`, `updated_at`, `event`,
 `workflow_id`, and `run_attempt`. No credentials or raw repository objects are
 returned. The upstream response is capped at 1 MiB and the projected run list
 at 30 entries. Successful reads are cached for about 30 seconds within the
 current Gateway, board identity, credential, repository, and filter scope.
+After that, a read returns the last successful result with `stale: true` while
+one background request refreshes it. Display a refreshing indicator when this
+flag is present. The next read uses the replacement result once it is ready.
+First reads and changes to the credential or filters still wait for GitHub.
 
 Rate limits, access denial, unavailable identity, and upstream failure return
-sanitized guidance. Redirects are refused. For a renamed repository, verify its
+sanitized guidance. A failed background refresh logs that guidance and removes
+the cached result, so the next read retries GitHub instead of reusing it.
+Redirects are refused. For a renamed repository, verify its
 new name and update both the read and grant. Each caller revalidates its widget,
 Gateway, and identity before receiving data, including shared reads and cache
 hits. Removing one widget does not fail another authorized widget's shared read.
 
 ## Security and storage
 
-Widget documents use restrictive Content Security Policies. Inline style and script and the listed public CDN scripts, stylesheets, and fonts are allowed; other external resource loads remain blocked. Registered content kinds can load their explicitly public static renderer assets from the isolated sandbox origin. Inline transcript widgets cannot make API connections. A pinned dashboard widget can fetch only exact HTTPS origins that the agent declared and the session policy granted.
+Widget documents use restrictive Content Security Policies. Inline style and script and the listed public CDN scripts, stylesheets, and fonts are allowed; other external resource loads remain blocked. Inline transcript widgets cannot make API connections. A pinned dashboard widget can fetch only exact HTTPS origins that the agent declared and the session policy granted.
 
 The Control UI's widget content iframe always omits `allow-same-origin`, even when the global embed mode is `trusted`, so widget scripts cannot read the parent application origin. With scripts enabled, the outer proxy runs on a dedicated origin and relays messages across the frame boundary. In `strict` mode, the Control UI still reads the document through its authenticated Gateway connection, but renders it without scripts or scripted interactions. Native clients use isolated, nonpersistent web views and block navigation away from the hosted widget. The core document host also serves sandbox-marked widgets with the resource policy and `sandbox allow-scripts` in the response header, so direct rendering still runs the widget in an opaque origin instead of an application origin. Only render widget code you are willing to execute in that isolated frame.
 

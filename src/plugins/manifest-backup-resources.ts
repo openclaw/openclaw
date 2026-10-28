@@ -1,13 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { hasNodeErrorCode, isPathInside } from "../infra/path-guards.js";
+import { listDatabaseEngineStores } from "../infra/database-engine/registry.js";
+import { ignoreMissingPath } from "../infra/errno.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import { isManifestPluginAvailableForControlPlane } from "./manifest-contract-eligibility.js";
 import { isActivatedManifestOwner } from "./manifest-owner-policy.js";
 import type { PluginManifestBackupResource } from "./manifest-types.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+
+const postgresFamilies = new Set<string>(
+  listDatabaseEngineStores()
+    .filter((store) => store.postgres)
+    .map((store) => store.id),
+);
 
 export type ResolvedPluginBackupResource = PluginManifestBackupResource & {
   pluginId: string;
@@ -26,10 +34,8 @@ function listPluginInstallRoots(env: NodeJS.ProcessEnv | undefined): string[] {
       .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
       .map((entry) => path.join(extensionsDir, entry.name));
   } catch (error) {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return [];
-    }
-    throw error;
+    ignoreMissingPath(error);
+    return [];
   }
 }
 
@@ -107,20 +113,20 @@ export function resolveActivatedPluginBackupInventory(params: {
       throw new Error(invalidDeclaration.message);
     }
     for (const plugin of snapshot.plugins) {
-      if (
-        !normalizedConfig.enabled ||
-        !plugin.backupResources?.length ||
-        !isActivatedManifestOwner({ plugin, normalizedConfig, rootConfig: params.config }) ||
-        !isManifestPluginAvailableForControlPlane({
+      const activated =
+        normalizedConfig.enabled &&
+        isActivatedManifestOwner({ plugin, normalizedConfig, rootConfig: params.config }) &&
+        isManifestPluginAvailableForControlPlane({
           snapshot,
           plugin,
           config: params.config,
-        })
-      ) {
-        continue;
-      }
-      for (const resource of plugin.backupResources) {
-        const key = `${plugin.id}\0${resource.scope}\0${resource.relativePath}\0${resource.disposition}`;
+        });
+      for (const resource of plugin.backupResources ?? []) {
+        // Retained databases still need matched capture when their plugin is disabled.
+        if (!activated && !postgresFamilies.has(resource.databaseFamily ?? plugin.id)) {
+          continue;
+        }
+        const key = `${plugin.id}\0${resource.scope}\0${resource.relativePath}\0${resource.disposition}\0${resource.databaseFamily ?? ""}`;
         if (!resources.has(key)) {
           resources.set(key, { pluginId: plugin.id, ...resource });
         }

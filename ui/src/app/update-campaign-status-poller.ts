@@ -4,9 +4,7 @@ export function createUpdateCampaignStatusPoller(params: {
   refresh: () => Promise<void>;
 }) {
   let timer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  let generation = 0;
   const stop = () => {
-    generation += 1;
     if (timer !== null) {
       globalThis.clearTimeout(timer);
       timer = null;
@@ -14,13 +12,11 @@ export function createUpdateCampaignStatusPoller(params: {
   };
   const poll = async () => {
     timer = null;
-    const currentGeneration = generation;
     if (params.canPoll()) {
       await params.refresh();
     }
-    if (currentGeneration === generation) {
-      sync();
-    }
+    // The owner retires polling eligibility before stopping; sync rechecks it after reads.
+    sync();
   };
   const sync = () => {
     if (!params.canPoll()) {

@@ -9,8 +9,7 @@ export function filterCodexVisionTools<T extends { name?: string }>(
     nativeImageInspectionEnabled: boolean;
   },
 ): T[] {
-  if (!params.modelHasVision || !params.nativeImageInspectionEnabled) {
-    return tools;
-  }
-  return tools.filter((tool) => tool.name !== "view_image");
+  return !params.modelHasVision || !params.nativeImageInspectionEnabled
+    ? tools
+    : tools.filter((tool) => tool.name !== "view_image");
 }

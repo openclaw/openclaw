@@ -18,6 +18,13 @@ spend limits, and backend failover without changing OpenClaw config.
     openclaw onboard --auth-choice litellm-api-key
     ```
 
+    Onboarding prompts for the proxy base URL. Press Enter to keep the `http://localhost:4000`
+    default, or enter your proxy's URL. After the API key, choose a model returned by the proxy's
+    `/v1/models` endpoint. The first advertised model is selected by default; you can also enter a
+    model ID manually. If discovery fails, onboarding shows the reason and asks for a manual ID.
+    If the configuration changes while credentials are being prepared, setup stops before
+    sending the discovery request. Rerun onboarding with the updated configuration.
+
     For non-interactive setup against a remote proxy, pass the proxy URL explicitly:
 
     ```bash
@@ -71,12 +78,12 @@ spend limits, and backend failover without changing OpenClaw config.
             maxTokens: 64000,
           },
           {
-            id: "gpt-6-astra",
-            name: "GPT-6 Astra",
-            reasoning: true,
-            input: ["text", "image"],
-            contextWindow: 1050000,
-            maxTokens: 128000,
+            id: "local-qwen",
+            name: "Local Qwen",
+            reasoning: false,
+            input: ["text"],
+            contextWindow: 32768,
+            maxTokens: 4096,
           },
         ],
       },
@@ -90,13 +97,26 @@ spend limits, and backend failover without changing OpenClaw config.
 }
 ```
 
-The default model onboarding writes is `litellm/claude-opus-4-6`.
+Interactive onboarding saves the chosen model as `litellm/<model-id>` and keeps authored model
+settings when that ID is already configured. Re-authentication keeps an existing default model
+and makes the selected model available. Non-interactive onboarding retains its
+`litellm/claude-opus-4-6` default. To change it after setup:
 
-In merge mode, onboarding with an explicit proxy URL preserves any authored provider models and
-otherwise leaves the provider model list empty for discovery. Run
-`openclaw models list --provider litellm --refresh --json` to list the proxy's models.
-With `models.mode: "replace"`, discovery is disabled, so onboarding keeps the documented default
-in the provider model list while preserving existing model definitions.
+```bash
+openclaw models list --provider litellm --refresh --json
+openclaw models set litellm/your-model-id
+```
+
+Interactive setup records the selected model in both merge and replace modes while preserving
+authored provider models. Non-interactive setup with an explicit proxy URL leaves the model list
+available for discovery in merge mode; replace mode keeps its documented default. Run
+`openclaw models list --provider litellm --refresh --json` to refresh the proxy's model list.
+
+Re-running authentication also combines case-variant provider keys, such as `LiteLLM` and `litellm`,
+into one canonical row while preserving authored provider options and model settings, including when
+activating a saved sign-in. Non-interactive
+reauthentication without `--custom-base-url` keeps the configured proxy URL, including when the
+existing provider key uses different casing.
 
 ## Image generation
 
@@ -130,6 +150,13 @@ LiteLLM can back the `image_generate` tool through OpenAI-compatible `/images/ge
 Loopback LiteLLM URLs (`http://localhost:4000`, `127.0.0.1`, `::1`, `host.docker.internal`) work
 without a global private-network override. For a LAN-hosted proxy, set
 `models.providers.litellm.request.allowPrivateNetwork: true` because the API key is sent to that host.
+
+Backends that answer with image URLs (`data[].url`, for example `dall-e-3`) work like base64
+results: OpenClaw downloads URLs at the configured provider origin automatically. Other private
+image hosts (including another port on loopback) require
+`models.providers.litellm.request.allowPrivateNetwork: true`. Redirects are checked at every hop.
+Downloads share the request deadline and the image size cap from `agents.defaults.mediaMaxMb`,
+without sending the LiteLLM API key or configured HTTP credentials to the image host.
 
 ## Advanced
 

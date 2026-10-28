@@ -4,10 +4,19 @@ import { parseArgs as parseNodeArgs } from "node:util";
 import { z } from "zod";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { execGhJson, workflowRunsApiArgs } from "./lib/plain-gh.mjs";
-import { readPrMetadata } from "./pr-lib/github.mjs";
+import {
+  createPrRollupReader,
+  FAILURE_CONCLUSIONS,
+  RollupPageSchema,
+  type RollupCheck,
+  type RollupPayload,
+  type RollupPage,
+} from "./lib/watch-pr-ci-rollup.mts";
+import { createCiRunReader } from "./lib/watch-pr-ci-run.mts";
+import { createPrMetadataReader } from "./pr-lib/github.mjs";
 
 const USAGE =
-  "Usage: node scripts/watch-pr-ci.mjs <pr-number> <head-sha> [--repo owner/repo] [--after run-id] [--attach-timeout 900] [--timeout 3600] [--interval 120] [--completion rollup|ci-run]";
+  "Usage: node scripts/watch-pr-ci.mjs <pr-number> <head-sha> [--repo owner/repo] [--after run-id] [--attach-timeout 900] [--timeout 3600] [--interval 120] [--completion rollup|ci-run] [--once]";
 
 const optional = <T,>(schema: z.ZodType<T>) => schema.optional().catch(undefined);
 const optionalNullable = <T,>(schema: z.ZodType<T>) => optional(schema.nullable());
@@ -20,55 +29,6 @@ const validArray = <T,>(schema: z.ZodType<T>) =>
   );
 const optionalString = optional(z.string());
 const optionalNumber = optional(z.number());
-const RollupCheckSchema = z.object({
-  kind: z.enum(["CheckRun", "StatusContext"]),
-  databaseId: optionalNumber,
-  name: optionalString,
-  context: optionalString,
-  status: optionalString,
-  conclusion: optionalNullable(z.string()),
-  state: optionalString,
-  checkSuite: optionalNullable(
-    z.object({
-      databaseId: optionalNumber,
-      workflowRun: optionalNullable(
-        z.object({
-          databaseId: optionalNumber,
-          event: optionalString,
-          workflow: optional(z.object({ databaseId: optionalNumber })),
-        }),
-      ),
-    }),
-  ),
-});
-const RollupPayloadSchema = z.object({
-  state: optionalString,
-  contexts: optional(
-    z.object({
-      totalCount: optionalNumber,
-      nodes: optional(validArray(RollupCheckSchema)),
-      pageInfo: optional(
-        z.object({
-          hasNextPage: optional(z.boolean()),
-          endCursor: optionalNullable(z.string()),
-        }),
-      ),
-    }),
-  ),
-});
-const RollupPageSchema = z
-  .object({
-    state: optionalString,
-    mergeable: optional(z.union([z.boolean(), z.string()])),
-    headRefOid: optionalString,
-    statusCheckRollup: optionalNullable(RollupPayloadSchema),
-  })
-  .catch({});
-const RollupResponseSchema = z.object({
-  data: z.object({
-    repository: z.object({ pullRequest: RollupPageSchema.nullish() }).nullish(),
-  }),
-});
 const RunListItemSchema = z.object({
   id: z.number(),
   workflow_id: optionalNumber,
@@ -128,22 +88,10 @@ const AttemptJobsPageSchema = z.object({
   jobs: z.array(AttemptJobSchema).max(100),
 });
 
-type RollupCheck = z.infer<typeof RollupCheckSchema>;
-type RollupPayload = z.infer<typeof RollupPayloadSchema>;
-type RollupPage = z.infer<typeof RollupPageSchema>;
 type RunListItem = z.infer<typeof RunListItemSchema>;
 type RunStatus = z.infer<typeof RunStatusSchema>;
 type JobIdentity = { runId: number; checkId: number };
 type PrRunReplacement = { workflowId: number; checkSuites: ReadonlyMap<number, number> };
-const FAILURE_CONCLUSIONS = new Set([
-  "ACTION_REQUIRED",
-  "CANCELLED",
-  "FAILURE",
-  "STARTUP_FAILURE",
-  "STALE",
-  "TIMED_OUT",
-]);
-const ROLLUP_QUERY = `query($owner:String!,$name:String!,$pr:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$pr){state mergeable headRefOid statusCheckRollup{state contexts(first:100,after:$cursor){totalCount pageInfo{hasNextPage endCursor} nodes{kind:__typename ... on CheckRun{name status conclusion databaseId checkSuite{databaseId workflowRun{databaseId event workflow{databaseId}}}} ... on StatusContext{context state}}}}}}}`;
 const MAX_EVIDENCE_READS_PER_POLL = 32;
 const GH_READ_OPTIONS = {
   stdio: ["ignore", "pipe", "pipe"],
@@ -182,6 +130,7 @@ export function parseArgs(argv: string[]) {
         timeout: { type: "string", default: "3600" },
         interval: { type: "string", default: "120" },
         completion: { type: "string", default: "rollup" },
+        once: { type: "boolean", default: false },
       },
     });
   } catch {
@@ -206,6 +155,7 @@ export function parseArgs(argv: string[]) {
     timeout: positiveInteger(parsed.values.timeout, "--timeout"),
     interval: positiveInteger(parsed.values.interval, "--interval"),
     completion,
+    once: parsed.values.once,
   };
   if (!/^[0-9a-f]{40}$/u.test(args.headSha)) {
     throw new Error("head-sha must be a full 40-character commit SHA");
@@ -218,7 +168,7 @@ export function parseArgs(argv: string[]) {
 
 const checkName = (check: RollupCheck) =>
   check.kind === "StatusContext" ? check.context : check.name;
-export const sanitizeCheckName = (name: string) =>
+const sanitizeCheckName = (name: string) =>
   name.replaceAll(ANSI_ESCAPE_SEQUENCE, "\u0000").replaceAll(UNSAFE_CHECK_NAME_RUN, "?");
 const isAutoResponse = (check: RollupCheck) =>
   checkName(check)
@@ -405,16 +355,19 @@ function ghReadOptions(deadline?: number) {
   return { ...GH_READ_OPTIONS, timeout: Math.min(GH_READ_OPTIONS.timeout, remaining) };
 }
 
-function readPr(pr: number, repo: string, deadline?: number) {
+function readPr(
+  pr: number,
+  readMetadata: ReturnType<typeof createPrMetadataReader>,
+  deadline?: number,
+) {
   // Repository resolution and metadata share one read budget, including diagnostics.
   const readDeadline = Date.now() + ghReadOptions(deadline).timeout;
-  return RollupPageSchema.parse(
-    readPrMetadata(pr, repo, ["state", "mergeable", "headRefOid"], () =>
-      ghReadOptions(readDeadline),
-    ),
+  const metadata = readMetadata(pr, ["state", "mergeable", "headRefOid", "url"], () =>
+    ghReadOptions(readDeadline),
   );
+  return { ...RollupPageSchema.parse(metadata), url: metadata.url };
 }
-export const buildFindRunArgs = (repo: string, sha: string) =>
+const buildFindRunArgs = (repo: string, sha: string) =>
   workflowRunsApiArgs(repo, sha, "pull_request", 20);
 export const selectRunAfter = (runs: RunListItem[], after?: number) =>
   runs.find((run) => run.conclusion !== "skipped" && (after === undefined || run.id > after));
@@ -434,18 +387,13 @@ function findRun(repo: string, sha: string, after?: number, pr?: number) {
   }
   return { run, runs: new Map(runs.map((item) => [item.id, item])) };
 }
-const readRun = (repo: string, runId: number, deadline?: number, includeJobs = false) =>
+const readRun = (repo: string, runId: number, deadline?: number) =>
   RunStatusSchema.parse(
-    execGhJson(
-      `run view ${runId} --repo ${repo} --json status,conclusion${includeJobs ? ",jobs" : ""}`.split(
-        " ",
-      ),
-      {
-        ...ghReadOptions(deadline),
-        // Revalidate changing run status instead of reusing a cached snapshot.
-        env: { ...process.env, OCTOPOOL_FRESH: "1" },
-      },
-    ),
+    execGhJson(`run view ${runId} --repo ${repo} --json status,conclusion`.split(" "), {
+      ...ghReadOptions(deadline),
+      // Revalidate changing run status instead of reusing a cached snapshot.
+      env: { ...process.env, OCTOPOOL_FRESH: "1" },
+    }),
   );
 
 function formatRunJobs(run: RunStatus) {
@@ -603,7 +551,7 @@ export function classifyRunAttachment(runId: number, run: RunStatus, after?: num
   };
 }
 
-export function classifyAttachedCiRun(run: RunStatus) {
+function classifyAttachedCiRun(run: RunStatus) {
   if (run.status !== "completed") {
     return { verdict: "PENDING" };
   }
@@ -612,78 +560,16 @@ export function classifyAttachedCiRun(run: RunStatus) {
     : { verdict: "FAILING", conclusion: run.conclusion ?? "unknown" };
 }
 
-export function collectRollupContexts(
-  fetchPage: (cursor: string | null) => RollupPage | null | undefined,
-) {
-  const firstPage = fetchPage(null);
-  const firstContexts = firstPage?.statusCheckRollup?.contexts;
-  if (!firstContexts) {
-    return firstPage;
+function githubPendingCount(rollup: RollupPayload | null | undefined) {
+  const { checkRunCountsByState, statusContextCountsByState } = rollup?.contexts ?? {};
+  if (!checkRunCountsByState || !statusContextCountsByState) {
+    return "unknown";
   }
-
-  const nodes = [...(firstContexts.nodes ?? [])];
-  let pageInfo = firstContexts.pageInfo;
-  let pageCount = 1;
-  // Polling work stays bounded at 1,000 contexts. Any truncation remains visible through
-  // totalCount and must classify conservatively rather than reading as success.
-  while (pageInfo?.hasNextPage && pageCount < 10) {
-    if (typeof pageInfo.endCursor !== "string") {
-      throw new Error("rollup page advertised a next page without a cursor");
-    }
-    const page = fetchPage(pageInfo.endCursor);
-    const contexts = page?.statusCheckRollup?.contexts;
-    pageCount += 1;
-    // Losing an advertised page (head moved, transient API gap) or reading a changed snapshot
-    // must not pass off the partial first page as complete; the watch loop catches this error
-    // and re-reads the rollup on its next bounded poll.
-    if (!contexts) {
-      throw new Error("rollup snapshot changed during pagination");
-    }
-    if (
-      page.headRefOid !== firstPage.headRefOid ||
-      page.statusCheckRollup?.state !== firstPage.statusCheckRollup?.state ||
-      contexts.totalCount !== firstContexts.totalCount
-    ) {
-      throw new Error("rollup snapshot changed during pagination");
-    }
-    nodes.push(...(contexts.nodes ?? []));
-    pageInfo = contexts.pageInfo;
-  }
-
-  return {
-    ...firstPage,
-    statusCheckRollup: {
-      ...firstPage.statusCheckRollup,
-      contexts: { ...firstContexts, nodes, pageInfo },
-    },
-  };
-}
-
-function readRollup(pr: number, repo: string, deadline?: number) {
-  const [owner, name] = repo.split("/");
-  return (
-    collectRollupContexts((cursor) => {
-      const queryArgs = [
-        "api",
-        "graphql",
-        "-f",
-        `query=${ROLLUP_QUERY}`,
-        "-f",
-        `owner=${owner}`,
-        "-f",
-        `name=${name}`,
-        "-F",
-        `pr=${pr}`,
-      ];
-      if (cursor !== null) {
-        queryArgs.push("-f", `cursor=${cursor}`);
-      }
-      const response = RollupResponseSchema.safeParse(
-        execGhJson(queryArgs, ghReadOptions(deadline)),
-      );
-      return response.success ? response.data.data.repository?.pullRequest : undefined;
-    }) ?? {}
-  );
+  return [...checkRunCountsByState, ...statusContextCountsByState]
+    .filter(({ state }) =>
+      ["PENDING", "EXPECTED", "QUEUED", "WAITING", "REQUESTED", "IN_PROGRESS"].includes(state),
+    )
+    .reduce((total, { count }) => total + count, 0);
 }
 
 function readPrRollup(
@@ -691,7 +577,9 @@ function readPrRollup(
   attachment: NonNullable<ReturnType<typeof findRun>>,
   deadline: number,
   reads: { remaining: number },
+  readRollup: ReturnType<typeof createPrRollupReader>,
   reconciled?: ReadonlyMap<number, string>,
+  initial?: RollupPage,
 ) {
   const { run, runs } = attachment;
   const boundToPr = (candidate: RunListItem) =>
@@ -706,8 +594,11 @@ function readPrRollup(
     boundToPr(run) && run.workflow_id !== undefined && run.check_suite_id !== undefined
       ? { workflowId: run.workflow_id, checkSuites }
       : undefined;
+  let nextPage = initial;
   while (true) {
-    const pr = readRollup(args.pr, args.repo, deadline);
+    const pr = nextPage ?? readRollup(deadline).page;
+    // Any metadata work below requires a new observation on the next iteration.
+    nextPage = undefined;
     const blocked = precheck(pr, args.headSha, true);
     if (blocked !== null) {
       return { exitCode: blocked };
@@ -779,18 +670,21 @@ export async function pollUntilDeadline<T>({
   deadline,
   interval,
   poll,
+  once = false,
   now = Date.now,
   wait = sleep,
 }: {
   deadline: number;
   interval: number;
   poll: () => T | undefined | Promise<T | undefined>;
+  // One-shot callers keep the deadline as the evidence-read budget, not a wait.
+  once?: boolean;
   now?: () => number;
   wait?: (milliseconds: number) => Promise<void>;
 }): Promise<T | undefined> {
   while (true) {
     const result = await poll();
-    if (result !== undefined) {
+    if (result !== undefined || once) {
       return result;
     }
     const remaining = deadline - now();
@@ -833,13 +727,22 @@ function precheck(pr: RollupPage, sha: string, midWait = false) {
 
 async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
+  const readMetadata = createPrMetadataReader(args.repo);
+  const readCiRun = createCiRunReader(args.repo, args.headSha, ghReadOptions);
+  const readRollup = createPrRollupReader(
+    args.pr,
+    args.repo,
+    (deadline) => readPr(args.pr, readMetadata, deadline),
+    ghReadOptions,
+  );
   const attachDeadline = Date.now() + args.attachTimeout * 1000;
   const attachment = await pollUntilDeadline({
     deadline: attachDeadline,
     interval: args.interval,
+    once: args.once,
     poll: () => {
       try {
-        const blocked = precheck(readPr(args.pr, args.repo), args.headSha);
+        const blocked = precheck(readPr(args.pr, readMetadata), args.headSha);
         if (blocked !== null) {
           return { exitCode: blocked };
         }
@@ -883,18 +786,23 @@ async function main(argv = process.argv.slice(2)) {
 
   const watchDeadline = Date.now() + args.timeout * 1000;
   let lastState = "NONE";
-  let lastPending = 0;
+  let lastPending: number | "unknown" = 0;
+  let pendingLabel = "pending";
+  // Reuse the previous poll's request shape, never its check state.
+  let detailedPoll = false;
   const watchResult = await pollUntilDeadline({
     deadline: watchDeadline,
     interval: args.interval,
+    once: args.once,
     poll: () => {
       try {
         if (args.completion === "ci-run") {
-          const blocked = precheck(readPr(args.pr, args.repo, watchDeadline), args.headSha, true);
+          const currentPr = readPr(args.pr, readMetadata, watchDeadline);
+          const blocked = precheck(currentPr, args.headSha, true);
           if (blocked !== null) {
             return blocked;
           }
-          const run = readRun(args.repo, runId, watchDeadline, true);
+          const run = RunStatusSchema.parse(readCiRun(runId, currentPr.url, watchDeadline));
           const result = classifyAttachedCiRun(run);
           const runStatus = run.status ?? "undefined";
           const runConclusion = run.conclusion ?? "pending";
@@ -907,14 +815,65 @@ async function main(argv = process.argv.slice(2)) {
           }
           return undefined;
         }
+        const initial = readRollup(watchDeadline, detailedPoll);
+        const summary = initial.page;
+        const blocked = precheck(summary, args.headSha, true);
+        if (blocked !== null) {
+          return blocked;
+        }
+        lastState = summary.statusCheckRollup?.state ?? "NONE";
+        const detailedObservation =
+          initial.details && ["FAILURE", "ERROR", "PENDING"].includes(lastState);
+        if (!detailedObservation && !["FAILURE", "ERROR"].includes(lastState)) {
+          const run = readRun(args.repo, runId, watchDeadline);
+          if (run.status === "completed" && run.conclusion !== "success") {
+            return emit(`FAILING checks=CI workflow (${run.conclusion ?? "unknown"})`, 15);
+          }
+          if (
+            lastState !== "PENDING" ||
+            run.status !== "completed" ||
+            run.conclusion !== "success"
+          ) {
+            detailedPoll = false;
+            pendingLabel = "github_pending";
+            lastPending = githubPendingCount(summary.statusCheckRollup);
+            console.log(
+              `STATUS rollup=${lastState === "SUCCESS" ? "green" : "pending"} github_rollup=${lastState} github_pending=${lastPending}`,
+            );
+            if (lastState === "SUCCESS" && run.status === "completed") {
+              // The run read can span a push or newly published checks on the same head.
+              const current = readRollup(watchDeadline, false).page;
+              const moved = precheck(current, args.headSha, true);
+              if (moved !== null) {
+                return moved;
+              }
+              lastState = current.statusCheckRollup?.state ?? "NONE";
+              lastPending = githubPendingCount(current.statusCheckRollup);
+              if (lastState === "SUCCESS") {
+                return emit("GREEN", 0);
+              }
+            }
+            return undefined;
+          }
+        }
+        detailedPoll = true;
         const reads = { remaining: MAX_EVIDENCE_READS_PER_POLL };
-        let observed = readPrRollup(args, attachment, watchDeadline, reads);
+        let observed = readPrRollup(
+          args,
+          attachment,
+          watchDeadline,
+          reads,
+          readRollup,
+          undefined,
+          detailedObservation ? summary : undefined,
+        );
         if ("exitCode" in observed) {
           return observed.exitCode;
         }
         let { pr, result } = observed;
         lastState = pr.statusCheckRollup?.state ?? "NONE";
         lastPending = result.pendingCount;
+        pendingLabel = "pending";
         let run =
           result.verdict === "FAILING" ? undefined : readRun(args.repo, runId, watchDeadline);
         if (
@@ -934,7 +893,7 @@ async function main(argv = process.argv.slice(2)) {
           if (reconciled.size > 0) {
             // The evidence scan may span pushes or new checks. Reobserve the PR
             // before applying proof, then retain the ordinary final CI-run check.
-            observed = readPrRollup(args, attachment, watchDeadline, reads, reconciled);
+            observed = readPrRollup(args, attachment, watchDeadline, reads, readRollup, reconciled);
             if ("exitCode" in observed) {
               return observed.exitCode;
             }
@@ -945,6 +904,9 @@ async function main(argv = process.argv.slice(2)) {
         }
         lastState = pr.statusCheckRollup?.state ?? "NONE";
         lastPending = result.pendingCount;
+        detailedPoll =
+          ["FAILURE", "ERROR"].includes(lastState) ||
+          (lastState === "PENDING" && run?.status === "completed" && run.conclusion === "success");
         console.log(
           `STATUS rollup=${result.verdict.toLowerCase()} github_rollup=${lastState} pending=${lastPending} superseded=${result.supersededCount}`,
         );
@@ -959,6 +921,10 @@ async function main(argv = process.argv.slice(2)) {
           run?.status === "completed" &&
           run.conclusion === "success"
         ) {
+          const moved = precheck(readPr(args.pr, readMetadata, watchDeadline), args.headSha, true);
+          if (moved !== null) {
+            return moved;
+          }
           return emit("GREEN", 0);
         }
       } catch (error) {
@@ -972,7 +938,7 @@ async function main(argv = process.argv.slice(2)) {
   }
   return emit(
     args.completion === "rollup"
-      ? `TIMEOUT github_rollup=${lastState} pending=${lastPending}`
+      ? `TIMEOUT github_rollup=${lastState} ${pendingLabel}=${lastPending}`
       : "TIMEOUT completion=ci-run",
     16,
   );

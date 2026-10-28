@@ -8,6 +8,20 @@ import {
 describe("agent run usage", () => {
   beforeEach(() => resetAgentRunUsageForTest());
 
+  it("marks emitted known subtotals incomplete until the run generation ends", () => {
+    const record = (outputTokens: number, unavailable = false) =>
+      recordAgentRunOutputTokens({
+        runId: "interrupted-run",
+        lifecycleGeneration: "generation",
+        outputTokens,
+        ...(unavailable ? { usageReport: { state: "unavailable" } as const } : {}),
+        emit: () => true,
+      });
+    expect(record(12)).toEqual({ outputTokens: 12 });
+    expect(record(7, true)).toEqual({ outputTokens: 12, usageReport: { state: "unavailable" } });
+    expect(record(3)).toEqual({ outputTokens: 15, usageReport: { state: "unavailable" } });
+  });
+
   it("does not commit usage when run ownership rejects the event", () => {
     const rejected = recordAgentRunOutputTokens({
       runId: "stale-run",

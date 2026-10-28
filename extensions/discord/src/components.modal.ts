@@ -2,24 +2,10 @@ import {
   buildDiscordModalCustomId as buildDiscordModalCustomIdImpl,
   parseDiscordModalCustomIdForInteraction as parseDiscordModalCustomIdForInteractionImpl,
 } from "./component-custom-id.js";
-import { createDiscordSelectMenu } from "./components.builders.js";
 import { mapTextInputStyle } from "./components.parse.js";
 import type { DiscordModalEntry, DiscordModalFieldDefinition } from "./components.types.js";
-import {
-  CheckboxGroup,
-  Label,
-  Modal,
-  RadioGroup,
-  RoleSelectMenu,
-  StringSelectMenu,
-  TextDisplay,
-  TextInput,
-  UserSelectMenu,
-} from "./internal/discord.js";
-
-// Some test-only module graphs partially mock `./internal/discord.js` and can drop `Modal`.
-// Keep dynamic form definitions loadable instead of crashing unrelated suites.
-const ModalBase: typeof Modal = Modal ?? (function ModalFallback() {} as unknown as typeof Modal);
+import { RoleSelectMenu, StringSelectMenu, UserSelectMenu } from "./internal/components.message.js";
+import { CheckboxGroup, Label, Modal, RadioGroup, TextInput } from "./internal/components.modal.js";
 
 function createModalFieldComponent(
   field: DiscordModalFieldDefinition,
@@ -36,39 +22,45 @@ function createModalFieldComponent(
     return new DynamicTextInput();
   }
   if (field.type === "select" || field.type === "role-select" || field.type === "user-select") {
-    const type =
-      field.type === "select" ? "string" : field.type === "role-select" ? "role" : "user";
-    const select = createDiscordSelectMenu(type, field.id, field.options);
+    const select =
+      field.type === "select"
+        ? new (class extends StringSelectMenu {
+            customId = field.id;
+            options = field.options ?? [];
+          })()
+        : field.type === "role-select"
+          ? new (class extends RoleSelectMenu {
+              customId = field.id;
+            })()
+          : new (class extends UserSelectMenu {
+              customId = field.id;
+            })();
     select.required = field.required;
     select.minValues = field.minValues;
     select.maxValues = field.maxValues;
     select.placeholder = field.placeholder;
     return select;
   }
+  const group =
+    field.type === "checkbox"
+      ? new (class extends CheckboxGroup {
+          customId = field.id;
+        })()
+      : new (class extends RadioGroup {
+          customId = field.id;
+        })();
+  group.options = field.options ?? [];
+  group.required = field.required;
   if (field.type === "checkbox") {
-    const options = field.options ?? [];
-    class DynamicCheckboxGroup extends CheckboxGroup {
-      customId = field.id;
-      override options = options;
-      override required = field.required;
-      override minValues = field.minValues;
-      override maxValues = field.maxValues;
-    }
-    return new DynamicCheckboxGroup();
+    group.minValues = field.minValues;
+    group.maxValues = field.maxValues;
   }
-  const options = field.options ?? [];
-  class DynamicRadioGroup extends RadioGroup {
-    customId = field.id;
-    override options = options;
-    override required = field.required;
-  }
-  return new DynamicRadioGroup();
+  return group;
 }
 
-export class DiscordFormModal extends ModalBase {
+export class DiscordFormModal extends Modal {
   override title: string;
   override customId: string;
-  override components: Array<Label | TextDisplay>;
   override customIdParser = parseDiscordModalCustomIdForInteractionImpl;
 
   constructor(params: { modalId: string; title: string; fields: DiscordModalFieldDefinition[] }) {
@@ -80,7 +72,6 @@ export class DiscordFormModal extends ModalBase {
       class DynamicLabel extends Label {
         override label = field.label;
         override description = field.description;
-        override component = component;
         override customId = field.id;
       }
       return new DynamicLabel(component);

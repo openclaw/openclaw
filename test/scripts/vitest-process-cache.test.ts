@@ -12,23 +12,47 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
 const tsxPreload = pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm")).href;
 
-it.each(["hermetic", "live-aware", "tooling"] as const)(
-  "keeps source compiler caching inside the owned namespace (%s)",
-  async (homeMode) => {
+async function run(spec: Parameters<typeof spawnOwnedVitestProcess>[0]) {
+  const { child, completion } = spawnOwnedVitestProcess(spec);
+  const output = { stdout: "", stderr: "" };
+  for (const stream of ["stdout", "stderr"] as const) {
+    child[stream]?.on("data", (chunk: Buffer) => {
+      output[stream] += chunk.toString();
+    });
+  }
+  return { result: await completion, ...output };
+}
+
+it.each([
+  ["hermetic", undefined],
+  ["live-aware", undefined],
+  ["tooling", undefined],
+  ["hermetic", "caller-cache"],
+  ["hermetic", ""],
+] as const)(
+  "reuses owned source compiler caches (%s, Bun cache %s)",
+  async (homeMode, bunCache) => {
     const root = fs.realpathSync(tempDirs.make("oc-vt-source-cache-"));
     const sourcePath = path.join(root, "source.mts");
-    fs.writeFileSync(sourcePath, "enum Value { Answer = 42 }\nconsole.log(Value.Answer);\n");
+    fs.writeFileSync(sourcePath, "export enum Value { Answer = 42 }\n");
     const script = `
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-const result = spawnSync(process.execPath, ["--import", ${JSON.stringify(tsxPreload)}, ${JSON.stringify(sourcePath)}], { encoding: "utf8" });
-if (result.error) throw result.error;
-if (result.status !== 0) throw new Error(result.stderr);
 const namespace = os.tmpdir();
 const cache = path.join(namespace, "tsx-" + (process.geteuid?.() ?? os.userInfo().username));
-console.log(JSON.stringify({ namespace, output: result.stdout, cached: fs.existsSync(cache) && fs.readdirSync(cache).length > 0 }));
+const entries = () => fs.existsSync(cache) ? fs.readdirSync(cache).map(name => [name, fs.statSync(path.join(cache, name)).mtimeMs]) : [];
+const run = () => {
+  const result = spawnSync(process.execPath, ["--import", ${JSON.stringify(tsxPreload)}, "--input-type=module", "-e", ${JSON.stringify(`import { Value } from ${JSON.stringify(pathToFileURL(sourcePath).href)}; console.log(Value.Answer);`)}], { encoding: "utf8" });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(result.stderr);
+  return result.stdout;
+};
+const output = run();
+const first = entries();
+const again = run();
+console.log(JSON.stringify({ namespace, output, again, disabled: process.env.TSX_DISABLE_CACHE, cached: first.length > 0, reused: JSON.stringify(entries()) === JSON.stringify(first), bunCache: process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH }));
 `;
     const env = {
       PATH: process.env.PATH,
@@ -39,31 +63,30 @@ console.log(JSON.stringify({ namespace, output: result.stdout, cached: fs.exists
       TEMP: root,
       TSX_DISABLE_CACHE: "1",
       NODE_DISABLE_COMPILE_CACHE: "1",
+      BUN_RUNTIME_TRANSPILER_CACHE_PATH: bunCache,
       ESBUILD_WORKER_THREADS: "0",
     };
-    const { child, completion } = spawnOwnedVitestProcess({
+    const { result, stdout, stderr } = await run({
       command: testNodeExecPath,
-      args: ["--input-type=module", "-e", script],
+      args: ["--import", tsxPreload, "--input-type=module", "-e", script],
       homeMode,
       options: { env, stdio: ["ignore", "pipe", "pipe"] },
     });
-    let output = "";
-    let errorOutput = "";
-    child.stdout?.on("data", (chunk: Buffer) => {
-      output += chunk.toString();
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      errorOutput += chunk.toString();
-    });
-    expect(await completion, errorOutput).toMatchObject({
+    expect(result, stderr).toMatchObject({
       code: 0,
       groupJoined: process.platform !== "win32",
     });
-    const observed = JSON.parse(output);
-    expect(observed.output).toBe("42\n");
-    expect(observed.cached).toBe(homeMode !== "tooling");
+    const observed = JSON.parse(stdout);
+    expect([observed.output, observed.again, observed.reused]).toEqual(["42\n", "42\n", true]);
+    expect(observed.disabled).toBe(homeMode === "tooling" ? "1" : undefined);
+    expect(observed.cached, JSON.stringify(observed)).toBe(homeMode !== "tooling");
+    expect(observed.bunCache).toBe(
+      bunCache ??
+        (homeMode === "tooling"
+          ? undefined
+          : path.resolve(import.meta.dirname, "../../.cache/bun-transpiler")),
+    );
     expect(path.dirname(observed.namespace)).toBe(root);
-    expect(env.TSX_DISABLE_CACHE).toBe("1");
     expect(fs.existsSync(observed.namespace)).toBe(process.platform === "win32");
   },
 );
@@ -77,7 +100,7 @@ it.skipIf(process.platform !== "win32")(
       skip();
       return;
     }
-    const { child, completion } = spawnOwnedVitestProcess({
+    const { result, stdout, stderr } = await run({
       command: testNodeExecPath,
       args: [
         "-e",
@@ -89,16 +112,8 @@ it.skipIf(process.platform !== "win32")(
         stdio: ["ignore", "pipe", "pipe"],
       },
     });
-    let output = "";
-    let errorOutput = "";
-    child.stdout?.on("data", (chunk: Buffer) => {
-      output += chunk.toString();
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      errorOutput += chunk.toString();
-    });
-    expect((await completion).code, errorOutput).toBe(0);
-    const [tmpdir, tmp, temp] = JSON.parse(output);
+    expect(result.code, stderr).toBe(0);
+    const [tmpdir, tmp, temp] = JSON.parse(stdout);
     expect(tmpdir).toBe(fs.realpathSync.native(tmpdir));
     expect(path.dirname(tmpdir)).toBe(fs.realpathSync.native(root));
     expect([tmp, temp]).toEqual([tmpdir, tmpdir]);

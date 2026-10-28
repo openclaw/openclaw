@@ -1,9 +1,7 @@
-// Shared Chrome MCP contracts and constants.
-import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import type { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
-import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { SdkErrorCode, type Client, type Tool } from "@modelcontextprotocol/client";
+import type { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import type { createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import type { CdpActionTimeouts } from "./cdp.js";
 
 export type ChromeMcpStructuredPage = {
@@ -13,7 +11,7 @@ export type ChromeMcpStructuredPage = {
 };
 
 export type ChromeMcpToolResult = {
-  structuredContent?: Record<string, unknown>;
+  structuredContent?: unknown;
   content?: Array<Record<string, unknown>>;
   isError?: boolean;
 };
@@ -23,6 +21,7 @@ export type ChromeMcpSession = {
   transport: StdioClientTransport;
   closeTransport: () => Promise<void>;
   ready: Promise<void>;
+  tools?: Tool[];
   processCleanup?: ChromeMcpProcessCleanupState;
   processCleanupRefresh?: Promise<void>;
   routing?: ChromeMcpRoutingState;
@@ -30,10 +29,13 @@ export type ChromeMcpSession = {
 
 export type ChromeMcpRoutingState = {
   sessionNonce: string;
-  withOperationLock: ReturnType<typeof createAsyncLock>;
+  operationPermits: ReturnType<typeof createPermitPool>;
   targetIdByPageId: Map<number, string>;
   nextTargetHandleId: number;
-  snapshotRefById: Map<string, { targetId: string; uid: string }>;
+  snapshotsByTarget: Map<
+    string,
+    { documentUid: string; refs: Map<string, { uid: string; documentUid?: string }> }
+  >;
   nextSnapshotRefId: number;
 };
 
@@ -50,7 +52,6 @@ export type ChromeMcpOpenOptions = ChromeMcpOperationOptions & {
 export type ChromeMcpTargetOperation = ChromeMcpOperationOptions & {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
-  userDataDir?: string;
   targetId: string;
 };
 
@@ -64,7 +65,7 @@ export class ChromeMcpDocumentUnavailableError extends Error {
 export function rethrowChromeMcpDocumentError(error: unknown): never {
   const message = error instanceof Error ? error.message : String(error);
   if (
-    /Element (?:with )?uid .* (?:not found|no longer exists) on (?:the )?page|Execution context was destroyed|Cannot find context with specified id|Frame (?:was |is )?detached|detached Frame|Node is detached from document/i.test(
+    /Element (?:with )?uid .* (?:not found|no longer exists) on (?:the )?page|Snapshot document (?:changed|disappeared)\. Take a new snapshot\.|Execution context was destroyed|Cannot find context with specified id|Frame (?:was |is )?detached|detached Frame|Node is detached from document/i.test(
       message,
     )
   ) {
@@ -83,9 +84,8 @@ export type ChromeMcpPageProbe = {
   onResult: (tabCount: number | null) => void;
 };
 
-export const MCP_REQUEST_TIMEOUT_CODE: number = ErrorCode.RequestTimeout;
+export const MCP_REQUEST_TIMEOUT_CODE = SdkErrorCode.RequestTimeout;
 
-/** Browser profile options used to connect or launch chrome-devtools-mcp. */
 export type ChromeMcpProfileOptions = {
   userDataDir?: string;
   cdpUrl?: string;
@@ -98,11 +98,9 @@ export type NormalizedChromeMcpProfileOptions = {
   browserUrl?: string;
   command: string;
   args: string[];
+  env?: Record<string, string>;
 };
-export type ChromeMcpOptionsInput =
-  | string
-  | ChromeMcpProfileOptions
-  | NormalizedChromeMcpProfileOptions;
+export type ChromeMcpOptionsInput = ChromeMcpProfileOptions | NormalizedChromeMcpProfileOptions;
 
 export type ChromeMcpSessionOwner = {
   isCurrent: (session: ChromeMcpSession) => boolean;
@@ -116,11 +114,6 @@ export type ChromeMcpSessionLease = {
   release: () => Promise<void>;
 };
 
-export type ChromeMcpSessionFactory = (
-  profileName: string,
-  options?: NormalizedChromeMcpProfileOptions,
-) => Promise<ChromeMcpSession>;
-
 /** One OS snapshot row: ancestry and immutable birth identity from the same read. */
 export type ChromeMcpProcessSnapshot = {
   pid: number;
@@ -128,19 +121,7 @@ export type ChromeMcpProcessSnapshot = {
   identity: string;
 };
 
-/** Injectable process cleanup dependencies for platform-specific tests. */
-export type ChromeMcpProcessCleanupDeps = {
-  listProcesses?: () => Promise<ChromeMcpProcessSnapshot[]>;
-  killProcess?: (pid: number, signal: NodeJS.Signals) => void;
-  sleep?: (ms: number) => Promise<void>;
-  platform?: NodeJS.Platform;
-  taskkillProcessTree?: (pid: number) => Promise<void>;
-};
-
-export type ChromeMcpOwnedProcess = {
-  pid: number;
-  identity: string;
-};
+export type ChromeMcpOwnedProcess = Pick<ChromeMcpProcessSnapshot, "pid" | "identity">;
 
 export type ChromeMcpProcessCleanupTarget = {
   root: ChromeMcpOwnedProcess;

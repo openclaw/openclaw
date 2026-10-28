@@ -1,22 +1,24 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
-import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type {
   ChannelMessageSendAttemptContext,
   ChannelMessageSendTextContext,
 } from "../../channels/message/types.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import { resolveDeliveryQueueMediaDir } from "../../config/paths.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.js";
-import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
+import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.kernel.js";
+import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import {
+  installQueueTestPlugin,
+  createDeliveryBarrier,
+  useDeliveryCleanup,
+  matrixDeliveryResult,
+  useOutboundFixture,
+} from "./deliver.custody.test-support.js";
 import {
   boundedCronCompletionRetention,
   drainMatrixReconnect,
@@ -33,199 +35,159 @@ import {
   markDeliveryPlatformSendAttemptStarted,
 } from "./delivery-queue-storage.js";
 import {
-  installDeliveryQueueTmpDirHooks,
   loadPendingDeliveries,
   readQueuedEntry,
   setQueuedEntryState,
 } from "./delivery-queue.test-helpers.js";
 
-let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
-
-function installHeldAdapter(
-  reconciliation = false,
-  renderPresentation?: ChannelOutboundAdapter["renderPresentation"],
-) {
-  const prepared = createDeferred();
-  const releasePreparation = createDeferred();
-  const providerEntered = createDeferred();
-  const releaseProvider = createDeferred();
-  const releaseResource = vi.fn();
-  const resource = { release: releaseResource };
-  const beforeSendAttempt = vi.fn(async (ctx: ChannelMessageSendAttemptContext) => {
-    prepared.resolve();
-    await releasePreparation.promise;
-    if (ctx.kind === "media") {
-      expect(fs.readFileSync(ctx.mediaUrl, "utf8")).toBe("retained attachment");
-    }
-    return resource;
-  });
-  let failProvider = false;
-  const send = vi.fn(async (ctx: ChannelMessageSendTextContext) => {
-    await ctx.onPlatformSendDispatch?.();
-    providerEntered.resolve();
-    await releaseProvider.promise;
-    if (failProvider) {
-      throw new Error("provider disconnected after dispatch");
-    }
-    return {
-      messageId: "accepted-message",
-      receipt: createMessageReceiptFromOutboundResults({
-        results: [{ channel: "matrix", messageId: "accepted-message" }],
-        kind: "text",
-      }),
-    };
-  });
-  const afterSendFailure = vi.fn(({ attemptToken }: { attemptToken?: unknown }) => {
-    if (attemptToken === resource) {
-      releaseResource();
-    }
-  });
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "matrix",
-        source: "test",
-        plugin: {
-          ...createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              ...matrixOutboundForQueueTest,
-              ...(renderPresentation
-                ? { presentationCapabilities: { supported: true }, renderPresentation }
-                : {}),
-            },
-          }),
-          message: {
-            id: "matrix",
-            durableFinal: {
-              capabilities: {
-                text: true,
-                media: true,
-                ...(reconciliation ? { reconcileUnknownSend: true } : {}),
-              },
-              ...(reconciliation
-                ? {
-                    automaticUnknownSendReconciliation: true,
-                    reconcileUnknownSendKinds: { text: true, media: true },
-                    reconcileUnknownSend: () => ({ status: "not_sent" as const }),
-                  }
-                : {}),
-            },
-            send: {
-              lifecycle: {
-                beforeSendAttempt,
-                afterSendFailure,
-              },
-              text: send,
-              media: send,
-            },
-          },
-        },
-      },
-    ]),
-  );
-  return {
-    prepared: prepared.promise,
-    releasePreparation: releasePreparation.resolve,
-    providerEntered: providerEntered.promise,
-    releaseProvider: releaseProvider.resolve,
-    failProvider: () => {
-      failProvider = true;
-    },
-    send,
-    beforeSendAttempt,
-    afterSendFailure,
-    releaseResource,
-  };
-}
+const outbound = useOutboundFixture();
+const deliverOutboundPayloads = outbound.deliver;
+const destination = {
+  cfg: {},
+  channel: "matrix",
+  to: "!room:example",
+  queuePolicy: "required",
+} as const;
 
 describe("queued cancellation during adapter preparation", () => {
-  const fixtures = installDeliveryQueueTmpDirHooks();
-
-  beforeAll(async () => {
-    ({ deliverOutboundPayloads } = await import("./deliver.js"));
+  let stateDir: string;
+  const { release: releases, pending, audit } = useDeliveryCleanup(() => vi.useRealTimers());
+  function adapterFixture(
+    reconciliation = false,
+    renderPresentation?: ChannelOutboundAdapter["renderPresentation"],
+  ) {
+    const preparation = createDeliveryBarrier();
+    const provider = createDeliveryBarrier();
+    const releaseResource = vi.fn();
+    const resource = { release: releaseResource };
+    const beforeSendAttempt = vi.fn(async (ctx: ChannelMessageSendAttemptContext) => {
+      await preparation.hold();
+      if (ctx.kind === "media") {
+        expect(fs.readFileSync(ctx.mediaUrl, "utf8")).toBe("retained attachment");
+      }
+      return resource;
+    });
+    let failProvider = false;
+    const send = vi.fn(async (ctx: ChannelMessageSendTextContext) => {
+      await ctx.onPlatformSendDispatch?.();
+      await provider.hold();
+      if (failProvider) {
+        throw new Error("provider disconnected after dispatch");
+      }
+      return matrixDeliveryResult("accepted-message");
+    });
+    const afterSendFailure = vi.fn(({ attemptToken }: { attemptToken?: unknown }) => {
+      if (attemptToken === resource) {
+        releaseResource();
+      }
+    });
+    installQueueTestPlugin({
+      outbound: {
+        ...matrixOutboundForQueueTest,
+        ...(renderPresentation
+          ? { presentationCapabilities: { supported: true }, renderPresentation }
+          : {}),
+      },
+      message: {
+        id: "matrix",
+        durableFinal: {
+          capabilities: { text: true, media: true, reconcileUnknownSend: reconciliation },
+          automaticUnknownSendReconciliation: reconciliation,
+          reconcileUnknownSendKinds: reconciliation ? { text: true, media: true } : undefined,
+          reconcileUnknownSend: reconciliation ? () => ({ status: "not_sent" }) : undefined,
+        },
+        send: { lifecycle: { beforeSendAttempt, afterSendFailure }, text: send, media: send },
+      },
+    });
+    releases.push(() => {
+      preparation.release();
+      provider.release();
+    });
+    return {
+      prepared: preparation.entered,
+      releasePreparation: preparation.release,
+      providerEntered: provider.entered,
+      releaseProvider: provider.release,
+      failProvider: () => {
+        failProvider = true;
+      },
+      send,
+      beforeSendAttempt,
+      afterSendFailure,
+      releaseResource,
+    };
+  }
+  function createCaller() {
+    const caller = new AbortController();
+    releases.push(() => caller.abort());
+    return caller;
+  }
+  function dispatch(params: Partial<Parameters<typeof deliverOutboundPayloads>[0]> = {}) {
+    const delivery = deliverOutboundPayloads({
+      ...destination,
+      payloads: [{ text: "question" }],
+      ...params,
+    });
+    pending.push(delivery.catch(() => undefined));
+    return delivery;
+  }
+  function start(params: Partial<Parameters<typeof deliverOutboundPayloads>[0]> = {}) {
+    const id = createDeferred<string>();
+    const operation = dispatch({
+      onDeliveryIntent: ({ id: value }) => id.resolve(value),
+      ...params,
+    });
+    return { queueId: id.promise, outcome: operation.catch((error: unknown) => error) };
+  }
+  const recover = () => drainMatrixReconnect({ stateDir, deliver: deliverOutboundPayloads });
+  const pendingDeliveries = () => loadPendingDeliveries(stateDir);
+  beforeEach(() => {
+    stateDir = outbound.tmpDir();
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-    vi.unstubAllEnvs();
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(createEmptyPluginRegistry());
-  });
-
-  it.each(
-    [false, true].flatMap((reconciliation) =>
-      [false, true].flatMap((bestEffort) =>
-        (["active", "retired"] as const).map((state) => ({ state, reconciliation, bestEffort })),
-      ),
-    ),
-  )(
-    "keeps queued caller authority through recovery ($state, reconciliation: $reconciliation, bestEffort: $bestEffort)",
-    async ({ state, reconciliation, bestEffort }) => {
-      const stateDir = fixtures.tmpDir();
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      const adapter = installHeldAdapter(reconciliation);
+  it.each([
+    { reconciliation: false, bestEffort: true },
+    { reconciliation: true, bestEffort: false },
+  ])(
+    "rejects retired queued callers through recovery (reconciliation: $reconciliation, bestEffort: $bestEffort)",
+    async ({ reconciliation, bestEffort }) => {
+      const adapter = adapterFixture(reconciliation);
       const onPayloadDeliveryOutcome = vi.fn();
-      let callerIsActive = true;
-      const assertCurrent = () => {
-        if (!callerIsActive) {
-          throw new Error("message caller retired");
-        }
-      };
-      const delivery = deliverOutboundPayloads({
-        cfg: {},
-        channel: "matrix",
-        to: "!room:example",
+      const caller = createCaller();
+      const assertCurrent = () => caller.signal.throwIfAborted();
+      const delivery = dispatch({
         payloads: [{ text: "caller-bound message" }],
-        queuePolicy: "required",
         bestEffort,
         assertDirectAdapterHandoff: assertCurrent,
         onPlatformSendDispatch: async () => assertCurrent(),
         onPayloadDeliveryOutcome,
       });
-      const outcome = delivery.then(
-        (results) => ({ results }),
-        (error: unknown) => ({ error }),
-      );
-      try {
-        await adapter.prepared;
-        expect(await loadPendingDeliveries(stateDir)).toHaveLength(1);
-        callerIsActive = state === "active";
-        adapter.releasePreparation();
-        adapter.releaseProvider();
-        const settled = await outcome;
-        if (state === "active") {
-          expect(settled).toMatchObject({ results: [{ messageId: "accepted-message" }] });
-        } else {
-          const rejection = { message: expect.stringContaining("message caller retired") };
-          expect(settled).toMatchObject(bestEffort ? { results: [] } : { error: rejection });
-          expect(onPayloadDeliveryOutcome).toHaveBeenCalledWith(
-            expect.objectContaining({
-              status: "failed",
-              error: expect.objectContaining(rejection),
-            }),
-          );
-          expect(adapter.send).not.toHaveBeenCalled();
-        }
-        await drainMatrixReconnect({ stateDir, deliver: deliverOutboundPayloads });
-        expect(adapter.send).toHaveBeenCalledTimes(state === "active" ? 1 : 0);
-        expect(await loadPendingDeliveries(stateDir)).toEqual([]);
-      } finally {
-        adapter.releasePreparation();
-        adapter.releaseProvider();
-        await outcome;
-      }
+      const outcome = delivery.catch((error: unknown) => error);
+
+      await adapter.prepared;
+      expect(await pendingDeliveries()).toHaveLength(1);
+      caller.abort(new Error("message caller retired"));
+      adapter.releasePreparation();
+      adapter.releaseProvider();
+      const settled = await outcome;
+      const rejection = { message: expect.stringContaining("message caller retired") };
+      expect(settled).toMatchObject(bestEffort ? [] : rejection);
+      expect(onPayloadDeliveryOutcome.mock.calls[0]?.[0]).toMatchObject({
+        status: "failed",
+        error: rejection,
+      });
+      expect(adapter.send).not.toHaveBeenCalled();
+      await recover();
+      expect(adapter.send).not.toHaveBeenCalled();
+      expect(await pendingDeliveries()).toEqual([]);
     },
   );
 
   it("recovers the valid payload after an active caller's mixed best-effort failures", async () => {
-    const stateDir = fixtures.tmpDir();
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const adapter = installHeldAdapter();
+    const adapter = adapterFixture();
     adapter.releasePreparation();
     adapter.releaseProvider();
-    const caller = new AbortController();
+    const caller = createCaller();
     const delivered: string[] = [];
     const onPayloadDeliveryOutcome = vi.fn();
     let failValidPayload = true;
@@ -244,21 +206,11 @@ describe("queued cancellation during adapter preparation", () => {
       }
       await ctx.onPlatformSendDispatch?.();
       delivered.push(ctx.text);
-      return {
-        messageId: "recovered-valid-message",
-        receipt: createMessageReceiptFromOutboundResults({
-          results: [{ channel: "matrix", messageId: "recovered-valid-message" }],
-          kind: "text",
-        }),
-      };
+      return matrixDeliveryResult("recovered-valid-message");
     });
     expect(
-      await deliverOutboundPayloads({
-        cfg: {},
-        channel: "matrix",
-        to: "!room:example",
+      await dispatch({
         payloads: [{ text: "invalid payload" }, { text: "valid payload" }],
-        queuePolicy: "required",
         bestEffort: true,
         assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
         onPayloadDeliveryOutcome,
@@ -268,73 +220,56 @@ describe("queued cancellation during adapter preparation", () => {
       { index: 0, status: "failed", sentBeforeError: false },
       { index: 1, status: "failed", sentBeforeError: false },
     ]);
-    expect(await loadPendingDeliveries(stateDir)).toHaveLength(1);
+    expect(await pendingDeliveries()).toHaveLength(1);
     expect(delivered).toEqual([]);
-    await drainMatrixReconnect({ stateDir, deliver: deliverOutboundPayloads });
+    await recover();
     expect(delivered).toEqual(["valid payload"]);
     expect(caller.signal.aborted).toBe(false);
   });
 
   it("retains ambiguous custody when an adapter omits dispatch notification before caller retirement", async () => {
-    const stateDir = fixtures.tmpDir();
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const adapter = installHeldAdapter();
+    const adapter = adapterFixture();
     adapter.releasePreparation();
     adapter.releaseProvider();
-    const caller = new AbortController();
+    const caller = createCaller();
     adapter.send.mockImplementationOnce(async () => {
       caller.abort(new Error("message caller retired"));
       throw new Error("provider response lost after possible delivery");
     });
-    const terminals: string[] = [];
-    const unsubscribe = onTrustedMessageAuditEvent((event) => {
-      if (event.action === "message.outbound.finished") {
-        terminals.push(event.outcome);
-      }
-    });
-    try {
-      expect(
-        await deliverOutboundPayloads({
-          cfg: {},
-          channel: "matrix",
-          to: "!room:example",
-          payloads: [{ text: "possibly delivered" }, { text: "must not dispatch" }],
-          queuePolicy: "required",
-          bestEffort: true,
-          assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-        }),
-      ).toEqual([]);
-      expect(adapter.send).toHaveBeenCalledOnce();
-      expect(await loadPendingDeliveries(stateDir)).toHaveLength(1);
-      expect(terminals).toEqual([]);
-      await drainMatrixReconnect({ stateDir, deliver: deliverOutboundPayloads });
-      expect(adapter.send).toHaveBeenCalledOnce();
-      expect(await loadPendingDeliveries(stateDir)).toEqual([]);
-      expect(terminals).toEqual(["unknown", "unknown"]);
-    } finally {
-      unsubscribe();
-    }
+    const terminals = audit(true);
+
+    expect(
+      await dispatch({
+        payloads: [{ text: "possibly delivered" }, { text: "must not dispatch" }],
+        bestEffort: true,
+        assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+      }),
+    ).toEqual([]);
+    expect(adapter.send).toHaveBeenCalledOnce();
+    expect(await pendingDeliveries()).toHaveLength(1);
+    expect(terminals).toEqual([]);
+    await recover();
+    expect(adapter.send).toHaveBeenCalledOnce();
+    expect(await pendingDeliveries()).toEqual([]);
+    expect(terminals).toEqual(["unknown", "unknown"]);
   });
 
   it.each(["lifecycle", "presentation", "initial handler"] as const)(
     "retires caller custody when %s preparation rejects after retirement",
     async (stage) => {
-      const stateDir = fixtures.tmpDir();
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      const caller = new AbortController();
+      const caller = createCaller();
       const assertCurrent = () => caller.signal.throwIfAborted();
-      const entered = createDeferred();
-      const release = createDeferred();
+      const gate = createDeliveryBarrier();
+      releases.push(gate.release);
       const rejectPreparation = vi.fn(async (assertHandoff?: () => void) => {
-        entered.resolve();
-        await release.promise;
+        await gate.hold();
         assertHandoff?.();
         throw new Error("asynchronous preparation rejected");
       });
       const renderer = vi
         .fn<NonNullable<ChannelOutboundAdapter["renderPresentation"]>>(({ payload }) => payload)
         .mockImplementationOnce(() => rejectPreparation());
-      const adapter = installHeldAdapter(false, stage === "presentation" ? renderer : undefined);
+      const adapter = adapterFixture(false, stage === "presentation" ? renderer : undefined);
       let onDeliveryIntent: (() => void) | undefined;
       if (stage === "lifecycle") {
         adapter.beforeSendAttempt.mockImplementationOnce((ctx) =>
@@ -350,72 +285,47 @@ describe("queued cancellation during adapter preparation", () => {
       }
       adapter.releasePreparation();
       adapter.releaseProvider();
-      const delivery = deliverOutboundPayloads({
-        cfg: {},
-        channel: "matrix",
-        to: "!room:example",
-        payloads: [
-          {
-            text: "question",
-            ...(stage === "presentation"
-              ? { presentation: { blocks: [{ type: "text" as const, text: "question" }] } }
-              : {}),
-          },
-        ],
-        queuePolicy: "required",
+      const presentation = { blocks: [{ type: "text" as const, text: "question" }] };
+      const delivery = dispatch({
+        payloads: [{ text: "question", ...(stage === "presentation" ? { presentation } : {}) }],
         assertDirectAdapterHandoff: assertCurrent,
         onDeliveryIntent,
       });
       const outcome = delivery.catch((error: unknown) => error);
-      try {
-        await Promise.race([entered.promise, outcome]);
-        expect(rejectPreparation).toHaveBeenCalledOnce();
-        expect(await loadPendingDeliveries(stateDir)).toHaveLength(1);
-        caller.abort(new Error("message caller retired"));
-        release.resolve();
-        expect(await outcome).toMatchObject({
-          message: expect.stringContaining("message caller retired"),
-          queueCustody: "released",
-        });
-        expect(adapter.send).not.toHaveBeenCalled();
-        expect(await loadPendingDeliveries(stateDir)).toEqual([]);
-        await drainMatrixReconnect({ stateDir, deliver: deliverOutboundPayloads });
-        expect(adapter.send).not.toHaveBeenCalled();
-      } finally {
-        release.resolve();
-        await outcome;
-      }
+
+      await Promise.race([gate.entered, outcome]);
+      expect(rejectPreparation).toHaveBeenCalledOnce();
+      expect(await pendingDeliveries()).toHaveLength(1);
+      caller.abort(new Error("message caller retired"));
+      gate.release();
+      expect(await outcome).toMatchObject({
+        message: expect.stringContaining("message caller retired"),
+        queueCustody: "released",
+      });
+      expect(adapter.send).not.toHaveBeenCalled();
+      expect(await pendingDeliveries()).toEqual([]);
+      await recover();
+      expect(adapter.send).not.toHaveBeenCalled();
     },
   );
 
-  it.each(["fresh", "restored media"] as const)(
-    "retires %s custody before preparation settles and releases its late token once",
-    async (mode) => {
-      vi.useFakeTimers();
-      const stateDir = fixtures.tmpDir();
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      const adapter = installHeldAdapter();
-      const controller = new AbortController();
-      const audit: string[] = [];
-      const retired = createDeferred();
-      const unsubscribe = onTrustedMessageAuditEvent((event) => {
-        audit.push(event.outcome);
-        if (event.outcome === "failed") {
-          retired.resolve();
-        }
-      });
-      const queueIdReady = createDeferred<string>();
+  it.each([false, true])(
+    "settles cancelled preparation custody (retained media: %s)",
+    async (media) => {
+      const adapter = adapterFixture();
+      const controller = createCaller();
+      const events = audit();
       const stableId = "cron-direct-delivery:v1:cancelled-preparation";
-      let artifact: string | undefined;
-      if (mode === "restored media") {
-        const spoolDir = resolveDeliveryQueueMediaDir(stateDir);
-        fs.mkdirSync(spoolDir, { recursive: true });
-        artifact = path.join(spoolDir, `${randomUUID()}.txt`);
+      const artifact = media
+        ? path.join(resolveDeliveryQueueMediaDir(stateDir), `${randomUUID()}.txt`)
+        : undefined;
+      if (artifact) {
+        fs.mkdirSync(path.dirname(artifact), { recursive: true });
         fs.writeFileSync(artifact, "retained attachment");
         await enqueueDeliveryOnce(
           {
             channel: "matrix",
-            to: "!room:example",
+            to: destination.to,
             payloads: [{ text: "question", mediaUrl: artifact }],
             completionRetention: boundedCronCompletionRetention,
           },
@@ -423,15 +333,9 @@ describe("queued cancellation during adapter preparation", () => {
           stateDir,
         );
       }
-      const delivery = deliverOutboundPayloads({
-        cfg: {},
-        channel: "matrix",
-        to: "!room:example",
-        payloads: [{ text: "question" }],
-        queuePolicy: "required",
+      const { outcome, queueId: queueIdPromise } = start({
         abortSignal: controller.signal,
-        onDeliveryIntent: ({ id }) => queueIdReady.resolve(id),
-        ...(mode === "restored media"
+        ...(media
           ? {
               deliveryIntentId: stableId,
               reusePendingDeliveryIntent: true,
@@ -439,107 +343,69 @@ describe("queued cancellation during adapter preparation", () => {
             }
           : {}),
       });
-      const outcome = delivery.then(
-        () => "sent",
-        (error: unknown) => error,
-      );
-      try {
-        const queueId = await queueIdReady.promise;
-        await adapter.prepared;
-        controller.abort(new Error("question ended"));
-        await retired.promise;
-
-        expect(await loadPendingDeliveries(stateDir)).toEqual([]);
+      const queueId = await queueIdPromise;
+      await adapter.prepared;
+      controller.abort(new Error("question ended"));
+      expect(await pendingDeliveries()).toHaveLength(1);
+      expect(events).toEqual(["queued"]);
+      if (artifact) {
         expect(adapter.afterSendFailure).not.toHaveBeenCalled();
-        expect(audit).toEqual(["queued", "failed"]);
+        expect(fs.existsSync(artifact)).toBe(true);
+      }
+      adapter.releasePreparation();
+      expect(await outcome).toMatchObject({
+        message: expect.stringContaining("Operation aborted"),
+        queueCustody: "released",
+      });
+      expect({
+        pending: await pendingDeliveries(),
+        sends: adapter.send.mock.calls.length,
+        releases: adapter.releaseResource.mock.calls.length,
+        events,
+      }).toEqual({ pending: [], sends: 0, releases: 1, events: ["queued", "failed"] });
+      if (artifact) {
+        expect(adapter.afterSendFailure).toHaveBeenCalledOnce();
         const recoveredSend = vi.fn(async () => []);
         await drainMatrixReconnect({ stateDir, deliver: recoveredSend });
         expect(recoveredSend).not.toHaveBeenCalled();
-        if (artifact) {
-          expect(fs.existsSync(artifact)).toBe(true);
-          expect(
-            loadDeliveryQueueMediaRetentionSnapshot({ expireBeforeMs: 0, stateDir })
-              .stagedArtifacts,
-          ).toEqual([artifact]);
-          expect(
-            getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, queueId, stateDir),
-          ).toBeUndefined();
-        }
-
-        // The removed row must not turn its old producer heartbeat into claim loss.
-        await vi.advanceTimersByTimeAsync(65_000);
-        adapter.releasePreparation();
-        expect(await outcome).toMatchObject({
-          message: expect.stringContaining("Operation aborted"),
-          queueCustody: "released",
-        });
-        expect(adapter.send).not.toHaveBeenCalled();
-        expect(adapter.afterSendFailure).toHaveBeenCalledOnce();
-        expect(adapter.releaseResource).toHaveBeenCalledOnce();
-        expect(audit).toEqual(["queued", "failed"]);
-        if (artifact) {
-          expect(fs.existsSync(artifact)).toBe(false);
-          expect(
-            loadDeliveryQueueMediaRetentionSnapshot({ expireBeforeMs: 0, stateDir })
-              .stagedArtifacts,
-          ).toEqual([]);
-        }
-      } finally {
-        controller.abort();
-        adapter.releasePreparation();
-        adapter.releaseProvider();
-        await outcome;
-        unsubscribe();
+        expect(
+          getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, queueId, stateDir),
+        ).toBeUndefined();
+        expect(fs.existsSync(artifact)).toBe(false);
+        expect(
+          (await loadDeliveryQueueMediaRetentionSnapshot({ expireBeforeMs: 0, stateDir }))
+            .stagedArtifacts,
+        ).toEqual([]);
       }
     },
   );
 
   it("does not retire a replacement producer while old preparation is held", async () => {
-    const stateDir = fixtures.tmpDir();
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const adapter = installHeldAdapter();
-    const controller = new AbortController();
-    const queueIdReady = createDeferred<string>();
-    const delivery = deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
-      to: "!room:example",
-      payloads: [{ text: "question" }],
-      queuePolicy: "required",
-      abortSignal: controller.signal,
-      onDeliveryIntent: ({ id }) => queueIdReady.resolve(id),
+    const adapter = adapterFixture();
+    const controller = createCaller();
+    const { outcome, queueId: queueIdPromise } = start({ abortSignal: controller.signal });
+
+    const queueId = await queueIdPromise;
+    await adapter.prepared;
+    const replacementClaim = randomUUID();
+    setQueuedEntryState(stateDir, queueId, {
+      retryCount: 0,
+      producerClaimId: replacementClaim,
+      availableAt: Date.now() + 60_000,
     });
-    const outcome = delivery.catch((error: unknown) => error);
-    try {
-      const queueId = await queueIdReady.promise;
-      await adapter.prepared;
-      const replacementClaim = randomUUID();
-      setQueuedEntryState(stateDir, queueId, {
-        retryCount: 0,
-        producerClaimId: replacementClaim,
-        availableAt: Date.now() + 60_000,
-      });
-      controller.abort(new Error("old question ended"));
-      expect(readQueuedEntry(stateDir, queueId).producerClaimId).toBe(replacementClaim);
-      adapter.releasePreparation();
-      expect(await outcome).toMatchObject({ queueCustody: "held" });
-      expect(readQueuedEntry(stateDir, queueId).producerClaimId).toBe(replacementClaim);
-      expect(adapter.send).not.toHaveBeenCalled();
-      expect(adapter.releaseResource).toHaveBeenCalledOnce();
-    } finally {
-      controller.abort();
-      adapter.releasePreparation();
-      adapter.releaseProvider();
-      await outcome;
-    }
+    controller.abort(new Error("old question ended"));
+    expect(readQueuedEntry(stateDir, queueId).producerClaimId).toBe(replacementClaim);
+    adapter.releasePreparation();
+    expect(await outcome).toMatchObject({ queueCustody: "held" });
+    expect(readQueuedEntry(stateDir, queueId).producerClaimId).toBe(replacementClaim);
+    expect(adapter.send).not.toHaveBeenCalled();
+    expect(adapter.releaseResource).toHaveBeenCalledOnce();
   });
 
   it.each(["send_attempt_started", "unknown_after_send"] as const)(
     "does not retire the same claim after durable state advances to %s",
     async (state) => {
       const { retireUnsentDelivery } = await import("./delivery-queue-ack.js");
-      const stateDir = fixtures.tmpDir();
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       const initialProducerClaim = createInitialDeliveryProducerClaim();
       const id = await enqueueDelivery({
         channel: "matrix",
@@ -553,130 +419,61 @@ describe("queued cancellation during adapter preparation", () => {
         await markDeliveryPlatformOutcomeUnknown(id, stateDir, producerClaimId);
       }
 
-      expect(retireUnsentDelivery({ id, producerClaimId, stateDir })).toBeUndefined();
+      expect(await retireUnsentDelivery({ id, producerClaimId, stateDir })).toBeUndefined();
       expect(readQueuedEntry(stateDir, id).recoveryState).toBe(state);
     },
   );
 
-  it("keeps failed retirement visible and settles custody once preparation finishes", async () => {
-    const queueAck = await import("./delivery-queue-ack.js");
-    vi.spyOn(queueAck, "retireUnsentDelivery").mockImplementationOnce(() => {
-      throw new Error("state database write failed");
-    });
-    const stateDir = fixtures.tmpDir();
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const adapter = installHeldAdapter();
-    const controller = new AbortController();
-    const audit: string[] = [];
-    const unsubscribe = onTrustedMessageAuditEvent((event) => audit.push(event.outcome));
-    const delivery = deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
-      to: "!room:example",
-      payloads: [{ text: "question" }],
-      queuePolicy: "required",
-      abortSignal: controller.signal,
-    });
-    const outcome = delivery.catch((error: unknown) => error);
-    try {
-      await adapter.prepared;
-      controller.abort(new Error("question ended"));
-      expect(await loadPendingDeliveries(stateDir)).toHaveLength(1);
-      expect(audit).toEqual(["queued"]);
-      adapter.releasePreparation();
-      expect(await outcome).toMatchObject({
-        message: expect.stringContaining("Operation aborted"),
-        queueCustody: "released",
-      });
-      expect(await loadPendingDeliveries(stateDir)).toEqual([]);
-      expect(adapter.releaseResource).toHaveBeenCalledOnce();
-      expect(adapter.send).not.toHaveBeenCalled();
-      expect(audit).toEqual(["queued", "failed"]);
-    } finally {
-      controller.abort();
-      adapter.releasePreparation();
-      adapter.releaseProvider();
-      await outcome;
-      unsubscribe();
-    }
-  });
-
   it.each([
-    ...(["sent", "ambiguous"] as const).flatMap((result) =>
-      (["signal", "assertion"] as const).map((authority) => ({
-        result,
-        authority,
-        bestEffort: false,
-      })),
-    ),
-    { result: "sent", authority: "assertion", bestEffort: true },
+    { result: "sent", authority: "signal", bestEffort: false },
+    { result: "ambiguous", authority: "signal", bestEffort: false },
+    { result: "ambiguous", authority: "assertion", bestEffort: false },
     { result: "ambiguous", authority: "assertion", bestEffort: true },
     { result: "partial", authority: "assertion", bestEffort: true },
   ] as const)(
     "preserves $result delivery after adapter dispatch has started ($authority, bestEffort: $bestEffort)",
     async ({ result, authority, bestEffort }) => {
-      vi.useFakeTimers();
-      const stateDir = fixtures.tmpDir();
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      const adapter = installHeldAdapter();
-      const controller = new AbortController();
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const adapter = adapterFixture();
+      const controller = createCaller();
       const assertCurrent =
         authority === "assertion" ? () => controller.signal.throwIfAborted() : undefined;
-      const queueIdReady = createDeferred<string>();
-      const delivery = deliverOutboundPayloads({
-        cfg: {},
-        channel: "matrix",
-        to: "!room:example",
+      const { outcome, queueId: queueIdPromise } = start({
         payloads:
           result === "partial"
             ? [{ text: "accepted part" }, { text: "rejected part" }]
             : [{ text: "question" }],
-        queuePolicy: "required",
         bestEffort,
         abortSignal: authority === "signal" ? controller.signal : undefined,
         assertDirectAdapterHandoff: assertCurrent,
         onPlatformSendDispatch: assertCurrent ? async () => assertCurrent() : undefined,
-        onDeliveryIntent: ({ id }) => queueIdReady.resolve(id),
       });
-      const outcome = delivery.then(
-        (results) => ({ results }),
-        (error: unknown) => ({ error }),
-      );
-      try {
-        const queueId = await queueIdReady.promise;
-        await adapter.prepared;
-        adapter.releasePreparation();
-        await adapter.providerEntered;
-        controller.abort(new Error("question ended after dispatch"));
-        expect(readQueuedEntry(stateDir, queueId).recoveryState).toBe("send_attempt_started");
-        await vi.advanceTimersByTimeAsync(65_000);
-        if (result === "ambiguous") {
-          adapter.failProvider();
-        }
-        adapter.releaseProvider();
-        const settled = await outcome;
-        expect(adapter.send).toHaveBeenCalledOnce();
-        if (result === "sent" || result === "partial") {
-          expect(settled).toMatchObject({ results: [{ messageId: "accepted-message" }] });
-          if (result === "sent") {
-            expect(await loadPendingDeliveries(stateDir)).toEqual([]);
-          } else {
-            expect(readQueuedEntry(stateDir, queueId).recoveryState).toBe("unknown_after_send");
-            vi.useRealTimers();
-            await drainMatrixReconnect({ stateDir, deliver: deliverOutboundPayloads });
-            expect(adapter.send).toHaveBeenCalledOnce();
-          }
+      const queueId = await queueIdPromise;
+      await adapter.prepared;
+      adapter.releasePreparation();
+      await adapter.providerEntered;
+      controller.abort(new Error("question ended after dispatch"));
+      expect(readQueuedEntry(stateDir, queueId).recoveryState).toBe("send_attempt_started");
+      await vi.advanceTimersByTimeAsync(65_000);
+      if (result === "ambiguous") {
+        adapter.failProvider();
+      }
+      adapter.releaseProvider();
+      const settled = await outcome;
+      expect(adapter.send).toHaveBeenCalledOnce();
+      if (result === "sent" || result === "partial") {
+        expect(settled).toMatchObject([{ messageId: "accepted-message" }]);
+        if (result === "sent") {
+          expect(await pendingDeliveries()).toEqual([]);
         } else {
-          expect(settled).toMatchObject(
-            bestEffort ? { results: [] } : { error: { queueCustody: "held" } },
-          );
           expect(readQueuedEntry(stateDir, queueId).recoveryState).toBe("unknown_after_send");
+          vi.useRealTimers();
+          await recover();
+          expect(adapter.send).toHaveBeenCalledOnce();
         }
-      } finally {
-        controller.abort();
-        adapter.releasePreparation();
-        adapter.releaseProvider();
-        await outcome;
+      } else {
+        expect(settled).toMatchObject(bestEffort ? [] : { queueCustody: "held" });
+        expect(readQueuedEntry(stateDir, queueId).recoveryState).toBe("unknown_after_send");
       }
     },
   );

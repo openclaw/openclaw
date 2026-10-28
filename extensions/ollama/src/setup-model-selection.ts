@@ -1,9 +1,13 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { selectPreferredLocalModelId } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeOllamaCloudModelId, OLLAMA_CLOUD_DEFAULT_MODELS } from "./defaults.js";
 import {
-  buildDefaultOllamaCloudModelDefinition,
+  selectPreferredLocalModelId,
+  type ModelDefinitionConfig,
+} from "openclaw/plugin-sdk/provider-model-shared";
+import { isHostedOllamaCloud } from "./defaults.js";
+import { getOllamaLatestDedupeKey } from "./model-id.js";
+import {
   buildOllamaModelDefinition,
+  capLocalOllamaModelContext,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
   isOllamaEmbeddingOnlyModel,
@@ -13,13 +17,15 @@ import {
   readOllamaModelShowInfo,
   resolveOllamaApiBase,
   type OllamaModelWithContext,
+  type OllamaModelShowInfo,
+  type OllamaTagModel,
 } from "./provider-models.js";
+
+export { findAvailableOllamaModelName } from "./model-id.js";
 
 const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
 const OLLAMA_TOOLS_SCAN_CONCURRENCY = 8;
-export const OLLAMA_APP_GUIDED_MIN_CONTEXT_TOKENS = 16_384;
-
-type OllamaCloudDefaultModel = (typeof OLLAMA_CLOUD_DEFAULT_MODELS)[number];
+const OLLAMA_APP_GUIDED_MIN_CONTEXT_TOKENS = 16_384;
 
 export function normalizeOllamaModelName(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -29,11 +35,6 @@ export function normalizeOllamaModelName(value: string | undefined): string | un
   return trimmed.toLowerCase().startsWith("ollama/")
     ? trimmed.slice("ollama/".length).trim() || undefined
     : trimmed;
-}
-
-function getOllamaLatestDedupeKey(name: string): string {
-  const normalized = name.trim().toLowerCase();
-  return normalized.endsWith(":latest") ? normalized.slice(0, -":latest".length) : normalized;
 }
 
 export function mergeUniqueModelNames(...groups: string[][]): string[] {
@@ -54,19 +55,6 @@ export function mergeUniqueModelNames(...groups: string[][]): string[] {
   return [...mergedByKey.values()];
 }
 
-export function findAvailableOllamaModelName(
-  modelName: string,
-  availableModelNames: Iterable<string>,
-): string | undefined {
-  const wantedKey = getOllamaLatestDedupeKey(modelName);
-  for (const available of availableModelNames) {
-    if (getOllamaLatestDedupeKey(available) === wantedKey) {
-      return available;
-    }
-  }
-  return undefined;
-}
-
 export function orderPreferredOllamaModelIds(modelIds: Iterable<string>): string[] {
   const remaining = [...modelIds];
   const ordered: string[] = [];
@@ -81,32 +69,6 @@ export function orderPreferredOllamaModelIds(modelIds: Iterable<string>): string
   return ordered;
 }
 
-function selectAppGuidedOllamaModelId(
-  models: Iterable<{
-    id: string;
-    contextWindow?: number;
-    supportsTools?: boolean;
-    reasoning?: boolean;
-    size?: number;
-  }>,
-): string | undefined {
-  const eligible = [...models].filter(
-    (model) =>
-      model.supportsTools === true &&
-      model.contextWindow !== undefined &&
-      model.contextWindow >= OLLAMA_APP_GUIDED_MIN_CONTEXT_TOKENS,
-  );
-  const nonReasoning = eligible.filter((model) => model.reasoning !== true);
-  const pool = nonReasoning.length > 0 ? nonReasoning : eligible;
-  const measuredSizes = pool
-    .map((model) => model.size)
-    .filter((size): size is number => typeof size === "number" && size > 0);
-  const smallestSize = measuredSizes.length > 0 ? Math.min(...measuredSizes) : undefined;
-  const fastest =
-    smallestSize === undefined ? pool : pool.filter((model) => model.size === smallestSize);
-  return orderPreferredOllamaModelIds(fastest.map((model) => model.id))[0];
-}
-
 function isOllamaToolsCapableModel(model: OllamaModelWithContext): boolean {
   return !isOllamaEmbeddingOnlyModel(model) && model.capabilities?.includes("tools") === true;
 }
@@ -114,41 +76,79 @@ function isOllamaToolsCapableModel(model: OllamaModelWithContext): boolean {
 export function selectAppGuidedOllamaModelFromDiscovery(
   models: Iterable<OllamaModelWithContext>,
 ): string | undefined {
-  return selectAppGuidedOllamaModelId(
-    [...models].map((model) => ({
-      id: model.name,
-      contextWindow: model.contextWindow,
-      supportsTools: isOllamaToolsCapableModel(model),
-      reasoning: model.capabilities?.includes("thinking") ?? isReasoningModelHeuristic(model.name),
-      size: model.size,
-    })),
+  const eligible = [...models].filter(
+    (model) =>
+      isOllamaToolsCapableModel(model) &&
+      model.contextWindow !== undefined &&
+      model.contextWindow >= OLLAMA_APP_GUIDED_MIN_CONTEXT_TOKENS,
+  );
+  const nonReasoning = eligible.filter(
+    (model) => !(model.capabilities?.includes("thinking") ?? isReasoningModelHeuristic(model.name)),
+  );
+  const pool = nonReasoning.length > 0 ? nonReasoning : eligible;
+  const measuredSizes = pool
+    .map((model) => model.size)
+    .filter((size): size is number => typeof size === "number" && size > 0);
+  const smallestSize = measuredSizes.length > 0 ? Math.min(...measuredSizes) : undefined;
+  const fastest =
+    smallestSize === undefined ? pool : pool.filter((model) => model.size === smallestSize);
+  return orderPreferredOllamaModelIds(fastest.map((model) => model.name))[0];
+}
+
+export function buildAppGuidedOllamaModel(params: {
+  baseUrl: string;
+  model: OllamaTagModel;
+  showInfo: OllamaModelShowInfo;
+  configuredCloudModel?: ModelDefinitionConfig;
+}): ModelDefinitionConfig | undefined {
+  const { baseUrl, model, showInfo, configuredCloudModel } = params;
+  const contextWindow = showInfo.contextWindow ?? configuredCloudModel?.contextWindow;
+  const supportsTools =
+    showInfo.capabilities?.includes("tools") ?? configuredCloudModel?.compat?.supportsTools;
+  const supportsCompletion =
+    showInfo.capabilities?.includes("completion") ?? Boolean(configuredCloudModel);
+  if (
+    !supportsTools ||
+    !supportsCompletion ||
+    contextWindow === undefined ||
+    contextWindow < OLLAMA_APP_GUIDED_MIN_CONTEXT_TOKENS
+  ) {
+    return undefined;
+  }
+  const definition =
+    configuredCloudModel ??
+    buildOllamaModelDefinition(model.name, contextWindow, showInfo.capabilities, {
+      ...showInfo,
+      remote: isHostedOllamaCloud(baseUrl) || isOllamaRemoteModel(model),
+    });
+  return capLocalOllamaModelContext(
+    {
+      ...definition,
+      ...(showInfo.parameterCount !== undefined ? { parameterCount: showInfo.parameterCount } : {}),
+      thinkingLevelMap: definition.thinkingLevelMap ?? showInfo.thinkingLevelMap,
+      contextWindow,
+      compat: { ...definition.compat, supportsTools: true },
+    },
+    baseUrl,
   );
 }
 
 export function buildOllamaModelsConfig(
   modelNames: string[],
   discoveredModelsByName?: Map<string, OllamaModelWithContext>,
-  defaultModels: readonly OllamaCloudDefaultModel[] = [],
 ) {
-  return modelNames.map((name) => {
+  return modelNames.flatMap((name) => {
     const discovered = discoveredModelsByName?.get(name);
-    // Cloud suggestions arrive suffixed (`kimi-k3:cloud`); the default table is keyed bare.
-    // Match through the suffix for context/capabilities, but keep the requested id: the
-    // suffixed spelling is what gets written into config.
-    const defaultModel = defaultModels.find(
-      (model) => model.id === normalizeOllamaCloudModelId(name),
-    );
-    if (defaultModel && !discovered && defaultModel.id === name) {
-      return buildDefaultOllamaCloudModelDefinition(defaultModel);
+    if (discovered && isOllamaEmbeddingOnlyModel(discovered)) {
+      return [];
     }
-    const capabilities =
-      discovered?.capabilities ?? (defaultModel ? [...defaultModel.capabilities] : undefined);
-    return buildOllamaModelDefinition(
+    const { parameterCount: _parameterCount, ...model } = buildOllamaModelDefinition(
       name,
-      discovered?.contextWindow ?? defaultModel?.contextWindow,
-      capabilities,
-      { showInspectionFailed: discovered?.showInspectionFailed },
+      discovered?.contextWindow,
+      discovered?.capabilities,
+      discovered ? { ...discovered, remote: isOllamaRemoteModel(discovered) } : undefined,
     );
+    return [model];
   });
 }
 

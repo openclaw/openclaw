@@ -1,0 +1,48 @@
+/**
+ * Remediation for apply_patch workspace containment.
+ *
+ * Which control imposed the boundary decides which remedy is true, so the runtime owner
+ * names its own source rather than the tool guessing from configuration it cannot see.
+ */
+import { isHostRootEscapeError, markHostRootEscape } from "./sandbox-paths.js";
+import { withToolOperatorHint } from "./tool-operator-hint.js";
+
+/** Which layer contained apply_patch, and therefore which operator explanation applies. */
+export type ApplyPatchContainmentSource = "config" | "session" | "required-root";
+
+const HINTS: Record<ApplyPatchContainmentSource, string> = {
+  "required-root":
+    "apply_patch is contained by this run's required workspace root. Full session permission " +
+    "mode and workspaceOnly configuration settings do not lift this boundary. Keep patch paths " +
+    "within the required root.",
+  config:
+    "apply_patch is workspace-contained by configuration. Both tools.exec.applyPatch.workspaceOnly " +
+    "(default true) and tools.fs.workspaceOnly impose this independently, so clearing one can leave " +
+    "the other in force. tools.exec.mode does not affect it.",
+  session:
+    "apply_patch is workspace-contained by this session's permission mode. Only a full permission " +
+    "mode lifts it; configuration settings do not override a session mode.",
+};
+
+/**
+ * Keep workspace binding guidance model-visible and permission controls operator-only.
+ * Container mounts cannot be rebound by selecting a host cwd.
+ */
+export function withApplyPatchContainmentHint(
+  error: unknown,
+  source: ApplyPatchContainmentSource | undefined,
+  hostWorkspace: boolean,
+): unknown {
+  if (!isHostRootEscapeError(error)) {
+    return error;
+  }
+  const failure = hostWorkspace
+    ? markHostRootEscape(
+        new Error(
+          `${error.message}. Keep patch paths within the bound root. For an authorized task in another repository, ask the parent to respawn the worker with sessions_spawn and cwd set to that repository. Changing exec workdir does not rebind file tools.`,
+          { cause: error },
+        ),
+      )
+    : error;
+  return source ? withToolOperatorHint(failure, HINTS[source]) : failure;
+}

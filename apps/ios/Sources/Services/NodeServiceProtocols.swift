@@ -45,14 +45,6 @@ protocol LocationServicing: Sendable {
     func stopMonitoringSignificantLocationChanges()
 }
 
-extension LocationServicing {
-    func authorizationSnapshot() -> LocationAuthorizationSnapshot {
-        LocationAuthorizationSnapshot(
-            authorizationStatus: self.authorizationStatus(),
-            accuracyAuthorization: self.accuracyAuthorization())
-    }
-}
-
 @MainActor
 protocol DeviceStatusServicing: Sendable {
     func status() async throws -> OpenClawDeviceStatusPayload
@@ -83,13 +75,7 @@ protocol MotionServicing: Sendable {
     func pedometer(params: OpenClawPedometerParams) async throws -> OpenClawPedometerPayload
 }
 
-struct WatchMessagingStatus: Equatable, Sendable {
-    var supported: Bool
-    var paired: Bool
-    var appInstalled: Bool
-    var reachable: Bool
-    var activationState: String
-}
+typealias WatchMessagingStatus = OpenClawWatchStatusPayload
 
 struct WatchExecApprovalResolveEvent: Codable, Equatable, Sendable {
     var replyId: String
@@ -100,31 +86,14 @@ struct WatchExecApprovalResolveEvent: Codable, Equatable, Sendable {
     var transport: String
 }
 
-struct WatchExecApprovalSnapshotRequestItem: Equatable, Sendable {
-    var approvalId: String
-    var activeResolutionAttemptId: String?
-}
+typealias WatchExecApprovalSnapshotRequestItem = OpenClawWatchExecApprovalSnapshotRequestItem
 
 struct WatchExecApprovalSnapshotRequestEvent: Equatable, Sendable {
     var requestId: String
     var gatewayStableID: String?
-    var heldApprovals: [WatchExecApprovalSnapshotRequestItem]
+    var heldApprovals: [WatchExecApprovalSnapshotRequestItem] = []
     var sentAtMs: Int64?
     var transport: String
-
-    init(
-        requestId: String,
-        gatewayStableID: String? = nil,
-        heldApprovals: [WatchExecApprovalSnapshotRequestItem] = [],
-        sentAtMs: Int64?,
-        transport: String)
-    {
-        self.requestId = requestId
-        self.gatewayStableID = gatewayStableID
-        self.heldApprovals = heldApprovals
-        self.sentAtMs = sentAtMs
-        self.transport = transport
-    }
 }
 
 struct WatchAppSnapshotRequestEvent: Equatable, Sendable {
@@ -143,11 +112,7 @@ struct WatchAppCommandEvent: Codable, Equatable, Sendable {
     var transport: String
 }
 
-struct WatchNotificationSendResult: Equatable, Sendable {
-    var deliveredImmediately: Bool
-    var queuedForDelivery: Bool
-    var transport: String
-}
+typealias WatchNotificationSendResult = OpenClawWatchNotifyPayload
 
 protocol WatchMessagingServicing: AnyObject, Sendable {
     func status() async -> WatchMessagingStatus

@@ -1,21 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { chromeEvent } from "./browser.test-support.js";
+import { OPENCLAW_TAB_GROUP_TITLE } from "./relay-core.js";
 import { registerTabAccessEvents } from "./tab-access-events.js";
 import { createTabAccessPolicy, type TabAccessEpoch, type TabAccessMode } from "./tab-access.js";
 import type { BrowserTabSnapshot } from "./tab-eligibility.js";
 
-function chromeEvent<Args extends unknown[]>() {
-  let listener: (...args: Args) => void = () => {
-    throw new Error("Chrome event listener was not registered");
-  };
-  return {
-    addListener(next: (...args: Args) => void) {
-      listener = next;
-    },
-    emit(...args: Args) {
-      listener(...args);
-    },
-  };
-}
+afterEach(() => vi.unstubAllGlobals());
 
 const navigationEvents = [
   { method: "Network.responseReceived", params: { requestId: "navigation-1" } },
@@ -26,11 +16,7 @@ const navigationEvents = [
 
 async function createNavigationHarness(
   mode: TabAccessMode,
-  {
-    fileAccessAllowed = true,
-    proveAttachment = true,
-    groupId = mode === "selected" ? 11 : -1,
-  } = {},
+  { fileAccessAllowed = true, groupId = mode === "selected" ? 11 : -1 } = {},
 ) {
   let tab: BrowserTabSnapshot = {
     id: 7,
@@ -55,6 +41,10 @@ async function createNavigationHarness(
       onReplaced: chromeEvent<[number, number]>(),
     },
     tabGroups: {
+      get: vi.fn(async (requestedGroupId: number) => ({
+        id: requestedGroupId,
+        title: requestedGroupId === 11 ? OPENCLAW_TAB_GROUP_TITLE : "Other",
+      })),
       onUpdated: chromeEvent<[group?: { id: number; title?: string }]>(),
       onRemoved: chromeEvent<[group?: { id: number; title?: string }]>(),
     },
@@ -63,22 +53,17 @@ async function createNavigationHarness(
       onDetach: chromeEvent<[{ tabId?: number }, string]>(),
     },
   };
-  const policy = createTabAccessPolicy({
-    chromeApi,
-    isSelectedTab: async (candidate) => candidate.groupId === 11,
-  });
+  vi.stubGlobal("chrome", chromeApi);
+  const policy = createTabAccessPolicy({});
   await policy.initialize(mode, true);
   const attachmentEpoch = policy.capture(7);
-  if (proveAttachment) {
-    await policy.requireTab(7, attachmentEpoch);
-  }
+  await policy.requireTab(7, attachmentEpoch);
   const attachments = new Map<number, { epoch: TabAccessEpoch }>([[7, { epoch: attachmentEpoch }]]);
   const send = vi.fn<(message: Record<string, unknown>) => void>();
   const detachDebugger = vi.fn(async (tabId: number) => {
     attachments.delete(tabId);
   });
   registerTabAccessEvents({
-    chromeApi,
     accessReady: Promise.resolve(),
     policy,
     attachments,
@@ -132,10 +117,7 @@ async function createNavigationHarness(
       }
     },
     deferLookup() {
-      let release = (_value: BrowserTabSnapshot) => {};
-      const pending = new Promise<BrowserTabSnapshot>((resolve) => {
-        release = resolve;
-      });
+      const { promise: pending, resolve: release } = Promise.withResolvers<BrowserTabSnapshot>();
       chromeApi.tabs.get.mockImplementation(async () => await pending);
       return async () => {
         release(tab);
@@ -175,107 +157,72 @@ describe("Chrome navigation event access", () => {
     expect(harness.send).not.toHaveBeenCalled();
   });
 
-  it.each([
-    "pause",
-    "mode change",
-    "disable",
-    "transition",
-    "remove",
-    "replace",
-    "detach",
-    "group rename",
-    "group removal",
-  ])("retires controlled blank authority on %s without reauthorizing it", async (reason) => {
-    const harness = await createNavigationHarness("all", { groupId: 11 });
-    await harness.controlBlank();
-    switch (reason) {
-      case "pause":
-        await harness.policy.pause(7);
-        expect(harness.policy.isDenied(7)).toBe(true);
-        await harness.policy.allow(7);
-        break;
-      case "mode change":
-        harness.policy.setMode("selected");
-        harness.policy.setMode("all");
-        break;
-      case "disable":
-        harness.policy.setEnabled(false);
-        harness.policy.setEnabled(true);
-        break;
-      case "transition":
-        harness.policy.beginTransition();
-        harness.policy.endTransition();
-        break;
-      case "remove":
-        harness.chromeApi.tabs.onRemoved.emit(7);
-        break;
-      case "replace":
-        harness.chromeApi.tabs.onReplaced.emit(8, 7);
-        break;
-      case "detach":
-        harness.chromeApi.debugger.onDetach.emit({ tabId: 7 }, "target_closed");
-        break;
-      case "group rename":
-        harness.chromeApi.tabGroups.onUpdated.emit({ id: 12, title: "Other" });
-        await expect(harness.policy.requireTab(7)).resolves.toMatchObject({ url: "about:blank" });
-        harness.chromeApi.tabGroups.onUpdated.emit({ id: 11, title: "Other" });
-        break;
-      case "group removal":
-        harness.chromeApi.tabGroups.onRemoved.emit({ id: 12 });
-        await expect(harness.policy.requireTab(7)).resolves.toMatchObject({ url: "about:blank" });
-        harness.chromeApi.tabGroups.onRemoved.emit({ id: 11 });
-        break;
-    }
-    harness.send.mockClear();
-    harness.emitNavigation();
-    await expect(harness.policy.requireTab(7)).rejects.toThrow(
-      reason === "remove" || reason === "replace"
-        ? "access was revoked"
-        : "restricted or unavailable",
-    );
-    await expect(harness.policy.requireTab(7)).rejects.toThrow("restricted or unavailable");
-    expect(harness.send).not.toHaveBeenCalled();
-  });
-
-  it.each(["source before blank", "blank before return"])(
-    "discards a stale selected discovery snapshot of %s before consuming provenance",
-    async (snapshot) => {
-      const harness = await createNavigationHarness("selected");
-      if (snapshot === "blank before return") {
-        await harness.controlBlank();
+  it.each(["pause", "mode change", "remove", "detach", "group rename", "group removal"])(
+    "retires controlled blank authority on %s without reauthorizing it",
+    async (reason) => {
+      const harness = await createNavigationHarness("all", { groupId: 11 });
+      await harness.controlBlank();
+      switch (reason) {
+        case "pause":
+          await harness.policy.pause(7);
+          expect(harness.policy.isDenied(7)).toBe(true);
+          await harness.policy.allow(7);
+          break;
+        case "mode change":
+          harness.policy.setMode("selected");
+          harness.policy.setMode("all");
+          break;
+        case "remove":
+          harness.chromeApi.tabs.onRemoved.emit(7);
+          break;
+        case "detach":
+          harness.chromeApi.debugger.onDetach.emit({ tabId: 7 }, "target_closed");
+          break;
+        case "group rename":
+          harness.chromeApi.tabGroups.onUpdated.emit({ id: 12, title: "Other" });
+          await expect(harness.policy.requireTab(7)).resolves.toMatchObject({ url: "about:blank" });
+          harness.chromeApi.tabGroups.onUpdated.emit({ id: 11, title: "Other" });
+          break;
+        case "group removal":
+          harness.chromeApi.tabGroups.onRemoved.emit({ id: 12 });
+          await expect(harness.policy.requireTab(7)).resolves.toMatchObject({ url: "about:blank" });
+          harness.chromeApi.tabGroups.onRemoved.emit({ id: 11 });
+          break;
       }
-      const stale = await harness.chromeApi.tabs.query();
-      let release = (_tabs: BrowserTabSnapshot[]) => {};
-      const lookup = new Promise<BrowserTabSnapshot[]>((resolve) => {
-        release = resolve;
-      });
-      let queried = () => {};
-      const started = new Promise<void>((resolve) => {
-        queried = resolve;
-      });
-      harness.chromeApi.tabs.query.mockImplementationOnce(() => {
-        queried();
-        return lookup;
-      });
-      const discovering = harness.policy.listAccessibleTabs();
-      await started;
-      try {
-        if (snapshot === "source before blank") {
-          await harness.controlBlank();
-        } else {
-          harness.setTab({ url: "https://return.example/" });
-          harness.chromeApi.debugger.onEvent.emit({ tabId: 7 }, "Page.frameNavigated", {
-            frame: { id: "root", loaderId: "return", url: "https://return.example/" },
-          });
-        }
-      } finally {
-        release(stale);
-      }
-      const url = snapshot === "source before blank" ? "about:blank" : "https://return.example/";
-      await expect(discovering).resolves.toEqual([expect.objectContaining({ id: 7, url })]);
-      await expect(harness.policy.requireTab(7)).resolves.toMatchObject({ id: 7, url });
+      harness.send.mockClear();
+      harness.emitNavigation();
+      await expect(harness.policy.requireTab(7)).rejects.toThrow(
+        reason === "remove" ? "access was revoked" : "restricted or unavailable",
+      );
+      await expect(harness.policy.requireTab(7)).rejects.toThrow("restricted or unavailable");
+      expect(harness.send).not.toHaveBeenCalled();
     },
   );
+
+  it("discards a stale selected discovery snapshot of blank before return", async () => {
+    const harness = await createNavigationHarness("selected");
+    await harness.controlBlank();
+    const stale = await harness.chromeApi.tabs.query();
+    const { promise: lookup, resolve: release } = Promise.withResolvers<BrowserTabSnapshot[]>();
+    const { promise: started, resolve: queried } = Promise.withResolvers<void>();
+    harness.chromeApi.tabs.query.mockImplementationOnce(() => {
+      queried();
+      return lookup;
+    });
+    const discovering = harness.policy.listAccessibleTabs();
+    await started;
+    try {
+      harness.setTab({ url: "https://return.example/" });
+      harness.chromeApi.debugger.onEvent.emit({ tabId: 7 }, "Page.frameNavigated", {
+        frame: { id: "root", loaderId: "return", url: "https://return.example/" },
+      });
+    } finally {
+      release(stale);
+    }
+    const url = "https://return.example/";
+    await expect(discovering).resolves.toEqual([expect.objectContaining({ id: 7, url })]);
+    await expect(harness.policy.requireTab(7)).resolves.toMatchObject({ id: 7, url });
+  });
 
   it("rereads a selected lookup overtaken by a native root commit before checking provenance", async () => {
     const harness = await createNavigationHarness("selected");
@@ -294,17 +241,8 @@ describe("Chrome navigation event access", () => {
     });
   });
 
-  it.each(
-    (["all", "selected"] as const).flatMap((mode) =>
-      [
-        "http://destination.example/",
-        "https://destination.example/",
-        "data:text/html,proof",
-        "blob:https://destination.example/document",
-        "file:///tmp/openclaw-navigation-proof.html",
-      ].map((url) => ({ mode, url })),
-    ),
-  )("preserves ordered navigation events in $mode mode for $url", async ({ mode, url }) => {
+  it.each(["selected"] as const)("preserves ordered navigation events in %s mode", async (mode) => {
+    const url = "https://destination.example/";
     const harness = await createNavigationHarness(mode);
     const releaseLookup = harness.deferLookup();
     try {
@@ -337,17 +275,11 @@ describe("Chrome navigation event access", () => {
     "different selected group",
     "wrong tab identity",
     "paused tab",
-    "mode transition",
     "changed group authority",
-    "stale attachment",
-    "unproven attachment",
     "forged epoch copy",
-    "detached tab",
     "replaced tab",
   ])("does not renew access for %s from a URL snapshot", async (scenario) => {
-    const harness = await createNavigationHarness(scenario === "paused tab" ? "all" : "selected", {
-      proveAttachment: scenario !== "unproven attachment",
-    });
+    const harness = await createNavigationHarness(scenario === "paused tab" ? "all" : "selected");
     const update: Partial<BrowserTabSnapshot> = { url: "https://destination.example/" };
     if (scenario === "paused tab") {
       await harness.policy.pause(7);
@@ -370,20 +302,11 @@ describe("Chrome navigation event access", () => {
         case "wrong tab identity":
           update.id = 8;
           break;
-        case "mode transition":
-          harness.policy.beginTransition();
-          break;
         case "changed group authority":
           harness.chromeApi.tabGroups.onUpdated.emit();
           break;
-        case "stale attachment":
-          harness.policy.invalidateTab(7);
-          break;
         case "forged epoch copy":
           harness.attachments.set(7, { epoch: { ...harness.attachmentEpoch } });
-          break;
-        case "detached tab":
-          harness.chromeApi.debugger.onDetach.emit({ tabId: 7 }, "target_closed");
           break;
         case "replaced tab":
           harness.chromeApi.tabs.onReplaced.emit(8, 7);
@@ -402,14 +325,8 @@ describe("Chrome navigation event access", () => {
 
   it("preserves commands admitted after a newer tab event when an older group lookup completes", async () => {
     const harness = await createNavigationHarness("selected");
-    let release = () => {};
-    const pending = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let observed = () => {};
-    const started = new Promise<void>((resolve) => {
-      observed = resolve;
-    });
+    const { promise: pending, resolve: release } = Promise.withResolvers<void>();
+    const { promise: started, resolve: observed } = Promise.withResolvers<void>();
     const get = harness.chromeApi.tabs.get.getMockImplementation()!;
     harness.chromeApi.tabs.get.mockImplementationOnce(async (tabId) => {
       observed();

@@ -1,8 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createWorkerPlacementInitialRecovery,
@@ -16,6 +12,7 @@ import {
   seedProvisioningPlacement,
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness, createRecoveryService } from "./placement-dispatch-test-harness.js";
+import { expectPlacement, workerBundle } from "./placement-lifecycle.test-support.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import {
   deriveEnvironmentIntent,
@@ -27,13 +24,7 @@ describe("worker placement shutdown replay", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
   it("retains interrupted fresh provisioning and activates the same operation after restart", async () => {
-    support.testState.prepareInstallation = async () => ({
-      ...support.BUNDLE_ARTIFACT,
-      protocolFeatures: [
-        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-        WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-      ],
-    });
+    support.testState.prepareInstallation = async () => workerBundle(support.BUNDLE_ARTIFACT);
     const interrupted = createDeferredCore<never>();
     const provisionStarted = createDeferredCore();
     const operationIds: string[] = [];
@@ -52,7 +43,7 @@ describe("worker placement shutdown replay", () => {
     let placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
     const first = support.createService(provider);
     let shuttingDown = false;
-    const dispatch = createRecoveryService(placements, first, () => shuttingDown);
+    const dispatch = await createRecoveryService(placements, first, () => shuttingDown);
     const transitions: string[] = [];
     const request = { ...REQUEST, executionMode: "remote-exec" as const };
     const rejected = expect(
@@ -66,8 +57,7 @@ describe("worker placement shutdown replay", () => {
     interrupted.reject(new Error("provider interrupted"));
     await rejected;
 
-    expect(placements.get(REQUEST.sessionId)).toMatchObject({
-      state: "provisioning",
+    expectPlacement(placements, "provisioning", {
       terminalAtMs: null,
       generation: provisioning.generation,
       environmentId,
@@ -99,7 +89,7 @@ describe("worker placement shutdown replay", () => {
     }));
     const attach = vi.spyOn(restarted, "attachSession");
     const recovery = coordinateWorkerPlacementDispatch(
-      createRecoveryService(placements, restarted),
+      await createRecoveryService(placements, restarted),
       (_request, run) => run(),
       createWorkerPlacementInitialRecovery({
         placements,
@@ -127,7 +117,7 @@ describe("worker placement shutdown replay", () => {
       await uninstallGuard();
     }
 
-    expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "active", environmentId });
+    expectPlacement(placements, "active", { environmentId });
     expect(support.testState.store.get(environmentId)).toMatchObject({
       state: "attached",
       provisionOperationId: operationId,
@@ -149,17 +139,21 @@ describe("worker placement shutdown replay", () => {
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
       const environments = support.createService(support.createProvider());
       const intent = deriveEnvironmentIntent(`session-dispatch:${REQUEST.sessionId}:1`);
-      support.testState.store.createIntent({
+      await support.testState.store.createIntent({
         ...intent,
         providerId: "fake",
         profileId: "development",
         profileSnapshot: { settings: { region: "test" } },
       });
-      const owner = seedProvisioningPlacement(placements, intent.environmentId, "remote-exec");
+      const owner = await seedProvisioningPlacement(
+        placements,
+        intent.environmentId,
+        "remote-exec",
+      );
       if (owner.state !== "provisioning") {
         throw new Error("recovery fixture requires provisioning");
       }
-      const dispatch = createRecoveryService(placements, environments, () => shutdown);
+      const dispatch = await createRecoveryService(placements, environments, () => shutdown);
       const interrupted = new Error(`recovery interrupted ${"x".repeat(2_000)}`);
       const report = vi.fn();
       const recordError = vi.spyOn(environments, "recordError");
@@ -196,11 +190,11 @@ describe("worker placement shutdown replay", () => {
     new WorkerDispatchTargetChangedError("session runtime changed"),
   ])("tears down an invalid recovery owner during shutdown: %s", async (error) => {
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-    const harness = createHarness(support.testState.stateDb, placements, {
+    const harness = await createHarness(support.testState.stateDb, placements, {
       isShuttingDown: () => true,
       recoveryBarrierError: error,
     });
-    const owner = harness.placements.seedProvisioning();
+    const owner = await harness.placements.seedProvisioning();
     if (owner.state !== "provisioning") {
       throw new Error("recovery fixture requires provisioning");
     }
@@ -215,7 +209,7 @@ describe("worker placement shutdown replay", () => {
 
     await harness.service.resumeProvisioning(owner, async () => {});
 
-    expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
+    expectPlacement(placements, "failed");
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
     expect(harness.environments.recordError).not.toHaveBeenCalled();
   });
@@ -232,7 +226,7 @@ describe("worker placement shutdown replay", () => {
             .list()
             .find((record) => record.provisionOperationId === operationId)!;
           if (destroyRequested) {
-            support.testState.store.requestDestroy({
+            await support.testState.store.requestDestroy({
               environmentId: environment.environmentId,
               state: environment.state,
             });
@@ -243,16 +237,15 @@ describe("worker placement shutdown replay", () => {
       const environments = support.createService(provider);
       const destroy = vi.spyOn(environments, "destroy");
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const dispatch = createRecoveryService(placements, environments, () => shutdown);
+      const dispatch = await createRecoveryService(placements, environments, () => shutdown);
 
       await expect(dispatch.dispatch({ ...REQUEST, executionMode: "remote-exec" })).rejects.toThrow(
         "provider interrupted",
       );
 
-      expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
+      expectPlacement(placements, "failed");
       expect(placements.get(REQUEST.sessionId)?.terminalAtMs).not.toBeNull();
-      expect(destroy).toHaveBeenCalledOnce();
-      expect(destroy).toHaveBeenCalledWith(
+      expect(destroy).toHaveBeenCalledExactlyOnceWith(
         deriveEnvironmentIntent(`session-dispatch:${REQUEST.sessionId}:1`).environmentId,
       );
     },

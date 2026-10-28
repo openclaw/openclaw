@@ -1,12 +1,10 @@
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
+import * as runtimeOwnership from "../../agents/harness/session-runtime-ownership.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../../config/config.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
 import {
@@ -15,17 +13,15 @@ import {
   requestContext,
 } from "./sessions-read-cache.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  disposeSessionReadContexts();
+const tempDirs = useSessionStoreTempDirs(afterAll, "catalog-delivery-selection-");
+afterEach(async () => {
+  await disposeSessionReadContexts();
   resetConfigRuntimeState();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
 });
 
 it("selects delivery aliases across agents without narrowing provider planning", async () => {
-  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("catalog-delivery-selection-"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make());
   const cfg = { agents: { ownership: "explicit" as const, entries: { main: {}, work: {} } } };
   setRuntimeConfigSnapshot(cfg, cfg);
   for (const agentId of ["main", "work"]) {
@@ -67,6 +63,15 @@ it("selects delivery aliases across agents without narrowing provider planning",
   while (projection.needsMaterialization) {
     await projection.ensureMaterialized();
   }
+  using ownership = vi.spyOn(runtimeOwnership, "readSessionRuntimeOwnershipAsync");
+  ownership.mockRejectedValue(
+    new Error("Runtime ownership is unavailable during catalog enumeration"),
+  );
+  replaceSessionEntrySync(
+    { agentId: "main", sessionKey: "agent:main:main" },
+    { sessionId: "main-main", updatedAt: 2 },
+  );
+  await projection.prepareSelection({ metadataOnly: true });
   const planning = createSessionCatalogRequestEntrySnapshot({
     cfg,
     fallbackAgentId: "main",
@@ -77,9 +82,6 @@ it("selects delivery aliases across agents without narrowing provider planning",
   const instances = new Map();
   for (const host of hosts) {
     planning.captureHostInstances(host, instances);
-  }
-  while (projection.needsMaterialization) {
-    await projection.ensureMaterialized();
   }
   const delivery = createSessionCatalogRequestEntrySnapshot({
     cfg,

@@ -1,26 +1,41 @@
 import { randomUUID } from "node:crypto";
 import { assert, expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import { hasPendingGeneratedMediaTaskForSessionKey } from "../../agents/media-generation-activity.js";
+import {
+  admitMediaHandle,
+  resetGeneratedMediaTaskActivityForTests,
+} from "../../agents/media-generation-activity.test-support.js";
 import { createSubagentRunParams } from "../../agents/subagent-test-fixtures.test-helpers.js";
 import {
   markRequesterTurnYielded,
   registerSubagentRun,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import type { MediaGenerationTaskHandle } from "../../agents/tools/media-generate-background-completion.js";
+import { createMediaGenerationTaskLifecycle } from "../../agents/tools/media-generate-background-shared.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { getReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { createBlockReplySource, setBlockReplyDelivery } from "./block-reply-delivery.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import * as pendingToolTaskDrain from "./pending-tool-task-drain.js";
 
 type WaitingStatusFixture = {
-  createMinimalRun: (params?: { opts?: InternalGetReplyOptions }) => {
+  createMinimalRun: (params?: {
+    opts?: InternalGetReplyOptions;
+    currentInboundEventKind?: "room_event";
+    runtimePolicySessionKey?: string;
+    sessionCtx?: { Provider: string; Surface: string };
+    runOverrides?: { messageProvider: string };
+  }) => {
     run: () => Promise<ReplyPayload | ReplyPayload[] | undefined>;
   };
-  runEmbeddedAgentMock: Pick<Mock, "mockImplementationOnce" | "mockResolvedValueOnce">;
+  runEmbeddedAgentMock: Pick<Mock, "mockImplementationOnce">;
 };
 
 export async function mockAcceptedWaitingStatusRun(
@@ -30,11 +45,12 @@ export async function mockAcceptedWaitingStatusRun(
     | ((params: RunEmbeddedAgentInternalParams) => Promise<EmbeddedAgentRunResult>),
 ): Promise<void> {
   const testState = await createOpenClawTestState({ label: "reply-waiting-child" });
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   onTestFinished(async () => {
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     await testState.cleanup();
   });
+  await captureRuntimeConfigAsyncReader()();
   runner.mockImplementationOnce(async (params: RunEmbeddedAgentInternalParams) => {
     assert(params.preparedRunAdmission);
     assert(params.sessionKey);
@@ -49,10 +65,10 @@ export async function mockAcceptedWaitingStatusRun(
       requesterAgentId: params.agentId,
       requesterTurnRunId: params.runId,
     };
-    registerSubagentRun(createSubagentRunParams({ ...spawn, ...requester, queued: true }));
+    await registerSubagentRun(createSubagentRunParams({ ...spawn, ...requester, queued: true }));
     const runResult = typeof result === "function" ? await result(params) : result;
     if (runResult.meta.yielded) {
-      expect(markRequesterTurnYielded(requester)).toBe(1);
+      expect(await markRequesterTurnYielded(requester)).toBe(1);
     }
     return { ...runResult, acceptedSessionSpawns: [spawn] };
   });
@@ -62,6 +78,46 @@ export function registerWaitingStatusCases({
   createMinimalRun,
   runEmbeddedAgentMock,
 }: WaitingStatusFixture): void {
+  it("retains pending media ownership for an explicit external NO_REPLY turn", async () => {
+    onTestFinished(resetGeneratedMediaTaskActivityForTests);
+    let handle: MediaGenerationTaskHandle | undefined;
+    runEmbeddedAgentMock.mockImplementationOnce(async (params: RunEmbeddedAgentInternalParams) => {
+      assert(params.preparedRunAdmission);
+      assert(params.sessionKey);
+      await params.preparedRunAdmission.admit("embedded");
+      handle = admitMediaHandle({
+        taskId: "webchat-waiting-image",
+        runId: `tool:image_generate:${randomUUID()}`,
+        requesterSessionKey: params.sandboxSessionKey ?? params.sessionKey,
+        requesterAgentId: params.agentId,
+        taskLabel: "waiting image",
+      });
+      return {
+        payloads: [],
+        meta: {
+          durationMs: 0,
+          continuationPending: true,
+          terminalReply: prepareAgentRunTerminalReply({ rawText: "NO_REPLY" }).terminalReply,
+        },
+      };
+    });
+    const { run } = createMinimalRun({
+      sessionCtx: { Provider: "whatsapp", Surface: "whatsapp" },
+      runOverrides: { messageProvider: "whatsapp" },
+    });
+
+    const result = await run();
+
+    assert(handle);
+    expect(
+      hasPendingGeneratedMediaTaskForSessionKey(
+        handle.requesterSessionKey,
+        handle.requesterAgentId,
+      ),
+    ).toBe(true);
+    expect(result).toBeUndefined();
+  });
+
   it.each([
     {
       label: "implicit continuation",
@@ -72,7 +128,15 @@ export function registerWaitingStatusCases({
       label: "explicit acknowledgment",
       meta: { yielded: true, yieldAcknowledgment: "Research started; results will follow." },
     },
-  ])("delivers one waiting status for $label", async ({ meta }) => {
+    {
+      label: "silent yield with an unsent acknowledgment",
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "Unsent confirmation",
+        terminalReply: { disposition: "silent" as const },
+      },
+    },
+  ])("delivers only a model-authored waiting acknowledgment for $label", async ({ meta }) => {
     await mockAcceptedWaitingStatusRun(runEmbeddedAgentMock, {
       payloads: [],
       meta: { durationMs: 0, ...meta },
@@ -81,20 +145,96 @@ export function registerWaitingStatusCases({
     const { run } = createMinimalRun({ opts: { onPendingContinuation } });
 
     const result = await run();
-    expect(result).toMatchObject({
-      text:
-        meta.yieldAcknowledgment ??
-        "I’m continuing this work and will send the result when it is ready.",
-      replyToId: "msg",
-    });
     expect(onPendingContinuation).toHaveBeenCalledOnce();
-    assert(result && !Array.isArray(result));
-    const metadata = getReplyPayloadMetadata(result);
-    expect(metadata).toMatchObject({
-      continuationStatus: true,
-      deliverDespiteSourceReplySuppression: true,
-    });
+    if ("terminalReply" in meta || !("yieldAcknowledgment" in meta)) {
+      expect(result).toBeUndefined();
+    } else {
+      expect(result).toMatchObject({
+        text: meta.yieldAcknowledgment,
+        replyToId: "msg",
+      });
+      assert(result && !Array.isArray(result));
+      expect(getReplyPayloadMetadata(result)).toMatchObject({
+        continuationStatus: true,
+        deliverDespiteSourceReplySuppression: true,
+      });
+    }
   });
+
+  it.each([
+    { label: "no children", acceptedSessionSpawns: [], delivered: true },
+    {
+      label: "a fire-and-forget child",
+      acceptedSessionSpawns: [
+        {
+          runId: "fire-and-forget",
+          childSessionKey: "agent:main:subagent:fire-and-forget",
+          expectsCompletionMessage: false,
+        },
+      ],
+      delivered: true,
+    },
+    {
+      label: "a shared main session",
+      acceptedSessionSpawns: [],
+      runtimePolicySessionKey: "agent:main:telegram:default:direct:42",
+      delivered: true,
+    },
+    { label: "a failed run", acceptedSessionSpawns: [], delivered: false },
+  ])(
+    "hands the progress card to a media-run continuation with $label",
+    async ({ acceptedSessionSpawns, runtimePolicySessionKey, delivered }) => {
+      onTestFinished(resetGeneratedMediaTaskActivityForTests);
+      let handle: MediaGenerationTaskHandle | undefined;
+      runEmbeddedAgentMock.mockImplementationOnce(
+        async (params: RunEmbeddedAgentInternalParams) => {
+          assert(params.preparedRunAdmission);
+          assert(params.sessionKey);
+          await params.preparedRunAdmission.admit("embedded");
+          // Media tools admit their runs under the attempt's sandbox (runtime policy) key.
+          handle = admitMediaHandle({
+            taskId: "waiting-image",
+            runId: `tool:image_generate:${randomUUID()}`,
+            requesterSessionKey: params.sandboxSessionKey ?? params.sessionKey,
+            requesterAgentId: params.agentId,
+            taskLabel: "waiting image",
+          });
+          return {
+            payloads: [],
+            meta: { durationMs: 0, continuationPending: true },
+            acceptedSessionSpawns,
+          };
+        },
+      );
+      const onPendingContinuation = vi.fn();
+      const { run } = createMinimalRun({
+        opts: { onPendingContinuation },
+        runtimePolicySessionKey,
+      });
+
+      const result = await run();
+      expect(result).toMatchObject({
+        text: "I’m continuing this work and will send the result when it is ready.",
+      });
+      // Delivering the status must not require a child that never owns the reply.
+      await onPendingContinuation.mock.calls[0]?.[0]?.settle(true);
+      assert(result && !Array.isArray(result) && handle);
+      const draft = { push: vi.fn(), retire: vi.fn() };
+      expect(getReplyPayloadMetadata(result)?.progressContinuation?.adopt(draft)).toBe(true);
+      const item = { itemId: handle.runId, kind: "subagent", title: "Image generation" };
+      expect(draft.push.mock.calls).toEqual([[{ ...item, phase: "update", status: "running" }]]);
+      const lifecycle = createMediaGenerationTaskLifecycle("image");
+      if (delivered) {
+        lifecycle.completeTaskRun({ handle, count: 1 });
+        expect(draft.retire).toHaveBeenCalledOnce();
+      } else {
+        // An undelivered result keeps the card as the chat's visible outcome.
+        lifecycle.failTaskRun({ handle });
+        expect(draft.push.mock.calls.at(-1)).toEqual([{ ...item, phase: "end", status: "failed" }]);
+        expect(draft.retire).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it.each([false, true])(
     "uses direct delivery completeness at settlement for waiting status (complete=%s)",
@@ -235,4 +375,34 @@ export function registerWaitingStatusCases({
       }
     },
   );
+
+  it.each([
+    { label: "no acknowledgment", warning: true },
+    { label: "explicit status", acknowledgment: "Research started; results will follow." },
+    {
+      label: "room event",
+      acknowledgment: "Research started; results will follow.",
+      roomEvent: true,
+      warning: true,
+    },
+    { label: "empty acknowledgment", acknowledgment: "[[reply_to_current]]", warning: true },
+  ])("resolves an earlier tool warning with $label", async (testCase) => {
+    const toolWarning = setReplyPayloadMetadata(
+      { text: "⚠️ Bash failed", isError: true },
+      { toolErrorWarning: { toolName: "bash" } },
+    );
+    await mockAcceptedWaitingStatusRun(runEmbeddedAgentMock, {
+      payloads: [toolWarning],
+      meta: { durationMs: 0, yielded: true, yieldAcknowledgment: testCase.acknowledgment },
+    });
+    const { run } = createMinimalRun({
+      currentInboundEventKind: testCase.roomEvent ? "room_event" : undefined,
+    });
+
+    await expect(run()).resolves.toMatchObject({
+      text: testCase.warning ? "⚠️ Bash failed" : testCase.acknowledgment,
+      ...(testCase.warning ? { isError: true } : {}),
+      replyToId: "msg",
+    });
+  });
 }

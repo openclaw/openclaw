@@ -37,12 +37,12 @@ read_when:
         ownership: "explicit",
         entries: {
           coder: {
-            model: "xiaomi/mimo-v2.5-pro",
+            model: "xiaomi/mimo-v2.6-pro",
             thinkingDefault: "high",
             params: { temperature: 0.1 },
           },
           chat: {
-            model: "xiaomi/mimo-v2.5-pro",
+            model: "xiaomi/mimo-v2.6-pro",
             thinkingDefault: "off",
             params: { temperature: 0.8 },
           },
@@ -62,7 +62,7 @@ read_when:
 
     Long tasks and sub-agents both consume tokens; set a cheaper model for sub-agents via `agents.defaults.subagents.model` if cost matters.
 
-    Docs: [Sub-agents](/tools/subagents), [Background Tasks](/automation/tasks).
+    Docs: [Sub-agents](/tools/subagents).
 
   </Accordion>
 
@@ -87,11 +87,11 @@ read_when:
     - If the completion origin only carries a channel, OpenClaw falls back to the requester session's stored route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery can still succeed.
     - No bound route and no usable stored route: direct delivery can fail and the result falls back to queued session delivery instead of posting immediately.
     - Invalid or stale targets can also force queue fallback or final delivery failure.
-    - If the child's last visible assistant reply is exactly `NO_REPLY` / `no_reply` or `ANNOUNCE_SKIP`, OpenClaw intentionally suppresses the announce instead of posting stale earlier progress.
+    - For a completion-required child, `NO_REPLY` or empty output is a missing deliverable passed to the parent as `(no output)` for visible handling or retry. Recorded completion and source-delivery facts suppress duplicate delivery; a completed final result, not stale earlier progress, satisfies the obligation.
 
-    Debug: `openclaw tasks show <lookup>` where `<lookup>` is a task id, run id, or session key.
+    Debug from the requester conversation with `/subagents list`, then `/subagents info <id|#>` and `/subagents log <id|#>`. Inspect Gateway logs for delivery failures; a finished execution does not by itself confirm that its completion was delivered.
 
-    Docs: [Sub-agents](/tools/subagents), [Background Tasks](/automation/tasks), [Session Tools](/concepts/session-tool).
+    Docs: [Sub-agents](/tools/subagents), [Session Tools](/concepts/session-tool).
 
   </Accordion>
 
@@ -118,17 +118,16 @@ read_when:
     - `--no-deliver` / `delivery.mode: "none"`: no runner fallback send is expected.
     - Missing or invalid announce target (`channel` / `to`): the runner skipped outbound delivery.
     - Channel auth failures (`unauthorized`, `Forbidden`): the runner tried to deliver but credentials blocked it.
-    - A silent isolated result (`NO_REPLY` / `no_reply` only) is treated as intentionally non-deliverable, so queued fallback delivery is also suppressed.
+    - A completed isolated final whose entire text trims to uppercase `NO_REPLY` is intentionally non-deliverable, so queued fallback delivery is also suppressed. Lowercase, wrapped forms, and trailing tokens remain visible.
 
     For isolated cron jobs, the agent can still send directly with the `message` tool when a chat route is available. `--announce` only controls runner fallback delivery for final text the agent did not already send itself.
 
     Debug:
     ```bash
     openclaw automations runs <jobId> --limit 50
-    openclaw tasks show <lookup>
     ```
 
-    Docs: [Cron jobs](/automation/cron-jobs), [Background Tasks](/automation/tasks).
+    Docs: [Cron jobs](/automation/cron-jobs).
 
   </Accordion>
 

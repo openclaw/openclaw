@@ -1,524 +1,534 @@
-// Model Catalog Core tests cover model catalog normalize behavior.
-import { describe, expect, it } from "vitest";
-import { normalizeModelCatalog, normalizeModelCatalogProviderRows } from "./index.js";
-import { buildModelCatalogMergeKey, buildModelCatalogRef } from "./model-catalog-refs.js";
+import { expect, it, vi } from "vitest";
+import {
+  normalizeModelCatalog,
+  normalizeModelCatalogProviderRows,
+} from "./model-catalog-normalize.js";
+import type { ModelCatalogProvider } from "./model-catalog-types.js";
+import {
+  parseRemoteModelCatalogBundle as parseV1,
+  parseRemoteModelCatalogBundleV2 as parseV2,
+  parseRemoteModelCatalogBundleV3 as parseV3,
+  validateAndSanitizeRemoteModelCatalogBundle as sanitizeV1,
+  validateAndSanitizeRemoteModelCatalogBundleV2 as sanitizeV2,
+  validateAndSanitizeRemoteModelCatalogBundleV3 as sanitizeV3,
+} from "./remote-catalog-bundle.js";
 
-describe("model catalog normalization", () => {
-  it("normalizes catalog ownership, aliases, suppressions, and row fields", () => {
-    const catalog = normalizeModelCatalog(
+const normalize = (value: unknown, ownedProviders = [" OpenAI "]) =>
+  normalizeModelCatalog(structuredClone(value), { ownedProviders: new Set(ownedProviders) });
+const normalizeModels = (...rows: unknown[]) =>
+  normalize({ providers: { OpenAI: { models: rows } } })?.providers?.openai?.models;
+const normalizeRows = (providerCatalog: ModelCatalogProvider) =>
+  normalizeModelCatalogProviderRows({ provider: " OpenAI ", providerCatalog, source: "manifest" });
+const windows = [
+  { id: "200k", label: "200K", contextWindow: 200_000 },
+  { id: "1m", label: "1M", contextWindow: 1_000_000 },
+];
+
+const wire = { api: "openai-responses", baseUrl: "https://api.test", headers: { x: "y" } };
+const scope = { baseUrlHosts: ["api.test"], providerConfigApiIn: ["qwen", "modelstudio"] };
+const suppression = { provider: "alias", model: "m", reason: "retired", when: scope };
+it.each<[string, unknown, unknown]>([
+  [
+    "providers",
+    {
+      OpenAI: {
+        ...wire,
+        defaultModel: " m ",
+        defaultUtilityModel: " u ",
+        models: [{ id: "m" }, { id: "" }],
+      },
+      other: { models: [{ id: "x" }] },
+    },
+    { openai: { ...wire, defaultModel: "m", defaultUtilityModel: "u", models: [{ id: "m" }] } },
+  ],
+  [
+    "aliases",
+    { Alias: { provider: "OpenAI", api: "azure-openai-responses" }, other: { provider: "other" } },
+    { alias: { provider: "openai", api: "azure-openai-responses" } },
+  ],
+  [
+    "suppressions",
+    [
       {
-        providers: {
-          OpenAI: {
-            baseUrl: "https://api.openai.com/v1",
-            api: "openai-responses",
-            headers: {
-              "x-provider": "openai",
-            },
-            defaultModel: " gpt-5.4 ",
-            defaultUtilityModel: " gpt-5.6-luna ",
-            models: [
-              {
-                id: "gpt-5.4",
-                name: "GPT-5.4",
-                api: "openai-completions",
-                baseUrl: "https://proxy.example/v1",
-                headers: {
-                  "x-model": "gpt-5.4",
-                },
-                input: ["text", "image", "document", "audio"],
-                reasoning: true,
-                contextWindow: 256000,
-                contextWindows: [
-                  { id: "1m", label: " 1M ", contextWindow: 1_000_000 },
-                  { id: "invalid", label: "Invalid", contextWindow: 0 },
-                  { id: "200k", label: " 200K ", contextWindow: 200_000 },
-                ],
-                contextWindowDefault: " 1m ",
-                contextTokens: 200000,
-                maxTokens: 128000,
-                thinkingLevelMap: {
-                  off: null,
-                  minimal: " low ",
-                  max: "max",
-                  adaptive: "high",
-                },
-                cost: {
-                  input: 1.25,
-                  output: 10,
-                  cacheRead: 0.125,
-                  tieredPricing: [
-                    {
-                      input: 1.25,
-                      output: 10,
-                      cacheRead: 0.125,
-                      cacheWrite: 1.25,
-                      range: [0, 256000],
-                    },
-                    {
-                      input: 1,
-                      output: 2,
-                      range: [0, 1000],
-                    },
-                  ],
-                },
-                compat: {
-                  supportsTools: true,
-                  codeMode: " preferred ",
-                  openRouterRouting: {
-                    only: [" anthropic ", "", 1],
-                    allow_fallbacks: false,
-                    require_parameters: "no",
-                  },
-                  vercelGatewayRouting: {
-                    order: [" anthropic ", "", 1],
-                    only: "openai",
-                  },
-                  zaiToolStream: true,
-                  cacheControlFormat: "anthropic",
-                  sendSessionAffinityHeaders: true,
-                  sendSessionIdHeader: false,
-                  supportsEagerToolInputStreaming: false,
-                  supportsLongCacheRetention: true,
-                  supportsResponsesContinuation: true,
-                  supportsJsonSchemaResponseFormat: true,
-                  requiresReasoningContentOnAssistantMessages: true,
-                  supportsStore: "yes",
-                  thinkingFormat: "together",
-                  unknownFlag: true,
-                },
-                status: "preview",
-                statusReason: "rolling out",
-                replaces: [" gpt-5.3 ", ""],
-                replacedBy: "gpt-5.5",
-                tags: [" default ", ""],
-              },
-              {
-                id: "",
-              },
-            ],
-          },
-          anthropic: {
-            models: [{ id: "claude-sonnet-4.6" }],
-          },
+        ...suppression,
+        provider: "Alias",
+        when: {
+          baseUrlHosts: ["API.TEST"],
+          providerConfigApiIn: ["Qwen", "ModelStudio"],
         },
-        aliases: {
-          "Azure-OpenAI-Responses": {
-            provider: "OpenAI",
-            api: "azure-openai-responses",
-          },
-          "anthropic-alias": {
-            provider: "anthropic",
-          },
-        },
-        suppressions: [
-          {
-            provider: "Azure-OpenAI-Responses",
-            model: "gpt-5.3-codex-spark",
-            reason: "not available",
-            when: {
-              baseUrlHosts: ["CODING-INTL.DASHSCOPE.ALIYUNCS.COM"],
-              providerConfigApiIn: ["Qwen", "ModelStudio"],
-            },
-          },
-        ],
-        discovery: {
-          OpenAI: "static",
-          anthropic: "static",
-          bad: "unknown",
-        },
-        runtimeAugment: true,
       },
-      { ownedProviders: new Set(["OpenAI"]) },
-    );
+    ],
+    [suppression],
+  ],
+  ["discovery", { OpenAI: "static", other: "static", bad: "unknown" }, { openai: "static" }],
+  ["runtimeAugment", true, true],
+])("normalizes catalog %s within provider ownership", (field, raw, expected) => {
+  expect(normalize({ [field]: raw })).toEqual({ [field]: expected });
+});
 
-    expect(catalog).toEqual({
-      providers: {
-        openai: {
-          baseUrl: "https://api.openai.com/v1",
-          api: "openai-responses",
-          headers: {
-            "x-provider": "openai",
-          },
-          defaultModel: "gpt-5.4",
-          defaultUtilityModel: "gpt-5.6-luna",
-          models: [
-            {
-              id: "gpt-5.4",
-              name: "GPT-5.4",
-              api: "openai-completions",
-              baseUrl: "https://proxy.example/v1",
-              headers: {
-                "x-model": "gpt-5.4",
-              },
-              input: ["text", "image", "document"],
-              reasoning: true,
-              contextWindow: 256000,
-              contextWindows: [
-                { id: "200k", label: "200K", contextWindow: 200_000 },
-                { id: "1m", label: "1M", contextWindow: 1_000_000 },
-              ],
-              contextWindowDefault: "1m",
-              contextTokens: 200000,
-              maxTokens: 128000,
-              thinkingLevelMap: { off: null, minimal: "low", max: "max" },
-              cost: {
-                input: 1.25,
-                output: 10,
-                cacheRead: 0.125,
-                tieredPricing: [
-                  {
-                    input: 1.25,
-                    output: 10,
-                    cacheRead: 0.125,
-                    cacheWrite: 1.25,
-                    range: [0, 256000],
-                  },
-                ],
-              },
-              compat: {
-                supportsTools: true,
-                codeMode: "preferred",
-                openRouterRouting: { only: ["anthropic"], allow_fallbacks: false },
-                vercelGatewayRouting: { order: ["anthropic"] },
-                zaiToolStream: true,
-                cacheControlFormat: "anthropic",
-                sendSessionAffinityHeaders: true,
-                sendSessionIdHeader: false,
-                supportsEagerToolInputStreaming: false,
-                supportsLongCacheRetention: true,
-                supportsResponsesContinuation: true,
-                supportsJsonSchemaResponseFormat: true,
-                requiresReasoningContentOnAssistantMessages: true,
-                thinkingFormat: "together",
-              },
-              status: "preview",
-              statusReason: "rolling out",
-              replaces: ["gpt-5.3"],
-              replacedBy: "gpt-5.5",
-              tags: ["default"],
-            },
-          ],
+it("keeps only explicit owned models.dev mappings without creating provider rows", () => {
+  const aliases = { alias: { provider: "example" } };
+  expect(
+    normalize(
+      {
+        modelsDev: {
+          " Example ": " Upstream-ID ",
+          other: "other-source",
+          alias: "alias-source",
+          Constructor: "blocked-source",
         },
+        providers: { example: { models: [] } },
+        aliases,
       },
-      aliases: {
-        "azure-openai-responses": {
-          provider: "openai",
-          api: "azure-openai-responses",
-        },
-      },
-      suppressions: [
-        {
-          provider: "azure-openai-responses",
-          model: "gpt-5.3-codex-spark",
-          reason: "not available",
-          when: {
-            baseUrlHosts: ["coding-intl.dashscope.aliyuncs.com"],
-            providerConfigApiIn: ["qwen", "modelstudio"],
-          },
-        },
+      [" EXAMPLE ", "constructor"],
+    ),
+  ).toEqual({ modelsDev: { example: "Upstream-ID" }, aliases });
+});
+
+it("sorts rows, drops invalid ids and upstream ids, merges transport and fills defaults", () => {
+  const transport = { api: "openai-responses", baseUrl: "https://api.test" } as const;
+  const image = { maxBytes: 4096, maxPixels: 1024, maxSidePx: 64, preferredSidePx: 32 };
+  const mediaInput = { image: { ...image, tokenMode: "detail" } } as const;
+  const defaults = {
+    ...transport,
+    provider: "openai",
+    source: "manifest",
+    reasoning: false,
+    status: "available",
+  };
+  expect(
+    normalizeRows({
+      ...transport,
+      headers: { x: " old ", inherited: "yes" },
+      models: [
+        { id: "z", headers: { x: " new " }, mediaInput },
+        { id: " " },
+        { id: "A", upstreamModel: "other/A", input: ["image"], compat: { supportsTools: false } },
       ],
-      discovery: {
-        openai: "static",
+    }),
+  ).toEqual([
+    {
+      ...defaults,
+      id: "A",
+      ref: "openai/A",
+      mergeKey: "openai::a",
+      name: "A",
+      input: ["image"],
+      compat: { supportsTools: false },
+      headers: { x: "old", inherited: "yes" },
+    },
+    {
+      ...defaults,
+      id: "z",
+      ref: "openai/z",
+      mergeKey: "openai::z",
+      name: "z",
+      input: ["text"],
+      mediaInput,
+      headers: { x: "new", inherited: "yes" },
+    },
+  ]);
+});
+
+it.each<[string, unknown, unknown?]>([
+  ["supportsTools", true],
+  ["sendSessionIdHeader", false],
+  ["cacheControlFormat", "anthropic"],
+  ["maxTokensField", "max_completion_tokens"],
+  ["thinkingFormat", "openrouter"],
+  ["codeMode", " preferred ", "preferred"],
+  ["toolSchemaProfile", " strict ", "strict"],
+  ["toolCallArgumentsEncoding", " json ", "json"],
+  ["visibleReasoningDetailTypes", [" summary ", ""], ["summary"]],
+  ["supportedReasoningEfforts", [" low ", " high "], ["low", "high"]],
+  ["supportedReasoningEfforts", [], []],
+  ["unsupportedToolSchemaKeywords", [" pattern ", ""], ["pattern"]],
+  ["reasoningEffortMap", { " low ": " minimal ", empty: "  " }, { low: "minimal" }],
+  [
+    "vercelGatewayRouting",
+    { only: [" openai "], order: [" anthropic ", "", 1] },
+    { only: ["openai"], order: ["anthropic"] },
+  ],
+])("normalizes compatibility %s", (field, raw, expected = raw) => {
+  expect(normalizeModels({ id: "m", compat: { [field]: raw } })).toEqual([
+    { id: "m", compat: { [field]: expected } },
+  ]);
+});
+
+it("normalizes model selections, lists, prices and safe headers", () => {
+  const tier = { input: 0, output: 2, cacheRead: 0, cacheWrite: 1, range: [128] };
+  const bounded = { ...tier, input: 1, range: [0, 256000] };
+  const cost = { input: 0, output: 2, cacheRead: 0.125, cacheWrite: 1 };
+  expect(
+    normalizeModels({
+      id: " m ",
+      input: ["text", "image", "video", "document", "audio"],
+      contextWindows: [
+        { ...windows[1], label: " 1M " },
+        { id: "bad", label: "bad", contextWindow: 0 },
+        windows[0],
+      ],
+      contextWindowDefault: " 1m ",
+      thinkingLevelMap: { off: null, minimal: " low ", max: "max", adaptive: "high" },
+      replaces: [" old ", ""],
+      tags: [" default ", ""],
+      headers: Object.fromEntries([
+        ["x", " safe "],
+        ["__proto__", "bad"],
+        ["constructor", "bad"],
+        ["prototype", "bad"],
+      ]),
+      cost: {
+        ...cost,
+        tieredPricing: [tier, bounded, { ...tier, range: [-1] }, { input: 1, range: [0, 2] }],
       },
-      runtimeAugment: true,
-    });
-  });
+    }),
+  ).toEqual([
+    {
+      id: "m",
+      input: ["text", "image", "video", "document"],
+      contextWindows: windows,
+      contextWindowDefault: "1m",
+      thinkingLevelMap: { off: null, minimal: "low", max: "max" },
+      replaces: ["old"],
+      tags: ["default"],
+      headers: { x: "safe" },
+      cost: { ...cost, tieredPricing: [tier, bounded] },
+    },
+  ]);
+});
 
-  it("keeps only explicit owned models.dev mappings without creating provider rows", () => {
-    expect(
-      normalizeModelCatalog(
-        {
-          modelsDev: {
-            " Example ": " Upstream-ID ",
-            other: "other-source",
-            alias: "alias-source",
-            Constructor: "blocked-source",
-          },
-          providers: { example: { models: [] } },
-          aliases: { alias: { provider: "example" } },
-        },
-        { ownedProviders: new Set([" EXAMPLE ", "constructor"]) },
-      ),
-    ).toEqual({
-      modelsDev: { example: "Upstream-ID" },
-      aliases: { alias: { provider: "example" } },
-    });
-  });
-
-  it("builds normalized rows with provider defaults and stable refs", () => {
-    const rows = normalizeModelCatalogProviderRows({
-      provider: "OpenAI",
-      providerCatalog: {
-        baseUrl: "https://api.openai.com/v1",
-        api: "openai-responses",
-        headers: {
-          "x-provider": "openai",
-        },
-        models: [
-          {
-            id: "GPT-5.4",
-            headers: {
-              "x-model": "gpt-5.4",
-            },
-            input: ["image"],
-            contextTokens: 64_000,
-            maxTokens: 4096,
-            thinkingLevelMap: { off: null, high: " high " },
-            cost: { input: 0, output: 2 },
-            compat: { supportsTools: false },
-            upstreamModel: "other/gpt-5.4",
-          },
-        ],
-      },
-      source: "manifest",
-    });
-
-    expect(rows).toEqual([
+it("normalizes routing and drops malformed compatibility fields", () => {
+  const routing = {
+    allow_fallbacks: false,
+    require_parameters: true,
+    data_collection: "deny",
+    zdr: true,
+    enforce_distillable_text: true,
+    order: ["openai"],
+    only: ["anthropic"],
+    ignore: ["bad"],
+    quantizations: ["fp8"],
+    sort: { by: "throughput", partition: null },
+    max_price: { prompt: "0.5", completion: 2, image: 0, audio: 3, request: 4 },
+    preferred_min_throughput: { p50: 10, p75: 20, p90: 30, p99: 40 },
+    preferred_max_latency: 1,
+  };
+  expect(
+    normalizeModels(
       {
-        provider: "openai",
-        id: "GPT-5.4",
-        ref: "openai/GPT-5.4",
-        mergeKey: "openai::gpt-5.4",
-        name: "GPT-5.4",
-        source: "manifest",
-        input: ["image"],
-        contextTokens: 64_000,
-        maxTokens: 4096,
-        thinkingLevelMap: { off: null, high: "high" },
-        cost: { input: 0, output: 2 },
-        compat: { supportsTools: false },
-        reasoning: false,
-        status: "available",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        headers: {
-          "x-provider": "openai",
-          "x-model": "gpt-5.4",
-        },
-      },
-    ]);
-    expect(buildModelCatalogRef("OpenAI", "GPT-5.4")).toBe("openai/GPT-5.4");
-    expect(buildModelCatalogMergeKey("OpenAI", "GPT-5.4")).toBe("openai::gpt-5.4");
-  });
-
-  it("normalizes complete provider routing, pricing, reasoning, and image limits", () => {
-    const tier = { input: 0, output: 2, cacheRead: 0, cacheWrite: 1, range: [128] };
-    const catalog = normalizeModelCatalog(
-      {
-        providers: {
-          OpenAI: {
-            models: [
-              {
-                id: " gpt-5.4 ",
-                headers: Object.fromEntries([
-                  ["x-safe", " value "],
-                  ["__proto__", "polluted"],
-                  ["constructor", "polluted"],
-                  ["prototype", "polluted"],
-                ]),
-                cost: {
-                  input: 0,
-                  output: 2,
-                  cacheWrite: 1,
-                  tieredPricing: [tier, { ...tier, range: [-1] }, { input: 1, range: [0, 2] }],
-                },
-                mediaInput: {
-                  image: {
-                    maxBytes: 4096,
-                    maxPixels: 1024,
-                    maxSidePx: 64,
-                    preferredSidePx: 32,
-                    tokenMode: "tile",
-                  },
-                },
-                compat: {
-                  supportsPromptCacheKey: true,
-                  toolSchemaProfile: " strict ",
-                  toolCallArgumentsEncoding: " json ",
-                  visibleReasoningDetailTypes: [" summary ", ""],
-                  supportedReasoningEfforts: [" low ", " high "],
-                  unsupportedToolSchemaKeywords: [" pattern ", ""],
-                  reasoningEffortMap: { " low ": " minimal ", empty: "  " },
-                  maxTokensField: "max_completion_tokens",
-                  thinkingFormat: "openrouter",
-                  openRouterRouting: {
-                    allow_fallbacks: false,
-                    require_parameters: true,
-                    data_collection: "deny",
-                    zdr: true,
-                    enforce_distillable_text: true,
-                    order: [" openai ", ""],
-                    only: [" anthropic "],
-                    ignore: [" bad "],
-                    quantizations: [" fp8 "],
-                    sort: { by: " throughput ", partition: null },
-                    max_price: { prompt: " 0.5 ", completion: 2, image: 0, audio: 3, request: 4 },
-                    preferred_min_throughput: { p50: 10, p75: 20, p90: 30, p99: 40 },
-                    preferred_max_latency: 1,
-                  },
-                  vercelGatewayRouting: { only: [" openai "], order: [" anthropic "] },
-                },
-              },
-            ],
-          },
-        },
-      },
-      { ownedProviders: new Set([" OpenAI "]) },
-    );
-
-    expect(catalog?.providers?.openai?.models).toEqual([
-      {
-        id: "gpt-5.4",
-        headers: { "x-safe": "value" },
-        cost: { input: 0, output: 2, cacheWrite: 1, tieredPricing: [tier] },
-        mediaInput: {
-          image: {
-            maxBytes: 4096,
-            maxPixels: 1024,
-            maxSidePx: 64,
-            preferredSidePx: 32,
-            tokenMode: "tile",
-          },
-        },
+        id: "m",
         compat: {
-          supportsPromptCacheKey: true,
-          toolSchemaProfile: "strict",
-          toolCallArgumentsEncoding: "json",
-          visibleReasoningDetailTypes: ["summary"],
-          supportedReasoningEfforts: ["low", "high"],
-          unsupportedToolSchemaKeywords: ["pattern"],
-          reasoningEffortMap: { low: "minimal" },
-          maxTokensField: "max_completion_tokens",
-          thinkingFormat: "openrouter",
           openRouterRouting: {
-            allow_fallbacks: false,
-            require_parameters: true,
-            data_collection: "deny",
-            zdr: true,
-            enforce_distillable_text: true,
-            order: ["openai"],
-            only: ["anthropic"],
-            ignore: ["bad"],
-            quantizations: ["fp8"],
-            sort: { by: "throughput", partition: null },
-            max_price: { prompt: "0.5", completion: 2, image: 0, audio: 3, request: 4 },
-            preferred_min_throughput: { p50: 10, p75: 20, p90: 30, p99: 40 },
-            preferred_max_latency: 1,
+            ...routing,
+            order: [" openai ", ""],
+            only: [" anthropic ", "", 1],
+            ignore: [" bad "],
+            quantizations: [" fp8 "],
+            sort: { by: " throughput ", partition: null },
+            max_price: { ...routing.max_price, prompt: " 0.5 " },
           },
-          vercelGatewayRouting: { only: ["openai"], order: ["anthropic"] },
         },
       },
-    ]);
-  });
-
-  it("retains an explicitly empty supported reasoning effort list", () => {
-    const catalog = normalizeModelCatalog(
       {
-        providers: {
-          example: { models: [{ id: "reasoner", compat: { supportedReasoningEfforts: [] } }] },
+        id: "invalid",
+        compat: {
+          supportsStore: "yes",
+          unknownFlag: true,
+          openRouterRouting: { require_parameters: "no" },
+          vercelGatewayRouting: { only: "openai" },
         },
       },
-      { ownedProviders: new Set(["example"]) },
-    );
+    ),
+  ).toEqual([{ id: "m", compat: { openRouterRouting: routing } }, { id: "invalid" }]);
+});
 
-    expect(catalog?.providers?.example?.models[0]?.compat).toEqual({
-      supportedReasoningEfforts: [],
-    });
+it.each([null, { suppressions: [{ provider: "openai" }] }, { modelsDev: { openai: " " } }])(
+  "rejects an empty or invalid catalog: %j",
+  (value) => expect(normalize(value)).toBeUndefined(),
+);
+
+it("drops the selection tuple with an undeclared default", () => {
+  const [row] = normalizeRows({
+    models: [{ id: "m", contextWindows: windows, contextWindowDefault: "missing" }],
   });
+  expect([row?.contextWindows, row?.contextWindowDefault]).toEqual([undefined, undefined]);
+});
 
-  it.each([
-    { name: "non-record catalog", value: null },
-    { name: "unowned provider", value: { providers: { anthropic: { models: [{ id: "x" }] } } } },
-    { name: "missing model id", value: { providers: { openai: { models: [{ id: "  " }] } } } },
-    { name: "unowned alias", value: { aliases: { alias: { provider: "anthropic" } } } },
-    { name: "invalid suppression", value: { suppressions: [{ provider: "openai" }] } },
-    { name: "unknown discovery", value: { discovery: { openai: "unknown" } } },
-    { name: "non-record models.dev mapping", value: { modelsDev: "openai" } },
-    { name: "array models.dev mapping", value: { modelsDev: ["openai"] } },
-    { name: "null models.dev mapping", value: { modelsDev: null } },
-    { name: "empty models.dev mapping", value: { modelsDev: {} } },
-    { name: "blank models.dev source", value: { modelsDev: { openai: "  " } } },
-    { name: "non-string models.dev source", value: { modelsDev: { openai: true } } },
-    { name: "unowned models.dev mapping", value: { modelsDev: { anthropic: "anthropic" } } },
-  ])("rejects a $name instead of publishing an empty catalog", ({ value }) => {
-    expect(normalizeModelCatalog(value, { ownedProviders: new Set(["openai"]) })).toBeUndefined();
+it("retains ownership without static models and rejects invalid credential scope", () => {
+  const provider = { authScope: "plugin", models: [] };
+  expect(normalize({ providers: { fixture: provider } }, ["fixture"])?.providers?.fixture).toEqual(
+    provider,
+  );
+  expect(() => normalize({ providers: { fixture: { authScope: "global" } } }, ["fixture"])).toThrow(
+    "credential ownership",
+  );
+});
+
+it("normalizes declared families and drops malformed families", () => {
+  const providers = normalize(
+    {
+      providers: {
+        OpenAI: {
+          family: " OpenAI ",
+          models: [{ id: "m" }, { id: "oss", family: "Meta" }, { id: "bad", family: 7 }],
+        },
+        Router: { family: "open ai", models: [{ id: "x", family: "a".repeat(65) }] },
+      },
+    },
+    ["openai", "router"],
+  )?.providers;
+  expect(providers).toEqual({
+    openai: {
+      family: "openai",
+      models: [{ id: "m" }, { id: "oss", family: "meta" }, { id: "bad" }],
+    },
+    router: { models: [{ id: "x" }] },
   });
+});
 
-  it("sorts provider rows and drops invalid models while preserving model overrides", () => {
+const transport = { baseUrl: "https://evil.test", headers: { Authorization: "bad" } };
+const cleanProvider = { models: [{ id: "claude-test" }] };
+const validBundle = {
+  schemaVersion: 1,
+  generatedAt: 1_753_500_000_000,
+  sourceCommit: "abc123",
+  providers: { anthropic: cleanProvider },
+};
+
+it("accepts v1 metadata while deeply stripping transport overrides", () => {
+  const provider = {
+    defaultModel: "claude-test",
+    models: [{ id: "claude-test", compat: { nested: {} } }],
+  };
+  const pricing = { "openai/gpt-external": { input: 2.5, output: 10, cacheRead: 1.25 } };
+  const parsed = sanitizeV1({
+    ...validBundle,
+    providers: {
+      anthropic: {
+        ...provider,
+        ...transport,
+        models: [{ id: "claude-test", ...transport, compat: { nested: transport } }],
+      },
+    },
+    pricing,
+  });
+  expect(parsed.providers.anthropic).toEqual(provider);
+  expect(parsed.pricing).toEqual(pricing);
+});
+const knownPrice = { status: "known", currency: "USD", unit: "million_tokens" };
+const modelV2 = (id: string, provider = "first", pricing: unknown = { status: "unknown" }) => ({
+  id,
+  provider,
+  pricing,
+});
+const firstModel = modelV2("vendor/model");
+const validBundleV2 = {
+  schemaVersion: 2,
+  generatedAt: validBundle.generatedAt,
+  sourceCommit: "abc123",
+  providers: { first: {}, second: {} },
+  models: [firstModel, modelV2("second-only", "second")],
+};
+const versions = [
+  [1, parseV1, sanitizeV1, validBundle],
+  [2, parseV2, sanitizeV2, validBundleV2],
+] as const;
+const v1Provider = (patch: Record<string, unknown>) => ({
+  providers: { anthropic: { ...cleanProvider, ...patch } },
+});
+const v1Models = (...models: unknown[]) => v1Provider({ models });
+const rowsFor = (version: number, models: unknown[]) =>
+  version === 1 ? { providers: { first: { models } } } : { models };
+
+type Rejection = [Record<string, unknown>, string?];
+const invalidV1: Rejection[] = [
+  [{ schemaVersion: 2 }],
+  [{ generatedAt: 0 }],
+  [
+    { generatedAt: Date.now() + 2 * 24 * 60 * 60_000 },
+    "generatedAt is implausibly far in the future",
+  ],
+  [v1Models()],
+  [v1Models({ id: " duplicate " }, { id: "duplicate" }), "duplicate model id: duplicate"],
+  [{ pricing: { "openai/bad": { input: -1, output: 2 } } }],
+  [{ pricing: { "openai/bad": { input: 1, output: 2, baseUrl: "https://bad.test" } } }],
+  [
+    v1Models({ id: "bad", contextWindows: windows, contextWindowDefault: "missing" }),
+    "contextWindowDefault must reference a declared contextWindows option",
+  ],
+  [v1Provider({ recommendedModels: ["claude-test"] }), "recommendedModels"],
+];
+const invalidV2: Rejection[] = [
+  [{ models: [firstModel, { ...firstModel, id: " vendor/model " }] }, "duplicate provider/model"],
+  [{ models: [{ ...firstModel, provider: "missing" }] }, "undeclared model provider"],
+  [{ models: [{ ...firstModel, baseUrl: "https://bad.test" }] }, "baseUrl"],
+  [{ models: [{ ...firstModel, contextWindowDefault: "missing" }] }, "contextWindowDefault"],
+  [{ models: [{ ...firstModel, pricing: { status: "unknown", input: 0 } }] }, "input"],
+  [{ models: [{ ...firstModel, pricing: knownPrice }] }, "known pricing must contain rates"],
+  [{ models: [{ ...firstModel, pricing: { ...knownPrice, input: -1 } }] }, "input"],
+  [{ pricing: {} }],
+];
+for (const recommendedModels of [["vendor/model", " vendor/model "], [" "], ["second-only"]]) {
+  invalidV2.push([
+    {
+      providers: { first: { recommendedModels }, second: {} },
+    },
+  ]);
+}
+for (const pricing of [
+  { "vendor/model": { input: 1, output: 2 } },
+  { model: { input: 1, output: 2, source: "x" } },
+]) {
+  for (const field of ["upstreamPricing", "providerPricing"]) {
+    invalidV2.push([{ [field]: pricing }]);
+  }
+}
+it.each([versions[0], versions[1]])(
+  "rejects malformed v%i catalogs",
+  (version, parse, _sanitize, bundle) => {
+    const cases = version === 1 ? invalidV1 : invalidV2;
+    for (const [patch, error] of cases) {
+      expect(() => parse({ ...bundle, ...patch }), JSON.stringify(patch)).toThrow(error);
+    }
+  },
+);
+
+it.each([versions[0], versions[1]])(
+  "ingests v%i rows independently and warns once per affected row",
+  (version, _parse, sanitize, base) => {
+    const warn = vi.fn();
+    const rows = [
+      { id: "kept", input: ["text", "audio", "image", "future", "video", "document"] },
+      { id: "future-only", input: ["audio"] },
+      { id: "bad-input", input: ["text", 42] },
+      { id: "bad-api", api: "future-api" },
+      { id: "bad-limit", contextWindow: -1 },
+      { id: "bad-context", contextWindowDefault: "missing" },
+      { id: " " },
+      {},
+      { id: "kept" },
+      { id: "last", input: ["text"] },
+    ];
+    const patch =
+      version === 1
+        ? {
+            providers: {
+              first: { models: rows },
+              second: { models: [{ id: "kept" }] },
+              empty: { models: [] },
+            },
+          }
+        : {
+            providers: { first: { recommendedModels: ["bad-api", "kept"] }, second: {} },
+            models: [
+              ...rows.map((row) =>
+                Object.assign({}, row, { provider: "first", pricing: { status: "unknown" } }),
+              ),
+              modelV2("kept", "second"),
+            ],
+          };
+    const bundle = sanitize({ ...base, ...patch }, warn);
+    const models =
+      bundle.schemaVersion === 1 ? (bundle.providers.first?.models ?? []) : bundle.models;
+    expect(models.slice(0, 2).map(({ id, input }) => ({ id, input }))).toEqual([
+      { id: "kept", input: ["text", "image", "video", "document"] },
+      { id: "last", input: ["text"] },
+    ]);
     expect(
-      normalizeModelCatalogProviderRows({
-        provider: " OpenAI ",
-        providerCatalog: {
-          headers: { "x-provider": " default ", "x-override": " old " },
-          models: [
-            { id: "z-model", headers: { "x-override": " new " } },
-            { id: "  " },
-            { id: "a-model", mediaInput: { image: { tokenMode: "detail", maxBytes: 1 } } },
-          ],
-        },
-        source: "runtime-refresh",
-      }),
-    ).toMatchObject([
+      bundle.schemaVersion === 1 ? bundle.providers.second?.models : models.slice(2),
+    ).toMatchObject([{ id: "kept" }]);
+    if (bundle.schemaVersion === 2) {
+      expect(bundle.providers.first?.recommendedModels).toEqual(["kept"]);
+    } else {
+      expect(bundle.providers).not.toHaveProperty("empty");
+    }
+    expect(warn).toHaveBeenCalledTimes(9);
+    warn.mockClear();
+    expect(sanitize(bundle, warn)).toEqual(bundle);
+    expect(warn).not.toHaveBeenCalled();
+  },
+);
+
+it.each([versions[0], versions[1]])(
+  "rejects invalid v%i envelopes and catalogs with no usable rows",
+  (version, _parse, sanitize, bundle) => {
+    for (const patch of [
+      { sourceCommit: undefined },
+      { generatedAt: "today" },
+      { providers: null },
+    ]) {
+      expect(() => sanitize({ ...bundle, ...patch })).toThrow();
+    }
+    for (const models of [[], [{ id: "" }]]) {
+      expect(() => sanitize({ ...bundle, ...rowsFor(version, models) }, vi.fn())).toThrow(
+        "no valid models",
+      );
+    }
+  },
+);
+
+it("strips v2 transport metadata while preserving transport-like provider identities", () => {
+  const models = [
+    {
+      ...firstModel,
+      provider: "headers",
+      contextWindows: windows,
+      contextWindowDefault: "1m",
+      compat: { supportsTools: true, nested: transport },
+    },
+    { ...validBundleV2.models[1], provider: "baseUrl" },
+  ];
+  const bundle = sanitizeV2({
+    ...validBundleV2,
+    providers: { headers: {}, baseUrl: {} },
+    models,
+  });
+  expect(Object.keys(bundle.providers)).toEqual(["headers", "baseUrl"]);
+  expect(bundle.models.map((model) => model.provider)).toEqual(["headers", "baseUrl"]);
+  expect(bundle.models[0]).toEqual({
+    ...models[0],
+    compat: { supportsTools: true, nested: {} },
+  });
+  expect(() => parseV2(bundle)).not.toThrow();
+});
+
+it("negotiates task metadata only on v3 and rejects malformed declarations per row", () => {
+  const inference = { chat: false, decision: { protocol: "fixture", input: ["text"] } };
+  const native = { ...firstModel, inference, compat: { nested: transport } };
+  const candidate = {
+    ...validBundleV2,
+    schemaVersion: 3,
+    providers: { first: { recommendedModels: [native.id] } },
+    models: [native],
+  };
+  expect(() => parseV2(candidate)).toThrow();
+  expect(() => parseV2({ ...candidate, schemaVersion: 2 })).toThrow();
+  expect(parseV3(candidate).models[0]?.inference).toEqual(inference);
+  const warn = vi.fn();
+  const invalid = {
+    ...native,
+    id: "invalid",
+    inference: { ...inference, decision: { ...inference.decision, protocol: "invalid protocol" } },
+  };
+  const admitted = sanitizeV3({ ...candidate, models: [native, invalid] }, warn);
+  expect(admitted.models).toHaveLength(1);
+  expect(admitted.models[0]).toMatchObject({ inference, compat: { nested: {} } });
+  expect(admitted.providers.first?.recommendedModels).toEqual([]);
+  expect(warn).toHaveBeenCalledOnce();
+});
+
+it("limits configured-origin discovery to owned runtime catalogs", () => {
+  expect(
+    normalize(
       {
-        id: "a-model",
-        provider: "openai",
-        input: ["text"],
-        reasoning: false,
-        status: "available",
-        mediaInput: { image: { tokenMode: "detail", maxBytes: 1 } },
+        discovery: { live: "runtime", cached: "refreshable", fixed: "static", other: "runtime" },
+        configuredEndpointDiscovery: [" LIVE ", "live", "cached", "fixed", "other", "missing"],
       },
-      { id: "z-model", headers: { "x-provider": "default", "x-override": "new" } },
-    ]);
-  });
-
-  it("bounds selectable context windows and keeps the default inside the cap", () => {
-    const contextWindows = Array.from({ length: 20 }, (_, index) => ({
-      id: `window-${index}`,
-      label: `Window ${index}`,
-      contextWindow: 20 - index,
-    }));
-    const [row] = normalizeModelCatalogProviderRows({
-      provider: "example",
-      providerCatalog: {
-        models: [{ id: "model", contextWindows, contextWindowDefault: "window-3" }],
-      },
-      source: "manifest",
-    });
-
-    expect(row?.contextWindows).toHaveLength(16);
-    expect(row?.contextWindows?.map((option) => option.contextWindow)).toEqual([
-      5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-    ]);
-    expect(row?.contextWindowDefault).toBe("window-3");
-  });
-
-  it.each([
-    { name: "an omitted default", contextWindowDefault: undefined },
-    { name: "an undeclared default", contextWindowDefault: "missing" },
-    { name: "a default dropped by the option cap", contextWindowDefault: "window-19" },
-  ])("drops the selection tuple with $name", ({ contextWindowDefault }) => {
-    const contextWindows = Array.from({ length: 20 }, (_, index) => ({
-      id: `window-${index}`,
-      label: `Window ${index}`,
-      contextWindow: 20 - index,
-    }));
-    const [row] = normalizeModelCatalogProviderRows({
-      provider: "example",
-      providerCatalog: {
-        models: [
-          {
-            id: "model",
-            contextWindows,
-            ...(contextWindowDefault ? { contextWindowDefault } : {}),
-          },
-        ],
-      },
-      source: "manifest",
-    });
-
-    // Options without a selectable default would render no picker control, so
-    // the normalized row must drop the whole tuple, not just the default.
-    expect(row?.contextWindows).toBeUndefined();
-    expect(row?.contextWindowDefault).toBeUndefined();
+      ["live", "cached", "fixed", "missing"],
+    ),
+  ).toEqual({
+    discovery: { live: "runtime", cached: "refreshable", fixed: "static" },
+    configuredEndpointDiscovery: ["live"],
   });
 });

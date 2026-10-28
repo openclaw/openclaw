@@ -4,52 +4,20 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import zlib from "node:zlib";
+import { walkDirectorySync } from "@openclaw/fs-safe/walk";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
-
-export const SESSION_ARCHIVE_ZSTD_SUFFIX = ".zst";
-
-type ZstdCodec = {
-  compress: (data: Buffer) => Buffer;
-  decompress: (data: Buffer) => Buffer;
-};
-
-// node:zlib ships zstd since Node 22.15/23.8; Bun may not implement it yet.
-// Feature-detect so the Bun path writes plain JSONL archives instead of
-// crashing, and mixed plain/compressed archives always stay readable.
-function resolveZstdCodec(): ZstdCodec | null {
-  const candidate = zlib as Partial<{
-    zstdCompressSync: (data: Buffer) => Buffer;
-    zstdDecompressSync: (data: Buffer) => Buffer;
-  }>;
-  if (
-    typeof candidate.zstdCompressSync !== "function" ||
-    typeof candidate.zstdDecompressSync !== "function"
-  ) {
-    return null;
-  }
-  return {
-    compress: candidate.zstdCompressSync.bind(zlib),
-    decompress: candidate.zstdDecompressSync.bind(zlib),
-  };
-}
+import { resolveZstdCodec } from "../../infra/zstd-codec.js";
+import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "./transcript-file-names.js";
+export { SESSION_ARCHIVE_ZSTD_SUFFIX } from "./transcript-file-names.js";
 
 const zstdCodec = resolveZstdCodec();
 
-/** Strips the optional zstd suffix so archive name parsers see one shape. */
-export function stripSessionArchiveCompressionSuffix(fileName: string): string {
-  return fileName.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)
-    ? fileName.slice(0, -SESSION_ARCHIVE_ZSTD_SUFFIX.length)
-    : fileName;
-}
-
-/** Compresses archive content when the runtime supports zstd. */
 export function encodeSessionArchiveContent(content: string): {
   bytes: Buffer;
   suffix: "" | typeof SESSION_ARCHIVE_ZSTD_SUFFIX;
 } {
   const plain = Buffer.from(content, "utf8");
-  if (!zstdCodec || plain.length === 0) {
+  if (plain.length === 0) {
     return { bytes: plain, suffix: "" };
   }
   // Default zstd level (3) matches the ratio/speed point Codex uses for cold
@@ -57,36 +25,17 @@ export function encodeSessionArchiveContent(content: string): {
   return { bytes: zstdCodec.compress(plain), suffix: SESSION_ARCHIVE_ZSTD_SUFFIX };
 }
 
-/** Reads an archived transcript, transparently decompressing zstd artifacts. */
 export function readSessionArchiveContentSync(filePath: string): string {
   if (!filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
     return fs.readFileSync(filePath, "utf8");
   }
-  if (!zstdCodec) {
-    throw new Error(
-      `Cannot read compressed transcript archive ${filePath}: this runtime lacks node:zlib zstd support`,
-    );
-  }
   return zstdCodec.decompress(fs.readFileSync(filePath)).toString("utf8");
-}
-
-/** Decodes staged archive bytes using the source archive's codec. */
-export function decodeSessionArchiveBytes(bytes: Uint8Array, compressed: boolean): string {
-  if (!compressed) {
-    return Buffer.from(bytes).toString("utf8");
-  }
-  if (!zstdCodec) {
-    throw new Error("Cannot decode compressed transcript archive: this runtime lacks zstd support");
-  }
-  return zstdCodec.decompress(Buffer.from(bytes)).toString("utf8");
 }
 
 /**
  * Materializes a compressed archive as a plain JSONL cache file and returns
- * the readable path; plain archives pass through untouched. Archives are
- * write-once (timestamped names), so a cache hit never needs revalidation —
- * this lets every downstream transcript reader (index, tail chunks, header
- * probes) work on archives without learning about compression.
+ * the readable path; plain archives pass through untouched. Source identity
+ * validates cached bytes so downstream readers need not handle compression.
  */
 export function materializeSessionArchiveForRead(filePath: string): string {
   if (!filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
@@ -134,17 +83,10 @@ function sweepMaterializedArchiveCache(cacheDir: string): void {
     return;
   }
   lastMaterializedArchiveCacheSweepMs = now;
-  let entries: string[];
-  try {
-    entries = fs.readdirSync(cacheDir);
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    const entryPath = path.join(cacheDir, entry);
+  for (const entry of walkDirectorySync(cacheDir, { maxDepth: 1, symlinks: "include" }).entries) {
     try {
-      if (now - fs.statSync(entryPath).mtimeMs > MATERIALIZED_ARCHIVE_CACHE_TTL_MS) {
-        fs.rmSync(entryPath, { force: true });
+      if (now - fs.statSync(entry.path).mtimeMs > MATERIALIZED_ARCHIVE_CACHE_TTL_MS) {
+        fs.rmSync(entry.path, { force: true });
       }
     } catch {
       // Another sweep may have removed it first; nothing to do.
@@ -160,16 +102,14 @@ function removeMaterializedArchiveCacheEntries(
   pathKey: string,
   keepName?: string,
 ): void {
-  let entries: string[];
-  try {
-    entries = fs.readdirSync(cacheDir);
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (!entry.startsWith(`${pathKey}-`) || entry === keepName || entry.endsWith(".tmp")) {
+  for (const entry of walkDirectorySync(cacheDir, { maxDepth: 1, symlinks: "include" }).entries) {
+    if (
+      !entry.name.startsWith(`${pathKey}-`) ||
+      entry.name === keepName ||
+      entry.name.endsWith(".tmp")
+    ) {
       continue;
     }
-    fs.rmSync(path.join(cacheDir, entry), { force: true });
+    fs.rmSync(entry.path, { force: true });
   }
 }

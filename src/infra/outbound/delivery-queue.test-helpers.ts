@@ -1,18 +1,132 @@
-// Test helpers provide isolated delivery-queue state directories and logger
-// stubs for queue/recovery tests.
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, vi } from "vitest";
+import type { ConversationDeliveryStoreScope } from "../../config/sessions/conversation-delivery-store.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { deriveDeliveryQueueRetentionColumns } from "../delivery-queue-retention-columns.js";
 import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+  claimDeliveryQueueEntryPlatformSendInDatabase,
+  renewDeliveryQueueEntryPlatformSendLeaseInDatabase,
+} from "../delivery-queue-sqlite-claim.kernel.js";
 import { loadDeliveryQueueEntries } from "../delivery-queue-sqlite.js";
-import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
+import { isPostgresSqlConnection } from "../sql-connection.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import type { DeliverFn, RecoveryLogger } from "./delivery-queue-recovery.js";
 import type { QueuedDelivery } from "./delivery-queue-types.js";
+
+export function createPendingFinalFixture(
+  storePath: string,
+  deliveryId: string,
+  sessionKey: string,
+  options: {
+    text?: string;
+    now?: number;
+    state?: "prepared" | "queued";
+    context?: DeliveryContext;
+    stale?: boolean;
+  } = {},
+) {
+  const { text = "pending final", now = 1, state = "prepared", context, stale = false } = options;
+  const intentId = `${deliveryId}-intent`,
+    sessionId = `${deliveryId}-session`;
+  const kind = "pending-final" as const;
+  const completion = { kind, deliveryId, intentId, sessionId, sessionKey, storePath };
+  const deliveries = stale ? [] : [{ id: deliveryId, state }];
+  const replayable = "replayable" as const;
+  const pending = { kind: replayable, text, context, createdAt: now, intentId, deliveries };
+  return { completion, entry: { sessionId, updatedAt: now, pendingFinalDelivery: pending } };
+}
+
+export async function prepareConversationDelivery(
+  scope: ConversationDeliveryStoreScope,
+  operationId: string,
+  message: string,
+  routeFingerprint: string,
+) {
+  // Keep session/routing modules out of storage-only fixtures' module graphs.
+  const { upsertSessionEntryCore } = await import("../../config/sessions/session-accessor.js");
+  const { beginConversationDeliveryOperation } =
+    await import("../../config/sessions/conversation-delivery-store.js");
+  const { buildConversationRef } = await import("../../routing/conversation-ref.js");
+  const { normalizeSessionDeliveryState } = await import("../../utils/delivery-context.shared.js");
+  const channel = "reef",
+    accountId = "default",
+    peerId = "peer-agent";
+  const conversationRef = buildConversationRef({ channel, accountId, kind: "direct", peerId });
+  await upsertSessionEntryCore(
+    { ...scope, sessionKey: "agent:main:reef:direct:peer-agent" },
+    {
+      sessionId: "reef-session",
+      updatedAt: 100,
+      chatType: "direct",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
+        origin: { provider: "reef", accountId: "default", nativeDirectUserId: "peer-agent" },
+      }),
+    },
+  );
+  await beginConversationDeliveryOperation(scope, {
+    operationId,
+    operationKind: "send",
+    message,
+    preparedMessageId: "reef-prepared",
+    conversationRef,
+  });
+  return {
+    channel,
+    to: "reef:peer-agent",
+    payloads: [{ text: message }],
+    deliveryCompletion: {
+      kind: "conversation" as const,
+      agentId: scope.agentId,
+      operationId,
+      storePath: scope.storePath,
+      routeFingerprint,
+    },
+  };
+}
+
+function queueDatabase(stateDir: string) {
+  return openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } });
+}
+
+export function readQueueStatus(stateDir: string, id: string): string | undefined {
+  const row = queueDatabase(stateDir)
+    .db.prepare("SELECT status FROM delivery_queue_entries WHERE queue_name = ? AND id = ?")
+    .get(OUTBOUND_DELIVERY_QUEUE_NAME, id) as { status?: string } | undefined;
+  return row?.status;
+}
+
+export async function createQueueMedia(stateDir: string, suffix: string, content: string) {
+  const artifact = path.join(
+    stateDir,
+    "delivery-queue-media",
+    `00000000-0000-4000-8000-${suffix}.ogg`,
+  );
+  await fs.promises.mkdir(path.dirname(artifact), { recursive: true });
+  await fs.promises.writeFile(artifact, content);
+  return artifact;
+}
+
+// Clock-controlled kernel cases stay in one realm; facade tests exercise real worker leases.
+export function claimDeliveryQueueEntryForTest(
+  params: Parameters<typeof claimDeliveryQueueEntryPlatformSendInDatabase>[1] & {
+    stateDir: string;
+  },
+) {
+  return claimDeliveryQueueEntryPlatformSendInDatabase(queueDatabase(params.stateDir), params);
+}
+
+export function renewDeliveryQueueEntryLeaseForTest(
+  params: Parameters<typeof renewDeliveryQueueEntryPlatformSendLeaseInDatabase>[1] & {
+    stateDir: string;
+  },
+) {
+  return renewDeliveryQueueEntryPlatformSendLeaseInDatabase(queueDatabase(params.stateDir), params);
+}
 
 export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDelivery[]> {
   return loadDeliveryQueueEntries(OUTBOUND_DELIVERY_QUEUE_NAME, stateDir) as QueuedDelivery[];
@@ -21,44 +135,21 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
 /** Installs Vitest hooks that provide a fresh delivery-queue state dir per case. */
 export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => string } {
   let tmpDir = "";
-  let fixtureRoot = "";
-  let fixtureCount = 0;
-
-  beforeAll(() => {
-    fixtureRoot = fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-dq-suite-"));
-  });
-
+  const dirs = useSessionStoreTempDirs(afterAll, "openclaw-dq-suite-");
   beforeEach(() => {
-    tmpDir = path.join(fixtureRoot, `case-${fixtureCount++}`);
-    fs.mkdirSync(tmpDir, { recursive: true });
+    tmpDir = dirs.make();
   });
 
   afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    if (tmpDir) {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-      tmpDir = "";
-    }
+    await closeStateDatabaseForTest();
+    tmpDir = "";
   });
 
-  afterAll(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    if (!fixtureRoot) {
-      return;
-    }
-    fs.rmSync(fixtureRoot, { recursive: true, force: true });
-    fixtureRoot = "";
-  });
-
-  return {
-    tmpDir: () => tmpDir,
-  };
+  return { tmpDir: () => tmpDir };
 }
 
 export function readQueuedEntry(tmpDir: string, id: string): Record<string, unknown> {
-  const { db } = openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } });
+  const { db } = queueDatabase(tmpDir);
   const row = db
     .prepare("SELECT entry_json FROM delivery_queue_entries WHERE queue_name = ? AND id = ?")
     .get(OUTBOUND_DELIVERY_QUEUE_NAME, id) as { entry_json?: string } | undefined;
@@ -69,15 +160,11 @@ export function readQueuedEntry(tmpDir: string, id: string): Record<string, unkn
 }
 
 export function readQueuedEntries(tmpDir: string): Record<string, unknown>[] {
-  const { db } = openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } });
+  const { db } = queueDatabase(tmpDir);
   const rows = db
     .prepare(
-      `
-        SELECT entry_json
-          FROM delivery_queue_entries
-         WHERE queue_name = ? AND status = 'pending'
-         ORDER BY enqueued_at ASC, id ASC
-      `,
+      `SELECT entry_json FROM delivery_queue_entries
+       WHERE queue_name = ? AND status = 'pending' ORDER BY enqueued_at ASC, id ASC`,
     )
     .all(OUTBOUND_DELIVERY_QUEUE_NAME) as Array<{ entry_json: string }>;
   return rows.map((row) => JSON.parse(row.entry_json) as Record<string, unknown>);
@@ -98,72 +185,64 @@ export function setQueuedEntryState(
   },
 ): void {
   const entry = readQueuedEntry(tmpDir, id);
-  entry.retryCount = state.retryCount;
-  if (state.lastAttemptAt === undefined) {
-    delete entry.lastAttemptAt;
-  } else {
-    entry.lastAttemptAt = state.lastAttemptAt;
+  for (const key of [
+    "retryCount",
+    "lastAttemptAt",
+    "lastError",
+    "enqueuedAt",
+    "platformSendStartedAt",
+    "recoveryState",
+    "producerClaimId",
+    "availableAt",
+  ] as const) {
+    if (state[key] !== undefined) {
+      entry[key] = state[key];
+    } else if (key === "lastAttemptAt" || key === "lastError") {
+      delete entry[key];
+    }
   }
-  if (state.enqueuedAt !== undefined) {
-    entry.enqueuedAt = state.enqueuedAt;
+  const { db } = queueDatabase(tmpDir);
+  const entryJson = JSON.stringify(entry);
+  if (isPostgresSqlConnection(db)) {
+    throw new Error("Delivery queue fixture mutation requires a SQLite database");
   }
-  if (state.lastError === undefined) {
-    delete entry.lastError;
-  } else {
-    entry.lastError = state.lastError;
-  }
-  if (state.platformSendStartedAt !== undefined) {
-    entry.platformSendStartedAt = state.platformSendStartedAt;
-  }
-  if (state.recoveryState !== undefined) {
-    entry.recoveryState = state.recoveryState;
-  }
-  if (state.producerClaimId !== undefined) {
-    entry.producerClaimId = state.producerClaimId;
-  }
-  if (state.availableAt !== undefined) {
-    entry.availableAt = state.availableAt;
-  }
-  const { db } = openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } });
   db.prepare(
-    `
-      UPDATE delivery_queue_entries
-         SET retry_count = ?,
-             enqueued_at = ?,
-             last_attempt_at = ?,
-             last_error = ?,
-             platform_send_started_at = ?,
-             recovery_state = ?,
-             entry_json = ?,
-             updated_at = ?
-       WHERE queue_name = ? AND id = ?
-    `,
+    `UPDATE delivery_queue_entries
+     SET retry_count = ?, enqueued_at = ?, last_attempt_at = ?, last_error = ?,
+         platform_send_started_at = ?, recovery_state = ?, entry_json = ?,
+         retention_id_prefix = @retention_id_prefix, retention_max_age_ms = @retention_max_age_ms,
+         retention_max_entries = @retention_max_entries, updated_at = ?
+     WHERE queue_name = ? AND id = ?`,
   ).run(
+    deriveDeliveryQueueRetentionColumns(id, entryJson),
     state.retryCount,
     state.enqueuedAt ?? Number(entry.enqueuedAt ?? 0),
     state.lastAttemptAt ?? null,
     state.lastError ?? null,
     state.platformSendStartedAt ?? null,
     state.recoveryState ?? null,
-    JSON.stringify(entry),
+    entryJson,
     Date.now(),
     OUTBOUND_DELIVERY_QUEUE_NAME,
     id,
   );
 }
 
-export function createRecoveryLog(): RecoveryLogger & {
-  info: ReturnType<typeof vi.fn<(msg: string) => void>>;
-  warn: ReturnType<typeof vi.fn<(msg: string) => void>>;
-  error: ReturnType<typeof vi.fn<(msg: string) => void>>;
-} {
+export function createRecoveryLog() {
   return {
     info: vi.fn<(msg: string) => void>(),
     warn: vi.fn<(msg: string) => void>(),
     error: vi.fn<(msg: string) => void>(),
-  };
+  } satisfies RecoveryLogger;
 }
 
 export function asDeliverFn(deliver: ReturnType<typeof vi.fn>): DeliverFn {
   return deliver as DeliverFn;
 }
+
+export const RECOVERY_SUMMARY = {
+  empty: { recovered: 0, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 },
+  failed: { recovered: 0, failed: 1, skippedMaxRetries: 0, deferredBackoff: 0 },
+  recovered: { recovered: 1, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 },
+  recoveredWithDeferred: { recovered: 1, failed: 0, skippedMaxRetries: 0, deferredBackoff: 1 },
+} as const;

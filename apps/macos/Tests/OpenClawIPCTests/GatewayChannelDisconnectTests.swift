@@ -341,13 +341,14 @@ struct GatewayChannelDisconnectTests {
         try await channel.connect()
         await snapshots.waitForCount(1)
         let firstTask = try #require(session.latestTask())
-        firstTask.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.eventData(seq: 1)))
+        // Exercise sequence handling without depending on the presence payload protocol.
+        firstTask.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.eventData(event: "test.event", seq: 1)))
         await events.waitForCount(1)
         while !firstTask.hasPendingReceiveHandler() {
             await Task.yield()
         }
 
-        firstTask.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.eventData(seq: 3)))
+        firstTask.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.eventData(event: "test.event", seq: 3)))
         await seqGapGate.waitForStart()
         await #expect(throws: (any Error).self) {
             try await channel.send(method: "force.disconnect", params: nil)

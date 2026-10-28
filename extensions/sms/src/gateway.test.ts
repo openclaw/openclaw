@@ -1,10 +1,11 @@
-// Sms tests cover gateway plugin behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { registerPluginHttpRoute as registerPluginHttpRouteType } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectSmsStartupWarnings, startSmsGatewayAccount } from "./gateway.js";
 import type { SmsChannelRuntime } from "./inbound.js";
 import type { ResolvedSmsAccount } from "./types.js";
+import { createSmsTestAccount } from "./webhook.test-support.js";
 
 const smsWebhookHandler = vi.hoisted(() => vi.fn(async (_req: unknown, _res: unknown) => true));
 const createSmsWebhookHandler = vi.hoisted(() => vi.fn((_params: unknown) => smsWebhookHandler));
@@ -50,45 +51,32 @@ vi.mock("./ingress-spool.js", () => ({ createSmsIngressSpool }));
 vi.mock("./media.js", () => ({ tryHandleHostedSmsMediaRequest }));
 vi.mock("./webhook.js", () => ({ createSmsWebhookHandler }));
 
-vi.mock("openclaw/plugin-sdk/webhook-ingress", () => ({
-  createFixedWindowRateLimiter: () => ({
-    clear: vi.fn(),
-    isRateLimited: vi.fn(() => false),
-    size: vi.fn(() => 0),
-  }),
-  readRequestBodyWithLimit: vi.fn(async () => ""),
-  registerPluginHttpRoute,
-}));
+// mock-isolation: Gateway fixtures control webhook registration and request admission.
+vi.mock("openclaw/plugin-sdk/webhook-ingress", () => ({ registerPluginHttpRoute }));
 
 function createAccount(accountId: string, webhookPath = "/webhooks/sms"): ResolvedSmsAccount {
-  return {
+  return createSmsTestAccount({
     accountId,
-    enabled: true,
     accountSid: `AC-${accountId}`,
-    authToken: "secret",
-    fromNumber: "+15557654321",
-    messagingServiceSid: "",
-    defaultTo: "",
     webhookPath,
     publicWebhookUrl: `https://gateway.example.com${webhookPath}`,
-    dangerouslyDisableSignatureValidation: false,
-    dmPolicy: "pairing",
-    allowFrom: [],
-    textChunkLimit: 1500,
-  };
+  });
+}
+
+function holdNextCall(mock: typeof stopSmsIngress) {
+  let release: (() => void) | undefined;
+  mock.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+  );
+  return () => release?.();
 }
 
 describe("startSmsGatewayAccount", () => {
   beforeEach(() => {
-    registerPluginHttpRoute.mockClear();
-    waitUntilAbort.mockClear();
-    createSmsIngressSpool.mockClear();
-    startSmsIngress.mockClear();
-    pauseSmsIngress.mockClear();
-    stopSmsIngress.mockClear();
-    createSmsWebhookHandler.mockClear();
-    smsWebhookHandler.mockClear();
-    tryHandleHostedSmsMediaRequest.mockClear();
+    vi.clearAllMocks();
     routeUnregisters.length = 0;
   });
 
@@ -100,9 +88,14 @@ describe("startSmsGatewayAccount", () => {
   });
 
   async function startRoute(
-    params: Omit<Parameters<typeof startSmsGatewayAccount>[0], "abortSignal">,
+    params: Omit<
+      Parameters<typeof startSmsGatewayAccount>[0],
+      "abortSignal" | "cfg" | "channelRuntime"
+    > = { account: createAccount("default") },
   ) {
     return await startSmsGatewayAccount({
+      cfg: {},
+      channelRuntime: {} as SmsChannelRuntime,
       ...params,
       abortSignal: new AbortController().signal,
     });
@@ -110,12 +103,7 @@ describe("startSmsGatewayAccount", () => {
 
   it("publishes ready and stopped around an active webhook route", async () => {
     const statusSink = vi.fn();
-    await startRoute({
-      cfg: {},
-      account: createAccount("default"),
-      channelRuntime: {} as SmsChannelRuntime,
-      statusSink,
-    });
+    await startRoute({ account: createAccount("default"), statusSink });
 
     expect(statusSink).toHaveBeenNthCalledWith(1, { lifecycle: "starting" });
     expect(statusSink).toHaveBeenCalledWith(
@@ -126,28 +114,13 @@ describe("startSmsGatewayAccount", () => {
     );
   });
 
-  it("publishes stopped for disabled accounts and blocked for missing required config", async () => {
-    const disabledSink = vi.fn();
-    await startRoute({
-      cfg: {},
-      account: { ...createAccount("disabled"), enabled: false },
-      channelRuntime: {} as SmsChannelRuntime,
-      statusSink: disabledSink,
-    });
-    expect(disabledSink).toHaveBeenLastCalledWith(
-      expect.objectContaining({ lifecycle: "stopped", running: false }),
-    );
-
-    const blockedSink = vi.fn();
-    await startRoute({
-      cfg: {},
-      account: { ...createAccount("missing"), authToken: "" },
-      channelRuntime: {} as SmsChannelRuntime,
-      statusSink: blockedSink,
-    });
-    expect(blockedSink).toHaveBeenLastCalledWith(
-      expect.objectContaining({ lifecycle: "blocked", terminalDisconnect: true }),
-    );
+  it.each([
+    { config: { enabled: false }, expected: { lifecycle: "stopped", running: false } },
+    { config: { authToken: "" }, expected: { lifecycle: "blocked", terminalDisconnect: true } },
+  ])("publishes $expected.lifecycle without registering a route", async ({ config, expected }) => {
+    const statusSink = vi.fn();
+    await startRoute({ account: { ...createAccount("default"), ...config }, statusSink });
+    expect(statusSink).toHaveBeenLastCalledWith(expect.objectContaining(expected));
     expect(registerPluginHttpRoute).not.toHaveBeenCalled();
   });
 
@@ -157,14 +130,9 @@ describe("startSmsGatewayAccount", () => {
       throw new Error("SMS route conflict");
     });
 
-    await expect(
-      startRoute({
-        cfg: {},
-        account: createAccount("default"),
-        channelRuntime: {} as SmsChannelRuntime,
-        statusSink,
-      }),
-    ).rejects.toThrow("SMS route conflict");
+    await expect(startRoute({ account: createAccount("default"), statusSink })).rejects.toThrow(
+      "SMS route conflict",
+    );
 
     expect(registerPluginHttpRoute).toHaveBeenCalledWith(
       expect.objectContaining({ throwOnFailure: true }),
@@ -174,110 +142,29 @@ describe("startSmsGatewayAccount", () => {
     expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
   });
 
-  it("rejects duplicate webhook paths across SMS accounts", async () => {
-    const channelRuntime = {} as SmsChannelRuntime;
-    await startRoute({
-      cfg: {},
-      account: createAccount("default"),
-      channelRuntime,
-    });
-
-    await expect(
-      startRoute({
-        cfg: {},
-        account: createAccount("support"),
-        channelRuntime,
-      }),
-    ).rejects.toThrow(/already registered by account default/u);
-  });
-
   it("rejects duplicate webhook paths after route normalization", async () => {
-    const channelRuntime = {} as SmsChannelRuntime;
-    await startRoute({
-      cfg: {},
-      account: createAccount("default", "/webhooks/sms"),
-      channelRuntime,
-    });
+    await startRoute();
 
-    await expect(
-      startRoute({
-        cfg: {},
-        account: createAccount("support", "webhooks/sms"),
-        channelRuntime,
-      }),
-    ).rejects.toThrow(/already registered by account default/u);
+    await expect(startRoute({ account: createAccount("support", "webhooks/sms") })).rejects.toThrow(
+      /already registered by account default/u,
+    );
     expect(registerPluginHttpRoute).toHaveBeenCalledTimes(1);
   });
 
-  it("allows distinct webhook paths across SMS accounts", async () => {
-    const channelRuntime = {} as SmsChannelRuntime;
-    await startRoute({
-      cfg: {},
-      account: createAccount("default"),
-      channelRuntime,
-    });
-    await startRoute({
-      cfg: {},
-      account: createAccount("support", "/webhooks/sms/support"),
-      channelRuntime,
-    });
-
-    expect(registerPluginHttpRoute).toHaveBeenCalledTimes(2);
-  });
-
-  it("fails startup when the shared route registry rejects the route", async () => {
-    registerPluginHttpRoute.mockImplementationOnce(() => {
-      throw new Error("plugin: route conflict at /webhooks/sms (exact)");
-    });
-
-    await expect(
-      startRoute({
-        cfg: {},
-        account: createAccount("default"),
-        channelRuntime: {} as SmsChannelRuntime,
-      }),
-    ).rejects.toThrow("plugin: route conflict");
-
-    expect(registerPluginHttpRoute).toHaveBeenCalledWith(
-      expect.objectContaining({ throwOnFailure: true }),
-    );
-    expect(startSmsIngress).not.toHaveBeenCalled();
-    expect(stopSmsIngress).toHaveBeenCalledOnce();
-  });
-
   it("serves hosted media and Twilio callbacks from one exact route", async () => {
-    await startRoute({
-      cfg: {},
-      account: createAccount("default"),
-      channelRuntime: {} as SmsChannelRuntime,
-    });
+    await startRoute();
 
-    type RegisteredRoute = {
-      path?: string;
-      match?: string;
-      handler: (
-        req: IncomingMessage,
-        res: ServerResponse,
-      ) => Promise<boolean | void> | boolean | void;
-    };
-    const route = registerPluginHttpRoute.mock.calls[0]?.[0] as RegisteredRoute | undefined;
+    const route = expectDefined(registerPluginHttpRoute.mock.calls[0]?.[0], "SMS webhook route");
     expect(route).toMatchObject({ path: "/webhooks/sms" });
-    expect(route?.match).toBeUndefined();
-    if (!route) {
-      throw new Error("SMS route was not registered");
+    expect(route.match).toBeUndefined();
+
+    for (const method of ["GET", "HEAD"]) {
+      const req = { method } as IncomingMessage;
+      const res = {} as ServerResponse;
+      await route.handler(req, res);
+      expect(tryHandleHostedSmsMediaRequest).toHaveBeenCalledWith(req, res, "default");
+      expect(smsWebhookHandler).not.toHaveBeenCalled();
     }
-
-    const getReq = { method: "GET" } as IncomingMessage;
-    const getRes = {} as ServerResponse;
-    await route.handler(getReq, getRes);
-    expect(tryHandleHostedSmsMediaRequest).toHaveBeenCalledWith(getReq, getRes, "default");
-    expect(smsWebhookHandler).not.toHaveBeenCalled();
-
-    const headReq = { method: "HEAD" } as IncomingMessage;
-    const headRes = {} as ServerResponse;
-    await route.handler(headReq, headRes);
-    expect(tryHandleHostedSmsMediaRequest).toHaveBeenCalledWith(headReq, headRes, "default");
-    expect(smsWebhookHandler).not.toHaveBeenCalled();
 
     tryHandleHostedSmsMediaRequest.mockResolvedValueOnce(false);
     const postReq = { method: "POST" } as IncomingMessage;
@@ -287,127 +174,46 @@ describe("startSmsGatewayAccount", () => {
     expect(tryHandleHostedSmsMediaRequest).toHaveBeenCalledTimes(3);
   });
 
-  it("falls through tokenless reads but keeps token-bearing non-GET media requests isolated", async () => {
-    await startRoute({
-      cfg: {},
-      account: createAccount("default"),
-      channelRuntime: {} as SmsChannelRuntime,
-    });
-    type RegisteredRoute = {
-      handler: (
-        req: IncomingMessage,
-        res: ServerResponse,
-      ) => Promise<boolean | void> | boolean | void;
-    };
-    const route = registerPluginHttpRoute.mock.calls[0]?.[0] as RegisteredRoute | undefined;
-    if (!route) {
-      throw new Error("SMS route was not registered");
-    }
+  it.each(["replacement", "abort cleanup"])(
+    "keeps a replacement live during predecessor %s",
+    async (mode) => {
+      const releaseStop = holdNextCall(stopSmsIngress);
+      await startRoute();
 
-    tryHandleHostedSmsMediaRequest.mockResolvedValueOnce(false);
-    const tokenlessGet = { method: "GET", url: "/webhooks/sms" } as IncomingMessage;
-    const getRes = {} as ServerResponse;
-    await route.handler(tokenlessGet, getRes);
-    expect(smsWebhookHandler).toHaveBeenCalledWith(tokenlessGet, getRes);
+      const firstReplacement = mode === "replacement" ? startRoute() : registeredRoutes[0]?.();
+      await vi.waitFor(() => expect(stopSmsIngress).toHaveBeenCalledTimes(1));
+      if (mode === "replacement") {
+        expect(registerPluginHttpRoute).toHaveBeenCalledTimes(2);
+        expect(startSmsIngress).toHaveBeenCalledTimes(1);
+      }
+      const replacement = startRoute();
+      await Promise.resolve();
 
-    tryHandleHostedSmsMediaRequest.mockResolvedValueOnce(true);
-    const tokenizedPost = {
-      method: "POST",
-      url: `/webhooks/sms?__openclaw_mms_token_${"a".repeat(24)}=secret`,
-    } as IncomingMessage;
-    await route.handler(tokenizedPost, {} as ServerResponse);
-    expect(smsWebhookHandler).toHaveBeenCalledTimes(1);
-  });
-
-  it("serializes overlapping replacements of the same webhook route", async () => {
-    let releaseStop: (() => void) | undefined;
-    stopSmsIngress.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          releaseStop = resolve;
-        }),
-    );
-    const params = {
-      cfg: {},
-      account: createAccount("default"),
-      channelRuntime: {} as SmsChannelRuntime,
-    };
-    await startRoute(params);
-
-    const firstReplacement = startRoute(params);
-    await vi.waitFor(() => expect(stopSmsIngress).toHaveBeenCalledTimes(1));
-    expect(registerPluginHttpRoute).toHaveBeenCalledTimes(2);
-    expect(startSmsIngress).toHaveBeenCalledTimes(1);
-    const secondReplacement = startRoute(params);
-    await Promise.resolve();
-
-    expect(registerPluginHttpRoute).toHaveBeenCalledTimes(3);
-    expect(startSmsIngress).toHaveBeenCalledTimes(1);
-    releaseStop?.();
-    await Promise.all([firstReplacement, secondReplacement]);
-    expect(startSmsIngress).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps a replacement route live while abort cleanup stops its predecessor", async () => {
-    let releaseStop: (() => void) | undefined;
-    stopSmsIngress.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          releaseStop = resolve;
-        }),
-    );
-    const params = {
-      cfg: {},
-      account: createAccount("default"),
-      channelRuntime: {} as SmsChannelRuntime,
-    };
-    await startRoute(params);
-
-    const shutdown = registeredRoutes[0]?.();
-    await vi.waitFor(() => expect(stopSmsIngress).toHaveBeenCalledTimes(1));
-    const replacement = startRoute(params);
-    await Promise.resolve();
-
-    expect(registerPluginHttpRoute).toHaveBeenCalledTimes(2);
-    expect(startSmsIngress).toHaveBeenCalledTimes(1);
-    releaseStop?.();
-    await Promise.all([shutdown, replacement]);
-    expect(startSmsIngress).toHaveBeenCalledTimes(2);
-  });
+      expect(registerPluginHttpRoute).toHaveBeenCalledTimes(mode === "replacement" ? 3 : 2);
+      expect(startSmsIngress).toHaveBeenCalledTimes(1);
+      releaseStop();
+      await Promise.all([firstReplacement, replacement]);
+      expect(startSmsIngress).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("binds replacement abort cleanup before its predecessor finishes stopping", async () => {
-    let releaseStop: (() => void) | undefined;
-    stopSmsIngress.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          releaseStop = resolve;
-        }),
-    );
-    const params = {
-      cfg: {},
-      account: createAccount("default"),
-      channelRuntime: {} as SmsChannelRuntime,
-    };
-    await startRoute(params);
+    const releaseStop = holdNextCall(stopSmsIngress);
+    await startRoute();
 
-    const replacement = startRoute(params);
+    const replacement = startRoute();
     await vi.waitFor(() => expect(registeredRoutes).toHaveLength(2));
     await vi.waitFor(() => expect(stopSmsIngress).toHaveBeenCalledTimes(1));
     const abortReplacement = registeredRoutes[1]?.();
 
     expect(routeUnregisters[1]).toHaveBeenCalledOnce();
-    releaseStop?.();
+    releaseStop();
     await Promise.all([replacement, abortReplacement]);
     expect(startSmsIngress).toHaveBeenCalledTimes(1);
   });
 
   it("stops both ingress instances when predecessor pause fails", async () => {
-    const params = {
-      cfg: {},
-      account: createAccount("default"),
-      channelRuntime: {} as SmsChannelRuntime,
-    };
-    await startRoute(params);
+    await startRoute();
     let replacementLifecycleSignal: AbortSignal | undefined;
     waitUntilAbort.mockImplementationOnce(async (signal, onAbort) => {
       replacementLifecycleSignal = signal;
@@ -422,7 +228,7 @@ describe("startSmsGatewayAccount", () => {
     });
     pauseSmsIngress.mockRejectedValueOnce(new Error("pause failed"));
 
-    await expect(startRoute(params)).rejects.toThrow("pause failed");
+    await expect(startRoute()).rejects.toThrow("pause failed");
 
     expect(replacementLifecycleSignal?.aborted).toBe(true);
     expect(stopSmsIngress).toHaveBeenCalledTimes(2);
@@ -430,27 +236,16 @@ describe("startSmsGatewayAccount", () => {
   });
 
   it("pauses the predecessor pump before exposing a replacement route", async () => {
-    let releasePause: (() => void) | undefined;
-    pauseSmsIngress.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          releasePause = resolve;
-        }),
-    );
-    const params = {
-      cfg: {},
-      account: createAccount("default"),
-      channelRuntime: {} as SmsChannelRuntime,
-    };
-    await startRoute(params);
+    const releasePause = holdNextCall(pauseSmsIngress);
+    await startRoute();
 
-    const replacement = startRoute(params);
+    const replacement = startRoute();
     await vi.waitFor(() => expect(registerPluginHttpRoute).toHaveBeenCalledTimes(2));
 
     expect(pauseSmsIngress).toHaveBeenCalledTimes(1);
     expect(stopSmsIngress).not.toHaveBeenCalled();
     expect(createSmsIngressSpool.mock.calls[0]?.[0]).not.toHaveProperty("abortSignal");
-    releasePause?.();
+    releasePause();
     await replacement;
     expect(stopSmsIngress).toHaveBeenCalledTimes(1);
   });

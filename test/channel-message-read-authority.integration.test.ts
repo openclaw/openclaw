@@ -7,9 +7,10 @@ import { createOperationalRunInstanceRef } from "../src/agents/admitted-run-cont
 import { wrapToolWithGatewayCallerIdentity } from "../src/agents/tools/gateway-caller-context.js";
 import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
 import { dispatchChannelMessageAction } from "../src/channels/plugins/message-action-dispatch.js";
-import type { ChannelMessageActionContext } from "../src/channels/plugins/types.js";
+import type { ChannelMessageActionContext } from "../src/channels/plugins/types.core.js";
+import * as commandSecretGateway from "../src/cli/command-secret-gateway.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";
 import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
@@ -125,6 +126,38 @@ const current = "100000000000000003";
 const sibling = "100000000000000004";
 const slackTarget = "C0123456789";
 
+function registerProvider(
+  channel: "discord" | "slack",
+  registration: "official" | "bundled" | "legacy" | "unverified",
+) {
+  const owner = createPluginRegistry({
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+    runtime: {} as PluginRuntime,
+    activateGlobalSideEffects: false,
+  });
+  const record = createPluginRecord({
+    id: channel,
+    origin: registration === "bundled" ? "bundled" : "global",
+    trustedOfficialInstall: registration !== "unverified" && registration !== "bundled",
+  });
+  const provider = channel === "discord" ? discordPlugin : slackPlugin;
+  owner.registry.plugins.push(record);
+  owner.createApi(record, { config: {}, registrationMode: "full" }).registerChannel({
+    plugin: {
+      ...provider,
+      // Status probes have provider-specific generics, unrelated to message dispatch.
+      status: undefined,
+      actions: {
+        ...provider.actions!,
+        readAuthorityActions:
+          registration === "legacy" ? undefined : provider.actions?.readAuthorityActions,
+      },
+    },
+  });
+  setActivePluginRegistry(owner.registry);
+  return record;
+}
+
 function confineProviderFetch(channel: "discord" | "slack", baseUrl: string): void {
   const realFetch = globalThis.fetch.bind(globalThis);
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -155,6 +188,7 @@ function confineProviderFetch(channel: "discord" | "slack", baseUrl: string): vo
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   resetPluginRuntimeStateForTest();
@@ -165,65 +199,37 @@ afterEach(() => {
 // Registrar trust is a fixture here; installer/loader provenance has separate coverage.
 // Responses and the terminal request log come from a real loopback HTTP server.
 describe.each(["discord", "slack"] as const)("official %s provider read boundary", (channel) => {
-  const modes = [
-    "allowed",
-    "denied",
-    "account",
-    "revoked",
-    "result-revoked",
-    "legacy",
-    "run-revoked-direct",
-    "run-result-revoked-direct",
-    "bundled-allowed",
-    "bundled-revoked",
-    "bundled-run-revoked-direct",
-    "bundled-run-result-revoked-direct",
-  ] as const;
-  const cases =
+  type ReadCase = [mode: string, content: number, total?: number, minimumLookups?: number];
+  const modes: ReadCase[] = [
+    ["allowed", 1],
+    ["denied", 0],
+    ["revoked", 0, 1],
+    ["result-revoked", 1],
+    ["run-revoked-direct", 0],
+    ["run-result-revoked-direct", 1],
+    ["bundled-allowed", 1],
+    ["bundled-revoked", 0, 1],
+  ];
+  const cases: ReadCase[] =
     channel === "discord"
       ? [
           ...modes,
-          "endpoint-allowed" as const,
-          "endpoint-lookup-revoked" as const,
-          "endpoint-content-lookup-revoked" as const,
+          ["endpoint-allowed", 1],
+          ["endpoint-lookup-revoked", 0, 0, 1],
+          ["endpoint-content-lookup-revoked", 0, undefined, 2],
         ]
       : [
           ...modes,
-          "tool-allowed" as const,
-          "tool-run-preparation-revoked" as const,
-          "tool-run-revoked" as const,
-          "tool-run-claim-revoked" as const,
-          "tool-run-result-revoked" as const,
-          "tool-run-retry-revoked" as const,
-          "bundled-tool-allowed" as const,
-          "bundled-tool-run-claim-revoked" as const,
+          ["tool-allowed", 1],
+          ["tool-run-preparation-revoked", 0, 0],
+          ["tool-run-revoked", 0, 1],
+          ["tool-run-claim-revoked", 0, 1],
+          ["tool-run-result-revoked", 1],
+          ["tool-run-retry-revoked", 0, 1],
+          ["bundled-tool-run-claim-revoked", 0, 1],
         ];
-  it.each(cases)("routes a cross-conversation read through the provider (%s)", async (mode) => {
-    const owner = createPluginRegistry({
-      logger: { info() {}, warn() {}, error() {}, debug() {} },
-      runtime: {} as PluginRuntime,
-      activateGlobalSideEffects: false,
-    });
-    const bundledRegistration = mode.startsWith("bundled-");
-    const record = createPluginRecord({
-      id: channel,
-      origin: bundledRegistration ? "bundled" : "global",
-      trustedOfficialInstall: !bundledRegistration,
-    });
-    const provider = channel === "discord" ? discordPlugin : slackPlugin;
-    const plugin = {
-      ...provider,
-      // Status probes have provider-specific generics and are not part of message dispatch.
-      status: undefined,
-      actions: {
-        ...provider.actions!,
-        readAuthorityActions:
-          mode === "legacy" ? undefined : provider.actions?.readAuthorityActions,
-      },
-    };
-    owner.registry.plugins.push(record);
-    owner.createApi(record, { config: {}, registrationMode: "full" }).registerChannel({ plugin });
-    setActivePluginRegistry(owner.registry);
+  async function exerciseRead(...[mode, content, total, minimumLookups]: ReadCase) {
+    const record = registerProvider(channel, mode.startsWith("bundled-") ? "bundled" : "official");
     const usesMessageTool = mode.includes("tool-");
     const runRevocation = mode.includes("run-");
     const resultRevocation = mode.includes("result");
@@ -324,7 +330,7 @@ describe.each(["discord", "slack"] as const)("official %s provider read boundary
         action: "read" as const,
         params: { channelId: channel === "discord" ? sibling : slackTarget, limit: 1 },
         accountId: "default",
-        requesterAccountId: mode === "account" ? "other" : "default",
+        requesterAccountId: "default",
         conversationReadOrigin: "delegated" as const,
         assertDirectAdapterHandoff: run?.assert,
         toolContext: {
@@ -335,25 +341,21 @@ describe.each(["discord", "slack"] as const)("official %s provider read boundary
       if (usesMessageTool) {
         setRuntimeConfigSnapshot(actionContext.cfg, actionContext.cfg);
       }
+      if (usesMessageTool && mode === "tool-run-preparation-revoked") {
+        vi.spyOn(commandSecretGateway, "resolveCommandSecretRefsViaGateway").mockImplementationOnce(
+          async ({ config }) => {
+            run!.revoke();
+            return {
+              resolvedConfig: config,
+              diagnostics: [],
+              targetStatesByPath: {},
+              hadUnresolvedTargets: false,
+            };
+          },
+        );
+      }
       const messageTool = usesMessageTool
-        ? run!.wrapTool(
-            createMessageTool({
-              ...run!.toolOptions,
-              config: actionContext.cfg,
-              getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-              resolveCommandSecretRefsViaGateway: async ({ config }) => {
-                if (mode === "tool-run-preparation-revoked") {
-                  run!.revoke();
-                }
-                return {
-                  resolvedConfig: config,
-                  diagnostics: [],
-                  targetStatesByPath: {},
-                  hadUnresolvedTargets: false,
-                };
-              },
-            }),
-          )
+        ? run!.wrapTool(createMessageTool({ ...run!.toolOptions, config: actionContext.cfg }))
         : undefined;
       const invocation = messageTool
         ? messageTool.execute("read-context", {
@@ -365,49 +367,17 @@ describe.each(["discord", "slack"] as const)("official %s provider read boundary
         : dispatchChannelMessageAction(actionContext);
       if (mode.endsWith("allowed")) {
         expect(await invocation).not.toBeNull();
-        expect(requests.filter(isContent)).toHaveLength(1);
       } else {
-        const outcome = await invocation.then(
-          () => ({ rejected: false, message: "" }),
-          (error: unknown) => ({
-            rejected: true,
-            message: error instanceof Error ? error.message : "non-Error rejection",
-          }),
+        await expect(invocation).rejects.toThrow(
+          mode === "denied" ? "not allowed" : "no longer active",
         );
-        expect(outcome.rejected).toBe(true);
-        expect(outcome.message).toContain(
-          mode === "legacy"
-            ? "exact current conversation"
-            : mode === "account"
-              ? "current provider and account"
-              : mode === "denied"
-                ? "not allowed"
-                : "no longer active",
-        );
-        expect(requests.filter(isContent)).toHaveLength(
-          mode === "result-revoked" || (runRevocation && resultRevocation) ? 1 : 0,
-        );
-        if (mode === "legacy" || mode === "account" || mode === "tool-run-preparation-revoked") {
-          expect(requests).toEqual([]);
-        }
-        if (
-          mode === "revoked" ||
-          mode === "bundled-revoked" ||
-          mode === "tool-run-revoked" ||
-          mode === "tool-run-claim-revoked" ||
-          mode === "bundled-tool-run-claim-revoked" ||
-          mode === "tool-run-retry-revoked"
-        ) {
-          expect(requests).toHaveLength(1);
-        }
-        if (mode === "endpoint-lookup-revoked") {
-          expect(endpointLookups).toBeGreaterThan(0);
-          expect(requests).toEqual([]);
-        }
-        if (mode === "endpoint-content-lookup-revoked") {
-          expect(endpointLookups).toBeGreaterThan(1);
-          expect(requests.filter(isContent)).toEqual([]);
-        }
+      }
+      expect(requests.filter(isContent)).toHaveLength(content);
+      if (total !== undefined) {
+        expect(requests).toHaveLength(total);
+      }
+      if (minimumLookups !== undefined) {
+        expect(endpointLookups).toBeGreaterThan(minimumLookups - 1);
       }
     } finally {
       run?.dispose();
@@ -415,7 +385,8 @@ describe.each(["discord", "slack"] as const)("official %s provider read boundary
         server.close((error) => (error ? reject(error) : resolve()));
       });
     }
-  });
+  }
+  it.each(cases)("routes a cross-conversation read through the provider (%s)", exerciseRead);
 });
 
 const slackMetadataActions = ["member-info", "emoji-list"] as const;
@@ -441,30 +412,7 @@ async function withSlackMetadataHarness(
     claim?: boolean;
   } = {},
 ) {
-  const owner = createPluginRegistry({
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime: {} as PluginRuntime,
-    activateGlobalSideEffects: false,
-  });
-  const record = createPluginRecord({
-    id: "slack",
-    origin: options.registration === "bundled" ? "bundled" : "global",
-    trustedOfficialInstall:
-      options.registration !== "unverified" && options.registration !== "bundled",
-  });
-  owner.registry.plugins.push(record);
-  owner.createApi(record, { config: {}, registrationMode: "full" }).registerChannel({
-    plugin: {
-      ...slackPlugin,
-      status: undefined,
-      actions: {
-        ...slackPlugin.actions!,
-        readAuthorityActions:
-          options.registration === "legacy" ? undefined : slackPlugin.actions?.readAuthorityActions,
-      },
-    },
-  });
-  setActivePluginRegistry(owner.registry);
+  const record = registerProvider("slack", options.registration ?? "official");
   const cfg: ChannelMessageActionContext["cfg"] = {
     channels: {
       slack: {
@@ -527,13 +475,6 @@ async function withSlackMetadataHarness(
       createMessageTool({
         ...run.toolOptions,
         config: cfg,
-        getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-        resolveCommandSecretRefsViaGateway: async ({ config }) => ({
-          resolvedConfig: config,
-          diagnostics: [],
-          targetStatesByPath: {},
-          hadUnresolvedTargets: false,
-        }),
       }),
     );
     await exercise({

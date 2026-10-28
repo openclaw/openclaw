@@ -11,14 +11,14 @@ export class TranscriptPrependAnchor {
   private firstMessageKey: string | undefined;
   private pending: (ChatTranscriptPrependAnchor & { measured: boolean }) | null = null;
 
+  constructor(
+    private readonly messageElements: ReadonlyMap<string, HTMLElement>,
+    private readonly onLayoutCorrection: (before: number, after: number) => void,
+  ) {}
+
   /** Stable message identity used to resolve its row in the committed projection. */
   get messageKey(): string | null {
     return this.pending?.messageKey ?? null;
-  }
-
-  /** Keep the retained row mounted while virtual and native offsets reconcile. */
-  get rowKey(): string | null {
-    return this.pending?.rowKey ?? null;
   }
 
   /** Keep the retained bubble mounted against the committed, not candidate, row map. */
@@ -29,7 +29,9 @@ export class TranscriptPrependAnchor {
   ): number[] {
     const messageKey = this.messageKey;
     const rowKey =
-      (messageKey === null ? null : this.committedMessageRows.get(messageKey)) ?? this.rowKey;
+      (messageKey === null ? null : this.committedMessageRows.get(messageKey)) ??
+      this.pending?.rowKey ??
+      null;
     return extractTranscriptRange(range, indexes, [focusedRowKey, rowKey]);
   }
 
@@ -42,34 +44,50 @@ export class TranscriptPrependAnchor {
     );
   }
 
-  /** Capture only a committed prepend that is not superseded by a scroll command. */
-  capture(element: HTMLDivElement | null, commanded: boolean): void {
-    const anchor = commanded
-      ? null
-      : captureTranscriptPrependAnchor(element, this.firstMessageKey, this.messageKeys);
+  /** Retain a reader through committed history or row-projection changes. */
+  capture(
+    element: HTMLDivElement | null,
+    commanded: boolean,
+    readingProjectionChanged = false,
+  ): void {
+    // A second projection may commit before measurement settles. Keep the
+    // original reader target rather than recapturing an already shifted bubble.
+    const retained =
+      this.pending && this.messageKeys.has(this.pending.messageKey) ? this.pending : null;
+    const anchor =
+      !commanded && (this.hasPrepend || readingProjectionChanged)
+        ? (retained ??
+          captureTranscriptPrependAnchor(element, this.messageKeys, this.messageElements.values()))
+        : null;
     if (anchor) {
       this.pending = { ...anchor, measured: false };
     }
     this.firstMessageKey = this.messageKeys.keys().next().value;
   }
 
-  /** Measure estimated rows before restoring the retained message on the next commit. */
+  /** Keep the message fixed while newly mounted viewport rows replace their estimates. */
   update(
     element: HTMLDivElement | null,
     virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
-    measureRows: () => void,
+    measureRows: () => boolean,
   ): boolean {
     const anchor = this.pending;
     if (!anchor) {
       return false;
     }
-    if (!anchor.measured) {
-      measureRows();
-      anchor.measured = true;
-      return true;
+    const changed = measureRows();
+    const moved = restoreTranscriptPrependAnchor(
+      anchor,
+      element,
+      virtualizer,
+      this.messageElements.values(),
+      this.onLayoutCorrection,
+    );
+    if (anchor.measured && !changed && !moved) {
+      this.pending = null;
     }
-    this.pending = null;
-    return restoreTranscriptPrependAnchor(anchor, element, virtualizer);
+    anchor.measured = true;
+    return true;
   }
 
   /** Carry the viewport target with native reader movement, not layout growth. */
@@ -93,22 +111,29 @@ export class TranscriptPrependAnchor {
   }
 }
 
-/** Capture the message being read before older history changes its containing row. */
+/** Capture a retained message before history or regrouping changes its row. */
 function captureTranscriptPrependAnchor(
   scrollElement: HTMLDivElement | null,
-  previousFirstMessageKey: string | undefined,
   next: TranscriptMessageKeys,
+  messageElements: Iterable<HTMLElement>,
 ): ChatTranscriptPrependAnchor | null {
-  const first = previousFirstMessageKey;
-  if (!scrollElement || !first || first === next.keys().next().value || !next.has(first)) {
+  if (!scrollElement) {
     return null;
   }
   const viewport = scrollElement.getBoundingClientRect();
   // Only rendered, retained bubbles can anchor the reader; overscan above the
   // viewport and messages removed by the new projection are not candidates.
-  for (const bubble of scrollElement.querySelectorAll<HTMLElement>(
-    ".chat-bubble[data-message-id]",
-  )) {
+  // Prepended refs register after retained ones; choose by DOM order, not insertion order.
+  const bubbles = [...messageElements]
+    .filter((bubble) => scrollElement.contains(bubble))
+    .toSorted((left, right) => {
+      const position = left.compareDocumentPosition(right);
+      if (position & Node.DOCUMENT_POSITION_FOLLOWING) {
+        return -1;
+      }
+      return position & Node.DOCUMENT_POSITION_PRECEDING ? 1 : 0;
+    });
+  for (const bubble of bubbles) {
     const messageKey = bubble.dataset.messageId;
     const rect = bubble.getBoundingClientRect();
     if (
@@ -129,18 +154,20 @@ function captureTranscriptPrependAnchor(
 
 /** Reconcile the inner-message anchor after the virtualizer commits its row anchor. */
 function restoreTranscriptPrependAnchor(
-  anchor: ChatTranscriptPrependAnchor | null,
+  anchor: ChatTranscriptPrependAnchor,
   scrollElement: HTMLDivElement | null,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  messageElements: Iterable<HTMLElement>,
+  onLayoutCorrection: (before: number, after: number) => void,
 ): boolean {
-  if (!anchor || !scrollElement) {
+  if (!scrollElement) {
     return false;
   }
   // Group renderers may replace the bubble at an array index during prepend;
   // resolve its stable render key in the committed DOM, not an old element.
-  const bubble = [
-    ...scrollElement.querySelectorAll<HTMLElement>(".chat-bubble[data-message-id]"),
-  ].find((element) => element.dataset.messageId === anchor.messageKey);
+  const bubble = [...messageElements].find(
+    (element) => scrollElement.contains(element) && element.dataset.messageId === anchor.messageKey,
+  );
   if (!bubble) {
     return false;
   }
@@ -148,9 +175,17 @@ function restoreTranscriptPrependAnchor(
   if (Math.abs(delta) <= 1) {
     return false;
   }
-  const offset = Math.max(0, scrollElement.scrollTop + delta);
+  const maxOffset = Math.max(0, scrollElement.scrollHeight - scrollElement.clientHeight);
+  const before = scrollElement.scrollTop;
+  const offset = Math.max(0, Math.min(maxOffset, before + delta));
+  // A retained message can become unreachable at an edge when provisional rows retire.
+  // Reissuing that clamped correction would keep the measurement loop alive forever.
+  if (Math.abs(offset - before) <= 1) {
+    return false;
+  }
   // Commit one measured message target through the scroll owner. This also
   // retires deferred row corrections already represented by the measured DOM.
   virtualizer.scrollToOffset(offset, { behavior: "instant" });
+  onLayoutCorrection(before, scrollElement.scrollTop);
   return true;
 }

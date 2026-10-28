@@ -6,9 +6,9 @@ import { expect, it } from "vitest";
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   type ControlUiSessionPullRequestsChanged,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
 } from "../../../src/gateway/control-ui-contract.js";
 import type { ControlUiLinkReaderPreview } from "../../../src/shared/control-ui-link-reader.js";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
@@ -16,6 +16,7 @@ import {
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
+import { expectCount, expectText } from "./activity-assertions.test-support.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -27,6 +28,12 @@ const keys = {
   branch: "agent:main:activity-branch",
   notes: "agent:main:activity-notes",
 };
+const sessionRows = [
+  [keys.frontend, "Activity feed improvements", "Alex Morgan", "main"],
+  [keys.review, "Review Gateway reconnection", "Casey Brooks", "reviewer"],
+  [keys.branch, "Polish responsive navigation", "Sam Rivera", "main"],
+  [keys.notes, "Release planning notes", "Alex Morgan", "main"],
+] as const;
 const repository = { owner: "example", repo: "control-ui" };
 const pullRequest = {
   ...repository,
@@ -50,16 +57,9 @@ const reviewRequest = {
 const preview: ControlUiLinkReaderPreview = {
   url: reviewRequest.url,
   title: reviewRequest.title,
-  subtitle: "example/gateway #17",
-  author: "casey-example",
-  badge: { label: "Draft", tone: "neutral" },
-  metadata: [
-    { label: "", value: "+63" },
-    { label: "", value: "−8" },
-  ],
-  createdAt: "2026-09-10T12:00:00Z",
-  updatedAt: "2026-09-11T12:00:00Z",
 };
+
+const ready = { rateLimited: false, status: "ready" as const };
 
 async function capture(page: Page, filename: string, content: readonly Locator[]) {
   if (captureUiProof) {
@@ -88,14 +88,7 @@ suite.define(() => {
         );
         const now = Date.now();
         const sessions = chatSessionListResponse(
-          (
-            [
-              [keys.frontend, "Activity feed improvements", "Alex Morgan", "main"],
-              [keys.review, "Review Gateway reconnection", "Casey Brooks", "reviewer"],
-              [keys.branch, "Polish responsive navigation", "Sam Rivera", "main"],
-              [keys.notes, "Release planning notes", "Alex Morgan", "main"],
-            ] as const
-          ).map(([key, label, owner, agentId], index) => ({
+          sessionRows.map(([key, label, owner, agentId], index) => ({
             key,
             label,
             agentId,
@@ -145,12 +138,14 @@ suite.define(() => {
           activity.locator(".activity-feed__session-row").filter({
             has: page.locator(`[data-activity-session="${key}"]`),
           });
-        await expect.poll(() => activity.locator("[data-activity-session]").count()).toBe(4);
+        const git = (key: string, part: string) => row(key).locator(`.activity-feed__${part}`);
+        await expectCount(activity.locator("[data-activity-session]")).toBe(4);
         await expect.poll(watchedKeys).toEqual(expect.arrayContaining(Object.values(keys)));
 
         const snapshots: ControlUiSessionPullRequestsChanged = {
           sessions: {
             [keys.frontend]: {
+              ...ready,
               pullRequests: [
                 pullRequest,
                 {
@@ -163,10 +158,8 @@ suite.define(() => {
                 },
               ],
               branch: { ...repository, branch: pullRequest.branch, additions: 205, deletions: 31 },
-              rateLimited: false,
-              status: "ready",
             },
-            [keys.review]: { pullRequests: [reviewRequest], rateLimited: false, status: "ready" },
+            [keys.review]: { ...ready, pullRequests: [reviewRequest] },
             [keys.branch]: {
               pullRequests: [],
               branch: {
@@ -178,32 +171,28 @@ suite.define(() => {
               rateLimited: true,
               status: "rate-limited",
             },
-            [keys.notes]: { pullRequests: [], rateLimited: false, status: "ready" },
+            [keys.notes]: { ...ready, pullRequests: [] },
           },
         };
         await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, snapshots);
-        const openPr = row(keys.frontend).locator('.activity-feed__pr[data-state="open"]');
-        await expect.poll(() => openPr.textContent()).toContain("control-ui#42");
+        const openPr = git(keys.frontend, 'pr[data-state="open"]');
+        await expectText(openPr).toContain("control-ui#42");
         expect(await openPr.locator(".activity-feed__additions").textContent()).toBe("+184");
         expect(await openPr.locator(".activity-feed__deletions").textContent()).toBe("−27");
-        expect(
-          await row(keys.frontend).locator('.activity-feed__pr[data-state="merged"]').count(),
-        ).toBe(1);
-        expect(await row(keys.frontend).locator(".activity-feed__branch").count()).toBe(0);
+        expect(await git(keys.frontend, 'pr[data-state="merged"]').count()).toBe(1);
+        expect(await git(keys.frontend, "branch").count()).toBe(0);
         expect(
           await openPr.evaluate((element) => element.closest("[data-activity-session]")),
         ).toBeNull();
 
-        const draftPr = row(keys.review).locator('.activity-feed__pr[data-state="draft"]');
-        await expect.poll(() => draftPr.textContent()).toContain("gateway#17");
+        const draftPr = git(keys.review, 'pr[data-state="draft"]');
+        await expectText(draftPr).toContain("gateway#17");
         expect(
           await draftPr.locator(".activity-feed__additions, .activity-feed__deletions").count(),
         ).toBe(0);
-        expect(await row(keys.notes).locator(".activity-feed__git").count()).toBe(0);
-        const branch = row(keys.branch).locator(".activity-feed__branch");
-        await expect
-          .poll(() => branch.textContent())
-          .toContain("feature/responsive-navigation-and-keyboard-shortcuts");
+        expect(await git(keys.notes, "git").count()).toBe(0);
+        const branch = git(keys.branch, "branch");
+        await expectText(branch).toContain("feature/responsive-navigation-and-keyboard-shortcuts");
         expect(await branch.locator(".activity-feed__additions").textContent()).toBe("+1,284");
         expect(await branch.locator(".activity-feed__deletions").textContent()).toBe("−96");
         await row(keys.branch)
@@ -213,7 +202,7 @@ suite.define(() => {
 
         const card = page.locator(".link-reader-hovercard");
         await draftPr.hover();
-        await expect.poll(() => card.textContent()).toContain(reviewRequest.title);
+        await expectText(card).toContain(reviewRequest.title);
         const request = await gateway.waitForRequest("forge.preview", {
           match: { url: reviewRequest.url },
         });
@@ -222,7 +211,7 @@ suite.define(() => {
         expect(await draftPr.getAttribute("target")).toBe("_blank");
         await capture(page, "02-desktop-pr-hover.png", [card]);
         await page.mouse.move(1, 1);
-        await expect.poll(() => card.count()).toBe(0);
+        await expectCount(card).toBe(0);
 
         await page.setViewportSize({ width: 390, height: 844 });
         await draftPr.scrollIntoViewIfNeeded();
@@ -231,30 +220,36 @@ suite.define(() => {
           .toBeLessThanOrEqual(1);
         await capture(page, "03-mobile-activity-git.png", [draftPr]);
         await draftPr.focus();
-        await expect.poll(() => card.textContent()).toContain(reviewRequest.title);
+        await expectText(card).toContain(reviewRequest.title);
         const bounds = await card.boundingBox();
         expect(bounds).not.toBeNull();
         expect(bounds!.x).toBeGreaterThanOrEqual(0);
         expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
         await capture(page, "04-mobile-pr-focus.png", [card]);
         await page.keyboard.press("Escape");
-        await expect.poll(() => card.count()).toBe(0);
+        await expectCount(card).toBe(0);
         expect(await draftPr.evaluate((element) => element === document.activeElement)).toBe(true);
         await page.keyboard.press("Enter");
         const reader = page.locator("openclaw-link-reader-panel");
         await reader.getByRole("heading", { name: reviewRequest.title, exact: true }).waitFor();
         expect(new URL(page.url()).pathname).toBe("/activity");
-        const external = reader.locator("a[data-link-reader-external]").first();
+        const external = reader
+          .locator(".lr-toolbar")
+          .getByRole("link", { name: "Open on " + TEST_LINK_READER.label, exact: true });
         expect(await external.getAttribute("href")).toBe(reviewRequest.url);
-        const popupPromise = page.waitForEvent("popup");
-        await external.click();
-        const popup = await popupPromise;
+        expect(await external.getAttribute("target")).toBe("_blank");
+        expect(await external.getAttribute("rel")).toBe("noopener noreferrer");
+        const [popup] = await Promise.all([page.waitForEvent("popup"), external.click()]);
         await popup.waitForLoadState("domcontentloaded");
         expect(popup.url()).toBe(reviewRequest.url);
         expect(new URL(page.url()).pathname).toBe("/activity");
         await popup.close();
         await reader.getByRole("button", { name: "Close link reader", exact: true }).click();
 
+        const originalProvider = await row(keys.frontend)
+          .locator("openclaw-link-reader-hovercard-provider")
+          .elementHandle();
+        const originalLink = await openPr.elementHandle();
         await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
           sessions: {
             [keys.frontend]: {
@@ -263,14 +258,18 @@ suite.define(() => {
             },
           },
         });
-        const updatedPr = row(keys.frontend).locator('.activity-feed__pr[data-state="merged"]');
-        await expect
-          .poll(() => updatedPr.locator(".activity-feed__additions").textContent())
-          .toBe("+192");
+        const updatedPr = git(keys.frontend, 'pr[data-state="merged"]');
+        await expectText(updatedPr.locator(".activity-feed__additions")).toBe("+192");
         expect(await updatedPr.locator(".activity-feed__deletions").textContent()).toBe("−30");
-        await expect
-          .poll(() => row(keys.frontend).locator(".activity-feed__branch").textContent())
-          .toContain(pullRequest.branch);
+        expect(await originalProvider?.evaluate((element) => element.isConnected)).toBe(true);
+        expect(
+          await originalLink?.evaluate(
+            (element) => element.isConnected && element.getAttribute("data-state") === "merged",
+          ),
+        ).toBe(true);
+        await originalProvider?.dispose();
+        await originalLink?.dispose();
+        await expectText(git(keys.frontend, "branch")).toContain(pullRequest.branch);
 
         const sessionLink = row(keys.notes).locator("[data-activity-session]");
         const href = await sessionLink.getAttribute("href");

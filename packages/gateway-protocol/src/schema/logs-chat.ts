@@ -1,17 +1,20 @@
-// Gateway Protocol schema module defines protocol validation shapes.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { CHAT_WORK_CONTEXT_DETAIL_LIMITS, CHAT_WORK_CONTEXT_LIMITS } from "../chat-work-context.js";
 import {
   CHAT_HISTORY_MAX_ENTRIES,
   CHAT_INPUT_RECEIPT_MAX_RUN_IDS,
   CHAT_INPUT_RUN_ID_MAX_CHARS,
+  CHAT_MESSAGE_MAX_CHARS,
 } from "./chat-history-constants.js";
 import { closedObject } from "./closed-object.js";
 import { HumanMentionsSchema } from "./human-mentions.js";
 import { ChatSendSessionKeyString, InputProvenanceSchema, NonEmptyString } from "./primitives.js";
 import { SessionPermissionModeSchema, SessionToolOverridesSchema } from "./sessions-row.js";
+// Gateway Protocol schema module defines protocol validation shapes.
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 /** Cursor-based request for the gateway log tail endpoint. */
 export const LogsTailParamsSchema = closedObject({
@@ -36,6 +39,14 @@ export const ChatHistoryParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
   cursor: Type.Optional(Type.String()),
+  // Receipts are useful only with the exact retained fields, not the transcript cursor alone.
+  knownState: Type.Optional(
+    closedObject({
+      pendingInputs: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+      sessionInfo: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+      commands: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+    }),
+  ),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: CHAT_HISTORY_MAX_ENTRIES })),
   maxBytes: Type.Optional(Type.Integer({ minimum: 1024 })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -50,6 +61,7 @@ export const ChatHistoryParamsSchema = closedObject({
   messageId: Type.Optional(NonEmptyString),
   sessionId: Type.Optional(NonEmptyString),
   maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
+  toolResultMaxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
 });
 
 /** Resolve a short chat link and fetch its first page under the same discovery policy. */
@@ -61,6 +73,7 @@ export const ChatStartupParamsSchema = Type.Union([
     agentId: NonEmptyString,
     limit: ChatHistoryParamsSchema.properties.limit,
     maxBytes: ChatHistoryParamsSchema.properties.maxBytes,
+    toolResultMaxChars: ChatHistoryParamsSchema.properties.toolResultMaxChars,
   }),
 ]);
 
@@ -73,10 +86,12 @@ export const ChatPendingInputsPageSchema = closedObject({
       message: Type.Unknown(),
       acceptedAt: Type.Number(),
       state: Type.String({ enum: ["queued", "cancelled", "interrupted"] }),
+      queued: Type.Optional(Type.Literal(true)),
     }),
     { maxItems: 20 },
   ),
   total: Type.Integer({ minimum: 0 }),
+  queuedCount: Type.Optional(Type.Integer({ minimum: 0 })),
   nextBefore: Type.Optional(Type.Integer({ minimum: 1 })),
 });
 export type ChatPendingInputsPage = Static<typeof ChatPendingInputsPageSchema>;
@@ -87,6 +102,8 @@ export const ChatInputReceiptsSchema = Type.Array(
     closedObject({
       runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
       state: Type.Literal("pending"),
+      queued: Type.Optional(Type.Literal(true)),
+      cancelled: Type.Optional(Type.Literal(true)),
     }),
     closedObject({
       runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
@@ -108,23 +125,31 @@ export const ChatInputConsumptionsSchema = Type.Array(
 );
 export type ChatInputConsumptions = Static<typeof ChatInputConsumptionsSchema>;
 
+/** Legacy persisted activity receipts; retained so existing history still validates. */
+export const AgentActivityDelegationSchema = closedObject({
+  runId: Type.String({ minLength: 1, maxLength: 256 }),
+  childSessionKey: Type.String({ minLength: 1, maxLength: 1024 }),
+  label: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+  groupId: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+  runtimeMs: Type.Optional(Type.Number({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
+  status: stringLiteralUnion(["accepted", "done", "failed", "killed", "timeout"]),
+});
+export type AgentActivityDelegation = Static<typeof AgentActivityDelegationSchema>;
 export const AgentActivityItemSchema = closedObject({
+  delegation: Type.Optional(Type.Array(AgentActivityDelegationSchema, { maxItems: 32 })),
   itemId: NonEmptyString,
-  phase: Type.Union([Type.Literal("start"), Type.Literal("update"), Type.Literal("end")]),
+  phase: stringLiteralUnion(["start", "update", "end"]),
   kind: Type.String(),
   title: Type.String(),
   status: Type.Optional(
-    Type.Union([
-      Type.Literal("running"),
-      Type.Literal("completed"),
-      Type.Literal("failed"),
-      Type.Literal("blocked"),
-    ]),
+    stringLiteralUnion(["running", "completed", "failed", "blocked", "skipped"]),
   ),
   name: Type.Optional(Type.String()),
   meta: Type.Optional(Type.String()),
   commandBearing: Type.Optional(Type.Boolean()),
   toolCallId: Type.Optional(Type.String()),
+  // The history page has no matching result; this is not a terminal receipt.
+  unpairedCall: Type.Optional(Type.Boolean()),
   startedAt: Type.Optional(Type.Number()),
   endedAt: Type.Optional(Type.Number()),
   error: Type.Optional(Type.String()),
@@ -152,7 +177,9 @@ export const ChatHistoryDeltaResultSchema = closedObject({
   messages: Type.Array(Type.Unknown()),
   activity: Type.Optional(Type.Array(ChatHistoryActivitySchema)),
   deltaCursor: Type.String(),
-  sessionInfo: Type.Unknown(),
+  sessionInfo: Type.Optional(Type.Unknown()),
+  sessionInfoSnapshotAt: Type.Optional(Type.Number()),
+  stateRevision: Type.Optional(ChatHistoryParamsSchema.properties.knownState),
   agentsList: Type.Optional(Type.Unknown()),
   inFlightRun: Type.Optional(Type.Unknown()),
   metadata: Type.Optional(Type.Unknown()),
@@ -176,6 +203,18 @@ export const ChatHistoryCursorResultSchema = Type.Union([
 export const ChatMetadataParamsSchema = Object.assign(
   closedObject({
     agentId: Type.Optional(NonEmptyString),
+    includeModels: Type.Optional(
+      Type.Boolean({
+        description:
+          "Include model and account selection metadata (default true). Set false when reading models.list separately.",
+      }),
+    ),
+    ifRevision: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description: "For includeModels:false, omit unchanged commands.",
+      }),
+    ),
     authProfileId: Type.Optional(
       Type.String({
         minLength: 1,
@@ -194,6 +233,38 @@ export const ChatMetadataParamsSchema = Object.assign(
   }),
   { not: { required: ["sessionKey", "authProfileId"] } },
 );
+
+/** Transient composer prediction anchored to a completed session run. */
+export const ChatPredictParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  runId: NonEmptyString,
+});
+
+/** Transient composer text only; null means there is no suggestion. */
+export const ChatPredictResultSchema = closedObject({
+  text: Type.Union([Type.String({ maxLength: 500 }), Type.Null()]),
+});
+
+/** Dismiss displayed pending inputs that ended interrupted or cancelled. */
+export const ChatPendingInputsDismissParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  sessionId: NonEmptyString,
+  inputIds: Type.Array(NonEmptyString, { minItems: 1, maxItems: 100, uniqueItems: true }),
+});
+
+export const ChatPendingInputsDismissResultSchema = closedObject({
+  dismissedIds: Type.Array(NonEmptyString, { maxItems: 100 }),
+  runIds: Type.Array(Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }), {
+    maxItems: 100,
+  }),
+  missingIds: Type.Array(NonEmptyString, { maxItems: 100 }),
+});
+
+export type ChatPredictParams = Static<typeof ChatPredictParamsSchema>;
+export type ChatPendingInputsDismissParams = Static<typeof ChatPendingInputsDismissParamsSchema>;
+export type ChatPendingInputsDismissResult = Static<typeof ChatPendingInputsDismissResultSchema>;
+export type ChatPredictResult = Static<typeof ChatPredictResultSchema>;
 
 /** Batched purpose-title request for tool calls rendered in the Control UI. */
 export const ChatToolTitlesParamsSchema = closedObject({
@@ -225,17 +296,20 @@ export type ChatToolTitlesResult = Static<typeof ChatToolTitlesResultSchema>;
 export const ChatMessageGetParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  sessionId: Type.Optional(NonEmptyString),
   messageId: NonEmptyString,
-  maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_000_000 })),
+  maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: CHAT_MESSAGE_MAX_CHARS })),
 });
 
-/** Result envelope for single-message lookup, including the stable miss/visibility reason. */
+/**
+ * Single-message lookup result. History messages also carry this envelope as
+ * `__openclaw.replyToMessage`: a display preview capped at 500 chars per field
+ * and 8 KiB, or an unavailable reason. It never changes the persisted transcript.
+ */
 export const ChatMessageGetResultSchema = closedObject({
   ok: Type.Boolean(),
   message: Type.Optional(Type.Unknown()),
-  unavailableReason: Type.Optional(
-    Type.Union([Type.Literal("not_found"), Type.Literal("oversized"), Type.Literal("not_visible")]),
-  ),
+  unavailableReason: Type.Optional(stringLiteralUnion(["not_found", "oversized", "not_visible"])),
 });
 /** Typed result shape for callers that branch on message availability. */
 export type ChatMessageGetResult = Static<typeof ChatMessageGetResultSchema>;
@@ -246,7 +320,7 @@ export const ChatAttachmentSchema = Type.Object(
     type: Type.Optional(Type.String()),
     mimeType: Type.Optional(Type.String()),
     fileName: Type.Optional(Type.String()),
-    origin: Type.Optional(Type.Union([Type.Literal("paste"), Type.Literal("file")])),
+    origin: Type.Optional(stringLiteralUnion(["paste", "file"])),
     // Runtime normalization also accepts ArrayBuffer views from native/browser callers.
     content: Type.Optional(Type.Unknown()),
     sizeBytes: Type.Optional(Type.Number()),
@@ -277,6 +351,31 @@ export const ChatSendIntentSchema = closedObject({
 });
 export type ChatSendIntent = Static<typeof ChatSendIntentSchema>;
 
+const ChatWorkContextSchema = closedObject({
+  page: Type.String({ minLength: 1, maxLength: CHAT_WORK_CONTEXT_LIMITS.page }),
+  title: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.title })),
+  sessionKey: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.sessionKey })),
+  sessionId: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.sessionId })),
+  agentId: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.agentId })),
+  workspace: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.workspace })),
+  file: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.file })),
+  selection: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.selection })),
+  detail: Type.Optional(
+    Type.Record(
+      // TypeBox's default key pattern skips newlines; every field must validate its value.
+      Type.String({ pattern: "^[\\s\\S]*$" }),
+      Type.String({ maxLength: CHAT_WORK_CONTEXT_DETAIL_LIMITS.value }),
+      {
+        maxProperties: CHAT_WORK_CONTEXT_DETAIL_LIMITS.fields,
+        propertyNames: Type.String({
+          minLength: 1,
+          maxLength: CHAT_WORK_CONTEXT_DETAIL_LIMITS.key,
+        }),
+      },
+    ),
+  ),
+});
+
 /** User-to-agent send request; idempotency key lets clients safely retry transport failures. */
 export const ChatSendParamsSchema = closedObject({
   sessionKey: ChatSendSessionKeyString,
@@ -284,9 +383,12 @@ export const ChatSendParamsSchema = closedObject({
   sessionId: Type.Optional(NonEmptyString),
   message: Type.String(),
   mentions: Type.Optional(HumanMentionsSchema),
+  workContext: Type.Optional(ChatWorkContextSchema),
   intent: Type.Optional(ChatSendIntentSchema),
   thinking: Type.Optional(Type.String()),
-  fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
+  fastMode: Type.Optional(
+    Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Literal("ultrafast")]),
+  ),
   // One-turn override for auto fast-mode cutoff seconds.
   fastAutoOnSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
   // One-turn override for active-run queue admission.
@@ -321,6 +423,7 @@ export const ChatAbortParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
   preserveSideRuns: Type.Optional(Type.Boolean()),
+  discardPendingInput: Type.Optional(Type.Boolean()),
 });
 
 /** Inserts an operator-visible synthetic message into an existing chat transcript. */
@@ -341,24 +444,28 @@ const ChatEventBaseSchema = {
 };
 
 /** Stable error categories exposed over the chat stream. */
-const ChatEventErrorKindSchema = Type.Union([
-  Type.Literal("refusal"),
-  Type.Literal("timeout"),
-  Type.Literal("rate_limit"),
-  Type.Literal("context_length"),
-  Type.Literal("unknown"),
+const ChatEventErrorKindSchema = stringLiteralUnion([
+  "refusal",
+  "timeout",
+  "rate_limit",
+  "context_length",
+  "state_contention",
+  "unknown",
 ]);
 
-/** Coarse startup stages shown while a run has not produced visible activity yet. */
-export const ChatRunStartupPhaseSchema = Type.Union([
-  Type.Literal("preparing_workspace"),
-  Type.Literal("naming_worktree"),
-  Type.Literal("creating_worktree"),
-  Type.Literal("running_setup"),
-  Type.Literal("provisioning_environment"),
-  Type.Literal("preparing_context"),
-  Type.Literal("memory_flushing"),
-  Type.Literal("starting_model"),
+/** Transient preparation and model-call stages; model waits can recur during a run. */
+export const ChatRunStartupPhaseSchema = stringLiteralUnion([
+  "waiting_for_state",
+  "preparing_workspace",
+  "naming_worktree",
+  "preparing_worktree_base",
+  "creating_worktree",
+  "running_setup",
+  "provisioning_environment",
+  "preparing_context",
+  "memory_flushing",
+  "starting_model",
+  "waiting_for_model",
 ]);
 
 /** Transient working status; only the run owner publishes terminal failures. */
@@ -366,11 +473,19 @@ export const ChatStatusEventSchema = closedObject({
   ...ChatEventBaseSchema,
   state: Type.Literal("status"),
   phase: ChatRunStartupPhaseSchema,
+  waitReason: Type.Optional(stringLiteralUnion(["response", "slot"])),
   retry: Type.Optional(
     closedObject({
       attempt: Type.Integer({ minimum: 1, maximum: 10 }),
       maxAttempts: Type.Integer({ minimum: 1, maximum: 10 }),
-      reason: Type.Literal("rate_limit"),
+      reason: stringLiteralUnion([
+        "rate_limit",
+        "overloaded",
+        "server_error",
+        "timeout",
+        "output_limit",
+      ]),
+      retryAt: Type.Optional(Type.Number({ minimum: 0 })),
     }),
   ),
 });
@@ -399,6 +514,8 @@ export const ChatFinalEventSchema = closedObject({
 export const ChatAbortedEventSchema = closedObject({
   ...ChatEventBaseSchema,
   state: Type.Literal("aborted"),
+  // Captured before abort clears the local provider wait; not backend-release evidence.
+  localModelMayStillBeFinishing: Type.Optional(Type.Literal(true)),
   message: Type.Optional(Type.Unknown()),
   errorMessage: Type.Optional(Type.String()),
   stopReason: Type.Optional(Type.String()),
@@ -413,6 +530,7 @@ const ChatErrorDetailSchema = closedObject({
   model: ChatErrorDetailTextSchema,
   failoverReason: ChatErrorDetailTextSchema,
   providerRuntimeFailureKind: ChatErrorDetailTextSchema,
+  providerErrorCode: ChatErrorDetailTextSchema,
   providerErrorType: ChatErrorDetailTextSchema,
   httpStatus: Type.Optional(Type.Integer({ minimum: 100, maximum: 599 })),
   providerErrorMessagePreview: ChatErrorDetailTextSchema,
@@ -438,6 +556,7 @@ export function projectChatErrorDetail(observation: unknown): ChatErrorDetail | 
     model: readText(source.model),
     failoverReason: readText(source.failoverReason),
     providerRuntimeFailureKind: readText(source.providerRuntimeFailureKind),
+    providerErrorCode: readText(source.providerErrorCode),
     providerErrorType: readText(source.providerErrorType),
     httpStatus:
       httpStatus !== undefined &&
@@ -458,6 +577,7 @@ export const ChatErrorEventSchema = closedObject({
   message: Type.Optional(Type.Unknown()),
   errorMessage: Type.Optional(Type.String()),
   errorKind: Type.Optional(ChatEventErrorKindSchema),
+  suppressErrorNotice: Type.Optional(Type.Boolean()),
   errorDetail: Type.Optional(ChatErrorDetailSchema),
   usage: Type.Optional(Type.Unknown()),
   stopReason: Type.Optional(Type.String()),

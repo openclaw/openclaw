@@ -30,20 +30,6 @@ describe("acp policy", () => {
     expect(resolveAcpDispatchPolicyError(cfg)?.code).toBe("ACP_DISPATCH_DISABLED");
   });
 
-  it("reports dispatch-disabled state when dispatch gate is false", () => {
-    const cfg = {
-      acp: {
-        enabled: true,
-        dispatch: {
-          enabled: false,
-        },
-      },
-    } satisfies OpenClawConfig;
-    expect(resolveAcpDispatchPolicyMessage(cfg)).toBe(
-      "ACP dispatch is disabled by policy (`acp.dispatch.enabled=false`).",
-    );
-  });
-
   it("allows explicit ACP turns when only dispatch is disabled", () => {
     const cfg = {
       acp: {
@@ -55,6 +41,9 @@ describe("acp policy", () => {
     } satisfies OpenClawConfig;
     expect(resolveAcpDispatchPolicyError(cfg)?.code).toBe("ACP_DISPATCH_DISABLED");
     expect(resolveAcpExplicitTurnPolicyError(cfg)).toBeNull();
+    expect(resolveAcpDispatchPolicyMessage(cfg)).toBe(
+      "ACP dispatch is disabled by policy (`acp.dispatch.enabled=false`).",
+    );
   });
 
   it("blocks explicit ACP turns when ACP is disabled", () => {

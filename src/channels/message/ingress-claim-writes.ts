@@ -1,7 +1,8 @@
 /** Bounded claim-token-fenced writes for durable ingress settlement. */
 import { sleepWithAbort } from "@openclaw/retry";
+import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { IngressAdoptionLostError, isIngressAdoptionLostError } from "./ingress-drain-state.js";
-import type { ChannelIngressQueue, ChannelIngressQueueClaim } from "./ingress-queue.js";
+import type { ChannelIngressQueue, ChannelIngressQueueClaim } from "./ingress-queue.types.js";
 import {
   DEFAULT_INGRESS_RETRY_BASE_MS,
   DEFAULT_INGRESS_RETRY_MAX_MS,
@@ -24,12 +25,14 @@ export function createIngressWriter<TPayload, TMetadata, TCompletedMetadata>(
     formatError,
     log,
     isStopped,
+    onTerminal,
   }: {
     queue: ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>;
     now: () => number;
     formatError: (err: unknown) => string;
     log: (message: string) => void;
     isStopped: () => boolean;
+    onTerminal: (id: string) => void;
   },
 ) {
   const commitClaimWriteWithRetry = async (params: {
@@ -53,7 +56,7 @@ export function createIngressWriter<TPayload, TMetadata, TCompletedMetadata>(
         }
         return committed;
       } catch (err) {
-        if (isIngressAdoptionLostError(err)) {
+        if (isIngressAdoptionLostError(err) || hasSqliteWorkerOutcomeUnknown(err)) {
           throw err;
         }
         attempt += 1;
@@ -93,33 +96,40 @@ export function createIngressWriter<TPayload, TMetadata, TCompletedMetadata>(
       write: () => queue.complete(claim),
       falseMeansReclaimed: true,
     });
+    onTerminal(claim.id);
   };
 
-  const releaseClaim = async (
+  const releaseClaim = (
     claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
     releaseOptions?: { lastError?: string; recordAttempt?: boolean },
-  ) => {
-    return await commitClaimWriteWithRetry({
+  ) =>
+    commitClaimWriteWithRetry({
       claim,
       label: "release",
-      write: () => queue.release(claim, { ...releaseOptions, releasedAt: now() }),
+      write: () =>
+        queue.release(claim, {
+          lastError: releaseOptions?.lastError,
+          recordAttempt: releaseOptions?.recordAttempt,
+          releasedAt: now(),
+        }),
       falseMeansReclaimed: false,
     });
-  };
 
-  const failClaim = async (
+  const failClaim = (
     claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
     reason: string,
     message: string,
-  ) => {
-    return await commitClaimWriteWithRetry({
+  ) =>
+    commitClaimWriteWithRetry({
       claim,
       label: "dead-letter",
       write: () => queue.fail(claim, { reason, message, failedAt: now() }),
       // Fail false after guillotine/supersede race: treat as already settled.
       falseMeansReclaimed: false,
+    }).then((committed) => {
+      onTerminal(claim.id);
+      return committed;
     });
-  };
 
   return { completeClaimWithRetry, releaseClaim, failClaim };
 }

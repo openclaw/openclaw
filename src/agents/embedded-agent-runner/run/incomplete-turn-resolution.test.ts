@@ -7,92 +7,66 @@ import {
   resolveIncompleteTurnPayloadText,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
-  resolveSilentToolResultReplyPayload,
 } from "./incomplete-turn-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
+function payloadText(attempt: EmbeddedRunAttemptResult, payloadCount = 0) {
+  return resolveIncompleteTurnPayloadText({
+    payloadCount,
+    aborted: false,
+    externalAbort: false,
+    timedOut: false,
+    attempt,
+  });
+}
+
+function refusalAttempt(provider: string, replaySafe: boolean) {
+  const assistant = buildEmbeddedRunnerAssistant({
+    provider,
+    stopReason: "error",
+    diagnostics: [
+      { type: "provider_refusal", timestamp: 0, details: { provider, category: "cyber" } },
+    ],
+  });
+  return makeEmbeddedRunnerAttempt({
+    lastAssistant: assistant,
+    currentAttemptAssistant: assistant,
+    replayMetadata: { hadPotentialSideEffects: !replaySafe, replaySafe },
+  });
+}
+
 describe("incomplete-turn terminal metadata", () => {
-  it("keeps the side-effect warning when the terminal error is a provider refusal", () => {
+  it("accepts a completed speech-only answer with provider reasoning", () => {
     const assistant = buildEmbeddedRunnerAssistant({
-      provider: "anthropic",
-      stopReason: "error",
-      diagnostics: [
-        {
-          type: "provider_refusal",
-          timestamp: 0,
-          details: { provider: "anthropic", category: "cyber" },
-        },
+      content: [
+        { type: "thinking", thinking: "Prepare a spoken greeting.", thinkingSignature: "" },
+        { type: "text", text: "" },
       ],
+      openclawDelivery: { tts: { tagged: true, text: "Have a lovely day." } },
     });
     const attempt = makeEmbeddedRunnerAttempt({
-      lastAssistant: assistant,
+      assistantTexts: [],
       currentAttemptAssistant: assistant,
-      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+      currentAttemptCompletedAssistant: assistant,
     });
 
-    expect(
-      resolveIncompleteTurnPayloadText({
-        payloadCount: 0,
-        aborted: false,
-        externalAbort: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBe(
-      "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying.",
+    expect(payloadText(attempt, 1)).toBeNull();
+  });
+
+  it("keeps the side-effect warning when the terminal error is a provider refusal", () => {
+    const attempt = refusalAttempt("anthropic", false);
+
+    expect(payloadText(attempt)).toBe(
+      "No answer was returned. Ask again if you still need one. Note: some tool actions may have already been executed — please verify before retrying.",
     );
   });
 
   it("keeps an explicitly replay-safe structured provider refusal replayable", () => {
-    const assistant = buildEmbeddedRunnerAssistant({
-      provider: "openai",
-      stopReason: "error",
-      diagnostics: [
-        {
-          type: "provider_refusal",
-          timestamp: 0,
-          details: { provider: "openai", category: "cyber" },
-        },
-      ],
-    });
-    const attempt = makeEmbeddedRunnerAttempt({
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-      replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    });
-    const incompleteTurnText = resolveIncompleteTurnPayloadText({
-      payloadCount: 0,
-      aborted: false,
-      externalAbort: false,
-      timedOut: false,
-      attempt,
-    });
+    const attempt = refusalAttempt("openai", true);
+    const incompleteTurnText = payloadText(attempt);
 
     expect(incompleteTurnText).toContain("provider refused this request");
     expect(resolveReplayInvalidFlag({ attempt, incompleteTurnText })).toBe(false);
-  });
-
-  it("uses the current completed assistant instead of stale session tool-use evidence", () => {
-    const staleAssistant = buildEmbeddedRunnerAssistant({ stopReason: "toolUse" });
-    const currentAssistant = buildEmbeddedRunnerAssistant({
-      content: [{ type: "text", text: "Here is the final answer." }],
-    });
-    const attempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: ["Analysis...", "Here is the final answer."],
-      toolMetas: [{ toolName: "update_plan" }],
-      lastAssistant: staleAssistant,
-      currentAttemptAssistant: currentAssistant,
-    });
-
-    expect(
-      resolveIncompleteTurnPayloadText({
-        payloadCount: 1,
-        aborted: false,
-        externalAbort: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBeNull();
   });
 
   it("keeps completed tool-use evidence incomplete when the current transcript slice is absent", () => {
@@ -105,18 +79,12 @@ describe("incomplete-turn terminal metadata", () => {
       currentAttemptCompletedAssistant: assistant,
     });
 
-    expect(
-      resolveIncompleteTurnPayloadText({
-        payloadCount: 1,
-        aborted: false,
-        externalAbort: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toContain("couldn't generate a response");
+    expect(payloadText(attempt, 1)).toBe(
+      "No answer was returned. Ask again if you still need one. Note: some tool actions may have already been executed — please verify before retrying.",
+    );
   });
 
-  it("emits a silent cron reply from the trailing current-attempt tool result", () => {
+  it("does not treat a tool result token as an assistant final", () => {
     const attempt = makeEmbeddedRunnerAttempt({
       toolMetas: [{ toolName: "exec" }],
       messagesSnapshot: [
@@ -125,46 +93,9 @@ describe("incomplete-turn terminal metadata", () => {
           content: [{ type: "text", text: "NO_REPLY" }],
           details: { aggregated: "NO_REPLY" },
         } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
-        buildEmbeddedRunnerAssistant({}),
       ],
     });
-
-    expect(
-      resolveSilentToolResultReplyPayload({
-        isCronTrigger: true,
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toEqual({ text: "NO_REPLY" });
-  });
-
-  it("does not reuse an older silent tool result without current tool activity", () => {
-    const attempt = makeEmbeddedRunnerAttempt({
-      toolMetas: [],
-      messagesSnapshot: [
-        {
-          role: "toolResult",
-          content: [{ type: "text", text: "NO_REPLY" }],
-        } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
-        {
-          role: "user",
-          content: [{ type: "text", text: "Current cron prompt" }],
-        } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
-        buildEmbeddedRunnerAssistant({}),
-      ],
-    });
-
-    expect(
-      resolveSilentToolResultReplyPayload({
-        isCronTrigger: true,
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBeNull();
+    expect(payloadText(attempt)).not.toBeNull();
   });
 
   it("marks compaction-timeout retries as paused and replay-invalid", () => {
@@ -182,4 +113,54 @@ describe("incomplete-turn terminal metadata", () => {
       }),
     ).toBe("paused");
   });
+});
+
+describe("tool-authored source replies", () => {
+  it.each([
+    [
+      "earlier-call",
+      "later-call",
+      "read",
+      "Earlier answer.",
+      undefined,
+      "No answer was returned. Ask again if you still need one.",
+    ],
+    [
+      "tool_1",
+      "tool_1",
+      "order_status",
+      "Pedido SO1 creado.",
+      [{ toolName: "order_status", meta: "orderId=SO1" }],
+      null,
+    ],
+  ] as const)(
+    "only completes the owning tool-use turn (%s / %s)",
+    (replyId, callId, name, text, toolMetas, expected) => {
+      const assistant = buildEmbeddedRunnerAssistant({
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "toolCall",
+            id: callId,
+            name,
+            arguments: name === "order_status" ? { orderId: "SO1" } : {},
+          },
+        ],
+      });
+      const attempt = makeEmbeddedRunnerAttempt({
+        lastAssistant: assistant,
+        sourceReplyDeliveryState: "missing",
+        ...(toolMetas ? { assistantTexts: [], toolMetas: [...toolMetas] } : {}),
+        messagingToolSourceReplyPayloads: [
+          {
+            text,
+            sourceReplyFinal: true,
+            toolAuthored: true,
+            toolAuthoredForToolCallId: replyId,
+          },
+        ],
+      });
+      expect(payloadText(attempt, 1)).toBe(expected);
+    },
+  );
 });

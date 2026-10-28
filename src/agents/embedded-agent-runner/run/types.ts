@@ -1,8 +1,5 @@
-/**
- * Shared result and attempt types for embedded-agent run internals.
- */
 import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
-import type { HeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type {
   SessionContextBudgetStatus,
@@ -12,11 +9,13 @@ import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../conte
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { AssistantMessage, Model } from "../../../llm/types.js";
 import type { CommandQueueTaskDeadline } from "../../../process/command-queue.types.js";
-import type { AgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
+import type { AgentHarnessCompletionScope } from "../../agent-harness-completion-scope.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import type { PreparedAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.types.js";
 import type { AuthProfileStore } from "../../auth-profiles/types.js";
+import type { ContextWindowInfo } from "../../context-window-guard.js";
 import type { DelegationCapability } from "../../delegation-capability.js";
 import type {
   MessagingToolSend,
@@ -30,6 +29,7 @@ import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.
 import type { ReplyDeliveryState } from "../../reply-completion.js";
 import type { AgentRuntimeModelAttempt, AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import type { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AuthStorage, ModelRegistry } from "../../sessions/index.js";
 import type { ToolEffectReceipt } from "../../tool-effect-receipt.js";
@@ -56,6 +56,8 @@ export type EmbeddedAttemptExecutionState = {
   deferredLifecycleOwner?: EmbeddedAttemptDeferredLifecycleOwner;
   terminal: AgentRunAttemptTerminal;
   trajectoryEndRecorded: boolean;
+  /** Final assistant text captured for the run-completed diagnostic event; gated before export. */
+  diagnosticFinalResponse?: string;
 };
 
 export type EmbeddedAttemptExternalAbortController = {
@@ -78,7 +80,7 @@ export type EmbeddedAttemptClientToolCallSlot = {
   completed: boolean;
 };
 
-type EmbeddedRunAttemptBase = Omit<
+export type EmbeddedRunAttemptBase = Omit<
   RunEmbeddedAgentParams,
   | "provider"
   | "model"
@@ -93,50 +95,9 @@ type EmbeddedRunAttemptBase = Omit<
   | "admittedRunContext"
 >;
 
-type EmbeddedRunContextWindowInfo = {
-  tokens: number;
-  referenceTokens?: number;
-  source: "model" | "modelsConfig" | "agentContextTokens" | "default";
-};
-
-export type EmbeddedRunFastModeParam = boolean | (() => boolean | undefined);
-
-type EmbeddedRunAttemptOperation = "attempt" | "settled-tool-finalization";
-
-type EmbeddedRunAttemptToolTerminalObservation = {
-  toolCallId?: string;
-  toolName: string;
-  arguments?: unknown;
-  /** Original host result or error; public fields cannot supply effect provenance. */
-  result?: unknown;
-  meta?: string;
-  executionStarted?: boolean;
-  /** Exact-instance replay classification resolved by the host tool catalog. */
-  replaySafe?: boolean;
-  outcome: "success" | "failure";
-  failure?: Omit<ToolErrorSummary, "toolName" | "meta" | "mutatingAction">;
-  /** Protocol-owned mutation facts for native tools that do not use OpenClaw definitions. */
-  nativeMutation?: {
-    mutatingAction: boolean;
-    replaySafe: boolean;
-  };
-  /** Concrete plugin owner; the terminal observer derives mutation facts from executed args. */
-  ownerMutation?: {
-    ownerKey: string;
-  };
-};
-
-type EmbeddedRunAttemptToolTerminalResolution = {
-  lastToolError?: ToolErrorSummary;
-  executionStarted: boolean;
-  executedArguments?: Record<string, unknown>;
-  sideEffectEvidence: boolean;
-  effectReceipt: ToolEffectReceipt;
-};
-
-type EmbeddedRunAttemptToolTerminalObserver = (
-  observation: EmbeddedRunAttemptToolTerminalObservation,
-) => EmbeddedRunAttemptToolTerminalResolution;
+export type EmbeddedRunFastModeParam =
+  | Exclude<FastMode, "auto">
+  | (() => Exclude<FastMode, "auto"> | undefined);
 
 /** Host-owned trajectory recorder supplied to plugin harnesses for attempt-local runtime events. */
 export type EmbeddedRunAttemptTrajectoryRecorder = {
@@ -145,9 +106,14 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 };
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
+  /** Transport hooks follow the current endpoint without changing admitted request policy. */
+  transportConfig?: RunEmbeddedAgentParams["config"];
+  modelCallSequence?: { value: number };
   /** Recomputed by the host for this attempt; never inherited from the requesting turn. */
   githubPublicationAvailable?: boolean;
   disableToolSearch?: true;
+  /** Recovery checkpoints preserve their input until memory extraction finishes. */
+  compactionForbidden?: boolean;
   sessionReadScopeKey?: string;
   admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
   /**
@@ -163,25 +129,35 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   /** Host-created authority available only after harness selection. */
   hostCapabilities?: import("../../harness/host-capability-types.js").AgentHarnessHostCapabilities;
   /** Sticky operation identity used to suppress ordinary retry and hook policy. */
-  operation?: EmbeddedRunAttemptOperation;
+  operation?: "attempt" | "settled-tool-finalization";
   /** Core-prepared fact that explicit requester/config policy restricts plugin-native tools. */
   pluginHarnessToolPolicyRestricted?: boolean;
+  /** Requester policy prepared by core; turn-specific tool restrictions still apply. */
+  preparedWebSearchPolicy?: {
+    allowed: boolean;
+    persistentAllowed: boolean;
+    /** Core binds the policy to this tuple; optional for existing SDK callers. */
+    modelRef?: ModelRef;
+    /** Exact requester reads used during preparation; absence preserves existing SDK callers. */
+    requesterFacts?: import("../../subagents/spawn/subagent-session-store.js").SessionCapabilitySnapshot[];
+  };
+  /** Host-prepared policy lifetime; turn-scoped policy can still allow every native tool. */
+  pluginHarnessToolPolicyScope?: "conversation" | "turn";
   /** Audited exact denies that the plugin harness must enforce against native equivalents. */
   pluginHarnessToolPolicySafeDeniedTools?: readonly string[];
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  preparedTtsPreferences?: import("../../../tts/tts-preferences.js").PreparedTtsPreferences;
   /** Active file-backed artifact target resolved by the run/session target seam. */
   sessionFile: string;
   initialReplayState?: EmbeddedRunReplayState;
   /** Pluggable context engine for ingest/assemble/compact lifecycle. */
   contextEngine?: ContextEngine;
-  /** Resolved model context window in tokens for assemble/compact budgeting. */
-  contextTokenBudget?: number;
   /** Native model context window before session or operator caps are applied. */
   modelContextWindow?: number;
   /** Per-model contextTokens cap authored by the operator; absent when none was authored. */
   authoredContextTokenCap?: number;
   /** Source metadata for the resolved model context budget. */
-  contextWindowInfo?: EmbeddedRunContextWindowInfo;
+  contextWindowInfo?: ContextWindowInfo;
   /** Resolved API key for this run when runtime auth did not replace it. */
   resolvedApiKey?: string;
   /** Auth profile resolved for this attempt's provider/model call. */
@@ -200,8 +176,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   delegationCapability?: DelegationCapability;
   /** Concrete degraded-runtime reason for this attempt, when known. */
   degradedReason?: string | null;
-  /** Final prepared harness for this attempt; not evidence of native session/model ownership. */
-  agentHarnessId?: string;
+  /** Actual embedded harness declaration, supplied by its invocation owner. */
+  supportsTurnScopedToolRestrictions?: boolean;
   /** Non-authorizing expectation; the harness must verify its current private binding. */
   expectedSessionRuntimeOwnership?: {
     model: "native";
@@ -216,9 +192,38 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   /** OpenClaw-owned runtime policy prepared by the orchestrator for this attempt. */
   runtimePlan?: AgentRuntimePlan;
   /** Reports terminal tool facts to the host-owned attempt outcome accumulator. */
-  observeToolTerminal?: EmbeddedRunAttemptToolTerminalObserver;
-  /** Host-issued scope for harnesses that mirror native child runs into task state. */
-  agentHarnessTaskRuntimeScope?: AgentHarnessTaskRuntimeScope;
+  observeToolTerminal?: (observation: {
+    toolCallId?: string;
+    toolName: string;
+    arguments?: unknown;
+    /** Original host result or error; public fields cannot supply effect provenance. */
+    result?: unknown;
+    meta?: string;
+    executionStarted?: boolean;
+    /** Exact-instance replay classification resolved by the host tool catalog. */
+    replaySafe?: boolean;
+    outcome: "success" | "failure";
+    failure?: Omit<ToolErrorSummary, "toolName" | "meta" | "mutatingAction">;
+    /** Protocol-owned mutation facts for native tools that do not use OpenClaw definitions. */
+    nativeMutation?: {
+      mutatingAction: boolean;
+      replaySafe: boolean;
+    };
+    /** Concrete plugin owner; the terminal observer derives mutation facts from executed args. */
+    ownerMutation?: {
+      ownerKey: string;
+    };
+  }) => {
+    lastToolError?: ToolErrorSummary;
+    executionStarted: boolean;
+    executedArguments?: Record<string, unknown>;
+    sideEffectEvidence: boolean;
+    effectReceipt: ToolEffectReceipt;
+  };
+  /** Host-issued scope for harness-owned child completion. */
+  agentHarnessCompletionScope?: AgentHarnessCompletionScope;
+  /** Host-only originals retained across native image projection. */
+  inputAttachmentMedia?: RunEmbeddedAgentParams["media"];
   /** Storage-aware trajectory recorder owned by the OpenClaw host. */
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder | null;
   /** Live observer called after wrapped tool outcomes are recorded. */
@@ -233,6 +238,11 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   onAttemptTimeout?: (reason: Error) => void;
   /** Signals an explicit cancellation through the active native run handle. */
   onAttemptAbort?: () => void;
+  /** Called before attempt cleanup; only core decides whether to request verified context. */
+  onSettledTurn?: (
+    attempt: EmbeddedRunAttemptResult,
+    captureContext: () => Promise<EmbeddedRunAttemptResult["settledTurnFinalizationContext"]>,
+  ) => Promise<void>;
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
   onDeferredLifecycleAbort?: (reason?: "user_abort" | "restart" | "superseded") => void;
   /** Host-requested runtime replacement takes effect after the current tool batch is persisted. */
@@ -241,6 +251,19 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   registerPluginRuntimeRefreshConsumer?: (isCurrent: () => boolean) => void;
   /** Completed native attempt results excluded by the original admission read fence. */
   pluginRuntimeRefreshMessages?: AgentMessage[];
+  /**
+   * Set on a plugin-runtime refresh continuation: the logical turn's user prompt.
+   * Prompt hooks see it instead of the synthetic continuation prompt, and turn-start
+   * work (next-turn injections, agent_turn_prepare) is not repeated.
+   */
+  pluginRuntimeRefreshUserPrompt?: string;
+  /** Host-owned same-turn recovery context; never a new user turn or execution authority. */
+  continuation?: {
+    /** Original current request, retained outside bounded historical projections. */
+    prompt: string;
+    /** Settled attempt snapshots, in order, including completed tool calls and results. */
+    messages: AgentMessage[];
+  };
   /** Run-owned permission changes survive native attempt replacement, never user cancellation. */
   permissionChange?: {
     readonly owner: object;
@@ -255,7 +278,7 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   };
   /** Supplies run-global model-call ordering for parallel tool outcomes. */
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
-  model: Model;
+  model: Model & { requestTimeoutMs?: number };
   authStorage: AuthStorage;
   /** Auth profile store already resolved during startup for this attempt. */
   authProfileStore: AuthProfileStore;
@@ -274,31 +297,24 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
 };
 
 export type EmbeddedRunAttemptResult = {
+  cyberAccessProgram?: "standard" | "daybreak_blue" | "daybreak_red";
   terminal: AgentRunAttemptTerminal;
+  preparedTerminalReply?: PreparedAgentRunTerminalReply;
+  /** Prepared policy that explains unavailable tools without another session read. */
+  sandboxRuntime?: ReturnType<typeof resolveSandboxRuntimeStatus>;
   /** True when the runtime made the authoritative final-assistant transcript decision. */
   assistantTranscriptOwned?: boolean;
   /** Exact idempotency key for the runtime-owned final-assistant transcript row. */
   assistantTranscriptIdempotencyKey?: string;
   /** Host-private terminal identity used to close the accepted transcript turn. */
   contextEngineTerminalAnchor?: import("../../../config/sessions/transcript-entry-anchor.js").TranscriptEntryAnchor;
-  preflightRecovery?:
-    | {
-        route: Exclude<PreemptiveCompactionRoute, "fits">;
-        source?: "mid-turn";
-        estimatedPromptTokens?: number;
-        promptBudgetBeforeReserve?: number;
-        overflowTokens?: number;
-        handled: true;
-        truncatedCount?: number;
-      }
-    | {
-        route: Exclude<PreemptiveCompactionRoute, "fits">;
-        source?: "mid-turn";
-        estimatedPromptTokens?: number;
-        promptBudgetBeforeReserve?: number;
-        overflowTokens?: number;
-        handled?: false;
-      };
+  preflightRecovery?: {
+    route: Exclude<PreemptiveCompactionRoute, "fits">;
+    source?: "mid-turn";
+    estimatedPromptTokens?: number;
+    promptBudgetBeforeReserve?: number;
+    overflowTokens?: number;
+  } & ({ handled: true; truncatedCount?: number } | { handled?: false });
   sessionIdUsed: string;
   sessionFileUsed?: string;
   diagnosticTrace?: DiagnosticTraceContext;
@@ -361,6 +377,10 @@ export type EmbeddedRunAttemptResult = {
   modelIterations?: number;
   /** Saved provider retry setting resolved by the prepared session owner. */
   providerRetryMaxRetries?: number;
+  /** Explicit provider/session request timeouts retain their configured retry policy. */
+  providerRequestTimeoutExplicit?: boolean;
+  /** Saved retry.provider.maxRetryDelayMs from the same owner; 0 disables the cap. */
+  providerRetryMaxDelayMs?: number;
   messagesSnapshot: AgentMessage[];
   pluginRuntimeRefreshMessages?: AgentMessage[];
   /** Owner-eligible settled finalization, with frozen evidence or an unavailable projection. */
@@ -370,6 +390,10 @@ export type EmbeddedRunAttemptResult = {
     | { readonly source: "unavailable" };
   beforeAgentFinalizeRevisionReason?: string;
   assistantTexts: string[];
+  /** A registered tool was requested as structured text without a native call. */
+  textToolCallAttempt?: boolean;
+  /** Immutable delivery facts prepared before a remote harness releases its file reader. */
+  preparedReplyMedia?: import("../../../auto-reply/reply/reply-media-paths.js").PreparedReplyMedia;
   latestMcpAppChannelView?: McpAppChannelView;
   latestMcpConnectAction?: McpConnectAction;
   lastAssistantTextMessageIndex?: number;
@@ -411,7 +435,6 @@ export type EmbeddedRunAttemptResult = {
   messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
-  heartbeatToolResponse?: HeartbeatToolResponse;
   toolMediaUrls?: string[];
   /**
    * Native artifacts produced and owned by the harness, never model-selected
@@ -444,6 +467,8 @@ export type EmbeddedRunAttemptResult = {
   yieldDetected?: boolean;
   /** Explicit user-facing waiting status supplied to sessions_yield. */
   yieldAcknowledgment?: string;
+  /** The registry accepted this attempt's explicit incoming-message wait. */
+  yieldMessageWaitRegistered?: boolean;
   /**
    * True when code mode owned this attempt's model tool surface. Absent means
    * the harness did not report engagement (treated as not engaged), which is

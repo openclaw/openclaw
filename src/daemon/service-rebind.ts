@@ -1,0 +1,127 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
+import { sha256Hex } from "../infra/crypto-digest.js";
+import { settleWithCleanup } from "../infra/error-graph-internal.js";
+import { readServiceFileState } from "./service-stage.js";
+import type { GatewayServiceCommandConfig } from "./service-types.js";
+
+export type GatewayServiceRebindReceipt = {
+  before: string;
+  after: string;
+  /** This receiver observed its rewrite, even if installer compensation restored A. */
+  mutated?: true;
+  runtimePinBefore?: string;
+  runtimePinAfter?: string;
+};
+type RebindCapture = {
+  before: string;
+  runtimePinBefore?: string;
+  mutated?: true;
+  refresh?: (assertCurrent: () => void) => Promise<void>;
+  receipt?: GatewayServiceRebindReceipt;
+};
+const captures = new AsyncLocalStorage<RebindCapture>();
+
+/** Content/identity evidence only. Neither a digest nor a receipt grants mutation authority. */
+export async function fingerprintGatewayServiceDefinition(
+  command: GatewayServiceCommandConfig | null,
+): Promise<string> {
+  if (!command) {
+    throw new Error("Managed service definition is unavailable.");
+  }
+  const paths = [
+    ...new Set([
+      ...(command.definitionPaths ?? []),
+      ...(command.sourcePath ? [command.sourcePath] : []),
+    ]),
+  ].toSorted();
+  const files = await Promise.all(
+    paths.map(async (file) => ({ path: file, state: await readServiceFileState(file) })),
+  );
+  if (files.some((file) => !file.state)) {
+    throw new Error("Managed service definition disappeared.");
+  }
+  return sha256Hex(stableStringify({ command, files }));
+}
+
+/** Installed only inside an admitted receiver's live executor, never from a saved receipt. */
+export async function withGatewayServiceRebindCapture<T>(
+  before: string,
+  operation: () => Promise<T>,
+  runtimePinBefore?: string,
+): Promise<T> {
+  if (!/^[a-f0-9]{64}$/.test(before)) {
+    throw new Error("Invalid original definition binding.");
+  }
+  if (runtimePinBefore !== undefined && !/^[a-f0-9]{64}$/.test(runtimePinBefore)) {
+    throw new Error("Invalid original runtime intent binding.");
+  }
+  return await captures.run({ before, runtimePinBefore }, operation);
+}
+
+export function currentGatewayServiceRebindReceipt(): GatewayServiceRebindReceipt | undefined {
+  return captures.getStore()?.receipt;
+}
+
+/** Called under the final native operation lock, including the failing-install path. */
+export async function captureGatewayServiceRebind<T>(
+  read: () => Promise<GatewayServiceCommandConfig | null>,
+  assertCurrent: () => void,
+  mutate: (preserveAutoStart: boolean) => Promise<T>,
+  readRuntimePinRevision?: () => string,
+): Promise<T> {
+  const capture = captures.getStore();
+  if (!capture) {
+    return await mutate(false);
+  }
+  const before = await fingerprintGatewayServiceDefinition(await read());
+  assertCurrent();
+  if (before !== capture.before) {
+    throw new Error("Original service definition changed before rebind.");
+  }
+  const runtimePinBefore = readRuntimePinRevision?.();
+  assertCurrent();
+  if (capture.runtimePinBefore !== undefined && runtimePinBefore !== capture.runtimePinBefore) {
+    throw new Error("Original runtime intent changed before rebind.");
+  }
+  capture.refresh = async (assertFinalCurrent) => {
+    // A failed read must never leave an earlier pre-compensation receipt usable.
+    capture.receipt = undefined;
+    assertFinalCurrent();
+    const after = await fingerprintGatewayServiceDefinition(await read());
+    assertFinalCurrent();
+    const runtimePinAfter = readRuntimePinRevision?.();
+    assertFinalCurrent();
+    if (after !== before || runtimePinAfter !== runtimePinBefore) {
+      capture.mutated = true;
+    }
+    capture.receipt = {
+      before,
+      after,
+      ...(capture.mutated ? { mutated: true } : {}),
+      ...(runtimePinBefore !== undefined ? { runtimePinBefore, runtimePinAfter } : {}),
+    };
+  };
+  try {
+    return await mutate(true);
+  } finally {
+    await capture.refresh(assertCurrent);
+  }
+}
+
+/** The installer may compensate outside the inner service writer. Observe its
+ * final definition under the surrounding native lock, before emitting a receipt. */
+export async function settleGatewayServiceRebind<T>(
+  assertCurrent: () => void,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const capture = captures.getStore();
+  if (!capture) {
+    return await operation();
+  }
+  return settleWithCleanup(
+    operation(),
+    () => capture.refresh?.(assertCurrent),
+    "Service rebind settlement could not be verified.",
+  );
+}

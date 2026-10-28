@@ -1,82 +1,22 @@
 /**
- * Transcript replay policy resolution.
  * Combines provider plugin replay hooks with core transport fallbacks so chat
  * history sanitization, tool IDs, thinking blocks, and turn validation align.
  */
-import { bindsClaudeThinkingPrefix } from "@openclaw/llm-core";
+import { isDirectAnthropicModel } from "@openclaw/ai/internal/anthropic";
+import { requiresReasoningContentReplay } from "@openclaw/ai/internal/openai-completions-compat";
+import { supportsNativeOpenAIResponsesEndpoint } from "@openclaw/ai/internal/openai-responses-payload-policy";
+import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import type { ProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import { resolveProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
-import { shouldDropClaudeThinkingBlocks } from "../plugins/provider-replay-helpers.js";
+import { buildAnthropicReplayPolicyForModel } from "../plugins/provider-replay-helpers.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { ProviderReplayPolicy } from "../plugins/types.js";
+import { isAnthropicApi } from "./embedded-agent-helpers/anthropic-api.js";
 import { isGoogleModelApi } from "./embedded-agent-helpers/google.js";
-import { normalizeProviderId } from "./model-selection.js";
-import type { ToolCallIdMode } from "./tool-call-id.js";
-
-/** Scope of transcript content sanitization before provider replay. */
-type TranscriptSanitizeMode = "full" | "images-only";
-
-/** Effective replay policy applied before sending transcript history to a provider. */
-export type TranscriptPolicy = {
-  sanitizeMode: TranscriptSanitizeMode;
-  sanitizeToolCallIds: boolean;
-  toolCallIdMode?: ToolCallIdMode;
-  duplicateToolCallIdStyle?: "openai";
-  preserveNativeAnthropicToolUseIds: boolean;
-  repairToolUseResultPairing: boolean;
-  preserveSignatures: boolean;
-  appendOnlyRuntimeContext?: boolean;
-  sanitizeThoughtSignatures?: {
-    allowBase64Only?: boolean;
-    includeCamelCase?: boolean;
-  };
-  dropThinkingBlocks: boolean;
-  dropReasoningFromHistory?: boolean;
-  applyGoogleTurnOrdering: boolean;
-  validateGeminiTurns: boolean;
-  validateAnthropicTurns: boolean;
-  allowSyntheticToolResults: boolean;
-};
-
-const SIGNED_THINKING_PROVIDERS = new Set(["anthropic", "amazon-bedrock", "anthropic-vertex"]);
-
-/** Return true when a provider family owns signed thinking blocks. */
-export function providerRequiresSignedThinking(provider?: string | null): boolean {
-  return SIGNED_THINKING_PROVIDERS.has(normalizeProviderId(provider ?? ""));
-}
-
-/** Decide whether signed thinking can be replayed under the current provider policy. */
-export function shouldAllowProviderOwnedThinkingReplay(params: {
-  modelApi?: string | null;
-  provider?: string | null;
-  policy: Pick<
-    TranscriptPolicy,
-    "validateAnthropicTurns" | "preserveSignatures" | "dropThinkingBlocks"
-  >;
-}): boolean {
-  const hasProviderOwnedSignedThinking =
-    params.policy.preserveSignatures || providerRequiresSignedThinking(params.provider);
-  return (
-    isAnthropicApi(params.modelApi) &&
-    params.policy.validateAnthropicTurns &&
-    hasProviderOwnedSignedThinking &&
-    !params.policy.dropThinkingBlocks
-  );
-}
-
-/**
- * Bedrock Converse still requires strict role alternation, so only the direct
- * Messages API keeps consecutive user turns separate under append-only replay.
- */
-export function shouldMergeConsecutiveUserTurns(
-  policy: Pick<TranscriptPolicy, "appendOnlyRuntimeContext">,
-  modelApi?: string | null,
-): boolean {
-  return !(policy.appendOnlyRuntimeContext && modelApi === "anthropic-messages");
-}
+import type { TranscriptPolicy } from "./transcript-policy.types.js";
 
 const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   sanitizeMode: "images-only",
@@ -87,6 +27,7 @@ const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   repairToolUseResultPairing: true,
   preserveSignatures: false,
   appendOnlyRuntimeContext: false,
+  inHistorySystemUpdates: false,
   sanitizeThoughtSignatures: undefined,
   dropThinkingBlocks: false,
   dropReasoningFromHistory: false,
@@ -96,10 +37,6 @@ const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   allowSyntheticToolResults: false,
 };
 
-function isAnthropicApi(modelApi?: string | null): boolean {
-  return modelApi === "anthropic-messages" || modelApi === "bedrock-converse-stream";
-}
-
 function isOpenAiResponsesCompatibleApi(modelApi?: string | null): boolean {
   return (
     modelApi === "openai-responses" ||
@@ -108,21 +45,9 @@ function isOpenAiResponsesCompatibleApi(modelApi?: string | null): boolean {
   );
 }
 
-function isClaudeFamilyModelId(modelId?: string | null): boolean {
-  const id = normalizeLowercaseStringOrEmpty(modelId);
-  return /(?:^|[./:_-])claude(?:$|[./:_-])/.test(id);
-}
-
 function modelDisablesReasoningEffort(model?: ProviderRuntimeModel): boolean {
   const compat = model?.compat as { supportsReasoningEffort?: boolean } | undefined;
   return compat?.supportsReasoningEffort === false;
-}
-
-function shouldPreserveReasoningContentReplay(params: {
-  modelId?: string | null;
-  model?: ProviderRuntimeModel;
-}): boolean {
-  return params.model?.reasoning === true || requiresReasoningContentReplay(params.modelId);
 }
 
 /**
@@ -136,200 +61,51 @@ function buildUnownedProviderTransportReplayFallback(params: {
   modelApi?: string | null;
   modelId?: string | null;
   model?: ProviderRuntimeModel;
+  inHistorySystemUpdates: boolean;
 }): ProviderReplayPolicy | undefined {
   const isGoogle = isGoogleModelApi(params.modelApi);
-  const isAnthropic = isAnthropicApi(params.modelApi);
+  if (isAnthropicApi(params.modelApi)) {
+    return {
+      ...buildAnthropicReplayPolicyForModel(
+        params.modelId ?? undefined,
+        params.model,
+        params.inHistorySystemUpdates,
+      ),
+      ...(modelDisablesReasoningEffort(params.model) ? { dropThinkingBlocks: true } : {}),
+    };
+  }
   const isStrictOpenAiCompatible = params.modelApi === "openai-completions";
-  const requiresOpenAiCompatibleToolIdSanitization =
-    params.modelApi === "openai-completions" ||
-    params.modelApi === "openai-responses" ||
-    params.modelApi === "openai-chatgpt-responses" ||
-    params.modelApi === "azure-openai-responses";
+  const isOpenAiResponses = isOpenAiResponsesCompatibleApi(params.modelApi);
+  const requiresOpenAiCompatibleToolIdSanitization = isStrictOpenAiCompatible || isOpenAiResponses;
 
-  if (
-    !isGoogle &&
-    !isAnthropic &&
-    !isStrictOpenAiCompatible &&
-    !requiresOpenAiCompatibleToolIdSanitization
-  ) {
+  if (!isGoogle && !requiresOpenAiCompatibleToolIdSanitization) {
     return undefined;
   }
 
   const modelId = normalizeLowercaseStringOrEmpty(params.modelId);
-  const isClaudeOpenAiResponses = isOpenAiResponsesCompatibleApi(params.modelApi)
-    ? isClaudeFamilyModelId(modelId)
-    : false;
+  const isClaudeOpenAiResponses =
+    isOpenAiResponses && /(?:^|[./:_-])claude(?:$|[./:_-])/.test(modelId);
   return {
-    ...(isGoogle || isAnthropic ? { sanitizeMode: "full" as const } : {}),
-    ...(isGoogle || isAnthropic || requiresOpenAiCompatibleToolIdSanitization
+    sanitizeMode: isGoogle ? "full" : undefined,
+    sanitizeToolCallIds: true,
+    toolCallIdMode: "strict",
+    sanitizeThoughtSignatures: isGoogle
       ? {
-          sanitizeToolCallIds: true,
-          toolCallIdMode: "strict" as const,
+          allowBase64Only: true,
+          includeCamelCase: true,
         }
-      : {}),
-    ...(isAnthropic
-      ? {
-          preserveSignatures: true,
-          appendOnlyRuntimeContext: bindsClaudeThinkingPrefix({
-            id: modelId,
-            params: params.model?.params,
-          }),
-        }
-      : {}),
-    ...(isGoogle
-      ? {
-          sanitizeThoughtSignatures: {
-            allowBase64Only: true,
-            includeCamelCase: true,
-          },
-        }
-      : {}),
-    ...(isAnthropic && shouldDropClaudeThinkingBlocks(modelId, params.model)
-      ? { dropThinkingBlocks: true }
-      : {}),
-    ...(isAnthropic && modelDisablesReasoningEffort(params.model)
-      ? { dropThinkingBlocks: true }
-      : {}),
-    ...(isStrictOpenAiCompatible
-      ? { dropReasoningFromHistory: !shouldPreserveReasoningContentReplay(params) }
-      : {}),
-    ...(isGoogle || isStrictOpenAiCompatible ? { applyAssistantFirstOrderingFix: true } : {}),
-    ...(isGoogle || isStrictOpenAiCompatible ? { validateGeminiTurns: true } : {}),
-    ...(isAnthropic || isStrictOpenAiCompatible || isClaudeOpenAiResponses
-      ? { validateAnthropicTurns: true }
-      : {}),
-    ...(isGoogle || isAnthropic || isOpenAiResponsesCompatibleApi(params.modelApi)
-      ? { allowSyntheticToolResults: true }
-      : {}),
+      : undefined,
+    dropReasoningFromHistory: isStrictOpenAiCompatible
+      ? params.model?.reasoning !== true && !requiresReasoningContentReplay(params.modelId)
+      : undefined,
+    applyAssistantFirstOrderingFix: isGoogle || isStrictOpenAiCompatible ? true : undefined,
+    validateGeminiTurns: isGoogle || isStrictOpenAiCompatible ? true : undefined,
+    validateAnthropicTurns: isStrictOpenAiCompatible || isClaudeOpenAiResponses ? true : undefined,
+    allowSyntheticToolResults: isGoogle || isOpenAiResponses ? true : undefined,
   };
 }
 
-const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
-  "kimi-for-coding",
-  "kimi-k2.5",
-  "kimi-k2.6",
-  "kimi-k2.7-code",
-  "kimi-k2.7-code-highspeed",
-  "kimi-k3",
-  "kimi-k2-thinking",
-  "kimi-k2-thinking-turbo",
-  "mimo-v2-pro",
-  "mimo-v2-omni",
-  "mimo-v2.5",
-  "mimo-v2.5-pro",
-  "mimo-v2.6-pro",
-]);
-
-function requiresReasoningContentReplay(modelId: string | null | undefined): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(modelId);
-  if (!normalized) {
-    return false;
-  }
-  const parts = normalized.split("/").filter(Boolean);
-  const finalPart = parts[parts.length - 1] ?? normalized;
-  const candidates = [finalPart];
-  const colonParts = finalPart.split(":").filter(Boolean);
-  if (colonParts.length > 1) {
-    candidates.push(colonParts[0] ?? "", colonParts[colonParts.length - 1] ?? "");
-  }
-  return candidates.some((candidate) => REASONING_CONTENT_REPLAY_MODEL_IDS.has(candidate));
-}
-
-function mergeTranscriptPolicy(
-  policy: ProviderReplayPolicy | undefined,
-  basePolicy: TranscriptPolicy = DEFAULT_TRANSCRIPT_POLICY,
-): TranscriptPolicy {
-  if (!policy) {
-    return basePolicy;
-  }
-
-  return {
-    ...basePolicy,
-    ...(policy.sanitizeMode != null ? { sanitizeMode: policy.sanitizeMode } : {}),
-    ...(typeof policy.sanitizeToolCallIds === "boolean"
-      ? { sanitizeToolCallIds: policy.sanitizeToolCallIds }
-      : {}),
-    ...(policy.toolCallIdMode ? { toolCallIdMode: policy.toolCallIdMode as ToolCallIdMode } : {}),
-    ...(policy.duplicateToolCallIdStyle
-      ? { duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle }
-      : {}),
-    ...(typeof policy.preserveNativeAnthropicToolUseIds === "boolean"
-      ? { preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds }
-      : {}),
-    ...(typeof policy.repairToolUseResultPairing === "boolean"
-      ? { repairToolUseResultPairing: policy.repairToolUseResultPairing }
-      : {}),
-    ...(typeof policy.preserveSignatures === "boolean"
-      ? { preserveSignatures: policy.preserveSignatures }
-      : {}),
-    ...(typeof policy.appendOnlyRuntimeContext === "boolean"
-      ? { appendOnlyRuntimeContext: policy.appendOnlyRuntimeContext }
-      : {}),
-    ...(policy.sanitizeThoughtSignatures
-      ? { sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures }
-      : {}),
-    ...(typeof policy.dropThinkingBlocks === "boolean"
-      ? { dropThinkingBlocks: policy.dropThinkingBlocks }
-      : {}),
-    ...(typeof policy.dropReasoningFromHistory === "boolean"
-      ? { dropReasoningFromHistory: policy.dropReasoningFromHistory }
-      : {}),
-    ...(typeof policy.applyAssistantFirstOrderingFix === "boolean"
-      ? { applyGoogleTurnOrdering: policy.applyAssistantFirstOrderingFix }
-      : {}),
-    ...(typeof policy.validateGeminiTurns === "boolean"
-      ? { validateGeminiTurns: policy.validateGeminiTurns }
-      : {}),
-    ...(typeof policy.validateAnthropicTurns === "boolean"
-      ? { validateAnthropicTurns: policy.validateAnthropicTurns }
-      : {}),
-    ...(typeof policy.allowSyntheticToolResults === "boolean"
-      ? { allowSyntheticToolResults: policy.allowSyntheticToolResults }
-      : {}),
-  };
-}
-
-const transcriptPolicyCache = new WeakMap<OpenClawConfig, Map<string, TranscriptPolicy>>();
-
-function canCacheTranscriptPolicy(params: {
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): params is { config: OpenClawConfig; env?: NodeJS.ProcessEnv } {
-  if (!params.config) {
-    return false;
-  }
-  return !params.env || params.env === process.env;
-}
-
-function resolveTranscriptPolicyCacheKey(params: {
-  modelApi?: string | null;
-  provider: string;
-  modelId?: string | null;
-  model?: ProviderRuntimeModel;
-  config: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): string {
-  return JSON.stringify({
-    provider: params.provider,
-    modelApi: params.modelApi ?? "",
-    modelId: params.modelId ?? "",
-    canonicalModelId:
-      typeof params.model?.params?.canonicalModelId === "string"
-        ? params.model.params.canonicalModelId
-        : "",
-    dropsThinkingForReasoningCompat: modelDisablesReasoningEffort(params.model),
-    preservesReasoningContentReplay: params.model?.reasoning === true,
-    workspaceDir: params.workspaceDir ?? "",
-    pluginControlPlane: resolvePluginControlPlaneFingerprint({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-    }),
-  });
-}
-
-/** Resolve and cache the effective replay policy for a provider/model/config tuple. */
+/** Resolve the effective replay policy from the prepared provider and model context. */
 export function resolveTranscriptPolicy(params: {
   modelApi?: string | null;
   provider?: string | null;
@@ -339,18 +115,9 @@ export function resolveTranscriptPolicy(params: {
   env?: NodeJS.ProcessEnv;
   model?: ProviderRuntimeModel;
   runtimeHandle?: ProviderRuntimePluginHandle;
+  directApiKey?: boolean;
 }): TranscriptPolicy {
   const provider = normalizeProviderId(params.provider ?? "");
-  const cacheConfig = canCacheTranscriptPolicy(params) ? params.config : undefined;
-  const cacheKey = cacheConfig
-    ? resolveTranscriptPolicyCacheKey({ ...params, provider, config: cacheConfig })
-    : undefined;
-  if (cacheConfig && cacheKey) {
-    const cached = transcriptPolicyCache.get(cacheConfig)?.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-  }
   const runtimePlugin =
     params.runtimeHandle?.plugin ??
     (provider
@@ -370,27 +137,42 @@ export function resolveTranscriptPolicy(params: {
     modelId: params.modelId ?? "",
     modelApi: params.modelApi,
     model: params.model,
+    inHistorySystemUpdates:
+      supportsNativeOpenAIResponsesEndpoint({
+        provider,
+        api: params.modelApi ?? "",
+        baseUrl: params.model?.baseUrl,
+      }) ||
+      (params.directApiKey === true &&
+        params.modelApi === "anthropic-messages" &&
+        isDirectAnthropicModel({ provider, baseUrl: params.model?.baseUrl }, params.env) &&
+        supportsClaudeInHistorySystemMessages({
+          id: params.modelId ?? undefined,
+          params: params.model?.params,
+        })),
   };
 
-  // Once a provider adopts the replay-policy hook, replay policy should come
-  // from the plugin, not from transport-family defaults in core.
+  // Provider hooks replace the fallback and can override the shared retention default.
   const buildReplayPolicy = runtimePlugin?.buildReplayPolicy;
-  const policy = buildReplayPolicy
-    ? mergeTranscriptPolicy(buildReplayPolicy(context) ?? undefined)
-    : mergeTranscriptPolicy(
-        buildUnownedProviderTransportReplayFallback({
-          modelApi: params.modelApi,
-          modelId: params.modelId,
-          model: params.model,
-        }),
-      );
-  if (cacheConfig && cacheKey) {
-    let configCache = transcriptPolicyCache.get(cacheConfig);
-    if (!configCache) {
-      configCache = new Map();
-      transcriptPolicyCache.set(cacheConfig, configCache);
+  const replayPolicy = buildReplayPolicy
+    ? (buildReplayPolicy(context) ?? undefined)
+    : buildUnownedProviderTransportReplayFallback(context);
+  const modelApi = params.modelApi;
+  const policy = {
+    ...DEFAULT_TRANSCRIPT_POLICY,
+    // Exact-entry caches need earlier temporal carriers to remain in the request prefix.
+    appendOnlyRuntimeContext: modelApi === "openai-completions" || modelApi === "ollama",
+  };
+  for (const [key, value] of Object.entries(replayPolicy ?? {})) {
+    if (value != null) {
+      Object.assign(policy, {
+        [key === "applyAssistantFirstOrderingFix" ? "applyGoogleTurnOrdering" : key]: value,
+      });
     }
-    configCache.set(cacheKey, policy);
+  }
+  if (policy.inHistorySystemUpdates) {
+    policy.inHistorySystemUpdates = context.inHistorySystemUpdates;
+    policy.appendOnlyRuntimeContext ||= context.inHistorySystemUpdates;
   }
   return policy;
 }

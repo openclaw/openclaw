@@ -1,6 +1,20 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 type ErrorPattern = RegExp | string;
 
+const EXECUTION_APPROVAL_FAILURE_MESSAGES = new Set([
+  "Codex node execution approval expired before a decision. Retry the action and approve the new request.",
+  "Codex node execution was denied. Retry the action and choose Allow once or Allow always to continue.",
+  "Codex node execution requires an available approval reviewer.",
+]);
+
+/** Node launch refusals are not provider failures; only known, bounded copy is public. */
+export function resolveExecutionApprovalFailureMessage(
+  raw: string | undefined,
+): string | undefined {
+  const message = raw?.trim().replace(/\s+\|\s+INVALID_REQUEST$/, "");
+  return message && EXECUTION_APPROVAL_FAILURE_MESSAGES.has(message) ? message : undefined;
+}
+
 // Both figures must be denominated in tokens and come from one clause. A message can state an RPM
 // limit and mention TPM elsewhere, and reading the pair on its own would compare a request count
 // against a token budget; requiring the unit to lead the clause keeps the numbers commensurable.
@@ -26,8 +40,13 @@ export function isProviderRequestSizeCeilingError(errorMessage?: string): boolea
 
 // Match model-transport EOF contracts, not plugin lifecycle stream failures.
 // Unresolved calls at EOF differ from an inconsistent completed response.
+// A body cut inside an SSE frame is a disconnect; a malformed whole frame is not a disconnect.
 export const INCOMPLETE_ASSISTANT_STREAM_RE =
-  /^(?:[\w -]*stream ended (?:before (?:message_?stop|(?:a )?terminal (?:finish reason|response event|event))|without (?:a terminal )?finish[_ ]reason)|Responses stream ended with unresolved tool calls)[.!]?$/i;
+  /^(?:[\w -]*stream ended (?:before (?:message_?stop|(?:a )?terminal (?:finish reason|response event|event))|without (?:a terminal )?finish[_ ]reason|with an incomplete frame)|Responses stream ended with unresolved tool calls)[.!]?$/i;
+// The OpenAI SDK uses this exact diagnostic for unreadable SSE event data.
+// Treat the failed response as a provider error, not arbitrary JSON/schema failures.
+export const MALFORMED_SSE_MESSAGE_RE =
+  /^Error reading response: malformed server-sent event JSON\.$/i;
 // Undici ends a stream body with this exact bare transport message. Keep it
 // anchored so unrelated failures that merely contain the word do not match.
 export const TERMINATED_TRANSPORT_MESSAGE_RE = /^terminated$/i;
@@ -44,7 +63,7 @@ export function isPreDispatchToolCallRejectionMessage(errorMessage?: string): bo
   return errorMessage !== undefined && PRE_DISPATCH_TOOL_CALL_REJECTION_MESSAGES.has(errorMessage);
 }
 const PERIODIC_USAGE_LIMIT_RE =
-  /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b/i;
+  /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b|已达到 Token Plan 用量上限|已达到每[日周月天](?:\/每[日周月天])*使用上限|(?:配额|额度)已用尽/i;
 
 const HIGH_CONFIDENCE_AUTH_PERMANENT_PATTERNS = [
   /api[_ ]?key[_ ]?(?:revoked|deactivated|deleted)/i,
@@ -64,6 +83,11 @@ const AMBIGUOUS_AUTH_ERROR_PATTERNS = [
   "permission_error",
 ] as const satisfies readonly ErrorPattern[];
 
+// Diagnostic counts and identifiers can equal 401/403 without an authentication failure.
+// Require a leading status, HTTP/status context, or a structured status/code field.
+const AUTH_HTTP_STATUS_RE =
+  /^\s*(?:401|403)\b|\b(?:http(?:[ _-]?status)?|status(?:[ _-]?code)?|response(?:[ _-]?code)?|error(?:[ _-]?code)?)\b[\s:=#"'(]{0,6}(?:401|403)\b|["'](?:status|code)["']\s*:\s*["']?(?:401|403)\b/i;
+
 const COMMON_AUTH_ERROR_PATTERNS = [
   "incorrect api key",
   "invalid token",
@@ -77,8 +101,7 @@ const COMMON_AUTH_ERROR_PATTERNS = [
   "insufficient permission",
   /missing scopes?:/i,
   "expired",
-  /\b401\b/,
-  /\b403\b/,
+  AUTH_HTTP_STATUS_RE,
   "no credentials found",
   "no api key found",
   /\bfailed to (?:extract|parse|validate|decode)\b.*\btoken\b/,
@@ -146,6 +169,7 @@ const ERROR_PATTERNS = {
     "访问量过大",
   ],
   serverError: [
+    MALFORMED_SSE_MESSAGE_RE,
     "an error occurred while processing",
     "internal server error",
     "internal_error",
@@ -206,6 +230,8 @@ const ERROR_PATTERNS = {
   ],
   billing: [
     BILLING_ERROR_HARD_402_RE,
+    // Already rendered billing copy re-enters classification; "usage limits" in it must not read as rate_limit.
+    /\breturned a billing error\b/i,
     /\b(?:got|returned|received)\s+(?:a\s+)?402\b(?!\s+records\b)/i,
     "payment required",
     "insufficient credits",
@@ -281,8 +307,23 @@ function matchesErrorPatterns(raw: string, patterns: readonly ErrorPattern[]): b
 export function matchesFormatErrorPattern(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.format);
 }
+export function isUnsupportedReasoningEffortParameterError(raw: string): boolean {
+  if (/supported values(?: are)?:/i.test(raw)) {
+    return false;
+  }
+  return (
+    /\b(?:unknown|unrecognized|unsupported|unexpected)\s+(?:field|parameter|(?:keyword\s+)?argument)\s*:?\s*["'`\\]*reasoning_effort(?![\w./-])/i.test(
+      raw,
+    ) ||
+    /(?<![\w./-])reasoning_effort["'`\\]*\s+(?:parameter\s+)?(?:is\s+)?(?:not supported|unsupported)\b/i.test(
+      raw,
+    )
+  );
+}
 export function isSessionTranscriptValidationErrorMessage(raw: string): boolean {
-  return /\binvalid session transcript entry\b/i.test(raw);
+  return /\b(?:invalid session transcript entry|persisted legacy session transcripts require doctor\/import migration)\b/i.test(
+    raw,
+  );
 }
 export function isRateLimitErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.rateLimit);
@@ -320,20 +361,17 @@ export function isBillingErrorMessage(raw: string): boolean {
   if (!BILLING_ERROR_HEAD_RE.test(raw)) {
     return false;
   }
-  return (
-    value.includes("upgrade") ||
-    value.includes("credits") ||
-    value.includes("payment") ||
-    value.includes("purchase") ||
-    value.includes("subscription") ||
-    value.includes("plan")
+  return ["upgrade", "credits", "payment", "purchase", "subscription", "plan"].some((hint) =>
+    value.includes(hint),
   );
 }
 export function isAuthPermanentErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.authPermanent);
 }
 export function isAuthErrorMessage(raw: string): boolean {
-  return matchesErrorPatterns(raw, ERROR_PATTERNS.auth);
+  return (
+    !resolveExecutionApprovalFailureMessage(raw) && matchesErrorPatterns(raw, ERROR_PATTERNS.auth)
+  );
 }
 export function isOverloadedErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.overloaded);
@@ -351,4 +389,26 @@ export function isServerErrorMessage(raw: string): boolean {
     return true;
   }
   return matchesErrorPatterns(scrubbed, ERROR_PATTERNS.serverError);
+}
+
+/** `All models failed (3): provider/model: text | provider/model: text` */
+const FAILOVER_AGGREGATE_PREFIX_RE = /^all(?: [\w-]+)? models failed \(\d+\):\s*/i;
+const FAILOVER_AGGREGATE_LEG_SPLIT_RE = /\s\|\s|;\s(?=\S+\/\S+:\s)/;
+/** `anthropic/claude-opus-5: You've hit your session limit` */
+const FAILOVER_LEG_ROUTE_PREFIX_RE = /^\S+\/\S+:\s+/;
+
+/**
+ * A chain summary concatenates every leg, so it outgrows the length guard that keeps
+ * provider text bounded, and a hint the provider did give is thrown away. Read the legs
+ * individually, preferring the first, which is the route the user actually chose.
+ */
+export function splitFailoverAggregateLegs(raw: string): string[] {
+  const withoutPrefix = raw.trim().replace(FAILOVER_AGGREGATE_PREFIX_RE, "");
+  if (withoutPrefix === raw.trim()) {
+    return [];
+  }
+  return withoutPrefix
+    .split(FAILOVER_AGGREGATE_LEG_SPLIT_RE)
+    .map((leg) => leg.trim().replace(FAILOVER_LEG_ROUTE_PREFIX_RE, "").trim())
+    .filter(Boolean);
 }

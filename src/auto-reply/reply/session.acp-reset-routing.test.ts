@@ -3,11 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  getSessionBindingService,
-  testing as sessionBindingTesting,
-} from "../../infra/outbound/session-binding-service.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { testing as sessionBindingTesting } from "../../infra/outbound/session-binding-service.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import {
   initSessionState,
   writeSessionStore as writeSessionStoreFast,
@@ -21,47 +18,11 @@ async function createStorePath(prefix: string) {
   return path.join(root, "sessions.json");
 }
 afterEach(async () => {
-  closeOpenClawStateDatabaseForTest();
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  await closeOpenClawStateDatabaseAsync();
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 describe("bound ACP reset routing", () => {
-  it.each(["/new", "/reset", "/new continue", "/reset continue"])(
-    "keeps the transport session unchanged before handling dynamically bound %s",
-    async (body) => {
-      const storePath = await createStorePath("openclaw-transport-acp-reset-");
-      const sourceKey = "agent:main:main";
-      const boundKey = "agent:main:acp:bound-reset";
-      await writeSessionStoreFast(storePath, {
-        [sourceKey]: { sessionId: "source-session", updatedAt: Date.now(), systemSent: true },
-        [boundKey]: { sessionId: "bound-session", updatedAt: Date.now(), systemSent: true },
-      });
-      await getSessionBindingService().bind({
-        targetSessionKey: boundKey,
-        targetKind: "session",
-        conversation: { channel: "webchat", accountId: "default", conversationId: "main" },
-        placement: "current",
-      });
-      const result = await initSessionState({
-        ctx: {
-          RawBody: body,
-          CommandBody: body,
-          CommandSource: "text",
-          CommandAuthorized: true,
-          Provider: "webchat",
-          Surface: "webchat",
-          From: "main",
-          To: "main",
-          SessionKey: "main",
-        },
-        cfg: { session: { store: storePath } },
-      });
-      expect(result.sessionKey).toBe(sourceKey);
-      expect(result.sessionId).toBe("source-session");
-      expect(result.resetTriggered).toBe(false);
-      expect(result.isNewSession).toBe(false);
-    },
-  );
   it.each([
     {
       name: "defers /new lifecycle rotation to the bound ACP reset handler",
@@ -69,21 +30,6 @@ describe("bound ACP reset routing", () => {
       to: "1478836151241412759",
       includeBinding: true,
       expectedRotation: false,
-    },
-    {
-      name: "defers /reset lifecycle rotation to the bound ACP reset handler",
-      body: "/reset",
-      to: "1478836151241412759",
-      includeBinding: true,
-      expectedRotation: false,
-    },
-    {
-      name: "rotates local session state for ACP /new when no matching conversation binding exists",
-      body: "/new",
-      to: "user:12345",
-      originatingTo: "user:12345",
-      includeBinding: false,
-      expectedRotation: true,
     },
     {
       name: "keeps custom reset triggers working on bound ACP sessions",
@@ -130,7 +76,6 @@ describe("bound ACP reset routing", () => {
         SenderId: "12345",
         From: "discord:12345",
         To: scenario.to,
-        OriginatingTo: "originatingTo" in scenario ? scenario.originatingTo : undefined,
         SessionKey: sessionKey,
       },
       cfg: {

@@ -46,7 +46,7 @@ openclaw plugins enable codex
 openclaw plugins enable logbook
 ```
 
-Configure an explicit vision model for deterministic startup:
+Configure an explicit vision model to make startup predictable:
 
 ```json5
 {
@@ -284,6 +284,9 @@ then retries. An unpinned setup can rotate to another eligible node.
 - If the latest batch shows an error, fix the model or auth problem and select
   **Analyze now**. Failed batches are retried only on that explicit action to
   avoid repeated model spend.
+
+Malformed distraction JSON in stored cards makes timeline reads fail visibly;
+it is not treated as an empty distraction list. The stored card remains unchanged.
 
 ## Related
 

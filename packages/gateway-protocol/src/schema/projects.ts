@@ -2,6 +2,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 const StoredProjectIdSchema = Type.String({
   pattern: "^[a-z0-9][a-z0-9-]{0,63}$",
@@ -83,6 +84,18 @@ export const ProjectSummarySchema = closedObject({
   lastUsedAt: Type.Number({ minimum: 0 }),
 });
 
+export const ProjectsCheckoutOptionsParamsSchema = closedObject({
+  projectId: NonEmptyString,
+  agentId: NonEmptyString,
+});
+
+/** Advisory selection facts; sessions.create revalidates authority and the checkout. */
+export const ProjectsCheckoutOptionsResultSchema = closedObject({
+  current: Type.Boolean(),
+  worktree: Type.Boolean(),
+});
+export type ProjectsCheckoutOptionsResult = Static<typeof ProjectsCheckoutOptionsResultSchema>;
+
 export const ProjectsListParamsSchema = closedObject({
   includeObserved: Type.Optional(
     Type.Boolean({
@@ -90,8 +103,16 @@ export const ProjectsListParamsSchema = closedObject({
     }),
   ),
 });
+export const ProjectDefaultRepositorySchema = closedObject({
+  identity: Type.String({ minLength: 1, maxLength: 200 }),
+  url: Type.String({ minLength: 1, maxLength: 2048 }),
+  ref: Type.Optional(Type.String({ minLength: 1, maxLength: 255 })),
+  profileId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+});
 export const ProjectsListResultSchema = closedObject({
   projects: Type.Array(ProjectRecordSchema),
+  defaultRepository: Type.Optional(ProjectDefaultRepositorySchema),
+  githubHost: Type.Optional(Type.String({ minLength: 1, maxLength: 2048 })),
   recents: Type.Optional(Type.Array(ProjectRecentSchema, { maxItems: 8 })),
   observedProjects: Type.Optional(
     Type.Array(ProjectSummarySchema, {
@@ -119,13 +140,15 @@ export const RemoteProjectSchema = closedObject({
   description: Type.Optional(Type.String({ maxLength: 500 })),
   cloneUrl: Type.String({ minLength: 1, maxLength: 2048 }),
   webUrl: Type.String({ minLength: 1, maxLength: 2048 }),
+  defaultBranch: Type.Optional(Type.String({ minLength: 1, maxLength: 255 })),
   private: Type.Boolean(),
 });
 export const ProjectsSearchRemoteParamsSchema = closedObject({
   query: Type.String({ minLength: 1, maxLength: 200 }),
 });
 export const ProjectsSearchRemoteResultSchema = closedObject({
-  credential: Type.Union([Type.Literal("configured"), Type.Literal("missing")]),
+  stale: Type.Optional(Type.Boolean()),
+  credential: stringLiteralUnion(["configured", "missing"]),
   projects: Type.Array(RemoteProjectSchema, { maxItems: 10 }),
 });
 
@@ -140,6 +163,7 @@ export type ProjectRecent = Static<typeof ProjectRecentSchema>;
 export type ProjectCheckout = Static<typeof ProjectCheckoutSchema>;
 export type ProjectSummary = Static<typeof ProjectSummarySchema>;
 export type ProjectsListParams = Static<typeof ProjectsListParamsSchema>;
+export type ProjectDefaultRepository = Static<typeof ProjectDefaultRepositorySchema>;
 export type ProjectsListResult = Static<typeof ProjectsListResultSchema>;
 export type ProjectsRegisterParams = Static<typeof ProjectsRegisterParamsSchema>;
 export type ProjectsRegisterResult = Static<typeof ProjectsRegisterResultSchema>;

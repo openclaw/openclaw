@@ -4,6 +4,28 @@ import { en } from "./en.ts";
 // Analysis copy loads with Usage; shared labels and Settings search stay eager.
 const enUsage = {
   usage: {
+    // The session time series still names a response that ended before its final usage.
+    unavailable:
+      "Token usage and cost are unknown because a response ended before final usage arrived. Select an unaffected session to view its usage.",
+    lowerBoundShort: "≥ Lower bound",
+    partialShort: "Partial results",
+    lowerBound:
+      "≥ marks a lower bound: some responses ended before their final usage arrived, so their tokens and cost are partly counted.",
+    presets: {
+      today: "Today",
+      last7d: "7d",
+      last30d: "30d",
+      last90d: "90d",
+      last1y: "1y",
+      all: "All",
+    },
+    scope: {
+      instance: "Current instance",
+      instanceHint: "Show only the active session id for each logical session.",
+      family: "Historical lineage",
+      familyHint: "Roll up known rotated transcript-backed session ids.",
+      familyIncluded: "Historical lineage includes {count} session instances.",
+    },
     filters: {
       rangeTitle: "Reporting range",
       rangeHint: "Choose the dates to include in every chart and total.",
@@ -39,12 +61,22 @@ const enUsage = {
     query: {
       placeholder:
         "Filter sessions (e.g. key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
-      apply: "Filter (client-side)",
+      apply: "Filter",
       matching: "{shown} of {total} sessions match",
       inRange: "{total} sessions in range",
       tip: "Tip: use filters or click bars to refine days.",
     },
+    export: {
+      label: "Export",
+      changed: "Session context changed while preparing the export. Refresh usage and try again.",
+      incomplete:
+        "Usage data is incomplete. Refresh usage and try again, or narrow the date range.",
+      sessionsCsv: "Sessions CSV",
+      dailyCsv: "Daily CSV",
+      json: "JSON",
+    },
     cacheStatus: {
+      checking: "Updating",
       warning: "Usage data may be incomplete. Checking for updated totals automatically.",
       paused:
         "Usage data may be incomplete. Automatic checks paused; select Refresh to check again.",
@@ -57,7 +89,12 @@ const enUsage = {
       select: "Filter by session creator",
       selected: "Selected identity",
       identity: "Identity",
-      unattributed: "Unattributed",
+      unattributed: "Not recorded",
+      unattributedHint:
+        "These sessions have no creator on record, usually because they started before OpenClaw recorded who starts each session.",
+      channelUser: "{channel} user {id}",
+      channelGroup: "{channel} group",
+      channelTopic: "{channel} group · topic {topic}",
       system: "System",
       empty: "No usage for these dates and filters.",
       more: "Show {count} more identities",
@@ -72,6 +109,9 @@ const enUsage = {
       title: "Daily Usage",
       total: "Total",
       byType: "By Type",
+      byProvider: "By Provider",
+      other: "Other",
+      pending: "not loaded yet",
       tokensTitle: "Daily Token Usage",
       costTitle: "Daily Cost",
       compressedScaleHint: "Square-root scale keeps low-usage days visible.",
@@ -84,6 +124,7 @@ const enUsage = {
       perDay: "/ day",
     },
     overview: {
+      unpriced: "Unpriced",
       messages: "Messages",
       messagesHint: "Total user and assistant messages in range.",
       messagesAbbrev: "msgs",
@@ -136,6 +177,9 @@ const enUsage = {
     sessions: {
       title: "Sessions",
       shown: "{count} shown",
+      showAll: "Show all {count}",
+      details: "Session details",
+      showTop: "Show top {count}",
       total: "{count} total",
       avg: "avg",
       all: "All",
@@ -151,6 +195,52 @@ const enUsage = {
       selected: "Selected ({count})",
       copy: "Copy",
       limitReached: "Showing first 1,000 sessions. Narrow date range for complete results.",
+    },
+    details: {
+      noUsageData: "No usage data for this session.",
+      duration: "Duration",
+      modelMix: "Model Mix",
+      filtered: "(filtered)",
+      close: "Close session details",
+      noTimeline: "No timeline data",
+      loadFailed: "Could not load {detail}: {error}",
+      noDataInRange: "No data in range",
+      usageOverTime: "Usage Over Time",
+      rangeStart: "Range start",
+      rangeEnd: "Range end",
+      reset: "Reset",
+      perTurn: "Per Turn",
+      cumulative: "Cumulative",
+      turnRange: "Turns {start}–{end} of {total}",
+      assistantOutputTokens: "Assistant output tokens",
+      userToolInputTokens: "User + tool input tokens",
+      tokensWrittenToCache: "Tokens written to cache",
+      tokensReadFromCache: "Tokens read from cache",
+      noContextData: "No context data",
+      contextOutOfDate: "These context details are out of date. Refresh usage and try again.",
+      systemPromptBreakdown: "System Prompt Breakdown",
+      collapseAll: "Collapse All",
+      expandAll: "Expand All",
+      baseContextPerMessage: "Base context per message",
+      system: "System",
+      systemShort: "Sys",
+      skills: "Skills",
+      tools: "Tools",
+      files: "Files",
+      ofInput: "of input",
+      of: "of",
+      timelineFiltered: "timeline filtered",
+      loadedIntervalMessages: "Loaded conversation · selected interval",
+      conversation: "Conversation",
+      noMessages: "No messages",
+      tool: "Tool",
+      toolResult: "Tool result",
+      hasTools: "Has tools",
+      searchConversation: "Search conversation",
+      filterByRole: "Filter by role",
+      filterByTool: "Filter by tool",
+      you: "You",
+      noMessagesMatch: "No messages match the filters.",
     },
     mosaic: {
       title: "Activity by Time",
@@ -178,8 +268,9 @@ const enUsage = {
 
 export const registerUsageEnglish = Object.assign(
   () => {
-    const { overview, ...sections } = enUsage.usage;
+    const { details, overview, ...sections } = enUsage.usage;
     Object.assign(en.usage, sections);
+    Object.assign(en.usage.details, details);
     Object.assign(en.usage.overview, overview);
   },
   { catalog: enUsage },

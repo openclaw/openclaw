@@ -1,81 +1,55 @@
-/**
- * Runtime dependency owner for subagent announcement delivery.
- *
- * Tests override this module's delivery capabilities while origin routing keeps
- * using the direct runtime exports below.
- */
-import "../../../auto-reply/reply/queue.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
-import { loadSessionEntryReadOnly as loadSessionEntry } from "../../../config/sessions/session-accessor.js";
+import {
+  projectSessionSharingEntry,
+  retainPreparedSessionGenerationFacts,
+} from "../../../config/sessions/session-accessor.sqlite-entry-cache.js";
+import { captureSessionActorStorageOwner } from "../../../config/sessions/session-actor-storage-binding.js";
+import type { SessionEntryCurrentFacts } from "../../../config/sessions/session-entry-current.types.js";
+import {
+  readSessionEntryReadOnlyInWorker,
+  withSessionEntryReadOnlyInWorker,
+  withSessionEntriesFromStoreInWorker,
+} from "../../../config/sessions/session-entry-read-runtime.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { callGateway } from "../../../gateway/call.js";
-import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
-import "../../../infra/outbound/best-effort-delivery.js";
-import "../../../infra/outbound/bound-delivery-router.js";
-import "../../../infra/outbound/conversation-id.js";
-import { sendMessage } from "../../../infra/outbound/message.js";
-import "../../../plugins/hook-runner-global.js";
 import {
+  isIncognitoSessionKey,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../../../routing/session-key.js";
-import { resolveActiveEmbeddedRunSessionId } from "../../embedded-agent-runner/active-run-projections.js";
-import type { EmbeddedAgentQueueMessageOptions } from "../../embedded-agent-runner/run-state.js";
-import {
-  formatEmbeddedAgentQueueFailureSummary,
-  isEmbeddedAgentRunActive,
-  queueEmbeddedAgentMessageWithOutcomeAsync,
-  queueGuardedEmbeddedAgentMessageWithOutcomeAsync,
-  resolveEmbeddedRunAbandonment,
-  type EmbeddedAgentQueueMessageOutcome,
-} from "../../embedded-agent-runner/runs.js";
-import { dispatchGatewayMethodInProcess } from "./subagent-announce.runtime.js";
+import type { SessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
+import { resolveActiveSessionRunId } from "../../../sessions/session-controller.queries.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
+import { withSubagentSessionSource } from "../spawn/subagent-session-source.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 export { resolveQueueSettings } from "../../../auto-reply/reply/queue.js";
 export { resolveExternalBestEffortDeliveryTarget } from "../../../infra/outbound/best-effort-delivery.js";
-export { createBoundDeliveryRouter } from "../../../infra/outbound/bound-delivery-router.js";
+export { resolveBoundDeliveryDestination } from "../../../infra/outbound/bound-delivery-router.js";
 export { resolveConversationIdFromTargets } from "../../../infra/outbound/conversation-id.js";
 export { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
-
-export { formatEmbeddedAgentQueueFailureSummary, isEmbeddedAgentRunActive };
-
-export type SubagentAnnounceDeliveryDeps = {
-  callGateway: typeof callGateway;
-  dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
-  getRuntimeConfig: typeof getRuntimeConfig;
-  getRequesterSessionActivity: (
-    requesterSessionKey: string,
-    requesterAgentId?: string,
-  ) => {
-    sessionId?: string;
-    isActive: boolean;
-  };
-  resolveRequesterSessionAbandonment: (
-    requesterSessionKey: string,
-    sessionId?: string,
-  ) => ReturnType<typeof resolveEmbeddedRunAbandonment>;
-  loadSessionEntry: typeof loadSessionEntry;
-  loadRequesterSessionEntry: typeof loadRequesterSessionEntry;
-  queueEmbeddedAgentMessageWithOutcome: (
-    sessionId: string,
-    text: string,
-    options?: EmbeddedAgentQueueMessageOptions,
-  ) => EmbeddedAgentQueueMessageOutcome | Promise<EmbeddedAgentQueueMessageOutcome>;
-  queueGuardedEmbeddedAgentMessageWithOutcome: typeof queueGuardedEmbeddedAgentMessageWithOutcomeAsync;
-  sendMessage: typeof sendMessage;
-};
+export { getRuntimeConfig as getSubagentAnnounceRuntimeConfig } from "../../../config/config.js";
+export { sendMessage as sendSubagentAnnounceMessage } from "../../../infra/outbound/message.js";
 
 type RequesterSessionEntryResult = {
   cfg: ReturnType<typeof getRuntimeConfig>;
-  entry: ReturnType<typeof loadSessionEntry>;
+  entry: Awaited<ReturnType<typeof readSessionEntryReadOnlyInWorker>>;
   canonicalKey: string;
   agentId?: string;
   storePath?: string;
+  physicalStorePath?: string;
 };
+
+export function hasUsableSessionEntry(entry: unknown): entry is Record<string, unknown> {
+  if (!isRecord(entry)) {
+    return false;
+  }
+  const sessionId = entry.sessionId;
+  return typeof sessionId !== "string" || sessionId.trim() !== "";
+}
 
 export function tryResolveSubagentRequesterAgentId(
   cfg: OpenClawConfig,
@@ -108,11 +82,11 @@ export function tryResolveSubagentRequesterAgentId(
   );
 }
 
-function loadDefaultRequesterSessionEntry(
+function resolveRequesterSessionEntryScope(
   requesterSessionKey: string,
   explicitAgentId?: string,
-): RequesterSessionEntryResult {
-  const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
+): Omit<RequesterSessionEntryResult, "entry"> & { storageKey: string } {
+  const cfg = getRuntimeConfig();
   const rawStorageKey = requesterSessionKey.trim();
   const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey, explicitAgentId);
   const configuredMainKey = normalizeMainKey(cfg.session?.mainKey);
@@ -120,169 +94,226 @@ function loadDefaultRequesterSessionEntry(
     rawStorageKey === "main" || rawStorageKey === configuredMainKey ? canonicalKey : rawStorageKey;
   const agentId = tryResolveSubagentRequesterAgentId(cfg, rawStorageKey, explicitAgentId);
   if (!agentId) {
-    return { cfg, entry: undefined, canonicalKey };
+    return { cfg, canonicalKey, storageKey };
   }
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-  const entry = subagentAnnounceDeliveryDeps.loadSessionEntry({
-    storePath,
+  return { cfg, canonicalKey, agentId, storePath, storageKey };
+}
+
+export async function loadRequesterSessionEntry(
+  requesterSessionKey: string,
+  explicitAgentId?: string,
+): Promise<RequesterSessionEntryResult> {
+  const { storageKey, ...resolved } = resolveRequesterSessionEntryScope(
+    requesterSessionKey,
+    explicitAgentId,
+  );
+  if (!resolved.agentId) {
+    return { ...resolved, entry: undefined };
+  }
+  const scope = {
+    storePath: resolved.storePath,
     sessionKey: storageKey,
-    agentId,
+    agentId: resolved.agentId,
     clone: false,
-  });
-  return { cfg, entry, canonicalKey, agentId, storePath };
-}
-
-const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
-  callGateway: (request) => bindGatewayLifecycleRequest()(request),
-  dispatchGatewayMethodInProcess: ((...args) =>
-    dispatchGatewayMethodInProcess(...args)) as typeof dispatchGatewayMethodInProcess,
-  getRuntimeConfig: () => getRuntimeConfig(),
-  getRequesterSessionActivity: (requesterSessionKey: string, requesterAgentId?: string) => {
-    const cfg = getRuntimeConfig();
-    const resolvedAgentId = tryResolveSubagentRequesterAgentId(
-      cfg,
-      requesterSessionKey,
-      requesterAgentId,
-    );
-    if (!resolvedAgentId) {
-      return { isActive: false };
-    }
-    const storedSessionId = loadRequesterSessionEntry(requesterSessionKey, resolvedAgentId).entry
-      ?.sessionId;
-    // Unscoped active-run keys are ambiguous across agents. An explicit owner
-    // must use its logical store entry instead of accepting another agent's run.
-    const activeSessionId = parseAgentSessionKey(requesterSessionKey)
-      ? resolveActiveEmbeddedRunSessionId(requesterSessionKey)
-      : undefined;
-    const sessionId = activeSessionId ?? storedSessionId;
-    return {
-      sessionId,
-      isActive: Boolean(sessionId && isEmbeddedAgentRunActive(sessionId)),
-    };
-  },
-  resolveRequesterSessionAbandonment: (requesterSessionKey, sessionId) =>
-    resolveEmbeddedRunAbandonment({ sessionKey: requesterSessionKey, sessionId }),
-  loadSessionEntry: (...args) => loadSessionEntry(...args),
-  loadRequesterSessionEntry: loadDefaultRequesterSessionEntry,
-  queueEmbeddedAgentMessageWithOutcome: (...args) =>
-    queueEmbeddedAgentMessageWithOutcomeAsync(...args),
-  queueGuardedEmbeddedAgentMessageWithOutcome: (...args) =>
-    queueGuardedEmbeddedAgentMessageWithOutcomeAsync(...args),
-  sendMessage: (...args) => sendMessage(...args),
-};
-
-let subagentAnnounceDeliveryDeps = defaultSubagentAnnounceDeliveryDeps;
-
-export function setSubagentAnnounceDeliveryDepsForTest(
-  overrides?: Partial<SubagentAnnounceDeliveryDeps>,
-): void {
-  const callGatewayOverride = overrides?.callGateway;
-  const dispatchGatewayMethodInProcessOverride =
-    overrides?.dispatchGatewayMethodInProcess ??
-    (callGatewayOverride
-      ? ((async (method, agentParams, options) =>
-          await callGatewayOverride({
-            method,
-            params: agentParams,
-            expectFinal: options?.expectFinal,
-            onAccepted: options?.onAccepted,
-            timeoutMs: options?.timeoutMs,
-          })) satisfies typeof dispatchGatewayMethodInProcess)
-      : undefined);
-  subagentAnnounceDeliveryDeps = overrides
-    ? {
-        ...defaultSubagentAnnounceDeliveryDeps,
-        ...overrides,
-        ...(dispatchGatewayMethodInProcessOverride
-          ? { dispatchGatewayMethodInProcess: dispatchGatewayMethodInProcessOverride }
-          : {}),
+  };
+  return withSubagentSessionSource(
+    { agentId: resolved.agentId, sessionKey: storageKey },
+    async (source) => {
+      const storePath = source?.path ?? resolved.storePath;
+      if (source || isIncognitoSessionKey(storageKey)) {
+        return {
+          ...resolved,
+          storePath,
+          physicalStorePath: source?.path,
+          entry: source?.actor.snapshot(source.authority)?.entry,
+        };
       }
-    : defaultSubagentAnnounceDeliveryDeps;
+      return withSessionEntryReadOnlyInWorker(
+        { ...scope, storePath },
+        () => {},
+        async (read, owner) => {
+          if (!read.ok) {
+            throw read.error;
+          }
+          return {
+            ...resolved,
+            storePath,
+            physicalStorePath: owner.scope?.storePath,
+            entry: read.value,
+          };
+        },
+      );
+    },
+  );
 }
 
-export function getSubagentAnnounceRuntimeConfig() {
-  return subagentAnnounceDeliveryDeps.getRuntimeConfig();
+/** Retain requester identity; run metadata writes do not replace its lifecycle. */
+export async function captureRequesterSessionEntryCurrent(
+  requesterSessionKey: string,
+  explicitAgentId?: string,
+): Promise<{
+  readCurrent: () => Pick<SessionEntryCurrentFacts, "sessionId" | "lifecycleRevision"> | undefined;
+  release: () => void;
+}> {
+  const source = captureSessionActorStorageOwner(
+    {
+      sessionKey: requesterSessionKey,
+      agentId: explicitAgentId,
+    },
+    { assertCurrent() {}, authorize() {} },
+  );
+  if (source) {
+    return {
+      readCurrent: () =>
+        source.binding?.actor.target.sessionKey === requesterSessionKey
+          ? source.binding.actor.snapshot(source.authority)?.entry
+          : source.owner?.readSession(requesterSessionKey, source.authority)?.entry,
+      release() {},
+    };
+  }
+  const { storageKey, agentId, storePath } = resolveRequesterSessionEntryScope(
+    requesterSessionKey,
+    explicitAgentId,
+  );
+  if (!agentId || !storePath) {
+    return { readCurrent: () => undefined, release() {} };
+  }
+  return withSessionEntriesFromStoreInWorker(
+    {
+      storePath,
+      agentId,
+      sessionKeys: [storageKey],
+      snapshotFields: [],
+      includeAuthorization: true,
+    },
+    async ({ result }) => {
+      const entry = result.entries[0]?.entry;
+      const databaseIdentity = result.databaseIdentity?.identity;
+      if (!entry || !databaseIdentity) {
+        return { readCurrent: () => undefined, release() {} };
+      }
+      const retained = retainPreparedSessionGenerationFacts({
+        databaseIdentity: `file:${databaseIdentity}`,
+        sessionKey: storageKey,
+        entry: projectSessionSharingEntry(entry),
+      });
+      return {
+        readCurrent: () => retained.readCurrent() ?? undefined,
+        release: retained.release,
+      };
+    },
+  );
+}
+
+/** Selected requesters retain their actor through all consumers and accepted settlement. */
+export function withSubagentRequesterSource<T>(
+  requesterSessionKey: string,
+  explicitAgentId: string | undefined,
+  consume: (isCurrent?: () => boolean) => Promise<T>,
+  controllerInput?: () => SessionControllerInput | undefined,
+): Promise<T> {
+  const agentId = explicitAgentId ?? parseAgentSessionKey(requesterSessionKey)?.agentId;
+  if (!agentId) {
+    return consume();
+  }
+  const retainedUntil = () => {
+    const input = controllerInput?.();
+    return input?.custody.rpcAdopted ? input.settlement.promise : undefined;
+  };
+  return withSubagentSessionSource(
+    { agentId, sessionKey: requesterSessionKey, retainedUntil },
+    async (source) => {
+      if (!source) {
+        return consume(isIncognitoSessionKey(requesterSessionKey) ? () => false : undefined);
+      }
+      const current = await captureRequesterSessionEntryCurrent(requesterSessionKey, agentId);
+      const isCurrent = () => {
+        try {
+          return current.readCurrent() !== undefined;
+        } catch {
+          return false;
+        }
+      };
+      try {
+        return await consume(isCurrent);
+      } finally {
+        const retained = retainedUntil();
+        if (retained) {
+          void retained.then(current.release, current.release);
+        } else {
+          current.release();
+        }
+      }
+    },
+  );
+}
+
+/** Compose requester authority with the caller's guards without replacing either owner. */
+export function withSubagentRequesterDelivery<
+  T extends {
+    requesterAgentId?: string;
+    controllerInput?: SessionControllerInput;
+    isSourceSessionEffectsAllowed?: () => boolean;
+    isSourceSessionAdmissionAllowed?: () => boolean;
+  },
+  R,
+>(requesterSessionKey: string, params: T, consume: (guarded: T) => Promise<R>): Promise<R> {
+  return withSubagentRequesterSource(
+    requesterSessionKey,
+    params.requesterAgentId,
+    (isCurrent) =>
+      consume(
+        isCurrent
+          ? {
+              ...params,
+              isSourceSessionEffectsAllowed: () =>
+                isCurrent() && params.isSourceSessionEffectsAllowed?.() !== false,
+              isSourceSessionAdmissionAllowed: () =>
+                isCurrent() && params.isSourceSessionAdmissionAllowed?.() !== false,
+            }
+          : params,
+      ),
+    () => params.controllerInput,
+  );
 }
 
 export function getSubagentRequesterSessionActivity(
   requesterSessionKey: string,
-  requesterAgentId?: string,
+  requester: Pick<RequesterSessionEntryResult, "agentId" | "canonicalKey" | "entry" | "storePath">,
 ) {
-  return subagentAnnounceDeliveryDeps.getRequesterSessionActivity(
-    requesterSessionKey,
-    requesterAgentId,
-  );
-}
-
-export function resolveSubagentRequesterSessionAbandonment(
-  requesterSessionKey: string,
-  sessionId?: string,
-) {
-  return subagentAnnounceDeliveryDeps.resolveRequesterSessionAbandonment(
-    requesterSessionKey,
+  if (!requester.agentId || !requester.storePath) {
+    return { isActive: false };
+  }
+  const storedSessionId = requester.entry?.sessionId;
+  const target = captureSessionTarget({
+    storeScope: requester.storePath,
+    sessionKey: requester.canonicalKey,
+    aliases: [requesterSessionKey],
+    agentId: requester.agentId,
+    incarnation: storedSessionId,
+  });
+  const activeSessionId = resolveActiveSessionRunId(requester.canonicalKey, target);
+  const sessionId = activeSessionId ?? storedSessionId;
+  return {
     sessionId,
-  );
+    target,
+    isActive: activeSessionId !== undefined,
+  };
 }
 
-export function loadRequesterSessionEntry(
-  requesterSessionKey: string,
-  explicitAgentId?: string,
-): RequesterSessionEntryResult {
-  return subagentAnnounceDeliveryDeps.loadRequesterSessionEntry(
-    requesterSessionKey,
-    explicitAgentId,
-  );
-}
-
-export function loadSessionEntryByKey(sessionKey: string, explicitAgentId?: string) {
-  const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
+export async function loadSessionEntryByKey(sessionKey: string, explicitAgentId?: string) {
+  const cfg = getRuntimeConfig();
   const agentId = tryResolveSubagentRequesterAgentId(cfg, sessionKey, explicitAgentId);
   if (!agentId) {
     return undefined;
   }
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-  return subagentAnnounceDeliveryDeps.loadSessionEntry({
-    storePath,
-    sessionKey,
-    agentId,
-    clone: false,
-  });
-}
-
-export async function queueSubagentAnnounceMessage(
-  sessionId: string,
-  text: string,
-  options?: EmbeddedAgentQueueMessageOptions,
-  canInject?: () => boolean,
-): Promise<EmbeddedAgentQueueMessageOutcome> {
-  if (canInject) {
-    return await subagentAnnounceDeliveryDeps.queueGuardedEmbeddedAgentMessageWithOutcome(
-      sessionId,
-      text,
-      options,
-      canInject,
-    );
-  }
-  return await subagentAnnounceDeliveryDeps.queueEmbeddedAgentMessageWithOutcome(
-    sessionId,
-    text,
-    options,
+  return withSubagentSessionSource({ agentId, sessionKey }, async (source) =>
+    source
+      ? source.actor.snapshot(source.authority)?.entry
+      : isIncognitoSessionKey(sessionKey)
+        ? undefined
+        : readSessionEntryReadOnlyInWorker({ storePath, sessionKey, agentId, projection: "list" }),
   );
-}
-
-export async function dispatchSubagentAnnounceAgent(
-  agentParams: Record<string, unknown>,
-  options: Parameters<typeof dispatchGatewayMethodInProcess>[2],
-): Promise<unknown> {
-  return await subagentAnnounceDeliveryDeps.dispatchGatewayMethodInProcess(
-    "agent",
-    agentParams,
-    options,
-  );
-}
-
-export async function sendSubagentAnnounceMessage(
-  params: Parameters<typeof sendMessage>[0],
-): ReturnType<typeof sendMessage> {
-  return await subagentAnnounceDeliveryDeps.sendMessage(params);
 }

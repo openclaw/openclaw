@@ -1,74 +1,86 @@
 import {
-  isSessionTranscriptProjectionUnavailableError,
-  readSessionTranscriptBoundedMessageTailPage,
-} from "../config/sessions/session-accessor.js";
-import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
-import { SessionTranscriptStorageUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+  resolveSqliteTranscriptReadScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { createSessionWorkerExecutionSource } from "../config/sessions/session-worker-execution-source.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import { readSessionFallbackModel } from "../status/session-fallback-model.js";
-import { projectSessionDisplayMessage } from "./session-display-projection.js";
-import { sqliteMessageEventWithSeq } from "./session-transcript-entry-message.js";
+import type { SessionRowTranscriptReadParams } from "./session-row-transcript-backfill.types.js";
+import type {
+  SessionRowAssistantMessage,
+  SessionRowTranscriptProjection,
+} from "./session-row-transcript-preview.js";
 
-/** Read-only transcript fields run after foreground projection work, never during materialization. */
-export async function backfillSessionRowTranscriptFields(params: {
-  agentId: string;
-  storeAgentId?: string;
-  storePath: string;
-  sessionKey: string;
-  sessionId: string;
-  sessionEntry: SessionEntry;
-  shouldCommit?: () => boolean;
-  model?: Pick<
-    Parameters<typeof readSessionFallbackModel>[0],
-    "selectedProvider" | "selectedModel" | "config"
+type BackfillParams = SessionRowTranscriptReadParams & {
+  sessionEntry: Pick<
+    InternalSessionEntry,
+    "sessionId" | "updatedAt" | "status" | "lastRunId" | "fallbackNotice"
   >;
-}): Promise<{ lastMessagePreview?: string; fallbackModel?: { provider: string; model: string } }> {
-  if (params.shouldCommit?.() === false) {
-    return {};
-  }
-  const transcriptScope = { ...params, agentId: params.storeAgentId ?? params.agentId };
-  try {
-    const fallback =
-      params.model &&
-      readSessionFallbackModel({
-        ...params.model,
-        sessionEntry: params.sessionEntry,
-        sessionScope: transcriptScope,
-      });
-    const fallbackModel = fallback
-      ? { provider: fallback.modelProvider, model: fallback.model }
-      : undefined;
-    const tail = readSessionTranscriptBoundedMessageTailPage(transcriptScope, {
-      maxMessages: 20,
-      maxBytes: 64 * 1024,
-      offset: 0,
-      readOnly: true,
+  model?: { selectedProvider: string; selectedModel: string; config?: OpenClawConfig };
+};
+
+/** Runtime alias and selected-model policy remain with the host, not the durable cache. */
+export function presentSessionRowTranscriptFields(
+  params: BackfillParams,
+  fields: Pick<
+    SessionRowTranscriptProjection,
+    "lastMessagePreview" | "lastAssistantMessage" | "terminalModel"
+  >,
+): {
+  lastMessagePreview?: string;
+  lastAssistantMessage?: SessionRowAssistantMessage;
+  fallbackModel?: { provider: string; model: string };
+} {
+  const { sessionEntry, model, ...scope } = params;
+  const terminal = fields.terminalModel;
+  const fallback =
+    model &&
+    readSessionFallbackModel({
+      ...model,
+      sessionEntry,
+      sessionScope: { ...scope, agentId: params.storeAgentId ?? params.agentId },
+      terminalModel: terminal && terminal.runId === sessionEntry.lastRunId ? terminal : null,
     });
-    // Older text cannot stand in for an oversized message skipped at the newest edge.
-    const events = tail.newestContiguousEventCount
-      ? tail.events.slice(-tail.newestContiguousEventCount)
-      : [];
-    for (const event of events.toReversed()) {
-      const projected = projectSessionDisplayMessage(sqliteMessageEventWithSeq(event), {
-        flattenMarkdown: true,
-      });
-      if (projected) {
-        // Detach resident strings from the parsed transcript payload.
-        return {
-          lastMessagePreview: Buffer.from(projected.text, "utf16le").toString("utf16le"),
-          ...(fallbackModel ? { fallbackModel } : {}),
-        };
-      }
-    }
-    return fallbackModel ? { fallbackModel } : {};
-  } catch (error) {
-    if (
-      isSessionTranscriptProjectionUnavailableError(error) ||
-      error instanceof SessionTranscriptStorageUnavailableError ||
-      error instanceof SessionTranscriptColdError
-    ) {
-      return {};
-    }
-    throw error;
+  return {
+    ...(fields.lastMessagePreview !== null
+      ? { lastMessagePreview: fields.lastMessagePreview }
+      : {}),
+    ...(fields.lastAssistantMessage && typeof fields.lastAssistantMessage !== "string"
+      ? { lastAssistantMessage: fields.lastAssistantMessage }
+      : {}),
+    ...(fallback
+      ? { fallbackModel: { provider: fallback.modelProvider, model: fallback.model } }
+      : {}),
+  };
+}
+
+/** Optional transcript facts are published by the resident row owner. */
+export async function backfillSessionRowTranscriptFields(params: BackfillParams) {
+  const { model: _model, sessionEntry: _sessionEntry, ...input } = params;
+  const options = toDatabaseOptions(
+    resolveSqliteTranscriptReadScope({
+      ...input,
+      agentId: params.storeAgentId ?? params.agentId,
+    }),
+  );
+  const execution = captureOpenClawAgentDatabaseExecution(options);
+  const source = createSessionWorkerExecutionSource(() => {}, "Session row backfill retired");
+  try {
+    const fields = await runOpenClawAgentWorkerWrite(
+      options,
+      () =>
+        execution.runExisting(source, (worker) =>
+          worker.execute({ type: "session.rowTranscript.backfill", input }),
+        ),
+      undefined,
+      undefined,
+      "background",
+    );
+    return fields ? presentSessionRowTranscriptFields(params, fields) : undefined;
+  } finally {
+    await execution.release();
   }
 }

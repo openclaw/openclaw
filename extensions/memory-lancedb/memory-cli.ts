@@ -1,6 +1,6 @@
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime";
-import type { OpenClawPluginApi } from "./api.js";
 import { isMemoryMachineOutput } from "./cli-output-mode.js";
 import type { MemoryConfig } from "./config.js";
 import type { Embeddings } from "./embeddings.js";
@@ -10,15 +10,16 @@ import {
   type MemoryQueryFilter,
   type MemoryDB,
 } from "./lancedb-store.js";
-import { normalizeRecallQuery } from "./memory-policy.js";
+import { normalizeRecallQuery, projectMemorySearchResult } from "./memory-policy.js";
+import type { MemoryStatsSource } from "./memory-stats.js";
 
-function parsePositiveIntegerOption(value: string | undefined, flag: string): number | undefined {
+function parseLimit(value: string | undefined): number | undefined {
   if (value === undefined) {
     return undefined;
   }
   const parsed = parseStrictPositiveInteger(value);
   if (parsed === undefined) {
-    throw new Error(`${flag} must be a positive integer`);
+    throw new Error("--limit must be a positive integer");
   }
   return parsed;
 }
@@ -59,7 +60,7 @@ function parseMemoryCliOrder(value: unknown): {
   };
 }
 
-export function parseMemoryCliFilter(rawValue: unknown): MemoryQueryFilter | undefined {
+function parseMemoryCliFilter(rawValue: unknown): MemoryQueryFilter | undefined {
   if (rawValue === undefined) {
     return undefined;
   }
@@ -110,10 +111,34 @@ export function registerMemoryCli(
   embeddings: Embeddings,
   resolveCliAgentId: (rawAgentId: unknown) => string,
   resolveConfig: () => MemoryConfig,
+  statsSource: MemoryStatsSource,
 ): void {
   api.registerCli(
     ({ program }) => {
-      const memory = program.command("ltm").description("LanceDB memory plugin commands");
+      const memory = program
+        .command("ltm")
+        .description("LanceDB memory plugin commands")
+        .hook("postAction", async () => {
+          await db.close();
+        });
+
+      memory
+        .command("optimize")
+        .description("Compact the local shared table offline, preserving rows and version history")
+        .action(async () => {
+          const { runWithLocalStateOwner } = await import("openclaw/plugin-sdk/cli-state-owner");
+          await runWithLocalStateOwner({
+            method: "memory-lancedb.optimize",
+            params: {},
+            target: "LanceDB memory table",
+            onForeignOwner: "refuse",
+            runLocal: async ({ assertCurrent }) => {
+              const result = await db.optimize(assertCurrent);
+              console.log(`Fragments: ${result.before.fragments} -> ${result.after.fragments}`);
+              console.log(`Rows: ${result.before.rows} -> ${result.after.rows}`);
+            },
+          });
+        });
 
       memory
         .command("list")
@@ -123,7 +148,7 @@ export function registerMemoryCli(
         .option("--order-by-created-at", "Order memories by createdAt descending", false)
         .action(async (opts) => {
           const agentId = resolveCliAgentId(opts.agent);
-          const limit = parsePositiveIntegerOption(opts.limit, "--limit");
+          const limit = parseLimit(opts.limit);
           const entries = await db.list(agentId, limit, {
             orderByCreatedAt: Boolean(opts.orderByCreatedAt),
           });
@@ -137,11 +162,10 @@ export function registerMemoryCli(
         .option("--agent <id>", "Agent id (default: configured default agent)")
         .option("--limit <n>", "Max results", "5")
         .action(async (query, opts) => {
-          let operationError: unknown;
-          let operationFailed = false;
+          let failure: { error: unknown } | undefined;
           try {
             const agentId = resolveCliAgentId(opts.agent);
-            const limit = parsePositiveIntegerOption(opts.limit, "--limit");
+            const limit = parseLimit(opts.limit);
             const config = resolveConfig();
             const vector = await embeddings.embed(
               agentId,
@@ -149,31 +173,17 @@ export function registerMemoryCli(
               config.embedding,
             );
             const results = await db.search(agentId, vector, limit, 0.3);
-            const output = results.map((r) => ({
-              id: r.entry.id,
-              text: r.entry.text,
-              category: r.entry.category,
-              importance: r.entry.importance,
-              score: r.score,
-            }));
-            defaultRuntime.writeJson(output);
-          } catch (err) {
-            operationError = err;
-            operationFailed = true;
+            defaultRuntime.writeJson(results.map(projectMemorySearchResult));
+          } catch (error) {
+            failure = { error };
           }
-          let closeError: unknown;
-          let closeFailed = false;
           try {
             await embeddings.close?.();
-          } catch (err) {
-            closeError = err;
-            closeFailed = true;
+          } catch (error) {
+            failure ??= { error };
           }
-          if (operationFailed) {
-            throw operationError;
-          }
-          if (closeFailed) {
-            throw closeError;
+          if (failure) {
+            throw failure.error;
           }
         });
 
@@ -193,7 +203,7 @@ export function registerMemoryCli(
           if (order && !selectedColumns.includes(order.column)) {
             selectedColumns.push(order.column);
           }
-          const limit = parsePositiveIntegerOption(opts.limit, "--limit") ?? 10;
+          const limit = parseLimit(opts.limit) ?? 10;
           let rows = await db.query(agentId, {
             columns: selectedColumns,
             filter: parseMemoryCliFilter(opts.filter),
@@ -226,8 +236,9 @@ export function registerMemoryCli(
         .description("Show memory statistics")
         .option("--agent <id>", "Agent id (default: configured default agent)")
         .action(async (opts) => {
+          const { readMemoryStats } = await import("./memory-stats.js");
           const agentId = resolveCliAgentId(opts.agent);
-          const count = await db.count(agentId);
+          const count = await readMemoryStats(statsSource, agentId);
           console.log(`Total memories: ${count}`);
         });
     },

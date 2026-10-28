@@ -1,22 +1,23 @@
+import type { ChildProcess } from "node:child_process";
 import { constants as osConstants } from "node:os";
 import process from "node:process";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { sleep } from "../utils/sleep.js";
 import { isChildProcessTreeAlive } from "./child-process-tree.js";
 import {
+  COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS,
   COMMAND_PROCESS_TREE_KILL_GRACE_MS,
   runOutsideCommandProcessScope,
   spawnCommand,
+  waitForCommandProcessGroupExit,
 } from "./exec-spawn.js";
 import { killProcessTree as terminateProcessTree } from "./kill-tree.js";
+import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.js";
 
 const WINDOWS_TASKKILL_TIMEOUT_MS = 5_000;
 
-type TerminationChild = {
-  pid?: number;
-  exitCode: number | null;
-  signalCode: NodeJS.Signals | null;
-};
+type TerminationChild = Pick<ChildProcess, "pid" | "exitCode" | "signalCode" | "once">;
 
 export function createCommandTerminationController(params: {
   child: TerminationChild;
@@ -68,10 +69,8 @@ export function createCommandTerminationController(params: {
     windowsTerminationPromise = (async () => {
       if (graceful) {
         taskkills.push(spawnTaskkill(["/PID", String(childPid), "/T"]));
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, params.killGraceMs);
-          timer.unref();
-        });
+        // Awaited cleanup stays live after both the child and taskkill handles close.
+        await sleep(params.killGraceMs);
         if (isDirectChildAlive()) {
           taskkills.push(spawnTaskkill(["/PID", String(childPid), "/T", "/F"]));
         }
@@ -123,27 +122,23 @@ export function createCommandTerminationController(params: {
         }
         cleanup = "forced";
         terminateProcessTree(childPid, { force: true, detached: true });
-        const deadline = Date.now() + COMMAND_PROCESS_TREE_KILL_GRACE_MS;
+        scheduleAdoptedChildZombieReapAfterExit(params.child, true);
         // Signal delivery is not exit. Observe only this group; never re-signal a retired PID.
-        while (groupAlive()) {
-          const currentStart = getFileLockProcessStartTime(childPid);
-          const remaining = deadline - Date.now();
-          if ((currentStart !== null && currentStart !== originalStart) || remaining <= 0) {
-            cleanup = "uncertain";
-            return;
-          }
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, Math.min(25, remaining));
-          });
-        }
+        cleanup =
+          (await waitForCommandProcessGroupExit(childPid, () => {
+            const current = getFileLockProcessStartTime(childPid);
+            return current === null || current === originalStart;
+          })) === "exited"
+            ? "forced"
+            : "uncertain";
       };
-      if (force) {
-        processTreeSettlement = forceAndObserve();
+      // A timeout signal is policy, not evidence of forced cleanup. Once the
+      // root and its group are gone, do not signal or relabel that normal exit.
+      if (!directChildAlive && !groupAlive()) {
         return false;
       }
-      // Failed roots can finish without descendants. Record graceful cleanup only
-      // when this invocation still owns a live or unproven tree to terminate.
-      if (!directChildAlive && !groupAlive()) {
+      if (force) {
+        processTreeSettlement = forceAndObserve();
         return false;
       }
       cleanup = "cooperative";
@@ -155,16 +150,22 @@ export function createCommandTerminationController(params: {
           cleanup = "uncertain";
         }
       }
+      // The first registration must outlive graceful cleanup and its force fallback.
+      scheduleAdoptedChildZombieReapAfterExit(
+        params.child,
+        true,
+        params.killGraceMs + COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS,
+      );
       processTreeSettlement = new Promise<void>((resolve) => {
-        const deadline = Date.now() + params.killGraceMs;
+        const deadline = performance.now() + params.killGraceMs;
         const check = () => {
           if (!groupAlive()) {
             cleanup = "cooperative";
             resolve();
             return;
           }
-          if (Date.now() < deadline) {
-            setTimeout(check, Math.min(25, deadline - Date.now()));
+          if (performance.now() < deadline) {
+            setTimeout(check, Math.min(25, deadline - performance.now()));
             return;
           }
           void forceAndObserve().then(resolve);

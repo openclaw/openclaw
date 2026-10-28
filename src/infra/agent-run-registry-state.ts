@@ -10,13 +10,62 @@ import type {
 
 const AGENT_RUN_REGISTRY_STATE_KEY = Symbol.for("openclaw.agentRunRegistry.state");
 
-export function getAgentRunRegistryState(): AgentRunRegistryState {
-  return resolveGlobalSingleton<AgentRunRegistryState>(AGENT_RUN_REGISTRY_STATE_KEY, () => ({
+const registryState = resolveGlobalSingleton<AgentRunRegistryState>(
+  AGENT_RUN_REGISTRY_STATE_KEY,
+  () => ({
     contexts: new Map<string, AgentRunContext>(),
     owners: new Map<string, AgentRunContextOwnership>(),
     lifecycleGeneration: randomUUID(),
     version: 0,
-  }));
+  }),
+);
+
+export function getAgentRunRegistryState(): AgentRunRegistryState {
+  return registryState;
+}
+
+/** Reads the process-local version of the active-run projection inputs. */
+export function readAgentRunIndexVersion(): number {
+  return registryState.version;
+}
+
+export function getAgentRunLifecycleGeneration(): string {
+  return registryState.lifecycleGeneration;
+}
+
+/** Lists registered runs bound to one current session identity. */
+export function listAgentRunsForSession(params: {
+  sessionKey: string;
+  sessionId?: string;
+}): Array<{ runId: string; lifecycleGeneration: string }> {
+  const state = getAgentRunRegistryState();
+  const runs: Array<{ runId: string; lifecycleGeneration: string }> = [];
+  for (const [runId, context] of state.contexts) {
+    const matches =
+      context.sessionKey === params.sessionKey &&
+      (!context.sessionId || context.sessionId === params.sessionId);
+    if (matches && context.lifecycleGeneration === state.lifecycleGeneration) {
+      runs.push({ runId, lifecycleGeneration: context.lifecycleGeneration });
+    }
+  }
+  return runs.toSorted((a, b) => a.runId.localeCompare(b.runId));
+}
+
+export function getAgentRunContextOwnerStatus(
+  runId: string,
+  claimId: string,
+  lifecycleGeneration: string,
+): "active" | "clear-requested" | undefined {
+  const state = getAgentRunRegistryState();
+  const owners = state.owners.get(runId);
+  if (
+    lifecycleGeneration !== state.lifecycleGeneration ||
+    owners?.lifecycleGeneration !== lifecycleGeneration ||
+    !owners.claimIds.has(claimId)
+  ) {
+    return undefined;
+  }
+  return owners.clearRequested ? "clear-requested" : "active";
 }
 
 export function bumpAgentRunIndexVersion(
@@ -25,10 +74,20 @@ export function bumpAgentRunIndexVersion(
 ): void {
   getAgentRunRegistryState().version += 1;
   for (const target of previous &&
-  (previous.sessionKey !== context?.sessionKey || previous.agentId !== context?.agentId)
+  (previous.sessionKey !== context?.sessionKey ||
+    (!previous.sessionKey && previous.sessionId !== context?.sessionId) ||
+    previous.agentId !== context?.agentId)
     ? [previous, context]
     : [context]) {
-    const { sessionKey, agentId } = target ?? {};
-    sessionChanges.emit(sessionKey ? { sessionKey, agentId } : { all: true, scope: "agent-runs" });
+    const { sessionKey, sessionId, agentId } = target ?? {};
+    sessionChanges.emit(
+      sessionKey
+        ? { sessionKey, agentId, scope: "runtime" }
+        : {
+            all: true,
+            scope: "agent-runs",
+            ...(sessionId ? { runtimeSession: { sessionId, agentId } } : {}),
+          },
+    );
   }
 }

@@ -1,4 +1,8 @@
 import { expect, it } from "vitest";
+import {
+  waitForControlUiGatewayReady,
+  waitForControlUiGatewayReconnecting,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -10,6 +14,7 @@ import {
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
   it.each([false, true])(
@@ -66,26 +71,32 @@ suite.define(() => {
         await expect.poll(() => page.title()).toBe(`${name} — OpenClaw`);
         await page.getByText(transcript, { exact: true }).first().waitFor({ state: "visible" });
         const route = new URL(page.url()).pathname;
-        await page.screenshot({ path: `${suite.artifactDir}/connected.png` });
+        if (captureUiProof) {
+          await page.screenshot({ path: `${suite.artifactDir}/connected.png` });
+        }
 
         await gateway.setOnline(false);
         await gateway.closeLatest(1001, "mock Gateway restart");
-        await expect.poll(() => page.title()).toMatch(/^\(Disconnected/);
-        await page.getByRole("button", { name: "Offline — Retry now", exact: true }).waitFor();
-        await page.screenshot({ path: `${suite.artifactDir}/offline.png` });
+        await waitForControlUiGatewayReconnecting(page);
+        if (captureUiProof) {
+          await page.screenshot({ path: `${suite.artifactDir}/offline.png` });
+        }
         const offlineTitle = await page.title();
         const offlineHeadings = await headings.allTextContents();
         expect(new URL(page.url()).pathname).toBe(route);
         expect(await page.getByText(transcript, { exact: true }).first().isVisible()).toBe(true);
 
         await gateway.setOnline(true);
+        await waitForControlUiGatewayReady(page);
         await expect.poll(() => page.title()).toBe(`${name} — OpenClaw`);
         await expect.poll(() => heading.textContent()).toBe(name);
         expect(new URL(page.url()).pathname).toBe(route);
         expect(await page.getByText(transcript, { exact: true }).first().isVisible()).toBe(true);
         await expect.poll(() => headings.allTextContents()).toEqual(names);
-        await page.screenshot({ path: `${suite.artifactDir}/reconnected.png` });
-        expect.soft(offlineTitle).toBe(`(Disconnected) ${name} — OpenClaw`);
+        if (captureUiProof) {
+          await page.screenshot({ path: `${suite.artifactDir}/reconnected.png` });
+        }
+        expect.soft(offlineTitle).toBe(`${name} — OpenClaw`);
         expect.soft(offlineHeadings).toEqual(names);
       });
     },

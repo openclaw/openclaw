@@ -1,4 +1,3 @@
-// Dispatches final reply payloads through visible senders and message tools.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
@@ -9,8 +8,10 @@ import {
   resolveDeliveryNotSentRetryability,
 } from "../../infra/delivery-recovery.shared.js";
 import { toErrorObject } from "../../infra/errors.js";
-import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
+import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
+import { generateSecureInt } from "../../infra/secure-random.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { sleep } from "../../utils.js";
@@ -20,8 +21,8 @@ import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { settleReplyPendingFinalDelivery } from "./dispatch-from-config.pending-final.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
 import {
   normalizeReplyPayloadOutcome,
@@ -34,7 +35,6 @@ import {
   markReplyDispatchBeforeDeliverDeadlineOwned,
   runReplyDispatchBeforeDeliverStage,
 } from "./reply-dispatch-before-deliver.js";
-import { getHumanDelay, getHumanDelayMax } from "./reply-dispatch-delay.js";
 import {
   createReplyDispatchSettledCounts,
   isReplyDispatchDeliveryPending,
@@ -49,31 +49,40 @@ import {
   type ReplyDispatchBeforeDeliver,
   type ReplyDispatchBeforeDeliverOptions,
   type ReplyDispatchKind,
+  type ReplyDispatchOperation,
   type ReplyDispatchReceipt,
   type ReplyDispatchRuntimeInfo,
-  type ReplyDispatchSettledCounts,
   type ReplyDispatcher,
   type ReplyFollowupAdmissionBarrierTimeoutPolicy,
 } from "./reply-dispatcher.types.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
 
-type ReplyDispatchErrorHandler = (
-  err: unknown,
-  info: ReplyDispatchRuntimeInfo,
-) => Promise<void> | void;
-
-type ReplyDispatchSkipHandler = (
-  payload: ReplyPayload,
-  info: ReplyDispatchRuntimeInfo & { reason: NormalizeReplySkipReason },
-) => void;
-
-type ReplyDispatchCancelHandler = (
-  payload: ReplyPayload,
-  info: ReplyDispatchRuntimeInfo,
-) => Promise<void> | void;
-
 export type { ReplyDispatchDeliveryOutcome };
+
+const DEFAULT_RANGE = { min: 800, max: 2500 };
+
+function resolveHumanDelayRange(config: HumanDelayConfig | undefined) {
+  if (!config?.mode || config.mode === "off") {
+    return undefined;
+  }
+  return config.mode === "custom"
+    ? { min: config.minMs ?? DEFAULT_RANGE.min, max: config.maxMs ?? DEFAULT_RANGE.max }
+    : DEFAULT_RANGE;
+}
+
+function getHumanDelay(config: HumanDelayConfig | undefined): number {
+  const range = resolveHumanDelayRange(config);
+  if (!range || range.max <= range.min) {
+    return range?.min ?? 0;
+  }
+  return range.min + generateSecureInt(range.max - range.min + 1);
+}
+
+function getHumanDelayMax(config: HumanDelayConfig | undefined): number {
+  const range = resolveHumanDelayRange(config);
+  return range ? Math.max(range.min, range.max) : 0;
+}
 
 type ReplyDispatchDeliveryOutcomeTracker = {
   promise: Promise<ReplyDispatchDeliveryOutcome>;
@@ -83,15 +92,34 @@ type ReplyDispatchDeliveryOutcomeTracker = {
   deliveredPayload?: ReplyPayload;
 };
 
-type ReplyDispatchDeliverer = (
+/** Invoke immediately without letting observer failures interrupt delivery bookkeeping. */
+function invokeReplyDispatcherObserver(
+  observer: () => unknown,
+  onError: (error: unknown) => void = () => undefined,
+): Promise<unknown> {
+  try {
+    return Promise.resolve(observer()).catch(onError);
+  } catch (error) {
+    // Error reporting itself can throw synchronously, before returning a promise.
+    onError(error);
+    return Promise.resolve();
+  }
+}
+
+function replaceDispatchPayload(
+  input: ReplyDispatchOperation,
   payload: ReplyPayload,
-  info: ReplyDispatchRuntimeInfo,
-) => Promise<unknown>;
+): ReplyDispatchOperation | null {
+  if (input.kind === "raw") {
+    return { kind: "raw", payload };
+  }
+  const [plan] = createStructuredOutboundPayloadPlan([payload]);
+  return plan ? { kind: "prepared", plan: { ...plan, sourceIndex: input.plan.sourceIndex } } : null;
+}
 
 export type { ReplyDispatchBeforeDeliver };
 export { composeReplyDispatchBeforeDeliver, markReplyDispatchBeforeDeliverDeadlineOwned };
 
-const silentReplyLogger = createSubsystemLogger("silent-reply/dispatcher");
 const { deliveryOutcomeTrackers, undeliveredFallbacks, conversationContextsByDispatcher } =
   resolveGlobalSingleton(Symbol.for("openclaw.replyDispatcherState"), () => ({
     deliveryOutcomeTrackers: new WeakMap<ReplyPayload, ReplyDispatchDeliveryOutcomeTracker>(),
@@ -118,12 +146,8 @@ export function captureReplyDispatchDeliveryOutcome(payload: ReplyPayload): {
   // it so a later send of the same payload owns a separate settlement.
   let tracker = deliveryOutcomeTrackers.get(payload);
   if (!tracker) {
-    let resolveOutcome!: (outcome: ReplyDispatchDeliveryOutcome) => void;
     tracker = {
-      promise: new Promise((resolve) => {
-        resolveOutcome = resolve;
-      }),
-      resolve: (outcome) => resolveOutcome(outcome),
+      ...createDeferredCore<ReplyDispatchDeliveryOutcome>(),
       tracked: false,
       pending: false,
     };
@@ -159,7 +183,14 @@ function buildReplyDispatchRuntimeInfo(
 }
 
 export type ReplyDispatcherOptions = {
-  deliver: ReplyDispatchDeliverer;
+  deliver: (payload: ReplyPayload, info: ReplyDispatchRuntimeInfo) => Promise<unknown>;
+  /**
+   * Receives a fresh plan after normalization and modifiers. When omitted, prepared
+   * sends fall back to deliver(payload, info), retaining that adapter's raw contract.
+   */
+  deliverPrepared?: (plan: OutboundPayloadPlan, info: ReplyDispatchRuntimeInfo) => Promise<unknown>;
+  /** The delivery callback admits custody before external I/O and owns failure settlement. */
+  pendingFinalDeliveryAdmission?: "deliver";
   silentReplyContext?: {
     cfg?: OpenClawConfig;
     sessionKey?: string;
@@ -168,24 +199,28 @@ export type ReplyDispatcherOptions = {
   };
   responsePrefix?: string;
   transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
-  /** Static context for response prefix template interpolation. */
   responsePrefixContext?: ResponsePrefixContext;
   /** Dynamic context provider for response prefix template interpolation.
    * Called at normalization time, after model selection is complete. */
   responsePrefixContextProvider?: () => ResponsePrefixContext;
   onHeartbeatStrip?: () => void;
   onIdle?: () => Promise<void> | void;
-  onError?: ReplyDispatchErrorHandler;
+  onError?: (err: unknown, info: ReplyDispatchRuntimeInfo) => Promise<void> | void;
   /** Let ingress retry proven-unsent work only when outbound recovery holds no delivery. */
   propagateRetryableNoSendFailure?: boolean;
-  // AIDEV-NOTE: onSkip lets channels detect silent/empty drops (e.g. Telegram empty-response fallback).
-  onSkip?: ReplyDispatchSkipHandler;
-  /** Human-like delay between block replies for natural rhythm. */
+  /** Lets channels detect silent/empty drops for their empty-response fallback. */
+  onSkip?: (
+    payload: ReplyPayload,
+    info: ReplyDispatchRuntimeInfo & { reason: NormalizeReplySkipReason },
+  ) => void;
   humanDelay?: HumanDelayConfig;
   beforeDeliver?: ReplyDispatchBeforeDeliver;
   /** Owner-declared deadline for the constructor before-delivery callback. */
   beforeDeliverOptions?: ReplyDispatchBeforeDeliverOptions;
-  onBeforeDeliverCancelled?: ReplyDispatchCancelHandler;
+  onBeforeDeliverCancelled?: (
+    payload: ReplyPayload,
+    info: ReplyDispatchRuntimeInfo,
+  ) => Promise<void> | void;
   /** Observe each queued payload settling, including cancellation and delivery failure. */
   onDeliverySettled?: (info: ReplyDispatchRuntimeInfo) => void;
   /** Resolve an owner activity policy for holding queued follow-ups behind delivery. */
@@ -206,41 +241,12 @@ export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onI
 };
 
 type ReplyDispatcherWithTypingResult = {
-  dispatcher: ReplyDispatcher;
+  dispatcher: ReturnType<typeof createReplyDispatcher>;
   replyOptions: Pick<GetReplyOptions, "onReplyStart" | "onTypingController" | "onTypingCleanup">;
   markDispatchIdle: () => void;
   /** Signal that the model run is complete so the typing controller can stop. */
   markRunComplete: () => void;
 };
-
-type NormalizeReplyPayloadInternalOptions = Pick<
-  ReplyDispatcherOptions,
-  | "responsePrefix"
-  | "responsePrefixContext"
-  | "responsePrefixContextProvider"
-  | "onHeartbeatStrip"
-  | "transformReplyPayload"
-> & {
-  conversationContext?: string;
-  onSkip?: (reason: NormalizeReplySkipReason) => void;
-};
-
-function normalizeReplyPayloadInternal(
-  payload: ReplyPayload,
-  opts: NormalizeReplyPayloadInternalOptions,
-): NormalizeReplyOutcome {
-  // Prefer dynamic context provider over static context
-  const prefixContext = opts.responsePrefixContextProvider?.() ?? opts.responsePrefixContext;
-
-  return normalizeReplyPayloadOutcome(payload, {
-    responsePrefix: opts.responsePrefix,
-    responsePrefixContext: prefixContext,
-    onHeartbeatStrip: opts.onHeartbeatStrip,
-    transformReplyPayload: opts.transformReplyPayload,
-    conversationContext: opts.conversationContext,
-    onSkip: opts.onSkip,
-  });
-}
 
 /** Normalize through a dispatcher's exact owner before TTS or other visible side effects. */
 export function prepareReplyPayloadForDispatcher(
@@ -253,7 +259,9 @@ export function prepareReplyPayloadForDispatcher(
     : { kind: "deliver", payload };
 }
 
-export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
+export function createReplyDispatcher(
+  options: ReplyDispatcherOptions,
+): ReplyDispatcher & Required<Pick<ReplyDispatcher, "sendPreparedReply">> {
   let beforeDeliver = composeReplyDispatchBeforeDeliver(
     options.beforeDeliver
       ? { hook: options.beforeDeliver, options: options.beforeDeliverOptions }
@@ -272,11 +280,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     block: 0,
     final: 0,
   };
-  const settledCounts: Record<ReplyDispatchKind, ReplyDispatchSettledCounts> = {
-    tool: createReplyDispatchSettledCounts(),
-    block: createReplyDispatchSettledCounts(),
-    final: createReplyDispatchSettledCounts(),
-  };
+  const settledCounts = mapReplyDispatchCounts(queuedCounts, createReplyDispatchSettledCounts);
   let retryableNoSendError: Error | undefined;
   let hasPendingDelivery = false;
   let sendChain: Promise<void> = Promise.resolve();
@@ -289,9 +293,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       return;
     }
     idleNotified = true;
-    try {
-      void Promise.resolve(options.onIdle?.()).catch(ignoreResult);
-    } catch {}
+    void invokeReplyDispatcherObserver(() => options.onIdle?.());
   };
   const scheduleDelivery = <T>(run: () => Promise<T>): Promise<T> => {
     idleNotified = false;
@@ -301,8 +303,6 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     void drained.then(() => drained === sendChain && pendingFinalizations > 0 && notifyIdle());
     return delivery;
   };
-  const enqueueSettlement = (settle: () => Promise<void>) =>
-    (settlementChain = settlementChain.then(settle));
   const waitForIdle = async () => {
     let sent: Promise<void>;
     let settled: Promise<void>;
@@ -313,22 +313,20 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     } while (sent !== sendChain || settled !== settlementChain);
   };
 
-  const buildReceipt = (): ReplyDispatchReceipt => ({
-    counts: {
-      tool: { ...settledCounts.tool },
-      block: { ...settledCounts.block },
-      final: { ...settledCounts.final },
-    },
-    anyVisibleDelivered: Object.values(settledCounts).some(
-      (counts) => counts.delivered > 0 || counts.failedAfterSend > 0,
-    ),
-    ...(hasPendingDelivery ? { hasPendingDelivery: true } : {}),
-  });
-
   const unregister = registerDispatcher(() => pending);
+  const releasePending = () => {
+    pending -= 1;
+    if (pending === 1 && completeCalled) {
+      pending -= 1;
+    }
+    if (pending === 0) {
+      unregister();
+      notifyIdle();
+    }
+  };
 
   const reportObserverError = (err: unknown, info: ReplyDispatchRuntimeInfo) => {
-    void Promise.resolve(options.onError?.(err, info)).catch(() => undefined);
+    void invokeReplyDispatcherObserver(() => options.onError?.(err, info));
   };
 
   const normalizeForDispatch = (
@@ -336,10 +334,10 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     payload: ReplyPayload,
     notifySkip: boolean,
   ) =>
-    normalizeReplyPayloadInternal(payload, {
+    normalizeReplyPayloadOutcome(payload, {
       responsePrefix: options.responsePrefix,
-      responsePrefixContext: options.responsePrefixContext,
-      responsePrefixContextProvider: options.responsePrefixContextProvider,
+      responsePrefixContext:
+        options.responsePrefixContextProvider?.() ?? options.responsePrefixContext,
       transformReplyPayload: options.transformReplyPayload,
       conversationContext: conversationContextsByDispatcher.get(dispatcher),
       onHeartbeatStrip: options.onHeartbeatStrip,
@@ -378,21 +376,26 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   };
 
   const deliverOnce = async (
-    payload: ReplyPayload,
+    input: ReplyDispatchOperation,
     info: ReplyDispatchRuntimeInfo,
   ): Promise<{
     settlement: Promise<ReplyDispatchDeliveryOutcome>;
+    deferred?: boolean;
     pendingDelivery?: boolean;
     payload?: ReplyPayload;
   }> => {
-    let deliverPayload: ReplyPayload | null = payload;
+    const payload = input.kind === "prepared" ? input.plan.payload : input.payload;
+    let deliveryInput: ReplyDispatchOperation | null = input;
     let deliveryStarted = false;
     let pendingDelivery = false;
-    const custody = getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion;
-    const settleCustody = (state: "delivered" | "suppressed" | "unknown") =>
-      custody
-        ? settlePendingFinalDelivery({ kind: "pending-final", ...custody }, state, ["queued"])
-        : undefined;
+    const metadata = getReplyPayloadMetadata(payload);
+    const custody = metadata?.pendingFinalDeliveryCompletion;
+    const settleCustody =
+      custody &&
+      ((
+        state: Parameters<typeof settleReplyPendingFinalDelivery>[1],
+        expectedStates: Parameters<typeof settleReplyPendingFinalDelivery>[2] = ["queued"],
+      ) => settleReplyPendingFinalDelivery(payload, state, expectedStates));
     const settleFailure = async (error: unknown): Promise<ReplyDispatchDeliveryOutcome> => {
       const retryableNoSend = isRetryableDeliveryNotSentError(error);
       const queueHeld = isDeliveryRecoveryOwnedRetry(error);
@@ -408,11 +411,15 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       if (retryableNoSend) {
         retryableNoSendError ??= toErrorObject(error, "reply delivery failed before dispatch");
       }
-      if (custody && deliveryStarted && !queueHeld) {
+      if (
+        settleCustody &&
+        deliveryStarted &&
+        !queueHeld &&
+        options.pendingFinalDeliveryAdmission !== "deliver"
+      ) {
         // Proven no-send restores replayable custody, including after direct
         // admission marked it unknown. An external queue keeps its own marker.
-        await settlePendingFinalDelivery(
-          { kind: "pending-final", ...custody },
+        await settleCustody(
           outcome === "failed-deliver" ? "unknown" : "prepared",
           outcome === "failed-deliver" ? ["queued"] : ["queued", "unknown"],
         );
@@ -421,55 +428,63 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     };
     try {
       if (beforeDeliver) {
+        const originalText = payload.text;
+        let deliverPayload: ReplyPayload | null;
         try {
           deliverPayload = await beforeDeliver(payload, info);
         } catch (error) {
           await notifyBeforeDeliverCancelled(payload, info);
           throw error;
         }
-        if (!deliverPayload) {
+        // Rewritten text is a new snapshot, not a continuation of the old preview.
+        if (deliverPayload?.textMode === "delta" && deliverPayload.text !== originalText) {
+          const { textMode: _textMode, ...snapshot } = deliverPayload;
+          deliverPayload = snapshot;
+        }
+        deliveryInput = deliverPayload
+          ? replaceDispatchPayload(input, copyReplyPayloadMetadata(payload, deliverPayload))
+          : null;
+        if (!deliveryInput && settleCustody) {
           // Record the intentional non-delivery before observers run so a
           // restart during observer work cannot replay a suppressed final.
-          if (custody) {
-            await settlePendingFinalDelivery({ kind: "pending-final", ...custody }, "suppressed", [
-              "prepared",
-            ]);
-          }
-          await notifyBeforeDeliverCancelled(payload, info);
-          return { settlement: Promise.resolve<ReplyDispatchDeliveryOutcome>("cancelled") };
+          await settleCustody("suppressed", ["prepared"]);
         }
-        deliverPayload = copyReplyPayloadMetadata(payload, deliverPayload);
       }
-      if (custody) {
+      if (deliveryInput && settleCustody && options.pendingFinalDeliveryAdmission !== "deliver") {
         // Claim direct-send custody before provider I/O; a non-prepared marker
         // means another owner already delivered, suppressed, or superseded this
         // final, so repeating the send would duplicate it.
-        const claim = await settlePendingFinalDelivery(
-          { kind: "pending-final", ...custody },
-          "queued",
-          ["prepared"],
-        );
-        if (claim.state !== "queued") {
-          await notifyBeforeDeliverCancelled(payload, info);
-          return { settlement: Promise.resolve<ReplyDispatchDeliveryOutcome>("cancelled") };
+        const claim = await settleCustody("queued", ["prepared"]);
+        if (claim?.state !== "queued") {
+          deliveryInput = null;
         }
       }
+      if (!deliveryInput) {
+        await notifyBeforeDeliverCancelled(payload, info);
+        return { settlement: Promise.resolve<ReplyDispatchDeliveryOutcome>("cancelled") };
+      }
       deliveryStarted = true;
+      const deliveredPayload =
+        deliveryInput.kind === "prepared" ? deliveryInput.plan.payload : deliveryInput.payload;
       const continuation =
         info.kind === "final"
-          ? getReplyPayloadMetadata(deliverPayload)?.progressContinuation
+          ? getReplyPayloadMetadata(deliveredPayload)?.progressContinuation
           : undefined;
-      const result = await options.deliver(
-        deliverPayload,
-        continuation ? { ...info, adoptProgressContinuation: continuation.adopt } : info,
-      );
+      const deliveryInfo = continuation
+        ? { ...info, adoptProgressDraft: continuation.adopt }
+        : info;
+      const result =
+        deliveryInput.kind === "prepared" && options.deliverPrepared
+          ? await options.deliverPrepared(deliveryInput.plan, deliveryInfo)
+          : await options.deliver(deliveredPayload, deliveryInfo);
       const finalization =
         isRecord(result) && result.finalization instanceof Promise
           ? result.finalization
           : undefined;
       pendingFinalizations += finalization ? 1 : 0;
       return {
-        payload: deliverPayload,
+        payload: deliveredPayload,
+        deferred: Boolean(finalization),
         get pendingDelivery() {
           return pendingDelivery;
         },
@@ -483,7 +498,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             const outcome = resolveReplyDispatchDeliveryOutcome(settledResult);
             pendingDelivery = isReplyDispatchDeliveryPending(settledResult);
             hasPendingDelivery ||= pendingDelivery;
-            await settleCustody(
+            await settleCustody?.(
               pendingDelivery || outcome === "failed-deliver"
                 ? "unknown"
                 : outcome === "channel-transform"
@@ -501,34 +516,17 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       };
     } catch (error) {
       const outcome = await settleFailure(error);
-      try {
-        await options.onError?.(error, info);
-      } catch {}
+      await invokeReplyDispatcherObserver(() => options.onError?.(error, info));
       return { settlement: Promise.resolve(outcome), pendingDelivery };
     }
   };
 
-  const startSerializedDelivery = (
-    payload: ReplyPayload,
-    info: ReplyDispatchRuntimeInfo,
-    shouldDelay: boolean,
-  ) =>
-    scheduleDelivery(async () => {
-      if (shouldDelay) {
-        const delayMs = getHumanDelay(options.humanDelay);
-        if (delayMs > 0) {
-          await sleep(delayMs);
-        }
-      }
-      return await deliverOnce(payload, info);
-    });
-
-  const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
+  const enqueue = (kind: ReplyDispatchKind, input: ReplyDispatchOperation) => {
+    const payload = input.kind === "prepared" ? input.plan.payload : input.payload;
     const deliveryOutcomeTracker = deliveryOutcomeTrackers.get(payload);
     deliveryOutcomeTrackers.delete(payload);
     const fallback = undeliveredFallbacks.get(payload);
     undeliveredFallbacks.delete(payload);
-    const originalWasExactSilent = isSilentReplyText(payload.text, SILENT_REPLY_TOKEN);
     const normalizedPrimary =
       getReplyPayloadMetadata(payload)?.replyDispatcherNormalizationOwner === dispatcher
         ? ({ kind: "deliver", payload } as const)
@@ -544,19 +542,13 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         : normalizedFallback?.kind === "deliver"
           ? normalizedFallback.payload
           : null;
-    if (!normalized) {
-      if (kind === "final" && originalWasExactSilent) {
-        silentReplyLogger.debug("exact NO_REPLY final payload was skipped before delivery", {
-          hasSessionKey: Boolean(options.silentReplyContext?.sessionKey),
-          surface: options.silentReplyContext?.surface,
-          conversationType: options.silentReplyContext?.conversationType,
-        });
-      }
+    const normalizedInput = normalized ? replaceDispatchPayload(input, normalized) : null;
+    if (!normalizedInput) {
       return false;
     }
-    const deliveryFallback =
+    let deliveryFallback =
       normalizedPrimary.kind === "deliver" && normalizedFallback?.kind === "deliver"
-        ? normalizedFallback.payload
+        ? replaceDispatchPayload(input, normalizedFallback.payload)
         : null;
     queuedCounts[kind] += 1;
     pending += 1;
@@ -564,15 +556,36 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       deliveryOutcomeTracker.tracked = true;
     }
 
-    // Determine if we should add human-like delay (only for block replies after the first).
     const shouldDelay = kind === "block" && sentFirstBlock;
     if (kind === "block") {
       sentFirstBlock = true;
     }
     let deliveryOutcome: ReplyDispatchDeliveryOutcome = "failed-before-deliver";
-    const dispatchInfo = buildReplyDispatchRuntimeInfo(normalized, kind);
-    const delivery = startSerializedDelivery(normalized, dispatchInfo, shouldDelay);
-    void enqueueSettlement(async () => {
+    const dispatchInfo = buildReplyDispatchRuntimeInfo(
+      normalizedInput.kind === "prepared" ? normalizedInput.plan.payload : normalizedInput.payload,
+      kind,
+    );
+    const delivery = scheduleDelivery(async () => {
+      if (shouldDelay) {
+        const delayMs = getHumanDelay(options.humanDelay);
+        if (delayMs > 0) {
+          await sleep(delayMs);
+        }
+      }
+      const attempt = await deliverOnce(normalizedInput, dispatchInfo);
+      if (
+        deliveryFallback &&
+        !attempt.deferred &&
+        shouldRetryReplyDispatch(await attempt.settlement) &&
+        !attempt.pendingDelivery
+      ) {
+        const fallbackInput = deliveryFallback;
+        deliveryFallback = null;
+        return await deliverOnce(fallbackInput, dispatchInfo);
+      }
+      return attempt;
+    });
+    settlementChain = settlementChain.then(async () => {
       let attempt: Awaited<typeof delivery> | undefined;
       try {
         attempt = await delivery;
@@ -582,15 +595,16 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           !attempt.pendingDelivery &&
           shouldRetryReplyDispatch(deliveryOutcome)
         ) {
-          attempt = await startSerializedDelivery(deliveryFallback, dispatchInfo, false);
+          // Deferred providers may need the admitted batch to drain before their
+          // finalization can prove no-send; those alternatives join the next batch.
+          const fallbackInput = deliveryFallback;
+          attempt = await scheduleDelivery(() => deliverOnce(fallbackInput, dispatchInfo));
           deliveryOutcome = await attempt.settlement;
         }
         settledCounts[kind][REPLY_DISPATCH_OUTCOME_COUNTS[deliveryOutcome]] += 1;
       } catch (err: unknown) {
         settledCounts[kind].failedBeforeSend += 1;
-        try {
-          await options.onError?.(err, dispatchInfo);
-        } catch {}
+        await invokeReplyDispatcherObserver(() => options.onError?.(err, dispatchInfo));
         deliveryOutcome = "failed-before-deliver";
       } finally {
         if (deliveryOutcomeTracker) {
@@ -600,19 +614,11 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             deliveryOutcome === "delivered" ? attempt?.payload : undefined;
           deliveryOutcomeTracker.resolve(deliveryOutcome);
         }
-        try {
-          options.onDeliverySettled?.(dispatchInfo);
-        } catch (err: unknown) {
-          reportObserverError(err, dispatchInfo);
-        }
-        pending -= 1;
-        if (pending === 1 && completeCalled) {
-          pending -= 1;
-        }
-        if (pending === 0) {
-          unregister();
-          notifyIdle();
-        }
+        void invokeReplyDispatcherObserver(
+          () => options.onDeliverySettled?.(dispatchInfo),
+          (error) => reportObserverError(error, dispatchInfo),
+        );
+        releasePending();
       }
     });
     return true;
@@ -623,22 +629,12 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       return;
     }
     completeCalled = true;
-    // If no replies were enqueued (pending is still 1 = just the reservation),
-    // schedule clearing the reservation after current microtasks complete.
-    // This gives any in-flight enqueue() calls a chance to increment pending.
-    void Promise.resolve().then(() => {
-      if (pending === 1 && completeCalled) {
-        // Still just the reservation, no replies were enqueued
-        pending -= 1;
-        if (pending === 0) {
-          unregister();
-          notifyIdle();
-        }
-      }
-    });
+    if (pending === 1) {
+      releasePending();
+    }
   };
 
-  const dispatcher: ReplyDispatcher = {
+  const dispatcher: ReturnType<typeof createReplyDispatcher> = {
     prepareReplyPayload: (kind, payload) => {
       const outcome = normalizeForDispatch(kind, payload, true);
       return outcome.kind === "deliver"
@@ -650,9 +646,10 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           }
         : outcome;
     },
-    sendToolResult: (payload) => enqueue("tool", payload),
-    sendBlockReply: (payload) => enqueue("block", payload),
-    sendFinalReply: (payload) => enqueue("final", payload),
+    sendToolResult: (payload) => enqueue("tool", { kind: "raw", payload }),
+    sendBlockReply: (payload) => enqueue("block", { kind: "raw", payload }),
+    sendFinalReply: (payload) => enqueue("final", { kind: "raw", payload }),
+    sendPreparedReply: (kind, plan) => enqueue(kind, { kind: "prepared", plan }),
     appendBeforeDeliver: (hook, stageOptions) => {
       beforeDeliver = composeReplyDispatchBeforeDeliver(beforeDeliver, {
         hook,
@@ -662,7 +659,13 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     supportsSettledReceipt: true,
     waitForIdle: async () => {
       await waitForIdle();
-      const receipt = buildReceipt();
+      const receipt: ReplyDispatchReceipt = {
+        counts: mapReplyDispatchCounts(settledCounts, (counts) => ({ ...counts })),
+        anyVisibleDelivered: Object.values(settledCounts).some(
+          (counts) => counts.delivered > 0 || counts.failedAfterSend > 0,
+        ),
+        ...(hasPendingDelivery ? { hasPendingDelivery: true } : {}),
+      };
       if (
         options.propagateRetryableNoSendFailure === true &&
         !hasPendingDelivery &&
@@ -704,16 +707,13 @@ export async function waitForReplyDispatcherIdle(
   if (abortSignal.aborted) {
     return undefined;
   }
-  let removeAbortListener: (() => void) | undefined;
-  const aborted = new Promise<undefined>((resolve) => {
-    const onAbort = () => resolve(undefined);
-    abortSignal.addEventListener("abort", onAbort, { once: true });
-    removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
-  });
+  const aborted = createDeferredCore<undefined>();
+  const onAbort = () => aborted.resolve(undefined);
+  abortSignal.addEventListener("abort", onAbort, { once: true });
   try {
-    return (await Promise.race([dispatcher.waitForIdle(), aborted])) || undefined;
+    return (await Promise.race([dispatcher.waitForIdle(), aborted.promise])) || undefined;
   } finally {
-    removeAbortListener?.();
+    abortSignal.removeEventListener("abort", onAbort);
   }
 }
 

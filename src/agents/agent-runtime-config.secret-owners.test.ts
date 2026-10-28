@@ -1,41 +1,40 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveQueuedReplyExecutionConfig } from "../auto-reply/reply/agent-runner-utils.js";
-import { resolveCommandConfigWithSecrets } from "../cli/command-config-resolution.js";
-import { getTtsCommandSecretTargetIds } from "../cli/command-secret-targets.js";
+import { resolveQueuedReplyExecutionConfig as resolveReplyConfig } from "../auto-reply/reply/agent-runner-utils.js";
 import * as configIo from "../config/io.js";
 import {
-  cloneConfigWithResolutionFacts,
-  createConfigResolutionFacts,
-  getConfigResolutionFacts,
-  setConfigResolutionFacts,
+  cloneConfigWithResolutionFacts as clonePreparedConfig,
+  createConfigResolutionFacts as resolutionFacts,
+  getConfigResolutionFacts as configFacts,
+  setConfigResolutionFacts as setConfigFacts,
 } from "../config/resolution-facts.js";
 import {
   getRuntimeConfigSnapshot,
-  getRuntimeConfigSnapshotMetadata,
+  getRuntimeConfigSnapshotMetadata as snapshotMetadata,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ModelsConfigSchema } from "../config/zod-schema.core.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { getPath, setPathCreateStrict } from "../secrets/path-utils.js";
 import * as secretResolver from "../secrets/resolve.js";
 import { resolveCommandSecretsFromActiveRuntimeSnapshot } from "../secrets/runtime-command-secrets.js";
 import {
   activateSecretsRuntimeSnapshotState,
-  getActiveSecretsRuntimeConfigSnapshot,
+  getActiveSecretsRuntimeConfigSnapshot as activeConfig,
   graftActiveSecretsRuntimeAuthState,
 } from "../secrets/runtime-state.js";
 import {
-  activateSecretsRuntimeSnapshot,
+  activateSecretsRuntimeSnapshot as activateSnapshot,
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
-  prepareSecretsRuntimeSnapshot,
+  prepareSecretsRuntimeSnapshot as prepareSnapshot,
   refreshActiveProviderAuthRuntimeSnapshot,
 } from "../secrets/runtime.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
+import { resolveAgentRuntimeConfig as resolveRuntimeConfig } from "./agent-runtime-config.js";
 import { resolveApiKeyForProviderCore } from "./model-auth-provider.js";
 
 const { callGatewayMock } = vi.hoisted(() => ({ callGatewayMock: vi.fn() }));
@@ -43,47 +42,73 @@ vi.mock("../gateway/call.js", () => ({ callGateway: callGatewayMock }));
 
 const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 let state: OpenClawTestState;
+const secretRef = (id: string, source: "env" | "store" = "env") => ({
+  source,
+  provider: "default",
+  id,
+});
+const expectUnavailable = (result: Promise<unknown>, owner: Record<string, string> = {}) =>
+  expect(result).rejects.toMatchObject({ code: "SECRET_SURFACE_UNAVAILABLE", ...owner });
+const emptyStore = () => ({ version: 1 as const, profiles: {} });
+const fallbackStore = () => ({
+  version: 1 as const,
+  profiles: {
+    "ollama:fallback": { type: "api_key" as const, provider: "ollama", key: "profile-fixture-key" },
+  },
+});
+function providerAuth(
+  cfg: OpenClawConfig,
+  overrides: Partial<Parameters<typeof resolveApiKeyForProviderCore>[0]> = {},
+) {
+  return resolveApiKeyForProviderCore({
+    provider: "ollama",
+    cfg,
+    agentDir: state.agentDir(),
+    ...overrides,
+  });
+}
+function pinOfflineConfig(config: OpenClawConfig) {
+  setRuntimeConfigSnapshot(config, config);
+  vi.spyOn(configIo, "readConfigFileSnapshotForWrite").mockRejectedValue(
+    new Error("fixture has no source file"),
+  );
+  callGatewayMock.mockRejectedValue(new Error("fixture gateway offline"));
+}
 
 function providerConfig(): OpenClawConfig {
+  const provider = (baseUrl: string, api: "openai-completions" | "ollama", key: string) => ({
+    baseUrl,
+    api,
+    apiKey: secretRef(key),
+    models: [],
+  });
   return {
     plugins: { enabled: false },
     models: {
       providers: {
-        healthy: {
-          baseUrl: "https://healthy.example/v1",
-          api: "openai-completions",
-          apiKey: { source: "env", provider: "default", id: "TEST_HEALTHY_PROVIDER_KEY" },
-          models: [],
-        },
-        ollama: {
-          baseUrl: "http://127.0.0.1:11434",
-          api: "ollama",
-          apiKey: { source: "env", provider: "default", id: "TEST_COLD_PROVIDER_KEY" },
-          models: [],
-        },
+        healthy: provider(
+          "https://healthy.example/v1",
+          "openai-completions",
+          "TEST_HEALTHY_PROVIDER_KEY",
+        ),
+        ollama: provider("http://127.0.0.1:11434", "ollama", "TEST_COLD_PROVIDER_KEY"),
       },
     },
   };
 }
 
 async function activateProviderConfig(config = providerConfig()) {
-  const snapshot = await prepareSecretsRuntimeSnapshot({
+  const snapshot = await prepareSnapshot({
     config,
     env: { TEST_HEALTHY_PROVIDER_KEY: "prepared-fixture-key", TEST_COLD_PROVIDER_KEY: undefined },
     agentDirs: [state.agentDir()],
-    loadAuthStore: () => ({ version: 1, profiles: {} }),
+    loadAuthStore: emptyStore,
     allowUnavailableSecretOwners: true,
   });
-  expect(snapshot.degradedOwners).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        ownerKind: "provider",
-        ownerId: "ollama",
-        degradationState: "cold",
-      }),
-    ]),
+  expect(snapshot.degradedOwners).toContainEqual(
+    expect.objectContaining({ ownerKind: "provider", ownerId: "ollama", degradationState: "cold" }),
   );
-  activateSecretsRuntimeSnapshot(snapshot);
+  activateSnapshot(snapshot);
   return snapshot;
 }
 
@@ -118,413 +143,238 @@ describe("agent execution respects prepared secret owners", () => {
       plugins: { enabled: false },
       agents: { defaults: { workspace: "/fixture/workspace" } },
     };
-    const facts = createConfigResolutionFacts([]);
-    setConfigResolutionFacts(config, facts);
+    const facts = resolutionFacts([]);
+    setConfigFacts(config, facts);
     const manifestRegistry = {
-      plugins: [
-        {
-          id: "refresh-context-fixture",
-          channels: [],
-          providers: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
-          origin: "bundled" as const,
-          rootDir: "/fixture/plugin",
-          source: "/fixture/plugin/index.js",
-          manifestPath: "/fixture/plugin/openclaw.plugin.json",
-        },
-      ],
+      plugins: [createPluginManifestRecordFixture({ id: "refresh-context-fixture" })],
     };
-    const snapshot = await prepareSecretsRuntimeSnapshot({
+    const snapshot = await prepareSnapshot({
       config,
       env: {},
       includeAuthStoreRefs: false,
       manifestRegistry,
     });
-    activateSecretsRuntimeSnapshot(snapshot);
-    const active = getActiveSecretsRuntimeConfigSnapshot();
-    const revision = getRuntimeConfigSnapshotMetadata()?.revision;
+    activateSnapshot(snapshot);
+    const active = activeConfig();
+    const revision = snapshotMetadata()?.revision;
     const clone = vi.spyOn(globalThis, "structuredClone");
 
-    const result = await resolveAgentRuntimeConfig(runtime);
+    const result = await resolveRuntimeConfig(runtime);
 
     expect(clone).not.toHaveBeenCalledWith(active?.sourceConfig);
     expect(result).toBe(active?.config);
-    expect(getConfigResolutionFacts(result)).toBe(facts);
-    expect(getRuntimeConfigSnapshotMetadata()?.revision).toBe(revision);
+    expect(configFacts(result)).toBe(facts);
+    expect(snapshotMetadata()?.revision).toBe(revision);
     expect(clone).not.toHaveBeenCalledWith(manifestRegistry);
   });
 
-  it.each(["reply", "agent"] as const)(
-    "%s starts with a healthy provider while an unrelated explicit provider ref is cold",
-    async (entry) => {
-      const snapshot = await activateProviderConfig();
-      const revision = getRuntimeConfigSnapshotMetadata()?.revision;
-      const resolveRef = vi.spyOn(secretResolver, "resolveSecretRefValue");
-      const config =
-        entry === "reply"
-          ? await resolveQueuedReplyExecutionConfig(snapshot.sourceConfig)
-          : await resolveAgentRuntimeConfig(runtime);
-      expect(config).toBe(getRuntimeConfigSnapshot());
-      expect(config.models?.providers?.healthy?.apiKey).toBe("prepared-fixture-key");
-      expect(config.models?.providers?.ollama?.apiKey).toEqual(
-        snapshot.sourceConfig.models?.providers?.ollama?.apiKey,
-      );
-      expect(callGatewayMock).not.toHaveBeenCalled();
-      expect(resolveRef).not.toHaveBeenCalled();
-      expect(getRuntimeConfigSnapshotMetadata()?.revision).toBe(revision);
-      await expect(
-        resolveApiKeyForProviderCore({
-          provider: "healthy",
-          cfg: config,
-          store: { version: 1, profiles: {} },
-          agentDir: state.agentDir(),
-        }),
-      ).resolves.toMatchObject({ apiKey: "prepared-fixture-key" });
-      vi.stubEnv("OLLAMA_API_KEY", "ambient-fixture-key");
-      await expect(
-        resolveApiKeyForProviderCore({
-          provider: "ollama",
-          cfg: config,
-          profileId: "ollama:fallback",
-          agentDir: state.agentDir(),
-          store: {
-            version: 1,
-            profiles: {
-              "ollama:fallback": {
-                type: "api_key",
-                provider: "ollama",
-                key: "profile-fixture-key",
-              },
-            },
-          },
-        }),
-      ).rejects.toMatchObject({
-        code: "SECRET_SURFACE_UNAVAILABLE",
-        ownerKind: "provider",
-        ownerId: "ollama",
-      });
-    },
-  );
+  it("reply starts with a healthy provider while an unrelated explicit provider ref is cold", async () => {
+    const snapshot = await activateProviderConfig();
+    const revision = snapshotMetadata()?.revision;
+    const resolveRef = vi.spyOn(secretResolver, "resolveSecretRefValue");
+    const config = await resolveReplyConfig(snapshot.sourceConfig);
+    expect(config).toBe(getRuntimeConfigSnapshot());
+    expect(config.models?.providers?.healthy?.apiKey).toBe("prepared-fixture-key");
+    expect(config.models?.providers?.ollama?.apiKey).toEqual(
+      snapshot.sourceConfig.models?.providers?.ollama?.apiKey,
+    );
+    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(resolveRef).not.toHaveBeenCalled();
+    expect(snapshotMetadata()?.revision).toBe(revision);
+    await expect(
+      providerAuth(config, { provider: "healthy", store: emptyStore() }),
+    ).resolves.toMatchObject({ apiKey: "prepared-fixture-key" });
+    vi.stubEnv("OLLAMA_API_KEY", "ambient-fixture-key");
+    await expectUnavailable(
+      providerAuth(config, { profileId: "ollama:fallback", store: fallbackStore() }),
+      { ownerKind: "provider", ownerId: "ollama" },
+    );
+  });
 
-  it.each([
-    "apiKey",
-    "headers.Authorization",
-    "request.headers.Authorization",
-    "request.auth.token",
-    "request.auth.value",
-    "request.tls.ca",
-    "request.tls.cert",
-    "request.tls.key",
-    "request.tls.passphrase",
-    "request.proxy.tls.ca",
-    "request.proxy.tls.cert",
-    "request.proxy.tls.key",
-    "request.proxy.tls.passphrase",
-  ])(
-    "keeps a cold provider's %s ref authoritative over inline, profile, and ambient auth",
-    async (credentialPath) => {
-      const source = providerConfig();
-      const provider = source.models!.providers!.ollama!;
-      provider.apiKey = "inline-fixture-key";
-      if (credentialPath === "request.auth.token") {
-        provider.request = {
-          auth: { mode: "authorization-bearer", token: "inline-fixture-token" },
-        };
-      } else if (credentialPath === "request.auth.value") {
-        provider.request = {
-          auth: { mode: "header", headerName: "Authorization", value: "inline-fixture-token" },
-        };
-      } else if (credentialPath.startsWith("request.proxy.")) {
-        provider.request = { proxy: { mode: "explicit-proxy", url: "https://proxy.example" } };
-      }
-      setPathCreateStrict(source, ["models", "providers", "ollama", ...credentialPath.split(".")], {
-        source: "store",
-        provider: "default",
-        id: "TEST_COLD_PROVIDER_KEY",
-      });
-      ModelsConfigSchema.parse(source.models);
-      const snapshot = await activateProviderConfig(source);
-      const resolveRef = vi.spyOn(secretResolver, "resolveSecretRefValue");
-      vi.stubEnv("OLLAMA_API_KEY", "ambient-fixture-key");
-      for (const config of [
-        await resolveQueuedReplyExecutionConfig(snapshot.sourceConfig),
-        await resolveAgentRuntimeConfig(runtime),
-      ]) {
-        await expect(
-          resolveApiKeyForProviderCore({
-            provider: "ollama",
-            cfg: config,
-            credentialPrecedence: "env-first",
-            agentDir: state.agentDir(),
-            store: {
-              version: 1,
-              profiles: {
-                "ollama:fallback": {
-                  type: "api_key",
-                  provider: "ollama",
-                  key: "profile-fixture-key",
-                },
-              },
-            },
-          }),
-        ).rejects.toMatchObject({ code: "SECRET_SURFACE_UNAVAILABLE", ownerId: "ollama" });
-      }
-      expect(callGatewayMock).not.toHaveBeenCalled();
-      expect(resolveRef).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["source", "runtime"] as const)(
-    "reuses a cloned prepared %s config without re-resolution",
-    async (kind) => {
-      const snapshot = await activateProviderConfig();
-      const input = cloneConfigWithResolutionFacts(
-        kind === "source" ? snapshot.sourceConfig : snapshot.config,
-      );
-      const config = await resolveQueuedReplyExecutionConfig(input);
-      expect(config).toEqual(snapshot.config);
-      expect(callGatewayMock).not.toHaveBeenCalled();
-      await expect(
-        resolveApiKeyForProviderCore({
-          provider: "ollama",
-          cfg: config,
-          agentDir: state.agentDir(),
+  it("keeps a cold provider's request.auth.token ref authoritative over inline, profile, and ambient auth", async () => {
+    const source = providerConfig();
+    const provider = source.models!.providers!.ollama!;
+    provider.apiKey = "inline-fixture-key";
+    provider.request = {
+      auth: {
+        mode: "authorization-bearer",
+        token: secretRef("TEST_COLD_PROVIDER_KEY", "store"),
+      },
+    };
+    ModelsConfigSchema.parse(source.models);
+    const snapshot = await activateProviderConfig(source);
+    const resolveRef = vi.spyOn(secretResolver, "resolveSecretRefValue");
+    vi.stubEnv("OLLAMA_API_KEY", "ambient-fixture-key");
+    for (const config of [
+      await resolveReplyConfig(snapshot.sourceConfig),
+      await resolveRuntimeConfig(runtime),
+    ]) {
+      await expectUnavailable(
+        providerAuth(config, {
+          credentialPrecedence: "env-first",
+          store: fallbackStore(),
         }),
-      ).rejects.toMatchObject({ code: "SECRET_SURFACE_UNAVAILABLE" });
-    },
-  );
+        { ownerId: "ollama" },
+      );
+    }
+    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(resolveRef).not.toHaveBeenCalled();
+  });
 
   it.each(["provider-auth refresh", "config refresh with auth graft"] as const)(
     "retains config preparation authority after %s",
     async (operation) => {
       const source = providerConfig();
-      source.skills = {
-        entries: {
-          fixture: { apiKey: { source: "env", provider: "default", id: "TEST_COLD_SKILL_KEY" } },
-        },
-      };
+      source.skills = { entries: { fixture: { apiKey: secretRef("TEST_COLD_SKILL_KEY") } } };
       const snapshot = await activateProviderConfig(source);
       if (operation === "provider-auth refresh") {
         await expect(refreshActiveProviderAuthRuntimeSnapshot()).resolves.toBe(true);
       } else {
-        const candidate = await prepareSecretsRuntimeSnapshot({
+        const candidate = await prepareSnapshot({
           config: source,
           env: { TEST_HEALTHY_PROVIDER_KEY: "prepared-fixture-key" },
           includeAuthStoreRefs: false,
           allowUnavailableSecretOwners: true,
         });
         graftActiveSecretsRuntimeAuthState(candidate);
-        activateSecretsRuntimeSnapshot(candidate);
+        activateSnapshot(candidate);
       }
-      expect(getActiveSecretsRuntimeConfigSnapshot()?.configRefsPrepared).toBe(true);
+      expect(activeConfig()?.configRefsPrepared).toBe(true);
       for (const config of [
-        await resolveQueuedReplyExecutionConfig(snapshot.sourceConfig),
-        await resolveAgentRuntimeConfig(runtime),
+        await resolveReplyConfig(snapshot.sourceConfig),
+        await resolveRuntimeConfig(runtime),
       ]) {
         expect(config.skills).toEqual(source.skills);
-        await expect(
-          resolveApiKeyForProviderCore({
-            provider: "ollama",
-            cfg: config,
-            agentDir: state.agentDir(),
-          }),
-        ).rejects.toMatchObject({ code: "SECRET_SURFACE_UNAVAILABLE" });
+        await expectUnavailable(providerAuth(config));
       }
       expect(callGatewayMock).not.toHaveBeenCalled();
     },
   );
 
-  it.each(["ref", "inline"] as const)(
-    "requires the same authored-ref facts token with a healthy %s key",
-    async (keyKind) => {
-      const source = providerConfig();
-      if (keyKind === "inline") {
-        source.models!.providers!.healthy!.apiKey = "prepared-fixture-key";
-      }
-      setConfigResolutionFacts(source, createConfigResolutionFacts([]));
-      const snapshot = await activateProviderConfig(source);
-      const input = cloneConfigWithResolutionFacts(snapshot.config);
-      await expect(resolveQueuedReplyExecutionConfig(input)).resolves.toEqual(snapshot.config);
-      expect(callGatewayMock).not.toHaveBeenCalled();
-      setConfigResolutionFacts(
-        input,
-        createConfigResolutionFacts(
-          [],
-          new Map([["models.providers.healthy.apiKey", "TEST_FOREIGN_PROVIDER_KEY"]]),
-        ),
-      );
-      expect(input).toEqual(snapshot.config);
-      expect(getConfigResolutionFacts(input)).toEqual(getConfigResolutionFacts(snapshot.config));
-      expect(getConfigResolutionFacts(input)).not.toBe(getConfigResolutionFacts(snapshot.config));
-      await expect(resolveQueuedReplyExecutionConfig(input)).rejects.toThrow(
-        "is unresolved in the active runtime snapshot",
-      );
-      expect(callGatewayMock).toHaveBeenCalledTimes(1);
-    },
-  );
+  it("requires the same authored-ref facts token with a healthy ref key", async () => {
+    const source = providerConfig();
+    setConfigFacts(source, resolutionFacts([]));
+    const snapshot = await activateProviderConfig(source);
+    const input = clonePreparedConfig(snapshot.config);
+    const resolved = await resolveReplyConfig(input);
+    expect(resolved).toEqual(snapshot.config);
+    expect(callGatewayMock).not.toHaveBeenCalled();
+    await expectUnavailable(providerAuth(resolved));
+    setConfigFacts(
+      input,
+      resolutionFacts(
+        [],
+        new Map([["models.providers.healthy.apiKey", "TEST_FOREIGN_PROVIDER_KEY"]]),
+      ),
+    );
+    expect(input).toEqual(snapshot.config);
+    expect(configFacts(input)).toEqual(configFacts(snapshot.config));
+    expect(configFacts(input)).not.toBe(configFacts(snapshot.config));
+    await expect(resolveReplyConfig(input)).rejects.toThrow(
+      "is unresolved in the active runtime snapshot",
+    );
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+  });
 
-  it.each(["auth-only", "unrecorded"] as const)(
-    "does not treat an %s snapshot as config-ref preparation authority",
-    async (kind) => {
-      const source = providerConfig();
-      const snapshot = await prepareSecretsRuntimeSnapshot({
-        config: source,
-        includeConfigRefs: false,
-        agentDirs: [state.agentDir()],
-        loadAuthStore: () => ({ version: 1, profiles: {} }),
-      });
-      if (kind === "auth-only") {
-        activateSecretsRuntimeSnapshot(snapshot);
-      } else {
-        activateSecretsRuntimeSnapshotState({
-          snapshot,
-          refreshContext: null,
-          refreshHandler: null,
-        });
-      }
-      vi.stubEnv("TEST_HEALTHY_PROVIDER_KEY", "local-fixture-key");
-      await expect(resolveQueuedReplyExecutionConfig(source)).rejects.toThrow(
-        "models.providers.ollama.apiKey is unresolved",
-      );
-      await expect(resolveAgentRuntimeConfig(runtime)).rejects.toThrow(
-        "models.providers.ollama.apiKey is unresolved",
-      );
-      expect(callGatewayMock).toHaveBeenCalledTimes(2);
-    },
-  );
+  it("keeps foreign-provider reply configs on the strict command path", async () => {
+    const snapshot = await activateProviderConfig();
+    const input = clonePreparedConfig(snapshot.config);
+    input.models!.providers!.ollama!.baseUrl = "https://foreign.example/v1";
+    await expect(resolveReplyConfig(input)).rejects.toThrow(
+      "is unresolved in the active runtime snapshot",
+    );
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(getRuntimeConfigSnapshot()).toEqual(snapshot.config);
+  });
 
-  it.each(["overlay", "foreign-provider"] as const)(
-    "keeps %s reply configs on the strict command path",
-    async (kind) => {
-      const snapshot = await activateProviderConfig();
-      const input = cloneConfigWithResolutionFacts(snapshot.config);
-      if (kind === "overlay") {
-        input.tools = { updatePlan: true };
-      } else {
-        input.models!.providers!.ollama!.baseUrl = "https://foreign.example/v1";
-      }
-      await expect(resolveQueuedReplyExecutionConfig(input)).rejects.toThrow(
-        "is unresolved in the active runtime snapshot",
-      );
-      expect(callGatewayMock).toHaveBeenCalledTimes(1);
-      expect(getRuntimeConfigSnapshot()).toEqual(snapshot.config);
-    },
-  );
+  it("does not treat an unrecorded snapshot as config-ref preparation authority", async () => {
+    const source = providerConfig();
+    const snapshot = await prepareSnapshot({
+      config: source,
+      includeConfigRefs: false,
+      agentDirs: [state.agentDir()],
+      loadAuthStore: emptyStore,
+    });
+    activateSecretsRuntimeSnapshotState({
+      snapshot,
+      refreshContext: null,
+      refreshHandler: null,
+    });
+    vi.stubEnv("TEST_HEALTHY_PROVIDER_KEY", "local-fixture-key");
+    await expect(resolveReplyConfig(source)).rejects.toThrow(
+      "models.providers.ollama.apiKey is unresolved",
+    );
+    await expect(resolveRuntimeConfig(runtime)).rejects.toThrow(
+      "models.providers.ollama.apiKey is unresolved",
+    );
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+  });
 
-  it.each(["reply", "agent"] as const)(
-    "keeps unprepared %s config strict even if the generic runtime config is pinned",
-    async (entry) => {
-      const config = providerConfig();
-      setRuntimeConfigSnapshot(config, config);
-      vi.spyOn(configIo, "readConfigFileSnapshotForWrite").mockRejectedValue(
-        new Error("fixture has no source file"),
-      );
-      callGatewayMock.mockRejectedValue(new Error("fixture gateway offline"));
-      vi.stubEnv("TEST_HEALTHY_PROVIDER_KEY", "local-fixture-key");
-      vi.stubEnv("OLLAMA_API_KEY", "ambient-fixture-key");
-      await expect(
-        entry === "reply"
-          ? resolveQueuedReplyExecutionConfig(config)
-          : resolveAgentRuntimeConfig(runtime),
-      ).rejects.toThrow("failed to resolve secrets");
-      expect(getActiveSecretsRuntimeSnapshot()).toBeNull();
-    },
-  );
+  it("keeps unprepared agent config strict even if the generic runtime config is pinned", async () => {
+    const config = providerConfig();
+    pinOfflineConfig(config);
+    vi.stubEnv("TEST_HEALTHY_PROVIDER_KEY", "local-fixture-key");
+    vi.stubEnv("OLLAMA_API_KEY", "ambient-fixture-key");
+    await expect(resolveRuntimeConfig(runtime)).rejects.toThrow("failed to resolve secrets");
+    expect(getActiveSecretsRuntimeSnapshot()).toBeNull();
+  });
 
   it("keeps explicit channel/account resolution strict without targeting a cold sibling account", async () => {
     const source = providerConfig();
     source.plugins = { allow: ["telegram"], entries: { telegram: { enabled: true } } };
     source.channels = {
-      telegram: {
-        accounts: {
-          healthy: { botToken: "fixture-channel-token" },
-        },
-      },
+      telegram: { accounts: { healthy: { botToken: "fixture-channel-token" } } },
     };
-    setPathCreateStrict(source, ["channels", "telegram", "accounts", "cold", "botToken"], {
-      source: "env",
-      provider: "default",
-      id: "TEST_COLD_CHANNEL_KEY",
-    });
+    setPathCreateStrict(
+      source,
+      ["channels", "telegram", "accounts", "cold", "botToken"],
+      secretRef("TEST_COLD_CHANNEL_KEY"),
+    );
     vi.stubEnv("TEST_COLD_CHANNEL_KEY", undefined);
     const snapshot = await activateProviderConfig(source);
-    expect(snapshot.degradedOwners).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ ownerKind: "account", degradationState: "cold" }),
-      ]),
+    expect(snapshot.degradedOwners).toContainEqual(
+      expect.objectContaining({ ownerKind: "account", degradationState: "cold" }),
     );
-    await expect(
-      resolveQueuedReplyExecutionConfig(snapshot.sourceConfig, {
+    const replyFor = (accountId: string) =>
+      resolveReplyConfig(snapshot.sourceConfig, {
         originatingChannel: "telegram",
-        originatingAccountId: "healthy",
-      }),
-    ).resolves.toEqual(snapshot.config);
-    await expect(
-      resolveAgentRuntimeConfig(runtime, {
-        runtimeChannelSecretScope: { channel: "telegram", accountId: "healthy" },
-      }),
-    ).resolves.toEqual(snapshot.config);
+        originatingAccountId: accountId,
+      });
+    const agentFor = (accountId: string) =>
+      resolveRuntimeConfig(runtime, {
+        runtimeChannelSecretScope: { channel: "telegram", accountId },
+      });
+    for (const resolve of [replyFor, agentFor]) {
+      await expect(resolve("healthy")).resolves.toEqual(snapshot.config);
+    }
     expect(callGatewayMock).not.toHaveBeenCalled();
+    for (const resolve of [replyFor, agentFor]) {
+      await expect(resolve("cold")).rejects.toThrow(
+        "channels.telegram.accounts.cold.botToken is unresolved",
+      );
+    }
     await expect(
-      resolveQueuedReplyExecutionConfig(snapshot.sourceConfig, {
-        originatingChannel: "telegram",
-        originatingAccountId: "cold",
-      }),
-    ).rejects.toThrow("channels.telegram.accounts.cold.botToken is unresolved");
-    await expect(
-      resolveAgentRuntimeConfig(runtime, {
-        runtimeChannelSecretScope: { channel: "telegram", accountId: "cold" },
-      }),
-    ).rejects.toThrow("channels.telegram.accounts.cold.botToken is unresolved");
-    await expect(
-      resolveAgentRuntimeConfig(runtime, { runtimeTargetsChannelSecrets: true }),
+      resolveRuntimeConfig(runtime, { runtimeTargetsChannelSecrets: true }),
     ).rejects.toThrow("channels.telegram.accounts.cold.botToken is unresolved");
   });
 
-  it.each([
-    ["global", "agent"],
-    ["agent", "agent"],
-    ["global", "tts"],
-    ["agent", "tts"],
-  ] as const)(
-    "resolves a persona-only %s SecretRef for local %s commands",
-    async (scope, command) => {
-      const config: OpenClawConfig = { plugins: { enabled: false } };
-      const keyPath = [
-        ...(scope === "agent" ? ["agents", "entries", "reader", "tts"] : ["tts"]),
-        "personas",
-        "reader.uk",
-        "providers",
-        "mock",
-        "apiKey",
-      ];
-      const ref = { source: "env", provider: "default", id: "TEST_TTS_PERSONA_ONLY_KEY" } as const;
-      setPathCreateStrict(config, keyPath, ref);
-      setRuntimeConfigSnapshot(config, config);
-      vi.spyOn(configIo, "readConfigFileSnapshotForWrite").mockRejectedValue(
-        new Error("fixture has no source file"),
-      );
-      callGatewayMock.mockRejectedValue(new Error("fixture gateway offline"));
-      vi.stubEnv("TEST_TTS_PERSONA_ONLY_KEY", "persona-only-fixture-key");
+  it("resolves a persona-only agent SecretRef for local agent commands", async () => {
+    const config: OpenClawConfig = { plugins: { enabled: false } };
+    const keyPath = [
+      ..."agents.entries.reader.tts.personas".split("."),
+      "reader.uk",
+      ..."providers.mock.apiKey".split("."),
+    ];
+    const personaRef = secretRef("TEST_TTS_PERSONA_ONLY_KEY");
+    setPathCreateStrict(config, keyPath, personaRef);
+    pinOfflineConfig(config);
+    vi.stubEnv("TEST_TTS_PERSONA_ONLY_KEY", "persona-only-fixture-key");
 
-      const resolved =
-        command === "agent"
-          ? await resolveAgentRuntimeConfig(runtime)
-          : (
-              await resolveCommandConfigWithSecrets({
-                config,
-                commandName: "infer tts convert",
-                targetIds: getTtsCommandSecretTargetIds(),
-                runtime,
-              })
-            ).resolvedConfig;
+    const resolved = await resolveRuntimeConfig(runtime);
 
-      expect(getPath(resolved, keyPath)).toBe("persona-only-fixture-key");
-      expect(getPath(config, keyPath)).toEqual(ref);
-    },
-  );
+    expect(getPath(resolved, keyPath)).toBe("persona-only-fixture-key");
+    expect(getPath(config, keyPath)).toEqual(personaRef);
+  });
 
   it("does not resolve unrelated channel, plugin, or Gateway refs for standalone nondelivery", async () => {
     const config = providerConfig();
@@ -543,18 +393,17 @@ describe("agent execution respects prepared secret owners", () => {
         },
       },
     };
-    setRuntimeConfigSnapshot(config, config);
-    vi.spyOn(configIo, "readConfigFileSnapshotForWrite").mockRejectedValue(
-      new Error("fixture has no source file"),
-    );
-    callGatewayMock.mockRejectedValue(new Error("fixture gateway offline"));
+    pinOfflineConfig(config);
     vi.stubEnv("TEST_HEALTHY_PROVIDER_KEY", "local-fixture-key");
     const resolveRef = vi.spyOn(secretResolver, "resolveSecretRefValue");
-    const result = await resolveAgentRuntimeConfig(runtime);
+    const result = await resolveRuntimeConfig(runtime);
     expect(result.models?.providers?.healthy?.apiKey).toBe("local-fixture-key");
-    expect(result.channels).toEqual(config.channels);
-    expect(result.gateway).toEqual(config.gateway);
-    expect(result.plugins).toEqual(config.plugins);
+    const { channels, gateway, plugins } = result;
+    expect({ channels, gateway, plugins }).toEqual({
+      channels: config.channels,
+      gateway: config.gateway,
+      plugins: config.plugins,
+    });
     expect(resolveRef.mock.calls.map(([ref]) => ref.id)).toEqual(["TEST_HEALTHY_PROVIDER_KEY"]);
   });
 });

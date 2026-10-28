@@ -1,0 +1,87 @@
+import { expect, it } from "vitest";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { attachmentImage } from "./chat-attachment-menu.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+
+const suite = createControlUiE2eSuite({ name: "Composer attachment containment" });
+
+suite.define(() => {
+  it.each(
+    ["new", "chat"].flatMap((route) =>
+      [
+        { width: 320, height: 568 },
+        { width: 390, height: 844 },
+        { width: 1050, height: 764 },
+        { width: 844, height: 390 },
+      ].map(({ width, height }) => ({ route, width, height })),
+    ),
+  )(
+    "keeps the $route attachment rail inside its surface at $width×$height",
+    ({ route, width, height }) =>
+      suite.withPage({ viewport: { width, height }, hasTouch: true }, async ({ page }) => {
+        await installMockGateway(page);
+        await page.goto(`${suite.server.baseUrl}${route}`);
+        const composer = page.locator(".agent-chat__input");
+        await composer.locator("textarea").fill("Compare the attached images.");
+        const images = Array.from({ length: 12 }, (_, i) => attachmentImage(`sample-${i + 1}.png`));
+        await composer.locator(".agent-chat__file-input").setInputFiles(images);
+        const rail = composer.locator(".chat-attachments-preview");
+        const thumbnails = rail.locator(".chat-attachment-thumb");
+        await expect.poll(() => thumbnails.count()).toBe(12);
+        await expect.poll(() => rail.locator('[aria-busy="true"]').count()).toBe(0);
+        await expect.poll(() => rail.getAttribute("data-scrollable")).toBe("true");
+        for (const theme of ["dark", "light"] as const) {
+          await page.emulateMedia({ colorScheme: theme });
+          await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(theme);
+        }
+
+        const containment = await rail.evaluate((element) => {
+          const surface = element.closest<HTMLElement>(".agent-chat__input")!;
+          const outer = surface.getBoundingClientRect();
+          const inner = element.getBoundingClientRect();
+          return {
+            leftOverflow: outer.left - inner.left,
+            rightOverflow: inner.right - outer.right,
+            surfaceOverflow: surface.scrollWidth - surface.clientWidth,
+            canScroll: element.scrollWidth > element.clientWidth,
+          };
+        });
+        expect(containment.canScroll).toBe(true);
+        expect(containment.leftOverflow).toBeLessThanOrEqual(0);
+        expect(containment.rightOverflow).toBeLessThanOrEqual(0);
+        expect(containment.surfaceOverflow).toBeLessThanOrEqual(1);
+
+        await rail.evaluate((element) => {
+          element.scrollLeft = (element.scrollWidth - element.clientWidth) / 2;
+        });
+        await expect.poll(() => rail.getAttribute("data-at-start")).toBe("false");
+        await expect.poll(() => rail.getAttribute("data-at-end")).toBe("false");
+
+        await rail.evaluate((element) => {
+          element.scrollLeft = element.scrollWidth;
+        });
+        await expect.poll(() => rail.getAttribute("data-at-end")).toBe("true");
+        const remove = thumbnails.last().getByRole("button", { name: "Remove sample-12.png" });
+        await remove.focus();
+        const target = await remove.evaluate(async (element) => {
+          await Promise.all(element.getAnimations().map((animation) => animation.finished));
+          const box = element.getBoundingClientRect();
+          const centerX = box.left + box.width / 2;
+          const centerY = box.top + box.height / 2;
+          return {
+            x: box.right - 1,
+            y: centerY,
+            edgesHit: [
+              [box.left + 1, centerY],
+              [box.right - 1, centerY],
+              [centerX, box.top + 1],
+              [centerX, box.bottom - 1],
+            ].every(([x, y]) => element.contains(document.elementFromPoint(x!, y!))),
+          };
+        });
+        expect(target.edgesHit).toBe(true);
+        await page.touchscreen.tap(target.x, target.y);
+        await expect.poll(() => thumbnails.count()).toBe(11);
+      }),
+  );
+});

@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import { runExec } from "../exec.js";
 import { runWithSpawnBroker } from "./context.js";
 import { createSpawnBrokerHost } from "./host.js";
+import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 
-const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+const skipBrokerTests = !supportsSpawnBrokerCommandTransport();
 
 describe.skipIf(skipBrokerTests)("broker callback context", () => {
   it("keeps commands launched by process and pipe callbacks in the Gateway transport scope", async () => {

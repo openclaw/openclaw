@@ -8,11 +8,16 @@ read_when:
   - You are deciding which memory surface a new feature or plugin should write to
 ---
 
-OpenClaw memory is a set of plain files and one SQLite index, organized into
-tiers with different trust levels, write rules, and injection behavior. This
+Memory Core, OpenClaw's default memory plugin, uses plain files and one SQLite
+index, organized into tiers with different trust levels, write rules, and injection behavior. This
 page explains the whole system: what gets written where, how content earns its
 way into long-term memory, how recall works on every turn, and how the system
 defends itself against junk and poisoning.
+
+Other selected memory plugins can own their storage and save pre-compaction
+context through their tools. Their flush receives the source turn's memory
+audience and sandbox state; the file and dreaming pipeline below describes
+Memory Core. See [Automatic memory flush](/concepts/memory#automatic-memory-flush).
 
 If you want task-oriented guides instead, start with
 [Memory overview](/concepts/memory), [Dreaming](/concepts/dreaming),
@@ -37,10 +42,10 @@ Five rules shape everything below:
    memory cannot catch poisoned facts reliably, so OpenClaw enforces
    provenance at write time and gates promotion structurally instead of
    trying to detect bad memories later.
-4. **Deterministic gates, model judgment inside them.** Scoring, thresholds,
-   eligibility, matching, and lifecycle are deterministic code. The language
+4. **Fixed checks, model judgment inside them.** Scoring, thresholds,
+   eligibility, matching, and lifecycle use fixed code rules. The language
    model is used where language judgment is genuinely needed, always inside
-   bounds that deterministic code enforces.
+   bounds that fixed code rules enforce.
 5. **Failures never block replies.** Every memory step in the reply path has
    a timeout, a fallback, or both. A memory subsystem that is down degrades
    recall quality; it never eats a turn.
@@ -51,17 +56,21 @@ Five rules shape everything below:
 | ------------ | ------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------ |
 | Instructions | `AGENTS.md` and workspace instruction files             | Human only                                          | Always, at session start                               |
 | Curated core | `MEMORY.md`, `USER.md`                                  | Dreaming consolidation; direct user request         | At session start when provenance is eligible; budgeted |
-| Episodic     | `memory/YYYY-MM-DD.md` daily notes, session transcripts | Agent during work; memory flush; transcript capture | Never; searchable on demand                            |
+| Episodic     | `memory/YYYY-MM-DD.md` daily notes, session transcripts | Agent during work; memory flush; transcript capture | On recall; not at session start                        |
 | Prospective  | Standing intents (SQLite) and cron jobs                 | `intent` tool; scheduled tasks                      | Only when a trigger fires                              |
 | Review       | `DREAMS.md`, dreaming reports                           | Dreaming phases                                     | Never; for human reading                               |
 
 The boundary that matters most is between the **curated core** and the
 **episodic** tier. Curated files are small, normally in context when their
 provenance is eligible, and written only through gated consolidation. Episodic
-files are large, append-friendly,
-and reachable only through explicit search tools or the escalation lane.
-Nothing crosses from episodic to curated without passing the promotion gates
-described below.
+files are large, append-friendly, and retrieved through search tools or
+Active Memory rather than loaded at session start. With
+`memory.search.rememberAcrossConversations` enabled and Active Memory on,
+relevant excerpts from the same agent's other recognized private conversations
+can inform reply context before generation. See
+[Remember across conversations](/concepts/active-memory/enabling#remember-across-conversations)
+for eligibility and privacy boundaries. Nothing crosses from episodic to curated
+without passing the promotion gates described below.
 
 ## Provenance: every memory knows where it came from
 
@@ -71,7 +80,7 @@ columns the model cannot write through prose:
 - **Origin class** is a closed set: `owner` (typed by the owner in a trusted
   channel), `agent` (derived by the agent from owner content), `untrusted`
   (derived from external content such as web pages, tool output, or non-owner
-  participants in group chats), and `system` (scaffolding such as heartbeat
+  participants in group chats), and `system` (runtime instructions such as heartbeat
   prompts and cron preambles).
 - **Session kind** records whether the source session was interactive, cron,
   heartbeat, or a sub-agent run.
@@ -80,12 +89,12 @@ columns the model cannot write through prose:
   accumulating beside them.
 
 Classification is conservative: content whose provenance cannot be determined
-is treated as `untrusted` if externally derived and `system` if scaffolding.
+is treated as `untrusted` if externally derived and `system` if it contains runtime instructions.
 It is never defaulted to `owner`.
 
 Two hygiene rules use this metadata to stop the classic failure modes of
 always-on agents, where production audits have found the overwhelming
-majority of auto-captured memories to be scaffolding restatements, heartbeat
+majority of auto-captured memories to be restatements of runtime instructions, heartbeat
 noise, and recall feedback loops:
 
 - **Session-kind gating.** Cron, heartbeat, and sub-agent sessions do not
@@ -134,7 +143,7 @@ flowchart LR
   A["Interactive sessions"] -->|notes, flush| E["Episodic tier + index (with provenance)"]
   B["Session end"] -->|transcript ingestion| E
   C["Pre-compaction flush"] -->|facts to daily notes| E
-  E --> G["Dreaming: gate (deterministic)"]
+  E --> G["Dreaming: check (rule-based)"]
   G -->|"gated candidates (never untrusted or system)"| L["Consolidation (model, bounded)"]
   L -->|"merge, supersede, dedupe"| M["MEMORY.md / USER.md"]
   L -->|summary + pre-image| D["DREAMS.md"]
@@ -152,6 +161,14 @@ that compacts daily feeds the pipeline through the flush; a user who runs
 many short sessions feeds it through transcript ingestion. Both converge on
 the same consolidation pass.
 
+Session indexing coalesces transcript notifications over a five-second window.
+The background worker reads appended events since its last retained snapshot;
+rewrites and resets rebuild that snapshot. Each source publication batches new
+chunks, embeddings, and search metadata in one transaction, retaining unchanged
+chunks. A completed turn becomes searchable when that background pass finishes,
+normally after the coalescing window plus embedding time. Searches made earlier
+can still see the previous index.
+
 ## Dreaming: consolidation with gates
 
 Dreaming is enabled by default and runs as a scheduled background sweep with
@@ -164,7 +181,7 @@ touching long-term memory.
 
 **Deep promotes through two gates in sequence:**
 
-1. **The deterministic gate.** Candidates are ranked by weighted signals
+1. **The rule-based check.** Candidates are ranked by weighted signals
    (retrieval relevance, recall frequency, query diversity, recency,
    multi-day recurrence, conceptual richness) and must pass all threshold
    gates. Recall behavior drives the ranking: memory graduates because it
@@ -204,7 +221,7 @@ requiring every editor of a plain Markdown file to share a lock.
 
 ## Recall: two lanes
 
-Recall is split by cost. The default lane is deterministic and adds no
+Recall is split by cost. The default lane is rule-based and adds no
 latency; the escalation lane runs a real sub-agent and is reserved for turns
 that need it.
 
@@ -229,7 +246,7 @@ Three mechanisms run on eligible turns with no model involvement:
 - **Trigger injection.** Writers can attach short trigger phrases to
   entries describing when they are relevant. Each inbound message runs a
   fast lexical and vector prefilter against those triggers; entries that
-  match strongly (score at or above 0.72) are injected as a compact hidden
+  match strongly (score at or above 0.65) are injected as a compact hidden
   context block, at most three per turn.
 
 Writers store both signals as trailing comments on the same `MEMORY.md` or
@@ -257,7 +274,7 @@ The blocking recall sub-agent from [Active memory](/concepts/active-memory)
 is the deep lane: a real agent turn that can search and read across
 conversation history, including cross-conversation transcript recall where
 `rememberAcrossConversations` allows it. By default it runs only when two
-deterministic conditions hold:
+fixed conditions hold:
 
 1. The message shows recall intent: explicit references to the past,
    temporal phrasing, or direct questions about prior decisions or
@@ -272,8 +289,8 @@ unconditional pre-reply recall; `mode: "off"` disables the lane.
 ## Project-scoped memory
 
 Repository work adds a second retrieval boundary alongside provenance. When a
-turn runs inside a Git repository, memory written by that work carries a
-trailing project annotation:
+turn runs inside a Git repository with `memory-core` selected, memory written by
+that work carries a trailing project annotation:
 
 ```markdown
 - Use the release helper for package validation. <!-- project: github.com/openclaw/openclaw -->
@@ -293,7 +310,11 @@ evicts the least-recent key beyond that cap. This set is ephemeral runtime
 state: it is not persisted or restored, so a new session or process starts with
 an empty set. The current repository identity remains a separate prepared fact
 used for write annotations; new repository-specific memories receive only that
-current key, not the whole active set. Ranked search boosts entries from any
+current key, not the whole active set. OpenClaw passes that key to memory prompt
+sections as `projectKey`, and `memory-core` owns the instruction that asks the
+agent to add the annotation. Other memory providers receive the same key but get
+no annotation instruction from core, so they can store project scope in their
+own format. Ranked search boosts entries from any
 repository in the active set, mildly demotes entries from another repository,
 and leaves untagged memory neutral. Trigger injection is stricter: a tagged
 entry is eligible only while every project key on that entry is in the active
@@ -315,7 +336,7 @@ active in that session.
 The boundary follows the same research result as the rest of recall: selective,
 query-relevant context outperforms indiscriminate history as sessions and
 corpora grow (LongMemEval, arXiv:2410.10813). Project identity is therefore a
-deterministic eligibility and ranking signal, not another model judgment or a
+rule-based eligibility and ranking signal, not another model judgment or a
 new configuration surface.
 
 ## The user model
@@ -354,7 +375,7 @@ event benchmarks). OpenClaw therefore compiles intentions out of the model:
   changelog") go into a per-agent SQLite table via the `intent` tool, with
   machine-checkable trigger fields: keywords, an optional trigger
   embedding, channel and sender scope, expiry, fire budget, cooldown.
-  Every inbound message runs a deterministic prefilter against armed
+  Every inbound message runs a rule-based prefilter against armed
   intents; a hit injects the intent as hidden context for the reply. No
   model call happens in the matching path.
 - **Aspirations** that cannot be compiled stay in Markdown, tagged with

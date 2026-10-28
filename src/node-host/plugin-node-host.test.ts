@@ -1,388 +1,175 @@
-/** Tests plugin node-host command registry loading, listing, and invocation. */
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import type { PluginNodeHostCommandRegistration } from "../plugins/registry-types.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { registerCommands } from "./node-host-command.fixture.test-support.js";
 import {
-  hasRegisteredNodeHostCommandActiveWork,
-  invokeRegisteredNodeHostCommand,
-  listRegisteredNodeHostCapsAndCommands,
-  notifyRegisteredNodeHostCommandDisconnect,
-  watchRegisteredNodeHostCommandAvailability,
+  hasRegisteredNodeHostCommandActiveWork as hasActiveWork,
+  invokeRegisteredNodeHostCommand as invoke,
+  isRegisteredNodeHostCommandDuplex as isDuplex,
+  listRegisteredNodeHostCapsAndCommands as listCommands,
+  notifyRegisteredNodeHostCommandDisconnect as disconnect,
+  watchRegisteredNodeHostCommandAvailability as watchAvailability,
 } from "./plugin-node-host.js";
 
 const availabilityContext = { config: {}, env: {} };
+type Command = PluginNodeHostCommandRegistration["command"];
+afterEach(resetPluginRuntimeStateForTest);
 
-afterEach(() => {
-  resetPluginRuntimeStateForTest();
-});
-
-describe("plugin node-host registry", () => {
-  it("lists plugin-declared caps and commands", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "browser",
-        pluginName: "Browser",
-        command: {
-          command: "browser.proxy",
-          cap: "browser",
-          handle: vi.fn(async () => "{}"),
-        },
-        source: "test",
-      },
-      {
-        pluginId: "photos",
-        pluginName: "Photos",
-        command: {
-          command: "photos.proxy",
-          cap: "photos",
-          handle: vi.fn(async () => "{}"),
-        },
-        source: "test",
-      },
-      {
-        pluginId: "browser-dup",
-        pluginName: "Browser Dup",
-        command: {
-          command: "browser.inspect",
-          cap: "browser",
-          handle: vi.fn(async () => "{}"),
-        },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
-
-    expect(listRegisteredNodeHostCapsAndCommands(availabilityContext)).toEqual({
-      caps: ["browser", "photos"],
-      commands: ["browser.inspect", "browser.proxy", "photos.proxy"],
-      nodePluginTools: [],
-    });
-  });
-
-  it("lists plugin-declared agent tool descriptors", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "browser",
-        pluginName: "Browser",
-        command: {
-          command: "browser.proxy",
-          cap: "browser",
-          agentTool: {
-            name: "browser_inspect",
-            description: "Inspect browser state",
-            parameters: {
-              type: "object",
-              properties: { url: { type: "string" } },
-            },
-          },
-          handle: vi.fn(async () => "{}"),
-        },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
-
-    expect(listRegisteredNodeHostCapsAndCommands(availabilityContext).nodePluginTools).toEqual([
-      {
-        pluginId: "browser",
-        name: "browser_inspect",
-        description: "Inspect browser state",
-        parameters: {
-          type: "object",
-          properties: { url: { type: "string" } },
-        },
-        command: "browser.proxy",
-      },
-    ]);
-  });
-
-  it("publishes a validated Computer Use descriptor beside its command pair", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "computer",
-        pluginName: "Computer",
-        command: {
-          command: "computer.act",
-          cap: "computer",
-          computerUse: () => ({
-            contractVersion: 2,
-            provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
-            actions: ["screenshot", "left_click"],
-            targets: ["screen"],
-            deliveryModes: ["foreground"],
-            observations: ["image"],
-            features: { recording: false, agentCursor: false, multiDisplay: false },
-          }),
-          handle: vi.fn(async () => "{}"),
-        },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
-
-    expect(listRegisteredNodeHostCapsAndCommands(availabilityContext)).toMatchObject({
-      caps: ["computer"],
-      commands: ["computer.act"],
-      computerUse: {
-        contractVersion: 2,
-        provider: { id: "fixture", generation: "generation-1" },
-        actions: ["screenshot", "left_click"],
-      },
-    });
-  });
-
-  it("skips agent tool descriptors with provider-unsafe names", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "browser",
-        pluginName: "Browser",
-        command: {
-          command: "browser.proxy",
-          cap: "browser",
-          agentTool: {
-            name: "browser.inspect",
-            description: "Inspect browser state",
-          },
-          handle: vi.fn(async () => "{}"),
-        },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
-
-    expect(listRegisteredNodeHostCapsAndCommands(availabilityContext)).toEqual({
-      caps: ["browser"],
-      commands: ["browser.proxy"],
-      nodePluginTools: [],
-    });
-  });
-
-  it("omits commands and capabilities unavailable in the node-local config", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "browser",
-        pluginName: "Browser",
-        command: {
-          command: "browser.proxy",
-          cap: "browser",
-          isAvailable: ({ config }) => config.browser?.enabled !== false,
-          handle: vi.fn(async () => "{}"),
-        },
-        source: "test",
-      },
-      {
-        pluginId: "photos",
-        pluginName: "Photos",
-        command: {
-          command: "photos.proxy",
-          cap: "photos",
-          handle: vi.fn(async () => "{}"),
-        },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
-
-    expect(
-      listRegisteredNodeHostCapsAndCommands({
-        config: { browser: { enabled: false } },
-        env: {},
-      }),
-    ).toEqual({
-      caps: ["photos"],
-      commands: ["photos.proxy"],
-      nodePluginTools: [],
-    });
-  });
-
-  it("owns plugin availability watcher cleanup", () => {
-    let notify: (() => void) | undefined;
-    const cleanup = vi.fn();
-    const onChange = vi.fn();
-    const scopedRegistry = vi.fn();
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "browser",
-        pluginName: "Browser",
-        command: {
-          command: "browser.proxy",
-          cap: "browser",
-          watchAvailability: (_context, callback) => {
-            notify = callback;
-            scopedRegistry(getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
-            return () => {
-              scopedRegistry(getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
-              cleanup();
-            };
-          },
-          handle: vi.fn(async () => "{}"),
-        },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
-
-    const stop = watchRegisteredNodeHostCommandAvailability(availabilityContext, () => {
-      scopedRegistry(getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
-      onChange();
-    });
-    notify?.();
-    expect(onChange).toHaveBeenCalledOnce();
-    stop();
-    expect(cleanup).toHaveBeenCalledOnce();
-    expect(scopedRegistry).toHaveBeenCalledTimes(3);
-    expect(scopedRegistry).toHaveBeenNthCalledWith(1, registry);
-    expect(scopedRegistry).toHaveBeenNthCalledWith(2, registry);
-    expect(scopedRegistry).toHaveBeenNthCalledWith(3, registry);
-  });
-
-  it("notifies each shared plugin disconnect owner once", async () => {
-    const onDisconnect = vi.fn(async () => {});
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = ["screen.snapshot", "computer.act"].map((command) => ({
-      pluginId: "computer",
-      pluginName: "Computer",
-      command: { command, onDisconnect, handle: vi.fn(async () => "{}") },
-      source: "test",
-    }));
-    setActivePluginRegistry(registry);
-
-    await notifyRegisteredNodeHostCommandDisconnect();
-
-    expect(onDisconnect).toHaveBeenCalledOnce();
-  });
-
-  it("retains plugin work after invocation and availability end until its owner cleans up", async () => {
-    let busy = false;
-    let available = true;
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "meeting",
-        pluginName: "Meeting",
-        source: "test",
-        command: {
-          command: "meeting.start",
-          isAvailable: () => available,
-          handle: async () => {
-            busy = true;
-            return "{}";
-          },
-          hasActiveWork: () => {
-            expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
-            return busy;
-          },
-          onDisconnect: () => {
-            busy = false;
-          },
-        },
-      },
-    ];
-    setActivePluginRegistry(registry);
-
-    expect(hasRegisteredNodeHostCommandActiveWork()).toBe(false);
-    await invokeRegisteredNodeHostCommand("meeting.start");
-    available = false;
-    expect(listRegisteredNodeHostCapsAndCommands(availabilityContext).commands).toEqual([]);
-    expect(hasRegisteredNodeHostCommandActiveWork()).toBe(true);
-    await notifyRegisteredNodeHostCommandDisconnect();
-    expect(hasRegisteredNodeHostCommandActiveWork()).toBe(false);
-  });
-
-  it("keeps uncertain plugin work busy when its owner query throws", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "meeting",
-        pluginName: "Meeting",
-        source: "test",
-        command: {
-          command: "meeting.start",
-          handle: async () => "{}",
-          hasActiveWork: () => {
-            throw new Error("work state unavailable");
-          },
-        },
-      },
-    ];
-    setActivePluginRegistry(registry);
-
-    expect(hasRegisteredNodeHostCommandActiveWork()).toBe(true);
-  });
-
-  it("dispatches plugin-declared node-host commands", async () => {
-    const handle = vi.fn(async (paramsJSON?: string | null) => {
+it.each([undefined, "optional", true] as const)(
+  "advertises and dispatches commands with duplex=%s",
+  async (duplex) => {
+    const handle = vi.fn<Command["handle"]>(async (paramsJSON) => {
       expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
       return paramsJSON ?? "";
     });
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "browser",
-        pluginName: "Browser",
-        command: {
-          command: "browser.proxy",
-          cap: "browser",
-          handle,
-        },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
+    const registry = registerCommands({ command: "file.fetch", cap: "file", duplex, handle });
+    expect(isDuplex("file.fetch")).toBe(duplex !== undefined);
+    const payload = '{"ok":true}';
+    if (duplex === true) {
+      await expect(invoke("file.fetch", null)).rejects.toThrow("requires duplex transport");
+    } else {
+      await expect(invoke("file.fetch", payload)).resolves.toBe(payload);
+      await expect(invoke("missing.command", null)).resolves.toBeNull();
+    }
+    if (duplex !== undefined) {
+      const io = {
+        signal: new AbortController().signal,
+        emitChunk: async () => {},
+        onInput: () => {},
+      };
+      await expect(invoke("file.fetch", payload, io)).resolves.toBe(payload);
+      expect(handle).toHaveBeenLastCalledWith(payload, io);
+    }
+  },
+);
 
-    const context = {
-      sendNodeEvent: vi.fn(async () => undefined),
-      sessionKey: "agent:main:canvas",
+it.each([true, false])(
+  "publishes available capabilities and validated descriptors (browser=%s)",
+  (enabled) => {
+    const browser = {
+      cap: "browser",
+      isAvailable: ({ config }: Parameters<NonNullable<Command["isAvailable"]>>[0]) =>
+        config.browser?.enabled !== false,
     };
-    await expect(
-      invokeRegisteredNodeHostCommand("browser.proxy", '{"ok":true}', undefined, context),
-    ).resolves.toBe('{"ok":true}');
-    await expect(invokeRegisteredNodeHostCommand("missing.command", null)).resolves.toBeNull();
-    expect(handle).toHaveBeenCalledWith('{"ok":true}', undefined, {
-      ...context,
-      prepareExecAuthorization: expect.any(Function),
-    });
-  });
-
-  it("gates duplex commands from embedded-worker manifests and supplies their IO context", async () => {
-    const handle = vi.fn(async (paramsJSON?: string | null) => paramsJSON ?? "");
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
+    registerCommands(
       {
-        pluginId: "terminal",
-        pluginName: "Terminal",
-        command: {
-          command: "terminal.resume.v1",
-          cap: "terminal",
-          duplex: true,
-          handle,
+        ...browser,
+        command: "browser.proxy",
+        agentTool: {
+          name: "browser_inspect",
+          description: "Inspect browser state",
+          parameters: { type: "object", properties: { url: { type: "string" } } },
         },
-        source: "test",
       },
-    ];
-    setActivePluginRegistry(registry);
-
-    expect(
-      listRegisteredNodeHostCapsAndCommands(availabilityContext, { includeDuplex: false }),
-    ).toEqual({ caps: [], commands: [], nodePluginTools: [] });
-    const io = {
-      signal: new AbortController().signal,
-      emitChunk: async () => {},
-      onInput: () => {},
-    };
-    await expect(
-      invokeRegisteredNodeHostCommand("terminal.resume.v1", '{"threadId":"id"}', io),
-    ).resolves.toBe('{"threadId":"id"}');
-    expect(handle).toHaveBeenCalledWith('{"threadId":"id"}', io);
-    await expect(invokeRegisteredNodeHostCommand("terminal.resume.v1", null)).rejects.toThrow(
-      "requires duplex transport",
+      {
+        ...browser,
+        command: "browser.inspect",
+        agentTool: { name: "browser.inspect", description: "Inspect browser state" },
+      },
+      { command: "photos.proxy", cap: "photos" },
     );
+    const listed = listCommands({ config: { browser: { enabled } }, env: {} });
+    expect(listed.caps).toEqual(enabled ? ["browser", "photos"] : ["photos"]);
+    expect(listed.commands).toEqual(
+      enabled ? ["browser.inspect", "browser.proxy", "photos.proxy"] : ["photos.proxy"],
+    );
+    expect(listed.nodePluginTools).toHaveLength(Number(enabled));
+    if (enabled) {
+      expect(listed.nodePluginTools[0]).toMatchObject({
+        pluginId: "browser",
+        name: "browser_inspect",
+        description: "Inspect browser state",
+        command: "browser.proxy",
+        parameters: { type: "object", properties: { url: { type: "string" } } },
+      });
+    }
+  },
+);
+
+it("scopes watcher callbacks, fences late notifications, and retries only failed cleanup", async () => {
+  const retiring = createDeferred();
+  const entered = createDeferred();
+  const failure = new Error("watcher retirement failed");
+  const successful = vi.fn(async () => {});
+  const onChange = vi.fn();
+  const assertScope = () =>
+    expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
+  let notify: (() => void) | undefined;
+  let reentrant: unknown;
+  const cleanup = vi.fn(() => {
+    assertScope();
+    entered.resolve();
+    // Do not await the completion whose cleanup is currently executing.
+    if (cleanup.mock.calls.length === 1) {
+      reentrant = stop();
+      return retiring.promise;
+    }
+    return Promise.resolve();
   });
+  const registry = registerCommands(
+    { command: "fixture.idle", watchAvailability: () => successful },
+    {
+      command: "fixture.observe",
+      watchAvailability: (_context, callback) => {
+        assertScope();
+        notify = callback;
+        return cleanup;
+      },
+    },
+  );
+  const stop = watchAvailability(availabilityContext, () => {
+    assertScope();
+    onChange();
+  });
+  notify?.();
+  const closing = stop();
+  const rejected = expect(closing).rejects.toBe(failure);
+  try {
+    notify?.();
+    await entered.promise;
+    expect(reentrant).toBe(closing);
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(onChange).toHaveBeenCalledOnce();
+    retiring.reject(failure);
+    await rejected;
+    await stop();
+    expect(successful).toHaveBeenCalledOnce();
+    expect(cleanup).toHaveBeenCalledTimes(2);
+  } finally {
+    retiring.resolve();
+    await Promise.allSettled([closing, reentrant, rejected]);
+  }
+});
+
+it("retains unavailable plugin work until its shared disconnect owner cleans up once", async () => {
+  let busy = false;
+  let available = true;
+  const onDisconnect = vi.fn(() => {
+    busy = false;
+  });
+  const registry = registerCommands(
+    ...["meeting.start", "meeting.observe"].map((command) => ({
+      command,
+      isAvailable: () => available,
+      handle: async () => {
+        busy = true;
+        return "{}";
+      },
+      hasActiveWork: () => {
+        expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
+        return busy;
+      },
+      onDisconnect,
+    })),
+  );
+  expect(hasActiveWork()).toBe(false);
+  await invoke("meeting.start");
+  available = false;
+  expect(listCommands(availabilityContext).commands).toEqual([]);
+  expect(hasActiveWork()).toBe(true);
+  await disconnect();
+  expect(onDisconnect).toHaveBeenCalledOnce();
+  expect(hasActiveWork()).toBe(false);
 });

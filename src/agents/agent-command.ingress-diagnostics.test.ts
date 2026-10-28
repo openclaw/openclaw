@@ -1,144 +1,138 @@
-/**
- * Tests for ingress model.usage diagnostic emission in agentCommandFromIngress.
- *
- * Covers:
- * - ingressDiagnosticChannel channel label resolution
- * - emitIngressModelUsageDiagnostic with diagnostics enabled + valid usage
- * - emitIngressModelUsageDiagnostic with diagnostics disabled
- * - emitIngressModelUsageDiagnostic with null/missing usage
- */
-
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { emitIngressModelUsageDiagnostic as emitIngressModelUsageDiagnosticBase } from "./command/ingress-diagnostics.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  agentCommandFromGatewayIngress,
+  compactionTestState as state,
+  makeCompactionResult,
+  registerAgentCommandCompactionTestHooks,
+  GATEWAY_INGRESS_ARGS,
+} from "./agent-command.compaction.test-support.js";
+import type { AgentCommandIngressOpts } from "./command/types.js";
+import type { EmbeddedAgentMeta } from "./embedded-agent-runner/types.js";
 
 const mocks = vi.hoisted(() => ({
   emitTrustedDiagnosticEvent: vi.fn(),
   isDiagnosticsEnabled: vi.fn(),
-  getRuntimeConfig: vi.fn(),
 }));
-
-vi.mock("../infra/diagnostic-events.js", () => ({
+vi.mock("../infra/diagnostic-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/diagnostic-events.js")>()),
   emitTrustedDiagnosticEvent: mocks.emitTrustedDiagnosticEvent,
   isDiagnosticsEnabled: mocks.isDiagnosticsEnabled,
 }));
 
-vi.mock("../config/io.js", () => ({
-  getRuntimeConfig: () => mocks.getRuntimeConfig(),
-}));
+registerAgentCommandCompactionTestHooks();
 
 beforeEach(() => {
-  vi.clearAllMocks();
   mocks.isDiagnosticsEnabled.mockReturnValue(true);
-  mocks.getRuntimeConfig.mockReturnValue({
-    models: {
-      providers: {
-        openai: {
-          baseUrl: "https://api.openai.com/v1",
-          models: [{ id: "gpt-5.5", cost: { input: 1, output: 2.5, cacheRead: 0, cacheWrite: 0 } }],
-        },
+  state.deliverAgentCommandResultMock.mockImplementation(
+    async (
+      params: Parameters<typeof import("./command/delivery.js").deliverAgentCommandResult>[0],
+    ) => {
+      const { deliverAgentCommandResult } = await import("./command/delivery.js");
+      return deliverAgentCommandResult(params);
+    },
+  );
+  if (!state.cfg) {
+    throw new Error("missing command fixture config");
+  }
+  state.cfg.models = {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        models: [
+          {
+            id: "gpt-5.5",
+            name: "Test model",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 1, output: 2.5, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128000,
+            maxTokens: 8192,
+            agentRuntime: { id: "openclaw" },
+          },
+        ],
       },
     },
+  };
+});
+
+async function runIngress(
+  agentMeta: Partial<EmbeddedAgentMeta> = {},
+  opts: Partial<AgentCommandIngressOpts> = {},
+) {
+  const result = makeCompactionResult({
+    sessionId: "sess-abc",
+    text: "Test answer",
+    runner: "embedded",
   });
-});
-
-afterEach(() => {
-  vi.clearAllMocks();
-});
-
-function makeResult(overrides?: Record<string, unknown>) {
-  return {
-    payloads: [{ text: "hello", mediaUrl: "" }],
+  state.runAgentAttemptMock.mockResolvedValueOnce({
+    ...result,
     meta: {
+      ...result.meta,
       durationMs: 1234,
-      aborted: false,
-      stopReason: "end_turn",
       agentMeta: {
         provider: "openai",
         model: "gpt-5.5",
         sessionId: "sess-abc",
+        usage: { input: 500, output: 200, cacheRead: 50, cacheWrite: 25, total: 775 },
+        contextTokens: 128000,
+        promptTokens: 1200,
+        lastCallUsage: { input: 500, output: 200 },
+        ...agentMeta,
+      },
+    },
+  });
+  await agentCommandFromGatewayIngress(
+    {
+      message: "hello",
+      sessionId: "sess-abc",
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      allowModelOverride: false,
+      messageChannel: "api",
+      ...opts,
+    },
+    ...GATEWAY_INGRESS_ARGS,
+  );
+  expect(state.runAgentAttemptMock).toHaveBeenCalledOnce();
+  return mocks.emitTrustedDiagnosticEvent.mock.calls
+    .map(([event]) => event)
+    .filter((event) => event.type === "model.usage");
+}
+
+describe("agent command ingress usage diagnostics", () => {
+  it("emits turn usage with the current run channel", async () => {
+    const events = await runIngress({}, { runContext: { messageChannel: "discord" } });
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "model.usage",
+        sessionKey: "agent:main:main",
+        sessionId: "sess-abc",
+        channel: "discord",
+        agentId: "main",
+        provider: "openai",
+        model: "gpt-5.5",
         usage: {
           input: 500,
           output: 200,
           cacheRead: 50,
           cacheWrite: 25,
+          promptTokens: 575,
           total: 775,
         },
-        contextTokens: 128000,
-        promptTokens: 1200,
-        lastCallUsage: { input: 500, output: 200 },
-        ...(overrides?.agentMeta as Record<string, unknown> | undefined),
-      },
-      ...(overrides?.meta as Record<string, unknown> | undefined),
-    },
-    ...overrides,
-  };
-}
-
-function makeOpts(overrides?: Record<string, unknown>) {
-  return {
-    message: "hello",
-    sessionKey: "agent:main:main",
-    agentId: "main",
-    allowModelOverride: false,
-    messageChannel: "api",
-    ...overrides,
-  };
-}
-
-function emitIngressModelUsageDiagnostic(
-  result: Parameters<typeof emitIngressModelUsageDiagnosticBase>[0],
-  opts: Parameters<typeof emitIngressModelUsageDiagnosticBase>[1],
-  agentDir = "/state/agents/main/agent",
-) {
-  emitIngressModelUsageDiagnosticBase(result, opts, agentDir);
-}
-
-describe("emitIngressModelUsageDiagnostic", () => {
-  it("emits model.usage when diagnostics are enabled and result has usage", () => {
-    const result = makeResult();
-    const opts = makeOpts();
-
-    emitIngressModelUsageDiagnostic(result, opts, "/state/agents/main/agent");
-
-    expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledTimes(1);
-    const event = mocks.emitTrustedDiagnosticEvent.mock.calls[0]?.[0];
-    expect(event).toMatchObject({
-      type: "model.usage",
-      sessionKey: "agent:main:main",
-      sessionId: "sess-abc",
-      channel: "api",
-      agentId: "main",
-      provider: "openai",
-      model: "gpt-5.5",
-      usage: {
-        input: 500,
-        output: 200,
-        cacheRead: 50,
-        cacheWrite: 25,
-        promptTokens: 575,
-        total: 775,
-      },
-      durationMs: 1234,
-    });
+        durationMs: 1234,
+        costUsd: 0.001,
+      }),
+    ]);
   });
 
-  it("uses terminal cumulative usage only for the diagnostic event and cost", () => {
-    const result = makeResult({
-      agentMeta: {
-        diagnosticUsage: {
-          input: 900,
-          output: 300,
-          cacheRead: 70,
-          cacheWrite: 30,
-          total: 1300,
-        },
-      },
-    });
-
-    emitIngressModelUsageDiagnostic(result, makeOpts(), "/state/agents/marie/agent");
-
-    expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledWith(
+  it("uses cumulative billing usage while retaining last-call context", async () => {
+    const events = await runIngress(
+      { diagnosticUsage: { input: 900, output: 300, cacheRead: 70, cacheWrite: 30, total: 1300 } },
+      { messageChannel: undefined, channel: "webchat" },
+    );
+    expect(events).toEqual([
       expect.objectContaining({
+        channel: "webchat",
         usage: {
           input: 900,
           output: 300,
@@ -151,138 +145,30 @@ describe("emitIngressModelUsageDiagnostic", () => {
         context: { limit: 128000, used: 1200 },
         costUsd: 0.00165,
       }),
-    );
+    ]);
   });
 
-  it("does not emit when diagnostics are disabled", () => {
+  it("does not emit when diagnostics are disabled", async () => {
     mocks.isDiagnosticsEnabled.mockReturnValue(false);
-    const result = makeResult();
-    const opts = makeOpts();
-
-    emitIngressModelUsageDiagnostic(result, opts);
-
-    expect(mocks.emitTrustedDiagnosticEvent).not.toHaveBeenCalled();
+    expect(await runIngress()).toEqual([]);
   });
 
-  it("does not emit when agentMeta is missing", () => {
-    const result = makeResult({
-      meta: { durationMs: 100, aborted: false, stopReason: "end_turn" },
-    });
-    // result.meta.agentMeta is undefined
-    (result as Record<string, unknown>).meta = { durationMs: 100 };
-
-    const opts = makeOpts();
-
-    emitIngressModelUsageDiagnostic(result, opts);
-
-    expect(mocks.emitTrustedDiagnosticEvent).not.toHaveBeenCalled();
+  it("does not emit token-only usage with zero counts", async () => {
+    expect(await runIngress({ usage: { input: 0, output: 0 } })).toEqual([]);
   });
 
-  it("does not emit when usage is zero", () => {
-    const result = makeResult({ agentMeta: { usage: { input: 0, output: 0 } } });
-    const opts = makeOpts();
-
-    emitIngressModelUsageDiagnostic(result, opts);
-
-    expect(mocks.emitTrustedDiagnosticEvent).not.toHaveBeenCalled();
-  });
-
-  it("resolves channel from runContext when available", () => {
-    const result = makeResult();
-    const opts = makeOpts({
-      runContext: { messageChannel: "discord" },
-      messageChannel: "api",
-    });
-
-    emitIngressModelUsageDiagnostic(result, opts);
-
-    expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledTimes(1);
-    const event = mocks.emitTrustedDiagnosticEvent.mock.calls[0]?.[0];
-    expect(event.channel).toBe("discord");
-  });
-
-  it("falls back to opts.channel when messageChannel is absent", () => {
-    const result = makeResult();
-    const opts = makeOpts({ messageChannel: undefined, channel: "webchat" });
-
-    emitIngressModelUsageDiagnostic(result, opts);
-
-    expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledTimes(1);
-    const event = mocks.emitTrustedDiagnosticEvent.mock.calls[0]?.[0];
-    expect(event.channel).toBe("webchat");
-  });
-
-  it('defaults channel to "http" when no channel info is present', () => {
-    const result = makeResult();
-    const opts = { message: "hi", allowModelOverride: false };
-
-    emitIngressModelUsageDiagnostic(result, opts);
-
-    expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledTimes(1);
-    const event = mocks.emitTrustedDiagnosticEvent.mock.calls[0]?.[0];
-    expect(event.channel).toBe("http");
-  });
-
-  it.each([
-    { name: "token buckets", usage: { input: 500, output: 200 }, cost: 0.001 },
-    { name: "cost-only positive total", usage: { cost: { total: 0.25 } }, cost: 0.25 },
-    { name: "cost-only zero total", usage: { cost: { total: 0 } }, cost: 0 },
-  ])("emits monetary diagnostics for $name", ({ usage, cost }) => {
-    const result = makeResult({
-      agentMeta: { usage, promptTokens: undefined, lastCallUsage: undefined },
-    });
-    const opts = makeOpts();
-
-    emitIngressModelUsageDiagnostic(result, opts);
-
-    expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledTimes(1);
-    const event = mocks.emitTrustedDiagnosticEvent.mock.calls[0]?.[0];
-    expect(event.costUsd).toBe(cost);
-    expect(event.context).not.toHaveProperty("used");
-  });
-
-  it("handles missing optional usage fields gracefully", () => {
-    const result = makeResult({
-      agentMeta: {
-        provider: "openai",
-        model: "gpt-5.5",
-        sessionId: "sess-min",
-        usage: { input: 100, output: 50 },
-      },
-    });
-    const opts = makeOpts();
-
-    emitIngressModelUsageDiagnostic(result, opts);
-
-    expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledTimes(1);
-    const event = mocks.emitTrustedDiagnosticEvent.mock.calls[0]?.[0];
-    expect(event.usage).toMatchObject({
-      input: 100,
-      output: 50,
-      cacheRead: 0,
-      cacheWrite: 0,
-      promptTokens: 100,
-      total: 150,
-    });
-  });
-
-  it("omits context.used when promptTokens is undefined", () => {
-    const result = makeResult({
-      agentMeta: {
-        promptTokens: undefined,
-        provider: "openai",
-        model: "gpt-5.5",
-        sessionId: "sess-no-prompt",
-        usage: { input: 10, output: 5 },
-        contextTokens: 128000,
-      },
-    });
-    const opts = makeOpts();
-
-    emitIngressModelUsageDiagnostic(result, opts);
-
-    expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledTimes(1);
-    const event = mocks.emitTrustedDiagnosticEvent.mock.calls[0]?.[0];
-    expect(event.context).toEqual({ limit: 128000 });
+  it("emits zero-cost diagnostics without token counts or a prompt estimate", async () => {
+    const events = await runIngress(
+      { usage: { cost: { total: 0 } }, promptTokens: undefined, lastCallUsage: undefined },
+      { messageChannel: undefined },
+    );
+    expect(events).toEqual([
+      expect.objectContaining({
+        channel: "http",
+        costUsd: 0,
+        context: { limit: 128000 },
+        usage: expect.objectContaining({ cacheRead: 0, cacheWrite: 0, total: 0 }),
+      }),
+    ]);
   });
 });

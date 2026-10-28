@@ -1,4 +1,5 @@
 import { clearAllCliSessions } from "./cli-session-binding.js";
+import { resolveSessionCreatorActor } from "./session-entry-provenance.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
 import {
   SESSION_TOTAL_TOKENS_VERSION,
@@ -6,8 +7,9 @@ import {
   type SessionEntry,
 } from "./types.js";
 
-type RetiredThinkingSelectionQuarantine = {
+type RetiredSessionMetadata = {
   thinkingLevelSelection?: unknown;
+  compactionCheckpoints?: unknown;
   modelFallback?: AgentPatchedSessionModelFallback & { prevThinkingLevelSelection?: unknown };
 };
 
@@ -16,13 +18,18 @@ export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
   lastRunId: undefined,
   lifecycleRunId: undefined,
   mainRestartRecovery: undefined,
+  pendingExecNotifications: undefined,
+  restartRecoveryOperatorSource: undefined,
+  restartRecoveryRequesterSource: undefined,
   pendingProjectGitUrl: undefined,
   pendingWorktree: undefined,
+  priorWorkspace: undefined,
   sessionDiffBaselineCapture: undefined,
   transcriptByteCompactionLatch: undefined,
 } satisfies Partial<InternalSessionEntry>;
 
 const PRIVATE_SESSION_ENTRY_KEYS = [
+  "inheritedGitContributorProfileIds",
   "profileInvolvement",
   "cliHistoryBoundary",
   "publicShare",
@@ -30,36 +37,39 @@ const PRIVATE_SESSION_ENTRY_KEYS = [
   "lastRunId",
   "lifecycleRunId",
   "mainRestartRecovery",
+  "pendingExecNotifications",
+  "restartRecoveryOperatorSource",
+  "restartRecoveryRequesterSource",
   "pendingProjectGitUrl",
   "pendingWorktree",
+  "priorWorkspace",
   "sessionDiffBaselineCapture",
   "transcriptByteCompactionLatch",
 ] as const satisfies readonly (keyof InternalSessionEntry)[];
 
-function projectPublicModelFallback(
-  fallback: RetiredThinkingSelectionQuarantine["modelFallback"],
-): AgentPatchedSessionModelFallback | undefined {
-  if (!fallback) {
-    return undefined;
-  }
-  const { prevThinkingLevelSelection: _privateSelection, ...publicFallback } = fallback;
-  return publicFallback;
-}
-
-function stripPrivateSessionEntryFields(entry: InternalSessionEntry): SessionEntry;
+function stripPrivateSessionEntryFields(
+  entry: InternalSessionEntry,
+  identity: "public" | "execution",
+): SessionEntry;
 function stripPrivateSessionEntryFields(
   entry: Partial<InternalSessionEntry>,
+  identity: "public" | "execution",
 ): Partial<SessionEntry>;
 function stripPrivateSessionEntryFields(
-  entry: Partial<InternalSessionEntry> & RetiredThinkingSelectionQuarantine,
+  entry: Partial<InternalSessionEntry> & RetiredSessionMetadata,
+  identity: "public" | "execution",
 ): Partial<SessionEntry> {
   const projected = { ...entry };
   for (const key of PRIVATE_SESSION_ENTRY_KEYS) {
     delete projected[key];
   }
+  if (identity === "public" && projected.createdActor) {
+    projected.createdActor = resolveSessionCreatorActor(projected.createdActor);
+  }
   delete projected.thinkingLevelSelection;
-  const modelFallback = projectPublicModelFallback(entry.modelFallback);
-  if (modelFallback) {
+  delete projected.compactionCheckpoints;
+  if (entry.modelFallback) {
+    const { prevThinkingLevelSelection: _privateSelection, ...modelFallback } = entry.modelFallback;
     projected.modelFallback = modelFallback;
   } else {
     delete projected.modelFallback;
@@ -67,18 +77,24 @@ function stripPrivateSessionEntryFields(
   return projected;
 }
 
+/** Internal execution retains the immutable sandbox actor, not its display projection. */
+export function projectExecutionSessionEntry(entry: InternalSessionEntry): SessionEntry {
+  return stripPrivateSessionEntryFields(entry, "execution");
+}
+
 export function projectPublicSessionEntry(entry: InternalSessionEntry): SessionEntry {
-  return stripPrivateSessionEntryFields(entry);
+  return stripPrivateSessionEntryFields(entry, "public");
 }
 
 export function projectPublicSessionEntryPatch(
   patch: Partial<InternalSessionEntry>,
 ): Partial<SessionEntry> {
-  return stripPrivateSessionEntryFields(patch);
+  return stripPrivateSessionEntryFields(patch, "public");
 }
 
 // A completed context rewrite invalidates the previous run snapshot, not the transcript ledger.
 export const COMPACTION_RUN_USAGE_CLEAR_PATCH = {
+  usageReport: undefined,
   inputTokens: undefined,
   outputTokens: undefined,
   cacheRead: undefined,
@@ -92,10 +108,10 @@ export function projectCompactionAccountingPatch(
     amount?: number;
     compactionKind?: "context-engine" | "native-harness" | "server-endpoint";
     now?: number;
-    tokensAfter?: number;
-    transcriptByteCompactionLatch?: NonNullable<
-      InternalSessionEntry["transcriptByteCompactionLatch"]
-    >;
+    /** Null invalidates an earlier estimate without incrementing the boundary count. */
+    tokensAfter?: number | null;
+    /** Omission preserves host suppression; null clears it across the worker boundary. */
+    transcriptByteCompactionLatch?: InternalSessionEntry["transcriptByteCompactionLatch"] | null;
   },
 ): Partial<InternalSessionEntry> {
   const incrementBy = Math.max(0, params.amount ?? 1);
@@ -107,8 +123,10 @@ export function projectCompactionAccountingPatch(
       : undefined;
   const patch: Partial<InternalSessionEntry> = {
     compactionCount: (current.compactionCount ?? 0) + incrementBy,
-    transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
     updatedAt: params.now ?? Date.now(),
+    ...(params.transcriptByteCompactionLatch !== undefined
+      ? { transcriptByteCompactionLatch: params.transcriptByteCompactionLatch ?? undefined }
+      : {}),
     ...(incrementBy > 0 || tokensAfter !== undefined ? COMPACTION_RUN_USAGE_CLEAR_PATCH : {}),
     ...(incrementBy > 0 ? { contextBudgetStatus: undefined } : {}),
   };
@@ -121,7 +139,7 @@ export function projectCompactionAccountingPatch(
       totalTokensFresh: true,
       totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     });
-  } else if (incrementBy > 0) {
+  } else if (incrementBy > 0 || params.tokensAfter === null) {
     patch.totalTokensFresh = false;
     patch.totalTokensVersion = undefined;
   }

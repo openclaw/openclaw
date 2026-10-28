@@ -1,18 +1,11 @@
-// Lists available agents and conversation bindings.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { buildSubagentRunReadIndex } from "../../../agents/subagents/registry/subagent-registry-read.js";
-import { buildSubagentRunView } from "../../../agents/subagents/registry/subagent-run-view.js";
 import { getChannelPlugin, normalizeChannelId } from "../../../channels/plugins/index.js";
-import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
+import { listSessionBindingsBySessionsAsync } from "../../../infra/outbound/session-binding-service.js";
 import { resolveChannelAccountId, resolveCommandSurfaceChannel } from "../channel-context.js";
 import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel } from "../subagents-utils.js";
-import { RECENT_WINDOW_MINUTES, type SubagentsCommandContext } from "./shared.js";
-
-function formatConversationBindingText(params: { conversationId: string }): string {
-  return `binding:${params.conversationId}`;
-}
+import type { SubagentsCommandContext } from "./shared.js";
 
 function supportsConversationBindings(channel: string): boolean {
   const channelId = normalizeChannelId(channel);
@@ -24,37 +17,27 @@ function supportsConversationBindings(channel: string): boolean {
   );
 }
 
-export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): CommandHandlerResult {
-  const { params, requesterKey, runs } = ctx;
-  const readIndex = buildSubagentRunReadIndex();
+export async function handleSubagentsAgentsAction(
+  ctx: SubagentsCommandContext,
+): Promise<CommandHandlerResult> {
+  const { params, requesterKey, readContext } = ctx;
   const channel = resolveCommandSurfaceChannel(params);
   const accountId = resolveChannelAccountId(params);
   const currentConversationBindingsSupported = supportsConversationBindings(channel);
-  const bindingService = getSessionBindingService();
-  const bindingsBySession = new Map<string, ReturnType<typeof bindingService.listBySession>>();
+  const { latest, active, recent } = readContext.list.view;
+  const bindingsBySession = await listSessionBindingsBySessionsAsync([
+    requesterKey,
+    ...latest.map((entry) => entry.childSessionKey),
+  ]);
+  params.command.assertOwnerCurrent?.();
+  const resolveSessionBindings = (sessionKey: string) =>
+    (bindingsBySession.get(sessionKey) ?? []).filter(
+      (entry) =>
+        entry.status === "active" &&
+        entry.conversation.channel === channel &&
+        entry.conversation.accountId === accountId,
+    );
 
-  const resolveSessionBindings = (sessionKey: string) => {
-    const cached = bindingsBySession.get(sessionKey);
-    if (cached) {
-      return cached;
-    }
-    const resolved = bindingService
-      .listBySession(sessionKey)
-      .filter(
-        (entry) =>
-          entry.status === "active" &&
-          entry.conversation.channel === channel &&
-          entry.conversation.accountId === accountId,
-      );
-    bindingsBySession.set(sessionKey, resolved);
-    return resolved;
-  };
-
-  const { latest, active, recent } = buildSubagentRunView({
-    runs,
-    recentMinutes: RECENT_WINDOW_MINUTES,
-    countPendingDescendantRuns: (sessionKey) => readIndex.countPendingDescendantRuns(sessionKey),
-  });
   const indexByChildSessionKey = new Map(
     [...active, ...recent].map((entry, idx) => [entry.childSessionKey, idx + 1] as const),
   );
@@ -70,9 +53,7 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
     for (const entry of visibleRuns) {
       const binding = resolveSessionBindings(entry.childSessionKey)[0];
       const bindingText = binding
-        ? formatConversationBindingText({
-            conversationId: binding.conversation.conversationId,
-          })
+        ? `binding:${binding.conversation.conversationId}`
         : currentConversationBindingsSupported
           ? "unbound"
           : "bindings unavailable";
@@ -90,9 +71,7 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
     for (const binding of requesterBindings) {
       const label = normalizeOptionalString(binding.metadata?.label) ?? binding.targetSessionKey;
       lines.push(
-        `- ${label} (${formatConversationBindingText({
-          conversationId: binding.conversation.conversationId,
-        })}, session:${binding.targetSessionKey})`,
+        `- ${label} (binding:${binding.conversation.conversationId}, session:${binding.targetSessionKey})`,
       );
     }
   }

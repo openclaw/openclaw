@@ -1,9 +1,10 @@
 /** Owner-native outbound message lifecycle projection for run inspection. */
-import type { DatabaseSync } from "node:sqlite";
+
 import type {
   DecisionReceiptV1,
   ExecutionIdentityContextV1,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { OutboundMessageAuditEventRecord } from "./audit-event-types.js";
 import {
   countOutboundMessageAuditEventsForRunInDatabase,
@@ -126,7 +127,7 @@ function projectMessageDeliveryReceipt(
 }
 
 export function summarizeMessageDeliveryReceiptsForRunInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     context: ExecutionIdentityContextV1;
     now: number;
@@ -146,7 +147,7 @@ export function summarizeMessageDeliveryReceiptsForRunInDatabase(
 }
 
 export function pageMessageDeliveryReceiptsForRunInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     context: ExecutionIdentityContextV1;
     after?: OutboundMessageAuditEventCursor;

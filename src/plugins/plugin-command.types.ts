@@ -1,4 +1,5 @@
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
+import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type {
@@ -6,54 +7,27 @@ import type {
   PluginConversationBindingRequestParams,
   PluginConversationBindingRequestResult,
 } from "./conversation-binding.types.js";
+import type { PluginRequesterModels } from "./model-catalog.types.js";
 
 type ChannelId = import("../channels/plugins/types.core.js").ChannelId;
 
-type PluginCommandSessionTarget = {
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-};
-
-// =============================================================================
-// Plugin Commands
-// =============================================================================
-
-export type PluginCommandDiagnosticsSession = {
-  /** Stable host session key when available. */
-  sessionKey?: string;
-  /** Ephemeral OpenClaw session id when available. */
-  sessionId?: string;
-  /** Canonical SQLite identity for active transcript access. */
-  sessionTarget?: PluginCommandSessionTarget;
-  /**
-   * Deprecated transcript locator for this OpenClaw session when available.
-   *
-   * SQLite-backed sessions use a `sqlite:<agentId>:<sessionId>:<storePath>`
-   * marker, not a filesystem path. Use session id/key plus transcript-runtime
-   * helpers for active transcript reads.
-   *
-   * @deprecated Use session identity fields with `plugin-sdk/session-transcript-runtime`.
-   */
-  sessionFile?: string;
+export type PluginCommandDiagnosticsSession = Pick<
+  PluginCommandContext,
+  | "sessionKey"
+  | "sessionId"
+  | "sessionTarget"
+  | "sessionFile"
+  | "channelId"
+  | "accountId"
+  | "messageThreadId"
+  | "threadParentId"
+> & {
   /** Embedded agent harness selected for this session. */
   agentHarnessId?: string;
   /** Channel/provider for this session when available. */
   channel?: string;
-  /** Provider channel id when available. */
-  channelId?: ChannelId;
-  /** Account id for multi-account channels when available. */
-  accountId?: string;
-  /** Thread/topic id when available. */
-  messageThreadId?: string | number;
-  /** Parent conversation id for thread-capable channels when available. */
-  threadParentId?: string;
 };
 
-/**
- * Context passed to plugin command handlers.
- */
 export type PluginCommandContext = {
   /** The sender's identifier (for example a channel-scoped user ID) */
   senderId?: string;
@@ -65,6 +39,8 @@ export type PluginCommandContext = {
   isAuthorizedSender: boolean;
   /** Whether the sender is an owner for owner-only command surfaces. */
   senderIsOwner?: boolean;
+  /** Revalidate admitted owner authority before privileged effects, after awaited preparation. */
+  assertOwnerCurrent?: () => void;
   /** Gateway client scopes for internal control-plane callers */
   gatewayClientScopes?: string[];
   /** Host-resolved agent that owns the active session. */
@@ -74,7 +50,7 @@ export type PluginCommandContext = {
   /** Ephemeral host session id for the active conversation when available. */
   sessionId?: string;
   /** Canonical SQLite identity for active transcript access. */
-  sessionTarget?: PluginCommandSessionTarget;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
   /**
    * Deprecated transcript locator for the active OpenClaw session when available.
    *
@@ -105,7 +81,13 @@ export type PluginCommandContext = {
   diagnosticsSessions?: PluginCommandDiagnosticsSession[];
   /** Host-bound runtime capabilities scoped to this command invocation. */
   runtimeContext?: {
+    /** Read-only requester/session-bound catalog, when explicitly requested and admitted. */
+    models?: PluginRequesterModels;
     llm?: Pick<import("./runtime/types-core.js").PluginRuntimeCore["llm"], "complete">;
+    /** Native helpers bound to this authenticated command invocation. */
+    subagents?: import("./runtime/types-native-subagent.js").NativeSubagentRuntime;
+    /** Bounded native schedules admitted by this external requester invocation only. */
+    scheduledTurns?: import("./runtime/types-scheduled-turns.js").PluginCommandScheduledTurns;
     compactCurrent?: () => Promise<{
       compacted: boolean;
       reason?: string;
@@ -126,9 +108,6 @@ export type PluginCommandContext = {
   getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
 };
 
-/**
- * Result returned by a plugin command handler.
- */
 export type PluginCommandResult = ReplyPayload & {
   /** Allows the agent session to continue processing after the command. */
   continueAgent?: boolean;
@@ -136,16 +115,10 @@ export type PluginCommandResult = ReplyPayload & {
   suppressReply?: boolean;
 };
 
-/**
- * Handler function for plugin commands.
- */
 type PluginCommandHandler = (
   ctx: PluginCommandContext,
 ) => PluginCommandResult | Promise<PluginCommandResult>;
 
-/**
- * Definition for a plugin-registered command.
- */
 export const AGENT_PROMPT_SURFACE_KINDS = [
   "openclaw_main",
   /** @deprecated Use openclaw_main. */
@@ -164,6 +137,9 @@ export type AgentPromptGuidanceEntry = {
 };
 
 export type AgentPromptGuidance = string | AgentPromptGuidanceEntry;
+
+/** Opt-in command runtime families; future families extend this union. */
+export type PluginCommandRuntimeCapability = "subagents" | "models" | "scheduledTurns";
 
 export type OpenClawPluginCommandDefinition = {
   /** Command name without leading slash (e.g., "tts") */
@@ -205,6 +181,8 @@ export type OpenClawPluginCommandDefinition = {
   requireAuth?: boolean;
   /** Operator scopes required by gateway clients; command owners may satisfy this on chat surfaces. */
   requiredScopes?: OperatorScope[];
+  /** Optional invocation capabilities; subagents requires a manifest contract and requireAuth: true. */
+  runtimeCapabilities?: readonly PluginCommandRuntimeCapability[];
   /** Whether a trusted bundled handler needs owner status for subcommand-level authorization. */
   exposeSenderIsOwner?: boolean;
   /**
@@ -212,6 +190,5 @@ export type OpenClawPluginCommandDefinition = {
    * by core. External plugins cannot use this field.
    */
   ownership?: "plugin" | "reserved";
-  /** The handler function */
   handler: PluginCommandHandler;
 };

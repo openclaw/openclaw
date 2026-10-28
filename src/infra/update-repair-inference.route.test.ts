@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginSetupRegistry } from "../plugins/setup-registry.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "../system-agent/inference-route.js";
 import { selectUpdateRepairInference } from "./update-repair-inference.js";
 
@@ -18,13 +19,11 @@ vi.mock("../plugins/cli-backends.runtime.js", () => ({
 }));
 vi.mock("../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/auth-profiles/store-runtime.js")>()),
-  loadAuthProfileStoreForRuntime: () => ({ version: 1, profiles: {} }),
+  loadAuthProfileStoreForRuntimeAsync: async () => ({ version: 1, profiles: {} }),
 }));
-vi.mock("../agents/model-auth-availability.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../agents/model-auth-availability.js")>()),
-  createModelAuthAvailabilityResolver: () => ({
-    evaluateModelAuth: () => ({ availability: true }),
-  }),
+vi.mock("../agents/model-auth.js", () => ({
+  hasAvailableAuthForProvider: async () => true,
+  resolveApiKeyForProviderCore: async () => ({ apiKey: "synthetic-credential" }),
 }));
 vi.mock("../system-agent/setup-inference-turn.js", () => ({ runSetupInferenceTurn: probe }));
 
@@ -48,63 +47,53 @@ const config: OpenClawConfig = {
 beforeEach(() => {
   cliBackendsTesting.setDepsForTest({
     resolvePluginSetupCliBackend: () => undefined,
-    resolvePluginSetupRegistry: () => ({
-      providers: [],
-      cliBackends: [],
-      configMigrations: [],
-      autoEnableProbes: [],
-      diagnostics: [],
-    }),
+    resolvePluginSetupRegistry: () => createEmptyPluginSetupRegistry(),
   });
   probe.mockReset().mockResolvedValue({ ok: true, latencyMs: 1, text: "OK", auth: {} });
 });
 
-afterEach(() => {
-  cliBackendsTesting.resetDepsForTest();
-});
+afterEach(() => cliBackendsTesting.resetDepsForTest());
 
-describe("update repair logical routes", () => {
-  it.each([false, true])(
-    "preserves the logical primary before fallbacks when its CLI runtime differs (primary fails: %s)",
-    async (primaryFails) => {
-      const original = await resolveSystemAgentConfiguredRouteFromConfig(config, "owner");
-      expect(original).toMatchObject({
-        runner: "cli",
-        provider: "fixture-cli",
-        modelLabel: "fixture/primary",
-        authProfileId: "owner-profile",
-      });
-      if (primaryFails) {
-        probe.mockResolvedValueOnce({ ok: false, status: "format", error: "model unavailable" });
-      }
+it.each([false, true])(
+  "preserves the logical primary before fallbacks when its CLI runtime differs (primary fails: %s)",
+  async (primaryFails) => {
+    const original = await resolveSystemAgentConfiguredRouteFromConfig(config, "owner");
+    expect(original).toMatchObject({
+      runner: "cli",
+      provider: "fixture-cli",
+      modelLabel: "fixture/primary",
+      authProfileId: "owner-profile",
+    });
+    if (primaryFails) {
+      probe.mockResolvedValueOnce({ ok: false, status: "format", error: "model unavailable" });
+    }
 
-      const selected = await selectUpdateRepairInference({
-        config,
-        runtime: { log() {}, error() {}, exit() {} },
-        signal: new AbortController().signal,
-        timeoutMs: 10_000,
-      });
+    const selected = await selectUpdateRepairInference({
+      config,
+      runtime: { log() {}, error() {}, exit() {} },
+      signal: new AbortController().signal,
+      timeoutMs: 10_000,
+    });
 
-      expect(probe.mock.calls.map(([params]) => params.route.modelLabel)).toEqual(
-        primaryFails ? ["fixture/primary", "fixture/backup"] : ["fixture/primary"],
-      );
-      expect(probe.mock.calls[0]?.[0].route).toMatchObject({
-        provider: "fixture",
-        authProfileId: "owner-profile",
+    expect(probe.mock.calls.map(([params]) => params.route.modelLabel)).toEqual(
+      primaryFails ? ["fixture/primary", "fixture/backup"] : ["fixture/primary"],
+    );
+    expect(probe.mock.calls[0]?.[0].route).toMatchObject({
+      provider: "fixture",
+      authProfileId: "owner-profile",
+      agentDir: "/isolated/owner",
+      agentHarnessRuntimeOverride: "openclaw",
+    });
+    expect(selected).toMatchObject({
+      ok: true,
+      route: {
+        runner: "embedded",
+        agentId: "owner",
         agentDir: "/isolated/owner",
-        agentHarnessRuntimeOverride: "openclaw",
-      });
-      expect(selected).toMatchObject({
-        ok: true,
-        route: {
-          runner: "embedded",
-          agentId: "owner",
-          agentDir: "/isolated/owner",
-          provider: "fixture",
-          model: primaryFails ? "backup" : "primary",
-        },
-        modelFallbacks: primaryFails ? ["fixture/spare"] : ["fixture/backup", "fixture/spare"],
-      });
-    },
-  );
-});
+        provider: "fixture",
+        model: primaryFails ? "backup" : "primary",
+      },
+      modelFallbacks: primaryFails ? ["fixture/spare"] : ["fixture/backup", "fixture/spare"],
+    });
+  },
+);

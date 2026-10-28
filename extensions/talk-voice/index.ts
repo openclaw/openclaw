@@ -1,4 +1,3 @@
-// Talk Voice plugin entrypoint registers its OpenClaw integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -12,12 +11,12 @@ import {
 import { resolveActiveTalkProviderConfig } from "openclaw/plugin-sdk/talk-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 
-function mask(s: string, keep = 6): string {
+function mask(s: string): string {
   const trimmed = s.trim();
-  if (trimmed.length <= keep) {
+  if (trimmed.length <= 6) {
     return "***";
   }
-  return `${trimmed.slice(0, keep)}…`;
+  return `${trimmed.slice(0, 6)}…`;
 }
 
 function isLikelyVoiceId(value: string): boolean {
@@ -41,81 +40,17 @@ function resolveProviderLabel(providerId: string): string {
   }
 }
 
-function formatVoiceMeta(voice: SpeechVoiceOption): string | undefined {
-  const parts = [voice.locale, voice.gender];
-  const personalities = voice.personalities?.filter((value) => value.trim().length > 0) ?? [];
-  if (personalities.length > 0) {
-    parts.push(personalities.join(", "));
-  }
-  const filtered = parts.filter((part): part is string => Boolean(part?.trim()));
-  return filtered.length > 0 ? filtered.join(" · ") : undefined;
-}
-
-function formatVoiceList(voices: SpeechVoiceOption[], limit: number, providerId: string): string {
-  const sliced = voices.slice(0, Math.max(1, Math.min(limit, 50)));
-  const lines: string[] = [];
-  lines.push(`${resolveProviderLabel(providerId)} voices: ${voices.length}`);
-  lines.push("");
-  for (const v of sliced) {
-    const name = (v.name ?? "").trim() || "(unnamed)";
-    const category = (v.category ?? "").trim();
-    const meta = category ? ` · ${category}` : "";
-    lines.push(`- ${name}${meta}`);
-    lines.push(`  id: ${v.id}`);
-    const details = formatVoiceMeta(v);
-    if (details) {
-      lines.push(`  meta: ${details}`);
-    }
-    const description = (v.description ?? "").trim();
-    if (description) {
-      lines.push(`  note: ${description}`);
-    }
-  }
-  if (voices.length > sliced.length) {
-    lines.push("");
-    lines.push(`(showing first ${sliced.length})`);
-  }
-  return lines.join("\n");
-}
-
-function findVoice(voices: SpeechVoiceOption[], query: string): SpeechVoiceOption | null {
-  const q = query.trim();
-  if (!q) {
-    return null;
-  }
-  const lower = normalizeLowercaseStringOrEmpty(q);
-  const byId = voices.find((v) => v.id === q);
-  if (byId) {
-    return byId;
-  }
-  const exactName = voices.find((v) => normalizeOptionalLowercaseString(v.name) === lower);
-  if (exactName) {
-    return exactName;
-  }
-  const partial = voices.find((v) => normalizeLowercaseStringOrEmpty(v.name).includes(lower));
-  return partial ?? null;
-}
-
-function asTrimmedString(value: unknown): string {
-  return normalizeOptionalString(value) ?? "";
-}
-
-function resolveCommandLabel(channel: string): string {
-  return channel === "discord" ? "/talkvoice" : "/voice";
-}
-
 const TALK_ADMIN_SCOPE = "operator.admin";
-
-function requiresAdminToSetVoice(params: {
-  senderIsOwner?: boolean;
-  gatewayClientScopes?: readonly string[];
-}): boolean {
-  const { senderIsOwner, gatewayClientScopes } = params;
-  if (Array.isArray(gatewayClientScopes)) {
-    return !gatewayClientScopes.includes(TALK_ADMIN_SCOPE);
-  }
-  return senderIsOwner !== true;
-}
+// The tool factory runs per invocation; a shared schema keeps host schema caches warm.
+const TALK_VOICE_PARAMETERS = {
+  type: "object",
+  properties: {
+    action: { type: "string", enum: ["list", "set"] },
+    voice: { type: "string", description: "Voice ID from list; required for set." },
+  },
+  required: ["action"],
+  additionalProperties: false,
+};
 
 export default definePluginEntry({
   id: "talk-voice",
@@ -123,22 +58,21 @@ export default definePluginEntry({
   description: "Select the active Talk voice and manage Talk voice configuration",
   register(api: OpenClawPluginApi) {
     const loadTool = createLazyRuntimeModule(() => import("./tool.js"));
-    api.registerTool({
-      name: "talk_voice",
-      label: "Talk Voice",
-      description:
-        "List or change the voice of the active realtime Talk call (browser, iOS, or Android) or Discord voice call in this conversation. Use list to see its provider, model, current voice, available voice IDs, and whether it can change. Use set with an available voice ID to reconnect the active call, preserving conversation and ongoing agent work. Success means the replacement call is ready. Saved voice defaults stay unchanged.",
-      parameters: {
-        type: "object",
-        properties: {
-          action: { type: "string", enum: ["list", "set"] },
-          voice: { type: "string", description: "Voice ID from list; required for set." },
-        },
-        required: ["action"],
-        additionalProperties: false,
+    api.registerTool(
+      (ctx) => {
+        const sessionKey = ctx.sessionKey;
+        return {
+          name: "talk_voice",
+          label: "Talk Voice",
+          description:
+            "List or change the voice of the active realtime Talk call (browser, iOS, or Android) or Discord voice call in this conversation. Use list to see its provider, model, current voice, available voice IDs, and whether it can change. Use set with an available voice ID to reconnect the active call, preserving conversation and ongoing agent work. Success means the replacement call is ready. Saved voice defaults stay unchanged.",
+          parameters: TALK_VOICE_PARAMETERS,
+          execute: async (...args) =>
+            await (await loadTool()).executeTalkVoiceTool(sessionKey, ...args),
+        };
       },
-      execute: async (...args) => await (await loadTool()).executeTalkVoiceTool(...args),
-    });
+      { name: "talk_voice" },
+    );
     api.registerCommand({
       name: "voice",
       nativeNames: {
@@ -148,7 +82,8 @@ export default definePluginEntry({
       acceptsArgs: true,
       exposeSenderIsOwner: true,
       handler: async (ctx) => {
-        const commandLabel = resolveCommandLabel(ctx.channel);
+        const assertOwnerCurrent = ctx.assertOwnerCurrent;
+        const commandLabel = ctx.channel === "discord" ? "/talkvoice" : "/voice";
         const args = ctx.args?.trim() ?? "";
         const tokens = args.split(/\s+/).filter(Boolean);
         const action = normalizeLowercaseStringOrEmpty(tokens[0] ?? "status");
@@ -165,10 +100,10 @@ export default definePluginEntry({
         }
         const providerId = active.provider;
         const providerLabel = resolveProviderLabel(providerId);
-        const apiKey = asTrimmedString(active.config.apiKey);
+        const apiKey = normalizeOptionalString(active.config.apiKey);
         const baseUrl = normalizeOptionalString(active.config.baseUrl);
 
-        const currentVoiceId = asTrimmedString(active.config.voiceId);
+        const currentVoiceId = normalizeOptionalString(active.config.voiceId);
 
         if (action === "status") {
           return {
@@ -189,9 +124,37 @@ export default definePluginEntry({
               apiKey: apiKey || undefined,
               baseUrl,
             });
-            return {
-              text: formatVoiceList(voices, limit, providerId),
-            };
+            const sliced = voices.slice(0, Math.max(1, Math.min(limit, 50)));
+            const lines: string[] = [];
+            lines.push(`${providerLabel} voices: ${voices.length}`);
+            lines.push("");
+            for (const v of sliced) {
+              const name = (v.name ?? "").trim() || "(unnamed)";
+              const category = (v.category ?? "").trim();
+              const meta = category ? ` · ${category}` : "";
+              lines.push(`- ${name}${meta}`);
+              lines.push(`  id: ${v.id}`);
+              const parts = [v.locale, v.gender];
+              const personalities =
+                v.personalities?.filter((value) => value.trim().length > 0) ?? [];
+              if (personalities.length > 0) {
+                parts.push(personalities.join(", "));
+              }
+              const filtered = parts.filter((part): part is string => Boolean(part?.trim()));
+              const details = filtered.length > 0 ? filtered.join(" · ") : undefined;
+              if (details) {
+                lines.push(`  meta: ${details}`);
+              }
+              const description = (v.description ?? "").trim();
+              if (description) {
+                lines.push(`  note: ${description}`);
+              }
+            }
+            if (voices.length > sliced.length) {
+              lines.push("");
+              lines.push(`(showing first ${sliced.length})`);
+            }
+            return { text: lines.join("\n") };
           } catch (error) {
             const message = formatErrorMessage(error);
             return { text: `${providerLabel} voice list failed: ${message}` };
@@ -201,12 +164,11 @@ export default definePluginEntry({
         if (action === "set") {
           // Persistent Talk voice changes are gateway config writes, so the
           // mutating subcommand requires explicit admin or owner authority.
-          if (
-            requiresAdminToSetVoice({
-              senderIsOwner: ctx.senderIsOwner,
-              gatewayClientScopes: ctx.gatewayClientScopes,
-            })
-          ) {
+          const { senderIsOwner, gatewayClientScopes } = ctx;
+          const requiresAdmin = Array.isArray(gatewayClientScopes)
+            ? !gatewayClientScopes.includes(TALK_ADMIN_SCOPE)
+            : senderIsOwner !== true;
+          if (requiresAdmin) {
             return { text: `⚠️ ${commandLabel} set requires operator.admin.` };
           }
 
@@ -226,7 +188,12 @@ export default definePluginEntry({
             const message = formatErrorMessage(error);
             return { text: `${providerLabel} voice lookup failed: ${message}` };
           }
-          const chosen = findVoice(voices, query);
+          const lower = normalizeLowercaseStringOrEmpty(query);
+          const chosen =
+            voices.find((v) => v.id === query) ??
+            voices.find((v) => normalizeOptionalLowercaseString(v.name) === lower) ??
+            voices.find((v) => normalizeLowercaseStringOrEmpty(v.name).includes(lower)) ??
+            null;
           if (!chosen) {
             const hint = isLikelyVoiceId(query) ? query : `"${query}"`;
             return { text: `No voice found for ${hint}. Try: ${commandLabel} list` };
@@ -234,22 +201,23 @@ export default definePluginEntry({
 
           await api.runtime.config.mutateConfigFile({
             afterWrite: { mode: "auto" },
+            writeOptions: {
+              assertCurrent: Array.isArray(ctx.gatewayClientScopes)
+                ? undefined
+                : assertOwnerCurrent,
+            },
             mutate: (draft) => {
-              const nextConfig = {
-                ...draft,
-                talk: {
-                  ...draft.talk,
-                  provider: providerId,
-                  providers: {
-                    ...draft.talk?.providers,
-                    [providerId]: {
-                      ...draft.talk?.providers?.[providerId],
-                      voiceId: chosen.id,
-                    },
+              draft.talk = {
+                ...draft.talk,
+                provider: providerId,
+                providers: {
+                  ...draft.talk?.providers,
+                  [providerId]: {
+                    ...draft.talk?.providers?.[providerId],
+                    voiceId: chosen.id,
                   },
                 },
               };
-              Object.assign(draft, nextConfig);
             },
           });
 

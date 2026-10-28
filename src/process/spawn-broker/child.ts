@@ -4,15 +4,30 @@ import { EventEmitter } from "node:events";
 import { Socket } from "node:net";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../../shared/deferred.js";
+import type { SpawnInitiation } from "../spawn-initiation.js";
 import { releasePipe } from "./pipe.js";
-import { SpawnBrokerError, type BrokerRequest, type BrokerResponse } from "./protocol.js";
+import {
+  serializeBrokerError,
+  SpawnBrokerError,
+  type BrokerRequest,
+  type BrokerResponse,
+} from "./protocol.js";
 
 type ChildMessage = Exclude<
   BrokerResponse,
-  { type: "ready" | "owned" | "pipe" | "pipe-prefix" | "execa-result" }
+  {
+    type:
+      | "ready"
+      | "startup-failed"
+      | "prepared"
+      | "owned"
+      | "pipe"
+      | "pipe-prefix"
+      | "execa-result"
+      | "file-read-chunk"
+      | "file-read-result";
+  }
 >;
-
-type Send = (message: BrokerRequest, handle?: SendHandle) => Promise<void>;
 
 /** Native pipes remain native streams; only lifecycle and IPC cross the broker. */
 export class BrokerChild extends EventEmitter implements ChildProcess {
@@ -45,7 +60,11 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
   constructor(
     readonly requestId: number,
     argv: string[],
-    private readonly transmit: Send,
+    private readonly transmit: (
+      message: BrokerRequest,
+      handle?: SendHandle,
+      initiateSpawn?: SpawnInitiation,
+    ) => Promise<void>,
   ) {
     super();
     this.spawnfile = argv[0]!;
@@ -102,7 +121,7 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
         type: "output-drained",
         id: this.requestId,
         fd,
-        error: error?.message,
+        error: error ? serializeBrokerError(error) : undefined,
       }).catch(() => {});
     };
     socket.once(fd === 0 ? "finish" : "end", () => acknowledge());
@@ -214,6 +233,7 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
         this.connected = false;
         this.channel = undefined;
         this.emit("disconnect");
+        this.finishClose();
         break;
       case "ipc":
         this.emit("message", message.message);
@@ -256,7 +276,7 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
   }
 
   private finishClose(): void {
-    if (!this.exited || this.pipes.size > 0 || this.closed) {
+    if (!this.exited || this.channel || this.pipes.size > 0 || this.closed) {
       return;
     }
     this.closed = true;
@@ -280,6 +300,7 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
     handleOrCallback?: SendHandle | ((error: Error | null) => void),
     optionsOrCallback?: MessageOptions | ((error: Error | null) => void),
     callback?: (error: Error | null) => void,
+    initiateSpawn?: SpawnInitiation,
   ): boolean {
     const done =
       typeof handleOrCallback === "function"
@@ -287,13 +308,12 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
         : typeof optionsOrCallback === "function"
           ? optionsOrCallback
           : callback;
-    if (!this.connected) {
-      const error = new Error("Child process IPC channel is closed");
-      queueMicrotask(() => (done ? done(error) : this.emit("error", error)));
-      return false;
-    }
-    if (this.sends.size >= 1024) {
-      const error = new Error("Child process IPC capacity exceeded");
+    if (!this.connected || this.sends.size >= 1024) {
+      const error = new Error(
+        this.connected
+          ? "Child process IPC capacity exceeded"
+          : "Child process IPC channel is closed",
+      );
       queueMicrotask(() => (done ? done(error) : this.emit("error", error)));
       return false;
     }
@@ -309,9 +329,12 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
       }),
     );
     const handle = typeof handleOrCallback === "function" ? undefined : handleOrCallback;
-    void this.transmit({ type: "ipc", id: this.requestId, sequence, message }, handle).catch(
-      (error: unknown) =>
-        this.finishSend(sequence, toErrorObject(error, "Spawn broker IPC delivery failed")),
+    void this.transmit(
+      { type: "ipc", id: this.requestId, sequence, message },
+      handle,
+      initiateSpawn,
+    ).catch((error: unknown) =>
+      this.finishSend(sequence, toErrorObject(error, "Spawn broker IPC delivery failed")),
     );
     return true;
   }

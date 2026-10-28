@@ -1,10 +1,11 @@
-// Post-install migration tests cover migration prompts and command guidance.
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { summarizeMigrationItems } from "../plugin-sdk/migration.js";
 import type { MigrationProviderPlugin } from "../plugins/types.js";
 import { createNonExitingRuntime } from "../runtime.js";
-import type { WizardPrompter } from "./prompts.js";
+import { offerPostInstallMigrations } from "./setup.post-install-migration.js";
 
 const migrationProviders = vi.hoisted(() => vi.fn<() => MigrationProviderPlugin[]>(() => []));
 vi.mock("../plugins/migration-provider-runtime.js", () => ({
@@ -13,39 +14,23 @@ vi.mock("../plugins/migration-provider-runtime.js", () => ({
     run: (providers: MigrationProviderPlugin[]) => Promise<unknown>,
   ) => await run(migrationProviders()),
 }));
-
-const resolveManifestContractRuntimePluginResolution = vi.hoisted(() =>
-  vi.fn((_params: { contract: string; value?: string }) => ({
-    pluginIds: [] as string[],
-    bundledCompatPluginIds: [] as string[],
-  })),
+const resolveOwnership = vi.hoisted(() =>
+  vi.fn((_params: { value?: string }) => ({ pluginIds: ["codex"], bundledCompatPluginIds: [] })),
 );
+// mock-isolation: Only fixture migration owners participate; do not discover installed plugins.
 vi.mock("../plugins/manifest-contract-runtime.js", () => ({
-  resolveManifestContractRuntimePluginResolution,
+  resolveManifestContractRuntimePluginResolution: resolveOwnership,
 }));
-
-const createMigrationLogger = vi.hoisted(() =>
-  vi.fn(() => ({
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  })),
-);
-vi.mock("../commands/migrate/context.js", () => ({ createMigrationLogger }));
-
-const resolveStateDir = vi.hoisted(() => vi.fn(() => "/tmp/state"));
-vi.mock("../config/paths.js", () => ({ resolveStateDir }));
-
+vi.mock("../commands/migrate/context.js", () => ({
+  createMigrationLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+}));
+vi.mock("../config/paths.js", () => ({ resolveStateDir: () => "/tmp/state" }));
 const migrateDefaultCommand = vi.hoisted(() =>
-  vi.fn(async (_runtime: unknown, _opts: { provider: string }) => undefined),
+  vi.fn<typeof import("../commands/migrate.js").migrateDefaultCommand>(),
 );
 vi.mock("../commands/migrate.js", () => ({ migrateDefaultCommand }));
 
-import { offerPostInstallMigrations } from "./setup.post-install-migration.js";
-
-const originalStdinIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-
+const ttyMock = createCliTtyMock([process.stdin]);
 function buildProvider(overrides: Partial<MigrationProviderPlugin> = {}): MigrationProviderPlugin {
   return {
     id: "codex",
@@ -56,309 +41,120 @@ function buildProvider(overrides: Partial<MigrationProviderPlugin> = {}): Migrat
     ...overrides,
   };
 }
-
-function setOwnership(providerId: string, owningPluginIds: string[]): void {
-  resolveManifestContractRuntimePluginResolution.mockImplementation((params) => {
-    if (params.value === providerId) {
-      return { pluginIds: owningPluginIds, bundledCompatPluginIds: [] };
-    }
-    return { pluginIds: [], bundledCompatPluginIds: [] };
+function runOffer(overrides: Partial<Parameters<typeof offerPostInstallMigrations>[0]> = {}) {
+  return offerPostInstallMigrations({
+    config: {},
+    runtime: createNonExitingRuntime(),
+    prompter,
+    installedPluginIds: ["codex"],
+    ...overrides,
   });
 }
 
-function setProviders(providers: MigrationProviderPlugin[]): void {
-  migrationProviders.mockReturnValue(providers);
-}
+let provider: MigrationProviderPlugin;
+let prompter: ReturnType<typeof createWizardPrompter>;
+beforeEach(() => {
+  provider = buildProvider();
+  prompter = createWizardPrompter();
+  migrationProviders.mockReset().mockReturnValue([provider]);
+  resolveOwnership.mockReset().mockReturnValue({
+    pluginIds: ["codex"],
+    bundledCompatPluginIds: [],
+  });
+  migrateDefaultCommand.mockReset();
+  ttyMock.set(true);
+});
+afterEach(ttyMock.restore);
 
-function setTTY(isTTY: boolean): void {
-  Object.defineProperty(process.stdin, "isTTY", { value: isTTY, configurable: true });
-}
-
-function buildBaseArgs(overrides: {
-  config?: OpenClawConfig;
-  prompter?: WizardPrompter;
-  installedPluginIds?: readonly string[];
-  nonInteractive?: boolean;
-}) {
-  return {
-    config: overrides.config ?? ({} as OpenClawConfig),
-    runtime: createNonExitingRuntime(),
-    prompter: overrides.prompter ?? createWizardPrompter(),
-    installedPluginIds: overrides.installedPluginIds ?? ["codex"],
-    ...(overrides.nonInteractive === undefined ? {} : { nonInteractive: overrides.nonInteractive }),
-  };
-}
-
-describe("offerPostInstallMigrations", () => {
-  beforeEach(() => {
-    // clearAllMocks only resets call history; reset the implementations each
-    // test would customize so prior cases don't leak across this suite.
-    migrationProviders.mockReset().mockReturnValue([]);
-    resolveManifestContractRuntimePluginResolution.mockReset().mockReturnValue({
-      pluginIds: [],
+it.each(["unowned", "absent", "low", "failed"])(
+  "excludes %s providers from migration offers",
+  async (mode) => {
+    const detect = vi.fn<NonNullable<MigrationProviderPlugin["detect"]>>(async () => {
+      if (mode === "failed") {
+        throw new Error("detect failure");
+      }
+      return { found: mode !== "absent", confidence: mode === "low" ? "low" : "high" };
+    });
+    migrationProviders.mockReturnValue([buildProvider({ detect })]);
+    resolveOwnership.mockReturnValue({
+      pluginIds: mode === "unowned" ? ["other"] : ["codex"],
       bundledCompatPluginIds: [],
     });
-    createMigrationLogger.mockReset().mockReturnValue({
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-    });
-    resolveStateDir.mockReset().mockReturnValue("/tmp/state");
-    migrateDefaultCommand.mockReset().mockResolvedValue(undefined);
-    setTTY(true);
-  });
-
-  afterEach(() => {
-    if (originalStdinIsTTYDescriptor) {
-      Object.defineProperty(process.stdin, "isTTY", originalStdinIsTTYDescriptor);
-    } else {
-      delete (process.stdin as Partial<typeof process.stdin>).isTTY;
-    }
-  });
-
-  afterAll(() => {
-    expect(Object.getOwnPropertyDescriptor(process.stdin, "isTTY")).toEqual(
-      originalStdinIsTTYDescriptor,
-    );
-  });
-
-  it("returns early when no plugins were installed in this onboarding step", async () => {
-    const config = { plugins: { entries: { codex: { enabled: true } } } } as OpenClawConfig;
-    const result = await offerPostInstallMigrations(
-      buildBaseArgs({ config, installedPluginIds: [] }),
-    );
-    expect(migrationProviders).not.toHaveBeenCalled();
-    expect(migrateDefaultCommand).not.toHaveBeenCalled();
-    expect(result.config).toBe(config);
-  });
-
-  it("skips providers not owned by any plugin in installedPluginIds", async () => {
-    const provider = buildProvider({ id: "codex" });
-    setProviders([provider]);
-    // Ownership map reports the provider lives on the "codex" plugin, but only
-    // "diagnostics-otel" was installed in this run — so no offer should fire.
-    setOwnership("codex", ["codex"]);
-
-    await offerPostInstallMigrations(buildBaseArgs({ installedPluginIds: ["diagnostics-otel"] }));
-
-    expect(provider.detect).not.toHaveBeenCalled();
-    expect(migrateDefaultCommand).not.toHaveBeenCalled();
-  });
-
-  it("skips providers whose detect reports nothing found", async () => {
-    const provider = buildProvider({
-      detect: vi.fn(async () => ({ found: false })),
-    });
-    setProviders([provider]);
-    setOwnership("codex", ["codex"]);
-    const prompter = createWizardPrompter();
-
-    await offerPostInstallMigrations(buildBaseArgs({ prompter }));
-
-    expect(provider.detect).toHaveBeenCalledOnce();
+    await runOffer();
+    expect(detect).toHaveBeenCalledTimes(mode === "unowned" ? 0 : 1);
     expect(prompter.confirm).not.toHaveBeenCalled();
     expect(migrateDefaultCommand).not.toHaveBeenCalled();
+  },
+);
+
+it("shows provider-owned import scope before asking and respects a decline", async () => {
+  const description = "Import Example skills. Example conversations are not imported.";
+  migrationProviders.mockReturnValue([buildProvider({ label: "Example", description })]);
+  await runOffer();
+  expect(prompter.note).toHaveBeenCalledWith(
+    `${description}\n\nYou will review import options and confirm before applying.`,
+    "Example migration",
+  );
+  expect(prompter.note).toHaveBeenCalledBefore(vi.mocked(prompter.confirm));
+  expect(prompter.confirm).toHaveBeenCalledWith({
+    message: "Review migration from Example at /home/user/.codex?",
+    initialValue: false,
   });
+  expect(migrateDefaultCommand).not.toHaveBeenCalled();
+});
 
-  it("skips providers whose detect confidence is low", async () => {
-    const provider = buildProvider({
-      detect: vi.fn(async () => ({ found: true, confidence: "low" as const })),
-    });
-    setProviders([provider]);
-    setOwnership("codex", ["codex"]);
-    const prompter = createWizardPrompter();
-
-    await offerPostInstallMigrations(buildBaseArgs({ prompter }));
-
-    expect(prompter.confirm).not.toHaveBeenCalled();
-    expect(migrateDefaultCommand).not.toHaveBeenCalled();
-  });
-
-  it("invokes migrateDefaultCommand when the user accepts in interactive mode", async () => {
-    const provider = buildProvider();
-    setProviders([provider]);
-    setOwnership("codex", ["codex"]);
-    const confirm = vi.fn(async (_params: { message: string; initialValue?: boolean }) => true);
-    const prompter = createWizardPrompter({
-      confirm: confirm as WizardPrompter["confirm"],
-    });
-
-    const result = await offerPostInstallMigrations(buildBaseArgs({ prompter }));
-
-    expect(confirm).toHaveBeenCalledOnce();
-    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: false }));
-    expect(migrateDefaultCommand).toHaveBeenCalledOnce();
-    expect(migrateDefaultCommand).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        provider: "codex",
-        configPatchMode: "return",
-        suppressPlanLog: true,
-      }),
-      provider,
-    );
-    expect(result.config).toEqual({});
-  });
-
-  it("returns config patched from migrated config items without mutating the input config", async () => {
-    const provider = buildProvider();
-    setProviders([provider]);
-    setOwnership("codex", ["codex"]);
-    const inputConfig = {
-      plugins: {
-        entries: {
-          codex: {
-            enabled: true,
-            config: {
-              appServer: { sandbox: "workspace-write" },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
+it.each(["empty", "failure", "patch"])("preserves input for %s migration results", async (mode) => {
+  const inputConfig: OpenClawConfig = { env: { vars: { KEEP: "original" } } };
+  const items = [
+    {
+      id: "config:env",
+      kind: "config",
+      action: "merge",
+      status: "migrated",
+      details: { path: ["env"], value: { vars: { IMPORTED: "yes" } } },
+    },
+  ] satisfies import("../plugins/types.js").MigrationPlan["items"];
+  if (mode === "failure") {
+    migrateDefaultCommand.mockRejectedValueOnce(new Error("boom"));
+  }
+  if (mode === "patch") {
     migrateDefaultCommand.mockResolvedValueOnce({
       providerId: "codex",
       source: "/home/user/.codex",
-      summary: {
-        total: 1,
-        planned: 0,
-        migrated: 1,
-        skipped: 0,
-        conflicts: 0,
-        errors: 0,
-        sensitive: 0,
-      },
-      items: [
-        {
-          id: "config:codex-plugins",
-          kind: "config",
-          action: "merge",
-          status: "migrated",
-          details: {
-            path: ["plugins", "entries", "codex"],
-            value: {
-              enabled: true,
-              config: {
-                codexPlugins: {
-                  enabled: true,
-                  allow_destructive_actions: true,
-                  plugins: {
-                    gmail: {
-                      enabled: true,
-                      marketplaceName: "openai-curated",
-                      pluginName: "gmail",
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      ],
-    } as never);
-    const prompter = createWizardPrompter({
-      confirm: vi.fn(async () => true) as WizardPrompter["confirm"],
+      summary: summarizeMigrationItems(items),
+      items,
     });
-
-    const result = await offerPostInstallMigrations(
-      buildBaseArgs({ config: inputConfig, prompter }),
-    );
-
-    expect(migrateDefaultCommand).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        configOverride: inputConfig,
-        configPatchMode: "return",
-      }),
-      provider,
-    );
-    expect(result.config).not.toBe(inputConfig);
-    expect(result.config.plugins?.entries?.codex?.config).toEqual({
-      appServer: { sandbox: "workspace-write" },
-      codexPlugins: {
-        enabled: true,
-        allow_destructive_actions: true,
-        plugins: {
-          gmail: {
-            enabled: true,
-            marketplaceName: "openai-curated",
-            pluginName: "gmail",
-          },
-        },
-      },
-    });
-    expect(inputConfig.plugins?.entries?.codex?.config).toEqual({
-      appServer: { sandbox: "workspace-write" },
-    });
+  }
+  vi.mocked(prompter.confirm).mockResolvedValue(true);
+  const result = await runOffer({ config: inputConfig });
+  expect(migrateDefaultCommand.mock.calls[0]?.[1]).toMatchObject({
+    provider: "codex",
+    configOverride: inputConfig,
+    configPatchMode: "return",
   });
-
-  it("does not invoke migrateDefaultCommand when the user declines", async () => {
-    const provider = buildProvider();
-    setProviders([provider]);
-    setOwnership("codex", ["codex"]);
-    const prompter = createWizardPrompter({
-      confirm: vi.fn(async () => false) as WizardPrompter["confirm"],
-    });
-
-    await offerPostInstallMigrations(buildBaseArgs({ prompter }));
-
-    expect(migrateDefaultCommand).not.toHaveBeenCalled();
+  expect(migrateDefaultCommand.mock.calls[0]?.[2]).toBe(provider);
+  expect(result.config === inputConfig).toBe(mode !== "patch");
+  expect(result.config).toEqual({
+    env: {
+      vars: mode === "patch" ? { KEEP: "original", IMPORTED: "yes" } : { KEEP: "original" },
+    },
   });
+  expect(inputConfig).toEqual({ env: { vars: { KEEP: "original" } } });
+});
 
-  it("never prompts or applies in non-interactive mode", async () => {
-    const provider = buildProvider();
-    setProviders([provider]);
-    setOwnership("codex", ["codex"]);
-    const prompter = createWizardPrompter();
-
-    await offerPostInstallMigrations(buildBaseArgs({ prompter, nonInteractive: true }));
-
-    expect(prompter.confirm).not.toHaveBeenCalled();
-    expect(migrateDefaultCommand).not.toHaveBeenCalled();
+it.each(["no plugins", "flag", "stdin"])("skips migration when %s", async (mode) => {
+  const config: OpenClawConfig = { env: { vars: { KEEP: "original" } } };
+  ttyMock.set(mode !== "stdin");
+  const result = await runOffer({
+    config,
+    nonInteractive: mode === "flag",
+    installedPluginIds: mode === "no plugins" ? [] : ["codex"],
   });
-
-  it("treats a non-TTY stdin as non-interactive even when nonInteractive flag is unset", async () => {
-    setTTY(false);
-    const provider = buildProvider();
-    setProviders([provider]);
-    setOwnership("codex", ["codex"]);
-    const prompter = createWizardPrompter();
-
-    await offerPostInstallMigrations(buildBaseArgs({ prompter }));
-
-    expect(prompter.confirm).not.toHaveBeenCalled();
-    expect(migrateDefaultCommand).not.toHaveBeenCalled();
-  });
-
-  it("swallows migrateDefaultCommand failures so onboarding can continue", async () => {
-    const provider = buildProvider();
-    setProviders([provider]);
-    setOwnership("codex", ["codex"]);
-    migrateDefaultCommand.mockRejectedValueOnce(new Error("boom"));
-    const prompter = createWizardPrompter({
-      confirm: vi.fn(async () => true) as WizardPrompter["confirm"],
-    });
-
-    await expect(offerPostInstallMigrations(buildBaseArgs({ prompter }))).resolves.toEqual({
-      config: {},
-    });
-    expect(migrateDefaultCommand).toHaveBeenCalledOnce();
-  });
-
-  it("falls back to a hint when detect throws", async () => {
-    const provider = buildProvider({
-      detect: vi.fn(async () => {
-        throw new Error("detect failure");
-      }),
-    });
-    setProviders([provider]);
-    setOwnership("codex", ["codex"]);
-    const prompter = createWizardPrompter();
-
-    await offerPostInstallMigrations(buildBaseArgs({ prompter }));
-
-    expect(prompter.confirm).not.toHaveBeenCalled();
-    expect(migrateDefaultCommand).not.toHaveBeenCalled();
-  });
+  if (mode === "no plugins") {
+    expect(migrationProviders).not.toHaveBeenCalled();
+  }
+  expect(result.config).toBe(config);
+  expect(prompter.note).not.toHaveBeenCalled();
+  expect(prompter.confirm).not.toHaveBeenCalled();
+  expect(migrateDefaultCommand).not.toHaveBeenCalled();
 });

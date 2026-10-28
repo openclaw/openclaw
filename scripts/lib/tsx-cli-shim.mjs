@@ -6,12 +6,24 @@ import { constants as osConstants } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ensureRepoNodeModulesLink } from "./local-check-runtime.mts";
+import { hasManagedCleanupParent } from "./managed-cleanup-handoff.mts";
 
 const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 const DEFAULT_FORCE_KILL_DELAY_MS = 5_000;
+const FORWARDED_COMPILER_FLAGS = new Set([
+  "--maglev",
+  "--no-maglev",
+  "--concurrent-sparkplug",
+  "--no-concurrent-sparkplug",
+]);
 const SHIM_CHECKOUT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-function resolveConfiguredModulesDir(checkoutRoot) {
+// Forward compiler policy without replaying parent loaders, evals, or debuggers.
+export function resolveForwardedNodeCompilerArgs(execArgv = process.execArgv) {
+  return execArgv.filter((arg) => FORWARDED_COMPILER_FLAGS.has(arg));
+}
+
+export function resolveConfiguredModulesDir(checkoutRoot) {
   const modulesDir =
     (process.env.PNPM_CONFIG_MODULES_DIR ?? process.env.pnpm_config_modules_dir) ||
     process.env.npm_config_modules_dir;
@@ -43,11 +55,26 @@ export function resolveTsxImport(checkoutRoot) {
   );
 }
 
-export async function registerToolingTsx() {
+function configureToolingTsx() {
   // tsx indexes the entire shared disk cache before expiration, coupling startup
   // to other checkouts' cache size. This flag retains its in-process Map and
   // reaches descendant tooling before their loaders initialize.
   process.env.TSX_DISABLE_CACHE = "1";
+  // Fixtures run this checkout's tooling from a cwd without a tsconfig, which
+  // disables tsx paths mapping for workspace imports. Pin this checkout's
+  // tsconfig only for that foreign cwd; explicit env and cwd tsconfigs win.
+  const checkoutTsconfig = path.join(SHIM_CHECKOUT_ROOT, "tsconfig.json");
+  if (
+    process.env.TSX_TSCONFIG_PATH === undefined &&
+    !existsSync(path.join(process.cwd(), "tsconfig.json")) &&
+    existsSync(checkoutTsconfig)
+  ) {
+    process.env.TSX_TSCONFIG_PATH = checkoutTsconfig;
+  }
+}
+
+export async function registerToolingTsx() {
+  configureToolingTsx();
   await import(resolveTsxImport(SHIM_CHECKOUT_ROOT));
 }
 
@@ -79,11 +106,75 @@ function signalChild(child, signal, detached) {
   }
 }
 
-async function runCliShimInner(moduleUrl, options, nodeArgs) {
+async function runCliShimProcess(moduleUrl, options, nodeArgs, onReady) {
+  // Native entrypoints need the explicit dependency link without loading TSX.
+  if (nodeArgs.length === 0) {
+    const modulesDir = resolveConfiguredModulesDir(SHIM_CHECKOUT_ROOT);
+    if (modulesDir) {
+      ensureRepoNodeModulesLink(modulesDir, { cwd: SHIM_CHECKOUT_ROOT });
+    }
+  }
+  const nodeExecutable = options.executable ?? (process.versions.bun ? "node" : process.execPath);
+  // The inherited-stdio Vitest wrapper alone supplies an artifact owner here.
+  const commandArgs = [
+    ...nodeArgs,
+    ...resolveForwardedNodeCompilerArgs(),
+    ...(options.execArgv ?? []),
+    // This child entry belongs to the worker asset inventory, not this module's import graph.
+    ...(options.workerRun
+      ? [
+          path.join(SHIM_CHECKOUT_ROOT, "scripts/lib/vitest-worker-bootstrap.mts"),
+          options.workerRun.descriptor.directory,
+        ]
+      : []),
+    fileURLToPath(new URL(options.implementation, moduleUrl)),
+    ...process.argv.slice(2),
+  ];
+  if (
+    options.terminationOwner === "implementation" &&
+    options.detached !== false &&
+    hasManagedCleanupParent()
+  ) {
+    // A managed parent hands cleanup to this responsive shim. Synchronous
+    // preparation stays in our child's group until its own owner is ready.
+    const { runManagedCommand } = await import("./managed-child-process.mts");
+    let childSignal;
+    let interrupted = false;
+    const exitCode = await runManagedCommand({
+      bin: nodeExecutable,
+      args: commandArgs,
+      cwd: process.cwd(),
+      env: process.env,
+      stdio: options.workerRun
+        ? ["inherit", "inherit", "inherit", "ipc"]
+        : (options.stdio ?? "inherit"),
+      signalKillGraceMs: options.forceKillDelayMs,
+      requireProcessTreeExit: true,
+      waitForCleanupRelease: true,
+      shell: false,
+      onSignal() {
+        interrupted = true;
+      },
+      onReady(child) {
+        onReady?.(child);
+        child.once("exit", (_code, signal) => {
+          childSignal = signal;
+        });
+      },
+    });
+    writeFailureTrailer(options.failureTool, exitCode);
+    if (childSignal && !interrupted) {
+      process.kill(process.pid, childSignal);
+      return { interrupted };
+    }
+    process.exitCode = exitCode;
+    return { interrupted };
+  }
   const detached = options.detached ?? (process.platform !== "win32" && !process.stdin.isTTY);
   const forceKillDelayMs = options.forceKillDelayMs ?? DEFAULT_FORCE_KILL_DELAY_MS;
   let child = null;
   let forceKillTimer = null;
+  let interrupted = false;
   const signalHandlers = new Map();
   const cleanup = () => {
     if (forceKillTimer) {
@@ -99,6 +190,7 @@ async function runCliShimInner(moduleUrl, options, nodeArgs) {
 
   for (const signal of FORWARDED_SIGNALS) {
     const handler = () => {
+      interrupted = true;
       signalChild(child, signal, detached);
       // A lifecycle-owning implementation must finish killing its own child groups.
       // A competing shim deadline can kill that owner and orphan those children.
@@ -116,26 +208,15 @@ async function runCliShimInner(moduleUrl, options, nodeArgs) {
   process.on("exit", exitHandler);
 
   try {
-    // Native entrypoints need the explicit dependency link without loading TSX.
-    if (nodeArgs.length === 0) {
-      const modulesDir = resolveConfiguredModulesDir(SHIM_CHECKOUT_ROOT);
-      if (modulesDir) {
-        ensureRepoNodeModulesLink(modulesDir, { cwd: SHIM_CHECKOUT_ROOT });
-      }
-    }
-    const implementationUrl = new URL(options.implementation, moduleUrl);
-    const implementationPath = fileURLToPath(implementationUrl);
-    const nodeExecutable = options.executable ?? (process.versions.bun ? "node" : process.execPath);
-    child = spawn(
-      nodeExecutable,
-      [...nodeArgs, ...(options.execArgv ?? []), implementationPath, ...process.argv.slice(2)],
-      {
-        cwd: process.cwd(),
-        detached,
-        env: process.env,
-        stdio: options.stdio ?? "inherit",
-      },
-    );
+    child = spawn(nodeExecutable, commandArgs, {
+      cwd: process.cwd(),
+      detached,
+      env: process.env,
+      stdio: options.workerRun
+        ? ["inherit", "inherit", "inherit", "ipc"]
+        : (options.stdio ?? "inherit"),
+    });
+    onReady?.(child);
     const result = await new Promise((resolve, reject) => {
       child.once("error", reject);
       child.once("close", (code, signal) => resolve({ code, signal }));
@@ -145,26 +226,60 @@ async function runCliShimInner(moduleUrl, options, nodeArgs) {
     if (result.signal) {
       writeFailureTrailer(options.failureTool, signalExitCode(result.signal));
       process.kill(process.pid, result.signal);
-      return;
+      return { interrupted };
     }
-    const exitCode = result.code ?? 1;
+    const exitCode = result.code ?? options.failureExitCode ?? 1;
     writeFailureTrailer(options.failureTool, exitCode);
     process.exitCode = exitCode;
+    return { interrupted };
   } catch (error) {
     cleanup();
+    if (options.workerRun) {
+      throw error;
+    }
     console.error(error);
-    writeFailureTrailer(options.failureTool, 1);
-    process.exitCode = 1;
+    const exitCode = options.failureExitCode ?? 1;
+    writeFailureTrailer(options.failureTool, exitCode);
+    process.exitCode = exitCode;
+    return { interrupted };
+  }
+}
+
+async function runCliShimInner(moduleUrl, options, nodeArgs) {
+  if (!options.workerRun) {
+    return runCliShimProcess(moduleUrl, options, nodeArgs);
+  }
+  // The forwarding shim owns its child's artifact loan until managed cleanup joins.
+  const completion = Promise.withResolvers();
+  /** @type {Promise<unknown> | undefined} */
+  let borrower;
+  try {
+    const result = await runCliShimProcess(moduleUrl, options, nodeArgs, (child) => {
+      borrower = options.workerRun.borrow(child, completion.promise);
+    });
+    completion.resolve(process.exitCode ?? 0);
+    return result;
+  } catch (error) {
+    if (borrower) {
+      completion.reject(error);
+    }
+    throw error;
+  } finally {
+    if (borrower) {
+      await borrower;
+    }
   }
 }
 
 async function runCliShim(moduleUrl, options, nodeArgs) {
   try {
-    await runCliShimInner(moduleUrl, options, nodeArgs);
+    return await runCliShimInner(moduleUrl, options, nodeArgs);
   } catch (error) {
     console.error(error);
-    writeFailureTrailer(options.failureTool, 1);
-    process.exitCode = 1;
+    const exitCode = options.failureExitCode ?? 1;
+    writeFailureTrailer(options.failureTool, exitCode);
+    process.exitCode = exitCode;
+    return { interrupted: false };
   }
 }
 
@@ -172,6 +287,25 @@ export function runNodeCliShim(moduleUrl, options = {}) {
   return runCliShim(moduleUrl, options, []);
 }
 
-export function runTsxCliShim(moduleUrl, options = {}) {
+export async function runTsxCliShim(moduleUrl, options = {}) {
+  if (options.toolingDependencies) {
+    try {
+      const { toolingDependencyOptions } = await import("./tooling-dependencies.mjs");
+      const tooling = toolingDependencyOptions(SHIM_CHECKOUT_ROOT, options.toolingDependencies, {
+        tsx: true,
+      });
+      if (tooling.tsxImport) {
+        configureToolingTsx();
+        // Install qualified resolution before TSX loads source imports. Keeping
+        // its absolute preload also preserves fork() without a workspace link.
+        return runCliShim(moduleUrl, options, [...tooling.execArgv, "--import", tooling.tsxImport]);
+      }
+    } catch (error) {
+      console.error(error);
+      writeFailureTrailer(options.failureTool, 1);
+      process.exitCode = 1;
+      return { interrupted: false };
+    }
+  }
   return runCliShim(moduleUrl, options, ["--import", new URL("../tsx.mjs", import.meta.url).href]);
 }

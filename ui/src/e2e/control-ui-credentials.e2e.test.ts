@@ -1,36 +1,32 @@
 // Control UI tests cover browser credential submission and visible recovery.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import type { Page } from "playwright";
+import { beforeEach, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
-  canRunPlaywrightChromium,
   controlUiE2eWaitTimeoutMs,
   installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI Gateway secret E2E",
+  startServerBeforeBrowser: true,
+  trackBrowserContexts: true,
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not installed or cannot start at ${executablePath}.`,
+});
 let artifactDir: string;
 beforeEach(() => {
   artifactDir = createControlUiE2eArtifactDir("control-ui-credentials");
 });
 const viewport = { height: 900, width: 1280 };
-
-let browser: Browser;
-let server: ControlUiE2eServer;
-const openContexts = new Set<BrowserContext>();
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
 
@@ -39,24 +35,53 @@ function readConnectAuth(request: MockGatewayRequest): Record<string, unknown> |
   return auth == null ? undefined : requireRecord(auth);
 }
 
-async function createCredentialPage(): Promise<{
-  context: BrowserContext;
-  gateway: MockGatewayControls;
-  page: Page;
-}> {
-  const context = await browser.newContext({
+async function createCredentialPage() {
+  const context = await suite.newBrowserContext({
     locale: "en-US",
-    recordVideo: { dir: artifactDir, size: viewport },
+    recordVideo:
+      process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+        ? { dir: artifactDir, size: viewport }
+        : undefined,
     serviceWorkers: "block",
     viewport,
   });
-  openContexts.add(context);
   const page = await context.newPage();
   page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
   const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
-  const response = await page.goto(server.baseUrl);
+  const response = await page.goto(suite.server.baseUrl);
   expect(response?.status()).toBe(200);
   return { context, gateway, page };
+}
+
+type CredentialFlow = Awaited<ReturnType<typeof createCredentialPage>>;
+
+async function submitSecret({ page, gateway }: CredentialFlow, secret: string) {
+  const previousCount = (await gateway.getRequests("connect")).length;
+  await gateway.deferNext("connect");
+  await page.getByLabel("Gateway secret", { exact: true }).fill(secret);
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  expect(readConnectAuth(await waitForNextConnect(gateway, previousCount))).toMatchObject({
+    token: secret,
+    password: secret,
+  });
+}
+
+async function captureCredentialPage(page: Page, fileName: string, rejected = false) {
+  await writeFile(
+    path.join(artifactDir, fileName),
+    await takeControlUiViewportScreenshot(
+      page,
+      page.locator(rejected ? ".login-gate__card" : ".shell"),
+      [page.locator(rejected ? ".login-gate__failure-steps" : "#control-ui-main")],
+    ),
+  );
+}
+
+async function acceptSecret({ page, gateway }: CredentialFlow, fileName: string) {
+  await gateway.resolveDeferred("connect");
+  await page.locator("openclaw-app-shell").waitFor();
+  expect(await page.locator("openclaw-login-gate").count()).toBe(0);
+  await captureCredentialPage(page, fileName);
 }
 
 async function waitForNextConnect(
@@ -89,28 +114,7 @@ async function rejectInitialConnect(
   await page.locator("openclaw-login-gate").waitFor();
 }
 
-describeControlUiE2e("Control UI Gateway secret E2E", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(
-        `Playwright Chromium is not installed or cannot start at ${chromiumExecutablePath}.`,
-      );
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await Promise.all([...openContexts].map((context) => context.close().catch(() => {})));
-    await browser?.close();
-    await server?.close();
-  });
-
-  afterEach(async () => {
-    await Promise.all([...openContexts].map((context) => context.close().catch(() => {})));
-    openContexts.clear();
-  });
-
+suite.define(() => {
   it("submits one secret for both authentication modes with visible acceptance and rejection recovery", async () => {
     const tokenFlow = await createCredentialPage();
     const tokenPageErrors: string[] = [];
@@ -122,29 +126,10 @@ describeControlUiE2e("Control UI Gateway secret E2E", () => {
       "unauthorized: gateway token required",
     );
 
-    const tokenInput = tokenFlow.page.getByLabel("Gateway secret", { exact: true });
-    const tokenConnectCount = (await tokenFlow.gateway.getRequests("connect")).length;
-    await tokenFlow.gateway.deferNext("connect");
-    await tokenInput.fill("token-accepted-by-mock");
-    await tokenFlow.page.getByRole("button", { name: "Connect", exact: true }).click();
-
-    const tokenConnect = await waitForNextConnect(tokenFlow.gateway, tokenConnectCount);
-    expect(readConnectAuth(tokenConnect)).toMatchObject({
-      token: "token-accepted-by-mock",
-      password: "token-accepted-by-mock",
-    });
-    await tokenFlow.gateway.resolveDeferred("connect");
-    await tokenFlow.page.locator("openclaw-app-shell").waitFor();
-    expect(await tokenFlow.page.locator("openclaw-login-gate").count()).toBe(0);
-    await writeFile(
-      path.join(artifactDir, "01-token-connected.png"),
-      await takeControlUiViewportScreenshot(tokenFlow.page, tokenFlow.page.locator(".shell"), [
-        tokenFlow.page.locator("#control-ui-main"),
-      ]),
-    );
+    await submitSecret(tokenFlow, "token-accepted-by-mock");
+    await acceptSecret(tokenFlow, "01-token-connected.png");
     expect(tokenPageErrors).toEqual([]);
-    await tokenFlow.context.close();
-    openContexts.delete(tokenFlow.context);
+    await suite.closeBrowserContext(tokenFlow.context);
 
     const passwordFlow = await createCredentialPage();
     const passwordPageErrors: string[] = [];
@@ -156,17 +141,7 @@ describeControlUiE2e("Control UI Gateway secret E2E", () => {
       "unauthorized: gateway password required",
     );
 
-    const passwordInput = passwordFlow.page.getByLabel("Gateway secret", { exact: true });
-    const rejectedConnectCount = (await passwordFlow.gateway.getRequests("connect")).length;
-    await passwordFlow.gateway.deferNext("connect");
-    await passwordInput.fill("password-rejected-by-mock");
-    await passwordFlow.page.getByRole("button", { name: "Connect", exact: true }).click();
-
-    const rejectedConnect = await waitForNextConnect(passwordFlow.gateway, rejectedConnectCount);
-    expect(readConnectAuth(rejectedConnect)).toMatchObject({
-      token: "password-rejected-by-mock",
-      password: "password-rejected-by-mock",
-    });
+    await submitSecret(passwordFlow, "password-rejected-by-mock");
     await passwordFlow.gateway.rejectDeferred("connect", {
       code: "UNAUTHORIZED",
       details: { code: ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH },
@@ -183,56 +158,9 @@ describeControlUiE2e("Control UI Gateway secret E2E", () => {
     ).toContain("gateway password mismatch");
     expect(await failure.locator(".login-gate__failure-steps").isVisible()).toBe(true);
     expect(await passwordFlow.page.locator("openclaw-app-shell").count()).toBe(0);
-    await writeFile(
-      path.join(artifactDir, "02-password-rejected.png"),
-      await takeControlUiViewportScreenshot(
-        passwordFlow.page,
-        passwordFlow.page.locator(".login-gate__card"),
-        [failure.locator(".login-gate__failure-steps")],
-      ),
-    );
-
-    const recoveredConnectCount = (await passwordFlow.gateway.getRequests("connect")).length;
-    await passwordFlow.gateway.deferNext("connect");
-    await passwordInput.fill("password-accepted-by-mock");
-    await passwordFlow.page.getByRole("button", { name: "Connect", exact: true }).click();
-
-    const recoveredConnect = await waitForNextConnect(passwordFlow.gateway, recoveredConnectCount);
-    expect(readConnectAuth(recoveredConnect)).toMatchObject({
-      token: "password-accepted-by-mock",
-      password: "password-accepted-by-mock",
-    });
-    await passwordFlow.gateway.resolveDeferred("connect");
-    await passwordFlow.page.locator("openclaw-app-shell").waitFor();
-    expect(await passwordFlow.page.locator("openclaw-login-gate").count()).toBe(0);
-    await writeFile(
-      path.join(artifactDir, "03-password-recovered.png"),
-      await takeControlUiViewportScreenshot(
-        passwordFlow.page,
-        passwordFlow.page.locator(".shell"),
-        [passwordFlow.page.locator("#control-ui-main")],
-      ),
-    );
+    await captureCredentialPage(passwordFlow.page, "02-password-rejected.png", true);
+    await submitSecret(passwordFlow, "password-accepted-by-mock");
+    await acceptSecret(passwordFlow, "03-password-recovered.png");
     expect(passwordPageErrors).toEqual([]);
-
-    await writeFile(
-      path.join(artifactDir, "behavior-summary.json"),
-      `${JSON.stringify(
-        {
-          password: {
-            rejectedOutcome: "visible-error",
-            recoveredOutcome: "connected",
-            submittedInConnectFrame: true,
-          },
-          token: {
-            acceptedOutcome: "connected",
-            submittedInConnectFrame: true,
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
   });
 });

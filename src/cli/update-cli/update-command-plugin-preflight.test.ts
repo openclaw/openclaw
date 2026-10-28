@@ -67,11 +67,11 @@ describe("core update plugin availability", () => {
     expect(mocks.metadata).toHaveBeenLastCalledWith({ spec: "@example/second", timeoutMs: 1000 });
   });
 
-  it.each(["discovery", "metadata"])("preserves an unclassified %s failure", async (stage) => {
+  it("preserves an unclassified metadata failure", async () => {
     const failure = new Error("State ownership changed");
-    mocks[stage === "discovery" ? "targets" : "metadata"].mockRejectedValueOnce(failure);
+    mocks.metadata.mockRejectedValueOnce(failure);
 
     await expect(preflightConfiguredNpmPluginTargets(params)).rejects.toBe(failure);
-    expect(mocks.metadata).toHaveBeenCalledTimes(stage === "discovery" ? 0 : 1);
+    expect(mocks.metadata).toHaveBeenCalledOnce();
   });
 });

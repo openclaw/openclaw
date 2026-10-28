@@ -1,13 +1,12 @@
 /** Worker-only canonical context construction and bounded value helpers. */
-import type { DatabaseSync } from "node:sqlite";
-import type { ExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/index.js";
-import { validateExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/index.js";
+
+import { validateExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/audit-run-validators.js";
+import type { ExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/schema/audit-run.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { pseudonymizeExecutionIdentityRef } from "./audit-identity.js";
 import type { ExecutionIdentityAdmissionEnvelope } from "./execution-identity-admission.js";
 import { sortUniqueExecutionIdentityEntries } from "./execution-identity-ordering.js";
 import { executionIdentitySpawnAdmission } from "./execution-identity-spawn-admission.js";
-
-const EXECUTION_IDENTITY_CONTEXT_MAX_BYTES = 16 * 1024;
 
 export function ensureBoundedExecutionIdentityRef(
   value: string,
@@ -36,7 +35,7 @@ export function freezeExecutionIdentityContext<T>(value: T, seen = new WeakSet<o
 }
 
 function hmacRef(
-  db: DatabaseSync,
+  db: EngineConnection,
   kind: Parameters<typeof pseudonymizeExecutionIdentityRef>[0]["kind"],
   scope: string,
   value: string,
@@ -50,7 +49,7 @@ function hmacRef(
 }
 
 export function buildExecutionIdentityContext(
-  db: DatabaseSync,
+  db: EngineConnection,
   envelope: ExecutionIdentityAdmissionEnvelope,
   fixed: { contextId: string; createdAt: number },
 ): ExecutionIdentityContextV1 {
@@ -154,6 +153,23 @@ export function buildExecutionIdentityContext(
     createdAt: fixed.createdAt,
     trustDomain: { kind: "gateway-cell", domainRef, state: "present" },
     invoker,
+    ...(envelope.representedSubject
+      ? {
+          representedSubject: {
+            state: "present",
+            principal: {
+              kind: "person",
+              domainRef,
+              principalRef: hmacRef(
+                db,
+                "principal",
+                `${domainRef}:person`,
+                envelope.representedSubject.rawPrincipalRef,
+              ),
+            },
+          },
+        }
+      : {}),
     ingress: {
       kind: envelope.ingress.kind,
       boundary: ensureBoundedExecutionIdentityRef(envelope.ingress.boundary, "ingress boundary"),
@@ -186,10 +202,6 @@ export function buildExecutionIdentityContext(
   };
   if (!validateExecutionIdentityContextV1(context)) {
     throw new Error("prepared execution identity context violates the V1 contract");
-  }
-  const encoded = JSON.stringify(context);
-  if (Buffer.byteLength(encoded, "utf8") > EXECUTION_IDENTITY_CONTEXT_MAX_BYTES) {
-    throw new Error("prepared execution identity context exceeds 16 KiB");
   }
   return freezeExecutionIdentityContext(context);
 }

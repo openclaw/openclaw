@@ -1,6 +1,7 @@
 // Narrow agent-scope helpers for control-plane and migration paths.
 
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentIds as readAgentIds } from "../agents/agent-roster.js";
 import {
   AgentSelectionRequiredError,
   tryResolveAmbientOwnerAgentId,
@@ -12,7 +13,6 @@ import {
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 
 export {
-  listAgentIds,
   resolveAgentConfig,
   resolveAgentDir,
   resolveDefaultAgentId,
@@ -20,6 +20,11 @@ export {
 } from "../agents/agent-scope.js";
 
 export { resolveSessionAgentIdStrict, resolveSessionAgentIdsStrict };
+
+/** Preserve the SDK's writable array while core readers share immutable roster facts. */
+function listAgentIdsCompatibility(config: Parameters<typeof readAgentIds>[0]): string[] {
+  return [...readAgentIds(config)];
+}
 
 type SessionAgentResolutionParams = Parameters<typeof resolveSessionAgentIdsStrict>[0];
 
@@ -32,11 +37,11 @@ function resolveSessionAgentIdsCompatibility(params: SessionAgentResolutionParam
   defaultAgentId: string;
   sessionAgentId: string;
 } {
+  const normalized = { ...params, agentId: normalizeOptionalString(params.agentId) };
   try {
-    return resolveSessionAgentIdsStrict(params);
+    return resolveSessionAgentIdsStrict(normalized);
   } catch (error) {
-    const requestedAgentId =
-      normalizeOptionalString(params.agentId) ?? normalizeOptionalString(params.fallbackAgentId);
+    const requestedAgentId = normalized.agentId ?? normalizeOptionalString(params.fallbackAgentId);
     const config = params.config ?? {};
     if (
       !(error instanceof AgentSelectionRequiredError) ||
@@ -49,7 +54,7 @@ function resolveSessionAgentIdsCompatibility(params: SessionAgentResolutionParam
     if (!ambientAgentId) {
       throw error;
     }
-    return resolveSessionAgentIdsStrict({ ...params, fallbackAgentId: ambientAgentId });
+    return resolveSessionAgentIdsStrict({ ...normalized, fallbackAgentId: ambientAgentId });
   }
 }
 
@@ -63,6 +68,7 @@ function resolveSessionAgentIdCompatibility(params: SessionAgentResolutionParams
 }
 
 export {
+  listAgentIdsCompatibility as listAgentIds,
   resolveSessionAgentIdCompatibility as resolveSessionAgentId,
   resolveSessionAgentIdsCompatibility as resolveSessionAgentIds,
 };

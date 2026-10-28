@@ -21,24 +21,31 @@ import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.IdlingResource
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.click
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.SavedStateHandle
@@ -86,6 +93,7 @@ class ChatCompletedWorkLayoutTest {
   private lateinit var controller: ChatController
   private var previousRuntime: NodeRuntime? = null
   private var restoreAnimatorScale: (() -> Unit)? = null
+  private val chatVisible = mutableStateOf(true)
 
   @Volatile private var historyResponse = HISTORY
 
@@ -167,15 +175,17 @@ class ChatCompletedWorkLayoutTest {
     composeRule.setContent {
       ClawDesignTheme {
         Box(Modifier.size(width = 360.dp, height = 800.dp).background(ClawTheme.colors.canvas).clipToBounds()) {
-          ChatScreen(
-            viewModel = model,
-            talkActive = false,
-            showSidebarButton = true,
-            onOpenSidebar = {},
-            onToggleTalk = {},
-            onOpenDashboard = {},
-            onOpenGatewaySettings = {},
-          )
+          if (chatVisible.value) {
+            ChatScreen(
+              viewModel = model,
+              talkActive = false,
+              showSidebarButton = true,
+              onOpenSidebar = {},
+              onToggleTalk = {},
+              onOpenDashboard = {},
+              onOpenGatewaySettings = {},
+            )
+          }
         }
       }
     }
@@ -183,9 +193,131 @@ class ChatCompletedWorkLayoutTest {
       // IO publications reach the ViewModel bridges through Android Main.
       composeRule.runOnIdle {
         model.chatSessionKey.value == SESSION && !model.chatHistoryLoading.value &&
-          model.chatHealthOk.value && model.chatMessages.value.size == 5 && runtime.pendingRunCount.value == 0
+          model.chatHealthOk.value && model.chatMessages.value.size == 5 && runtime.chat.pendingRunCount.value == 0
       }
     }
+  }
+
+  @Test
+  @Config(sdk = [31])
+  fun browserDismissalSurvivesRefreshAndSessionSwitchUntilReopenedOrNewToolPresentation() {
+    fun browserResult(id: String) =
+      JsonObject(
+        toolResult(id, "browser", "Browser ready", false) +
+          (
+            "details" to
+              buildJsonObject {
+                put(
+                  "browserTab",
+                  buildJsonObject {
+                    put("target", "host")
+                    put("profile", "openclaw")
+                    put("targetId", "travel")
+                    put("url", "https://example.test/travel")
+                  },
+                )
+              }
+          ),
+      )
+
+    val original = browserResult("browser-first")
+    showToolResults(listOf(original))
+    composeRule.onNodeWithText("Agent browser").assertIsDisplayed()
+    capture("browser-unavailable")
+    composeRule.onNodeWithText("Browser view unavailable. Update your Gateway and use its bundled Control UI.").assertIsDisplayed()
+    composeRule.onNodeWithContentDescription("Control browser").assertIsNotEnabled()
+    val reader = composeRule.onNode(hasScrollToIndexAction())
+    val boundsWithBrowser = reader.getUnclippedBoundsInRoot()
+    composeRule.onNodeWithContentDescription("Close").performTouchInput { click() }
+    composeRule.onNodeWithText("Agent browser").assertDoesNotExist()
+    val boundsWithoutBrowser = reader.getUnclippedBoundsInRoot()
+    assertTrue(boundsWithoutBrowser.bottom - boundsWithoutBrowser.top > boundsWithBrowser.bottom - boundsWithBrowser.top)
+    composeRule.runOnIdle { chatVisible.value = false }
+    composeRule.runOnIdle { chatVisible.value = true }
+    composeRule.onNodeWithText("Agent browser").assertDoesNotExist()
+
+    showToolResults(listOf(JsonObject(original + ("content" to JsonPrimitive("Refreshed browser result")))))
+    composeRule.waitUntil {
+      composeRule.runOnIdle {
+        model.chatMessages.value
+          .singleOrNull()
+          ?.content
+          ?.singleOrNull()
+          ?.toolActivity
+          ?.result == "Refreshed browser result"
+      }
+    }
+    composeRule.onNodeWithText("Agent browser").assertDoesNotExist()
+    for (session in listOf(OTHER_SESSION, SESSION)) {
+      composeRule.runOnIdle { model.switchChatSession(session, "main") }
+      composeRule.waitUntil {
+        composeRule.runOnIdle {
+          model.chatSessionKey.value == session && !model.chatHistoryLoading.value &&
+            model.chatMessages.value
+              .lastOrNull()
+              ?.entryId == if (session == SESSION) "browser-first" else "work-final"
+        }
+      }
+      composeRule.onNodeWithText("Agent browser").assertDoesNotExist()
+    }
+
+    composeRule.onNodeWithContentDescription("Chat actions").performTouchInput { click() }
+    composeRule.onNodeWithText("Agent browser").performTouchInput { click() }
+    composeRule.onNodeWithText("Agent browser").assertIsDisplayed()
+    composeRule.onNodeWithContentDescription("Close").performTouchInput { click() }
+    showToolResults(listOf(browserResult("browser-next")))
+    composeRule.onNodeWithText("Agent browser").assertIsDisplayed()
+
+    composeRule.runOnIdle { runtime.disconnect() }
+    composeRule.waitUntil { composeRule.runOnIdle { !model.gatewayConnectionDisplay.value.isConnected } }
+    composeRule.onNodeWithText("Agent browser").assertDoesNotExist()
+  }
+
+  @Test
+  fun liveToolActivityStartsCollapsed() {
+    showToolResults(emptyList())
+    composeRule.runOnIdle {
+      controller.handleGatewayEvent(
+        "agent",
+        """{"sessionKey":"$SESSION","stream":"tool","data":{"phase":"start","name":"read","toolCallId":"live-read","args":{"path":"README.md"}}}""",
+      )
+      controller.handleGatewayEvent(
+        "agent",
+        """{"sessionKey":"$SESSION","stream":"tool","data":{"phase":"start","name":"exec","toolCallId":"live-exec","args":{"command":"pnpm test"}}}""",
+      )
+    }
+    composeRule.waitUntil { composeRule.runOnIdle { model.chatToolActivities.value.size == 2 } }
+    capture("live-tools-collapsed")
+    composeRule
+      .onNode(hasText(nativeString("Tool activity")) and hasClickAction())
+      .assertIsDisplayed()
+      .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    composeRule.onNodeWithText("pnpm test", useUnmergedTree = true).assertDoesNotExist()
+    val group = composeRule.onNode(hasText(nativeString("Tool activity")) and hasClickAction())
+    group.performClick()
+    val command = composeRule.onNode(hasText("pnpm test") and hasClickAction())
+    command.performClick()
+    capture("live-tools-expanded")
+    composeRule.runOnIdle {
+      controller.handleGatewayEvent("agent", """{"sessionKey":"$SESSION","stream":"tool","data":{"phase":"result","name":"exec","toolCallId":"live-exec"}}""")
+    }
+    composeRule.waitUntil { composeRule.runOnIdle { model.chatPendingToolCalls.value.size == 1 } }
+    group.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Expanded")))
+    command.assertIsDisplayed().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Expanded")))
+    capture("completed-before-history")
+    showToolResults(listOf(toolResult("live-read", "read", "Project ready", false), toolResult("live-exec", "exec", "All tests passed", false)))
+    group.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Expanded")))
+    command.assertIsDisplayed().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Expanded")))
+    composeRule.onNodeWithText("All tests passed").assertIsDisplayed()
+    capture("durable-tool-output")
+    composeRule.runOnIdle {
+      controller.handleGatewayEvent("agent", """{"sessionKey":"$SESSION","stream":"item","data":{"itemId":"tool:live-read","kind":"tool","phase":"end","title":"Read project","toolCallId":"live-read","name":"read","status":"blocked"}}""")
+    }
+    composeRule.waitUntil { composeRule.runOnIdle { model.chatToolActivities.value.any { it.activity?.status == "blocked" } } }
+    group.performClick()
+    group.assert(hasText(nativeString("Blocked")))
+    group.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    capture("blocked-tools-collapsed")
   }
 
   @Test
@@ -233,6 +365,7 @@ class ChatCompletedWorkLayoutTest {
     }
 
     worked.performClick()
+    composeRule.onNode(hasText(nativeString("Tool activity")) and hasClickAction()).performClick()
     capture("expanded")
     assertions.checkSucceeds {
       worked.assertIsDisplayed().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Expanded")))
@@ -256,6 +389,45 @@ class ChatCompletedWorkLayoutTest {
       composeRule.onNodeWithText(COMMAND, useUnmergedTree = true).assertDoesNotExist()
       composeRule.onNodeWithText(OUTPUT, useUnmergedTree = true).assertDoesNotExist()
     }
+  }
+
+  @Test
+  fun completedWorkSummaryKeepsEarlierToolFailureVisible() {
+    val response = Json.parseToJsonElement(HISTORY).jsonObject
+    val failure = "The optional dashboard check was denied."
+    val revised =
+      response.getValue("messages").jsonArray.mapIndexed { index, message ->
+        if (index == 3) {
+          JsonObject(message.jsonObject + mapOf("content" to JsonPrimitive(failure), "isError" to JsonPrimitive(true)))
+        } else {
+          message
+        }
+      }
+    historyResponse = JsonObject(response + ("messages" to JsonArray(revised))).toString()
+    composeRule.runOnIdle { model.refreshChat() }
+    composeRule.waitUntil {
+      composeRule.runOnIdle {
+        !model.chatHistoryLoading.value && model.chatMessages.value
+          .getOrNull(3)
+          ?.content
+          ?.singleOrNull()
+          ?.toolActivity
+          ?.isError == true
+      }
+    }
+
+    val worked = composeRule.onNode(hasText(nativeString("Worked for \$duration", "4s")) and hasClickAction())
+    capture("completed-tool-failure-collapsed")
+    worked.assertIsDisplayed().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    composeRule.onNodeWithText(FINAL).assertIsDisplayed()
+    composeRule.onNodeWithText(failure, useUnmergedTree = true).assertDoesNotExist()
+    composeRule.onNodeWithText(nativeString("1 tool failed"), useUnmergedTree = true).assertIsDisplayed()
+
+    worked.performClick()
+    composeRule.onNode(hasText(nativeString("Tool activity")) and hasClickAction()).performClick()
+    composeRule.onNode(hasText(COMMAND) and hasClickAction()).performClick()
+    composeRule.onNodeWithText(failure).assertIsDisplayed()
+    composeRule.onNodeWithText(FINAL).assertIsDisplayed()
   }
 
   @Test
@@ -287,6 +459,7 @@ class ChatCompletedWorkLayoutTest {
     val worked = composeRule.onNode(hasText(nativeString("Worked for \$duration", "4s")) and hasClickAction())
     val command = composeRule.onNode(hasText(COMMAND) and hasClickAction())
     worked.performClick()
+    composeRule.onNode(hasText(nativeString("Tool activity")) and hasClickAction()).performClick()
     command.performClick()
     composeRule.onNodeWithText(OUTPUT).assertIsDisplayed()
     capture("replacement-before")
@@ -374,6 +547,8 @@ class ChatCompletedWorkLayoutTest {
   fun sessionSwitchResetsDisclosureEvenWhenHistoryKeysMatch() {
     val worked = composeRule.onNode(hasText(nativeString("Worked for \$duration", "4s")) and hasClickAction())
     worked.performClick()
+    val tools = composeRule.onNode(hasText(nativeString("Tool activity")) and hasClickAction())
+    tools.performClick()
     worked.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Expanded")))
     for (session in listOf(OTHER_SESSION, SESSION)) {
       composeRule.runOnIdle { model.switchChatSession(session, "main") }
@@ -388,6 +563,10 @@ class ChatCompletedWorkLayoutTest {
       worked.assertIsDisplayed().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
       composeRule.onNodeWithText(FINAL).assertIsDisplayed()
       composeRule.onNodeWithText(EARLIER, useUnmergedTree = true).assertDoesNotExist()
+      worked.performClick()
+      tools.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+      tools.performClick()
+      worked.performClick()
     }
     capture("session-disclosure-reset")
   }
@@ -422,6 +601,7 @@ class ChatCompletedWorkLayoutTest {
   @Test
   fun collapsedCommandFailureIsVisibleWithoutOpeningItsOutput() {
     showToolResults(listOf(toolResult("command-error", "exec", "Command could not finish.", isError = true)))
+    composeRule.onNode(hasText(nativeString("Tool activity")) and hasClickAction()).performClick()
     val row = composeRule.onNode(hasClickAction() and hasText(nativeString("Failed")))
     capture("failed-command-collapsed")
     row.assertIsDisplayed().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
@@ -436,6 +616,7 @@ class ChatCompletedWorkLayoutTest {
   @Test
   fun collapsedBlankReadFailureRemainsInspectable() {
     showToolResults(listOf(toolResult("read-error", "read", "", isError = true)))
+    composeRule.onNode(hasText(nativeString("Tool activity")) and hasClickAction()).performClick()
     val row = composeRule.onNode(hasClickAction() and hasText(nativeString("Failed")) and hasText("Read"))
     capture("failed-read-collapsed")
     row.assertIsDisplayed().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
@@ -488,21 +669,37 @@ class ChatCompletedWorkLayoutTest {
 
   private fun showToolResults(results: List<JsonObject>) {
     val history = Json.parseToJsonElement(HISTORY).jsonObject
+    val expectedEntryIds =
+      results.map {
+        it
+          .getValue("__openclaw")
+          .jsonObject
+          .getValue("id")
+          .jsonPrimitive
+          .content
+      }
     // No later answer: exercise the retained failure rows through the real timeline owner.
     historyResponse = JsonObject(history + ("messages" to JsonArray(results))).toString()
     composeRule.runOnIdle { model.refreshChat() }
-    composeRule.waitUntil {
-      composeRule.runOnIdle {
-        !model.chatHistoryLoading.value && model.chatMessages.value.map { it.entryId } ==
-          results.map {
-            it
-              .getValue("__openclaw")
-              .jsonObject
-              .getValue("id")
-              .jsonPrimitive
-              .content
-          }
+    // History is published from IO, then bridged to the ViewModel on Main.
+    val historyRefresh =
+      object : IdlingResource {
+        override val isIdleNow: Boolean
+          get() = !model.chatHistoryLoading.value && model.chatMessages.value.map { it.entryId } == expectedEntryIds
+
+        override fun getDiagnosticMessageIfBusy(): String =
+          "Chat history loading=${model.chatHistoryLoading.value} " +
+            "entries=${model.chatMessages.value.map { it.entryId }} expected=$expectedEntryIds"
       }
+    composeRule.registerIdlingResource(historyRefresh)
+    try {
+      composeRule.waitForIdle()
+    } finally {
+      composeRule.unregisterIdlingResource(historyRefresh)
+    }
+    composeRule.runOnIdle {
+      assertTrue("The tool history refresh must finish", !model.chatHistoryLoading.value)
+      assertEquals(expectedEntryIds, model.chatMessages.value.map { it.entryId })
     }
   }
 

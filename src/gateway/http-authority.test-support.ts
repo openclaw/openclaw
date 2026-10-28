@@ -3,49 +3,46 @@ import { resetConfigRuntimeState, type GatewayAuthConfig } from "../config/confi
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { browserProxyAuth } from "./server.auth.test-helpers.js";
 import type { GatewayServer } from "./server.js";
-import { agentCommandMock, getGatewayTestPort, testState } from "./test-helpers.js";
+import { agentCommandMock, testState } from "./test-helpers.js";
+import { startClaimedGateway } from "./test-helpers.listener.js";
 
+type HttpHeaders = Record<string, string>;
 type OwnerIdentityRequests = {
-  post: (stream: boolean | undefined, headers: Record<string, string>) => Promise<Response>;
+  post: (stream: boolean | undefined, headers: HttpHeaders) => Promise<Response>;
   consume: (response: Response, stream: boolean) => Promise<unknown>;
   senderIsOwner: () => unknown;
 };
 
-export async function expectDeclaredHttpOwnerIdentity(params: OwnerIdentityRequests) {
+async function expectOwner(params: OwnerIdentityRequests, owner: boolean, headers: HttpHeaders) {
   for (const stream of [false, true]) {
-    for (const { scopes, senderIsOwner } of [
-      { scopes: "operator.write", senderIsOwner: false },
-      { scopes: "operator.admin, operator.write", senderIsOwner: true },
-    ]) {
-      agentCommandMock.mockClear();
-      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
-      const response = await params.post(stream, {
-        "x-openclaw-scopes": scopes,
-        "x-openclaw-sender-is-owner": "true",
-      });
-      expect(response.status).toBe(200);
-      await params.consume(response, stream);
-      expect(agentCommandMock).toHaveBeenCalledTimes(1);
-      expect(params.senderIsOwner()).toBe(senderIsOwner);
-    }
+    agentCommandMock.mockClear();
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+    const response = await params.post(stream, headers);
+    expect(response.status).toBe(200);
+    await params.consume(response, stream);
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    expect(params.senderIsOwner()).toBe(owner);
+  }
+}
+
+export async function expectDeclaredHttpOwnerIdentity(params: OwnerIdentityRequests) {
+  for (const owner of [false, true]) {
+    await expectOwner(params, owner, {
+      "x-openclaw-scopes": owner ? "operator.admin, operator.write" : "operator.write",
+      "x-openclaw-sender-is-owner": "true",
+    });
   }
 }
 
 export async function expectSharedSecretHttpOwnerIdentity(params: OwnerIdentityRequests) {
-  for (const stream of [false, true]) {
-    agentCommandMock.mockClear();
-    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
-    const response = await params.post(stream, {
-      authorization: "Bearer secret",
-      "x-openclaw-scopes": "operator.approvals",
-      "x-openclaw-sender-is-owner": "false",
-    });
-    expect(response.status).toBe(200);
-    await params.consume(response, stream);
-    expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    expect(params.senderIsOwner()).toBe(true);
-  }
+  await expectOwner(params, true, {
+    authorization: "Bearer secret",
+    "x-openclaw-scopes": "operator.approvals",
+    "x-openclaw-sender-is-owner": "false",
+  });
   agentCommandMock.mockClear();
   const unauthorized = await params.post(undefined, {
     authorization: "Bearer wrong",
@@ -64,46 +61,35 @@ export async function expectHttpForeignSessionAuthority(params: {
   closeReason: string;
   startServer: (port: number, auth: GatewayAuthConfig) => Promise<GatewayServer>;
   writeGatewayConfig: (config: Record<string, unknown>) => Promise<void>;
-  post: (port: number, headers: Record<string, string>) => Promise<Response>;
+  post: (port: number, headers: HttpHeaders) => Promise<Response>;
 }) {
   const sharedSecretOwner = params.authMethod === "token";
   await withEnvAsync(
     { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
     async () => {
-      const port = await getGatewayTestPort();
       let server: GatewayServer | undefined;
       const previousGatewayAuth = testState.gatewayAuth;
-      const trustedProxyAuth = {
-        mode: "trusted-proxy" as const,
-        trustedProxy: {
-          userHeader: "x-forwarded-user",
-          requiredHeaders: ["x-forwarded-proto"],
-          allowLoopback: true,
-        },
-      };
-      const requestAuth = sharedSecretOwner
-        ? { mode: "token" as const, token: "owner-secret" }
-        : trustedProxyAuth;
+      const requestAuth: GatewayAuthConfig = sharedSecretOwner
+        ? { mode: "token", token: "owner-secret" }
+        : browserProxyAuth();
       testState.gatewayAuth = requestAuth;
       try {
+        const guest = {
+          agents: sharedSecretOwner ? [] : "*",
+          scopes: ["operator.write"],
+          sessions: { others: "view" },
+        };
         await params.writeGatewayConfig({
           gateway: {
             auth: requestAuth,
             trustedProxies: ["127.0.0.1"],
-            roles: {
-              default: "guest",
-              definitions: {
-                guest: {
-                  agents: sharedSecretOwner ? [] : "*",
-                  scopes: ["operator.write"],
-                  sessions: { others: "view" },
-                },
-              },
-            },
+            roles: { default: "guest", definitions: { guest } },
           },
         });
         resetConfigRuntimeState();
-        server = await params.startServer(port, requestAuth);
+        const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+        const port = portClaim.port;
+        server = await startClaimedGateway(portClaim, () => params.startServer(port, requestAuth));
 
         const owner = ensureProfileForEmail(params.ownerEmail);
         const sessionKey = params.sessionKey;

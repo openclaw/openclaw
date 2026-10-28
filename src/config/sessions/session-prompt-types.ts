@@ -25,5 +25,7 @@ export type SessionSkillSnapshot = {
    * src/skills/runtime/embedded-run-entries.ts rebuilds it from disk.
    */
   resolvedSkills?: Skill[];
+  /** Runtime-only model-discoverable catalog before prompt budgeting; never persisted. */
+  discoverySkills?: Skill[];
   version?: number;
 };

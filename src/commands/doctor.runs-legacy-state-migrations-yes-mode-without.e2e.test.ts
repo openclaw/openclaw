@@ -1,21 +1,29 @@
-// Doctor legacy-state e2e tests cover yes-mode state migrations without interactive prompts.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { ProviderPlugin } from "../plugins/types.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   arrangeLegacyStateMigrationTest,
   confirm,
   createDoctorRuntime,
   ensureAuthProfileStore,
   mockDoctorConfigSnapshot,
-  serviceIsLoaded,
-  serviceRestart,
-  writeConfigFile,
+  transformConfigFile,
 } from "./doctor.e2e-harness.js";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
   useMockProviders: false,
   resolvePluginProvidersCore: vi.fn((_params?: unknown): ProviderPlugin[] => []),
 }));
+
+// Physical-store inspection has its own suites; this fixture exercises migration/config routing.
+vi.mock("./doctor-database-engine.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./doctor-database-engine.js")>();
+  return {
+    ...actual,
+    noteDatabaseEngines: vi.fn<typeof actual.noteDatabaseEngines>().mockResolvedValue([]),
+  };
+});
 
 vi.mock("../plugins/providers.runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/providers.runtime.js")>(
@@ -33,166 +41,98 @@ vi.mock("../plugins/providers.runtime.js", async () => {
 });
 
 let doctorCommand: typeof import("./doctor.js").doctorCommand;
-let healthCommand: typeof import("./health.js").healthCommand;
 
-describe("doctor command", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.doUnmock("../flows/doctor-health-contributions.js");
-    ({ doctorCommand } = await import("./doctor.js"));
-    ({ healthCommand } = await import("./health.js"));
-    vi.clearAllMocks();
-    providerRuntimeMocks.useMockProviders = false;
-    providerRuntimeMocks.resolvePluginProvidersCore.mockReturnValue([]);
+async function expectNixRefusal(options: Parameters<typeof doctorCommand>[1]) {
+  mockDoctorConfigSnapshot();
+  await withEnvAsync({ OPENCLAW_NIX_MODE: "1" }, async () => {
+    await expect(doctorCommand(createDoctorRuntime(), options)).rejects.toThrow(
+      "OPENCLAW_NIX_MODE=1",
+    );
   });
+  expect(transformConfigFile).not.toHaveBeenCalled();
+}
 
-  it("runs legacy state migrations in yes mode without prompting", async () => {
-    const {
-      doctorCommand: doctorCommandValue,
-      runtime,
-      runLegacyStateMigrations,
-    } = await arrangeLegacyStateMigrationTest();
-
-    await (
-      doctorCommandValue as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>
-    )(runtime, { yes: true });
-
-    expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
-    expect(confirm).not.toHaveBeenCalled();
-  }, 30_000);
-
-  it("runs legacy state migrations in non-interactive mode without prompting", async () => {
-    const {
-      doctorCommand: doctorCommandLocal,
-      runtime,
-      runLegacyStateMigrations,
-    } = await arrangeLegacyStateMigrationTest();
-
-    await (
-      doctorCommandLocal as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>
-    )(runtime, { nonInteractive: true });
-
-    expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
-    expect(confirm).not.toHaveBeenCalled();
-  }, 30_000);
-
-  it("refuses doctor repair mode in Nix before repair side effects", async () => {
-    const previous = process.env.OPENCLAW_NIX_MODE;
-    process.env.OPENCLAW_NIX_MODE = "1";
-    try {
-      mockDoctorConfigSnapshot();
-      await expect(doctorCommand(createDoctorRuntime(), { repair: true })).rejects.toThrow(
-        "OPENCLAW_NIX_MODE=1",
-      );
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_NIX_MODE;
-      } else {
-        process.env.OPENCLAW_NIX_MODE = previous;
-      }
-    }
-
-    expect(writeConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("refuses doctor gateway token generation in Nix before config writes", async () => {
-    const previous = process.env.OPENCLAW_NIX_MODE;
-    process.env.OPENCLAW_NIX_MODE = "1";
-    try {
-      mockDoctorConfigSnapshot();
-      await expect(
-        doctorCommand(createDoctorRuntime(), { generateGatewayToken: true }),
-      ).rejects.toThrow("OPENCLAW_NIX_MODE=1");
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_NIX_MODE;
-      } else {
-        process.env.OPENCLAW_NIX_MODE = previous;
-      }
-    }
-
-    expect(writeConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("skips gateway restarts in non-interactive mode", async () => {
-    mockDoctorConfigSnapshot();
-
-    vi.mocked(healthCommand).mockRejectedValueOnce(new Error("gateway closed"));
-
-    serviceIsLoaded.mockResolvedValueOnce(true);
-    serviceRestart.mockClear();
-    confirm.mockClear();
-
-    await doctorCommand(createDoctorRuntime(), { nonInteractive: true });
-
-    expect(serviceRestart).not.toHaveBeenCalled();
-    expect(confirm).not.toHaveBeenCalled();
-  });
-
-  it("migrates anthropic oauth config profile id when only email profile exists", async () => {
-    mockDoctorConfigSnapshot({
-      config: {
-        auth: {
-          profiles: {
-            "anthropic:default": { provider: "anthropic", mode: "oauth" },
-          },
-        },
-      },
-    });
-
-    ensureAuthProfileStore.mockReturnValue({
-      version: 1,
-      profiles: {
-        "anthropic:me@example.com": {
-          type: "oauth",
-          provider: "anthropic",
-          access: "access",
-          refresh: "refresh",
-          expires: Date.now() + 60_000,
-          email: "me@example.com",
-        },
-      },
-    });
-    providerRuntimeMocks.useMockProviders = true;
-    providerRuntimeMocks.resolvePluginProvidersCore.mockReturnValue([
-      {
-        id: "anthropic",
-        label: "Anthropic",
-        auth: [],
-        oauthProfileIdRepairs: [{ legacyProfileId: "anthropic:default" }],
-      },
-    ]);
-
-    const previousConfigWriteSupport =
-      process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE;
-    process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE = "1";
-    try {
-      await doctorCommand(createDoctorRuntime(), { yes: true });
-    } finally {
-      if (previousConfigWriteSupport === undefined) {
-        delete process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE;
-      } else {
-        process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE =
-          previousConfigWriteSupport;
-      }
-    }
-
-    const writtenCall = writeConfigFile.mock.calls.findLast((call) => {
-      const candidate = call[0] as Record<string, unknown>;
-      const auth = candidate.auth as { profiles?: unknown } | undefined;
-      return Boolean(auth?.profiles);
-    });
-    const written = writtenCall?.[0] as Record<string, unknown> | undefined;
-    if (!written) {
-      throw new Error("Expected doctor to write migrated auth profiles");
-    }
-    const profiles = (written.auth as { profiles: Record<string, unknown> }).profiles;
-    expect(profiles).toHaveProperty("anthropic:me@example.com");
-    const migratedProfile = profiles["anthropic:me@example.com"] as
-      | { provider?: unknown; mode?: unknown }
-      | undefined;
-    expect(migratedProfile?.provider).toBe("anthropic");
-    expect(migratedProfile?.mode).toBe("oauth");
-    expect(profiles["anthropic:default"]).toBeUndefined();
-  }, 30_000);
+beforeEach(async () => {
+  vi.resetModules();
+  vi.doUnmock("../flows/doctor-health-contributions.js");
+  // Prepare the real owners and nested check descriptors as fixture code;
+  // detectors and repairs still run inside the unchanged command deadline.
+  await import("./doctor-maintenance.js");
+  const { resolveDoctorContributionHealthChecks } =
+    await import("../flows/doctor-health-contributions.js");
+  await resolveDoctorContributionHealthChecks();
+  ({ doctorCommand } = await import("./doctor.js"));
+  vi.clearAllMocks();
+  providerRuntimeMocks.useMockProviders = false;
+  providerRuntimeMocks.resolvePluginProvidersCore.mockReturnValue([]);
 });
+
+it("runs legacy state migrations in yes mode without prompting", async () => {
+  const {
+    doctorCommand: runDoctor,
+    runtime,
+    runLegacyStateMigrations,
+  } = await arrangeLegacyStateMigrationTest();
+  await (runDoctor as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>)(runtime, {
+    yes: true,
+  });
+  expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
+  expect(confirm).not.toHaveBeenCalled();
+}, 30_000);
+
+it.each([{ repair: true }, { generateGatewayToken: true }])(
+  "refuses Nix mutations before side effects: %j",
+  expectNixRefusal,
+);
+
+it("migrates anthropic oauth config profile id when only email profile exists", async () => {
+  mockDoctorConfigSnapshot({
+    config: {
+      auth: {
+        profiles: { "anthropic:default": { provider: "anthropic", mode: "oauth" } },
+        order: { anthropic: ["anthropic:default"] },
+      },
+    },
+  });
+
+  ensureAuthProfileStore.mockReturnValue({
+    version: 1,
+    profiles: {
+      "anthropic:me@example.com": {
+        type: "oauth",
+        provider: "anthropic",
+        access: "access",
+        refresh: "refresh",
+        expires: Date.now() + 60_000,
+        email: "me@example.com",
+      },
+    },
+  });
+  providerRuntimeMocks.useMockProviders = true;
+  providerRuntimeMocks.resolvePluginProvidersCore.mockReturnValue([
+    {
+      id: "anthropic",
+      label: "Anthropic",
+      auth: [],
+      oauthProfileIdRepairs: [{ legacyProfileId: "anthropic:default" }],
+    },
+  ]);
+
+  await withEnvAsync({ OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1" }, () =>
+    doctorCommand(createDoctorRuntime(), { yes: true }),
+  );
+
+  const committed = await Promise.all(
+    transformConfigFile.mock.results.flatMap((result) =>
+      result.type === "return" ? [result.value] : [],
+    ),
+  );
+  const auth = committed.findLast((result) => result.nextConfig.auth?.profiles)?.nextConfig.auth;
+  expect(auth).toMatchObject({
+    profiles: {
+      "anthropic:me@example.com": { provider: "anthropic", mode: "oauth", email: "me@example.com" },
+    },
+    order: { anthropic: ["anthropic:me@example.com"] },
+  });
+  expect(auth?.profiles).not.toHaveProperty("anthropic:default");
+}, 30_000);
