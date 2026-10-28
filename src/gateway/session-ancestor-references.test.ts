@@ -8,6 +8,24 @@ const child: GatewaySessionRow = {
   updatedAt: 1,
 };
 
+it("shares certified ancestor rows across histories only within their publication revision", () => {
+  const row = Object.freeze({ ...child, key: "agent:main:parent", snapshotAt: 10 });
+  const prepared = [prepareSessionAncestor(row)];
+  const first = new ConnectionSessionRows();
+  const second = new ConnectionSessionRows();
+  const publish = (owner: ConnectionSessionRows, revision: string) =>
+    owner.prepareDelivery(child, prepared, revision).ancestor!.ancestorSessions[0]!;
+  const initial = publish(first, "first");
+  expect(publish(second, "first")).toBe(initial);
+  expect(initial).toEqual({ ...row, ancestorRevision: "first" });
+  const next = publish(first, "second");
+  expect(next).not.toBe(initial);
+  expect(next).toEqual({ ...row, ancestorRevision: "second" });
+  expect(publish(second, "second")).toBe(next);
+  expect(publish(first, "first")).toEqual(initial);
+  expect(initial.ancestorRevision).toBe("first");
+});
+
 it("preserves presentation clocks and the delivered baseline when serialization fails", () => {
   const references = new ConnectionSessionRows();
   const row: GatewaySessionRow = {

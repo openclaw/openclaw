@@ -46,15 +46,14 @@ function fullRowByteLength(
 }
 
 type DeliveredAncestor = { key: string; content: string; chars: number; revision: string };
-const preparedAncestors = new WeakMap<
-  SessionRow,
-  {
-    row: SessionRow;
-    identity: string;
-    content: string;
-    chars: number;
-  }
->();
+type PreparedAncestor = {
+  row: SessionRow;
+  identity: string;
+  content: string;
+  chars: number;
+  certified?: SessionRow;
+};
+const preparedAncestors = new WeakMap<SessionRow, PreparedAncestor>();
 
 /** Prepare immutable viewer content once, before consulting connection delivery history. */
 export function prepareSessionAncestor(row: SessionRow) {
@@ -63,7 +62,7 @@ export function prepareSessionAncestor(row: SessionRow) {
     return cached;
   }
   const serialized = JSON.stringify(row.snapshotAt === undefined ? row : { ...row, snapshotAt: 0 });
-  const prepared = {
+  const prepared: PreparedAncestor = {
     row,
     identity: JSON.stringify([row.agentId, row.key]),
     content: createHash("sha256").update(serialized).digest("base64url"),
@@ -232,7 +231,8 @@ export class ConnectionSessionRows {
     const ancestorSessions: SessionRow[] = [];
     const ancestorSessionRefs: SessionAncestorRef[] = [];
     let updates: Map<string, DeliveredAncestor | undefined> | undefined;
-    for (const { row, identity, content, chars } of rows) {
+    for (const prepared of rows) {
+      const { row, identity, content, chars } = prepared;
       const snapshotAt = row.snapshotAt;
       const previous = this.#rows.get(identity);
       if (
@@ -249,7 +249,11 @@ export class ConnectionSessionRows {
         });
         continue;
       }
-      ancestorSessions.push({ ...row, ancestorRevision: revision });
+      // One row per publication lets existing delta/encoding owners share their work.
+      if (prepared.certified?.ancestorRevision !== revision) {
+        prepared.certified = { ...row, ancestorRevision: revision };
+      }
+      ancestorSessions.push(prepared.certified);
       (updates ??= new Map()).set(
         identity,
         snapshotAt !== undefined && chars <= MAX_CONTENT_CHARS
