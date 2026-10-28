@@ -2,6 +2,7 @@ import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion"
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { attachInternalToolResultContentSource } from "../../packages/agent-core/src/internal-hooks.js";
+import type { PluginHookAfterToolCallEvent } from "../plugins/hook-after-tool-call.types.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import {
   truncateSanitizedExternalContent,
@@ -221,4 +222,19 @@ export function resolveToolResultFailureKind(result: unknown): ToolResultFailure
     return "blocked";
   }
   return timedOut ? "timed_out" : (statusKind ?? "failed");
+}
+
+/**
+ * Project the canonical failure classifier onto the `after_tool_call` contract
+ * exactly as `resolveToolResultTerminalDiagnostic` maps it; detail-less results
+ * stay unknown rather than reading as success.
+ */
+export function resolveToolResultHookOutcome(
+  result: unknown,
+): PluginHookAfterToolCallEvent["outcome"] {
+  if (!readToolResultDetails(result)) {
+    return undefined;
+  }
+  const failureKind = resolveToolResultFailureKind(result);
+  return failureKind === undefined ? "completed" : failureKind === "blocked" ? "blocked" : "error";
 }

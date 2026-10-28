@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createBaseToolHandlerState } from "../agents/agent-tool-handler-state.test-helpers.js";
+import { resolveToolResultTerminalDiagnostic } from "../agents/agent-tools.before-tool-call.diagnostics.js";
 import { handleToolExecutionStart } from "../agents/embedded-agent-subscribe.handlers.tools.start.js";
 import { endTool } from "../agents/embedded-agent-subscribe.handlers.tools.test-support.js";
+import type { PluginHookAfterToolCallEvent } from "./hook-types.js";
 import type { HookRunner } from "./hooks.js";
 
 const hookMocks = vi.hoisted(() => ({
@@ -20,7 +22,7 @@ vi.mock("../infra/agent-events.js", () => ({
   registerAgentEventLifecycleRotationHandler: vi.fn(),
 }));
 
-function toolRun(id: string) {
+function toolRun(id: string, toolName = "read") {
   const ctx = {
     params: { session: { messages: [] } },
     hookRunner: hookMocks.runner,
@@ -38,11 +40,11 @@ function toolRun(id: string) {
     sessionKey: `session-${id}`,
     sessionId: `ephemeral-${id}`,
     agentId: `agent-${id}`,
-    toolName: "read",
+    toolName,
     toolCallId: "shared-tool-call-id",
   };
   Object.assign(ctx.params, context);
-  const { toolName, toolCallId, runId } = context;
+  const { toolCallId, runId } = context;
   return {
     start: (args: unknown) =>
       handleToolExecutionStart(ctx as never, {
@@ -97,5 +99,87 @@ describe("after_tool_call hook wiring", () => {
     expect(hookMocks.runner.runBeforeToolCall).not.toHaveBeenCalled();
     a.expectPayload(1);
     b.expectPayload(2);
+  });
+});
+
+function lastAfterToolCallEvent(): PluginHookAfterToolCallEvent {
+  const calls = hookMocks.runner.runAfterToolCall.mock.calls;
+  expect(calls.length).toBeGreaterThan(0);
+  return calls[calls.length - 1]![0];
+}
+
+/** The hook observation must equal the canonical terminal diagnostic of the same result. */
+function expectOutcomeMatchesDiagnostic(
+  result: unknown,
+  outcome: NonNullable<PluginHookAfterToolCallEvent["outcome"]>,
+) {
+  expect(resolveToolResultTerminalDiagnostic(result, 0).type).toBe(`tool.execution.${outcome}`);
+}
+
+describe("after_tool_call terminal outcome", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+  });
+
+  it("reports blocked for exec approval-unavailable that carries no error message", async () => {
+    const run = toolRun("approval-unavailable", "exec");
+    const result = {
+      content: [{ type: "text" as const, text: "approval unavailable" }],
+      details: { status: "approval-unavailable" },
+    };
+    await run.start({ command: "uname -a" });
+    await run.finish(result);
+    const event = lastAfterToolCallEvent();
+    expect(event.outcome).toBe("blocked");
+    // Baseline gap kept visible: approval-unavailable still yields no error text.
+    expect(event.error).toBeUndefined();
+    expect(event.result).toEqual(result);
+    expectOutcomeMatchesDiagnostic(result, "blocked");
+  });
+
+  it("reports error for a structured failure with no message text", async () => {
+    const run = toolRun("empty-structured-failure");
+    const result = { content: [], details: { ok: false } };
+    await run.start({ path: "/tmp/path-empty-structured-failure.txt" });
+    await run.finish(result);
+    const event = lastAfterToolCallEvent();
+    expect(event.outcome).toBe("error");
+    // extractToolErrorMessage finds no text here, so the hook error stays empty.
+    expect(event.error).toBeUndefined();
+    expectOutcomeMatchesDiagnostic(result, "error");
+  });
+
+  it("reports completed for a structured success", async () => {
+    const run = toolRun("structured-success");
+    const result = {
+      content: [{ type: "text" as const, text: "done-structured-success" }],
+      details: { ok: true },
+    };
+    await run.start({ path: "/tmp/path-structured-success.txt" });
+    await run.finish(result);
+    const event = lastAfterToolCallEvent();
+    expect(event.outcome).toBe("completed");
+    expectOutcomeMatchesDiagnostic(result, "completed");
+    // Every pre-existing payload field survives next to the new field.
+    expect(event).toMatchObject({
+      toolName: "read",
+      toolCallId: "shared-tool-call-id",
+      runId: "run-structured-success",
+      params: { path: "/tmp/path-structured-success.txt" },
+      error: undefined,
+    });
+    expect(event.durationMs).toBeTypeOf("number");
+    expect("result" in event).toBe(true);
+  });
+
+  it("omits outcome when the result carries no structured outcome", async () => {
+    const run = toolRun("unknown-outcome");
+    await run.start({ path: "/tmp/path-unknown-outcome.txt" });
+    await run.finish({ content: [{ type: "text", text: "done-unknown-outcome" }] });
+    const event = lastAfterToolCallEvent();
+    expect(event).not.toHaveProperty("outcome");
+    expect(event.result).toEqual({ content: [{ type: "text", text: "done-unknown-outcome" }] });
+    expect(event.durationMs).toBeTypeOf("number");
   });
 });
