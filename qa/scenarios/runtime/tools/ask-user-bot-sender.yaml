@@ -1,0 +1,249 @@
+title: Ask user question from a bot sender's turn goes to the owner
+
+scenario:
+  id: runtime-tool-ask-user-bot-sender
+  surface: runtime-tool
+  coverage:
+    primary:
+      - agent-runtime.tool-ask-user
+    secondary:
+      - channels.qa-channel-outbound
+  objective: Verify that an ask_user question raised while answering another agent reaches the agent's owner with an answer surface the owner can use, and that the owner's answer resumes the run.
+  gatewayConfigPatch:
+    commands:
+      ownerAllowFrom: [alice]
+    gateway:
+      publicOrigin: https://qa-control.example.test
+      controlUi:
+        enabled: true
+    messages:
+      queue:
+        mode: steer
+  successCriteria:
+    - A bot sender's message starts a turn that calls ask_user once.
+    - QA Channel delivers a single-choice question to the owner's direct conversation with its option buttons, its Control UI answer page and no typed-reply guidance, and the bot's conversation receives none.
+    - The owner's answer reaches the resumed run, and its reply reaches the bot's conversation.
+    - The bot's reply, steered into the run while the question is pending, does not answer it.
+    - A question without buttons reaches the owner with its Control UI answer page alone.
+  docsRefs:
+    - docs/tools/ask-user.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - src/agents/tools/question-prompt-send.ts
+    - src/agents/harness/user-input-bridge.ts
+    - extensions/qa-channel/src/inbound.ts
+  execution:
+    kind: flow
+    summary: Send inbound turns from a bot sender, observe each ask_user prompt in the owner's conversation, answer as the owner through the Gateway question resolution that buttons and the Control UI use, and verify the resumed run received the owner's answer.
+    config:
+      requiredProviderMode: mock-openai
+      requiredProvider: mock-openai
+      peerConversationId: qa-ask-user-peer-agent
+      ownerConversationId: alice
+      answerLinkBase: https://qa-control.example.test/ask/
+      choicePromptNeedle: Where should this deploy?
+      choicePrompt: >-
+        Structured question QA check from a peer agent. Call ask_user exactly once with the
+        deploy_target question, then reply with the selected value.
+        ask_user_fixture=single
+        QA routing marker: tool search qa check target=ask_user.
+      multiPromptNeedle: Which checks should run?
+      multiPrompt: >-
+        Structured question QA check from a peer agent. Call ask_user exactly once with the
+        checks question, then reply with the selected values.
+        ask_user_fixture=multi
+        QA routing marker: tool search qa check target=ask_user.
+
+flow:
+  steps:
+    - name: links a bot sender's question without buttons to its answer page
+      actions:
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: startIndex
+          value:
+            expr: state.getSnapshot().messages.length
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.peerConversationId
+              kind: direct
+            senderId:
+              ref: config.peerConversationId
+            senderName: Peer Agent
+            senderIsBot: true
+            text:
+              ref: config.multiPrompt
+        - call: waitForCondition
+          saveAs: pendingQuestion
+          args:
+            - lambda:
+                async: true
+                expr: "(await env.gateway.call('question.list', {})).questions.find((question) => question.status === 'pending' && question.questions.some((entry) => entry.question === config.multiPromptNeedle))"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - 100
+        - call: waitForCondition
+          saveAs: promptMessage
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.slice(startIndex).find((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.ownerConversationId && candidate.text.includes(config.multiPromptNeedle))"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - 100
+        - assert:
+            expr: "promptMessage.text.includes(`Answer here: ${config.answerLinkBase}${pendingQuestion.id}`) && !promptMessage.text.includes('Reply with')"
+            message:
+              expr: "`the owner's prompt lacks its answer page: ${JSON.stringify(promptMessage.text)}`"
+        - set: resolution
+          value:
+            expr: >-
+              env.gateway.call('question.resolve', {
+                id: pendingQuestion.id,
+                answers: { answers: { checks: ['Unit (Recommended)', 'E2E'] } },
+                resolvedBy: 'qa-lab',
+              })
+        - assert:
+            expr: "resolution.status === 'answered'"
+            message:
+              expr: "`the owner's answer was not accepted: ${JSON.stringify(resolution)}`"
+      detailsExpr: "`question sent to ${promptMessage.conversation.id} with its answer page`"
+    - name: sends the bot sender's question to the owner and resumes on the owner's answer
+      actions:
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: startIndex
+          value:
+            expr: state.getSnapshot().messages.length
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.peerConversationId
+              kind: direct
+            senderId:
+              ref: config.peerConversationId
+            senderName: Peer Agent
+            senderIsBot: true
+            text:
+              ref: config.choicePrompt
+        - call: waitForCondition
+          saveAs: pendingQuestion
+          args:
+            - lambda:
+                async: true
+                expr: "(await env.gateway.call('question.list', {})).questions.find((question) => question.status === 'pending' && question.questions.some((entry) => entry.question === config.choicePromptNeedle))"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - 100
+        - call: waitForCondition
+          saveAs: promptMessage
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.slice(startIndex).find((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.ownerConversationId && candidate.text.includes(config.choicePromptNeedle))"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - 100
+        - assert:
+            expr: "promptMessage.text.includes(`Choose an option, or answer here: ${config.answerLinkBase}${pendingQuestion.id}`) && !promptMessage.text.includes('Reply with')"
+            message:
+              expr: "`the owner's prompt lacks its buttons and answer page: ${JSON.stringify(promptMessage.text)}`"
+        - assert:
+            expr: "!state.getSnapshot().messages.slice(startIndex).some((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.peerConversationId && candidate.text.includes(config.choicePromptNeedle))"
+            message: the bot sender's conversation received the question prompt
+        - set: resolution
+          value:
+            expr: >-
+              env.gateway.call('question.resolve', {
+                id: pendingQuestion.id,
+                answers: { answers: { deploy_target: ['Staging (Recommended)'] } },
+                resolvedBy: 'qa-lab',
+              })
+        - assert:
+            expr: "resolution.status === 'answered'"
+            message:
+              expr: "`the owner's answer was not accepted: ${JSON.stringify(resolution)}`"
+        - call: waitForCondition
+          saveAs: resumedProviderRequest
+          args:
+            - lambda:
+                async: true
+                expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).find((request) => String(request.toolOutput ?? '').includes('Deploy:'))"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - 100
+        - assert:
+            expr: "String(resumedProviderRequest.toolOutput).includes('Staging')"
+            message:
+              expr: "`the resumed run did not receive the owner's answer: ${JSON.stringify(resumedProviderRequest.toolOutput)}`"
+        - call: waitForCondition
+          saveAs: finalMessage
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.slice(startIndex).find((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.peerConversationId && !candidate.deleted)"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - 100
+      detailsExpr: "`question sent to ${promptMessage.conversation.id}; reply sent to ${finalMessage.conversation.id}`"
+    - name: keeps the question pending when the bot replies while it waits
+      actions:
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.peerConversationId
+              kind: direct
+            senderId:
+              ref: config.peerConversationId
+            senderName: Peer Agent
+            senderIsBot: true
+            text:
+              ref: config.choicePrompt
+        - call: waitForCondition
+          saveAs: pendingQuestion
+          args:
+            - lambda:
+                async: true
+                expr: "(await env.gateway.call('question.list', {})).questions.find((question) => question.status === 'pending' && question.questions.some((entry) => entry.question === config.choicePromptNeedle))"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - 100
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.peerConversationId
+              kind: direct
+            senderId:
+              ref: config.peerConversationId
+            senderName: Peer Agent
+            senderIsBot: true
+            text: Production
+        - call: waitForCondition
+          args:
+            - lambda:
+                async: true
+                expr: "(await new Promise((resolve) => setTimeout(resolve, 5000))) ?? true"
+            - 15000
+            - 100
+        - set: stillPending
+          value:
+            expr: "(await env.gateway.call('question.get', { id: pendingQuestion.id })).question.status"
+        - assert:
+            expr: "stillPending === 'pending'"
+            message:
+              expr: "`the bot's reply resolved the owner's question: ${stillPending}`"
+        - set: resolution
+          value:
+            expr: >-
+              env.gateway.call('question.resolve', {
+                id: pendingQuestion.id,
+                answers: { answers: { deploy_target: ['Staging (Recommended)'] } },
+                resolvedBy: 'qa-lab',
+              })
+        - assert:
+            expr: "resolution.status === 'answered'"
+            message:
+              expr: "`the owner's answer was not accepted: ${JSON.stringify(resolution)}`"
+      detailsExpr: "`the bot's steered reply left ${pendingQuestion.id} pending; the owner answered it`"

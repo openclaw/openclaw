@@ -111,6 +111,8 @@ export type McpLoopbackRequestContext = {
   /** Host-owned creator origin; child MCP request fields cannot widen it. */
   cronCreatorCallerOrigin?: CronScheduledToolCallerOrigin;
   senderIsOwner: boolean;
+  /** Host-minted from the run's inbound sender, so a bot sender's questions go to the owner. */
+  senderIsBot?: true;
   /** Host-verified Git credit only; never sourced from MCP headers or used as authority. */
   gitContributorProfileId?: string;
   /** Capability minted only for Gateway-launched CLI backends. */

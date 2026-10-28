@@ -415,6 +415,7 @@ export async function resolveGatewayScopedTools(
       : undefined,
     requesterAgentIdOverride: sessionAgentId,
     agentChannel: params.messageProvider ?? undefined,
+    senderIsBot: surface === "loopback" && params.senderIsBot === true,
     questionInputMode: resolveConversationQuestionInputMode({
       messageProvider: params.messageProvider,
     }),

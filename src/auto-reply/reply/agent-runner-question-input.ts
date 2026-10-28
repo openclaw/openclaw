@@ -37,9 +37,11 @@ export async function runReplyQuestionInput(
   | { handled: true; payload: ReplyPayload | undefined }
 > {
   const { followupRun, opts, sessionKey } = params;
+  // A bot sender never answers for a person, whatever the question's creator policy admits.
   const external =
-    followupRun.run.inputProvenance === undefined ||
-    followupRun.run.inputProvenance.kind === "external_user";
+    (followupRun.run.inputProvenance === undefined ||
+      followupRun.run.inputProvenance.kind === "external_user") &&
+    params.sessionCtx.SenderIsBot !== true;
   const text = (
     params.transcriptCommandBody ??
     followupRun.transcriptPrompt ??

@@ -255,6 +255,7 @@ export function buildCliMcpGrantContext(params: {
     taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget ? true : undefined,
     senderIsOwner: params.run.senderIsOwner === true,
+    ...(params.run.senderIsBot === true ? { senderIsBot: true as const } : {}),
     ...(params.run.gitContributorProfileId
       ? { gitContributorProfileId: params.run.gitContributorProfileId }
       : {}),

@@ -69,6 +69,7 @@ function buildFollowupTemplateContext(turn: AdmittedFollowupTurn): TemplateConte
     SenderName: run.senderName,
     SenderUsername: run.senderUsername,
     SenderE164: run.senderE164,
+    SenderIsBot: run.senderIsBot,
     GroupChannel: run.groupChannel,
     GroupSpace: run.groupSpace,
     InputProvenance: run.inputProvenance,

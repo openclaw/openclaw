@@ -337,6 +337,7 @@ function prepareStream(
     currentMessageId: attempt.currentMessageId,
     replyToMode: attempt.replyToMode,
     hasRepliedRef: attempt.hasRepliedRef,
+    senderIsBot: attempt.senderIsBot,
     internalEvents: attempt.internalEvents,
     compactionCountOwner: attempt.compactionCountOwner,
     onContextAccountingEvent: attempt.onContextAccountingEvent,

@@ -17,6 +17,18 @@ question input: Discord, Slack, Telegram, and WebChat (including the Control UI
 and native OpenClaw clients). Subagents and other non-primary runs do not
 receive it, and an explicit tool denial still takes precedence.
 
+When the message that started the turn came from a bot, such as another agent
+on Discord or Slack, nobody in that conversation can answer for you, so the
+question goes to the agent's owner on the route proactive delivery uses:
+`commands.ownerAllowFrom`, then the channel's `allowFrom`. The owner answers on
+the question's Control UI page, which the prompt links to and which takes every
+answer, free text included; where the owner's channel shows buttons, the option
+buttons are a shortcut. A typed reply does not answer it. This requires
+`gateway.publicOrigin`: without it, or without an owner route, the question is
+cancelled and `ask_user` reports that its prompt could not be delivered. The
+bot's own replies never answer a question, and a `secrets` request goes to the
+owner the same way.
+
 On the ACP bridge, iMessage, Mattermost, Signal, WhatsApp, and other surfaces without
 question input, the agent asks in ordinary plain text instead of calling
 `ask_user`. Approval reactions are separate and remain available. Native agent

@@ -78,6 +78,7 @@ const qaBusRequests: Partial<Record<string, (state: QaBusState, body: unknown) =
         ...qaBusMessageOptionalFields,
         conversation: qaBusConversationSchema,
         senderId: z.string(),
+        senderIsBot: z.boolean().optional(),
         text: z.string(),
         threadTitle: z.string().optional(),
         nativeCommand: z.object({ name: z.string() }).passthrough().optional(),

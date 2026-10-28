@@ -187,6 +187,55 @@ it("adopts active steering through prepared policy without caller-thread SQL", a
   });
 });
 
+it.each([
+  { sender: "bot", senderIsBot: true, answers: false },
+  { sender: "human", senderIsBot: false, answers: true },
+])(
+  "steers a $sender sender's message as a possible question answer: $answers",
+  async ({ senderIsBot, answers }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const key = `agent:main:steering-answer-${String(senderIsBot)}`;
+      const config: OpenClawConfig = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(config);
+      const run = createQueueTestRun({
+        prompt: "Production",
+        messageId: `incoming-answer-${String(senderIsBot)}`,
+        originatingChannel: "webchat",
+      });
+      run.operatorAuthority = steeringRequester();
+      Object.assign(run.run, { agentId: "main", sessionKey: key, senderIsBot, config });
+      const { operation, fingerprint } = await prepareOperation(run);
+      const queued: Array<{ isInboundUserMessage?: boolean }> = [];
+      attachSteerBackend(operation, fingerprint, {
+        cancel() {},
+        async queueMessage() {
+          throw new Error("Expected awaited steering");
+        },
+        async queueMessageAsync(_text, options, preparation) {
+          await preparation.prepareCurrent();
+          queued.push({ isInboundUserMessage: options?.isInboundUserMessage });
+          options?.onQueueAccepted?.(true);
+        },
+      });
+      try {
+        await expect(
+          runActiveReplySteer(
+            createSteerParams(key, run, operation, {
+              opts: { runId: `incoming-answer-${String(senderIsBot)}` },
+              replyOperationRunState: {},
+              runFollowup: vi.fn(async () => {}),
+            }),
+          ),
+        ).resolves.toBe("handled");
+        expect(queued).toEqual([{ isInboundUserMessage: answers }]);
+      } finally {
+        clearSessionQueues([key], getSessionControllerEntryForOperation(operation).target);
+        operation.complete();
+      }
+    });
+  },
+);
+
 it.for(
   (["initial-injection", "native-backend"] as const).flatMap((phase) =>
     (["terminal-pending", "matching-tombstone", "unrelated-tombstone"] as const).map((change) => ({

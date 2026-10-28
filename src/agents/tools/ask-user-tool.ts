@@ -476,20 +476,20 @@ export function createAskUserTool(params: {
       }
       const sessionKey = askUserSessionKey(params.sessionKey, params.agentId);
       const timeoutMs = normalized.timeoutSeconds * 1_000;
-      const send = params.questionPrompt?.send;
+      const questionPrompt = params.questionPrompt;
       const { state, delivery } = createAskUserPromptDelivery(
         questionId,
         sessionKey,
         normalized.questions,
         normalized.timeoutSeconds,
         "ask_user already has a pending question for this session; wait for it to resolve before asking another",
-        send
+        questionPrompt
           ? (id) =>
               sendQuestionToolPrompt({
                 toolName: "ask_user",
                 questionId: id,
                 questions: normalized.questions,
-                send,
+                delivery: questionPrompt,
                 signal: prompt.signal,
               })
           : undefined,

@@ -335,6 +335,7 @@ function createPluginUserInputHandler(params: {
           delivery: {
             onBlockReply: run.onBlockReply,
             onPartialReply: run.onPartialReply,
+            senderIsBot: run.senderIsBot,
           },
           signal,
           isActive: () => assertionSucceeds(assertQuestionActive),
