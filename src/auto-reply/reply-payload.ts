@@ -177,6 +177,10 @@ export function getReplyPayloadTtsSupplement(
     ...(payload.ttsSupplement?.visibleTextAlreadyDelivered === true
       ? { visibleTextAlreadyDelivered: true }
       : {}),
+    // Delivery reads the lifetime from the normalized supplement, so dropping it
+    // here would quietly restore durable custody for audio whose writer fence
+    // recovery cannot rebuild.
+    ...(payload.ttsSupplement?.liveOnly === true ? { liveOnly: true } : {}),
   };
 }
 
@@ -190,7 +194,7 @@ export function isReplyPayloadTtsSupplement(
 export function markReplyPayloadAsTtsSupplement<T extends ReplyPayload>(
   payload: T,
   spokenText: string = payload.spokenText ?? payload.text ?? "",
-  options?: { visibleTextAlreadyDelivered?: boolean },
+  options?: { visibleTextAlreadyDelivered?: boolean; liveOnly?: boolean },
 ): T {
   const normalizedSpokenText = readNonBlankString(spokenText);
   if (!normalizedSpokenText) {
@@ -204,6 +208,7 @@ export function markReplyPayloadAsTtsSupplement<T extends ReplyPayload>(
       ...(options?.visibleTextAlreadyDelivered === true
         ? { visibleTextAlreadyDelivered: true }
         : {}),
+      ...(options?.liveOnly === true ? { liveOnly: true } : {}),
     },
   };
 }
