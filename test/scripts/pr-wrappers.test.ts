@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import {
+  accessSync,
   chmodSync,
   constants as fsConstants,
   cpSync,
@@ -482,6 +483,93 @@ exit "$status"
     expect(fixture.gitText(["rev-parse", ref])).toBe(successor);
   });
 
+  itPosix.each(["canonical", "linked"] as const)(
+    "asserts the retained workflow instead of moving main from %s",
+    (location) => {
+      const fixture = workflowFixture();
+      const first = fixture.run();
+      expect(first.status, first.stderr).toBe(0);
+      const ref = "refs/openclaw/pr-workflow-bindings/123";
+      const admitted = fixture.gitText(["rev-parse", ref]);
+      writeFileSync(
+        fixture.reviewPath,
+        `${readScript(fixture.reviewPath)}\nreview_guard() { echo 'new workflow'; }\n`,
+      );
+      fixture.commit(["scripts/pr-lib/review.sh"], true);
+      const advanced = fixture.gitText(["rev-parse", "HEAD"]);
+      expect(advanced).not.toBe(fixture.source);
+
+      const mismatch = runWrapper(
+        fixture,
+        ["--expect-wrapper-revision", advanced, "review-guard", "123"],
+        location,
+        {
+          env: {
+            ...fixture.env,
+            OPENCLAW_PR_TOOLING_ROOT: join(fixture.root, "missing-tooling"),
+          },
+        },
+      );
+      expect(mismatch.status).toBe(1);
+      expect(mismatch.stderr).toContain(`native wrapper selection is ${fixture.source}`);
+      expect(mismatch.stderr).not.toContain("tooling");
+      expect(mismatch.stdout).not.toContain("new workflow");
+      expect(fixture.gitText(["rev-parse", ref])).toBe(admitted);
+
+      const matched = runWrapper(
+        fixture,
+        ["--expect-wrapper-revision", fixture.source, "review-guard", "123"],
+        location,
+      );
+      expect(matched.status, matched.stderr).toBe(0);
+      expect(matched.stdout).toContain(`admitted workflow ${fixture.source}`);
+      expect(matched.stdout).not.toContain("new workflow");
+      expect(fixture.gitText(["rev-parse", ref])).toBe(admitted);
+      const activeWrapper = matched.stdout.match(/^active workflow wrapper (.+)$/m)?.[1] ?? "";
+      expect(activeWrapper).toContain("openclaw-pr-anchor.");
+      expect(existsSync(join(activeWrapper, ".."))).toBe(false);
+    },
+  );
+
+  itPosix("asserts the verified canonical HEAD before native cold qualification", () => {
+    const fixture = workflowFixture();
+    fixture.git(fixture.canonical, ["update-ref", "-d", "refs/remotes/origin/main"]);
+    const mismatch = runWrapper(
+      fixture,
+      ["--expect-wrapper-revision", fixture.localRevision, "review-guard", "123"],
+      "canonical",
+    );
+    expect(mismatch.status).toBe(1);
+    expect(mismatch.stderr).toContain(`native wrapper selection is ${fixture.source}`);
+    expect(fixture.gitText(["for-each-ref", "--format=%(refname)", "refs/openclaw/"])).toBe("");
+
+    const matched = runWrapper(
+      fixture,
+      ["--expect-wrapper-revision", fixture.source, "review-guard", "123"],
+      "canonical",
+    );
+    expect(matched.status, matched.stderr).toBe(0);
+    expect(matched.stdout).toContain(`admitted workflow ${fixture.source}`);
+    expect(matched.stdout).toContain(
+      `active workflow wrapper ${join(realpathSync(fixture.canonical), "scripts")}`,
+    );
+    const record = JSON.parse(
+      fixture.git(fixture.canonical, [
+        "show",
+        "refs/openclaw/pr-workflow-bindings/123:binding.json",
+      ]).stdout,
+    );
+    expect(record.source).toBe(fixture.source);
+    expect(
+      fixture.gitText([
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/openclaw/pr-workflow-qualification/",
+        "refs/remotes/origin/main",
+      ]),
+    ).toBe("");
+  });
+
   itPosix("keeps the captured revision when main advances during archive materialization", () => {
     const fixture = workflowFixture();
     writeFileSync(
@@ -492,13 +580,17 @@ exit "$status"
     const advanced = fixture.gitText(["rev-parse", "HEAD"]);
     fixture.git(fixture.canonical, ["update-ref", "refs/remotes/origin/main", fixture.source]);
     const selectedGit = join(fixture.root, "selected-git");
+    // Preserve the original delegate lookup path across wrapper Git adapters.
+    const delegatePath = "'" + fixture.env.PATH.replaceAll("'", "'\\''") + "'";
+    const delegateGit = "'" + resolveCommand("git").replaceAll("'", "'\\''") + "'";
     writeExecutable(
       selectedGit,
       `#!/bin/sh
-"${resolveCommand("git")}" "$@"
+export PATH=${delegatePath}
+${delegateGit} "$@"
 status=$?
 case " $* " in
-  *' archive '*) "${resolveCommand("git")}" -C "${fixture.canonical}" update-ref refs/remotes/origin/main ${advanced} ;;
+  *' archive '*) ${delegateGit} -C "${fixture.canonical}" update-ref refs/remotes/origin/main ${advanced} ;;
 esac
 exit "$status"
 `,
@@ -539,17 +631,48 @@ exit "$status"
   itPosix("fails loudly at preflight when ripgrep is unavailable", () => {
     const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     rmSync(join(fixture.bin, "rg"));
-    for (const command of ["bash", "basename", "dirname", "git", "gh", "jq", "pnpm", "node"]) {
+    for (const command of [
+      "bash",
+      "basename",
+      "dirname",
+      "readlink",
+      "git",
+      "gh",
+      "jq",
+      "pnpm",
+      "node",
+    ]) {
       rmSync(join(fixture.bin, command), { force: true });
       symlinkSync(resolveCommand(command), join(fixture.bin, command));
     }
+
+    // Keep guarded Git first and preserve its backend discovery order without
+    // exposing the host PATH (which would make ripgrep available again).
+    const gitPaths: string[] = [];
+    for (const [index, directory] of (process.env.PATH ?? "").split(delimiter).entries()) {
+      const candidate = join(directory, "git");
+      try {
+        if (!statSync(candidate).isFile()) {
+          continue;
+        }
+        accessSync(candidate, fsConstants.X_OK);
+      } catch {
+        continue;
+      }
+      const gitPath = join(fixture.root, `git-path-${index}`);
+      mkdirSync(gitPath);
+      symlinkSync(realpathSync(candidate), join(gitPath, "git"));
+      gitPaths.push(gitPath);
+    }
+    expect(gitPaths.length).toBeGreaterThan(0);
+    expect(realpathSync(join(gitPaths[0]!, "git"))).toBe(realpathSync(join(fixture.bin, "git")));
 
     const result = spawnSync(join(fixture.canonical, "scripts", "pr"), ["ls"], {
       cwd: fixture.canonical,
       encoding: "utf8",
       env: {
         ...fixture.env,
-        PATH: fixture.bin,
+        PATH: [fixture.bin, ...gitPaths].join(delimiter),
       },
     });
 
@@ -881,6 +1004,249 @@ exit "$status"
     );
     fixture.commit(["scripts/pr-lib/gates.sh"]);
   }
+
+  it.each([
+    { name: "missing value", args: ["--expect-wrapper-revision"] },
+    { name: "named ref", args: ["--expect-wrapper-revision", "main", "ls"] },
+    { name: "short OID", args: ["--expect-wrapper-revision", "a".repeat(39), "ls"] },
+    {
+      name: "duplicate expectation",
+      args: [
+        "--expect-wrapper-revision",
+        "a".repeat(40),
+        "--expect-wrapper-revision",
+        "a".repeat(40),
+        "ls",
+      ],
+    },
+  ])("rejects a $name before expected-revision selection", ({ args }) => {
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
+    const result = spawnSync(join(fixture.canonical, "scripts/pr"), args, {
+      cwd: fixture.canonical,
+      encoding: "utf8",
+      env: fixture.env,
+    });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("requires one full lowercase commit OID");
+    expect(
+      readdirSync(fixture.root).filter((name) => name.startsWith("openclaw-pr-anchor.")),
+    ).toEqual([]);
+  });
+
+  it.each(["canonical", "linked", "missing-anchor"])(
+    "refuses an expected-revision mismatch before dependency effects from %s",
+    (route) => {
+      const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
+      if (route === "missing-anchor") {
+        fixture.git(fixture.canonical, ["update-ref", "-d", "refs/remotes/origin/main"]);
+      }
+      const caller = route === "canonical" ? fixture.canonical : fixture.linked;
+      const result = spawnSync(
+        join(caller, "scripts/pr"),
+        ["--dev-wrapper", "--expect-wrapper-revision", fixture.localRevision, "ci-dispatch", "123"],
+        {
+          cwd: caller,
+          encoding: "utf8",
+          env: { ...fixture.env, OPENCLAW_PR_TOOLING_ROOT: join(fixture.root, "missing-tooling") },
+        },
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("native wrapper selection is");
+      expect(result.stderr).not.toContain("scripts/pr tooling root");
+      expect(result.stdout).not.toContain("wrapper executed");
+      expect(
+        readdirSync(fixture.root).filter((name) => name.startsWith("openclaw-pr-anchor.")),
+      ).toEqual([]);
+    },
+  );
+
+  itPosix.each(
+    ["canonical", "linked", "matching-linked"].flatMap((route) =>
+      ["external", "repository-local", "symlinked-repository-local"].map((temporaryRoot) => ({
+        route,
+        temporaryRoot,
+      })),
+    ),
+  )(
+    "keeps one expected snapshot through both handoffs from $route with $temporaryRoot TMPDIR despite later selector writes",
+    ({ route, temporaryRoot }) => {
+      const fixture = makeMismatchedWrapperRepo({
+        toolingOnly: true,
+        dispatchBody:
+          'printf "executed-wrapper=%s\\nchecked-revision=%s\\n" "$script_self" "$OPENCLAW_PR_ANCHOR_EXPECTED_REVISION";',
+      });
+      const expected = fixture
+        .git(fixture.canonical, ["rev-parse", "refs/remotes/origin/main"])
+        .stdout.trim();
+      if (route === "matching-linked") {
+        fixture.git(fixture.linked, ["checkout", "--detach", expected]);
+        parkCanonicalOffAnchor(fixture);
+        linkPrWrapperDependencies(fixture.linked);
+      }
+      const caller = route === "canonical" ? fixture.canonical : fixture.linked;
+      const snapshotParent =
+        temporaryRoot === "external" ? fixture.root : join(caller, ".local", "tmp");
+      mkdirSync(snapshotParent, { recursive: true });
+      let temporaryDirectory = snapshotParent;
+      if (temporaryRoot === "symlinked-repository-local") {
+        temporaryDirectory = join(fixture.root, "temporary-alias");
+        symlinkSync(snapshotParent, temporaryDirectory, "dir");
+      }
+      const selectedGit = join(fixture.root, "selected-git");
+      const selections = join(fixture.root, "wrapper-selections");
+      // Preserve the original delegate lookup path across wrapper Git adapters.
+      const delegatePath = "'" + fixture.env.PATH.replaceAll("'", "'\\''") + "'";
+      // Change the shared selector at archive dispatch, after the comparison.
+      // Linked callers also lose the canonical executable; neither can be reread.
+      writeFileSync(
+        selectedGit,
+        [
+          "#!/bin/sh",
+          `export PATH=${delegatePath}`,
+          'case "$*" in',
+          '  *"rev-parse --verify refs/remotes/origin/main^{commit}")',
+          '    printf "selected\\n" >> "$PR_TEST_SELECTIONS" ;;',
+          '  *" archive "*)',
+          '    "$PR_TEST_REAL_GIT" -C "$PR_TEST_CANONICAL" update-ref refs/remotes/origin/main "$PR_TEST_NEXT_REVISION" || exit',
+          '    if [ "$PR_TEST_REPLACE_CANONICAL" = 1 ]; then',
+          '      printf "#!/bin/sh\\necho unexpected-canonical-wrapper\\nexit 91\\n" > "$PR_TEST_CANONICAL/scripts/pr"',
+          "    fi ;;",
+          "esac",
+          'exec "$PR_TEST_REAL_GIT" "$@"',
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      const result = spawnSync(
+        join(caller, "scripts/pr"),
+        ["--expect-wrapper-revision", expected, "ci-dispatch", "123"],
+        {
+          cwd: caller,
+          encoding: "utf8",
+          env: {
+            ...fixture.env,
+            TMPDIR: temporaryDirectory,
+            OPENCLAW_PR_GIT: selectedGit,
+            PR_TEST_REAL_GIT: resolveCommand("git"),
+            PR_TEST_SELECTIONS: selections,
+            PR_TEST_CANONICAL: fixture.canonical,
+            PR_TEST_NEXT_REVISION: fixture.localRevision,
+            PR_TEST_REPLACE_CANONICAL: route === "canonical" ? "0" : "1",
+          },
+        },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toContain(
+        "executed-wrapper=" + realpathSync(snapshotParent) + "/openclaw-pr-anchor.",
+      );
+      expect(result.stdout).toContain("checked-revision=" + expected);
+      expect(result.stdout).not.toContain("unexpected-canonical-wrapper");
+      expect(result.stderr).not.toContain("running the canonical checkout's wrapper");
+      expect(readFileSync(selections, "utf8")).toBe("selected\n");
+      expect(
+        fixture.git(fixture.canonical, ["rev-parse", "refs/remotes/origin/main"]).stdout.trim(),
+      ).toBe(fixture.localRevision);
+      // The existing creator/FD supervisor owns completed-drain snapshot cleanup.
+      expect(
+        readdirSync(snapshotParent).filter((name) => name.startsWith("openclaw-pr-anchor.")),
+      ).toEqual([]);
+    },
+  );
+
+  it("refuses an anchor without the expected-revision handoff before materializing dependencies", () => {
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
+    const entrypoint = join(fixture.canonical, "scripts/pr");
+    writeFileSync(
+      entrypoint,
+      readScript(entrypoint).replace("  # PR_EXPECTED_WRAPPER_REVISION_HANDOFF_V1\n", ""),
+    );
+    fixture.git(fixture.canonical, ["add", "scripts/pr"]);
+    fixture.git(fixture.canonical, ["commit", "-m", "test: unsupported expected-revision handoff"]);
+    fixture.git(fixture.canonical, ["push", "origin", "main"]);
+    const expected = fixture
+      .git(fixture.canonical, ["rev-parse", "refs/remotes/origin/main"])
+      .stdout.trim();
+    const result = spawnSync(
+      join(fixture.linked, "scripts/pr"),
+      ["--expect-wrapper-revision", expected, "ci-dispatch", "123"],
+      {
+        cwd: fixture.linked,
+        encoding: "utf8",
+        env: { ...fixture.env, OPENCLAW_PR_TOOLING_ROOT: join(fixture.root, "missing-tooling") },
+      },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("does not support the expected wrapper revision handoff");
+    expect(result.stderr).not.toContain("scripts/pr tooling root");
+    expect(
+      readdirSync(fixture.root).filter((name) => name.startsWith("openclaw-pr-anchor.")),
+    ).toEqual([]);
+  });
+
+  it.each(["canonical", "linked"])(
+    "rejects matching ambient expected-revision receipts from a fresh %s checkout",
+    (route) => {
+      const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
+      const expected = fixture
+        .git(fixture.canonical, ["rev-parse", "refs/remotes/origin/main"])
+        .stdout.trim();
+      const caller = route === "canonical" ? fixture.canonical : fixture.linked;
+      const result = spawnSync(
+        join(caller, "scripts/pr"),
+        ["--expect-wrapper-revision", expected, "ci-dispatch", "123"],
+        {
+          cwd: caller,
+          encoding: "utf8",
+          env: {
+            ...fixture.env,
+            OPENCLAW_PR_ANCHOR_REPO_ROOT: fixture.canonical,
+            OPENCLAW_PR_ANCHOR_EXPECTED_REVISION: expected,
+            OPENCLAW_PR_TOOLING_ROOT: join(fixture.root, "missing-tooling"),
+          },
+        },
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("handoff requires a snapshot, not a Git checkout");
+      expect(result.stderr).not.toContain("scripts/pr tooling root");
+      expect(result.stdout).not.toContain("wrapper executed");
+      expect(
+        readdirSync(fixture.root).filter((name) => name.startsWith("openclaw-pr-anchor.")),
+      ).toEqual([]);
+    },
+  );
+
+  it.each(["missing receipt", "mismatched receipt", "missing option"])(
+    "refuses an incomplete expected-revision handoff: %s",
+    (failure) => {
+      const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
+      const expected = fixture
+        .git(fixture.canonical, ["rev-parse", "refs/remotes/origin/main"])
+        .stdout.trim();
+      const args = failure === "missing option" ? [] : ["--expect-wrapper-revision", expected];
+      const result = spawnSync(
+        join(fixture.canonical, "scripts/pr"),
+        [...args, "ci-dispatch", "123"],
+        {
+          cwd: fixture.canonical,
+          encoding: "utf8",
+          env: {
+            ...fixture.env,
+            OPENCLAW_PR_ANCHOR_REPO_ROOT: fixture.canonical,
+            OPENCLAW_PR_ANCHOR_EXPECTED_REVISION:
+              failure === "missing receipt"
+                ? ""
+                : failure === "mismatched receipt"
+                  ? fixture.localRevision
+                  : expected,
+            OPENCLAW_PR_TOOLING_ROOT: join(fixture.root, "missing-tooling"),
+          },
+        },
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("expected wrapper revision handoff is missing or mismatched");
+      expect(result.stderr).not.toContain("scripts/pr tooling root");
+    },
+  );
 
   itPosix("preserves selected shell and Node Git across a legacy extracted wrapper handoff", () => {
     const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
