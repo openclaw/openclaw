@@ -1,3 +1,5 @@
+import { deserialize } from "node:v8";
+import { Worker } from "node:worker_threads";
 import type {
   OpenAsyncKeyedStoreOptions,
   PluginStateOperation,
@@ -5,6 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { generateIdentity } from "../protocol/index.js";
@@ -182,6 +185,38 @@ afterEach(() => {
   nextOperationWrite = undefined;
   nextOperationRead = undefined;
   vi.restoreAllMocks();
+});
+
+it("keeps peer read request bytes independent of retained outbound deliveries", async () => {
+  const { store, trustedPeer, recipient } = await trustedStore();
+  const deliveries = runtime().state.openSyncKeyedStore(REEF_DELIVERY_STORE_OPTIONS);
+  for (let index = 0; index < 128; index++) {
+    deliveries.register(`${peerKey()}:${String(index).padStart(26, "0")}`, {
+      bodyHash: "a".repeat(64),
+      recipient,
+      sentAt: Date.now(),
+    });
+  }
+  const nativePost = Object.getOwnPropertyDescriptor(Worker.prototype, "postMessage")!;
+  const bytes: number[] = [];
+  vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (this: Worker, ...args) {
+    const message: unknown = args[0];
+    if (isRecord(message) && message.type === "execute" && message.input instanceof Uint8Array) {
+      const command: unknown = deserialize(message.input);
+      if (isRecord(command) && command.type === "pluginState.executeOperation") {
+        bytes.push(message.input.byteLength);
+      }
+    }
+    Reflect.apply(nativePost.value, this, args);
+  });
+  expect((await store.snapshot("clawd")).trust).toEqual(trustedPeer);
+  expect(await store.list()).toEqual([{ peer: "clawd", trust: trustedPeer }]);
+  const observation = await store.observePeer("clawd");
+  expect(bytes).toHaveLength(3);
+  expect(Math.max(...bytes)).toBeLessThan(16_384);
+  await store.setAutonomy("clawd", "notify-only");
+  expect(observation!.assertCurrent).toThrow();
+  expect(await store.overdueOutboundDeliveries(0, Date.now() + 1)).toHaveLength(128);
 });
 
 it("renews a rejection reservation while preserving duplicate receipt expiry", async () => {
