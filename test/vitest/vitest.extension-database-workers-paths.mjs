@@ -112,6 +112,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/nextcloud-talk/src/webhook-spool.test.ts",
   "extensions/nostr/src/nostr-bus.inbound.test.ts",
   "extensions/nostr/src/nostr-bus.outbound.test.ts",
+  "extensions/nostr/src/nostr-bus.reconnect.test.ts",
   "extensions/signal/src/monitor.attachment-base64.test.ts",
   "extensions/signal/src/monitor.tool-result.autostart.test.ts",
   "extensions/signal/src/signal-ingress.approval-reaction-replay.test.ts",
