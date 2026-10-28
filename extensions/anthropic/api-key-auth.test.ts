@@ -13,8 +13,9 @@ import { buildAnthropicProvider } from "./register.runtime.js";
 
 const workspaceId = "wrkspc_01JwQvzr7rXLA5AGx3HKfFUJ";
 const apiKey = "sk-ant-api03-workspace-test-not-real";
+const provider: ModelProviderConfig = { baseUrl: "https://api.anthropic.com", models: [] };
 const config: OpenClawConfig = {
-  models: { providers: { anthropic: { headers: { "X-Route": "preserve" } } } },
+  models: { providers: { anthropic: { ...provider, headers: { "X-Route": "preserve" } } } },
 };
 
 async function authenticate(
@@ -90,13 +91,7 @@ describe("Anthropic API-key workspace setup", () => {
 
   it("propagates cancellation before publishing a credential result", async () => {
     const cancelled = new Error("setup cancelled");
-    await expect(
-      authenticate(
-        config,
-        vi.fn(async () => {
-          throw cancelled;
-        }),
-      ),
-    ).rejects.toBe(cancelled);
+    const text = vi.fn<ProviderAuthContext["prompter"]["text"]>().mockRejectedValue(cancelled);
+    await expect(authenticate(config, text)).rejects.toBe(cancelled);
   });
 });
