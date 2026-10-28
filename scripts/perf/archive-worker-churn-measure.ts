@@ -28,7 +28,9 @@ import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import type { SessionLifecycleArchivedTranscript } from "../../src/config/sessions/session-accessor.sqlite-contract.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import type { OpenClawAgentDatabase } from "../../src/state/openclaw-agent-db.js";
 
 const { values } = parseArgs({
   options: {
@@ -183,19 +185,30 @@ if (values.allocations || values.entry) {
   // Runtime workers choose explicit execArgv. Instrument only this benchmark process,
   // preserving the source loader and leaving untraced timing passes untouched.
   workerThreads.Worker = class extends NativeWorker {
-    constructor(filename: string | URL, options: import("node:worker_threads").WorkerOptions = {}) {
-      const target = options.workerData?.type === "sqlite-transcript-archive-v2";
+    constructor(
+      inputFilename: string | URL,
+      inputOptions: import("node:worker_threads").WorkerOptions = {},
+    ) {
+      const archive = inputOptions.workerData?.type === "sqlite-transcript-archive-v2";
+      const filename =
+        archive && values.entry ? pathToFileURL(path.resolve(values.entry)) : inputFilename;
+      const options =
+        archive && values.entry
+          ? {
+              ...inputOptions,
+              execArgv: [
+                "--import",
+                new URL("./team-shape-stress-loader.mjs", import.meta.url).href,
+              ],
+            }
+          : inputOptions;
+      const target = archive && values.allocations;
       super(
-        target && values.entry ? pathToFileURL(path.resolve(values.entry)) : filename,
+        filename,
         target
           ? {
               ...options,
-              execArgv: [
-                ...(values.entry
-                  ? ["--import", new URL("./team-shape-stress-loader.mjs", import.meta.url).href]
-                  : (options.execArgv ?? process.execArgv)),
-                ...(values.allocations ? ["--import", preload] : []),
-              ],
+              execArgv: [...(options.execArgv ?? process.execArgv), "--import", preload],
             }
           : options,
       );
@@ -230,7 +243,7 @@ try {
   }
   loop.enable();
   for (let iteration = 0; iteration < iterations; iteration++) {
-    const database =
+    const database: OpenClawAgentDatabase | undefined =
       values.operation === "maintenance"
         ? agentDb.openOpenClawAgentDatabase({ agentId: "main", env: process.env })
         : undefined;
@@ -249,7 +262,7 @@ try {
         referencedSessionIds: new Set(),
       });
       assert(deletion);
-      const row = database.db
+      const row: Record<string, import("node:sqlite").SQLOutputValue> | undefined = database.db
         .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
         .get(sessionKey);
       assert(typeof row?.entry_json === "string");
@@ -264,7 +277,13 @@ try {
     const cpu = process.cpuUsage();
     const thread = process.threadCpuUsage();
     const startedWorkers = counts()?.started ?? 0;
-    const result = database
+    const result:
+      | Awaited<
+          ReturnType<
+            typeof maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort
+          >
+        >
+      | Awaited<ReturnType<typeof cold.runSessionColdStorageMaintenance>> = database
       ? await maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
           { agentId: "main", env: process.env, path: database.path },
           [plan],
@@ -276,7 +295,8 @@ try {
     if (database) {
       assert("pruned" in result && result.pruned === 1, JSON.stringify(result));
       assert(Array.isArray(result.archivedTranscripts) && result.archivedTranscripts.length === 1);
-      const published = result.archivedTranscripts[0];
+      const published: SessionLifecycleArchivedTranscript | undefined =
+        result.archivedTranscripts[0];
       assert(published);
       assert.equal(
         compression.readSessionArchiveContentSync(published.archivedPath).trim(),
