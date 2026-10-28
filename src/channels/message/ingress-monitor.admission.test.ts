@@ -150,6 +150,30 @@ describe("channel ingress monitor admission", () => {
     },
   );
 
+  it("persists the event when retention pruning before admission fails", async () => {
+    const queue = createQueue();
+    const lockError = new Error("database is locked");
+    const prune = queue.prune.bind(queue);
+    const pruneSpy = vi
+      .spyOn(queue, "prune")
+      .mockRejectedValueOnce(lockError)
+      .mockImplementation(prune);
+    const errors: unknown[] = [];
+    const monitor = createMonitor(queue, {
+      retention: { pruneIntervalMs: 0 },
+      onError: (error) => errors.push(error),
+    });
+    try {
+      await monitor.admit({ id: "first", text: "one" });
+      await monitor.admit({ id: "second", text: "two" });
+      expect((await queue.listPending()).map((row) => row.id)).toEqual(["first", "second"]);
+      expect(pruneSpy).toHaveBeenCalledTimes(2);
+      expect(errors).toEqual([lockError]);
+    } finally {
+      await monitor.stop();
+    }
+  });
+
   it("keeps delayed inspection in FIFO admission and joins it on stop", async () => {
     const queue = createQueue();
     const inspection = createDeferred();
