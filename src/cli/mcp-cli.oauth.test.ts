@@ -41,41 +41,6 @@ afterEach(async () => {
   }
 });
 
-it("surfaces required OAuth authorization in status and doctor", async () => {
-  readMcpOAuthCredentialsStatus.mockResolvedValue({
-    state: "requires-authorization",
-  });
-
-  await setServer("docs", { ...httpServer, auth: "oauth" });
-  mockLog.mockClear();
-
-  await mcp("status", "--verbose");
-
-  const statusLines = mockLog.mock.calls.map((call) => String(call[0]));
-  expect(statusLines).toContain("- docs: streamable-http oauth authorization-required");
-  expect(statusLines).toContain("  oauth: requires-authorization");
-
-  mockLog.mockClear();
-  await mcp("doctor", "--json");
-
-  expect(JSON.parse(lastLogLine())).toMatchObject({
-    ok: true,
-    servers: [
-      {
-        name: "docs",
-        ok: true,
-        issues: [
-          {
-            level: "warning",
-            message:
-              "OAuth credentials require additional authorization; run openclaw mcp login docs",
-          },
-        ],
-      },
-    ],
-  });
-});
-
 it("shows connected requester principals in list and status output", async () => {
   countMcpOAuthPrincipals.mockResolvedValue(2);
 
