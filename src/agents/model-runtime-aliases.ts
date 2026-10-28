@@ -160,10 +160,9 @@ export function resolveCliRuntimeTwinRoute(
   },
 ): CliRuntimeTwinRoute | undefined {
   const provider = normalizeProviderId(entry.provider);
-  const boundProvider = scope.cliRuntimeBindings.find(
-    ({ runtime }) => runtime === provider,
+  const aliasOf = scope.cliRuntimeBindings.find(
+    (binding) => binding.runtime === provider && binding.provider !== provider,
   )?.provider;
-  const aliasOf = boundProvider && boundProvider !== provider ? boundProvider : undefined;
   const runtime = aliasOf
     ? provider
     : normalizeOptionalAgentRuntimeId(

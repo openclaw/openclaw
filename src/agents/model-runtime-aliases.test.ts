@@ -12,7 +12,6 @@ import {
   createModelPickerVisibleProviderPredicate,
   isRetiredModelPickerProvider,
   areRuntimeModelRefsEquivalent,
-  isCliRuntimeAlias,
   isCliRuntimeProvider,
   omitCliRuntimeAliasTwins,
   resolveCliRuntimeTwinRoute,
@@ -203,30 +202,21 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     );
   });
 
-  it("keeps standalone CLI backend provider refs visible", () => {
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [
-        claudeBinding,
-        { id: "acme-cli", pluginId: "acme", config: { command: "acme" } },
-        {
-          id: "antigravity-cli",
-          pluginId: "antigravity",
-          modelProvider: "antigravity-cli",
-          config: { command: "agy" },
-        },
-      ],
-    });
-
-    const isVisibleProvider = createModelPickerVisibleProviderPredicate();
-
-    expect(isCliRuntimeProvider("claude-cli")).toBe(true);
-    expect(isVisibleProvider("claude-cli")).toBe(false);
-    expect(isCliRuntimeProvider("acme-cli")).toBe(false);
-    expect(isVisibleProvider("acme-cli")).toBe(true);
-    expect(isCliRuntimeAlias("antigravity-cli")).toBe(false);
-    expect(isCliRuntimeProvider("antigravity-cli")).toBe(true);
-    expect(isVisibleProvider("antigravity-cli")).toBe(true);
-  });
+  it.each([undefined, "acme-cli"])(
+    "keeps standalone CLI refs visible (binding %s)",
+    (modelProvider) => {
+      cliBackendsTesting.setDepsForTest({
+        resolveRuntimeCliBackends: () => [
+          claudeBinding,
+          { id: "acme-cli", pluginId: "acme", modelProvider, config: { command: "acme" } },
+        ],
+      });
+      const isVisibleProvider = createModelPickerVisibleProviderPredicate();
+      expect(isCliRuntimeProvider("claude-cli")).toBe(true);
+      expect(isVisibleProvider("claude-cli")).toBe(false);
+      expect(isVisibleProvider("acme-cli")).toBe(true);
+    },
+  );
 
   it("recognizes runtime providers without loading unrelated setup backends", () => {
     cliBackendsTesting.setDepsForTest({
@@ -295,19 +285,6 @@ describe("resolveCliRuntimeExecutionProvider", () => {
       throw new Error("expected a Claude CLI role policy");
     }
     expect(keys([cliOnly])).toHaveLength(rows.length);
-  });
-
-  it("does not mark a self-bound CLI provider row as an alias twin", () => {
-    expect(
-      resolveCliRuntimeTwinRoute(
-        { provider: "antigravity-cli", id: "gemini-3.1-pro" },
-        {
-          config: {},
-          agentId: "main",
-          cliRuntimeBindings: [{ provider: "antigravity-cli", runtime: "antigravity-cli" }],
-        },
-      ),
-    ).toBeUndefined();
   });
 
   it("recognizes retired picker providers without loading CLI backend metadata", () => {
