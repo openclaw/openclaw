@@ -25,6 +25,7 @@ import {
   type VolatileSessionTab,
 } from "./session-tab-process-state.js";
 import * as sessionTabStore from "./session-tab-store.js";
+import * as sessionTabTracking from "./session-tab-tracking.js";
 
 afterEach(async () => {
   const { closePlaywrightBrowserConnection } = await import("./pw-session.js");
@@ -66,8 +67,10 @@ function retainedDashboardRecord(targetId: string): DurableTabRecord {
   };
 }
 
-function seedVolatileTabActivity(entries: Array<{ targetId: string; lastUsedAt: number }>) {
-  const sessionKey = "agent:main:eviction";
+function seedVolatileTabActivity(
+  entries: Array<{ targetId: string; lastUsedAt: number }>,
+  sessionKey = "agent:main:eviction",
+) {
   const sessions = volatileTabsBySession();
   const tabs = sessions.get(sessionKey) ?? new Map<string, VolatileSessionTab>();
   for (const { targetId, lastUsedAt } of entries) {
@@ -364,6 +367,112 @@ describe("browser tab selection and ownership", () => {
     // OLD2 and OLD3 carry no recorded activity, so OLD3 (ahead of OLD2 in the
     // reversed CDP listing) is evicted before any tracked tab.
     expect(closed).toEqual(["http://127.0.0.1:18800/json/close/OLD3"]);
+  });
+
+  it("attributes durable tab activity across profileAliases during managed-tab eviction", async () => {
+    vi.spyOn(sessionTabStore, "readBrowserDashboardTabs").mockResolvedValue([
+      retainedDashboardRecord("OLD1"),
+    ]);
+    vi.spyOn(sessionTabTracking, "readDurableTabs").mockResolvedValue([
+      {
+        kind: "durable",
+        version: 1,
+        sessionKey: "agent:main:upgraded",
+        nativeTargetId: "OLD8",
+        profile: "chrome",
+        profileAliases: ["openclaw"],
+        profileFingerprint: "profile",
+        browserInstanceFingerprint: "browser",
+        interactionTargetKind: "native",
+        trackedAt: 9_000,
+        lastUsedAt: 9_000,
+        storageKey: "durable-old8",
+      },
+    ]);
+    mockCreatedTarget("NEW", "http://127.0.0.1:3009");
+    seedVolatileTabActivity(
+      Array.from({ length: 6 }, (_, index) => ({
+        targetId: `OLD${index + 2}`,
+        lastUsedAt: 2_000 + index,
+      })),
+    );
+    const closed: string[] = [];
+    const cleanup = Promise.withResolvers<void>();
+    const { openclaw, runtime } = setup(async (url) => {
+      if (url.includes("/json/list")) {
+        return Response.json(makeManagedTabsWithNew({ newFirst: true }));
+      }
+      if (url.includes("/json/version")) {
+        return Response.json({
+          webSocketDebuggerUrl:
+            "ws://127.0.0.1:18800/devtools/browser/MANAGED-BROWSER?auth=fixture-value",
+        });
+      }
+      if (url.includes("/json/close/")) {
+        closed.push(url);
+        cleanup.resolve();
+        return new Response();
+      }
+      throw new Error("unexpected fetch: " + url);
+    });
+    runtime.running = mockLaunchedChrome(vi.fn(), 1234);
+    await openclaw.openTab("http://127.0.0.1:3009");
+    await cleanup.promise;
+    // OLD8 is recorded under legacy profile "chrome" with profileAliases: ["openclaw"]
+    // at lastUsedAt 9000, so it is preserved and OLD2 (lastUsedAt 2000) is evicted instead.
+    expect(closed).toEqual(["http://127.0.0.1:18800/json/close/OLD2"]);
+  });
+
+  it("ignores dashboard durable records when reading page-tab activity for eviction", async () => {
+    const activeDashboard = retainedDashboardRecord("OLD1");
+    const releasedDashboard: DurableTabRecord = {
+      ...retainedDashboardRecord("OLD2"),
+      lastUsedAt: 9_999,
+      dashboard: {
+        ...retainedDashboardRecord("OLD2").dashboard!,
+        state: "released",
+      },
+    };
+    vi.spyOn(sessionTabStore, "readBrowserDashboardTabs").mockResolvedValue([
+      activeDashboard,
+      releasedDashboard,
+    ]);
+    vi.spyOn(sessionTabTracking, "readDurableTabs").mockResolvedValue([
+      { ...activeDashboard, kind: "durable" },
+      { ...releasedDashboard, kind: "durable" },
+    ]);
+    mockCreatedTarget("NEW", "http://127.0.0.1:3009");
+    seedVolatileTabActivity(
+      Array.from({ length: 6 }, (_, index) => ({
+        targetId: `OLD${index + 3}`,
+        lastUsedAt: 3_000 + index,
+      })),
+    );
+    const closed: string[] = [];
+    const cleanup = Promise.withResolvers<void>();
+    const { openclaw, runtime } = setup(async (url) => {
+      if (url.includes("/json/list")) {
+        return Response.json(makeManagedTabsWithNew({ newFirst: true }));
+      }
+      if (url.includes("/json/version")) {
+        return Response.json({
+          webSocketDebuggerUrl:
+            "ws://127.0.0.1:18800/devtools/browser/MANAGED-BROWSER?auth=fixture-value",
+        });
+      }
+      if (url.includes("/json/close/")) {
+        closed.push(url);
+        cleanup.resolve();
+        return new Response();
+      }
+      throw new Error("unexpected fetch: " + url);
+    });
+    runtime.running = mockLaunchedChrome(vi.fn(), 1234);
+    await openclaw.openTab("http://127.0.0.1:3009");
+    await cleanup.promise;
+    // OLD2 is not retained in readBrowserDashboardTabs, and its stale dashboard
+    // durable record does not count as session page activity, so OLD2 is evicted as untracked.
+    expect(closed).toEqual(["http://127.0.0.1:18800/json/close/OLD2"]);
   });
 
   it("does not block opening on an ordinary managed-tab cleanup close", async () => {

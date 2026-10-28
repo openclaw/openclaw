@@ -106,8 +106,19 @@ function normalizeWsUrl(raw: string | undefined, cdpBaseUrl: string): string | u
 async function readProfileTabLastUsedAt(profileName: string): Promise<Map<string, number>> {
   const profile = normalizeOptionalLowercaseString(profileName);
   const lastUsedByTarget = new Map<string, number>();
-  const observe = (targetId: string, recordProfile: string | undefined, lastUsedAt: number) => {
-    if (!targetId || normalizeOptionalLowercaseString(recordProfile) !== profile) {
+  const observe = (
+    targetId: string,
+    recordProfile: string | undefined,
+    profileAliases: readonly string[] | undefined,
+    lastUsedAt: number,
+  ) => {
+    const normalizedRecordProfile = normalizeOptionalLowercaseString(recordProfile);
+    if (
+      !targetId ||
+      !profile ||
+      (normalizedRecordProfile !== profile &&
+        !profileAliases?.some((alias) => normalizeOptionalLowercaseString(alias) === profile))
+    ) {
       return;
     }
     const previous = lastUsedByTarget.get(targetId);
@@ -116,15 +127,23 @@ async function readProfileTabLastUsedAt(profileName: string): Promise<Map<string
     }
   };
   for (const record of await readDurableTabs()) {
+    if (record.dashboard) {
+      continue;
+    }
     const observedAt =
       record.interactionTargetKind === "native"
         ? readColdNativeActivity(browserSessionTabNativeIdentity(record))
         : undefined;
-    observe(record.nativeTargetId, record.profile, Math.max(record.lastUsedAt, observedAt ?? 0));
+    observe(
+      record.nativeTargetId,
+      record.profile,
+      record.profileAliases,
+      Math.max(record.lastUsedAt, observedAt ?? 0),
+    );
   }
   for (const sessionTabs of volatileTabsBySession().values()) {
     for (const tab of sessionTabs.values()) {
-      observe(tab.targetId, tab.profile, tab.lastUsedAt);
+      observe(tab.targetId, tab.profile, undefined, tab.lastUsedAt);
     }
   }
   return lastUsedByTarget;
