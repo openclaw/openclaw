@@ -478,6 +478,19 @@ export function buildAnthropicProvider(): ProviderPlugin {
   const providerId = "anthropic";
   const defaultAnthropicModel = CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF;
   const { cli, setupToken, apiKey: apiKeyMethod } = createAnthropicAuthMethods();
+  const apiKeyAuth = createProviderApiKeyAuthMethod({
+    providerId,
+    methodId: apiKeyMethod.id,
+    label: apiKeyMethod.label,
+    hint: apiKeyMethod.hint,
+    optionKey: "anthropicApiKey",
+    flagName: "--anthropic-api-key",
+    envVar: "ANTHROPIC_API_KEY",
+    promptMessage: "Enter Anthropic API key",
+    defaultModel: defaultAnthropicModel,
+    expectedProviders: ["anthropic"],
+    wizard: apiKeyMethod.wizard,
+  });
   return {
     ...createAnthropicProvider(),
     deprecatedProfileIds: [CLAUDE_CLI_PROFILE_ID],
@@ -521,19 +534,10 @@ export function buildAnthropicProvider(): ProviderPlugin {
             defaultAnthropicModel,
           ),
       },
-      createProviderApiKeyAuthMethod({
-        providerId,
-        methodId: apiKeyMethod.id,
-        label: apiKeyMethod.label,
-        hint: apiKeyMethod.hint,
-        optionKey: "anthropicApiKey",
-        flagName: "--anthropic-api-key",
-        envVar: "ANTHROPIC_API_KEY",
-        promptMessage: "Enter Anthropic API key",
-        defaultModel: defaultAnthropicModel,
-        expectedProviders: ["anthropic"],
-        wizard: apiKeyMethod.wizard,
-      }),
+      {
+        ...apiKeyAuth,
+        run: async (ctx) => (await loadAuthRuntime()).runAnthropicApiKeyAuth(ctx, apiKeyAuth.run),
+      },
     ],
     // A single-provider result is republished under every hook alias, which would
     // list these API rows as `claude-cli/*` too. Claude CLI membership comes
