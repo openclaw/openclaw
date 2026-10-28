@@ -44,6 +44,22 @@ in macOS System Settings.
 <Frame>
 <img src="/assets/macos-onboarding/02-local-networks.jpeg" alt="macOS dialog that asks whether OpenClaw may find devices on the local network" />
 </Frame>
+
+macOS may also show a second local-network prompt that names **Bun** instead of
+OpenClaw. The Gateway runs on the Bun runtime bundled inside `OpenClaw.app` and
+advertises itself on the LAN over Bonjour, so macOS attributes that request to
+Bun. Allow it if other devices should discover or connect to this Gateway over
+the LAN. The Gateway binds to loopback by default, so a **This Mac (Local only)**
+setup keeps working if you choose **Don't Allow**. You can change it later in
+**System Settings -> Privacy & Security -> Local Network**.
+
+First launch can also open a macOS prompt to install Git or the Xcode Command
+Line Tools. OpenClaw runs `git --version` when it creates a brand-new agent
+workspace so it can track that workspace with `git init`. Git is optional: if
+you cancel the prompt, the workspace is created without a Git repository, and
+installing the tools later with `xcode-select --install` does not initialize
+that workspace. To track it in Git, initialize it yourself as described in
+[Agent workspace](/concepts/agent-workspace#git-backup-recommended-private).
 </Step>
 <Step title="Welcome and security notice">
 The app opens on its welcome screen with the security notice. Read the notice,
