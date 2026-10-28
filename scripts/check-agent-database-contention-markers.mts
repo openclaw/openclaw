@@ -49,6 +49,16 @@ export const AGENT_DATABASE_CONTENTION_MARKERS: MarkerSpec[] = [
     sourceModule: "src/cron/maintenance.ts",
     markers: ["Session registry maintenance skipped some agent stores", "failedStores"],
   },
+  {
+    // The canonical-validation worker pool closes its own agent database; a close
+    // that loses its race must be retried at that boundary, not dropped.
+    sourceModule: "src/config/sessions/session-accessor.sqlite-worker-close-contention.ts",
+    markers: ["isTransientAgentDatabaseContention", "settleSqliteWorkerCloseWithContentionRetry"],
+  },
+  {
+    sourceModule: "src/config/sessions/session-accessor.sqlite-mutation-worker.runtime.ts",
+    markers: ["settleSqliteWorkerCloseWithContentionRetry"],
+  },
 ];
 
 function listBuiltRuntimeFiles(distDir: string): string[] {

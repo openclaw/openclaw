@@ -18,6 +18,10 @@ const gc = vi.hoisted(() => ({
   result: undefined as WeakRef<object> | undefined,
 }));
 
+const workerClose = vi.hoisted(() => ({
+  results: [] as Array<{ errors: Error[]; settled: boolean }>,
+}));
+
 vi.mock("../../infra/worker-idle-gc.js", () => ({
   scheduleWorkerIdleGc: () => {
     gc.pending = gc.collect;
@@ -31,7 +35,9 @@ vi.mock("../../infra/kysely-sync-cache-state.js", () => ({
 }));
 vi.mock("../../state/openclaw-agent-canonical-validation-receipt.js", () => ({}));
 vi.mock("../../state/openclaw-agent-db-readonly-open.js", () => ({}));
-vi.mock("../../state/openclaw-state-db-cache.js", () => ({}));
+vi.mock("../../state/openclaw-state-db-cache.js", () => ({
+  closeOpenClawStateDatabaseByPath: () => {},
+}));
 vi.mock("../../state/openclaw-agent-db-identity.js", () => ({
   readOpenClawAgentDatabaseIdentity: () => ({
     identity: "1:2",
@@ -54,7 +60,8 @@ vi.mock("../../state/openclaw-agent-db.js", () => {
   const database = { db: { isOpen: true, isTransaction: false } };
   return {
     borrowOpenClawAgentDatabase: () => ({ release() {} }),
-    settleOpenClawAgentDatabaseWorkerClose: () => ({ errors: [], settled: true }),
+    settleOpenClawAgentDatabaseWorkerClose: () =>
+      workerClose.results.shift() ?? { errors: [], settled: true },
     withOpenClawAgentDatabaseAdmission: <T>(
       _options: unknown,
       withAdmission: OpenClawAgentDatabaseWriteAdmission,
@@ -173,5 +180,67 @@ it("releases replies and preserves idle collection across buffered admissions", 
       gc.pending = undefined;
       gc.collect.mockClear();
     }
+  }
+});
+
+it("retries a pooled close that lost its race instead of rejecting the task", async () => {
+  const { port1: parentPort, port2: worker } = new MessageChannel();
+  const databaseOptions = { agentId: "fixture", path: "/fixture/agent.sqlite", env: {} };
+  const coordination = {
+    actorId: "fixture",
+    databasePath: "/fixture/state.sqlite",
+    stateContext: {
+      environment: { OPENCLAW_STATE_DIR: "/fixture" },
+    },
+  };
+  // The first close loses its race; the retry converges the same handle.
+  workerClose.results = [
+    { errors: [new Error("database is locked")], settled: false },
+    { errors: [], settled: true },
+  ];
+  const running = runReclamationWorkerPort(worker, databaseOptions, { operationId: 0 });
+  parentPort.postMessage(
+    {
+      type: "close",
+      operationId: 1,
+      coordination,
+    } satisfies SqliteReclamationWorkerCloseRequest,
+    [],
+  );
+  try {
+    await expect(running).resolves.toMatchObject({ settled: true, cleanupWarnings: [] });
+  } finally {
+    parentPort.close();
+    worker.close();
+    workerClose.results = [];
+  }
+});
+
+it("keeps a damaged pooled close terminal instead of retrying it", async () => {
+  const { port1: parentPort, port2: worker } = new MessageChannel();
+  const databaseOptions = { agentId: "fixture", path: "/fixture/agent.sqlite", env: {} };
+  const coordination = {
+    actorId: "fixture",
+    databasePath: "/fixture/state.sqlite",
+    stateContext: {
+      environment: { OPENCLAW_STATE_DIR: "/fixture" },
+    },
+  };
+  workerClose.results = [{ errors: [new Error("file is not a database")], settled: false }];
+  const running = runReclamationWorkerPort(worker, databaseOptions, { operationId: 0 });
+  parentPort.postMessage(
+    {
+      type: "close",
+      operationId: 1,
+      coordination,
+    } satisfies SqliteReclamationWorkerCloseRequest,
+    [],
+  );
+  try {
+    await expect(running).rejects.toThrow(/could not close its agent database/);
+  } finally {
+    parentPort.close();
+    worker.close();
+    workerClose.results = [];
   }
 });

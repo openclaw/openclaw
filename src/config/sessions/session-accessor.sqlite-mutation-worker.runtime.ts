@@ -49,6 +49,7 @@ import type {
   SqliteReclamationWorkerMessage,
 } from "./session-accessor.sqlite-reclamation-worker.types.js";
 import { withWorkerWriteAdmission } from "./session-accessor.sqlite-worker-admission.runtime.js";
+import { settleSqliteWorkerCloseWithContentionRetry } from "./session-accessor.sqlite-worker-close-contention.js";
 import {
   runWithSqliteMutationWorkerCoordination,
   type SqliteMutationWorkerCoordination,
@@ -62,10 +63,14 @@ async function settleReclamationDatabase(pathname: string): Promise<{
   cleanupWarnings: string[];
   settled: boolean;
 }> {
-  const outcome = await settleOpenClawAgentDatabaseWorkerClose(pathname);
+  // The worker owns this close, so the worker owns the retry policy for a close
+  // that lost its own race. A damaged database is not contention and stays terminal.
+  const outcome = await settleSqliteWorkerCloseWithContentionRetry({
+    settle: () => settleOpenClawAgentDatabaseWorkerClose(pathname),
+  });
   return {
-    cleanupWarnings: outcome.errors.map((error) => error.message),
-    settled: outcome.settled,
+    cleanupWarnings: outcome.result.errors.map((error) => error.message),
+    settled: outcome.result.settled,
   };
 }
 
@@ -278,7 +283,15 @@ export async function runReclamationWorkerPort(
           const cleanup = await closeDatabase();
           if (pooledTask) {
             if (!cleanup.settled) {
-              throw new Error("Canonical validation task could not close its agent database");
+              // Keep the close failure visible: a losing race and a damaged
+              // database both stay loud, and the reason must not be dropped.
+              throw new Error(
+                `Canonical validation task could not close its agent database${
+                  cleanup.cleanupWarnings.length > 0
+                    ? `: ${cleanup.cleanupWarnings.join("; ")}`
+                    : ""
+                }`,
+              );
             }
             // Keep native close under this task's coordinator and parent's writer admission.
             closeOpenClawStateDatabaseByPath(request.coordination.databasePath);
