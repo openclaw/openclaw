@@ -53,6 +53,39 @@ const history = [
 ];
 
 suite.define(() => {
+  it("keeps the restart recovery notice time visible across reloads", async () => {
+    await suite.withPage(
+      { ...pageOptions, locale: "en-US", timezoneId: "UTC" },
+      async ({ page }) => {
+        const restart = {
+          ...message("user", "[System] Continue the interrupted turn.", "restart-clock"),
+          provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
+        };
+        await installMockGateway(page, {
+          historyMessages: [history[0]!, restart, history[history.length - 1]!],
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        const notice = page.locator(".chat-notice");
+        await notice.getByText("System · restart recovery", { exact: true }).waitFor();
+        for (const width of [1100, 390]) {
+          await page.setViewportSize({ width, height: 900 });
+          const metric = notice.locator(".chat-divider__metric");
+          await expect.poll(() => metric.textContent()).toBe("10:00 AM");
+          expect(await notice.getAttribute("data-ts")).toBe(String(timestamp));
+          expect(
+            await notice.evaluate((element) => element.scrollWidth <= element.clientWidth),
+          ).toBe(true);
+        }
+        await page.reload();
+        await notice.getByText("System · restart recovery", { exact: true }).waitFor();
+        await expect
+          .poll(() => notice.locator(".chat-divider__metric").textContent())
+          .toBe("10:00 AM");
+        expect(await notice.getAttribute("data-ts")).toBe(String(timestamp));
+      },
+    );
+  });
+
   it.each([false, true])(
     "appends events without losing disclosure state (grouped=%s)",
     async (grouped) => {

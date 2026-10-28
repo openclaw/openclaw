@@ -102,7 +102,9 @@ describe("system notices through pending-to-history promotion", () => {
           : baseMessage["__openclaw"],
       };
       if (sourceTool === "main_session_restart_recovery") {
-        expect(render([], pending(message))).toMatchObject([{ kind: "notice", label }]);
+        expect(render([], pending(message))).toMatchObject([
+          { kind: "notice", label, showTimestamp: true },
+        ]);
         for (const state of ["interrupted", "cancelled"] as const) {
           expect(render([], pending(message, state))).toMatchObject([
             {
@@ -137,6 +139,13 @@ describe("system notices through pending-to-history promotion", () => {
       // Promotion must not be separated by search, which evicts the pending notice.
       for (const [stage, messages] of stages.entries()) {
         const items = render(messages, inputs);
+        if (sourceTool === "main_session_restart_recovery") {
+          expect(
+            items.find((item) => item.kind === "notice" && item.label === label),
+          ).toMatchObject({
+            showTimestamp: true,
+          });
+        }
         const canonicalOrder = [
           { kind: "group", role: "user", messages: [{ message: before }] },
           { kind: "notice", icon: "cpu", label, text, timestamp: 1000 },

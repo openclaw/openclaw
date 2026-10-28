@@ -34,6 +34,7 @@ const systemNoticeKinds: Readonly<Record<string, SystemNoticeKind>> = {
     icon: "cpu",
     labelKey: "chat.systemNotice.restartRecovery.label",
     summaryKey: null,
+    showTimestamp: true,
     pendingSummaryKeys: {
       interrupted: "chat.systemNotice.restartRecovery.interrupted",
       cancelled: "chat.systemNotice.restartRecovery.cancelled",
