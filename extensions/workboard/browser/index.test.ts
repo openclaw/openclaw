@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import type {
   ControlUiAccessory,
+  ControlUiAction,
   ControlUiNavigationItem,
   ControlUiPage,
 } from "openclaw/plugin-sdk/control-ui";
@@ -91,6 +92,21 @@ function mountAccessory(session: ReturnType<typeof createGatewaySession>) {
 }
 
 const makeBoard = (id: string, extra: Partial<WorkboardBoardSummary> = {}) => ({ id, ...extra });
+
+it("offers Add to Workboard as a session menu action", async () => {
+  request.mockResolvedValue({ boards: [] });
+  await activate();
+  const action = fixture.registrations.get("action/capture-session") as ControlUiAction | undefined;
+  expect(action).toMatchObject({ placement: "session", label: "Add to Workboard" });
+  const session = createGatewaySession({ key: "agent:main:dashboard:1" });
+  const context = { sessionKey: session.key, session };
+  expect(action?.resolve?.(context)).toMatchObject({
+    label: "Add to Workboard",
+    hidden: false,
+  });
+  fixture.host.connection.canWrite = false;
+  expect(action?.resolve?.(context)?.hidden).toBe(true);
+});
 
 it("refreshes catalog labels when a deferred locale loads and when the locale changes", async () => {
   Object.assign(fixture.host, { locale: "sv" });
@@ -373,7 +389,7 @@ it("avoids accessory polling, recovers failed reads, and retires pending reads",
   const container = mountAccessory(session);
   await vi.advanceTimersByTimeAsync(0);
   expect(container.textContent).toContain(card.title);
-  expect(registeredKeys("action/")).toEqual([]);
+  expect(registeredKeys("action/")).toEqual(["action/capture-session"]);
   const expectedCalls = [
     ["workboard.boards.list", {}],
     ["workboard.cards.list", { sessionKey: session.key }],

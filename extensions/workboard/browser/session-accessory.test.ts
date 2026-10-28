@@ -1,8 +1,10 @@
 import "./test/dom.setup.ts";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { createWorkboardCapability } from "./lib/workboard/capability.ts";
 import { createWorkboardCard } from "./lib/workboard/test/index-helpers.ts";
 import { mountPage } from "./pages/workboard/workboard-page.test-support.ts";
+import { createWorkboardPage } from "./pages/workboard/workboard-page.tsx";
 import { createWorkboardSessionAccessory } from "./session-accessory.tsx";
 import { workboardTestHost } from "./test/host.setup.ts";
 import { createViewContext } from "./test/host.ts";
@@ -16,13 +18,15 @@ function mountAccessory(sessionKey: string, payload: unknown = {}, agentId?: str
   fixture.host.request = request as typeof fixture.host.request;
   const container = document.body.appendChild(document.createElement("div"));
   const context = createViewContext(fixture.host, { sessionKey, ...(agentId ? { agentId } : {}) });
-  let mounted = createWorkboardSessionAccessory()(container, context);
+  const workboard = createWorkboardCapability();
+  onTestFinished(() => workboard.dispose());
+  let mounted = createWorkboardSessionAccessory(workboard)(container, context);
   const dispose = () => {
     mounted?.dispose?.();
     mounted = undefined;
   };
   onTestFinished(dispose);
-  return { ...fixture, request, container, context, mounted, dispose };
+  return { ...fixture, request, container, context, mounted, dispose, workboard };
 }
 
 it("reveals a reassigned linked card without changing the selected chat agent", async () => {
@@ -53,6 +57,62 @@ it.each(["global", "unknown"])("ignores bare %s sessions despite an ambient owne
   const { container, host } = mountAccessory(key, {}, "writer");
   expect(container.querySelector("a")).toBeNull();
   expect(host.navigation.openPage).not.toHaveBeenCalled();
+});
+
+it("opens the linked card details from the session chip", async () => {
+  const sessionKey = "agent:writer:dashboard:1";
+  const card = createWorkboardCard({
+    agentId: "writer",
+    sessionKey,
+    metadata: { automation: { boardId: "ops" } },
+  });
+  const { host, container, request, workboard } = mountAccessory(sessionKey, {
+    cards: [card],
+    boards: [{ id: "ops" }],
+  });
+  Object.assign(host.agents, {
+    rows: [{ id: "main" }, { id: "writer" }],
+    defaultId: "main",
+    selectedId: "writer",
+    scopeId: "writer",
+    refresh: vi.fn(async () => {}),
+  });
+  request.mockImplementation(async (method: string) => {
+    if (method === "workboard.cards.list") {
+      return { cards: [card], boards: [{ id: "ops" }] };
+    }
+    if (method === "agents.list") {
+      return {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "main" }, { id: "writer" }],
+      };
+    }
+    return {};
+  });
+  const destination = document.body.appendChild(document.createElement("div"));
+  let disposePage = () => {};
+  onTestFinished(() => {
+    disposePage();
+    destination.remove();
+  });
+  vi.mocked(host.navigation.openPage).mockImplementation(({ path }) => {
+    disposePage();
+    const mounted = createWorkboardPage(workboard, vi.fn())(
+      destination,
+      createViewContext(host, { boardId: path?.[0] ?? "__all__" }),
+    );
+    disposePage = () => mounted?.dispose?.();
+  });
+  await vi.waitFor(() => expect(container.textContent).toContain(card.title));
+  container.querySelector("a")!.click();
+  await vi.waitFor(() =>
+    expect(destination.querySelector("[data-test-dialog]")?.getAttribute("aria-label")).toBe(
+      card.title,
+    ),
+  );
+  expect(workboard.state.detailCardId).toBe(card.id);
 });
 
 it("refreshes only the visible session and ignores stale lookups after navigation", async () => {

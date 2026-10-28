@@ -9,6 +9,7 @@ import { WORKBOARD_CHANGED_EVENT, type WorkboardBoardSummary } from "./lib/workb
 import { createLazyWorkboardPage } from "./pages/workboard/lazy-page.ts";
 import { workboardPageTarget } from "./pages/workboard/page-target.ts";
 import { createWorkboardSessionAccessory } from "./session-accessory.tsx";
+import { createWorkboardSessionAction } from "./session-action.ts";
 import { createWorkboardWidget } from "./widgets.tsx";
 import "./components/toast.css";
 import "./styles/workboard.css";
@@ -132,8 +133,9 @@ export default defineControlUiPlugin({
       host.ui.registerAccessory({
         id: "linked-card",
         placement: "session-header",
-        mount: createWorkboardSessionAccessory(),
+        mount: createWorkboardSessionAccessory(workboard),
       }),
+      host.ui.registerAction(createWorkboardSessionAction(host, workboard)),
       ...(["mini", "card", "board"] as const).map((id) =>
         host.ui.registerWidget({
           id,

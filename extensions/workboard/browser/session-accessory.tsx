@@ -6,15 +6,19 @@ import { createMemo, createSignal, Show } from "solid-js";
 import { icons } from "./components/icons.tsx";
 import { t } from "./i18n/index.ts";
 import { workboardCardBoardId } from "./lib/workboard/board-filter.ts";
-import { isActiveWorkboardCard } from "./lib/workboard/card-state.ts";
+import type { WorkboardCapability } from "./lib/workboard/capability.ts";
+import { isActiveWorkboardCard, replaceCard } from "./lib/workboard/card-state.ts";
 import { normalizeWorkboardChange } from "./lib/workboard/change-payload.ts";
 import { normalizeCardsPayload } from "./lib/workboard/normalization.ts";
 import { findWorkboardSessionCard } from "./lib/workboard/session-links.ts";
 import { WORKBOARD_CHANGED_EVENT, type WorkboardCard } from "./lib/workboard/types.ts";
 import { matchesAgentScope } from "./pages/workboard/agent-filter.ts";
 import { workboardPageTarget } from "./pages/workboard/page-target.ts";
+import { openCardDetails } from "./pages/workboard/view-card-details.tsx";
 
-export function createWorkboardSessionAccessory(): ControlUiAccessory["mount"] {
+export function createWorkboardSessionAccessory(
+  workboard: WorkboardCapability,
+): ControlUiAccessory["mount"] {
   return (container, initialContext) => {
     let context = initialContext;
     let disposed = false;
@@ -158,6 +162,13 @@ export function createWorkboardSessionAccessory(): ControlUiAccessory["mount"] {
                 ) {
                   host.agents.setScope(null);
                 }
+                // The board page renders details from its own shared state; seed
+                // the chip's freshly read card so the details panel can resolve it.
+                if (!workboard.state.cards.some((entry) => entry.id === activeCard.id)) {
+                  replaceCard(workboard.state, activeCard);
+                }
+                openCardDetails(workboard.state, activeCard);
+                workboard.notify();
                 host.navigation.openPage(workboardPageTarget(workboardCardBoardId(activeCard)));
               }}
             >
