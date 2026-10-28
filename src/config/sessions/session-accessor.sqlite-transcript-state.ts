@@ -42,11 +42,11 @@ import {
 import {
   assertSessionTranscriptHot,
   readSessionColdTranscript,
-  SessionTranscriptColdError,
 } from "./session-cold-storage-state.js";
 import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
 import { publishSessionTranscriptAuthority } from "./session-transcript-authority.js";
 import type { SessionTranscriptAuthority } from "./session-transcript-authority.types.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import {
   readTranscriptContextFacts,
   retainTranscriptContextFacts,

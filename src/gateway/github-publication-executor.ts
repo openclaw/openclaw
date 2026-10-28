@@ -50,6 +50,7 @@ import { projectGitHubPublicationResult } from "./github-publication-receipt.js"
 import {
   reconcileGitHubPublication,
   prepareGitHubPublicationWorkspaceRecovery,
+  type GitHubPublicationRecoveryResult,
 } from "./github-publication-recovery.js";
 import type { GitHubPublicationRequesterPolicyV2 } from "./github-publication-requester.js";
 import {
@@ -66,7 +67,7 @@ type PublicationRow = GitHubPublicationExecutionRow;
 
 export async function executeGitHubPublication<Row extends PublicationRow>(params: {
   initial: Row;
-  recoveryResult?: SessionGitHubPublicationResult;
+  recoveryResult?: GitHubPublicationRecoveryResult;
   identity?: GitHubPublicationIdentityOwner;
   requester?: () => GitHubPublicationRequesterPolicyV2;
   target?: { pushRepository: string; repository: string; baseBranch: string };

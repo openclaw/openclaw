@@ -720,6 +720,7 @@ src/config/sessions/session-canonical-key-error.ts
 src/config/sessions/session-canonical-key.ts
 src/config/sessions/session-canonical-row.ts
 src/config/sessions/session-cold-storage-state.ts
+src/config/sessions/session-transcript-cold-error.ts
 src/config/sessions/session-entry-codec.ts
 src/config/sessions/session-entry-write-policy.ts
 src/config/sessions/session-entry-cohort.worker.ts
@@ -2275,6 +2276,7 @@ src/config/sessions/session-participant-identity.ts
 src/config/sessions/session-participant-prepared-read.ts
 packages/agent-core/src/harness/session/session.ts
 packages/ai/src/transports/provider-compaction-checkpoint.ts
+src/config/sessions/recovery-notice.ts
 src/config/sessions/restart-recovery-state.ts
 src/config/sessions/session-accessor.sqlite-delete-snapshot.ts
 src/config/sessions/session-accessor.sqlite-export-slices.ts

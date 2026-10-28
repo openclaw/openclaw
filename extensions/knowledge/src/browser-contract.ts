@@ -48,6 +48,7 @@ export const browserContract = {
     maintenance_status: { kind: "query" },
     stores_snapshot: { kind: "query" },
     stores_change: { kind: "action" },
+    stores_grant: { kind: "action" },
     stores_change_status: { kind: "query" },
     agent_query: { kind: "query" },
     agent_action: { kind: "action" },

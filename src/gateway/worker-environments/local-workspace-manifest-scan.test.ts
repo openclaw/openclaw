@@ -37,111 +37,154 @@ import type { LocalWorkspaceMutation } from "./local-workspace-store.types.js";
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 
-it("prepares depth plus one packs for a one-file scan and retains unchanged subtrees through GC", async () => {
-  using db = new DatabaseSync(":memory:");
-  const root = await fs.realpath(dirs.make("workspace-incremental-scan-"));
-  const files = Array.from({ length: 64 }, (_, index) => ({
-    path: `edited/deep/file-${String(index).padStart(4, "0")}.txt`,
-    type: "file" as const,
-    mode: 0o644,
-    size: 3,
-    sha256: hash("old"),
-  }));
-  const directories = ["edited", "edited/deep", "untouched"];
-  const nodes = [
-    ...directories.map((entryPath) => ({ path: entryPath, type: "directory" as const })),
-    ...files,
-    ...["a", "b"].map((name) => ({
-      path: `untouched/${name}.txt`,
-      type: "file" as const,
-      mode: 0o644,
-      size: 3,
-      sha256: hash("old"),
-    })),
-  ];
-  await Promise.all(
-    directories.map((entryPath) => fs.mkdir(path.join(root, entryPath), { recursive: true })),
-  );
-  await Promise.all(
-    nodes
-      .filter((node) => node.type === "file")
-      .map((node) => fs.writeFile(path.join(root, node.path), "old")),
-  );
-  await requireGit(root, ["init", "--quiet"]);
-  await requireGit(root, ["add", "."]);
-  const baseline = createLocalWorkspaceManifestTree(nodes);
-  const treeRoot = localWorkspaceDigestBytes(baseline.get("")!.treeRef);
-  const row = {
-    ...localWorkspaceProjectionFixture("incremental", root),
-    tree_root_digest: treeRoot,
-    baseline_ref: localWorkspaceManifestRootReference(baseline, "a".repeat(40)),
-  };
-  mutateLocalWorkspaceProjection(db, row.worktree_id, { kind: "create", row });
-  const prepare = (batches: readonly Uint8Array[]) => {
-    for (const batch of batches) {
-      const preparation = deserialize(inflateRawSync(batch)) as LocalWorkspacePreparation;
-      prepareLocalWorkspaceContentInDatabase(db, preparation);
+it.each(["edit", "delete one-child root", "delete two-sided root"])(
+  "keeps a complete incremental pack graph through acceptance and GC after %s",
+  async (operation) => {
+    using db = new DatabaseSync(":memory:");
+    const root = await fs.realpath(dirs.make("workspace-incremental-scan-"));
+    const files = Array.from(
+      { length: operation === "delete one-child root" ? 2 : 64 },
+      (_, index) => ({
+        path: `edited/deep/file-${String(index).padStart(4, "0")}.txt`,
+        type: "file" as const,
+        mode: 0o644,
+        size: 3,
+        sha256: hash("old"),
+      }),
+    );
+    const directories = ["edited", "edited/deep", "untouched"];
+    const nodes = [
+      ...directories.map((entryPath) => ({ path: entryPath, type: "directory" as const })),
+      ...files,
+      ...["a", "b"].map((name) => ({
+        path: `untouched/${name}.txt`,
+        type: "file" as const,
+        mode: 0o644,
+        size: 3,
+        sha256: hash("old"),
+      })),
+    ];
+    await Promise.all(
+      directories.map((entryPath) => fs.mkdir(path.join(root, entryPath), { recursive: true })),
+    );
+    await Promise.all(
+      nodes
+        .filter((node) => node.type === "file")
+        .map((node) => fs.writeFile(path.join(root, node.path), "old")),
+    );
+    await requireGit(root, ["init", "--quiet"]);
+    await requireGit(root, ["add", "."]);
+    const baseline = createLocalWorkspaceManifestTree(nodes);
+    const treeRoot = localWorkspaceDigestBytes(baseline.get("")!.treeRef);
+    const row = {
+      ...localWorkspaceProjectionFixture("incremental", root),
+      tree_root_digest: treeRoot,
+      baseline_ref: localWorkspaceManifestRootReference(baseline, "a".repeat(40)),
+    };
+    mutateLocalWorkspaceProjection(db, row.worktree_id, { kind: "create", row });
+    const prepare = (batches: readonly Uint8Array[]) => {
+      for (const batch of batches) {
+        const preparation = deserialize(inflateRawSync(batch)) as LocalWorkspacePreparation;
+        prepareLocalWorkspaceContentInDatabase(db, preparation);
+      }
+    };
+    prepare(prepareLocalWorkspaceTreePacks(baseline));
+    const directoryRoot = baseline.get(baseline.get("edited/deep")!.children!)!;
+    const changedPath = operation === "edit" ? files[32]!.path : directoryRoot.node.path;
+    if (operation === "edit") {
+      await fs.writeFile(path.join(root, changedPath), "new");
+    } else {
+      expect(
+        [directoryRoot.left, directoryRoot.right].filter((child) => child !== null),
+      ).toHaveLength(operation === "delete one-child root" ? 1 : 2);
+      await fs.unlink(path.join(root, changedPath));
     }
-  };
-  prepare(prepareLocalWorkspaceTreePacks(baseline));
-  const changed = { ...files[32]!, sha256: hash("new") };
-  await fs.writeFile(path.join(root, changed.path), "new");
-  const input = {
-    id: row.worktree_id,
-    revision: 0,
-    action: { kind: "scan" as const, target: "projection" as const, canonicalRoot: root },
-  };
-  const result = await executeLocalWorkspaceManifestRead(
-    readLocalWorkspaceManifestRows(db, input),
-    input.action,
-  );
-  if (result.kind !== "scan") {
-    throw new Error("Missing incremental scan");
-  }
-  const counter = trackSqliteStatementExecutions(db, ["preparationReads"], (sql) =>
-    /^select\b.*"sweep_epoch".*"local_workspace_tree_packs"/i.test(sql) ? "preparationReads" : null,
-  );
-  try {
-    prepare(result.preparations!);
-    expect(counter.counts.preparationReads).toBe(1);
-  } finally {
-    counter.restore();
-  }
-  expect(result.preparations).toHaveLength(1);
-  const packs = result.preparations!.flatMap(
-    (batch) => (deserialize(inflateRawSync(batch)) as LocalWorkspacePreparation).packs!,
-  );
-  // The three path components select three directory packs plus the sentinel root pack.
-  expect(packs).toHaveLength(4);
-  const expected = createLocalWorkspaceManifestTree(
-    nodes.map((node) => (node.path === changed.path ? changed : node)),
-  );
-  expect(result.resultingRoot).toBe(localWorkspaceManifestRootReference(expected, row.base_commit));
-  const { preparations: _preparations, observation: _observation, ...checkpoint } = result;
-  mutateLocalWorkspaceProjection(db, row.worktree_id, {
-    kind: "update",
-    revision: 0,
-    patch: { checkpoint_json: JSON.stringify(checkpoint) },
-  });
-  db.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "config_machine_state"));
-  beginLocalWorkspaceSweepInDatabase(db);
-  const pendingEpoch = beginLocalWorkspaceSweepInDatabase(db);
-  expect(readLocalWorkspaceSweepCandidates(db, pendingEpoch).packs).toEqual([]);
-  expect(readLocalWorkspaceTree(db, treeRoot)).toEqual(baseline);
-  const nextRoot = localWorkspaceDigestBytes(result.treeRoot!);
-  expect(readLocalWorkspaceTree(db, nextRoot)).toEqual(expected);
-  mutateLocalWorkspaceProjection(db, row.worktree_id, {
-    kind: "update",
-    revision: 1,
-    patch: { checkpoint_json: null },
-    manifest: checkpoint,
-  });
-  const acceptedEpoch = beginLocalWorkspaceSweepInDatabase(db);
-  const garbage = readLocalWorkspaceSweepCandidates(db, acceptedEpoch);
-  expect(garbage.packs.length).toBeGreaterThan(0);
-  deleteLocalWorkspaceSweepBatchInDatabase(db, acceptedEpoch, garbage);
-  expect(readLocalWorkspaceTree(db, nextRoot)).toEqual(expected);
-});
+    const expected = createLocalWorkspaceManifestTree(
+      nodes.flatMap((node) =>
+        node.path !== changedPath
+          ? [node]
+          : operation === "edit"
+            ? [{ ...files[32]!, sha256: hash("new") }]
+            : [],
+      ),
+    );
+    const promoted = expected.get(expected.get("edited/deep")!.children!)!;
+    // Initial publication must not accidentally supply the pack needed after deletion.
+    expect(
+      db
+        .prepare("SELECT 1 FROM local_workspace_tree_packs WHERE tree_digest = ?")
+        .get(localWorkspaceDigestBytes(promoted.treeRef)),
+    ).toBeUndefined();
+    const input = {
+      id: row.worktree_id,
+      revision: 0,
+      action: { kind: "scan" as const, target: "projection" as const, canonicalRoot: root },
+    };
+    const result = await executeLocalWorkspaceManifestRead(
+      readLocalWorkspaceManifestRows(db, input),
+      input.action,
+    );
+    if (result.kind !== "scan") {
+      throw new Error("Missing incremental scan");
+    }
+    const counter = trackSqliteStatementExecutions(db, ["preparationReads"], (sql) =>
+      /^select\b.*"sweep_epoch".*"local_workspace_tree_packs"/i.test(sql)
+        ? "preparationReads"
+        : null,
+    );
+    try {
+      prepare(result.preparations!);
+      expect(counter.counts.preparationReads).toBe(1);
+    } finally {
+      counter.restore();
+    }
+    const nextRoot = localWorkspaceDigestBytes(result.treeRoot!);
+    const { preparations: _preparations, observation: _observation, ...checkpoint } = result;
+    let revision = 0;
+    if (operation === "edit") {
+      mutateLocalWorkspaceProjection(db, row.worktree_id, {
+        kind: "update",
+        revision: 0,
+        patch: { checkpoint_json: JSON.stringify(checkpoint) },
+      });
+      db.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "config_machine_state"));
+      beginLocalWorkspaceSweepInDatabase(db);
+      const pendingEpoch = beginLocalWorkspaceSweepInDatabase(db);
+      expect(readLocalWorkspaceSweepCandidates(db, pendingEpoch).packs).toEqual([]);
+      expect(readLocalWorkspaceTree(db, treeRoot)).toEqual(baseline);
+      expect(readLocalWorkspaceTree(db, nextRoot)).toEqual(expected);
+      revision = 1;
+    }
+    mutateLocalWorkspaceProjection(db, row.worktree_id, {
+      kind: "update",
+      revision,
+      patch: { checkpoint_json: null },
+      manifest: checkpoint,
+    });
+    expect(
+      readLocalWorkspaceManifestRows(db, { ...input, revision: revision + 1 }).records,
+    ).toEqual(expected);
+    expect(result.preparations).toHaveLength(1);
+    const packs = result.preparations!.flatMap(
+      (batch) => (deserialize(inflateRawSync(batch)) as LocalWorkspacePreparation).packs!,
+    );
+    // The three path components select three directory packs plus the sentinel root pack.
+    expect(packs).toHaveLength(4);
+    expect(result.resultingRoot).toBe(
+      localWorkspaceManifestRootReference(expected, row.base_commit),
+    );
+    if (operation !== "edit") {
+      db.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "config_machine_state"));
+      beginLocalWorkspaceSweepInDatabase(db);
+      beginLocalWorkspaceSweepInDatabase(db);
+    }
+    const acceptedEpoch = beginLocalWorkspaceSweepInDatabase(db);
+    const garbage = readLocalWorkspaceSweepCandidates(db, acceptedEpoch);
+    expect(garbage.packs.length).toBeGreaterThan(0);
+    deleteLocalWorkspaceSweepBatchInDatabase(db, acceptedEpoch, garbage);
+    expect(readLocalWorkspaceTree(db, nextRoot)).toEqual(expected);
+  },
+);
 
 async function repairFixture() {
   const root = await fs.realpath(dirs.make("workspace-baseline-repair-"));
@@ -194,6 +237,12 @@ it.each(["projection", "canonical", "checkpoint"] as const)(
       );
       snapshot.row.checkpoint_json = JSON.stringify(scan);
     }
+    if (matching === "canonical") {
+      // A later guest name must not enroll unrelated canonical bytes or spoil
+      // an already matching canonical candidate.
+      await fs.writeFile(path.join(projection, "unaccepted.txt"), "guest addition");
+      await fs.writeFile(path.join(canonical, "unaccepted.txt"), "host-only bytes");
+    }
     const divergent = matching === "projection" ? canonical : projection;
     await fs.writeFile(path.join(divergent, "nested/file.txt"), "preserved live edit");
     const result = await executeLocalWorkspaceManifestRead(snapshot, {
@@ -231,16 +280,20 @@ it.each(["projection", "canonical", "checkpoint"] as const)(
   },
 );
 
-it("preserves divergent filesystems when neither can reconstruct the exact missing baseline", async () => {
-  const { projection, canonical, snapshot } = await repairFixture();
-  await fs.writeFile(path.join(projection, "nested/file.txt"), "guest edit");
-  await fs.writeFile(path.join(canonical, "nested/file.txt"), "host edit");
-  await expect(
-    executeLocalWorkspaceManifestRead(snapshot, {
-      kind: "repair",
-      canonicalRoot: canonical,
-    }),
-  ).rejects.toThrow("neither workspace matches the saved baseline");
-  expect(await fs.readFile(path.join(projection, "nested/file.txt"), "utf8")).toBe("guest edit");
-  expect(await fs.readFile(path.join(canonical, "nested/file.txt"), "utf8")).toBe("host edit");
-});
+it.each(["different", "identical"] as const)(
+  "preserves %s later edits when neither filesystem matches the exact missing baseline",
+  async (edits) => {
+    const { projection, canonical, snapshot } = await repairFixture();
+    await fs.writeFile(path.join(projection, "nested/file.txt"), "guest edit");
+    const hostEdit = edits === "identical" ? "guest edit" : "host edit";
+    await fs.writeFile(path.join(canonical, "nested/file.txt"), hostEdit);
+    await expect(
+      executeLocalWorkspaceManifestRead(snapshot, {
+        kind: "repair",
+        canonicalRoot: canonical,
+      }),
+    ).rejects.toThrow("neither workspace matches the saved baseline");
+    expect(await fs.readFile(path.join(projection, "nested/file.txt"), "utf8")).toBe("guest edit");
+    expect(await fs.readFile(path.join(canonical, "nested/file.txt"), "utf8")).toBe(hostEdit);
+  },
+);

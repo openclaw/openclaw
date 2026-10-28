@@ -49,10 +49,10 @@ import {
 } from "./deliver-types.js";
 import {
   captureDeliveryPlacementEvidence,
+  deliveryPlacementMatchesContext,
   type DeliveryPlacementEvidence,
 } from "./delivery-placement-evidence.js";
 import type { DurableDeliveryCompletion } from "./delivery-queue-types.js";
-import { normalizeTargetForProvider } from "./target-normalization.js";
 
 /** In-process locator captured before delivery preparation; never queue payload data. */
 export type ConversationDeliveryTarget = Pick<
@@ -297,15 +297,9 @@ function resolvePendingFinalResultEvidence(
   if (!context?.channel || !context.to || !options.identifiedResult) {
     return undefined;
   }
-  const expectedTarget = normalizeTargetForProvider(context.channel, context.to);
+  const destination = { channel: context.channel, to: context.to, threadId: context.threadId };
   const matchesPlacement = (placement: DeliveryPlacementEvidence | undefined): boolean =>
-    !placement ||
-    (!placement.invalid &&
-      placement.channels.every((channel) => channel === context.channel) &&
-      placement.targets.every(
-        (target) => normalizeTargetForProvider(context.channel!, target) === expectedTarget,
-      ) &&
-      placement.threads.every((thread) => thread === String(context.threadId ?? "").trim()));
+    deliveryPlacementMatchesContext(placement, destination);
   const matches = (result: OutboundDeliveryResult): boolean =>
     result.channel === context.channel &&
     result.outcome !== "not_sent" &&

@@ -323,6 +323,14 @@ During cooldown, publication status includes the remaining wait and the latest f
 
 During publication, an accepted PR response still completes its owned receipt if the requesting connection closes or publication permission ends. A successful local branch update likewise finishes its matching index transaction while the execution retains workspace ownership. This settlement does not authorize another push or PR creation; unconfirmed outcomes retain their existing recovery or personal-confirmation requirements.
 
+If an update reached an existing PR before that PR closed, recovery recognizes
+the accepted commit and the original publication receipt, including after its
+branch is deleted or the accepted tree is merged. It settles the same request
+against that PR without reopening it or creating a replacement. A
+recovered publication result records the accepted update; it does not mean the
+PR is still open. Inspect its current state before making a new, explicit
+publication request for further work.
+
 Before creating a publication commit or changing the local branch and index, the Gateway verifies that the accepted commit shares Git history with the authenticated pull request base, and that the published branch is absent or an ancestor of the accepted local head. Recreating a local branch or expiring its reflog does not invalidate shared commit history. A failed lookup is not treated as an absent branch. A rebased, behind, or unrelated branch is rejected with recovery guidance before new local publication changes. Recovery of an already-started request-owned index transaction still runs first. The push is conditional on the exact observed remote head or branch absence, so a concurrent branch change is rejected. The broker never rewrites published history or rewrites local history automatically.
 
 To refresh an existing PR, preserve its published history and apply the intended edits on top of the published head. For an imported original PR, preserve local work until its updated source has been explicitly accepted; never create a replacement PR or redirect its publication to another branch. For ordinary session-created PRs, if rewritten history is intentional, use a new session branch and a replacement PR instead. Do not merge the old published history back merely to make a rebased branch pushable.

@@ -235,7 +235,7 @@ export async function runPreparedChannelTurnCore<
         });
         emitStage("record", "done");
         await params.afterRecord?.();
-        await deliverPendingDeliveryNotice(recordSessionKey, params.storePath);
+        await deliverPendingDeliveryNotice(recordSessionKey, params.storePath, recordAgentId);
       } catch (err) {
         emitStage("record", "error", err);
         try {

@@ -140,6 +140,20 @@ describe("worker environment service provision replay", () => {
     await support.reopenWorkerEnvironmentStore();
 
     const restarted = support.createService(provider());
+    // A new caller must not replay an indeterminate allocation after losing authority.
+    await expect(
+      restarted.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-restart-replay",
+        machineClass: "large",
+        os: "os-a",
+        beforeProvision: () => {
+          throw new Error("Caller authority revoked");
+        },
+      }),
+    ).rejects.toThrow("Caller authority revoked");
+    expect(operationIds).toEqual([operationId]);
+    expect(support.testState.store.get(environmentId)).toMatchObject(pendingAllocation);
     restarted.start();
     await support.waitForFast(() =>
       expect(support.testState.store.get(environmentId)).toMatchObject({

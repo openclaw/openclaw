@@ -449,8 +449,8 @@ The coverage audit found three different boundaries:
 Focused reproduction:
 
 ```sh
-node scripts/run-vitest.mjs src/agents/code-mode.bridge.lifecycle.test.ts --maxWorkers=1
-node scripts/run-vitest.mjs src/agents/code-mode-engine-parity.test.ts \
+OPENCLAW_VITEST_RUNTIME=node node scripts/run-vitest.mjs src/agents/code-mode.bridge.lifecycle.test.ts --maxWorkers=1
+OPENCLAW_VITEST_RUNTIME=node node scripts/run-vitest.mjs src/agents/code-mode-engine-parity.test.ts \
   src/agents/code-mode.failure-phase.test.ts --maxWorkers=1
 node --import ./scripts/tsx.mjs scripts/perf/code-mode-engine-measure.ts 1 3
 ```
@@ -465,11 +465,24 @@ Additional standalone-probe limits remain explicit. Each synthetic continuation 
 a fresh timeout, so its successful resumes cannot establish the production
 owner's cumulative budget. QuickJS's shared worker pool is not adopted by the
 probe's resource host; closing that host is not proof of QuickJS pool retirement.
-The sequential cleanup block also needs separate failure-path qualification:
-an earlier cleanup rejection skips later cleanup, while pending cleanup can
-leave the child alive until the parent's 180-second deadline. These are
-source-level proof gaps, not an observed executor failure or evidence that QuickJS
-should be removed.
+The probe's cleanup audit found a separate harness defect: a failed parallel
+execution or an assertion could lose custody of sibling checkpoints, and an
+earlier cleanup rejection skipped later cleanup. The probe now registers
+checkpoints as they arrive, joins launched siblings before unwinding, joins all
+checkpoint disposals and attempts host and scheduler cleanup independently.
+It preserves workload and cleanup errors and clears both timers after cleanup
+settles. Three deterministic failure-path tests target this ownership boundary;
+they mock the executor and do not establish VM behavior. The initial
+[CI execution](https://github.com/openclaw/openclaw/actions/runs/40708711969/job/122888857460)
+passed all three tests under a Bun host. This does not establish Node-host
+coverage. A follow-up Testbox allocation was also stopped while queued and
+supplied no execution proof.
+
+Pending cleanup can still leave the child alive until the parent's 180-second
+deadline. The pool-retirement and cumulative-budget limits above also remain
+unqualified. These are explicit proof gaps, not an observed executor failure or
+evidence that QuickJS should be removed. An explicit `OPENCLAW_VITEST_RUNTIME=node`
+selects the Node test host; launching the wrapper with Node alone does not.
 
 ## Reproduction and remaining qualification
 

@@ -67,12 +67,24 @@ describe("protected canonical session handoff", () => {
 
   it.each([
     "__openclawSessionFacePreference=1",
+    "__openclawSessionKey=agent%3Aother%3Adashboard%3A11111111-2222-3333-4444-555555555555",
     "__openclawSessionKey=agent%3Amain%3Adashboard%3A11111111-2222-3333-4444-555555555555&__openclawComposerFocus=1",
   ])("preserves navigation hints %s without changing the authenticated target", async (query) => {
     const path = `${canonical}?${query}`;
     const opened = await request(entryUrl(path, "/control"));
     expect(opened.serveApp).toHaveBeenCalledWith(path, expect.any(Function));
-    expect(parseReturn(path, "/control")).toEqual(parseReturn(canonical, "/control"));
+    expect(resolveSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: {
+          namespace: "chat",
+          kind: "short",
+          agentId: "main",
+          shortId: "12345678aaaa40008000000000000001",
+          slugHint: "launch",
+          literalSessionKey: "agent:main:launch-12345678aaaa40008000000000000001",
+        },
+      }),
+    );
   });
 
   it("uses the authenticated profile and grants only exact accessible sessions", async () => {
@@ -128,6 +140,10 @@ describe("protected canonical session handoff", () => {
     "/control/chat/main?__openclawSessionFacePreference=1&__openclawSessionFacePreference=1",
     "/control/chat/main?__openclawSessionKey=first&__openclawSessionKey=second",
     "/control/chat/main?__openclawSessionKey=",
+    "/control/chat/main?__openclawSessionKey=+%20",
+    "/control/chat/main?__openclawSessionKey=agent%3Amain%3Aa%00",
+    "/control/chat/main?__openclawSessionKey=agent%3Amain%3Aa%7F",
+    "/control/chat/main?__openclawSessionKey=agent%3Amain%3Aa&unknown=value",
     "/control/chat/main?__openclawComposerFocus=1&__openclawComposerFocus=1",
     "/control/chat/main?__openclawComposerFocus=0",
     "/control/chat/main?__openclawComposerFocus=",
