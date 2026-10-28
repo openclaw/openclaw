@@ -6569,6 +6569,5 @@
 ["ui/src/pages/plugins/plugins-page.generations.test.ts","../../components/confirm-dialog.ts","29010d4b48ecb6a8932036adcb5c2d910c9c76c242c0124481a10ac96470b5e9",1]
 ["ui/src/pages/plugins/plugins-page.persisted-install.test.ts","../../components/confirm-dialog.ts","29010d4b48ecb6a8932036adcb5c2d910c9c76c242c0124481a10ac96470b5e9",1]
 ["ui/src/pages/plugins/plugins-page.test.ts","../../components/confirm-dialog.ts","29010d4b48ecb6a8932036adcb5c2d910c9c76c242c0124481a10ac96470b5e9",1]
-["ui/src/pages/portals/portals-page.test.ts","./portal-reachability.ts","e1746fe571fdfe83366ec4999b7812ff3e4fabd7739892586b350b55f92a101c",1]
 ["ui/src/pages/sessions/sessions-page.archived.test.ts","../../components/confirm-dialog.ts","29010d4b48ecb6a8932036adcb5c2d910c9c76c242c0124481a10ac96470b5e9",1]
 ["ui/src/pages/sessions/sessions-page.test.ts","../../components/confirm-dialog.ts","29010d4b48ecb6a8932036adcb5c2d910c9c76c242c0124481a10ac96470b5e9",1]

@@ -247,6 +247,9 @@ describe("recoverEmbeddedRunAttempt", () => {
       expect(written.filter((event) => event.name === "model.retry.decision")).toEqual([
         expect.objectContaining({
           attributes: {
+            captureId: expect.any(String),
+            sequence: 1,
+            failedWrites: 0,
             decision: retryAvailable ? "accepted" : "rejected",
             reason: retryAvailable ? "backoff_completed" : "retry_budget_exhausted",
             retryCount: 0,

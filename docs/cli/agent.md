@@ -250,6 +250,21 @@ and complete measurements; observed error counts include intentional checks and
 are not repair-turn counts. Task latency excludes startup and interviews.
 Auto comparisons retain the `auto` label rather than reporting forced Code Mode.
 
+Gateway cells also retain `model-timeline.jsonl` and `gateway.modelAccounting`.
+This separate projection counts observed logical model calls across the isolated
+Gateway lifetime, including auxiliary work that settles during shutdown. Exact
+task, interview, and owned child run IDs identify `foreground`; other calls stay
+in `other`, without inferring their purpose or attributing them to the task.
+`complete` requires continuous capture, matching call terminals, successful
+producer cleanup, and a cleanly joined Gateway. Missing or damaged evidence is
+incomplete, not zero. Token buckets remain null when any selected call lacks
+that usage observation, even when the logical-call count is complete.
+
+`model.usage` observations are reconciliation evidence and are never added to
+call-terminal usage. Neither this projection nor transcript accounting measures
+physical HTTP attempts, internal retries, opaque external runtimes, or the full
+provider bill. A logical call can include more than one transport request.
+
 Automated completion means artifact/effect checks passed. Final-response
 accuracy and execution integrity need separate adjudication against retained
 transcripts, commands, receipts, and files. A correct artifact can accompany

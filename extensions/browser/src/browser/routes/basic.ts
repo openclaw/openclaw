@@ -106,12 +106,12 @@ async function buildBrowserStatus(
   let cdpReady: boolean;
   let pageReady = false;
   if (capabilities.usesChromeMcp) {
-    const deadlineMs = Date.now() + STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS;
+    const deadlineMs = performance.now() + STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS;
     cdpReady = await profileCtx.isTransportAvailable(
       STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS,
       signal,
       {
-        timeoutMs: () => Math.max(1, deadlineMs - Date.now()),
+        timeoutMs: () => Math.max(1, deadlineMs - performance.now()),
         onResult: (tabCount) => (pageReady = tabCount !== null),
       },
     );

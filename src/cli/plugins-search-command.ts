@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { ClawHubPackageSearchResult } from "../infra/clawhub-packages.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -24,8 +25,8 @@ function formatPackageSearchLine(entry: ClawHubPackageSearchResult): string {
     pkg.isOfficial && pkg.channel !== "official" ? "official" : undefined,
     pkg.latestVersion ? formatVersionLabel(pkg.latestVersion) : undefined,
   ].filter(Boolean);
-  const summary = pkg.summary ? theme.muted(` — ${pkg.summary}`) : "";
-  return `${pkg.name}  ${theme.muted(flags.join(" | "))}${summary}\n  ${theme.muted(`Install: ${formatCliCommand(`openclaw plugins install ${installSpec}`)}`)}`;
+  const summary = pkg.summary ? theme.muted(terminalText` — ${pkg.summary}`) : "";
+  return `${terminalText`${pkg.name}`}  ${theme.muted(terminalText`${flags.join(" | ")}`)}${summary}\n  ${theme.muted(`Install: ${formatCliCommand(terminalText`openclaw plugins install ${installSpec}`)}`)}`;
 }
 
 export async function runPluginsSearchCommand(
@@ -58,7 +59,7 @@ export async function runPluginsSearchCommand(
     if (opts.json) {
       throw error;
     }
-    runtime.error(formatErrorMessage(error));
+    runtime.error(terminalText`${formatErrorMessage(error)}`);
     runtime.exit(1);
   }
 }

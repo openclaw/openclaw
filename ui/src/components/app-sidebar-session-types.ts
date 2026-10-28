@@ -194,6 +194,7 @@ export type SidebarRecentSession = Readonly<{
   spawnedBy?: string;
   forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
   status?: SessionRunStatus;
+  lastRunError?: string;
   createdAt?: number;
   startedAt?: number;
   updatedAt?: number | null;
@@ -222,6 +223,9 @@ export type SidebarSessionHovercardRow = Pick<
   | "endedAt"
   | "hasAutomation"
   | "hasActiveRun"
+  | "gatewayHasActiveRun"
+  | "hasActiveSubagentRun"
+  | "lastRunError"
   | "label"
   | "lastMessagePreview"
   | "expandedParticipants"

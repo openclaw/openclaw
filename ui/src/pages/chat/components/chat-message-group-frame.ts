@@ -194,10 +194,10 @@ export function prepareMessageGroupFrame(
   // Tool activity and live narration are blocks of the turn whose answer follows:
   // no identity, footer or actions of their own, only the run-block gap.
   const isTurnBlock =
-    group.messages.every((message) => message.presentationOwnsFooter === false) ||
     normalizedRole === "tool" ||
     (group.messages.length > 0 &&
-      group.messages.every(({ message }) => isProviderVoiceTranscript(message))) ||
+      (group.messages.every((message) => message.presentationOwnsFooter === false) ||
+        group.messages.every(({ message }) => isProviderVoiceTranscript(message)))) ||
     (normalizedRole === "assistant" &&
       !opts.searchResult &&
       !ownsRunFrame &&

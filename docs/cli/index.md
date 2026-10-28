@@ -72,6 +72,8 @@ Use `--` to stop option parsing. Command words still dispatch after it: for exam
   Embedded newlines, carriage returns, and tabs appear as `\n`, `\r`, and `\t`
   instead of changing the report layout. This display formatting does not change
   the underlying paths, configuration values, or JSON fields.
+  Bidirectional formatting controls are removed from displayed values; ordinary
+  right-to-left letters and emoji are preserved.
 - On bounded reporting commands, `--json` reserves stdout for one JSON document.
   The CLI suppresses styling and progress output. Warnings and diagnostics stay on
   stderr.

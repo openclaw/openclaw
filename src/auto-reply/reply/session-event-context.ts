@@ -6,6 +6,7 @@ import { createCronExecutionId } from "../../cron/run-id.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
 import { readExecRequestOwners } from "../../infra/exec-request-context.js";
 import { channelRouteTargetsMatchExact } from "../../plugin-sdk/channel-route.js";
+import { normalizeAccountId } from "../../routing/account-id.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { CRON_EXECUTION_SOURCE_TOOL } from "../../sessions/input-provenance.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -15,6 +16,7 @@ import type { MsgContext } from "../templating.js";
 import type { SessionEventOptions, SessionEventTarget } from "./session-event-contract.js";
 import {
   getSessionEventRuntimeConfig,
+  readSessionEventTargetCommandOwner,
   readSessionEventTargetEnvironment,
   readSessionEventTargetOperatorAuthority,
   readSessionEventTargetOwnerContinuation,
@@ -145,6 +147,30 @@ export function buildSessionEventContext(params: {
         return true;
       },
     });
+  } else {
+    const commandOwner = readSessionEventTargetCommandOwner(target);
+    if (commandOwner) {
+      const { authority, requester } = commandOwner;
+      // A continuation of the requester's own work keeps their owner tools only while
+      // they are still an owner under the current config.
+      bindCommandOwnerAuthority(ctx, {
+        recoveryReference: authority.recoveryReference,
+        isCurrent: () => {
+          params.assertCurrent();
+          return authority.isCurrent(getSessionEventRuntimeConfig());
+        },
+      });
+      // Owner-checked effects (for example Gateway maintenance) recheck this sender at
+      // use. Project it only on the requester's own channel account, never across
+      // channels where the same raw ID can name someone else.
+      if (
+        deliveryContext?.channel === requester.channel &&
+        normalizeAccountId(deliveryContext.accountId) === normalizeAccountId(requester.accountId)
+      ) {
+        ctx.SenderId = requester.senderId;
+        ctx.SenderE164 = requester.senderE164;
+      }
+    }
   }
   setChannelSourceTurnId(ctx, options.sourceTurnId);
   return ctx;
