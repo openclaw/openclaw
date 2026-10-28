@@ -312,6 +312,8 @@ Operator clients may advertise optional capabilities in `connect.params.caps`:
 
 - `tool-events`: accepts structured tool lifecycle events.
 - `inline-widgets`: can render hosted inline widget tool results.
+- `no-question-input`: cannot collect structured question answers. The ACP bridge
+  advertises this capability so its turns omit `ask_user` and ask in ordinary text.
 - `ultrafast`: accepts the explicit `"ultrafast"` fast-mode value in session metadata.
   Without it, session responses and events present that value as Fast (`true`)
   for released native decoders that only accept booleans and `"auto"`. This is a

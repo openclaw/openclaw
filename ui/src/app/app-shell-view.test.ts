@@ -151,16 +151,18 @@ it("publishes readiness when the retained sidebar's delayed module commits", asy
   }
 });
 
-it("exposes the Claws navigation entry only while its Labs toggle is enabled", async () => {
+it("exposes the Templates navigation entry only while its Labs toggle is enabled", async () => {
   const { owner, runtime } = await mountShell();
   const initial = runtime.context.runtimeConfig.state;
   const config = vi.spyOn(runtime.context.runtimeConfig, "state", "get");
   for (const enabled of [false, true, false]) {
     config.mockReturnValue({
       ...initial,
-      bootstrapConfig: { gateway: { controlUi: { experimental: { claws: enabled } } } },
+      bootstrapConfig: { gateway: { controlUi: { experimental: { templates: enabled } } } },
     });
-    expect(readShellView(owner).sidebarProperties.enabledRouteIds.includes("claws")).toBe(enabled);
+    expect(readShellView(owner).sidebarProperties.enabledRouteIds.includes("templates")).toBe(
+      enabled,
+    );
     expect(readShellView(owner).sidebarProperties.enabledRouteIds).toContain("agents");
   }
 });

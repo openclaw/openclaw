@@ -188,7 +188,7 @@ export function connectShellIdle(
               "load",
               () => {
                 if (applyStyle && !styleApplied()) {
-                  // Keep Chat's style matching out of Create Claw, but its JS lazy.
+                  // Keep Chat's style matching out of Create Template, but its JS lazy.
                   // Vite adopts this loaded sheet; it must outlive the idle owner.
                   link.rel = "stylesheet";
                   link.removeAttribute("as");

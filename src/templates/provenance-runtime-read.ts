@@ -1,0 +1,266 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { formatErrorMessage } from "../infra/errors.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
+import {
+  registerOpenClawStateDatabaseLifecycleListener,
+  type OpenClawStateDatabaseOptions,
+} from "../state/openclaw-state-db.js";
+import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import type { TemplateInstallSchemaVersionRow } from "./provenance-runtime-read.kernel.js";
+import { parseTemplateInstallRecordSchemaVersion } from "./provenance-schema-version.js";
+
+type TemplateInstallSchemaVersionRead =
+  | {
+      kind: "ok";
+      schemaVersion: ReturnType<typeof parseTemplateInstallRecordSchemaVersion>;
+      agentConfigDigest: string;
+    }
+  | { kind: "error"; error: unknown };
+
+type TemplateInstallSchemaVersionSnapshot =
+  | { kind: "ready"; schemaVersions: Map<string, TemplateInstallSchemaVersionRead> }
+  | {
+      kind: "state-error";
+      error: unknown;
+      knownAgentIds: ReadonlySet<string>;
+      ownershipUnknown: boolean;
+    }
+  | { kind: "uninitialized" };
+
+type TemplateInstallSchemaVersionReadOptions = OpenClawStateDatabaseOptions & {
+  artifactPreservingReadOnly?: boolean;
+};
+
+// Config preparation publishes legacy ownership reads.
+const snapshotsByPath = new Map<string, TemplateInstallSchemaVersionSnapshot>();
+export const templateSchemaVersionNotifications = { onChanged: () => {} };
+const handedOffFacts = resolveGlobalSingleton(
+  Symbol.for("openclaw.templateInstallSchemaVersionFacts"),
+  () =>
+    new AsyncLocalStorage<{
+      path: string;
+      snapshot: TemplateInstallSchemaVersionSnapshot;
+      active: boolean;
+    }>(),
+);
+
+function decodeSchemaVersions(
+  rows: TemplateInstallSchemaVersionRow[],
+): TemplateInstallSchemaVersionSnapshot {
+  const schemaVersions = new Map<string, TemplateInstallSchemaVersionRead>();
+  for (const row of rows) {
+    try {
+      schemaVersions.set(row.agentId, {
+        kind: "ok",
+        schemaVersion: parseTemplateInstallRecordSchemaVersion(row.schemaVersion),
+        agentConfigDigest: row.agentConfigDigest,
+      });
+    } catch (error) {
+      schemaVersions.set(row.agentId, { kind: "error", error });
+    }
+  }
+  return { kind: "ready", schemaVersions };
+}
+
+function knownAgentIds(
+  snapshot: TemplateInstallSchemaVersionSnapshot | undefined,
+): ReadonlySet<string> {
+  if (snapshot?.kind === "ready") {
+    return new Set(snapshot.schemaVersions.keys());
+  }
+  return snapshot?.kind === "state-error" ? snapshot.knownAgentIds : new Set();
+}
+
+function isOwnershipUnknown(snapshot: TemplateInstallSchemaVersionSnapshot | undefined): boolean {
+  return (
+    !snapshot ||
+    snapshot.kind === "uninitialized" ||
+    (snapshot.kind === "state-error" && snapshot.ownershipUnknown)
+  );
+}
+
+function failedSchemaVersionSnapshot(
+  error: unknown,
+  previous?: TemplateInstallSchemaVersionSnapshot,
+  ownershipUnknown = true,
+): Extract<TemplateInstallSchemaVersionSnapshot, { kind: "state-error" }> {
+  return {
+    kind: "state-error",
+    error,
+    knownAgentIds: knownAgentIds(previous),
+    ownershipUnknown,
+  };
+}
+
+registerOpenClawStateDatabaseLifecycleListener((event) => {
+  if (event.kind === "failure-cleared" || event.kind === "opened") {
+    return;
+  }
+  const previous = snapshotsByPath.get(event.path);
+  const error =
+    event.kind === "open-error" || event.kind === "terminal-failure"
+      ? event.error
+      : new Error("OpenClaw state database closed before consent provenance verification.");
+  snapshotsByPath.set(
+    event.path,
+    failedSchemaVersionSnapshot(error, previous, isOwnershipUnknown(previous)),
+  );
+  templateSchemaVersionNotifications.onChanged();
+});
+
+function resolveSnapshotPath(options: OpenClawStateDatabaseOptions): string {
+  return options.database?.path ?? resolveDatabasePath(options);
+}
+
+/** Discovery workers consume the host's prepared facts, including failed or missing preparation. */
+export function captureTemplateInstallSchemaVersionFacts(
+  options: OpenClawStateDatabaseOptions = {},
+) {
+  const path = resolveSnapshotPath(options);
+  const snapshot = readCachedTemplateInstallSchemaVersions(options);
+  if (snapshot.kind === "ready") {
+    return {
+      path,
+      snapshot: {
+        kind: snapshot.kind,
+        schemaVersions: [...snapshot.schemaVersions].map(
+          ([agentId, read]) =>
+            [
+              agentId,
+              read.kind === "error" ? { ...read, error: formatErrorMessage(read.error) } : read,
+            ] as const,
+        ),
+      },
+    };
+  }
+  return {
+    path,
+    snapshot:
+      snapshot.kind === "state-error"
+        ? {
+            ...snapshot,
+            error: formatErrorMessage(snapshot.error),
+            knownAgentIds: [...snapshot.knownAgentIds],
+          }
+        : snapshot,
+  };
+}
+
+/** Includes late plugin imports, whose config preparers run immediately on registration. */
+export function withTemplateInstallSchemaVersionFacts<T>(
+  facts: ReturnType<typeof captureTemplateInstallSchemaVersionFacts>,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const snapshot: TemplateInstallSchemaVersionSnapshot =
+    facts.snapshot.kind === "ready"
+      ? { ...facts.snapshot, schemaVersions: new Map(facts.snapshot.schemaVersions) }
+      : facts.snapshot.kind === "state-error"
+        ? { ...facts.snapshot, knownAgentIds: new Set(facts.snapshot.knownAgentIds) }
+        : facts.snapshot;
+  const scope = { path: facts.path, snapshot, active: true };
+  return handedOffFacts.run(scope, async () => {
+    try {
+      return await operation();
+    } finally {
+      scope.active = false;
+    }
+  });
+}
+
+function readHandedOffFacts(options: OpenClawStateDatabaseOptions) {
+  const scope = handedOffFacts.getStore();
+  if (!scope) {
+    return undefined;
+  }
+  if (!scope.active || scope.path !== resolveSnapshotPath(options)) {
+    throw new Error("Template provenance facts are outside their captured state scope.");
+  }
+  return scope.snapshot;
+}
+
+export function readCachedTemplateInstallSchemaVersions(
+  options: OpenClawStateDatabaseOptions = {},
+): TemplateInstallSchemaVersionSnapshot {
+  return (
+    readHandedOffFacts(options) ??
+    snapshotsByPath.get(resolveSnapshotPath(options)) ?? { kind: "uninitialized" }
+  );
+}
+
+function resolveSchemaVersionSnapshot(
+  snapshot: TemplateInstallSchemaVersionSnapshot | undefined,
+  previous: TemplateInstallSchemaVersionSnapshot | undefined,
+): TemplateInstallSchemaVersionSnapshot {
+  if (snapshot) {
+    return snapshot;
+  }
+  const previousAgentIds = knownAgentIds(previous);
+  return previousAgentIds.size > 0 || (previous !== undefined && isOwnershipUnknown(previous))
+    ? {
+        kind: "state-error",
+        error: new Error(
+          "OpenClaw state database disappeared after Template ownership was observed.",
+        ),
+        knownAgentIds: previousAgentIds,
+        ownershipUnknown: true,
+      }
+    : { kind: "ready", schemaVersions: new Map() };
+}
+
+export async function prepareTemplateInstallSchemaVersions(
+  options: TemplateInstallSchemaVersionReadOptions = {},
+): Promise<{ path: string; publish: () => void }> {
+  const path = resolveSnapshotPath(options);
+  const previous = snapshotsByPath.get(path);
+  let snapshot: TemplateInstallSchemaVersionSnapshot;
+  let assertCurrent: (() => void) | undefined;
+  try {
+    const context = captureOpenClawStateWorkerContext({ path, env: options.env });
+    assertCurrent = context.admission.assertCurrent;
+    if (previous?.kind === "ready") {
+      snapshot = previous;
+    } else {
+      const rows = await runOpenClawStateWorkerOperation(
+        context,
+        (scope) =>
+          scope.execute({
+            type: "templates.install-schema-versions",
+            input: {
+              artifactPreservingReadOnly:
+                options.artifactPreservingReadOnly !== false || isArtifactPreservingStateRead(),
+            },
+          }),
+        { existingOnly: true },
+      );
+      snapshot = resolveSchemaVersionSnapshot(
+        rows === undefined ? undefined : decodeSchemaVersions(rows),
+        previous,
+      );
+    }
+  } catch (error) {
+    snapshot = failedSchemaVersionSnapshot(error, previous);
+  }
+  return {
+    path,
+    publish: () => {
+      const current = snapshotsByPath.get(path);
+      // Lifecycle changes and newer preparation supersede the staged read.
+      if (current !== previous) {
+        return;
+      }
+      try {
+        if (resolveSnapshotPath(options) !== path) {
+          throw new Error("OpenClaw state location changed before consent provenance publication.");
+        }
+        assertCurrent?.();
+      } catch (error) {
+        snapshot = failedSchemaVersionSnapshot(error, current);
+      }
+      snapshotsByPath.set(path, snapshot);
+      templateSchemaVersionNotifications.onChanged();
+    },
+  };
+}

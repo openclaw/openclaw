@@ -15,6 +15,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "./openclaw-state-schema.test-support.js";
 import {
@@ -268,6 +269,7 @@ it("upgrades deferred channel links without granting legacy recovery custody", a
   renameSync(options.path, `${options.path}.seed`);
   copyFileSync(`${options.path}.seed`, options.path);
   const legacy = new DatabaseSync(options.path);
+  restorePreTemplateStateIdentifiersForTest(legacy);
   addPreCutoverClientCredentialTablesForTest(legacy);
   legacy.exec(`
     DROP INDEX idx_user_profile_identities_authorization;

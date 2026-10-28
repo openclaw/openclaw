@@ -58,9 +58,27 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 34      | Durable default cron partition binding, independent of the state directory                                                                                                                                                                                                                                                                     | Unreleased          |
 | 35      | Content-addressed local workspace directory packs and source path sets, with compact per-projection file fingerprints                                                                                                                                                                                                                          | Unreleased          |
 
+| 36 | Starter install tables, record versions, and provenance use canonical Template names; unrelated data and absent optional provenance stay unchanged | Unreleased |
+
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schema 36
+
+Schema 36 migrates the five physical `claw_*` install tables to `template_*`,
+renames their feature-specific columns and record schema identifiers, and maps
+the structured `claw-introduced` origin and `claw` provenance values to their
+Template equivalents. It does not rewrite package identities, paths, content
+digests, JSON payloads, or unrelated strings. Databases with no installed Labs
+content still require this migration because the predecessor tables exist there.
+Optional `agent_provenance` storage remains absent when it was never installed.
+
+SQLite startup and Doctor use the existing schema migration transaction and
+backup owners. PostgreSQL uses its consecutive schema migration owner and
+verifies the predecessor and successor catalogs. A refused publication rolls
+back the cutover. Older binaries refuse schema 36; rollback restores the verified
+pre-migration backup with its matching binary.
 
 ### State schema 34
 

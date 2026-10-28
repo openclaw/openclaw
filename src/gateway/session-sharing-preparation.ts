@@ -284,7 +284,7 @@ export async function prepareSessionMutationFacts(
     }
     const preparations = params.storageReady ? [params.storageReady] : [];
     for (const { candidate } of candidateIdentities) {
-      const pending = getPendingOpenClawAgentDatabasePreparation(candidate.physicalPath);
+      const pending = getPendingOpenClawAgentDatabasePreparation(candidate.physicalPath, "read");
       if (pending) {
         preparations.push(pending);
       }

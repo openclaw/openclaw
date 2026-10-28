@@ -7,8 +7,8 @@ import { resolveGatewayStatus } from "../lib/gateway-status.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
-import { isClawsAvailable } from "../pages/claws/availability.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.tsx";
+import { isTemplatesAvailable } from "../pages/templates/availability.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
 import type { ShellLazyOverlayHost } from "./app-shell-lazy-view.tsx";
@@ -200,9 +200,9 @@ export function readShellView(host: ShellViewHost) {
     router: runtime.router,
     activePluginTabId: activePluginRef ? pluginTabKey(activePluginRef) : "",
     enabledRouteIds:
-      isClawsAvailable(context.runtimeConfig.state) === true
+      isTemplatesAvailable(context.runtimeConfig.state) === true
         ? APP_ROUTE_IDS
-        : APP_ROUTE_IDS.filter((routeId) => routeId !== "claws"),
+        : APP_ROUTE_IDS.filter((routeId) => routeId !== "templates"),
     sessionKey: host.routeState.sessionRouteNotice ? "" : host.activeSessionKey,
     connected: gatewayConnected,
     connectionStatus,
