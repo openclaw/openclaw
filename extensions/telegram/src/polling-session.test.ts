@@ -53,7 +53,7 @@ const isRecoverableTelegramNetworkErrorMock = vi.hoisted(() => vi.fn(() => true)
 const computeBackoffMock = vi.hoisted(() =>
   vi.fn((_policy: { initialMs: number }, _attempt: number) => 0),
 );
-const sleepWithAbortMock = vi.hoisted(() => vi.fn(async () => undefined));
+const sleepWithAbortMock = vi.hoisted(() => vi.fn(async (): Promise<void> => undefined));
 const drainPendingDeliveriesMock = vi.hoisted(() => vi.fn(async (_opts: unknown) => undefined));
 
 vi.mock("./bot.js", () => ({
@@ -200,12 +200,6 @@ function makeIsolatedBot(params?: {
     handleUpdate: vi.fn(params?.handleUpdate ?? noop),
     stop: vi.fn(params?.stop ?? noop),
   };
-}
-
-function expectTelegramBotTransportSequence(firstTransport: unknown, secondTransport: unknown) {
-  expect(createTelegramBotMock).toHaveBeenCalledTimes(2);
-  expect(createTelegramBotMock.mock.calls.at(0)?.[0]?.telegramTransport).toBe(firstTransport);
-  expect(createTelegramBotMock.mock.calls.at(1)?.[0]?.telegramTransport).toBe(secondTransport);
 }
 
 function expectDrainPendingDeliveriesCall(index = 0): DrainPendingDeliveriesCall {
@@ -527,7 +521,7 @@ describe("TelegramPollingSession", () => {
         const abort = new AbortController();
         const backoff = createDeferred<void>();
         const setStatus = vi.fn();
-        using now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+        using _now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
         sleepWithAbortMock.mockImplementationOnce(() => backoff.promise);
         createTelegramBotMock.mockImplementation(() => {
           if (phase === "bot creation") {

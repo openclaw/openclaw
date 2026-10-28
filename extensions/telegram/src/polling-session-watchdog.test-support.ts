@@ -116,12 +116,12 @@ export function registerPollingStallRestartTests({
       const transport = {
         fetch: globalThis.fetch,
         sourceFetch: globalThis.fetch,
-        close: vi.fn(async () => undefined),
+        close: vi.fn(async (): Promise<void> => undefined),
       };
       const replacement =
         replacementKind === "same"
           ? transport
-          : { ...transport, close: vi.fn(async () => undefined) };
+          : { ...transport, close: vi.fn(async (): Promise<void> => undefined) };
       const releaseClose = createDeferred<void>();
       replacement.close.mockImplementation(async () => await releaseClose.promise);
       const createTelegramTransport = vi.fn(() => replacement);

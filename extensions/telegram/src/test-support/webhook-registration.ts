@@ -43,7 +43,6 @@ export function registerTelegramWebhookRegistrationTests(fixture: RegistrationFi
   };
 
   it("retries transient getMe startup init failures before starting the account", async () => {
-    const setStatus = vi.fn();
     using now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
     const retryStarted = createDeferred<void>();
     const releaseRetry = createDeferred<void>();
