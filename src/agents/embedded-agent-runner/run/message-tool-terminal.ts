@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   getInternalToolTurnCompletion,
+  setInternalToolSteeringAllowance,
   setInternalToolTurnCompletion,
 } from "../../../../packages/agent-core/src/internal-hooks.js";
 import {
@@ -17,6 +18,7 @@ import {
   extractMessagingToolSendResult,
   isDeliveredMessagingToolSendToCurrentSource,
 } from "../../embedded-agent-messaging-extraction.js";
+import { isMessageToolSendActionName } from "../../embedded-agent-messaging.js";
 import type { MessagingToolSourceReplyPayload } from "../../embedded-agent-messaging.types.js";
 import { captureToolAuthoredSourceReply } from "../../embedded-agent-tool-authored-source-reply.js";
 import type { AfterToolCallContext, AfterToolCallResult, Agent } from "../../runtime/index.js";
@@ -105,7 +107,35 @@ export function installMessageToolTerminalHook(
     agent: Agent;
     onDeliveredSourceReply?: () => void;
   },
-): void {
+): () => void {
+  const steeringAllowance =
+    params.sourceReplyDeliveryMode === "message_tool_only"
+      ? (args: unknown) => {
+          const toolArgs = asOptionalRecord(args);
+          if (
+            !toolArgs ||
+            !isMessageToolSendActionName(toolArgs.action) ||
+            !resolveMessageToolSourceReplyFinal(toolArgs)
+          ) {
+            return false;
+          }
+          const extractionArgs =
+            params.currentProvider &&
+            typeof toolArgs.provider !== "string" &&
+            typeof toolArgs.channel !== "string"
+              ? { ...toolArgs, provider: params.currentProvider }
+              : toolArgs;
+          const send = extractMessagingToolSend("message", extractionArgs, params);
+          return isDeliveredMessagingToolSendToCurrentSource({ ...params, send });
+        }
+      : undefined;
+  const refreshSteeringAllowance = () => {
+    const messageTool = params.agent.state.tools.find((tool) => tool.name === "message");
+    if (messageTool) {
+      setInternalToolSteeringAllowance(messageTool, steeringAllowance);
+    }
+  };
+  refreshSteeringAllowance();
   const finalReplyInputs = new Set<object>();
   const nestedCompletion = createSourceReplyBatchCompletion();
   const previousCompletion = getInternalToolTurnCompletion(params.agent);
@@ -168,4 +198,5 @@ export function installMessageToolTerminalHook(
     }
     return delivered && final ? { ...hookResult, terminate: true } : hookResult;
   };
+  return refreshSteeringAllowance;
 }
