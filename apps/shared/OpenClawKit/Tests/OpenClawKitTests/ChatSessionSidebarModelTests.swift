@@ -5,6 +5,39 @@ import Testing
 
 @MainActor
 struct ChatSessionSidebarModelTests {
+    @Test func `uncategorized child stays under grouped parent rather than becoming a recent root`() throws {
+        let sections = ChatSessionSidebarModel.sections(
+            sessions: [
+                self.entry(key: "parent", category: "Work", childSessions: ["child"]),
+                self.entry(key: "child", parentSessionKey: "parent"),
+            ],
+            currentSessionKey: "parent",
+            groups: [OpenClawChatSessionGroup(name: "Work", position: 0)],
+            query: "")
+        let group = try #require(sections.first { $0.id == "group:Work" })
+        #expect(group.nodes.map(\.id) == ["parent"])
+        #expect(group.nodes.first?.children.map(\.id) == ["child"])
+        #expect(!sections.contains { $0.id == "recent" })
+    }
+
+    @Test func `independent category and pin keep children selectable outside their parent tree`() {
+        let sections = ChatSessionSidebarModel.sections(
+            sessions: [
+                self.entry(key: "parent", category: "Work", childSessions: ["categorized", "pinned"]),
+                self.entry(key: "categorized", category: "Other", parentSessionKey: "parent"),
+                self.entry(key: "pinned", pinned: true, parentSessionKey: "parent"),
+            ],
+            currentSessionKey: "parent",
+            groups: [
+                OpenClawChatSessionGroup(name: "Work", position: 0),
+                OpenClawChatSessionGroup(name: "Other", position: 1),
+            ],
+            query: "")
+        #expect(sections.first { $0.id == "group:Work" }?.nodes.first?.children.isEmpty == true)
+        #expect(sections.first { $0.id == "group:Other" }?.nodes.map(\.id) == ["categorized"])
+        #expect(sections.first { $0.id == "pinned" }?.nodes.map(\.id) == ["pinned"])
+    }
+
     private func mixedRoster() throws -> [OpenClawChatSessionEntry] {
         try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(#"""
         {"sessions":[

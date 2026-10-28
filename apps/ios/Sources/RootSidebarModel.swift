@@ -265,6 +265,7 @@ final class RootSidebarModel {
             activeAgentID: activeAgentID,
             groups: groups,
             excludesMainSession: true,
+            includeEmptyGroups: true,
             query: query,
             sessionRoutingContract: sessionRoutingContract)
     }
@@ -330,6 +331,7 @@ final class RootSidebarModel {
     }
 
     func refreshSessions(appModel: NodeAppModel) async {
+        await appModel.sessionGroups.refresh(appModel: appModel)
         self.rosterGeneration &+= 1
         let rosterGeneration = self.rosterGeneration
         self.isRefreshing = true
@@ -344,6 +346,7 @@ final class RootSidebarModel {
         switch loadedRoster {
         case let .success(roster):
             self.applyRoster(roster)
+            appModel.sessionGroups.pruneCollapsed(for: self.sessions)
         case let .failure(message):
             self.sessionErrorText = message
         case .cancelled:

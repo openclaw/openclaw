@@ -588,6 +588,8 @@ final class NodeAppModel {
     private var apnsLastRegisteredGatewayStableID: String?
     @ObservationIgnored private let pushRegistrationManager = PushRegistrationManager()
 
+    let sessionGroups = SessionGroupModel()
+
     var operatorSession: GatewayNodeSession {
         self.operatorGateway
     }

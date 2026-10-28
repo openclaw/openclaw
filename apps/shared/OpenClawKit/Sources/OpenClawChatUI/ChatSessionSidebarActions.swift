@@ -5,60 +5,6 @@ import OpenClawKit
 import OpenClawProtocol
 
 @MainActor
-public struct OpenClawSessionMenuConnection {
-    public let hello: HelloOk
-    public let local: Bool
-    public var groupDefaultsBrowser: OpenClawGroupDefaultsBrowser?
-    public let selfProfileID: String?
-    public let isCurrent: () -> Bool
-    private let sendRequest: (OpenClawChatGatewayRequest) async throws -> Data
-    public let link: (OpenClawChatSessionEntry, Bool) -> URL?
-    public let openWindow: (OpenClawChatSessionEntry) -> Void
-
-    public init(
-        hello: HelloOk,
-        local: Bool,
-        selfProfileID: String? = nil,
-        isCurrent: @escaping () -> Bool,
-        request: @escaping (OpenClawChatGatewayRequest) async throws -> Data,
-        link: @escaping (OpenClawChatSessionEntry, Bool) -> URL?,
-        openWindow: @escaping (OpenClawChatSessionEntry) -> Void)
-    {
-        self.hello = hello
-        self.local = local
-        self.selfProfileID = selfProfileID
-        self.isCurrent = isCurrent
-        self.sendRequest = request
-        self.link = link
-        self.openWindow = openWindow
-    }
-
-    func allows(_ method: String, scope: String = "operator.write") -> Bool {
-        let methods = self.hello.features["methods"]?.value as? [AnyCodable] ?? []
-        let scopes = (self.hello.auth["scopes"]?.value as? [AnyCodable] ?? []).compactMap { $0.value as? String }
-        let broadRead = scopes.contains("operator.read") || scopes.contains("operator.write")
-        let scopedRead = broadRead || scopes.contains("operator.sessions.write")
-        return self.isCurrent() && methods.contains(.init(method)) &&
-            (scopes.contains("operator.admin") || scopes.contains(scope) ||
-                (scope == "operator.read" && broadRead) || (scope == "operator.sessions.read" && scopedRead))
-    }
-
-    func read<T: Decodable>(_ method: String, _ params: [String: OpenClawProtocol.AnyCodable] = [:]) async throws -> T {
-        try await JSONDecoder().decode(
-            T.self,
-            from: self.request(.init(method: method, params: params, timeoutMs: 15000)))
-    }
-
-    @discardableResult
-    public func request(_ request: OpenClawChatGatewayRequest) async throws -> Data {
-        guard self.isCurrent(), !Task.isCancelled else { throw CancellationError() }
-        let data = try await self.sendRequest(request)
-        guard self.isCurrent(), !Task.isCancelled else { throw CancellationError() }
-        return data
-    }
-}
-
-@MainActor
 @Observable
 final class ChatSessionSidebarActions {
     struct Profile: Decodable {

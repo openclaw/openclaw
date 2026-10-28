@@ -139,10 +139,6 @@ struct RootTabsSidebarRegressionTests {
             source,
             from: "private func agentSelectorLabel(",
             to: "private var newChatButton:")
-        let pages = try Self.extract(
-            source,
-            from: "private func pagesSection(",
-            to: "private var homeRow:")
         let sessions = try Self.extract(
             source,
             from: "private func sessionsSection(",
@@ -178,7 +174,6 @@ struct RootTabsSidebarRegressionTests {
         #expect(footer.contains("self.selectSidebarDestination(.settings)"))
         #expect(footer.contains("RootTabs.Sidebar.Destination.settings"))
 
-        #expect(pages.contains("ForEach(pinnedSessionNodes)"))
         #expect(sessions.contains("section.id == \"recent\""))
         #expect(sessions.contains("String(localized: \"Sessions\")"))
         #expect(!sessions.contains("String(localized: \"Recent\")"))
