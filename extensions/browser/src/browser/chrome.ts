@@ -10,7 +10,6 @@ import { ensurePortAvailable, type SsrFPolicy } from "openclaw/plugin-sdk/securi
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { CONFIG_DIR, sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { monotonicNow } from "openclaw/plugin-sdk/time-runtime";
 import { createBoundedUtf8Tail } from "./bounded-utf8-tail.js";
 import { hasChromeProxyControlArg, omitChromeProxyEnv } from "./browser-proxy-mode.js";
 import { assertManagedProxyAllowsCdpUrl } from "./cdp-proxy-bypass.js";
@@ -313,8 +312,8 @@ async function terminateChromeForRetry(proc: ChildProcess, userDataDir: string):
 }
 
 async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> {
-  const deadline = monotonicNow() + timeoutMs;
-  while (monotonicNow() < deadline) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
     if (!isPidAlive(pid)) {
       return true;
     }
@@ -852,8 +851,8 @@ async function launchOpenClawChromeLocked(
     const { pid: bootstrapPid, proc: bootstrap, releaseAbort } = await spawnOnce();
     let bootstrapError: Error | undefined;
     try {
-      const deadline = monotonicNow() + CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS;
-      while (monotonicNow() < deadline) {
+      const deadline = performance.now() + CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS;
+      while (performance.now() < deadline) {
         signal?.throwIfAborted();
         if (fs.existsSync(localStatePath) && fs.existsSync(preferencesPath)) {
           break;
@@ -909,11 +908,11 @@ async function launchOpenClawChromeLocked(
       proc = spawned.proc;
       releaseSpawnAbort = spawned.releaseAbort;
       const hasExited = () => spawned.proc.exitCode != null || spawned.proc.signalCode != null;
-      const readyDeadline = monotonicNow() + resolved.localLaunchTimeoutMs;
+      const readyDeadline = performance.now() + resolved.localLaunchTimeoutMs;
       let launchHttpReachable = false;
       // Full CDP WebSocket readiness is handled by the caller's
       // waitForCdpReadyAfterLaunch() budget; launch only owns process discovery.
-      while (monotonicNow() < readyDeadline) {
+      while (performance.now() < readyDeadline) {
         signal?.throwIfAborted();
         if (hasExited()) {
           break;

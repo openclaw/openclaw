@@ -1,7 +1,6 @@
 import { hash } from "node:crypto";
 import { type WebClientOptions, WebClient } from "@slack/web-api";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import { monotonicNow } from "openclaw/plugin-sdk/time-runtime";
 import type { SlackProxyDispatcher } from "./client-options.js";
 import {
   resolveSlackLookupClientOptions,
@@ -61,14 +60,14 @@ export function createSlackReadClient(
 }
 
 function createSlackStartupAuthFetch(baseFetch: SlackFetch): SlackFetch {
-  const deadline = monotonicNow() + SLACK_STARTUP_AUTH_RETRY_BUDGET_MS;
+  const deadline = performance.now() + SLACK_STARTUP_AUTH_RETRY_BUDGET_MS;
   return async (input, init) => {
     const response = await baseFetch(input, init);
     if (response.status !== 429) {
       return response;
     }
     const retryAfter = Number.parseInt(response.headers.get("retry-after") ?? "", 10);
-    const remainingMs = Math.max(0, deadline - monotonicNow());
+    const remainingMs = Math.max(0, deadline - performance.now());
     if (!Number.isFinite(retryAfter) || retryAfter * 1000 <= remainingMs) {
       return response;
     }

@@ -15,7 +15,6 @@ import {
   filterStringEntries,
   asFiniteNumber,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { monotonicNow } from "openclaw/plugin-sdk/time-runtime";
 import { GoogleMeetBrowserManualActionError } from "../browser-manual-action-error.js";
 import type { GoogleMeetConfig } from "../config.js";
 import { GOOGLE_MEET_BROWSER_NODE_ADAPTER } from "./google-meet-platform-constants.js";
@@ -233,8 +232,8 @@ export async function createMeetWithBrowserProxyOnNode(params: {
   }
   const notes = new Set<string>();
   let lastError: unknown;
-  const deadline = monotonicNow() + timeoutMs;
-  while (monotonicNow() <= deadline) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() <= deadline) {
     try {
       const evaluated = await callBrowser({
         method: "POST",

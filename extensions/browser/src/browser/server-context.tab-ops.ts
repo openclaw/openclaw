@@ -1,6 +1,5 @@
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { monotonicNow } from "openclaw/plugin-sdk/time-runtime";
 import {
   assertChromeMcpCdpTransportAllowed,
   resolveCdpControlPolicy,
@@ -462,8 +461,8 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
             url: createdViaCdp.finalUrl,
             ...ssrfPolicyOpts,
           });
-          const deadline = monotonicNow() + OPEN_TAB_DISCOVERY_WINDOW_MS;
-          while (monotonicNow() < deadline) {
+          const deadline = performance.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
+          while (performance.now() < deadline) {
             opts?.signal?.throwIfAborted();
             const tabs = await readTabs(opts).catch(() => [] as BrowserTab[]);
             const found = tabs.find((t) => t.targetId === createdViaCdp.targetId);

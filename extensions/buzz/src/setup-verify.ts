@@ -1,5 +1,4 @@
 import { sleep, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { monotonicNow } from "openclaw/plugin-sdk/time-runtime";
 
 const GATEWAY_RELOAD_WAIT_MS = 15_000;
 const GATEWAY_RELOAD_POLL_MS = 500;
@@ -45,7 +44,7 @@ export async function verifyBuzzAfterSetup(params: {
     // The reload budget is consumed by sleep polls on the monotonic clock; the
     // deadline must live there too, or a wall-clock step (NTP correction, VM
     // resume) keeps polling the Gateway past the configured reload window.
-    const reloadDeadline = monotonicNow() + GATEWAY_RELOAD_WAIT_MS;
+    const reloadDeadline = performance.now() + GATEWAY_RELOAD_WAIT_MS;
     let reloadPending = false;
     while (true) {
       try {
@@ -75,7 +74,7 @@ export async function verifyBuzzAfterSetup(params: {
           throw error;
         }
       }
-      const remainingMs = reloadDeadline - monotonicNow();
+      const remainingMs = reloadDeadline - performance.now();
       if (remainingMs <= 0) {
         throw new Error(
           `Gateway did not apply the saved Buzz configuration within ${GATEWAY_RELOAD_WAIT_MS / 1000} seconds`,

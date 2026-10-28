@@ -11,7 +11,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { monotonicNow, raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { textResult, type AgentToolResult } from "openclaw/plugin-sdk/tool-results";
 import type { MemoryConfig } from "./config.js";
 
@@ -305,7 +305,7 @@ class ProviderAdapterEmbeddings implements Embeddings {
     timeoutMs?: number,
   ): Promise<number[]> {
     const deadlineAtMs = timeoutMs
-      ? monotonicNow() + resolveTimerTimeoutMs(timeoutMs, 1)
+      ? performance.now() + resolveTimerTimeoutMs(timeoutMs, 1)
       : undefined;
     const fingerprint = embeddingConfigFingerprint(embedding);
     this.invalidate(fingerprint);
@@ -317,7 +317,7 @@ class ProviderAdapterEmbeddings implements Embeddings {
         return await provider.embed(text, { inputType: "query" });
       }
       // Shared initialization may finish after recall returns; never dispatch that expired query.
-      const remainingTimeoutMs = Math.floor(deadlineAtMs - monotonicNow());
+      const remainingTimeoutMs = Math.floor(deadlineAtMs - performance.now());
       if (remainingTimeoutMs <= 0) {
         throw new Error("memory-lancedb embedding timed out");
       }
@@ -369,7 +369,7 @@ export async function runWithTimeout<T>(params: {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   // Share one absolute deadline with native work so the outer race cannot
   // abandon a still-running operation after reporting a timeout.
-  const deadlineAtMs = monotonicNow() + timeoutMs;
+  const deadlineAtMs = performance.now() + timeoutMs;
   try {
     const result = await raceWithTimeout(
       () => params.task(deadlineAtMs),
@@ -377,12 +377,12 @@ export async function runWithTimeout<T>(params: {
       (): typeof TIMEOUT => TIMEOUT,
       { ref: false },
     );
-    if (result === TIMEOUT || monotonicNow() >= deadlineAtMs) {
+    if (result === TIMEOUT || performance.now() >= deadlineAtMs) {
       return { status: "timeout" };
     }
     return { status: "ok", value: result };
   } catch (error) {
-    if (monotonicNow() >= deadlineAtMs) {
+    if (performance.now() >= deadlineAtMs) {
       return { status: "timeout" };
     }
     throw error;

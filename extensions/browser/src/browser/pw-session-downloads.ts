@@ -1,6 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { monotonicNow } from "openclaw/plugin-sdk/time-runtime";
 import type { Page } from "playwright-core";
 import { BROWSER_ACTION_NAVIGATION_GRACE_MS } from "./act-policy.js";
 import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
@@ -62,8 +61,8 @@ export function beginActionDownloadCaptureOnPage(
         });
       };
       const firstEventGraceMs = Math.max(0, drainOpts.firstEventGraceMs ?? 0);
-      const deadlineAtMs = monotonicNow() + ACT_DOWNLOAD_MAX_DRAIN_MS;
-      const remainingBudgetMs = () => Math.max(0, deadlineAtMs - monotonicNow());
+      const deadlineAtMs = performance.now() + ACT_DOWNLOAD_MAX_DRAIN_MS;
+      const remainingBudgetMs = () => Math.max(0, deadlineAtMs - performance.now());
       if (capture.pending.length === 0 && firstEventGraceMs > 0) {
         await waitForEvent(Math.min(firstEventGraceMs, remainingBudgetMs()));
       }

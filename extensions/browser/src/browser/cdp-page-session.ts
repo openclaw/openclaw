@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
-import { monotonicNow } from "openclaw/plugin-sdk/time-runtime";
 import type { CdpProtocolSend } from "./cdp-ax.js";
 import { assertCdpEndpointAllowed, type CdpSendFn, withCdpSocket } from "./cdp.helpers.js";
 
@@ -92,10 +91,10 @@ async function waitForCdpNavigationResult(
   requestedUrl: string,
   signal?: AbortSignal,
 ): Promise<string | undefined> {
-  const deadline = monotonicNow() + CDP_TARGET_NAVIGATION_RESULT_TIMEOUT_MS;
+  const deadline = performance.now() + CDP_TARGET_NAVIGATION_RESULT_TIMEOUT_MS;
   const requestedAboutBlank = requestedUrl.trim() === "" || requestedUrl.trim() === "about:blank";
   let stableCandidate: { key: string; since: number } | undefined;
-  while (monotonicNow() < deadline) {
+  while (performance.now() < deadline) {
     signal?.throwIfAborted();
     const frameTree = await send("Page.getFrameTree", undefined, sessionId).catch(() => null);
     signal?.throwIfAborted();
@@ -111,7 +110,7 @@ async function waitForCdpNavigationResult(
     // client redirects without waiting for slow subresources to finish loading.
     if (finalUrl && finalUrl !== "about:blank" && loaderId) {
       const key = `${loaderId}\n${finalUrl}`;
-      const now = monotonicNow();
+      const now = performance.now();
       if (stableCandidate?.key === key) {
         if (now - stableCandidate.since >= CDP_TARGET_NAVIGATION_STABILITY_MS) {
           return finalUrl;

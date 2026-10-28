@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
-import { monotonicNow } from "openclaw/plugin-sdk/time-runtime";
 import { waitForBrowserStartup } from "../sdk-node-runtime.js";
 import {
   assertChromeMcpCdpTransportAllowed,
@@ -357,9 +356,9 @@ export function createProfileAvailability({
   ): Promise<void> => {
     // launchOpenClawChrome() can return before Chrome is fully ready to serve /json/version + CDP WS.
     // If a follow-up call races ahead, we can hit PortInUseError trying to launch again on the same port.
-    const deadlineMs = monotonicNow() + state().resolved.localCdpReadyTimeoutMs;
-    while (monotonicNow() < deadlineMs) {
-      const remainingMs = Math.max(0, deadlineMs - monotonicNow());
+    const deadlineMs = performance.now() + state().resolved.localCdpReadyTimeoutMs;
+    while (performance.now() < deadlineMs) {
+      const remainingMs = Math.max(0, deadlineMs - performance.now());
       const attemptTimeoutMs = Math.max(
         CDP_READY_AFTER_LAUNCH_MIN_TIMEOUT_MS,
         Math.min(MANAGED_CDP_READY_HTTP_TIMEOUT_MS, remainingMs),
@@ -392,9 +391,9 @@ export function createProfileAvailability({
   };
 
   const waitForChromeMcpReadyAfterAttach = async (signal: AbortSignal): Promise<void> => {
-    const deadlineMs = monotonicNow() + CHROME_MCP_ATTACH_READY_WINDOW_MS;
+    const deadlineMs = performance.now() + CHROME_MCP_ATTACH_READY_WINDOW_MS;
     let lastError: unknown;
-    while (monotonicNow() < deadlineMs) {
+    while (performance.now() < deadlineMs) {
       try {
         const { listChromeMcpTabs } = await getChromeMcpModule();
         await listChromeMcpTabs(profile.name, profile, { signal });

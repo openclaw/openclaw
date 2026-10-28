@@ -3,7 +3,6 @@ import { resolve } from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
-import { monotonicNow } from "openclaw/plugin-sdk/time-runtime";
 import { DIAL_BUNDLES } from "./helper-results.js";
 
 type FaceTimeHelperTarget = "FaceTime";
@@ -226,8 +225,8 @@ export class FaceTimeHelperSupervisor {
   }
 
   async #waitForAuthenticatedConnection(target: FaceTimeHelperTarget): Promise<void> {
-    const deadline = monotonicNow() + 10_000;
-    while (this.#started && monotonicNow() < deadline) {
+    const deadline = performance.now() + 10_000;
+    while (this.#started && performance.now() < deadline) {
       this.#refreshConnections();
       const state = this.#states.get(target);
       if (!state || state.connected || state.stale) {

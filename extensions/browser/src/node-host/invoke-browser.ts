@@ -4,7 +4,6 @@ import {
   asNullableRecord,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { monotonicNow } from "openclaw/plugin-sdk/time-runtime";
 import { hasBrowserControlWork } from "../browser-control-state.js";
 import { BROWSER_PROXY_COMMAND, BROWSER_PROXY_UPLOAD_COMMAND } from "../browser-node-commands.js";
 import {
@@ -333,7 +332,7 @@ export async function runBrowserProxyCommand(
   assertCurrent();
 
   const timeoutMs = resolveBrowserProxyTimeoutMs(params.timeoutMs);
-  const deadlineAt = monotonicNow() + timeoutMs;
+  const deadlineAt = performance.now() + timeoutMs;
   const timeoutDetails = {
     method,
     path,
@@ -411,7 +410,7 @@ export async function runBrowserProxyCommand(
     await discardStagedBrowserProxyUpload(stagedUpload);
     throw error;
   }
-  const remainingTimeoutMs = deadlineAt - monotonicNow();
+  const remainingTimeoutMs = deadlineAt - performance.now();
   if (remainingTimeoutMs <= 0) {
     await discardStagedBrowserProxyUpload(stagedUpload);
     throw new Error(formatBrowserProxyTimeoutMessage({ ...timeoutDetails, status: null }));

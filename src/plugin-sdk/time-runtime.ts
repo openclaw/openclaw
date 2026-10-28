@@ -12,8 +12,3 @@ export {
   type StageTiming,
   type StageTimingSummary,
 } from "../shared/stage-timing.js";
-export {
-  monotonicNow,
-  monotonicDeadlineAfter,
-  remainingMonotonicMs,
-} from "../shared/monotonic-time.js";

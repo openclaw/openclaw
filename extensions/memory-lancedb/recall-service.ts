@@ -1,4 +1,3 @@
-import { monotonicNow } from "openclaw/plugin-sdk/time-runtime";
 import { MemoryRecallEmbeddingError, runWithTimeout } from "./embeddings.js";
 import type { MemorySearchResult } from "./lancedb-store.js";
 
@@ -16,13 +15,15 @@ export function startMemoryRecall(params: {
     task: async (deadlineAtMs) => {
       let vector: number[];
       try {
-        vector = await params.embed(() => Math.max(1, Math.floor(deadlineAtMs - monotonicNow())));
+        vector = await params.embed(() =>
+          Math.max(1, Math.floor(deadlineAtMs - performance.now())),
+        );
       } catch (error) {
         throw new MemoryRecallEmbeddingError(error);
       }
       params.beforeSearch?.();
       phase = "search";
-      return await params.search(vector, Math.max(0, Math.floor(deadlineAtMs - monotonicNow())));
+      return await params.search(vector, Math.max(0, Math.floor(deadlineAtMs - performance.now())));
     },
   });
   return {

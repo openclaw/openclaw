@@ -1,6 +1,5 @@
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage, type SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
-import { monotonicNow } from "openclaw/plugin-sdk/time-runtime";
 import { assertChromeMcpCdpTransportAllowed } from "./cdp-reachability-policy.js";
 import { fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
 import { appendCdpPath } from "./cdp.js";
@@ -136,8 +135,8 @@ export function createProfileSelectionOps({
         canResolveSelection(unfilteredTabs) ||
         preservedCanResolveSelection())
     ) {
-      const deadline = monotonicNow() + OPEN_TAB_DISCOVERY_WINDOW_MS;
-      while (monotonicNow() < deadline) {
+      const deadline = performance.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
+      while (performance.now() < deadline) {
         await sleepWithAbort(OPEN_TAB_DISCOVERY_POLL_MS, options?.signal);
         listedTabs = await readTabs();
         await openWhenConfirmedEmpty(listedTabs);
@@ -197,7 +196,7 @@ export function createProfileSelectionOps({
     targetId: string,
     options?: BrowserTabTargetOptions,
   ): Promise<void> => {
-    const deadline = monotonicNow() + CLOSE_TAB_VERIFY_WINDOW_MS;
+    const deadline = performance.now() + CLOSE_TAB_VERIFY_WINDOW_MS;
     for (;;) {
       let stillOpen: boolean;
       try {
@@ -217,7 +216,7 @@ export function createProfileSelectionOps({
       if (!stillOpen) {
         return;
       }
-      if (monotonicNow() >= deadline) {
+      if (performance.now() >= deadline) {
         throw new BrowserError(
           `Browser did not close tab ${targetId}: it is still open after the close request. ` +
             "A page prompt such as a beforeunload dialog may be blocking it; resolve the prompt " +

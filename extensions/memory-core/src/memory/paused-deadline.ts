@@ -1,7 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { MemorySearchDeadlineControl } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { monotonicNow } from "openclaw/plugin-sdk/time-runtime";
 
 export function createPausedDeadline(params: {
   kind: "corpus" | "embedding";
@@ -11,7 +10,7 @@ export function createPausedDeadline(params: {
   expire: () => void;
 }) {
   // setTimeout is monotonic. A wall-clock jump must not consume or invent pause budget.
-  const now = monotonicNow;
+  const now = () => performance.now();
   let remainingMs = params.timeoutMs;
   let segmentStartedAt = now();
   let paused = false;
