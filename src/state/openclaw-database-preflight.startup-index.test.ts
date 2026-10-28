@@ -197,9 +197,7 @@ it.for(["missing", "drifted"] as const)(
               code: "UNAVAILABLE",
               retryable: true,
             });
-            expect(() => fixture.agent(agent.agentId, agent.path)).toThrow(
-              "has not completed startup inspection and preparation",
-            );
+            expect(() => fixture.agent(agent.agentId, agent.path)).toThrow("is still preparing");
           }
           await expect(fixture.prepare()).resolves.toEqual([]);
           expect(

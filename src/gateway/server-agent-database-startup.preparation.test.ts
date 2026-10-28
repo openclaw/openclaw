@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { AgentDatabaseSchemaAdmissionChangedError } from "../state/agent-database-admission-error.js";
 import {
+  createAgentDatabaseAdmissionErrorShape,
   readAgentDatabaseAdmissionRefusal,
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
@@ -319,12 +320,27 @@ it("admits a small deferred agent while an earlier agent's session migration is 
     assertCurrent();
   });
   await fleet.run(async () => {
+    const pending = readAgentDatabaseAdmissionRefusal("large", fleet)!;
+    expect(pending.reason).toContain("still preparing");
+    expect(pending.reason).toContain("phase: inspection");
+    expect(pending.repairHint).not.toMatch(/doctor|stop|restart/i);
+    expect(pending.repairHint).toContain("Retry");
+    expect(createAgentDatabaseAdmissionErrorShape(pending)).toMatchObject({
+      code: "UNAVAILABLE",
+      retryable: true,
+      retryAfterMs: 250,
+    });
     fleet.inspect(0);
     await withinTest(migrationEntered.promise, signal);
+    expect(pending.reason).toContain("phase: migration");
     fleet.inspect(1);
     await vi.advanceTimersByTimeAsync(60_000);
     expectAdmission(fleet, "small");
     expectAdmission(fleet, "large", "agent-database-inspection-pending");
+    expect(pending.reason).toContain("phase: migration; background preparation elapsed: 60s");
+    expect(createAgentDatabaseAdmissionErrorShape(pending).message).not.toMatch(
+      /doctor|stop|restart/i,
+    );
     expect(mocks.warn).toHaveBeenCalledWith(progressMessage, {
       agentId: "large",
       phase: "migration",
@@ -647,6 +663,11 @@ it.for(["initial", "successor"] as const)(
         reason: error.message,
         repairHint: expect.stringContaining("openclaw doctor --fix"),
       });
+      const failed = readAgentDatabaseAdmissionRefusal("main", fleet)!;
+      const errorShape = createAgentDatabaseAdmissionErrorShape(failed);
+      expect(errorShape.retryable).toBe(false);
+      expect(errorShape.retryAfterMs).toBeUndefined();
+      expect(errorShape.message).toContain("openclaw doctor --fix");
       expect(mocks.refreshModels).toHaveBeenCalledTimes(1);
       expect(mocks.info).not.toHaveBeenCalledWith(recoveredMessage, expect.anything());
     });

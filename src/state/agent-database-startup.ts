@@ -69,6 +69,11 @@ function recoveryTiming(recovery: PendingRecovery, now = performance.now()) {
     },
   };
 }
+function updatePreparationReason(recovery: PendingRecovery, now = performance.now()): void {
+  const elapsedSeconds = Math.floor((now - recovery.startedAt) / 1_000);
+  recovery.refusal.reason = `Agent ${recovery.refusal.agentId} is still preparing (phase: ${recovery.phase}; background preparation elapsed: ${elapsedSeconds}s).`;
+}
+
 type PreparedSchemaHeader = Pick<
   AgentSchemaInspection,
   "version" | "writerAppVersion" | "agentSchemaMeta"
@@ -137,6 +142,7 @@ class AgentDatabaseStartupAdmission {
     this.progressTimer ??= setInterval(() => {
       const now = performance.now();
       for (const [agentId, recovery] of this.pending) {
+        updatePreparationReason(recovery, now);
         log.warn("agent database startup preparation still running", {
           agentId,
           phase: recovery.phase,
@@ -366,7 +372,7 @@ class AgentDatabaseStartupAdmission {
         agentId,
         paths,
         pending: true,
-        reason: `Agent ${agentId} has not completed startup inspection and preparation. ${params.reason}`,
+        reason: params.reason,
       });
       const startedAt = performance.now();
       const completion = createDeferredCore();
@@ -385,11 +391,13 @@ class AgentDatabaseStartupAdmission {
         recovery.phaseDurationsMs = recoveryTiming(recovery, now).phaseDurationsMs;
         recovery.phase = name;
         recovery.phaseStartedAt = now;
+        updatePreparationReason(recovery, now);
       };
+      updatePreparationReason(recovery, startedAt);
       this.pending.set(agentId, recovery);
       this.startProgress();
       refusals.push(refusal);
-      log.info(refusal.reason, { agentId, paths });
+      log.info(refusal.reason, { agentId, paths, reason: params.reason });
       const witnesses = paths.map((pathname) => {
         try {
           return { pathname, identity: readSqliteIntegrityFileIdentity(pathname) };
