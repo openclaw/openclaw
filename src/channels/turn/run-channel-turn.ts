@@ -1,5 +1,6 @@
 import { recordChannelHistoryEntryWithMedia } from "../../auto-reply/reply/history.js";
 import { toHistoryMediaEntries } from "../inbound-event/media.js";
+import { runBeforeRouteInboundMessage } from "./before-route-inbound-message.js";
 import { runPreparedChannelTurn } from "./execution.js";
 import {
   assembleResolvedChannelTurn,
@@ -202,6 +203,25 @@ export async function runChannelTurn<
       reason: preflightAdmission.reason,
     });
     return { admission: preflightAdmission, dispatched: false };
+  }
+
+  if (params.beforeRouteInboundMessage) {
+    const routeAdmission = await runBeforeRouteInboundMessage(params.beforeRouteInboundMessage);
+    if (routeAdmission) {
+      await recordDroppedChannelTurnHistory({
+        input,
+        preflight,
+        admission: routeAdmission,
+      });
+      emit({
+        stage: "preflight",
+        event: "drop",
+        messageId: input.id,
+        admission: routeAdmission.kind,
+        reason: routeAdmission.reason,
+      });
+      return { admission: routeAdmission, dispatched: false };
+    }
   }
 
   const unresolved = await params.adapter.resolveTurn(input, eventClass, preflight);
