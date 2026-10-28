@@ -292,7 +292,9 @@ describe("gateway crash-loop breaker", () => {
       const bootId = (await lifecycle.begin(nowMs - 1_000)).id;
       await lifecycle.complete(bootId, "clean_stop", nowMs, { reason });
       const output = lines.join("\n");
-      expect(output).toContain(`stopped after SIGTERM 3 times in 5 min (${owner} manages this Gateway)`);
+      expect(output).toContain(
+        `stopped after SIGTERM 3 times in 5 min (${owner} manages this Gateway)`,
+      );
       expect(output).not.toContain("another supervisor");
       expect(output).not.toContain('"level":"warn"');
     },
