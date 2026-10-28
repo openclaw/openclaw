@@ -238,7 +238,15 @@ export class TooltipOwner {
 
   readonly #handlePointerEnter = (event: Event) => {
     if (this.#suppressHoverUntilLeave) {
-      return;
+      // Exposure from our popup is not fresh intent; entry from outside is.
+      const previous =
+        event instanceof MouseEvent && event.relatedTarget instanceof Node
+          ? event.relatedTarget
+          : null;
+      if (!(event instanceof MouseEvent) || this.#containsInteractionTarget(previous)) {
+        return;
+      }
+      this.#suppressHoverUntilLeave = false;
     }
     if (!("pointerType" in event) || event.pointerType !== "touch") {
       this.#triggerHovered = true;
