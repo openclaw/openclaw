@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import { readSessionQueuedInputPage } from "../config/sessions/session-pending-input-history.js";
 import { preparePendingInputStore } from "../config/sessions/session-pending-input-store.js";
@@ -106,6 +107,12 @@ export async function continueSessionQueuedInputs(
                 sessionKey: target.sessionKey,
                 sessionId: target.sessionId,
                 idempotencyKey: row.run_id,
+                deliver: message["__openclaw"]?.chatSendDelivery?.deliver,
+                originatingChannel: message["__openclaw"]?.chatSendDelivery?.originatingChannel,
+                originatingTo: message["__openclaw"]?.chatSendDelivery?.originatingTo,
+                originatingAccountId: message["__openclaw"]?.chatSendDelivery?.originatingAccountId,
+                originatingThreadId: message["__openclaw"]?.chatSendDelivery?.originatingThreadId,
+                replyToId: normalizeOptionalString(message["__openclaw"]?.replyToId),
                 message:
                   extractTextFromChatContent(message.content, { joinWith: "\n" }) ||
                   MEDIA_ONLY_USER_TEXT,

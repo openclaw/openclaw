@@ -86,6 +86,7 @@ export function createGatewayChatUserTurnController(params: {
   onMessagePersisted?: () => void;
 }): GatewayChatUserTurnController {
   const { admission, request, session } = params;
+  const recoveredInput = readQueuedChatInputAdmission(session.clientRunId);
   const entry = session.entry;
   const originProvider = entry?.modelOverrideFallbackOriginProvider;
   const originModel = entry?.modelOverrideFallbackOriginModel;
@@ -105,7 +106,9 @@ export function createGatewayChatUserTurnController(params: {
     request.goalOperation?.action === "resume"
       ? undefined
       : gatewayClientSenderFields(params.client).sender;
-  const senderProfileId = params.client?.authenticatedUserProfile?.profileId;
+  const senderProfileId = recoveredInput
+    ? recoveredInput.requesterProfile?.id
+    : params.client?.authenticatedUserProfile?.profileId;
   const toolCaller = params.client?.internal?.agentToolCaller;
   const requesterOrigin = captureRequesterOrigin({
     requesterOrigin: toolCaller?.requesterOrigin,
@@ -120,7 +123,6 @@ export function createGatewayChatUserTurnController(params: {
   });
   const mentionInbox = params.mentionInbox;
   const sourceId = buildRunUserTurnIdempotencyKey(session.clientRunId);
-  const recoveredInput = readQueuedChatInputAdmission(session.clientRunId);
   const selectedMentions =
     recoveredInput?.target.message["__openclaw"]?.humanMentions ?? request.mentions;
   const sourceClients =
@@ -272,6 +274,7 @@ export function createGatewayChatUserTurnController(params: {
         const metadata = { ...asOptionalRecord(Reflect.get(next, "__openclaw")) };
         delete metadata.chatRequestIdentity;
         delete metadata.suppressCommandInterpretation;
+        delete metadata.chatSendDelivery;
         delete metadata.modelSelection;
         const visibleHumanInput =
           !params.client?.internal?.syntheticClient &&
@@ -287,6 +290,17 @@ export function createGatewayChatUserTurnController(params: {
             ...(request.requestIdentity ? { chatRequestIdentity: request.requestIdentity } : {}),
             ...(request.suppressCommandInterpretation
               ? { suppressCommandInterpretation: true }
+              : {}),
+            ...(request.p.deliver !== undefined || request.explicitOrigin
+              ? {
+                  chatSendDelivery: {
+                    deliver: request.p.deliver,
+                    originatingChannel: request.p.originatingChannel,
+                    originatingTo: request.p.originatingTo,
+                    originatingAccountId: request.p.originatingAccountId,
+                    originatingThreadId: request.p.originatingThreadId,
+                  },
+                }
               : {}),
             ...(visibleHumanInput ? { modelSelection } : {}),
             ...(contextFreeCommand ? { contextFreeCommand: true } : {}),

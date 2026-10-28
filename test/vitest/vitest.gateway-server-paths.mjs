@@ -169,6 +169,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/remote-control-ui-ingress.integration.test.ts",
   "src/gateway/remote-control-ui-ingress.test.ts",
   "src/gateway/server-instance-runtime.approvals.test.ts",
+  "src/gateway/queued-chat-inputs.metadata.test.ts",
   "src/gateway/server-methods/agent.create-event.test.ts",
   "src/gateway/server-methods/approval.legacy-authority.test.ts",
   "src/gateway/server-methods/approval.request-authority.test.ts",

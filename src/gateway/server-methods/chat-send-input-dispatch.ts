@@ -23,6 +23,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveChatAbortDiagnosticReason } from "../chat-abort-diagnostics.js";
 import { runOutsideOperatorToolGatewayAuthority } from "../operator-tool-gateway-authority.js";
+import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { invalidateSkillAuthoringForOtherRequester } from "../skill-library-authoring.js";
 import { startChatDispatch } from "./chat-send-agent-dispatch.js";
 import type { StartChatDispatchParams } from "./chat-send-agent-dispatch.types.js";
@@ -283,15 +284,17 @@ export async function handleChatSendWithStorage(
       userTurn,
     });
     const { ctx, isInternalTextSlashCommandTurn } = preparedUserTurn;
+    // Retained inputs need queue custody even after the resume run has finished.
     commitFreshInput =
-      (commitInitialInput && !requiresRuntimeApprovedChatInput(client)) ||
-      (admission.localInputAdmission &&
-        request.p.queueMode !== "steer" &&
-        !messageInjectionTarget &&
-        !isInternalTextSlashCommandTurn &&
-        (admission.localGoalAdmission ||
-          (userTurn.baseInput.display !== false &&
-            (!systemInputProvenance || systemInputProvenance.kind === "external_user"))));
+      !readQueuedChatInputAdmission(clientRunId) &&
+      ((commitInitialInput && !requiresRuntimeApprovedChatInput(client)) ||
+        (admission.localInputAdmission &&
+          request.p.queueMode !== "steer" &&
+          !messageInjectionTarget &&
+          !isInternalTextSlashCommandTurn &&
+          (admission.localGoalAdmission ||
+            (userTurn.baseInput.display !== false &&
+              (!systemInputProvenance || systemInputProvenance.kind === "external_user")))));
     admission.setPendingInputCleanup(async () => {
       try {
         const pending =

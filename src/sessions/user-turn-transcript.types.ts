@@ -52,6 +52,14 @@ export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> &
   provenance?: InputProvenance;
   __openclaw?: Record<string, unknown> & {
     humanMentions?: readonly HumanMention[];
+    /** Accepted delivery intent; readmission still checks the sender's current authority. */
+    chatSendDelivery?: {
+      deliver?: boolean;
+      originatingChannel?: string;
+      originatingTo?: string;
+      originatingAccountId?: string;
+      originatingThreadId?: string;
+    };
     requesterOrigin?: RequesterOrigin;
   };
 };
