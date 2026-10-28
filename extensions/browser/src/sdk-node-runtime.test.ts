@@ -1,4 +1,3 @@
-// Browser tests cover sdk node runtime plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForBrowserStartup, withTimeout } from "./sdk-node-runtime.js";
@@ -9,7 +8,7 @@ describe("withTimeout", () => {
     vi.useRealTimers();
   });
 
-  it("keeps a paused budget monotonic across a wall-clock step", async () => {
+  it("keeps nested paused budgets monotonic across a wall-clock step", async () => {
     vi.useFakeTimers();
     const gate = Promise.withResolvers<void>();
     const ready = Promise.withResolvers<string>();
@@ -18,11 +17,12 @@ describe("withTimeout", () => {
       await gate.promise;
       await waitForBrowserStartup(() => ready.promise);
       return new Promise<string>((resolve, reject) => {
-        signal?.addEventListener("abort", () => reject(signal.reason as Error));
+        signal?.addEventListener("abort", () => reject(signal.reason));
         void finish.promise.then(resolve);
       });
     }
-    const result = withTimeout(work, 20_000, "browser request").catch((error: unknown) => error);
+    const request = () => withTimeout(work, 20_000);
+    const result = withTimeout(request, 20_000).catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(0);
     vi.setSystemTime(Date.now() + 30_000);
     gate.resolve();
@@ -50,7 +50,8 @@ describe("withTimeout", () => {
   });
 
   it("caps oversized timeouts before arming the abort timer", async () => {
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout").mockReturnValue(1 as never);
+    vi.useFakeTimers();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     await expect(withTimeout(async () => "ok", Number.MAX_SAFE_INTEGER)).resolves.toBe("ok");
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
