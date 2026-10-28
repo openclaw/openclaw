@@ -13,6 +13,7 @@ import {
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { createHostedConversationTools } from "./conversation-tools.js";
 import * as gateway from "./in-process-gateway.js";
+import * as sessionsSend from "./sessions-send-tool.js";
 
 const conversation = {
   conversationRef: "conv_0123456789abcdef0123456789abcdef",
@@ -176,5 +177,21 @@ describe("conversation tools", () => {
       expect(GATEWAY_OWNER_ONLY_CORE_TOOLS).toContain(name);
       expect(DEFAULT_GATEWAY_HTTP_TOOL_DENY).toContain(name);
     }
+  });
+
+  it.each([
+    ["top-level Slack request (reply anchor only)", undefined, undefined],
+    ["genuine Slack thread", "1793209000.000050", "1793209000.000050"],
+  ])("captures the sessions_send requester route for a %s", (_name, agentThreadId, threadId) => {
+    const createSend = vi.spyOn(sessionsSend, "createSessionsSendTool");
+    // Slack exposes the triggering message ts as currentThreadTs; in a thread it is the thread root.
+    const anchor = agentThreadId ?? "1793210000.000100";
+    createHostedConversationTools(
+      { agentChannel: "slack", agentTo: "channel:C1", agentThreadId, currentThreadTs: anchor },
+      "main",
+      {},
+    );
+    const origin = createSend.mock.lastCall?.[0]?.requesterOrigin;
+    expect(origin).toEqual({ channel: "slack", to: "channel:C1", threadId });
   });
 });

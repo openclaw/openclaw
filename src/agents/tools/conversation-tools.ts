@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { OpenClawToolsOptions } from "../openclaw-tools.types.js";
 import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
+import { resolveSpawnRequesterConversationTarget } from "../spawn-requester-origin.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,
@@ -193,11 +194,12 @@ export function createHostedConversationTools(
       // session as spawnedBy, so the parent check must use the same key.
       agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
       agentSessionId: options?.sessionId,
+      // Same owner as sessions_spawn: the session's own route and thread, not a
+      // channel's reply anchor (Slack exposes the top-level message ts there).
       requesterOrigin: {
         channel: options?.agentChannel,
         accountId: options?.agentAccountId,
-        to: options?.currentMessagingTarget ?? options?.currentChannelId ?? options?.agentTo,
-        threadId: options?.currentThreadTs ?? options?.agentThreadId,
+        ...resolveSpawnRequesterConversationTarget(options ?? {}),
       },
       config: sessionConfig,
     }),
