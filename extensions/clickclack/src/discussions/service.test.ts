@@ -568,18 +568,14 @@ describe("ClickClack discussion session events", () => {
     const updateEntered = createDeferred<void>();
     const releaseUpdate = createDeferred<void>();
     let reconcile: Promise<void> | undefined;
-    let scenario: Promise<void> | undefined;
     let finishing: Promise<void> | undefined;
     const finish = () =>
       (finishing ??= (async () => {
         releaseUpdate.resolve();
-        await Promise.allSettled([
-          ...(scenario ? [scenario] : []),
-          ...(reconcile ? [reconcile] : []),
-        ]);
+        await Promise.allSettled([scenario, reconcile]);
       })());
     finishScenario = finish;
-    scenario = (async () => {
+    const scenario = (async () => {
       try {
         await h.service.open(sessionKey);
         h.updateChannel.mockClear();

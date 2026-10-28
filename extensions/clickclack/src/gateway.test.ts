@@ -1,12 +1,10 @@
 import { EventEmitter } from "node:events";
-import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { NativeCommandSpec } from "openclaw/plugin-sdk/native-command-registry";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ResolvedClickClackAccount } from "./types.js";
+import { createGatewayContext, type GatewayContext } from "./gateway.test-support.js";
 
-type GatewayContext = ChannelGatewayContext<ResolvedClickClackAccount>;
 type CommandMenuEntry = { command: string; description: string; args_hint: string };
 
 class FakeSocket extends EventEmitter {
@@ -64,29 +62,6 @@ import { startClickClackGatewayAccount } from "./gateway.js";
 import { ClickClackHttpError } from "./http-client.js";
 
 const { client, inbound, resolveAccess } = mocks;
-
-function createGatewayContext(abortSignal: AbortSignal): GatewayContext {
-  return {
-    cfg: {
-      channels: {
-        clickclack: {
-          baseUrl: "https://clickclack.example",
-          apiBaseUrl: "http://127.0.0.1:8484",
-          token: "test-token",
-          workspace: "main",
-          reconnectMs: 1,
-        },
-      },
-    } as GatewayContext["cfg"],
-    accountId: "default",
-    account: {} as ResolvedClickClackAccount,
-    runtime: {} as GatewayContext["runtime"],
-    abortSignal,
-    log: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    getStatus: () => ({ accountId: "default" }) as ReturnType<GatewayContext["getStatus"]>,
-    setStatus: vi.fn(),
-  };
-}
 
 let socket: FakeSocket;
 let abort: AbortController;
@@ -177,7 +152,10 @@ describe("ClickClack gateway", () => {
     socket = new FakeSocket();
     client.websocket.mockReturnValue(socket);
     abort = new AbortController();
-    ctx = createGatewayContext(abort.signal);
+    ctx = createGatewayContext(abort.signal, {
+      apiBaseUrl: "http://127.0.0.1:8484",
+      reconnectMs: 1,
+    });
     run = undefined;
     mocks.createClickClackClient.mockReturnValue(client);
     client.me.mockResolvedValue({ id: "bot-user", handle: "bot" });
