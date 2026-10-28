@@ -134,10 +134,16 @@ final class OpenClawSnapshotUITests: XCTestCase {
             XCTAssertEqual(input.value as? String, focusProbe)
             self.clearTextField(input)
             XCTAssertEqual(input.value as? String, "")
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+            // Dismiss through the transcript gutter, not a diagram that opens its preview on tap.
+            app.scrollViews["chat-transcript"]
+                .coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.05)).tap()
             if keyboard.exists {
                 XCTAssertTrue(keyboard.waitForNonExistence(timeout: 3))
             }
+            XCTAssertFalse(app.buttons["Close diagram preview"].exists)
+            let diagram = app.buttons["Mermaid diagram"]
+            XCTAssertTrue(diagram.waitForExistence(timeout: 8))
+            XCTAssertTrue(diagram.isHittable)
         }
     }
 
