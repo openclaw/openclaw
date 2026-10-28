@@ -1,5 +1,6 @@
-# Preserve 502 net lines of Sections regression coverage (#186229): two-step
-# editor scoping, Gateway search, ordering, guest flow and session-menu entry.
-# Current main contributes 6,310,802 lines; this candidate adds exactly 502.
-# Admit the measured 6,311,304 total without extra future allowance.
-6311304
+# Preserve 131 net lines of Knowledge page and plugin-page navigation regression coverage
+# (#186993: first-load ordering, count failure and retained views; #186994: params update
+# a mounted plugin page). Main bf6a97a1 measured 6,311,372 lines, 68 over its 6,311,304
+# ceiling; 6,311,372 + 131 = 6,311,503. Add 97 lines (~0.0015%) for main advancing during
+# exact-head CI. Both PRs carry this identical file. Counting and CI rules stay unchanged.
+6311600
