@@ -754,6 +754,27 @@ function normalizeList<T>(
     : fallback;
 }
 
+/** Metadata fields Workboard persists; a write that names anything else must fail loudly. */
+const SUPPORTED_METADATA_KEYS: ReadonlySet<string> = new Set([
+  "artifacts",
+  "attempts",
+  "attachments",
+  "automation",
+  "archivedAt",
+  "claim",
+  "comments",
+  "diagnostics",
+  "failureCount",
+  "lifecycleStatusSourceUpdatedAt",
+  "links",
+  "notifications",
+  "proof",
+  "stale",
+  "templateId",
+  "workerLogs",
+  "workerProtocol",
+]);
+
 export function normalizeMetadata(
   value: unknown,
   fallback: WorkboardMetadata = {},
@@ -763,8 +784,19 @@ export function normalizeMetadata(
     automationLaunch?: WorkboardLaunchState;
     preserveProofId?: string;
     preserveNotificationId?: string;
+    rejectUnknownKeys?: boolean;
   } = {},
 ): WorkboardMetadata {
+  if (options.rejectUnknownKeys && isRecord(value)) {
+    const unsupported = Object.keys(value)
+      .filter((key) => !SUPPORTED_METADATA_KEYS.has(key))
+      .toSorted();
+    if (unsupported.length > 0) {
+      throw new Error(
+        `Unsupported workboard metadata key(s): ${unsupported.join(", ")}. Supported keys: ${[...SUPPORTED_METADATA_KEYS].toSorted().join(", ")}.`,
+      );
+    }
+  }
   if (!isRecord(value) && !options.automationLaunch) {
     return trimMetadataToBudget(fallback, options);
   }

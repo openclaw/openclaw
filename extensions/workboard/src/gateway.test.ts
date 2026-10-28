@@ -234,6 +234,39 @@ describe("workboard gateway methods", () => {
     expect(eventsRespond.error?.message).toContain("workboard.notifications.advance");
   });
 
+  it("rejects unsupported card metadata keys instead of dropping them", async () => {
+    const { invoke } = createGateway();
+    const created = await invoke("cards.create", { title: "Metadata probe" });
+    expect(created.ok).toBe(true);
+    const card = created.data?.card;
+
+    const rejected = await invoke("cards.update", {
+      id: card.id,
+      patch: { metadata: { entryId: "abc-123" } },
+    });
+    expect(rejected.ok).toBe(false);
+    expect(rejected.error?.message).toContain("Unsupported workboard metadata key(s): entryId");
+
+    // A rejected write leaves the card and its revision untouched.
+    const afterReject = await invoke("cards.list", {});
+    expect(afterReject.data?.cards).toEqual([
+      expect.objectContaining({ id: card.id, updatedAt: card.updatedAt }),
+    ]);
+
+    const accepted = await invoke("cards.update", {
+      id: card.id,
+      patch: { metadata: { templateId: "bugfix" } },
+    });
+    expect(accepted.ok).toBe(true);
+    expect(accepted.data?.card.metadata.templateId).toBe("bugfix");
+
+    const rejectedCreate = await invoke("cards.create", {
+      title: "Metadata probe 2",
+      metadata: { entryId: "abc-123" },
+    });
+    expect(rejectedCreate.ok).toBe(false);
+  });
+
   it("validates Sessions board RPC input and keeps card writes out of Sessions boards", async () => {
     vi.useFakeTimers();
     const store = createWorkboardSqliteTestStore();

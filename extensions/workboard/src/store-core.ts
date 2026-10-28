@@ -320,7 +320,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
         templateId: normalizeTemplateId(input.templateId),
         ...(childAutomation ? { automation: childAutomation } : {}),
       },
-      { allowDependencyLinks: false, allowArchivedAt: false },
+      { allowDependencyLinks: false, allowArchivedAt: false, rejectUnknownKeys: true },
     );
     const syncedMetadata = trimMetadataToBudget(
       syncExecutionAttemptMetadata(metadata, execution, now),
@@ -488,6 +488,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
         : normalizeExecution(effectivePatch.execution);
     let metadata = normalizeMetadata(effectivePatch.metadata, existing.metadata, {
       automationLaunch: options.automationLaunch,
+      rejectUnknownKeys: true,
       allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
       preserveProofId: options.preserveProofId,
       preserveNotificationId: options.preserveNotificationId,
