@@ -37,7 +37,7 @@ When unset, all inbound channel surfaces use:
 - `cap: 20`
 - `drop: "summarize"`
 
-Same-conversation collaborative steering is enabled by default. A compatible prompt can be injected into the active runtime, so no second session run is started. The active execution keeps its original authority; steering does not give each message its own tool policy. If the active run cannot accept steering, OpenClaw waits for the active run to finish before starting the prompt.
+Same-conversation collaborative steering is enabled by default, including [Shared Owner WebUI/channel continuation](/concepts/queue-steering#scope) in the exact same active session. When collaboration is disabled, that continuation requires current administrative authority on the shared WebUI side and current channel-owner authority on the channel side. A compatible prompt can be injected into the active runtime, so no second session run is started. The active execution keeps its original authority; steering does not give each message its own tool policy. If the active run cannot accept steering, OpenClaw waits for the active run to finish before starting the prompt.
 
 ## Queue modes
 

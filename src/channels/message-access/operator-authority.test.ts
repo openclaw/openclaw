@@ -57,7 +57,11 @@ import {
   syncGitHubIdentity,
 } from "../../state/user-profile-writes.worker.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
-import { createHostIngressFixture } from "./host-ingress.test-support.js";
+import {
+  createHostIngressFixture,
+  ingressInput,
+  ingressMessage,
+} from "./host-ingress.test-support.js";
 import { withAdminIngress } from "./operator-authority.test-support.js";
 
 function authorize(cfg: Parameters<typeof resolveCommandAuthorization>[0]["cfg"], ctx: MsgContext) {
@@ -455,6 +459,62 @@ it("keeps configured owners independent of role and identity links", () =>
     expect(assertions[0]).toThrow();
     expect(authorize(cfg, contexts[1]!).senderIsOwner).toBe(true);
     expect(assertions[1]).not.toThrow();
+  }));
+
+it("binds explicit WhatsApp phone ownership without attesting a personal identity", () =>
+  withOperator(async ({ cfg, admin, activatePolicy }) => {
+    const senderId = "+15550000001";
+    const identity = { channelId: "whatsapp", accountId: "default", senderId };
+    cfg.commands!.ownerAllowFrom = [`whatsapp:${senderId}`];
+    await activatePolicy({});
+    linkUserChannelIdentity(admin.profile.id, identity);
+    const host = createHostIngressFixture("whatsapp", cfg);
+    using _ = { [Symbol.dispose]: host.retire };
+    const context = async (
+      sender = senderId,
+      overrides: Parameters<typeof ingressInput>[1] = {},
+      exposedSender = sender,
+    ) => {
+      const message = ingressMessage("whatsapp", "agent:main:main", sender);
+      const ingress = await host.ingress.resolveStable(
+        ingressInput(message, { identity: { kind: "phone" }, ...overrides }),
+      );
+      return host.buildContext({
+        ...message,
+        sender: { id: exposedSender },
+        channelIngress: ingress,
+      });
+    };
+    const admitted = await context();
+    const assertOwner = expectDefined(
+      captureCommandOwnerAssertion(admitted),
+      "explicit WhatsApp owner authority",
+    );
+    expect(assertOwner).not.toThrow();
+    expect(admitted.SenderId).toBe(senderId);
+    expectNoRequester(admitted);
+    for (const unrelated of [
+      await context("+15550000002"),
+      await context(senderId, {
+        subject: { stableId: senderId, authentication: { stableId: "unverified" } },
+      }),
+      await context(senderId, { dmPolicy: "disabled" }),
+      await context(senderId, {}, "+15550000002"),
+      structuredClone(admitted),
+    ]) {
+      expect(captureCommandOwnerAssertion(unrelated)).toBeUndefined();
+    }
+    cfg.commands!.ownerAllowFrom = [];
+    expect(assertOwner).toThrow(CommandOwnerRevokedError);
+    expect(captureCommandOwnerAssertion(await context())).toBeUndefined();
+    await activatePolicy({});
+    cfg.commands!.ownerAllowFrom = [`whatsapp:${senderId}`];
+    await activatePolicy({});
+    expect(assertOwner).toThrow(CommandOwnerRevokedError);
+    const fresh = expectDefined(captureCommandOwnerAssertion(await context()), "fresh owner");
+    expect(fresh).not.toThrow();
+    host.retire();
+    expect(fresh).toThrow(CommandOwnerRevokedError);
   }));
 
 it("carries native Slack requester authority and keeps relay replays asserted", () =>

@@ -13,6 +13,7 @@ import {
 } from "../../agents/cron-creator-authority-context.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import { bindReplyInputChannel } from "../../agents/harness/host-private-capabilities.js";
 import { resolveOwnerPromptNumbers } from "../../agents/owner-display.js";
 import { captureRequesterOrigin } from "../../agents/requester-origin.js";
 import { revokeRequesterCronAuthority } from "../../agents/subagents/requester-cron-authority.js";
@@ -653,6 +654,7 @@ export async function executePreparedReplyRun(
   const sourceReplyDeliveryRuntimeOptions = opts as SourceReplyDeliveryRuntimeOptions | undefined;
   if (!inputProvenance || inputProvenance.kind === "external_user") {
     transferRequesterProfile(ctx, followupRun);
+    bindReplyInputChannel(followupRun.run, ctx.Provider ?? ctx.Surface);
   }
   copyChildSessionPublication(sessionCtx, followupRun.run);
   if (command.senderIsOwner && channelOwnerAuthority) {

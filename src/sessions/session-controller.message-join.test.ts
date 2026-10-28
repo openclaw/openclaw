@@ -1,11 +1,13 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import {
+  bindReplyInputChannel,
   bindWorkerToolPreparation,
   isToolAuthorityReadCaptureActive,
 } from "../agents/harness/host-private-capabilities.js";
 import { bindPreparedToolAuthority } from "../agents/harness/tool-authority-preparation.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
+import { bindCommandOwnerAuthority } from "../auto-reply/command-owner-authority.js";
 import { withMessageInjectionAdmission } from "../auto-reply/reply/message-injection-authority.js";
 import {
   prepareReplyRunToolAuthority,
@@ -24,7 +26,16 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { captureGatewayAuthPolicy } from "../gateway/auth-policy.js";
+import { captureGatewayOperatorRunAuthority } from "../gateway/operator-run-authority.js";
+import type { GatewayClient } from "../gateway/server-methods/client-types.js";
+import {
+  dispatchProfile,
+  gatewayConnect,
+  operatorRecoverySnapshotFixture,
+} from "../gateway/server/client-fixtures.test-support.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { ensureGatewayOwnerProfile } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withSessionTurn } from "./session-controller.admission.js";
 import {
@@ -91,8 +102,19 @@ type JoinCase = {
     | "backend"
     | "delivery"
     | "link-revoke"
-    | "identity-disconnect";
+    | "identity-disconnect"
+    | "owner-revoke"
+    | "shared-revoke";
   crossSurface?: "incoming" | "outgoing" | "different" | "shared" | "delegated" | "initiator";
+  sharedOwner?: {
+    direction: "incoming" | "outgoing";
+    channelOwner?: false;
+    collaborative?: true;
+    webSource?: "personal" | "forged";
+    webAdmin?: false;
+    routedBrowser?: true;
+    differentSession?: true;
+  };
   sessionOnly?: true;
 };
 type Outcome = "accepted" | "deferred" | "rejected" | "revoked" | "failed";
@@ -158,12 +180,76 @@ it.each<[string, Outcome, JoinCase?]>([
     "accepted",
     { crossSurface: "outgoing", after: "identity-disconnect" },
   ],
+  ["channel owner guides shared WebUI", "accepted", { sharedOwner: { direction: "incoming" } }],
+  ["shared WebUI guides channel owner", "accepted", { sharedOwner: { direction: "outgoing" } }],
+  [
+    "claimed channel ownership is not authority",
+    "deferred",
+    { sharedOwner: { direction: "incoming", channelOwner: false } },
+  ],
+  [
+    "collaborative channel guides shared WebUI",
+    "accepted",
+    { sharedOwner: { direction: "incoming", channelOwner: false, collaborative: true } },
+  ],
+  [
+    "shared WebUI guides collaborative channel",
+    "accepted",
+    { sharedOwner: { direction: "outgoing", channelOwner: false, collaborative: true } },
+  ],
+  [
+    "browser delivery through a channel is not channel ingress",
+    "deferred",
+    {
+      sharedOwner: {
+        direction: "incoming",
+        channelOwner: false,
+        collaborative: true,
+        routedBrowser: true,
+      },
+    },
+  ],
+  [
+    "shared WebUI without admin cannot guide a channel owner",
+    "deferred",
+    { sharedOwner: { direction: "outgoing", webAdmin: false } },
+  ],
+  [
+    "personal admin is not shared WebUI authority",
+    "deferred",
+    { sharedOwner: { direction: "incoming", webSource: "personal" } },
+  ],
+  [
+    "owner profile and auth facts do not mint shared authority",
+    "deferred",
+    { sharedOwner: { direction: "incoming", webSource: "forged" } },
+  ],
+  [
+    "shared continuation requires the same session",
+    "deferred",
+    { sharedOwner: { direction: "incoming", differentSession: true } },
+  ],
+  [
+    "channel ownership revoked before submission",
+    "failed",
+    { sharedOwner: { direction: "incoming" }, after: "owner-revoke" },
+  ],
+  [
+    "shared WebUI authority revoked before submission",
+    "failed",
+    { sharedOwner: { direction: "outgoing" }, after: "shared-revoke" },
+  ],
 ])(
   "joins the selected execution with current admission checks: %s",
   async (name, outcome, c = {}) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const key = `agent:main:join-${name.replaceAll(" ", "-")}`;
       const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+      if (c.sharedOwner) {
+        cfg.messages = {
+          queue: { allowCollaborativeSteering: c.sharedOwner.collaborative === true },
+        };
+      }
       setRuntimeConfigSnapshot(cfg);
       const entry: SessionEntry = {
         sessionId: "join-session",
@@ -209,6 +295,50 @@ it.each<[string, Outcome, JoinCase?]>([
         modelPolicy: prepareOperatorModelPolicy({ cfg, policy: {} }),
         assertCurrent: assertSource,
       });
+      const sharedRevocation = new AbortController();
+      let sharedCapture: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+      if (c.sharedOwner && !c.sharedOwner.webSource) {
+        ensureGatewayOwnerProfile(null);
+        const client: GatewayClient = {
+          connId: "shared-browser",
+          connect: gatewayConnect(
+            c.sharedOwner.webAdmin === false
+              ? ["operator.read", "operator.write"]
+              : ["operator.admin"],
+          ),
+          authenticatedUserProfile: dispatchProfile("gateway-owner"),
+          usesSharedGatewayAuth: true,
+          sharedGatewaySessionGeneration: "shared-test-generation",
+          authPolicy: captureGatewayAuthPolicy(cfg, { role: "operator", authMethod: "token" }),
+          internal: { authenticatedOperator: true, operatorRoleActor: { kind: "system" } },
+        };
+        sharedCapture = await captureGatewayOperatorRunAuthority({
+          client,
+          context: { getRuntimeConfig: () => cfg },
+          sourceAuthority: {
+            signal: sharedRevocation.signal,
+            assertCurrent: () => sharedRevocation.signal.throwIfAborted(),
+            gatewayAccessGrant: null,
+          },
+        });
+        if (!sharedCapture) {
+          throw new Error("Expected host-captured shared browser authority");
+        }
+      }
+      using _ = { [Symbol.dispose]: () => sharedCapture?.release() };
+      const webAuthority =
+        sharedCapture?.authority ??
+        (c.sharedOwner?.webSource === "forged"
+          ? createAdmittedRunOperatorAuthority({
+              ...operatorAuthority,
+              profileId: "gateway-owner",
+              recoverySnapshot: operatorRecoverySnapshotFixture("gateway-owner", "forged-grant", {
+                controlUiAdmin: true,
+                sourceIngress: "control-ui",
+              }),
+            })
+          : operatorAuthority);
+      let channelOwnerCurrent = true;
       run.operatorAuthority = operatorAuthority;
       let originalIdentityCurrent = true;
       let incomingIdentityCurrent = true;
@@ -238,6 +368,22 @@ it.each<[string, Outcome, JoinCase?]>([
             operatorProfileId: "join-owner",
             delegatedCreatorProfileId: "initiator",
           };
+        }
+      }
+      if (c.sharedOwner) {
+        bindReplyInputChannel(
+          run.run,
+          c.sharedOwner.direction === "incoming" ? "webchat" : "telegram",
+        );
+        if (c.sharedOwner.direction === "incoming") {
+          run.operatorAuthority = webAuthority;
+        } else {
+          run.operatorAuthority = undefined;
+          run.originatingChannel = "telegram";
+          run.run.messageProvider = "telegram";
+          if (c.sharedOwner.channelOwner !== false) {
+            bindCommandOwnerAuthority(run.run, { isCurrent: () => channelOwnerCurrent });
+          }
         }
       }
       await withSessionTurn({ ...address, sessionId: entry.sessionId }, async (operation) => {
@@ -303,6 +449,21 @@ it.each<[string, Outcome, JoinCase?]>([
           incoming.operatorAuthority =
             c.crossSurface === "outgoing" ? operatorAuthority : undefined;
           incoming.toolsAllow = ["message"];
+        }
+        if (c.sharedOwner) {
+          const fromWeb = c.sharedOwner.direction === "outgoing";
+          incoming.originatingChannel = fromWeb ? "webchat" : "telegram";
+          incoming.run.messageProvider = incoming.originatingChannel;
+          incoming.run.senderId = "other-transport-requester";
+          incoming.operatorAuthority = c.sharedOwner.routedBrowser
+            ? operatorAuthority
+            : fromWeb
+              ? webAuthority
+              : undefined;
+          incoming.toolsAllow = ["message"];
+          if (c.sharedOwner.differentSession) {
+            incoming.run.sessionKey = "agent:main:another-session";
+          }
         }
         const incomingRevocation = new AbortController();
         if (c.after === "caller-revoke") {
@@ -399,6 +560,17 @@ it.each<[string, Outcome, JoinCase?]>([
           });
           Object.assign(caller, incomingContext);
         }
+        if (c.sharedOwner) {
+          bindReplyInputChannel(
+            caller,
+            c.sharedOwner.routedBrowser || c.sharedOwner.direction === "outgoing"
+              ? "webchat"
+              : "telegram",
+          );
+          if (c.sharedOwner.direction === "incoming" && c.sharedOwner.channelOwner !== false) {
+            bindCommandOwnerAuthority(caller, { isCurrent: () => channelOwnerCurrent });
+          }
+        }
         const delivery = prepareSteeringDelivery({
           ...address,
           entry: currentEntry,
@@ -437,6 +609,9 @@ it.each<[string, Outcome, JoinCase?]>([
           expect(delivered).not.toHaveBeenCalled();
           return;
         }
+        if (c.sharedOwner) {
+          expect(joined.allowPendingUserInputAnswer).toBe(false);
+        }
         if (c.after === "revoke") {
           sourceRevocation.abort(new Error("Caller revoked"));
         }
@@ -445,6 +620,12 @@ it.each<[string, Outcome, JoinCase?]>([
         }
         if (c.after === "identity-disconnect") {
           originalIdentityCurrent = false;
+        }
+        if (c.after === "owner-revoke") {
+          channelOwnerCurrent = false;
+        }
+        if (c.after === "shared-revoke") {
+          sharedRevocation.abort(new Error("Shared browser authority revoked"));
         }
         if (c.after === "settings" || c.after === "activity") {
           const settings = c.after === "settings";
@@ -488,9 +669,12 @@ it.each<[string, Outcome, JoinCase?]>([
           }
           const readAuthority = joined.toolAuthority.read;
           const closed = c.after === "delivery";
-          const attempt = await beginReplyMessageInjectionTarget(target, incoming.prompt, {
+          const admission = beginReplyMessageInjectionTarget(target, incoming.prompt, {
             assertCurrent: assertSource,
             isInboundUserMessage: true,
+            ...(joined.allowPendingUserInputAnswer === false
+              ? { allowPendingUserInputAnswer: false as const }
+              : {}),
             terminalReplyExpectation: "required",
             toolAuthorityFingerprint: joined.toolAuthorityFingerprint,
             toolAuthorityPreparation: bindPreparedToolAuthority(
@@ -513,6 +697,14 @@ it.each<[string, Outcome, JoinCase?]>([
               }),
             ),
           });
+          if (c.after === "shared-revoke") {
+            await expect(admission).rejects.toThrow("Shared browser authority revoked");
+            expect(delivered).not.toHaveBeenCalled();
+            expect(replacement).not.toHaveBeenCalled();
+            assertFrozen();
+            return;
+          }
+          const attempt = await admission;
           expect((await attempt.outcome).status).toBe(outcome);
           expect(delivered).toHaveBeenCalledTimes(outcome === "accepted" ? 1 : 0);
           expect(replacement).not.toHaveBeenCalled();

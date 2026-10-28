@@ -4,7 +4,6 @@ import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
@@ -17,6 +16,7 @@ import {
 import { resolveConversationToolPolicies } from "../../agents/conversation-tool-policy-pipeline.js";
 import {
   bindReplyToolAuthorityCallerRead,
+  readReplyInputChannel,
   recordPreparedToolAuthorityRead,
   type PreparedQuestionCallerRead,
   type ReplyToolAuthorityCaller,
@@ -56,11 +56,9 @@ import {
   type ReplyMessageJoinObservation,
 } from "../../sessions/session-controller.message-join-observation.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { readTransferredRequesterProfile } from "../requester-profile.js";
-import {
-  MessageInjectionAuthorityError,
-  MessageInjectionPolicyMismatchError,
-} from "./message-injection-authority.js";
+import { MessageInjectionPolicyMismatchError } from "./message-injection-authority.js";
 import {
   captureReplyToolAuthoritySession,
   retainReplyToolAuthorityClassification,
@@ -68,7 +66,7 @@ import {
   type CapturedReplyToolAuthoritySession,
 } from "./reply-tool-authority-cohort.js";
 import {
-  isSameReplyToolAuthorityConversation,
+  captureReplyToolAuthorityContinuation,
   projectReplyToolAuthorityInput,
 } from "./reply-tool-authority-inbound.js";
 import {
@@ -342,6 +340,8 @@ export function prepareReplyToolAuthority(
     >
   > {
   const capturedJoinObservation = joinObservation ? structuredClone(joinObservation) : undefined;
+  const channelOwner = getCommandOwnerAuthority(run.run);
+  const inputChannel = readReplyInputChannel(run.run);
   const snapshot = captureReplyToolAuthorityInput(run);
   const requesterPrincipalKey = resolveRequesterPrincipalKey({
     ...snapshot.run,
@@ -359,8 +359,13 @@ export function prepareReplyToolAuthority(
     (!selectedProfileId || selectedProfileId === directRequester?.id)
       ? directRequester?.id
       : undefined;
-  const projectInput = (caller?: ReplyToolAuthorityCaller, sameRequesterProfile = false) =>
-    projectReplyToolAuthorityInput(snapshot, caller, requesterPrincipalKey, sameRequesterProfile);
+  const projectInput = (caller?: ReplyToolAuthorityCaller, preserveIncumbentAuthority = false) =>
+    projectReplyToolAuthorityInput(
+      snapshot,
+      caller,
+      requesterPrincipalKey,
+      preserveIncumbentAuthority,
+    );
   const env = { ...process.env };
   const sessionKey = snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey;
   const agentId = sessionKey
@@ -559,53 +564,31 @@ export function prepareReplyToolAuthority(
     projectRequester: project,
   };
   bindReplyToolAuthorityCallerRead(result.projectAsync, (caller, expected, route, assertActive) => {
-    const incomingProfile =
-      caller &&
-      "kind" in caller &&
-      snapshot.run.sessionKey?.trim() &&
-      (!caller.caller.inputProvenance || caller.caller.inputProvenance.kind === "external_user") &&
-      caller.caller.sessionKey?.trim() === snapshot.run.sessionKey?.trim()
-        ? readTransferredRequesterProfile(caller.caller)
-        : undefined;
-    const matchingProfile =
-      incomingProfile &&
-      incomingProfile.id !== GATEWAY_OWNER_PROFILE_ID &&
-      (incomingProfile.id === requesterProfileId ||
-        requesterPrincipalKey === JSON.stringify(["operator", incomingProfile.id]))
-        ? incomingProfile
-        : undefined;
-    const sameRequesterProfile = matchingProfile !== undefined;
-    // Linked identity permits guidance across scopes, not automatic question
-    // answers or image cancellation under the incumbent's question authority.
-    const allowPendingUserInputAnswer: false | undefined =
-      matchingProfile &&
-      caller &&
-      "kind" in caller &&
-      (!isSameReplyToolAuthorityConversation(snapshot, caller.caller) ||
-        requesterPrincipalKey !==
-          resolveRequesterPrincipalKey({
-            ...caller.caller,
-            messageChannel: caller.caller.originatingChannel,
-          }))
-        ? false
-        : undefined;
+    const {
+      continuationKind,
+      allowPendingUserInputAnswer,
+      assertCurrent: assertContinuationCurrent,
+    } = captureReplyToolAuthorityContinuation({
+      snapshot,
+      caller,
+      requesterPrincipalKey,
+      requesterProfileId,
+      channelOwner,
+      inputChannel,
+    });
     const assertCurrent = () => {
       assertActive();
       assertOpen();
-      if (matchingProfile && !matchingProfile.isCurrent()) {
-        throw new MessageInjectionAuthorityError({
-          cause: new Error("Requester profile binding is no longer current"),
-        });
-      }
+      assertContinuationCurrent();
     };
     assertCurrent();
     return {
       assertCurrent,
-      sameRequesterProfile,
+      continuationKind,
       allowPendingUserInputAnswer,
       joinObservation: capturedJoinObservation,
       prepare: async () => {
-        const projected = projectInput(caller, sameRequesterProfile);
+        const projected = projectInput(caller, continuationKind !== undefined);
         const policyInputs = projected === snapshot ? [snapshot] : [snapshot, projected];
         const assertCallerCurrent = () => {
           assertCurrent();

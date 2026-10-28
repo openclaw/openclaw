@@ -63,7 +63,7 @@ export async function prepareReplyMessageContinuation(params: {
     if (
       !selected ||
       !observation ||
-      (!selected.sameRequesterProfile && (!principal || principal !== owner.requesterPrincipalKey))
+      (!selected.continuationKind && (!principal || principal !== owner.requesterPrincipalKey))
     ) {
       // Released snapshots keep their existing complete-policy compatibility path.
       return { kind: "unsupported" as const };
