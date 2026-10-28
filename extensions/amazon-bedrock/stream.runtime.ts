@@ -120,6 +120,13 @@ function normalizeAdaptiveClaudeToolChoice(
 // OpenClaw synthesizes these caps when the provider's real output limit is unknown.
 // Keep them out of Bedrock adaptive requests so Bedrock can use its native default.
 const OPENCLAW_FALLBACK_MODEL_MAX_TOKENS = new Set([4096, 8192, 16_384]);
+// These routes accept user images but reject images nested in tool results.
+const TOOL_RESULT_IMAGE_REJECTING_MODELS = [
+  "openai.gpt-5.6-sol",
+  "openai.gpt-6-sol",
+  "openai.gpt-6.1-sol",
+  "moonshotai.kimi-k3",
+];
 
 function resolveAdaptiveBedrockMaxTokens(
   model: Model<"bedrock-converse-stream">,
@@ -1012,10 +1019,11 @@ function convertMessages(
 
         const toolResults = group.map((resultMessage) => createBedrockToolResult(resultMessage));
 
-        // GPT-5.6 Sol accepts user images but rejects images nested in tool results.
         // Keep all tool outputs contiguous before labeled images, without rewriting history.
         const attachedImages: ContentBlock[] = [];
-        const userContent: ContentBlock[] = model.id.includes("openai.gpt-5.6-sol")
+        const userContent: ContentBlock[] = TOOL_RESULT_IMAGE_REJECTING_MODELS.some((id) =>
+          model.id.includes(id),
+        )
           ? toolResults.map((block): ContentBlock => {
               const images: ContentBlock[] = [];
               const content = (block.toolResult.content ?? []).filter((part) => {
