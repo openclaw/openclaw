@@ -407,7 +407,7 @@ const measured = samples.map((sample) => {
     startNs: sample.startNs,
     endNs: sample.endNs,
     wallMs: sample.wallMs,
-    ...(sample.cpu ? { cpu: sample.cpu } : {}),
+    cpu: sample.cpu,
     response: sample.response,
     statementCalls: statements.length,
     countStatements: statements.filter(
