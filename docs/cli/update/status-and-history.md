@@ -36,6 +36,16 @@ run asynchronously so a blocked snapshot does not freeze the command.
 A fresh profile without Gateway credentials can report a `channels` inspection
 error while still returning update availability and empty recovery history.
 
+Status does not acquire the managed handoff file lock. A live holder of
+`managed-update-handoffs.sqlite.lock` therefore does not prevent read-only status.
+When an updater times out acquiring that lock, its error includes
+`file_lock_timeout`, the lock path, elapsed wait, timeout budget, recorded holder
+PID and start identity, holder liveness, any recorded command or phase, and the
+waiting phase. Dead or unregistered self-held sidecars are reclaimed with a warning;
+active local holders and recorded sibling workers remain protected. For an admitted
+run, `lastRun` retains the failed step and lock reason code. A failure before run
+admission does not replace earlier history.
+
 When a package publication journal no longer matches its installation, status
 names the changed parent, control directory, or journal bindings with their
 recorded and current `dev:ino` values. It identifies device-number-only changes

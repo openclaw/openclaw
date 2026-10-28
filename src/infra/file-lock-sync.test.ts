@@ -2,12 +2,68 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { Worker } from "node:worker_threads";
-import { afterEach, expect, it } from "vitest";
+import { threadId, Worker } from "node:worker_threads";
+import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { acquireFileLockSyncWithRetry } from "./file-lock-sync.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+
+it.each(["live", "dead", "self", "legacy self", "other thread"])(
+  "diagnoses or reclaims a %s handoff lock",
+  async (holder) => {
+    const { root } = await import("@openclaw/fs-safe/root");
+    const directory = fs.realpathSync(dirs.make("handoff-lock-diagnostic-"));
+    const target = path.join(directory, "managed-update-handoffs.sqlite");
+    const lockPath = `${target}.lock`;
+    const pid = holder === "live" ? process.ppid : holder === "dead" ? 2_147_483_647 : process.pid;
+    const payload = {
+      pid,
+      starttime: getFileLockProcessStartTime(pid),
+      command: "openclaw",
+      phase: "doctor",
+      ...(holder === "legacy self"
+        ? {}
+        : { threadId: holder === "other thread" ? threadId + 1 : threadId }),
+    };
+    fs.writeFileSync(lockPath, JSON.stringify(payload));
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      const options = {
+        lockRoot: await root(directory),
+        timeoutMs: 20,
+        phase: "managed-handoff:writer-admission",
+      };
+      if (holder === "live" || holder === "other thread") {
+        expect(() => acquireFileLockSyncWithRetry(target, options)).toThrow(
+          expect.objectContaining({
+            code: "file_lock_timeout",
+            lockPath,
+            timeoutMs: 20,
+            phase: options.phase,
+            holder: expect.objectContaining({ pid, alive: true, phase: "doctor" }),
+            message: expect.stringMatching(
+              /file_lock_timeout.*waited.*ms.*pid=.*alive=true.*doctor.*managed-handoff:writer-admission/,
+            ),
+          }),
+        );
+        expect(JSON.parse(fs.readFileSync(lockPath, "utf8"))).toEqual(payload);
+        expect(warning).not.toHaveBeenCalled();
+      } else {
+        const release = acquireFileLockSyncWithRetry(target, options);
+        release();
+        expect(fs.existsSync(lockPath)).toBe(false);
+        expect(warning).toHaveBeenCalledWith(
+          expect.stringContaining(`Reclaimed stale file lock ${lockPath}`),
+        );
+      }
+    } finally {
+      warning.mockRestore();
+    }
+  },
+);
 
 const writerSource = `
   const { parentPort, workerData } = require("node:worker_threads");
