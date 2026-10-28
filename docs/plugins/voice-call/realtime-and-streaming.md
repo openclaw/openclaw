@@ -260,7 +260,7 @@ to turn it off.
 - Set the number's own noise suppression to `disabled` in Telnyx first (Mission Control Portal, Voice, Phone Numbers, the number, Settings, or `PATCH /v2/phone_numbers/{id}/voice`). A number-level setting engages Telnyx's default engine at answer, and a later `suppression_start` collides with it; Telnyx returns a 500 for that collision rather than a clean 422. Per-call suppression also costs more than the default engine, and Telnyx bills each direction separately.
 - Telnyx rejects noise suppression while media streaming is active, so Voice Call answers these calls without the stream, starts suppression, and then starts streaming with the same stream settings.
 - If the suppression request fails or takes longer than 5 seconds, Voice Call logs a warning and streams without suppression. The call continues.
-- If streaming cannot start after the answer, Voice Call hangs up instead of leaving the caller on a silent line.
+- If the answer or the later stream start fails, Voice Call hangs up instead of leaving the caller on a silent line. An answer failure can mean Telnyx answered but its response never arrived, so the hangup is best effort.
 - The setting applies to inbound calls only. Outbound dial requests are unchanged, and calls without media streaming are unaffected.
 
 ### Tool policy

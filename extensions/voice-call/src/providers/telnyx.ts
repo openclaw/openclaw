@@ -268,7 +268,8 @@ export class TelnyxProvider implements VoiceCallProvider {
    *
    * With both, the steps must run in this order, because Telnyx rejects `suppression_start`
    * while media streaming is active:
-   * 1. `answer` without streaming fields. Failure rejects and no later step runs.
+   * 1. `answer` without streaming fields. Failure hangs the call up (best effort, since Telnyx may
+   *    have answered before its response was lost) and rejects with the `answer` error.
    * 2. `suppression_start` with the configured direction, engine, and engine config, capped at 5s so the stream
    *    token stays valid. Failure or timeout is logged and the call streams without suppression.
    * 3. `streaming_start` with the streaming fields. Failure hangs the answered call up (a failed
@@ -279,10 +280,19 @@ export class TelnyxProvider implements VoiceCallProvider {
     // Telnyx rejects suppression_start while media streaming is active (422, code 90045),
     // so a suppressed call answers without its stream and starts it after suppression.
     const suppression = input.streamUrl ? this.noiseSuppression : undefined;
-    await this.api.request(`/calls/${input.providerCallId}/actions/answer`, {
-      command_id: `openclaw-answer-${input.callId}`,
-      ...(suppression ? {} : streaming),
-    });
+    try {
+      await this.api.request(`/calls/${input.providerCallId}/actions/answer`, {
+        command_id: `openclaw-answer-${input.callId}`,
+        ...(suppression ? {} : streaming),
+      });
+    } catch (err) {
+      // This answer carries no stream; if Telnyx answered but its response was lost, the
+      // caller would sit on silence, so release the call before reporting the failure.
+      if (suppression) {
+        await this.hangUpAfterFailedStep(input, "answer");
+      }
+      throw err;
+    }
     if (!suppression) {
       return;
     }
@@ -316,18 +326,23 @@ export class TelnyxProvider implements VoiceCallProvider {
       });
     } catch (err) {
       // The call is already answered; without media the caller would sit on silence.
-      await this.hangupCall({
-        callId: input.callId,
-        providerCallId: input.providerCallId,
-        reason: "error",
-      }).catch((hangupErr: unknown) => {
-        console.warn(
-          `[telnyx] Failed to hang up call ${input.callId} after streaming_start failed: ${formatErrorMessage(hangupErr)}`,
-        );
-      });
+      await this.hangUpAfterFailedStep(input, "streaming_start");
       const message = `call answered but Telnyx streaming_start failed; hanging up: ${formatErrorMessage(err)}`;
       throw new Error(message, { cause: err });
     }
+  }
+
+  /** Hang up a call whose answer setup failed; a failed hangup is only logged. */
+  private async hangUpAfterFailedStep(input: AnswerCallInput, step: string): Promise<void> {
+    await this.hangupCall({
+      callId: input.callId,
+      providerCallId: input.providerCallId,
+      reason: "error",
+    }).catch((hangupErr: unknown) => {
+      console.warn(
+        `[telnyx] Failed to hang up call ${input.callId} after ${step} failed: ${formatErrorMessage(hangupErr)}`,
+      );
+    });
   }
 
   async playTts(input: PlayTtsInput): Promise<void> {
