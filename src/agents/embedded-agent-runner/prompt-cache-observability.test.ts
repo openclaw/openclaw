@@ -168,7 +168,8 @@ describe("prompt cache observability", () => {
     }
     const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
     expect(collectPromptCacheTools([{ name: "read", parameters }])).toEqual(first);
-    expect(hashes).not.toHaveBeenCalled();
+    expect(collectPromptCacheTools([{ name: "read", parameters }])).toEqual(first);
+    expect(hashes).toHaveBeenCalledTimes(1);
   });
 
   it("fingerprints own __proto__ schema properties without prototype pollution", () => {

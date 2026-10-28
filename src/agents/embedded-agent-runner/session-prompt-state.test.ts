@@ -640,12 +640,15 @@ describe("session tool surface", () => {
         const unchanged = surface([tool("read", "New guidance", reordered)], entries);
         expect(unchanged[0]?.description).toBe("Pinned description");
         expect(fixture.state.pendingToolSurface).toBeUndefined();
+        expect(stringify).toHaveBeenCalledTimes(2);
+        stringify.mockClear();
+        surface([tool("read", "New guidance", reordered)], entries);
         expect(stringify).toHaveBeenCalledTimes(restored ? 1 : 0);
         stringify.mockClear();
         const replacement = surface([tool("read", "Changed schema", changed)], entries);
         expect(replacement[0]?.description).toBe("Changed schema");
         expect(fixture.state.pendingToolSurface?.tools).toEqual(definitions(replacement));
-        expect(stringify).toHaveBeenCalledTimes(restored ? 1 : 0);
+        expect(stringify).toHaveBeenCalledTimes(restored ? 2 : 1);
       } finally {
         stringify.mockRestore();
       }

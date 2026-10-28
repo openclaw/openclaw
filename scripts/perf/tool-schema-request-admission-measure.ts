@@ -1,14 +1,17 @@
 /**
  * Provider-request schema admission probe (synthetic tools; no network or model calls).
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/tool-schema-request-admission-measure.ts
- * --tools 40|80 --iterations 2000 --samples 3 --mode repeated|across-runs|published [--strict]
+ * --tools 40|80 --iterations 2000 --samples 3 --mode repeated|across-runs|published|publication [--strict]
  * Across-runs creates a fresh catalog every 20 requests, outside measurement.
+ * Publication measures fresh owner publications and provider variants each turn, including
+ * consuming the source canonical fingerprints for prompt diagnostics. Use --strict for
+ * strict provider prewarming. --tools 80 models two tools from each of 40 synthetic plugins.
  * CPU is untraced; allocation is sampled separately, including collected objects.
  * Compare baseline/candidate in counterbalanced order with the same arguments.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import type { HeapProfiler } from "node:inspector";
+import type { HeapProfiler, Profiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
@@ -35,7 +38,7 @@ const integer = (raw: string, label: string) =>
 const toolCount = integer(values.tools, "tools");
 const iterations = integer(values.iterations, "iterations");
 const samples = integer(values.samples, "samples");
-assert.ok(["repeated", "across-runs", "published"].includes(values.mode));
+assert.ok(["repeated", "across-runs", "published", "publication"].includes(values.mode));
 const collectGarbage = globalThis.gc;
 assert.ok(collectGarbage, "Run with --expose-gc");
 
@@ -98,10 +101,41 @@ function fixtures() {
 function run(catalogs: Tool[][]) {
   let emitted = 0;
   for (let index = 0; index < iterations; index++) {
-    const tools = catalogs[values.mode === "across-runs" ? Math.floor(index / 20) : 0]!;
+    const sources = catalogs[values.mode === "across-runs" ? Math.floor(index / 20) : 0]!;
+    const tools = values.mode === "publication" ? publishCatalog(sources) : sources;
     emitted += convertResponsesToolPayload(tools, { strict: values.strict }).length;
   }
   assert.equal(emitted, toolCount * iterations);
+}
+
+function publishCatalog(tools: Tool[]): Tool[] {
+  return tools.map((tool) => {
+    const { schema, violations } = publishRuntimeToolInputSchema(tool.parameters);
+    assert.equal(violations.length, 0);
+    assert.ok(isRecord(schema));
+    assert.ok(getPublishedRuntimeToolInputSchema(schema)?.canonicalFingerprint);
+    return { ...tool, parameters: schema };
+  });
+}
+
+function countFunctions(coverage: Profiler.ScriptCoverage[]) {
+  let publications = 0;
+  let canonicalSerializations = 0;
+  for (const script of coverage) {
+    for (const entry of script.functions) {
+      const count = entry.ranges[0]?.count ?? 0;
+      if (
+        script.url.includes("tool-schema-json-projection.") &&
+        entry.functionName === "projectToolInputSchema"
+      ) {
+        publications += count;
+      }
+      if (entry.functionName === "stableStringify") {
+        canonicalSerializations += count;
+      }
+    }
+  }
+  return { publications, canonicalSerializations };
 }
 
 function bytes(node: HeapProfiler.SamplingHeapProfileNode): number {
@@ -112,12 +146,24 @@ const goldenCatalog = catalog();
 const goldenPayload = convertResponsesToolPayload(goldenCatalog, { strict: values.strict });
 assert.ok(goldenPayload.every((tool) => tool.strict === values.strict));
 const golden = JSON.stringify(goldenPayload);
+// Key sorting preserves the byte length of these JSON-only fixtures. Both publications
+// (source and provider variant) have the same length, so coverage supplies exact byte work.
+const schemaBytes = Buffer.byteLength(JSON.stringify(goldenCatalog[0]!.parameters));
+if (values.mode === "publication") {
+  for (const tool of goldenPayload) {
+    assert.equal(Buffer.byteLength(JSON.stringify(tool.parameters)), schemaBytes);
+  }
+}
 const goldenSchema = publishRuntimeToolInputSchema(goldenCatalog[0]!.parameters).schema;
 const schemaHash = getPublishedRuntimeToolInputSchema(goldenSchema)?.canonicalFingerprint;
 const parityInputs = fixtures();
 for (const tools of parityInputs) {
   assert.equal(
-    JSON.stringify(convertResponsesToolPayload(tools, { strict: values.strict })),
+    JSON.stringify(
+      convertResponsesToolPayload(values.mode === "publication" ? publishCatalog(tools) : tools, {
+        strict: values.strict,
+      }),
+    ),
     golden,
   );
 }
@@ -131,7 +177,17 @@ for (const tools of parityInputs) {
 const rows = [];
 const inspector = new Session();
 inspector.connect();
+let workCounts;
 try {
+  if (values.mode === "publication") {
+    const inputs = fixtures();
+    await inspector.post("Profiler.enable");
+    await inspector.post("Profiler.startPreciseCoverage", { callCount: true, detailed: false });
+    run(inputs);
+    workCounts = countFunctions((await inspector.post("Profiler.takePreciseCoverage")).result);
+    await inspector.post("Profiler.stopPreciseCoverage");
+    await inspector.post("Profiler.disable");
+  }
   for (let sample = 0; sample < samples; sample++) {
     const timingInputs = fixtures();
     collectGarbage();
@@ -172,6 +228,15 @@ console.log(
     payloadBytes: Buffer.byteLength(golden),
     payloadSha256: createHash("sha256").update(golden).digest("hex"),
     schemaHash,
+    workCounts,
+    ...(workCounts
+      ? {
+          firstPublicationsPerTurn: workCounts.publications / iterations,
+          canonicalSerializationsPerTurn: workCounts.canonicalSerializations / iterations,
+          canonicalSerializedBytesPerTurn:
+            (workCounts.canonicalSerializations * schemaBytes) / iterations,
+        }
+      : {}),
     selectedModePayloadVerified: true,
     rows,
   }),

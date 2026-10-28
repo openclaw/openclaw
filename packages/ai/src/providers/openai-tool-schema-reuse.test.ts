@@ -1,3 +1,4 @@
+import * as normalization from "@openclaw/normalization-core";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
@@ -118,6 +119,36 @@ it("publishes detached immutable schemas while source edits require a new public
   assert(isRecord(refreshed.schema));
   expect(publication(refreshed.schema)?.fingerprint).not.toBe(published.fingerprint);
   expect(actions(payloadSchema([choose(refreshed.schema)]))).toEqual(["read", "write"]);
+});
+
+it("computes canonical fingerprints only when consumed and once per immutable publication", () => {
+  using stringify = vi.spyOn(normalization, "stableStringify");
+  const source = actionSchema();
+  const { schema } = publishRuntimeToolInputSchema(source);
+  assert(isRecord(schema));
+  const tool = choose(schema);
+  const loose = JSON.stringify(wireTool([tool]));
+  const strict = JSON.stringify(wireTool([tool], true));
+  expect(stringify).not.toHaveBeenCalled();
+  const published = expectDefined(publication(schema), "published schema");
+  const digest = published.canonicalFingerprint;
+  expect(published.canonicalFingerprint).toBe(digest);
+  expect(stringify).toHaveBeenCalledTimes(1);
+  const reordered = publishRuntimeToolInputSchema({
+    additionalProperties: false,
+    required: ["action"],
+    properties: source.properties,
+    type: "object",
+  });
+  expect(publication(reordered.schema)?.canonicalFingerprint).toBe(digest);
+  source.properties.action.enum.push("write");
+  expect(publication(publishRuntimeToolInputSchema(source).schema)?.canonicalFingerprint).not.toBe(
+    digest,
+  );
+  expect(published.canonicalFingerprint).toBe(digest);
+  expect(JSON.stringify(wireTool([tool]))).toBe(loose);
+  expect(JSON.stringify(wireTool([tool], true))).toBe(strict);
+  expect(stringify).toHaveBeenCalledTimes(3);
 });
 
 it("reuses published provider variants without changing current strict or compatibility options", () => {
