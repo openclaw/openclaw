@@ -212,7 +212,7 @@ describe("channel-health-monitor", () => {
         lastDisconnect: { at: Date.now(), error: "transport stopped" },
       });
       await clock.advanceBy(27_000);
-      expect(manager.getRuntimeSnapshot).toHaveBeenCalledOnce();
+      expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
       expect(manager.stopChannel).not.toHaveBeenCalled();
       expect(manager.startChannel).not.toHaveBeenCalled();
       expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
@@ -223,6 +223,7 @@ describe("channel-health-monitor", () => {
       });
       expect(manager.startChannel).toHaveBeenCalledExactlyOnceWith("slack", "default", {
         reason: "health-monitor",
+        preserveManualStop: true,
       });
     } finally {
       monitor.stop();
