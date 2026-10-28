@@ -358,6 +358,9 @@ export async function finishGatewayStartup(params: {
   kernel.setPostAttachHandles(postAttachHandles);
   if (minimalTestGateway) {
     databasePreparationReady.resolve();
+    // Minimal startup skips the sidecars whose channel start releases this gate;
+    // explicit account starts still recheck cancellation after it opens.
+    releaseStartupAccountStarts();
   }
   startupTrace.detail("memory.ready", [
     ...collectGatewayProcessMemoryUsageMb(),
