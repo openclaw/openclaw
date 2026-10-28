@@ -309,6 +309,28 @@ describe("CLI backend metadata and bindings", () => {
     );
   });
 
+  it("keeps a self-bound CLI provider out of the hidden runtime-alias list", () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        runtimeEntry({ id: "antigravity-cli", modelProvider: "antigravity-cli" }),
+      ],
+    });
+
+    expect(listCliRuntimeModelBackendBindings()).toEqual([
+      { provider: "antigravity-cli", runtime: "antigravity-cli" },
+    ]);
+    expect(listCliRuntimeProviderIds()).toEqual([]);
+    expect(resolveCliRuntimeCanonicalProvider({ runtime: "antigravity-cli" })).toBe(
+      "antigravity-cli",
+    );
+    expect(
+      resolveCliRuntimeModelBackendBinding({
+        provider: "antigravity-cli",
+        runtime: "antigravity-cli",
+      }),
+    ).toEqual({ provider: "antigravity-cli", runtime: "antigravity-cli" });
+  });
+
   it("includes setup bindings only when requested", () => {
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [],

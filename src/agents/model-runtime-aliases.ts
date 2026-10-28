@@ -67,7 +67,9 @@ export function isCliRuntimeProvider(
 export function isCliRuntimeAlias(runtime: string | undefined): boolean {
   const normalized = normalizeProviderId(runtime ?? "");
   return normalized
-    ? listCliRuntimeModelBackendBindings().some((binding) => binding.runtime === normalized)
+    ? listCliRuntimeModelBackendBindings().some(
+        (binding) => binding.runtime === normalized && binding.provider !== normalized,
+      )
     : false;
 }
 
@@ -158,7 +160,10 @@ export function resolveCliRuntimeTwinRoute(
   },
 ): CliRuntimeTwinRoute | undefined {
   const provider = normalizeProviderId(entry.provider);
-  const aliasOf = scope.cliRuntimeBindings.find(({ runtime }) => runtime === provider)?.provider;
+  const boundProvider = scope.cliRuntimeBindings.find(
+    ({ runtime }) => runtime === provider,
+  )?.provider;
+  const aliasOf = boundProvider && boundProvider !== provider ? boundProvider : undefined;
   const runtime = aliasOf
     ? provider
     : normalizeOptionalAgentRuntimeId(
