@@ -78,31 +78,28 @@ describe("native manager identity", () => {
   it.each([
     { label: "changed account", uid: 3002 },
     { label: "missing account", uid: undefined },
+    { label: "retained manager route", uid: 2001 },
   ])("revalidates native manager identity before preparation: $label", (scenario) =>
     withServiceHome(async (home) => {
       let managerUid: number | undefined = 2001;
-      const { stop } = mockService(home, () => managerUid);
+      const seenRoutes: Array<string | undefined> = [];
+      const { stop } = mockService(home, () => managerUid, seenRoutes);
       const before = await inspect();
       expect(before).toMatchObject(ownedIdentity);
       managerUid = scenario.uid;
-      await expect(prepare(before)).rejects.toThrow(/ownership|manager identity/);
-      expect(stop).not.toHaveBeenCalled();
-    }),
-  );
-
-  it("retains the inspected systemd manager route during preparation", () =>
-    withServiceHome(async (home) => {
-      const seenRoutes: Array<string | undefined> = [];
-      const { stop } = mockService(home, () => 2001, seenRoutes);
-      const before = await inspect();
-      expect(before).toMatchObject(ownedIdentity);
       const admittedRoute = "unix:path=/run/user/2001/bus";
       before.serviceEnv = { ...before.serviceEnv, DBUS_SESSION_BUS_ADDRESS: admittedRoute };
       const readsBeforePreparation = seenRoutes.length;
-      await expect(prepare(before)).resolves.toMatchObject({ stopped: true, ...ownedIdentity });
-      expect(stop).toHaveBeenCalledOnce();
-      expect(new Set(seenRoutes.slice(readsBeforePreparation))).toEqual(new Set([admittedRoute]));
-    }));
+      if (managerUid === 2001) {
+        await expect(prepare(before)).resolves.toMatchObject({ stopped: true, ...ownedIdentity });
+        expect(stop).toHaveBeenCalledOnce();
+        expect(new Set(seenRoutes.slice(readsBeforePreparation))).toEqual(new Set([admittedRoute]));
+      } else {
+        await expect(prepare(before)).rejects.toThrow(/ownership|manager identity/);
+        expect(stop).not.toHaveBeenCalled();
+      }
+    }),
+  );
 
   it("names both installations when the admitted Gateway command moves to another install", () =>
     withServiceHome(async (home) => {
@@ -184,7 +181,7 @@ it.each([
     vi.spyOn(process, "geteuid").mockReturnValue(uid);
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     const root = await fs.realpath(process.cwd());
-    const unitName = "openclaw-production@worker.service";
+    const unitName = update ? "openclaw-production@worker.service" : "openclaw.service";
     const restartCommand = `sudo systemctl restart ${unitName}`;
     const service = createMockGatewayService();
     mocks.service.mockReturnValue(service);
@@ -220,30 +217,26 @@ it.each([
         root,
         phase: "prepare",
       });
-    const preparation = update ? withUpdateInProgressEnv(undefined, prepare) : prepare();
-    if (!update) {
-      if (uid !== 0) {
-        const blocked = await preparation;
-        expect(blocked).toMatchObject({
-          stopped: false,
-          blockMessage: expect.stringContaining(`sudo systemctl stop ${unitName}`),
-          blockFailureFacts: [expect.objectContaining({ check: "gateway-stop" })],
-        });
-        expect(
-          blocked.blockFailureFacts
-            ?.map((fact) => createUpdateFailureFact(fact).message)
-            .join("\n"),
-        ).toContain("sudo systemctl stop");
-        expectNoServiceCalls(service.stop, service.start, service.restart, service.install);
-        expect(mocks.prepareStop).not.toHaveBeenCalled();
-        expect(mocks.drain).not.toHaveBeenCalled();
-        return;
-      }
-      expect(await preparation).toMatchObject({ stopped: true });
+    const prepared = await (update ? withUpdateInProgressEnv(undefined, prepare) : prepare());
+    if (!update && uid === 0) {
+      expect(prepared).toMatchObject({ stopped: true });
       expect(service.stop).toHaveBeenCalledOnce();
       return;
     }
-    const prepared = await preparation;
+    expectNoServiceCalls(service.stop, service.start, service.restart, service.install);
+    expect(mocks.prepareStop).not.toHaveBeenCalled();
+    expect(mocks.drain).not.toHaveBeenCalled();
+    if (!update) {
+      expect(prepared).toMatchObject({
+        stopped: false,
+        blockMessage: expect.stringContaining(`sudo systemctl stop ${unitName}`),
+        blockFailureFacts: [expect.objectContaining({ check: "gateway-stop" })],
+      });
+      expect(
+        prepared.blockFailureFacts?.map((fact) => createUpdateFailureFact(fact).message).join("\n"),
+      ).toContain(`sudo systemctl stop ${unitName}`);
+      return;
+    }
     expect(prepared).toMatchObject({
       stopped: false,
       running: true,
@@ -317,133 +310,113 @@ describe("service fingerprint", () => {
     };
   }
 
-  async function expectPublication(admission: Promise<void>, accepted: boolean) {
-    if (accepted) {
-      await expect(admission).resolves.toBeUndefined();
-    } else {
-      await expect(admission).rejects.toMatchObject({ reason: "runtime-artifact-publication" });
-    }
-  }
-
   it.each([
-    "equivalent selected wrapper",
-    "unlisted wrapper",
-    "Task still registered",
-    "changed command",
-  ])("keeps the package no-restart exception with its selected Startup owner: %s", (scenario) =>
+    ["win32", "publication", "equivalent selected wrapper", true],
+    ["win32", "publication", "unlisted wrapper", false],
+    ["win32", "publication", "Task still registered", false],
+    ["win32", "publication", "changed command", false],
+    ["linux", "before-stop", "no declared profile", true],
+    ["linux", "publication", "declared selected", true],
+    ["linux", "before-stop", "changed declared profile", false],
+    ["linux", "publication", "other native unit", false],
+  ] as const)("keeps selected %s correspondence at %s: %s", (platform, phase, scenario, accepted) =>
     withServiceHome(async (home) => {
-      mockProcessPlatform("win32");
-      const env = { HOME: home, OPENCLAW_PROFILE: "selected" };
+      mockProcessPlatform(platform);
+      const windows = platform === "win32";
       const startup = "C:\\Startup\\Gateway.vbs";
-      const command = {
-        ...gatewayCommand(home),
-        environment: env,
-        sourcePath: "C:\\Gateway\\gateway.cmd",
-      };
-      const state: GatewayServiceState = {
-        installed: false,
-        loadState: { status: "not-loaded" },
-        running: true,
-        env,
-        command,
-        runtime: { status: "running", pid: process.pid },
-      };
-      vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockResolvedValue([
-        { env, scope: "user", windowsStartupEntry: startup },
-      ]);
-      const startupCommand = {
-        ...command,
-        sourcePath: "c:/Gateway/gateway.cmd",
-        definitionPaths: [startup, "c:/Gateway/gateway.cmd"],
-        programArguments: [...command.programArguments],
-      };
-      if (scenario === "changed command") {
-        startupCommand.programArguments.push("--verbose");
-      }
-      const selectedCommand: Command = { ...command };
-      if (scenario !== "Task still registered") {
-        selectedCommand.startupEntryPaths = [
-          scenario === "unlisted wrapper" ? "C:\\Startup\\Other.vbs" : startup,
-        ];
-      }
-      vi.spyOn(gatewayService, "readGatewayServiceState").mockImplementation(
-        async (_service, args) => ({
-          ...state,
-          command: args?.windowsStartupEntry ? startupCommand : selectedCommand,
-        }),
-      );
-      const admission = publish(env, {
-        shouldRestart: false,
-        selected: selected(command),
-      });
-      await expectPublication(admission, scenario === "equivalent selected wrapper");
-    }),
-  );
-
-  it.each([
-    { phase: "before-stop", scenario: "no declared profile" },
-    { phase: "publication", scenario: "declared selected" },
-    { phase: "before-stop", scenario: "changed declared profile" },
-    { phase: "publication", scenario: "other native unit" },
-  ] as const)("keeps selected Linux correspondence at $phase: $scenario", ({ phase, scenario }) =>
-    withServiceHome(async (home) => {
-      mockProcessPlatform("linux");
       const unit = "custom-selected.service";
       const observedUnit = scenario === "other native unit" ? "custom-sibling.service" : unit;
-      const selectedEnv = { HOME: home, OPENCLAW_PROFILE: "selected", OPENCLAW_SYSTEMD_UNIT: unit };
-      const environment: Record<string, string> = { HOME: home };
+      const selectedEnv: Record<string, string> = { HOME: home, OPENCLAW_PROFILE: "selected" };
+      if (!windows) {
+        selectedEnv.OPENCLAW_SYSTEMD_UNIT = unit;
+      }
+      const environment: Record<string, string> = windows ? selectedEnv : { HOME: home };
       if (scenario !== "no declared profile") {
         environment.OPENCLAW_PROFILE = "selected";
       }
       const command = {
         ...gatewayCommand(home),
         environment,
-        sourcePath: path.join(home, "shared-template.service"),
+        sourcePath: windows
+          ? "C:\\Gateway\\gateway.cmd"
+          : path.join(home, "shared-template.service"),
       };
-      const observedCommand =
-        scenario === "changed declared profile"
+      const observedCommand = windows
+        ? {
+            ...command,
+            sourcePath: "c:/Gateway/gateway.cmd",
+            definitionPaths: [startup, "c:/Gateway/gateway.cmd"],
+            programArguments: [...command.programArguments],
+          }
+        : scenario === "changed declared profile"
           ? { ...command, environment: { ...environment, OPENCLAW_PROFILE: "changed" } }
           : command;
+      if (scenario === "changed command") {
+        observedCommand.programArguments.push("--verbose");
+      }
+      const selectedCommand: Command = { ...command };
+      if (windows && scenario !== "Task still registered") {
+        selectedCommand.startupEntryPaths = [
+          scenario === "unlisted wrapper" ? "C:\\Startup\\Other.vbs" : startup,
+        ];
+      }
+      const env = windows
+        ? selectedEnv
+        : {
+            HOME: home,
+            OPENCLAW_SYSTEMD_UNIT: observedUnit,
+            OPENCLAW_PROFILE: observedCommand.environment.OPENCLAW_PROFILE,
+          };
       const state: GatewayServiceState = {
-        installed: true,
-        loadState: { status: "loaded" },
+        installed: !windows,
+        loadState: { status: windows ? "not-loaded" : "loaded" },
         running: true,
+        env,
         command: observedCommand,
-        env: {
-          HOME: home,
-          OPENCLAW_SYSTEMD_UNIT: observedUnit,
-          OPENCLAW_PROFILE: observedCommand.environment.OPENCLAW_PROFILE,
-        },
         runtime: {
           status: "running",
           pid: process.pid,
-          systemd: { scope: "user", unit: observedUnit, managerUid: 501 },
+          ...(windows ? {} : { systemd: { scope: "user", unit: observedUnit, managerUid: 501 } }),
         },
       };
       vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockResolvedValue([
-        {
-          env: { HOME: home, OPENCLAW_SYSTEMD_UNIT: observedUnit },
-          scope: "user",
-          systemdReadTarget: {
-            scope: "user",
-            unitName: observedUnit,
-            unitPath: command.sourcePath,
-          },
-        },
+        windows
+          ? { env, scope: "user", windowsStartupEntry: startup }
+          : {
+              env: { HOME: home, OPENCLAW_SYSTEMD_UNIT: observedUnit },
+              scope: "user",
+              systemdReadTarget: {
+                scope: "user",
+                unitName: observedUnit,
+                unitPath: command.sourcePath,
+              },
+            },
       ]);
-      vi.spyOn(gatewayService, "readGatewayServiceState").mockResolvedValue(state);
+      vi.spyOn(gatewayService, "readGatewayServiceState").mockImplementation(
+        async (_service, args) => ({
+          ...state,
+          command: windows && !args?.windowsStartupEntry ? selectedCommand : observedCommand,
+        }),
+      );
       const admission = publish(selectedEnv, {
         phase,
-        shouldRestart: phase === "before-stop",
-        selected: selected(command, false, {
-          serviceEnv: selectedEnv,
-          serviceManagerUid: 501,
-        }),
+        shouldRestart: !windows && phase === "before-stop",
+        selected: selected(
+          command,
+          windows,
+          windows
+            ? {}
+            : {
+                serviceEnv: selectedEnv,
+                serviceManagerUid: 501,
+              },
+        ),
       });
-      await expectPublication(
-        admission,
-        scenario !== "changed declared profile" && scenario !== "other native unit",
-      );
+      if (accepted) {
+        await expect(admission).resolves.toBeUndefined();
+      } else {
+        await expect(admission).rejects.toMatchObject({ reason: "runtime-artifact-publication" });
+      }
     }),
   );
 
