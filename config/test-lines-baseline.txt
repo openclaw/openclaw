@@ -1,6 +1,4 @@
-# Preserve distinct guest recovery, authority and history regression coverage.
-# Frozen e094e4c8 used 6,301,989 lines, leaving 11 under the prior 6,302,000 ceiling.
-# Add 8,000 bounded lines (~0.127%); this is reserve, not a combined-repair estimate.
-# Counting, branch-delta handling and all test/CI requirements stay unchanged.
-# Future increases require separate justification; no automatic budget growth.
-6310000
+# Preserve 133 lines of real SQLite admission/capture regression coverage.
+# Current main contributes 6,310,650 lines; this candidate adds exactly 133.
+# Admit the measured 6,310,783 total without extra future allowance.
+6310783
