@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   readSqliteDatabaseScopedWriteToken,
@@ -14,7 +15,62 @@ import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { hasSqliteWorkerOutcomeUnknown } from "./sqlite-worker-error.js";
 
 describe("scoped SQLite write receipts", () => {
-  const { openDatabase } = useSqliteSchemaTestFixture();
+  const { openDatabase, tempDirs } = useSqliteSchemaTestFixture();
+
+  it.each(["commit", "rollback", "savepoint rollback", "nested rollback", "temp"])(
+    "predicts the committed data and schema generation after %s",
+    (outcome) => {
+      const database = openDatabase(
+        undefined,
+        true,
+        path.join(tempDirs.make("write-receipt-"), "state.sqlite"),
+      );
+      readSqliteDatabaseScopedWriteToken(database, "entry");
+      let pending: string | undefined;
+      const transact = () =>
+        runSqliteImmediateTransactionSync(database, () => {
+          if (outcome === "savepoint rollback") {
+            database.exec("SAVEPOINT repair");
+          }
+          if (outcome === "nested rollback") {
+            expect(() =>
+              runSqliteImmediateTransactionSync(database, () => {
+                database.exec("CREATE TABLE added(id INTEGER)");
+                throw new Error("synthetic nested rollback");
+              }),
+            ).toThrow("synthetic nested rollback");
+          } else {
+            database.exec(`CREATE ${outcome === "temp" ? "TEMP " : ""}TABLE added(id INTEGER)`);
+          }
+          if (outcome === "savepoint rollback") {
+            database.exec("ROLLBACK TO repair; RELEASE repair");
+          }
+          withSqliteDatabaseWriteScope(database, ["entry"], () => {
+            database.exec("INSERT INTO original VALUES (1)");
+          });
+          pending = readSqliteDatabasePendingScopedWriteToken(database, "entry");
+          if (outcome === "rollback") {
+            throw new Error("synthetic rollback");
+          }
+        });
+      if (outcome === "rollback") {
+        expect(transact).toThrow("synthetic rollback");
+      } else {
+        transact();
+      }
+      expect(pending).toBeDefined();
+      expect(readSqliteDatabaseScopedWriteToken(database, "entry") === pending).toBe(
+        outcome !== "rollback",
+      );
+      if (outcome !== "rollback") {
+        using sibling = openDatabase("", true, database.location()!);
+        withSqliteDatabaseWriteScope(sibling, ["entry"], () => {
+          sibling.exec("INSERT INTO original VALUES (2)");
+        });
+        expect(readSqliteDatabaseScopedWriteToken(database, "entry")).not.toBe(pending);
+      }
+    },
+  );
 
   it.each([
     ["preparation", "preparation rejected"],

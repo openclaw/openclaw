@@ -1,6 +1,14 @@
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
-import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import { createControlUiMockSameOriginGatewayScript } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { chatDelta } from "./chat-flow-fixtures.test-support.ts";
+import {
+  createChatFlowE2eSuite,
+  installMockGateway,
+  requireRecord,
+  requireString,
+} from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -15,6 +23,96 @@ const previewArtifact = {
 };
 
 suite.define(() => {
+  it("keeps chat and file navigation usable when returning to a file's folder", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const errors: string[] = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
+      const gateway = await installMockGateway(page, {
+        operatorScopes: ["operator.sessions.read", "operator.sessions.write"],
+        sessions: [
+          createControlUiSessionRow("agent:main:main", "Delivery notes", Date.now(), {
+            visibility: "shared",
+            sharingRole: "owner",
+          }),
+        ],
+        methodResponses: {
+          "artifacts.list": { artifacts: [] },
+          "sessions.files.list": {
+            sessionKey: "main",
+            root: "/workspace",
+            files: [],
+            browser: {
+              path: "",
+              entries: [{ kind: "file", name: "notes.md", path: "notes.md", size: 17 }],
+            },
+          },
+          "sessions.files.get": {
+            sessionKey: "main",
+            root: "/workspace",
+            file: {
+              name: "notes.md",
+              path: "notes.md",
+              workspacePath: "notes.md",
+              content: "# Delivery notes\n",
+              previewKind: "text",
+              contentEncoding: "utf8",
+            },
+          },
+          "sessions.files.download": {
+            filename: "notes.md",
+            mimeType: "text/markdown",
+            url: "/api/artifacts/download/navigation/notes",
+            expiresAt: "2099-01-01T00:00:00Z",
+          },
+        },
+      });
+      await page.route("**/api/artifacts/download/navigation/notes", (route) =>
+        route.fulfill({ body: "# Delivery notes\n", contentType: "text/markdown" }),
+      );
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+      await composer.fill("Please review the delivery notes before publishing.");
+      await openChatSidePanelType(page, "Files");
+      const file = page.locator(".workspace-desktop").getByRole("button", {
+        name: "notes.md",
+        exact: true,
+      });
+      await file.click();
+      const heading = page.getByRole("heading", { name: "Delivery notes", exact: true });
+      await heading.waitFor();
+      await page.getByRole("button", { name: "More file actions", exact: true }).click();
+      await page.getByRole("menuitem", { name: "Attach to session", exact: true }).click();
+      await page.getByRole("button", { name: "Remove notes.md", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Send message", exact: true }).click();
+      const sent = await gateway.waitForRequest("chat.send");
+      const runId = requireString(requireRecord(sent.params).idempotencyKey, "run ID");
+      await gateway.emitGatewayEvent(
+        "chat",
+        chatDelta(runId, "Reviewing the delivery notes.", "agent:main:main", { seq: 1 }),
+      );
+      await page
+        .locator(".chat-bubble.streaming", { hasText: "Reviewing the delivery notes." })
+        .waitFor();
+      await composer.fill("Keep the examples ready for review.");
+      expect(errors).toEqual([]);
+      await page.getByRole("button", { name: "Root", exact: true }).click();
+      await file.waitFor({ state: "visible" });
+      await heading.waitFor({ state: "hidden" });
+      await file.click();
+      await heading.waitFor();
+      await gateway.emitChatFinal({ runId, text: "The delivery notes are ready." });
+      await page
+        .locator(".chat-group.assistant .chat-text", { hasText: "The delivery notes are ready." })
+        .waitFor();
+      await page.getByRole("button", { name: "Stop generating", exact: true }).waitFor({
+        state: "hidden",
+      });
+      expect(await composer.inputValue()).toBe("Keep the examples ready for review.");
+      expect(errors).toEqual([]);
+    });
+  });
+
   it("retries a failed post-run listing without hiding a rejected retry", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {

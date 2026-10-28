@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { tempWorkspace, type TempWorkspace } from "@openclaw/fs-safe/temp";
 import { clean as cleanSemver } from "semver";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveInstallWorkTimeoutMs } from "../infra/install-mode-options.js";
 import {
   installPackageDir,
@@ -206,7 +207,7 @@ export async function installPluginFromManagedNpmRoot(
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
-    logger.info?.(`Installing ${params.displaySpec} into ${npmRoot}…`);
+    logger.info?.(terminalText`Installing ${params.displaySpec} into ${npmRoot}…`);
     const repairOpenClawPeer = async (phase: "" | " after npm install") => {
       if (params.packageName === "openclaw") {
         return;
@@ -219,7 +220,7 @@ export async function installPluginFromManagedNpmRoot(
         logger,
       });
       if (repairedOpenClawPeer) {
-        logger.info?.(`Repaired stale openclaw peer dependency in ${npmRoot}${phase}`);
+        logger.info?.(terminalText`Repaired stale openclaw peer dependency in ${npmRoot}${phase}`);
       }
     };
     await repairOpenClawPeer("");
@@ -237,7 +238,7 @@ export async function installPluginFromManagedNpmRoot(
         };
       }
       logger.warn?.(
-        `${cause.error}; quarantined ${formatManagedNpmProjectQuarantineArtifacts(recovery.quarantine.movedArtifactNames)} at ${recovery.quarantine.quarantineDir} and rebuilding once before retrying.`,
+        terminalText`${cause.error}; quarantined ${formatManagedNpmProjectQuarantineArtifacts(recovery.quarantine.movedArtifactNames)} at ${recovery.quarantine.quarantineDir} and rebuilding once before retrying.`,
       );
       return null;
     };
@@ -383,7 +384,7 @@ export async function installPluginFromManagedNpmRoot(
     if (incompletePlatformPackages.length > 0) {
       const incompletePlatformPackageNames = incompletePlatformPackages.map((entry) => entry.name);
       logger.warn?.(
-        `npm left current-platform package(s) ${incompletePlatformPackageNames.join(", ")} missing or incomplete; retrying once with a fresh cache.`,
+        terminalText`npm left current-platform package(s) ${incompletePlatformPackageNames.join(", ")} missing or incomplete; retrying once with a fresh cache.`,
       );
       let freshCache: TempWorkspace | undefined;
       try {
@@ -412,7 +413,7 @@ export async function installPluginFromManagedNpmRoot(
       } finally {
         await freshCache?.cleanup().catch((error: unknown) => {
           logger.warn?.(
-            `Failed to remove temporary npm cache ${freshCache?.dir}: ${String(error)}`,
+            terminalText`Failed to remove temporary npm cache ${freshCache?.dir}: ${String(error)}`,
           );
         });
       }

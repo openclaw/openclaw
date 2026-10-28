@@ -8,6 +8,7 @@ import {
   withoutGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import { isHostPluginApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import {
   getCanonicalGatewayContextResolver,
@@ -543,7 +544,7 @@ export function resolveInProcessGatewayDispatch(
   }
   const hostApprovalRequestEligible =
     options?.allowHostPluginApprovalRequest === true &&
-    method === "plugin.approval.request" &&
+    isHostPluginApprovalMethod(method) &&
     options.forceSyntheticClient === true;
   const trustedPluginApprovalOwnerId =
     hostApprovalRequestEligible &&
@@ -588,7 +589,8 @@ export function resolveInProcessGatewayDispatch(
         ? (trustedPluginApprovalOwnerId ?? signedAgentApprovalOwnerId)
         : signedAgentApprovalOwnerId
       : undefined;
-  // The host grants only request admission; it never gives the plugin reviewer scopes.
+  // The host grants only request admission and the wait for that request's own verdict;
+  // it never gives the plugin reviewer scopes.
   const requestScopes = hostApprovalRequestOwnerId ? [WRITE_SCOPE] : syntheticScopes;
   const baseSyntheticClient = createSyntheticPluginRuntimeClient({
     ...(operatorAuthority

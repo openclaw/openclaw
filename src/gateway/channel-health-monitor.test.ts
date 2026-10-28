@@ -108,6 +108,7 @@ async function expectRestartedChannel(
   expect(manager.stopChannel).toHaveBeenCalledWith(channel, accountId, { manual: false });
   expect(manager.startChannel).toHaveBeenCalledWith(channel, accountId, {
     reason: "health-monitor",
+    preserveManualStop: true,
   });
   monitor.stop();
 }
@@ -178,6 +179,7 @@ describe("channel-health-monitor", () => {
         reason: "health-monitor",
       });
       expect(manager.resetRestartAttempts).toHaveBeenCalledExactlyOnceWith("discord", "default");
+      expect(manager.captureAccountRestart).not.toHaveBeenCalled();
     } finally {
       monitor.stop();
     }
@@ -210,7 +212,7 @@ describe("channel-health-monitor", () => {
         lastDisconnect: { at: Date.now(), error: "transport stopped" },
       });
       await clock.advanceBy(27_000);
-      expect(manager.getRuntimeSnapshot).toHaveBeenCalledOnce();
+      expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
       expect(manager.stopChannel).not.toHaveBeenCalled();
       expect(manager.startChannel).not.toHaveBeenCalled();
       expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
@@ -221,6 +223,7 @@ describe("channel-health-monitor", () => {
       });
       expect(manager.startChannel).toHaveBeenCalledExactlyOnceWith("slack", "default", {
         reason: "health-monitor",
+        preserveManualStop: true,
       });
     } finally {
       monitor.stop();
@@ -355,6 +358,7 @@ describe("channel-health-monitor", () => {
     expect(manager.stopChannel).toHaveBeenCalledWith("discord", "default", { manual: false });
     expect(manager.startChannel).toHaveBeenCalledWith("discord", "default", {
       reason: "health-monitor",
+      preserveManualStop: true,
     });
     expect(manager.stopChannel).not.toHaveBeenCalledWith("discord", "quiet", { manual: false });
     expect(manager.startChannel).not.toHaveBeenCalledWith("discord", "quiet", expect.anything());

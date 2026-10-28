@@ -64,6 +64,7 @@ export async function integrateManagedWorkspaceSource(
       githubHost: string;
       review: { repository: string; commit: string };
       initial: boolean;
+      reviewOnly: boolean;
       emptySource: boolean;
       resuming: boolean;
       accept: () => Promise<void>;
@@ -114,7 +115,7 @@ export async function integrateManagedWorkspaceSource(
   let pendingStaged: { path: string; indexEntry?: string }[] = [];
   const stagedError =
     "Commit the staged changes in files that also have unstaged changes before refreshing this PR; its existing files and index were preserved.";
-  if (params.source) {
+  if (params.source && !params.source.reviewOnly) {
     if (params.source.resuming) {
       // An accepted transfer may retain a paused runtime. Recover it through its
       // owner before asking that runtime to execute the workspace check.
@@ -145,6 +146,18 @@ export async function integrateManagedWorkspaceSource(
         !sandbox.backend
       ) {
         throw new Error("The base refresh sandbox no longer belongs to this workspace.");
+      }
+      // A destination change selects a comparison, not a source to merge or stage.
+      if (params.source?.reviewOnly) {
+        previousBase = state.current().base_commit ?? undefined;
+        return {
+          status: "current",
+          repository: target.repository,
+          baseBranch: target.baseBranch,
+          baseCommit: params.source.commit,
+          changedPaths: [],
+          conflictPaths: [],
+        };
       }
       // This operation prepares an existing private checkout; it never creates a new binding.
       state.current();
@@ -643,16 +656,19 @@ export async function integrateManagedWorkspaceSource(
       { contents: true, commitPresent: true },
     );
   }
-  return {
-    ...result,
-    review: await prepareManagedWorkspaceReviewBase({
-      owner,
-      sandbox,
-      reviewCommit,
-      previousBase,
-      signal: params.signal,
-      assertCurrent,
-      reviewPreparationError,
-    }),
-  };
+  const review = await prepareManagedWorkspaceReviewBase({
+    owner,
+    sandbox,
+    reviewCommit,
+    previousBase,
+    signal: params.signal,
+    assertCurrent,
+    stageChanges: !params.source?.reviewOnly,
+    reviewPreparationError,
+  });
+  if (params.source?.reviewOnly) {
+    // Keep the old binding retryable until its new comparison is installed.
+    await params.source.accept();
+  }
+  return { ...result, review };
 }

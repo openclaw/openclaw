@@ -1,5 +1,6 @@
 /* Discrete display transitions keep the closed surface painted during its exit. */
-.chat-details[data-desktop]:has(> .chat-details-desktop-body) {
+.chat-details:has(> .chat-details-desktop-body) {
+  container-type: inline-size;
   flex-direction: column;
   padding: 0;
   overflow: hidden;
@@ -62,8 +63,8 @@
 }
 
 .chat-details-desktop-body__content {
-  padding-block: 4px;
-  padding-inline: calc(16px - var(--details-scrollbar-reserve, 0px));
+  /* Subtract the native gutters before the first layout measurement. */
+  padding: 4px calc(16px + 50% - 50cqi);
 }
 
 @supports selector(::-webkit-scrollbar) {

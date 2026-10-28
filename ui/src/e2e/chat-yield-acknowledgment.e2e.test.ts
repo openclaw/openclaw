@@ -39,7 +39,7 @@ const runId = "parent-run";
 type ChildFacts = Partial<
   Pick<
     GatewaySessionRow,
-    "status" | "hasActiveRun" | "activeRunIds" | "endedAt" | "runtimeMs" | "agentStatus"
+    "status" | "hasActiveRun" | "activeRunIds" | "endedAt" | "agentStatus" | "subagentRunState"
   >
 >;
 
@@ -87,12 +87,12 @@ function scenarioData(scenario: Scenario, now: number) {
               },
               now,
             ),
-            child(3, THIRD, { ...done, endedAt: now - 350_000, runtimeMs: 240_000 }, now),
+            child(3, THIRD, { ...done, endedAt: now - 350_000, subagentRunState: "paused" }, now),
           ]
         : [
             child(1, FIRST, { ...done, endedAt: now - 2_000 }, now),
             child(2, SECOND, { ...done, endedAt: now - 200_000 }, now),
-            child(3, THIRD, { ...done, endedAt: now - 350_000 }, now),
+            child(3, THIRD, { ...done, endedAt: now - 350_000, subagentRunState: "paused" }, now),
           ];
   const acknowledgment = scenario === "one-waiting" ? SHORT_ACK : LONG_ACK;
   const resumed = scenario === "resumed";
@@ -259,20 +259,20 @@ suite.define(() => {
       const toggle = wait.locator("button[aria-expanded]");
       await expect
         .poll(async () => squash(await toggle.textContent()))
-        .toBe("Waiting on 3 sessions · 1 needs your input · 10m");
+        .toBe("Waiting on 3 sessions · 1 needs your input · 1 paused · 10m");
       expect(await toggle.getAttribute("aria-expanded")).toBe("true");
       const rows = wait.locator("li");
       expect((await rows.allTextContents()).map(squash)).toEqual([
         `${SECOND} Needs your input`,
+        `${THIRD} Paused`,
         `${FIRST} Running`,
-        `${THIRD} Done`,
       ]);
       expect(
         await rows.locator("a").evaluateAll((links) => links.map((a) => a.getAttribute("href"))),
       ).toEqual([
         "/chat/main/subagent/dependency-update-2",
-        "/chat/main/subagent/dependency-update-1",
         "/chat/main/subagent/dependency-update-3",
+        "/chat/main/subagent/dependency-update-1",
       ]);
       await toggle.click();
       expect(await toggle.getAttribute("aria-expanded")).toBe("false");
@@ -300,11 +300,15 @@ suite.define(() => {
       expect(squash(await toggle.textContent())).toBe("Resumed · 9m 32s later · 3 sessions");
       expect(await toggle.getAttribute("aria-expanded")).toBe("true");
       expect((await rule.locator("li").allTextContents()).map(squash)).toEqual([
+        `${THIRD} Paused`,
         `${FIRST} Done`,
         `${SECOND} Done`,
-        `${THIRD} Done`,
       ]);
-      expect(await thread.locator(".chat-group.assistant").count()).toBe(1);
+      // Only a paused child is left: a quiet note below the answer, not a waiting line.
+      const note = thread.locator(".chat-group.assistant .chat-subagent-wait");
+      expect(squash(await note.textContent())).toBe(`${THIRD} is paused`);
+      expect(await note.locator("a").getAttribute("href")).toMatch(/dependency-update-3$/);
+      expect(await thread.textContent()).not.toContain("Waiting on");
       expect(await thread.locator(".chat-notice").count()).toBe(0);
       expect(await thread.textContent()).not.toContain(PRIVATE);
       // A listed child opens its own session in place.

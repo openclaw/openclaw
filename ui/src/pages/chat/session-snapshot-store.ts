@@ -17,6 +17,7 @@ import {
   MAX_CACHED_CHAT_SESSIONS,
   setSessionCacheValue,
 } from "./session-cache.ts";
+import { detailsSnapshotSchema } from "./session-details-snapshot-schema.ts";
 import {
   MAX_CACHED_CHAT_SNAPSHOT_WEIGHT,
   MAX_CACHED_CHAT_WEIGHT,
@@ -92,6 +93,7 @@ const snapshotSchema = json.object(
     sessionState: json.optional(chatSessionStateSnapshotSchema),
     headerViewers: json.optional(chatHeaderViewersSnapshotSchema),
     headerSharing: json.optional(json.nullable(chatHeaderSharingSnapshotSchema)),
+    details: detailsSnapshotSchema,
     composer: json.optional(
       json.nullable(
         json.object({

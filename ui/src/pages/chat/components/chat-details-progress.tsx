@@ -70,6 +70,7 @@ export function ChatDetailsProgress(props: Props) {
             manualOnly: true,
           }}
           refreshAction={props.props?.progressCardRefresh}
+          reserveRefresh={props.desktop && props.props?.progressCardRefreshReserved}
           menuRef={props.menuRef}
           menuOptions={{
             class: "chat-details-progress__menu",

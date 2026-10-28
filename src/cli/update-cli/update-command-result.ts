@@ -5,6 +5,7 @@ import { resolveStateDir } from "../../config/paths.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { acquireWithWait } from "../../infra/acquire-with-wait.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import {
   attachErrorDiagnostic,
   formatErrorMessageForDisplay,
@@ -280,6 +281,9 @@ export function createUpdateCommandFailureResult(
   const pkgOwnershipFailure = cause instanceof SystemPackageOwnershipError;
   const admissionFailure =
     admission === true && cause instanceof GatewayServiceUpdateOwnershipError;
+  const lockFailure = collectNestedErrorCandidates(cause).find((candidate) =>
+    hasErrnoCode(candidate, "file_lock_timeout"),
+  );
   const detail =
     ownershipFailure?.message ??
     (admissionFailure
@@ -294,7 +298,9 @@ export function createUpdateCommandFailureResult(
           ? cause.reason
           : admissionFailure
             ? "managed-service-preflight"
-            : "update-failed";
+            : lockFailure
+              ? "file_lock_timeout"
+              : "update-failed";
   const stepResult = preMutationFailure ? cause.stepResult : undefined;
   const doctorFailureFacts = collectUpdateDoctorFailureFacts(failure.cause);
   const failedStep: UpdateStepResult = stepResult?.failedStep ?? {

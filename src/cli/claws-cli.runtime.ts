@@ -32,6 +32,7 @@ import { redactSensitiveArgv } from "../config/redact-argv.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { sleep } from "../utils/sleep.js";
 import {
@@ -419,9 +420,9 @@ export async function runClawsAddCommand(sourcePath: string, opts: ClawsAddOptio
                     },
                   ),
                 waitUntilAgentAvailable: async (agentId) => {
-                  const deadline = Date.now() + CLAW_AGENT_RELOAD_TIMEOUT_MS;
+                  const deadline = monotonicNow() + CLAW_AGENT_RELOAD_TIMEOUT_MS;
                   let lastError: unknown;
-                  while (Date.now() < deadline) {
+                  while (monotonicNow() < deadline) {
                     try {
                       const response = await callGatewayFromCliWithTransport<{
                         config?: OpenClawConfig;

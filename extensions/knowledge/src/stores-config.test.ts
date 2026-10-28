@@ -39,13 +39,17 @@ it("policy gates default on and reject retired config shapes", () => {
   expect(parsePolicy(undefined)).toStrictEqual({
     operatorRead: true,
     writesEnabled: true,
+    hubPercentile: 90,
     maintenance,
   });
   expect(parsePolicy({ writesEnabled: false })).toStrictEqual({
     operatorRead: true,
     writesEnabled: false,
+    hubPercentile: 90,
     maintenance,
   });
+  expect(parsePolicy({ pageBudgets: { hubPercentile: 95 } }).hubPercentile).toBe(95);
+  expect(() => parsePolicy({ pageBudgets: { hubPercentile: 20 } })).toThrow(/invalid/);
   expect(
     parsePolicy({ maintenance: { schedule: "*/5 * * * *", timezone: "UTC" } }).maintenance,
   ).toStrictEqual({ enabled: true, schedule: "*/5 * * * *", timezone: "UTC" });

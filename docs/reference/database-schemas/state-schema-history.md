@@ -452,6 +452,8 @@ No agent schema changes are involved.
 Startup and Doctor add the nullable columns without assigning authority to legacy
 rows; unused profile tables remain absent until first use. The current schema
 and the profile owner's first-use initialization share the table and index definitions.
+Upgrades also add nullable `canonical_login TEXT` when a legacy identity table
+predates that profile field, preserving its rows without inferring a login.
 Both published schema markers normally advance to 19. During the existing
 [older-updater publication deferral](/reference/database-schemas/versioning#schema-bumps-and-older-updaters),
 content can be upgraded while older published markers remain. References cannot

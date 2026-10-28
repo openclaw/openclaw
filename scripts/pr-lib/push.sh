@@ -247,15 +247,26 @@ setup_prhead_remote() {
 
 resolve_prhead_remote_sha() {
   local pr_head="$1"
+  local remote_refs remote_sha remote_status=0
+  PRHEAD_REMOTE_SHA=""
 
-  local remote_sha
-  remote_sha=$(pr_git ls-remote "$PRHEAD_REMOTE_URL" "refs/heads/$pr_head" 2>/dev/null | awk '{print $1}' || true)
-  if [ -z "$remote_sha" ]; then
-    echo "Remote branch refs/heads/$pr_head not found on prhead" >&2
-    exit 1
+  # A transport can fail after advertising refs. Partial output must never
+  # become publication authority, and its diagnostic must stay visible.
+  remote_refs=$(pr_git ls-remote --exit-code --heads "$PRHEAD_REMOTE_URL" "refs/heads/$pr_head") || remote_status=$?
+  if [ "$remote_status" -eq 0 ]; then
+    remote_sha=$(printf '%s\n' "$remote_refs" | awk -v ref="refs/heads/$pr_head" '$2 == ref {print $1}')
+    if [ -n "$remote_sha" ]; then
+      PRHEAD_REMOTE_SHA="$remote_sha"
+      return 0
+    fi
+    remote_status=2
   fi
-
-  PRHEAD_REMOTE_SHA="$remote_sha"
+  if [ "$remote_status" -eq 2 ]; then
+    echo "Remote branch refs/heads/$pr_head not found on prhead" >&2
+  else
+    echo "Unable to inspect remote branch refs/heads/$pr_head (git ls-remote exited $remote_status)" >&2
+  fi
+  return "$remote_status"
 }
 
 verify_prep_commit_range_signed() {
@@ -358,7 +369,7 @@ push_prep_head_to_pr_branch() {
   verify_prep_head_extends_hosted_head "$lease_sha" "$prep_head_sha" || return 1
   setup_prhead_remote
 
-  resolve_prhead_remote_sha "$pr_head"
+  resolve_prhead_remote_sha "$pr_head" || return $?
   local remote_sha="$PRHEAD_REMOTE_SHA"
 
   local pushed_from_sha="$lease_sha"

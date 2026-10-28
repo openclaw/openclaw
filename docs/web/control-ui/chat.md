@@ -92,16 +92,25 @@ While the handoff waits on child sessions, its working line names them in place
 of the working text. With one child it reads **Waiting on** and that child's
 name, then the time since your message. With several it reads, for example,
 **Waiting on 3 sessions · 1 needs your input · 9m**, and a list below it shows
-each child with its status in words: **Needs your input**, **Running**,
-**Failed**, **Stopped**, or **Done**. Children that asked for your attention come
-first. The list is open while the agent waits; select the line to close or reopen
+each child with its status in words: **Needs your input**, **Paused**,
+**Running**, **Failed**, **Stopped**, or **Done**. Children that asked for your
+attention come first, then paused ones. The list is open while the agent waits; select the line to close or reopen
 it. It names subagents and child sessions alike, including children that finished
 during the wait. Each name, here and in the **Resumed** list, links to that
 child's session; Cmd-, Ctrl-, or middle-click opens it in a new tab. A child the
 chat's own subagent list does not include, or a pane that cannot open sessions,
 shows the name as plain text. **Needs your input** is the child's own attention request, the
-same one the sidebar shows; a child paused for a continuation without one reads
-as finished. The time stays on the same clock across handoffs and resumes.
+same one the sidebar shows. A child that called `sessions_yield` and waits for a
+continuation reads **Paused**, and the line counts it, as in **Waiting on 3
+sessions · 1 paused · 9m**; with one child it reads **Waiting on** its name and
+**Paused**. A paused child keeps the waiting line open even when no other child
+is running, without showing the parent as working, until it continues, finishes,
+or is stopped; once it runs again it reads **Running**. While every remaining
+child is paused, the line shows no time. After the agent resumes, if the only
+children left are paused, the reply ends with a quiet note instead of a waiting
+line: **CI action pins is paused**, with the name linked, or **2 sessions are
+paused**. A child with its own work still running reads **Running** and keeps the
+waiting line. The time stays on the same clock across handoffs and resumes.
 Until the subagent list is available, the existing working indicator remains as
 a fallback. Its wait clock measures the
 current idle interval from the parent’s latest recorded run end, even if the

@@ -94,7 +94,9 @@ export type ChannelAccountLifecycle = {
     channel: ChannelId,
     accountId: string,
     reason: StartChannelOptions["reason"],
+    options?: { resetRestartAttempts?: boolean },
   ) => ((shouldContinue: () => boolean) => Promise<boolean>) | undefined;
+  resetRestartAttempts: (channelId: ChannelId, accountId: string) => void;
   isManuallyStopped: (channelId: ChannelId, accountId: string) => boolean;
   isAccountListed: (channelId: ChannelId, accountId: string) => boolean;
 };
