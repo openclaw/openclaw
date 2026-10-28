@@ -6,4 +6,5 @@
 # Increase over the CI-base ceiling: 789 existing debt + 1,114 PR lines + 451 reserve = 2,354.
 # Reserve is below 0.01% of measured use; this is test-resource capacity, not a security waiver.
 # All cases, assertions and counting/gating rules remain unchanged; no automatic budget growth.
-6302000
+# PR #167670: approved +243, matching this PR's measured net added test lines.
+6302243

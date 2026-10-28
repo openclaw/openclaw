@@ -1980,6 +1980,23 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   right: calc(var(--sidebar-child-session-toggle-width) + 6px);
 }
 
+/* Keep Archive outside the disclosure slot after the last child disappears.
+   Touch layouts retain their existing always-visible action clearance. */
+@media (hover: hover) and (pointer: fine) {
+  .shell:not(.shell--mobile-nav)
+    .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--team):has(
+      [data-sidebar-session-archive]
+    ) {
+    > .sidebar-recent-session__aside {
+      right: calc(var(--sidebar-child-session-toggle-width) + 6px);
+    }
+
+    &:not(:has(> .sidebar-child-session-toggle)):is(:hover, :focus-within) {
+      padding-inline-end: calc(4px + var(--sidebar-child-session-toggle-width));
+    }
+  }
+}
+
 .sidebar-recent-session:not(
     .sidebar-recent-session--child,
     .sidebar-recent-session--single-line
