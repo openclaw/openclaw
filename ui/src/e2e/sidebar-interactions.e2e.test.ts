@@ -259,11 +259,11 @@ suite.define(() => {
       const researchSwitch = menu.getByRole("menuitem", { name: "Research", exact: true });
       await expect
         .poll(() =>
-          researchSwitch.evaluate(
-            (element) => element.parentElement?.matches(".sidebar-agent-menu__agent-list") ?? false,
-          ),
+          menu
+            .locator(".sidebar-agent-menu__agent-list .agent-select__option-label")
+            .allTextContents(),
         )
-        .toBe(true);
+        .toEqual(["Show all", "Scheduled Automations", "Research", "Forge", "Support"]);
       await expect
         .poll(() => researchSwitch.locator(".agent-select__avatar img").getAttribute("src"))
         .toContain("data:image/png;base64,");
@@ -320,7 +320,13 @@ suite.define(() => {
         .toBe(1);
       await sidebar.locator(".sidebar-agent-card__main").click();
       await menu.getByRole("menuitem", { name: "Show all", exact: true }).click();
+      await waitForControlUiRoute(page, { routeId: "sessions", pathname: "/sessions" });
       await sidebar.locator(".sidebar-workspace-header__main").click();
+      await expectAttribute(
+        menu.getByRole("menuitem", { name: "Show all", exact: true }),
+        "aria-current",
+        "true",
+      );
     });
   });
 
