@@ -40,11 +40,7 @@ function fixture(
   ]);
   return {
     entries,
-    resolve: (
-      toolName = "browser",
-      assertNativeRuntimeCurrent?: () => void,
-      toolMeta?: { pluginId: string },
-    ) =>
+    resolve: (toolName = "browser", assertNativeRuntimeCurrent?: () => void, pluginId?: string) =>
       resolveSessionResourceToolPolicy({
         config,
         client,
@@ -59,7 +55,7 @@ function fixture(
         },
         readPreparedSessionEntry: (query) => entries.get(query.key),
         toolName,
-        toolMeta,
+        toolMeta: pluginId ? { pluginId } : undefined,
         assertNativeRuntimeCurrent,
       }),
   };
@@ -162,7 +158,6 @@ it("rechecks selected model policy when the stored provider changes", () => {
 
 it("admits a coding-profile MCP App tool only with its bundle MCP ownership", () => {
   const { resolve } = fixture({ config: { tools: { profile: "coding" } } });
-  // App callers project names like demo_show; only registered ownership matches bundle-mcp.
   expect(() => resolve("demo_show")).toThrow();
-  expect(() => resolve("demo_show", undefined, { pluginId: "bundle-mcp" })).not.toThrow();
+  expect(() => resolve("demo_show", undefined, "bundle-mcp")).not.toThrow();
 });

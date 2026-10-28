@@ -478,7 +478,6 @@ describe.each<Path>(["model-created", "extension-runtime"])(
   },
 );
 
-// Both entry points run against the real session MCP runtime and HTTP transport.
 async function revalidatesCachedGrantOverHttp(path: Path, signal: AbortSignal) {
   const mcp = new Server(
     { name: "parts", version: "1" },
