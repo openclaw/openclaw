@@ -111,10 +111,7 @@ function pairedDeviceMatchesNodeApprovalQuery(device: PairedDevice, query: strin
   );
 }
 
-function buildPendingNodeApprovalNotice(
-  device: PairedDevice,
-  opts: DevicesRpcOpts,
-): string[] | null {
+function buildPendingNodeApprovalNotice(device: PairedDevice, opts: DevicesRpcOpts): string | null {
   const pending = device.pendingNodeSurface;
   const requestId = normalizeOptionalString(pending?.requestId);
   if (!pending || !requestId) {
@@ -130,12 +127,12 @@ function buildPendingNodeApprovalNotice(
   const command = formatPairingApproveCommand("nodes", requestId, { timeout: opts.timeout });
   const connectionReminder = formatConnectionFlagReminder(opts);
   const lines = [
-    `Node ${action} pending for ${sanitizeForLog(label)}. Run ${sanitizeForLog(command)}`,
+    terminalText`Node ${action} pending for ${sanitizeForLog(label)}. Run ${sanitizeForLog(command)}`,
   ];
   if (connectionReminder) {
     lines.push(connectionReminder);
   }
-  return lines;
+  return lines.join("\n");
 }
 
 function findPairedDevicePendingNodeApprovalNotices(
@@ -144,7 +141,7 @@ function findPairedDevicePendingNodeApprovalNotices(
 ): string[] {
   return (paired ?? []).flatMap((device) => {
     const notice = buildPendingNodeApprovalNotice(device, opts);
-    return notice ?? [];
+    return notice ? [notice] : [];
   });
 }
 
@@ -309,7 +306,7 @@ async function approvePairingWithFallback(
           if (replacement) {
             defaultRuntime.log(
               theme.warn(
-                terminalText`Pending request ${requestId} was replaced by same-device repair ${replacement.requestId}; approving latest compatible request.`,
+                terminalText`Pending request ${sanitizeForLog(requestId)} was replaced by same-device repair ${sanitizeForLog(replacement.requestId)}; approving latest compatible request.`,
               ),
             );
           }
@@ -522,22 +519,24 @@ function formatTokenSummary(tokens: DeviceTokenSummary[] | undefined) {
     return "none";
   }
   const parts = tokens
-    .map((t) => terminalText`${t.role}${t.revokedAtMs ? " (revoked)" : ""}`)
+    .map((t) => terminalText`${sanitizeForLog(t.role)}${t.revokedAtMs ? " (revoked)" : ""}`)
     .toSorted((a, b) => a.localeCompare(b));
   return parts.join(", ");
 }
 
 function formatPendingDeviceIdentity(request: PendingDevice): string {
-  return terminalText`${normalizeOptionalString(request.displayName) ?? normalizeOptionalString(request.deviceId) ?? ""}`;
+  return terminalText`${sanitizeForLog(
+    normalizeOptionalString(request.displayName) ?? normalizeOptionalString(request.deviceId) ?? "",
+  )}`;
 }
 
 function formatAccessSummary(access: DevicePairingAccessSummary | null): string {
   if (!access) {
     return "none";
   }
-  const roles = access.roles.length > 0 ? terminalText`${access.roles.join(", ")}` : "none";
-  const scopes = access.scopes.length > 0 ? terminalText`${access.scopes.join(", ")}` : "none";
-  return `roles: ${roles}; scopes: ${scopes}`;
+  const roles = access.roles.length > 0 ? access.roles.map(sanitizeForLog).join(", ") : "none";
+  const scopes = access.scopes.length > 0 ? access.scopes.map(sanitizeForLog).join(", ") : "none";
+  return terminalText`roles: ${roles}; scopes: ${scopes}`;
 }
 
 const PENDING_APPROVAL_COPY: Record<PendingDeviceApprovalKind, { label: string; note: string }> = {
@@ -597,7 +596,7 @@ function failDevicesCommand(json: boolean | undefined, ...lines: string[]): void
     throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
   }
   for (const line of lines) {
-    defaultRuntime.error(terminalText`${line}`);
+    defaultRuntime.error(line);
   }
   defaultRuntime.exit(1);
 }
@@ -647,7 +646,7 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
           }
           return {
             Request: req.requestId,
-            Device: terminalText`${formatPendingDeviceIdentity(req)}${req.remoteIp ? ` · ${req.remoteIp}` : ""}`,
+            Device: `${formatPendingDeviceIdentity(req)}${req.remoteIp ? terminalText` · ${sanitizeForLog(req.remoteIp)}` : ""}`,
             Requested: formatAccessSummary(approval.requested),
             Approved: formatAccessSummary(approval.approved),
             Age: typeof req.ts === "number" ? formatTimeAgo(Date.now() - req.ts) : "",
@@ -660,12 +659,14 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
   if (list.paired.length) {
     const tableWidth = getTerminalTableWidth();
     const rows = list.paired.map((device) => ({
-      Device: terminalText`${device.operatorLabel || device.displayName || device.clientId || device.deviceId}`,
-      "Device ID": terminalText`${device.deviceId}`,
-      Roles: device.roles?.length ? terminalText`${device.roles.join(", ")}` : "",
-      Scopes: device.scopes?.length ? terminalText`${device.scopes.join(", ")}` : "",
+      Device: sanitizeForLog(
+        device.operatorLabel || device.displayName || device.clientId || device.deviceId,
+      ),
+      "Device ID": sanitizeForLog(device.deviceId),
+      Roles: device.roles?.length ? device.roles.map(sanitizeForLog).join(", ") : "",
+      Scopes: device.scopes?.length ? device.scopes.map(sanitizeForLog).join(", ") : "",
       Tokens: formatTokenSummary(device.tokens),
-      IP: terminalText`${device.remoteIp ?? ""}`,
+      IP: device.remoteIp ? sanitizeForLog(device.remoteIp) : "",
     }));
     defaultRuntime.log(`${theme.heading("Paired")} ${theme.muted(`(${list.paired.length})`)}`);
     defaultRuntime.log(
@@ -688,7 +689,7 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
     }
     const nodeApprovalNotices = findPairedDevicePendingNodeApprovalNotices(opts, list.paired);
     for (const notice of nodeApprovalNotices) {
-      defaultRuntime.log(theme.warn(terminalText`${notice}`));
+      defaultRuntime.log(theme.warn(notice));
     }
   }
   if (!list.pending.length && !list.paired.length) {
@@ -706,7 +707,7 @@ export async function runDevicesDeleteCommand(
   if (!trimmed) {
     failDevicesCommand(
       opts.json,
-      `${field} is required. Run ${formatCliCommand("openclaw devices list")} to choose a ${operation === "remove" ? "paired device" : "pending request"}.`,
+      terminalText`${field} is required. Run ${formatCliCommand("openclaw devices list")} to choose a ${operation === "remove" ? "paired device" : "pending request"}.`,
     );
     return;
   }
@@ -821,13 +822,13 @@ export async function runDevicesApproveCommand(
     defaultRuntime.log(
       `${theme.warn("Selected pending device request")} ${theme.command(terminalText`${req.requestId}`)}`,
     );
-    defaultRuntime.log(terminalText`  Device: ${formatPendingDeviceIdentity(req)}`);
-    defaultRuntime.log(terminalText`  Requested: ${formatAccessSummary(approval.requested)}`);
+    defaultRuntime.log(`  Device: ${formatPendingDeviceIdentity(req)}`);
+    defaultRuntime.log(`  Requested: ${formatAccessSummary(approval.requested)}`);
     if (approval.approved) {
-      defaultRuntime.log(terminalText`  Approved: ${formatAccessSummary(approval.approved)}`);
+      defaultRuntime.log(`  Approved: ${formatAccessSummary(approval.approved)}`);
     }
     if (req.remoteIp) {
-      defaultRuntime.log(terminalText`  IP:     ${req.remoteIp}`);
+      defaultRuntime.log(terminalText`  IP:     ${sanitizeForLog(req.remoteIp)}`);
     }
     defaultRuntime.log(`  Note:   ${PENDING_APPROVAL_COPY[approval.kind].note}`);
     defaultRuntime.error(terminalText`Approve this exact request with: ${approveCommand}`);
@@ -870,7 +871,7 @@ export async function runDevicesApproveCommand(
     throw error;
   }
   if (!result) {
-    const message = `No pending device request matches ${sanitizeForLog(resolvedRequestId)}. Run ${formatCliCommand("openclaw devices list")} and retry with the current request ID.`;
+    const message = terminalText`No pending device request matches ${sanitizeForLog(resolvedRequestId)}. Run ${formatCliCommand("openclaw devices list")} and retry with the current request ID.`;
     const nodeApprovalNotices = findPairedDevicePendingNodeApprovalNotices(
       opts,
       approvalContext.pairingList?.paired.filter((device) =>
@@ -901,7 +902,7 @@ export async function runDevicesRenameCommand(opts: DevicesRpcOpts): Promise<voi
   if (!deviceId || !label) {
     failDevicesCommand(
       opts.json,
-      `--device and --name are required. Run ${formatCliCommand("openclaw devices list")} to choose a paired device.`,
+      terminalText`--device and --name are required. Run ${formatCliCommand("openclaw devices list")} to choose a paired device.`,
     );
     return;
   }
@@ -911,7 +912,7 @@ export async function runDevicesRenameCommand(opts: DevicesRpcOpts): Promise<voi
     return;
   }
   defaultRuntime.log(
-    `${theme.success("Renamed")} ${theme.command(terminalText`${deviceId}`)} ${theme.muted("→")} ${terminalText`${label}`}`,
+    `${theme.success("Renamed")} ${theme.command(terminalText`${deviceId}`)} ${theme.muted("→")} ${terminalText`${sanitizeForLog(label)}`}`,
   );
 }
 

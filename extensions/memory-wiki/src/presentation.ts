@@ -13,7 +13,7 @@ export function renderWikiSearchResults(
     : results
         .map(
           (result, index) =>
-            `${index + 1}. ${text(result.title)} (${text(result.corpus)}/${text(result.kind)})\n${result.path ? `Path: ${text(result.path)}` : `Lookup: ${text(result.lookup)}`}${result.startLine !== undefined && result.endLine !== undefined ? `\nLines: ${result.startLine}-${result.endLine}` : ""}${result.provenanceLabel ? `\nProvenance: ${text(result.provenanceLabel)}` : ""}${result.matchedClaimId ? `\nClaim: ${text(result.matchedClaimId)}` : ""}${result.evidenceKinds && result.evidenceKinds.length > 0 ? `\nEvidence: ${text(result.evidenceKinds.join(", "))}` : ""}\nSnippet: ${text(result.snippet)}`,
+            `${index + 1}. ${text(result.title)} (${text(result.corpus)}/${text(result.kind)})\n${result.path ? `Path: ${text(result.path)}` : `Lookup: ${text(String(result.lookup))}`}${result.startLine !== undefined && result.endLine !== undefined ? `\nLines: ${result.startLine}-${result.endLine}` : ""}${result.provenanceLabel ? `\nProvenance: ${text(result.provenanceLabel)}` : ""}${result.matchedClaimId ? `\nClaim: ${text(result.matchedClaimId)}` : ""}${result.evidenceKinds && result.evidenceKinds.length > 0 ? `\nEvidence: ${text(result.evidenceKinds.join(", "))}` : ""}\nSnippet: ${text(result.snippet)}`,
         )
         .join("\n\n");
 }

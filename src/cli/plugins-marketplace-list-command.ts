@@ -44,7 +44,7 @@ export async function runPluginMarketplaceListCommand(
   );
   for (const plugin of result.manifest.plugins) {
     const suffix = plugin.version
-      ? theme.muted(terminalText` ${formatVersionLabel(plugin.version)}`)
+      ? theme.muted(` ${formatVersionLabel(terminalText`${plugin.version}`)}`)
       : "";
     const desc = plugin.description ? ` - ${theme.muted(terminalText`${plugin.description}`)}` : "";
     defaultRuntime.log(`${theme.command(terminalText`${plugin.name}`)}${suffix}${desc}`);
