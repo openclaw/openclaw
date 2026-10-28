@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#101827">
+  <meta name="description" content="ShopMini - bản demo quản lý sản phẩm, đơn hàng và doanh thu cho shop nhỏ.">
+  <title>ShopMini — Quản lý shop nhỏ</title>
+  <link rel="stylesheet" href="./style.css">
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#" aria-label="ShopMini trang chủ">
+        <span class="brand-mark">S</span>
+        <span>Shop<span class="brand-light">Mini</span><small>QUẢN LÝ BÁN HÀNG</small></span>
+      </a>
+      <div class="sidebar-label">TỔNG QUAN</div>
+      <a class="nav-link active" href="#overview"><span>▦</span> Tổng quan</a>
+      <a class="nav-link" href="#orders"><span>▤</span> Đơn hàng</a>
+      <a class="nav-link" href="#products"><span>▧</span> Sản phẩm</a>
+      <div class="sidebar-note">
+        <span class="note-icon">✦</span>
+        <strong>Bản demo MVP</strong>
+        <p>Dữ liệu được lưu trên trình duyệt này. Hãy dùng dữ liệu giả khi thử nghiệm.</p>
+      </div>
+      <div class="sidebar-footer"><span class="status-dot"></span> Đang chạy cục bộ</div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">BẢNG ĐIỀU KHIỂN</p>
+          <h1>Chào bạn, chủ shop <span class="wave">✦</span></h1>
+          <p class="muted">Theo dõi tình hình kinh doanh trong một nơi.</p>
+        </div>
+        <div class="topbar-actions">
+          <span class="demo-chip"><span class="status-dot"></span> Chế độ dùng thử</span>
+          <button class="avatar" type="button" aria-label="Tài khoản demo">Q</button>
+        </div>
+      </header>
+
+      <section id="overview" class="stats-grid" aria-label="Thống kê">
+        <article class="stat-card">
+          <div class="stat-heading"><span>Doanh thu đã giao</span><span class="stat-icon revenue">₫</span></div>
+          <div class="stat-value" id="stat-revenue">0 ₫</div>
+          <p class="stat-foot">Tính từ đơn hàng đã giao</p>
+        </article>
+        <article class="stat-card">
+          <div class="stat-heading"><span>Tổng đơn hàng</span><span class="stat-icon orders-icon">▤</span></div>
+          <div class="stat-value" id="stat-orders">0</div>
+          <p class="stat-foot">Tất cả trạng thái</p>
+        </article>
+        <article class="stat-card">
+          <div class="stat-heading"><span>Đang xử lý</span><span class="stat-icon pending">◷</span></div>
+          <div class="stat-value" id="stat-pending">0</div>
+          <p class="stat-foot">Chờ xử lý hoặc đang giao</p>
+        </article>
+        <article class="stat-card">
+          <div class="stat-heading"><span>Sản phẩm</span><span class="stat-icon products-icon">▧</span></div>
+          <div class="stat-value" id="stat-products">0</div>
+          <p class="stat-foot">Sản phẩm trong danh mục</p>
+        </article>
+      </section>
+
+      <section class="workspace-grid">
+        <article class="panel" id="orders">
+          <div class="panel-heading">
+            <div><p class="eyebrow">VẬN HÀNH</p><h2>Đơn hàng gần đây</h2></div>
+            <button class="button button-primary" id="open-order-form" type="button">＋ Tạo đơn hàng</button>
+          </div>
+          <div class="toolbar">
+            <label class="search-box"><span>⌕</span><input id="order-search" type="search" placeholder="Tìm khách hàng hoặc mã đơn..." aria-label="Tìm đơn hàng"></label>
+            <select id="order-filter" aria-label="Lọc trạng thái">
+              <option value="all">Tất cả trạng thái</option>
+              <option value="Mới">Mới</option>
+              <option value="Đang giao">Đang giao</option>
+              <option value="Đã giao">Đã giao</option>
+              <option value="Đã hủy">Đã hủy</option>
+            </select>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>MÃ ĐƠN / KHÁCH HÀNG</th><th>SẢN PHẨM</th><th>TỔNG TIỀN</th><th>TRẠNG THÁI</th><th></th></tr></thead>
+              <tbody id="orders-body"></tbody>
+            </table>
+          </div>
+          <div id="orders-empty" class="empty-state" hidden><span>▤</span><strong>Chưa tìm thấy đơn hàng</strong><p>Thử đổi từ khóa hoặc tạo đơn hàng mới.</p></div>
+        </article>
+
+        <article class="panel product-panel" id="products">
+          <div class="panel-heading">
+            <div><p class="eyebrow">KHO HÀNG</p><h2>Sản phẩm</h2></div>
+          </div>
+          <form id="product-form" class="stack-form">
+            <label>Tên sản phẩm<input id="product-name" name="name" maxlength="70" placeholder="Ví dụ: Bình giữ nhiệt" required></label>
+            <div class="form-row">
+              <label>Giá bán (₫)<input id="product-price" name="price" type="number" min="1000" step="1000" placeholder="99000" required></label>
+              <label>Số lượng<input id="product-stock" name="stock" type="number" min="0" step="1" value="10" required></label>
+            </div>
+            <button class="button button-secondary full-width" type="submit">＋ Thêm sản phẩm</button>
+          </form>
+          <div class="section-divider"></div>
+          <div class="product-list-heading"><strong>Danh mục hiện tại</strong><span id="product-count-label">0 sản phẩm</span></div>
+          <div id="product-list" class="product-list"></div>
+        </article>
+      </section>
+
+      <footer class="app-footer"><span>ShopMini <span class="footer-dot">•</span> Dự án demo học tập</span><span>Chưa dùng cho dữ liệu kinh doanh thật</span></footer>
+    </main>
+  </div>
+
+  <dialog id="order-dialog" class="modal">
+    <form id="order-form" class="modal-card">
+      <div class="modal-heading"><div><p class="eyebrow">ĐƠN HÀNG MỚI</p><h2>Tạo đơn hàng</h2></div><button class="icon-button" id="close-order-form" type="button" aria-label="Đóng">×</button></div>
+      <label>Tên khách hàng<input id="customer-name" name="customer" maxlength="70" placeholder="Nhập tên khách hàng" required></label>
+      <label>Sản phẩm<select id="order-product" name="product" required></select></label>
+      <label>Số lượng<input id="order-quantity" name="quantity" type="number" min="1" step="1" value="1" required></label>
+      <div class="order-total-preview"><span>Tạm tính</span><strong id="order-total-preview">0 ₫</strong></div>
+      <div class="modal-actions"><button class="button button-ghost" id="cancel-order-form" type="button">Hủy</button><button class="button button-primary" type="submit">Tạo đơn hàng</button></div>
+    </form>
+  </dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
