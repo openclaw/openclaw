@@ -40,7 +40,7 @@ function toRunMap(runs: SubagentRunRecord[]): Map<string, SubagentRunRecord> {
   return new Map(runs.map((run) => [run.runId, run]));
 }
 
-const runIds = (runs: readonly SubagentRunRecord[] | undefined) => runs?.map((run) => run.runId);
+const runIds = (runs: readonly { runId: string }[] | undefined) => runs?.map((run) => run.runId);
 const descendants = (index: ReturnType<typeof buildSubagentRunReadIndexFromRuns>, root: string) =>
   runIds(index.listDescendantRunsForRequester(root));
 
