@@ -96,18 +96,11 @@ function configureModels(
 }
 
 function singleSessionTableCells(logs: string[]): string[] {
-  const lines = stripAnsi(logs.join("\n"))
+  const [header = [], ...rows] = stripAnsi(logs.join("\n"))
     .split("\n")
     .filter((line) => /^[│|]/u.test(line))
-    .map((line) =>
-      line
-        .split(/[│|]/u)
-        .slice(1, -1)
-        .map((cell) => cell.trim()),
-    );
-  const [header = [], ...rows] = lines;
-  expect(rows.length).toBeGreaterThan(0);
-  return header.map((_, index) => rows.map((row) => row[index]).join(""));
+    .map((line) => line.split(/[│|]/u).slice(1, -1));
+  return header.map((_, index) => rows.map((row) => (row[index] ?? "").trim()).join(""));
 }
 
 describe("sessionsCommand", () => {
@@ -165,6 +158,12 @@ describe("sessionsCommand", () => {
     }
   });
 
+  it("shows a saved session label as its own column", async () => {
+    const store = await writeSession("a", { label: "research helper" });
+    const cells = singleSessionTableCells(await readSessionsText(store));
+    expect([cells.length, cells[2]]).toEqual([8, "research helper"]);
+  });
+
   it("preserves recorded tokens without freshness provenance in text and JSON", async () => {
     const store = await writeSession(
       "boundary-session",
@@ -177,8 +176,8 @@ describe("sessionsCommand", () => {
       },
       "agent:main:boundary",
     );
-    const logs = await readSessionsText(store);
-    expect(singleSessionTableCells(logs)[5]).toBe("49/200k (?%)");
+    const cells = singleSessionTableCells(await readSessionsText(store));
+    expect([cells.length, cells[5]]).toEqual([7, "49/200k (?%)"]);
     const payload = await readSessionsJson(store);
     expect(payload.sessions).toEqual([
       expect.objectContaining({

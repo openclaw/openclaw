@@ -4,7 +4,7 @@
  */
 import { splitGraphemes } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { theme } from "../../packages/terminal-core/src/theme.js";
+import { sessionTint, theme } from "../../packages/terminal-core/src/theme.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import { resolveSessionCreatorActor } from "../config/sessions/session-entry-provenance.js";
@@ -85,6 +85,18 @@ export function formatSessionAgeCell(updatedAt: number | null | undefined, rich:
 export function formatSessionModelCell(model: string | null | undefined, rich: boolean): string {
   const label = sanitizeTerminalText(model ?? "unknown");
   return rich ? theme.info(label) : label;
+}
+
+export function formatSessionLabelCell(
+  row: Pick<SessionDisplayRow, "label" | "color">,
+  rich: boolean,
+): string {
+  const label = row.label?.trim();
+  if (!label) {
+    return "";
+  }
+  const tint = sessionTint(row.color);
+  return rich && tint ? tint(sanitizeTerminalText(label)) : sanitizeTerminalText(label);
 }
 
 export function formatSessionFlagsCell(
