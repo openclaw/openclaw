@@ -19,10 +19,12 @@ import type {
   SessionPendingInputWithdrawalResult,
 } from "./session-pending-input-withdrawal.worker.js";
 import { captureSessionStoreReadTarget } from "./session-store-read-target.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import {
   settleSessionWorkerReceipt,
   type SessionWorkerReceiptAdmission,
 } from "./session-worker-receipt.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 type WithdrawalScope = SessionAccessScope & { agentId: string; sessionId: string };
 type WithdrawalSelection =
@@ -199,4 +201,34 @@ export async function interruptOrphanedSessionPendingInputs(
     { lifecycleGeneration: getAgentEventLifecycleGeneration() },
     assertCurrent,
   );
+}
+
+export async function listOrphanedSessionPendingInputTargets(
+  scope: Omit<WithdrawalScope, "sessionKey" | "sessionId">,
+  queuedInputIds: readonly string[],
+) {
+  const captured = {
+    ...scope,
+    sessionKey: "",
+    env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
+  };
+  const target = captureSessionStoreReadTarget(
+    captured,
+    "Orphaned input discovery changed its captured database owner",
+  );
+  const resolved = await prepareSqliteScope(captured);
+  const { options, identity, source, assertReadCurrent } = target.resolve(resolved);
+  if (!identity.key.startsWith("file:")) {
+    return [];
+  }
+  const targets = await withSessionHistoryWorkerDatabase(options, (owner) =>
+    owner.readPendingInputOrphans({
+      env: captured.env,
+      source,
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      queuedInputIds,
+    }),
+  );
+  assertReadCurrent();
+  return targets;
 }

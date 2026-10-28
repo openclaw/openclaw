@@ -17,6 +17,7 @@ import {
   readSessionPendingInput,
 } from "../config/sessions/session-pending-input-history.js";
 import { readSessionPendingInputReceiptsInWorker } from "../config/sessions/session-pending-input-receipts.js";
+import * as pendingInputWithdrawal from "../config/sessions/session-pending-input-withdrawal.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -278,6 +279,14 @@ it("settles unmarked crash input once as resendable failed input without resumin
     setRuntimeConfigSnapshot({});
     const target = { agentId: "main", sessionKey: "agent:main:crashed", sessionId: "crashed" };
     replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
+    for (let i = 0; i < 20; i++) {
+      replaceSessionEntrySync(
+        { ...target, sessionKey: `agent:main:empty-${i}` },
+        { sessionId: `empty-${i}`, updatedAt: 1 },
+      );
+    }
+    const settle = vi.spyOn(pendingInputWithdrawal, "interruptOrphanedSessionPendingInputs");
+    const discover = vi.spyOn(pendingInputWithdrawal, "listOrphanedSessionPendingInputTargets");
     const receipts = [];
     for (const runId of ["crashed", "live"]) {
       const receipt = await stageSessionPendingInput(target, {
@@ -308,6 +317,9 @@ it("settles unmarked crash input once as resendable failed input without resumin
           signal: new AbortController().signal,
           log: { warn },
         });
+        expect(settle).toHaveBeenCalledTimes(1);
+        expect(discover).toHaveBeenCalledTimes(boot + 1);
+        expect(settle.mock.calls[0]?.[0]).toMatchObject(target);
         expect(
           await readSessionPendingInputReceiptsInWorker(target, { runIds: ["crashed", "live"] }),
         ).toEqual([
@@ -327,6 +339,8 @@ it("settles unmarked crash input once as resendable failed input without resumin
       expect(dispatch).not.toHaveBeenCalled();
       expect(warn).not.toHaveBeenCalled();
     } finally {
+      settle.mockRestore();
+      discover.mockRestore();
       dispatch.mockRestore();
       live!.finish("cancelled");
       await live!.settled?.();

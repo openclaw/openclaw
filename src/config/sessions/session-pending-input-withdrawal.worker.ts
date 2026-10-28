@@ -2,9 +2,11 @@ import { getPostgresPhysicalFacts } from "../../infra/database-engine/physical-f
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
+  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { deferSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-admission.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
@@ -13,7 +15,46 @@ import {
 import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
+import type {
+  PendingInputOrphansWorkerInput,
+  PendingInputOrphanTarget,
+} from "./session-pending-input-history.types.js";
 import { parseSessionPendingInputMessage } from "./session-pending-input-value.js";
+
+/** Read the pending-input index once per store, never once per session. */
+export function readOrphanedSessionPendingInputTargetsInWorker(
+  request: PendingInputOrphansWorkerInput,
+): PendingInputOrphanTarget[] {
+  const read = withOpenClawAgentDatabaseReadOnly(
+    (database) => {
+      assertCapturedSessionEntryReadSource(request.source, database);
+      if (!hasSessionPendingInputsSchema(database.db)) {
+        return [];
+      }
+      return executeSqliteQuerySync(
+        database.db,
+        getSessionKysely(database.db)
+          .selectFrom("session_pending_inputs as pending")
+          .innerJoin("session_nodes as node", (join) =>
+            join
+              .onRef("node.session_key", "=", "pending.session_key")
+              .onRef("node.current_session_id", "=", "pending.session_id"),
+          )
+          .select(["pending.session_key as sessionKey", "pending.session_id as sessionId"])
+          .distinct()
+          .where("pending.state", "=", "queued")
+          .where("pending.consumed_event_id", "is", null)
+          .where("pending.lifecycle_generation", "!=", request.lifecycleGeneration)
+          .$if(request.queuedInputIds.length > 0, (query) =>
+            query.where("pending.input_id", "not in", sqliteStringSet(request.queuedInputIds)),
+          ),
+      ).rows;
+    },
+    { ...request.database, env: request.env },
+  );
+  return read.found ? read.value : [];
+}
 
 export type SessionPendingInputWithdrawal = {
   sessionKey: string;
