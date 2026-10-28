@@ -188,6 +188,24 @@ describe("getHistoryLimitFromSessionKey", () => {
       expectLimit("telegram:dm:123", 42, { accountId });
     },
   );
+
+  it("matches a per-DM key written with the native user id casing", () => {
+    const cfg = {
+      channels: { slack: { dmHistoryLimit: 50, dms: { U0123ABC: { historyLimit: 3 } } } },
+    } satisfies OpenClawConfig;
+    const key = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "slack",
+      peerId: "U0123ABC",
+      dmScope: "per-channel-peer",
+    });
+    expectLimit(key, 3, { peerId: "U0123ABC", chatType: "direct" }, cfg);
+    expectLimit(key, 3, undefined, cfg);
+    const exact = {
+      channels: { slack: { dms: { ...cfg.channels.slack.dms, u0123abc: { historyLimit: 5 } } } },
+    };
+    expectLimit(key, 5, { peerId: "U0123ABC", chatType: "direct" }, exact);
+  });
 });
 
 it("account-scoped limits change the retained transcript without affecting other accounts", () => {
