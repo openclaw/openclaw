@@ -20,6 +20,7 @@ import {
   getCompactionProvider,
   type CompactionProvider,
 } from "../../plugins/compaction-provider.js";
+import { projectRecordedModelPrompt } from "../../sessions/user-turn-transcript.message.js";
 import { isRealConversationMessage } from "../compaction-real-conversation.js";
 import { summarizeCompactionHistory } from "../compaction.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "../copilot-dynamic-headers.js";
@@ -50,6 +51,7 @@ import {
   getCompactionSafeguardRuntime,
   setCompactionSafeguardCancellation,
 } from "./compaction-safeguard-runtime.js";
+import { extractMessageText, hasProjectedSummaryText } from "./compaction-safeguard-text.js";
 import {
   collectToolFailures,
   formatToolFailuresSection,
@@ -331,22 +333,6 @@ function budgetCompactionSummary(
     bodyTrimmed: rendered ? rendered.trimmed : cappedBody.length < summaryBody.length,
     suffixTrimmed: cappedSuffix.length < suffix.text.length,
   };
-}
-
-function extractMessageText(message: AgentMessage): string {
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") {
-    return content.trim();
-  }
-  return Array.isArray(content)
-    ? content
-        .flatMap((block) => {
-          const text =
-            block && typeof block === "object" ? (block as { text?: unknown }).text : undefined;
-          return typeof text === "string" && text.trim() ? [text.trim()] : [];
-        })
-        .join("\n")
-    : "";
 }
 
 function formatNonTextPlaceholder(content: unknown): string | null {
@@ -815,7 +801,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         try {
           // Give the provider ALL messages — no pruning, no chunking, no split-turn splitting.
           const providerResult = await compactionProvider.summarize({
-            messages: [...baseMessagesToSummarize, ...turnPrefixMessages],
+            messages: [...baseMessagesToSummarize, ...turnPrefixMessages].map((message) =>
+              projectRecordedModelPrompt(message),
+            ),
             signal,
             customInstructions: structuredInstructions,
             summarizationInstructions,
@@ -919,6 +907,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const reconciliationMessages =
         previousSummary ||
         includePreservedContext ||
+        hasProjectedSummaryText(preservedRecentMessages) ||
         summaryTargetMessages.length > 0 ||
         turnPrefixMessages.length > 0
           ? oracleMessages

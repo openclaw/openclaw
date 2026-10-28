@@ -1,4 +1,5 @@
 import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
+import { projectRecordedModelPrompt } from "../../../sessions/user-turn-transcript.message.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { PromptOptions } from "../agent-session-types.js";
 import { createFreshLlmBoundaryTokenEstimator } from "../context-token-pressure.js";
@@ -26,7 +27,12 @@ const promptRequestBudgets = new WeakMap<PromptOptions, CompactionRequestBudget>
 
 function estimateVariableRequestTokens(messages: AgentMessage[], prompt: string): number {
   const estimateTokens = createFreshLlmBoundaryTokenEstimator({});
-  return estimateTokens({ messages, prompt }) - estimateTokens({ messages: [], prompt: "" });
+  return (
+    estimateTokens({
+      messages: messages.map((message) => projectRecordedModelPrompt(message)),
+      prompt,
+    }) - estimateTokens({ messages: [], prompt: "" })
+  );
 }
 
 /** Bind prepared foreground facts to the exact owned prompt invocation, outside public options. */

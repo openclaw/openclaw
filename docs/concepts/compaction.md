@@ -8,6 +8,12 @@ title: "Compaction"
 
 Every model has a context window: the maximum number of tokens it can process. When a conversation approaches that limit, OpenClaw **compacts** older messages into a summary so the chat can continue.
 
+For uploaded documents, client-side compaction counts and summarizes the frozen
+text that was supplied to the model, not just the attachment's caption. It does
+not reread the attachment or rewrite the saved user message. Direct recent-turn
+excerpts and timeout fallback text still use the original conversation text;
+generated summaries remain subject to the summarizer's input and output limits.
+
 ## How it works
 
 1. Older conversation turns are summarized into a compact entry.
@@ -46,6 +52,10 @@ summaries and leaves the current branch unchanged.
 If the summary output budget is exhausted without visible text, a reasoning model may have spent the allowance on thinking. Set `agents.defaults.compaction.thinkingLevel` to `"off"` if the model supports it, or use `agents.defaults.compaction.model` to select a model that can summarize within the available output budget. The error identifies the selected model, the summary allowance, and the model's configured `maxTokens`. The summary allowance is also limited by compaction's reserved budget, so increasing `maxTokens` alone may not raise it.
 
 Built-in summarization receives text, not image pixels. Omitted images and other non-text input receive markers such as `[image data omitted from summary input]`, without claiming that a model processed the data. The first eight affected messages receive at most two fixed markers each; further omissions receive one aggregate statement. These additions, including newly retained role labels and separators, total at most 847 UTF-8 bytes per summarizer request and count toward token estimates. Existing text is not capped by this omission budget. Custom compaction providers still receive the original message content.
+
+For custom providers, this is the model-facing message content: uploaded documents
+include their frozen text projection rather than only the persisted caption.
+Other content blocks, including non-text blocks, are preserved.
 
 <Note>
 New configs default `agents.defaults.compaction.mode` to `"safeguard"` (stricter guardrails, summary quality audits). Set `mode: "default"` explicitly to opt out.

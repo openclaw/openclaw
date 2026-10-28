@@ -1,5 +1,10 @@
 // Prepare native process probes before their liveness, readiness, and retention deadlines.
 export const agentProcessTestEntrypoints = {
+  documentCompaction: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "embedded-agent-runner/run.document-compaction.test-support",
+    distWorkerPath: "agents/embedded-agent-runner/run.document-compaction.test-support.js",
+  },
   blockChunker: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "embedded-agent-block-chunker",

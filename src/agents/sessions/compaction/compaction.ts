@@ -1,5 +1,6 @@
 /** Preserves the session SDK's throwing summary API over agent-core results. */
 import type { Model, ModelRequestHeaders } from "../../../llm/types.js";
+import { projectRecordedModelPrompt } from "../../../sessions/user-turn-transcript.message.js";
 import {
   generateSummary as generateSummaryCore,
   type CompactionSummaryPrompt,
@@ -33,7 +34,7 @@ export async function generateSummary(
 ): Promise<string> {
   return unwrapCoreResult(
     await generateSummaryCore(
-      currentMessages,
+      currentMessages.map((message) => projectRecordedModelPrompt(message)),
       model,
       reserveTokens,
       apiKey,

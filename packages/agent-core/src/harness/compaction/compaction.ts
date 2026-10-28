@@ -224,7 +224,10 @@ export interface ContextUsageEstimate {
 }
 
 /** Estimate context tokens for messages using provider usage when available. */
-export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEstimate {
+export function estimateContextTokens(
+  messages: AgentMessage[],
+  estimateMessageTokens = estimateTokens,
+): ContextUsageEstimate {
   let usageTokens = 0;
   let lastUsageIndex: number | null = null;
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -246,7 +249,7 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
   }
   let trailingTokens = 0;
   for (const message of lastUsageIndex === null ? messages : messages.slice(lastUsageIndex + 1)) {
-    trailingTokens += estimateTokens(message);
+    trailingTokens += estimateMessageTokens(message);
   }
 
   return {
@@ -442,10 +445,11 @@ export function prepareCompaction(
   const latestUnresolvedUserRequest = requestState
     ? (extractLatestUserRequest(contextMessages) ?? previousLatestUnresolvedUserRequest)
     : undefined;
-  const contextUsage = estimateContextTokens(contextMessages);
+  const estimateMessageTokens = constraints?.estimateTokens ?? estimateTokens;
+  const contextUsage = estimateContextTokens(contextMessages, estimateMessageTokens);
   const tokensBefore = contextUsage.tokens;
   const totalEstimatedTokens = contextMessages.reduce(
-    (total, message) => total + estimateTokens(message),
+    (total, message) => total + estimateMessageTokens(message),
     0,
   );
   // Provider usage includes prompt/schema tokens omitted by estimateTokens. Normalize its trigger
@@ -462,7 +466,7 @@ export function prepareCompaction(
         )
       : 1;
   const resetPreludeTokens = resetPreludeMessages.reduce(
-    (total, message) => total + estimateTokens(message),
+    (total, message) => total + estimateMessageTokens(message),
     0,
   );
   // The reset prelude is always part of the summarization request. Count it like

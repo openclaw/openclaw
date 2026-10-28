@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { prepareModelPromptProjection } from "../../../sessions/user-turn-transcript.message.js";
 import {
   createCompactionRequestBudget,
   estimateCompactedRequestTokens,
@@ -6,6 +7,33 @@ import {
 } from "./request-budget.js";
 
 describe("createCompactionRequestBudget", () => {
+  it.each([
+    { pendingKey: "document", expectedTokens: 1_229 },
+    { pendingKey: "next-document", expectedTokens: 2_429 },
+  ])(
+    "counts frozen document text with pending overlap for $pendingKey",
+    ({ pendingKey, expectedTokens }) => {
+      const text = "x".repeat(4_000);
+      const message = prepareModelPromptProjection(
+        { role: "user", content: "Caption", timestamp: 1, idempotencyKey: "document" },
+        text,
+      );
+      if (!message) {
+        throw new Error("Expected a new projection");
+      }
+      const budget = createCompactionRequestBudget({
+        contextWindow: 4_096,
+        reserveTokens: 512,
+        pendingPrompt: text,
+        pendingUserIdempotencyKey: pendingKey,
+      });
+      // One 1,000-token body plus request/message framing and the safety margin;
+      // a different pending input adds its own 1,200-token reservation.
+      expect(estimateCompactedRequestTokens([message], budget)).toBe(expectedTokens);
+      expect(message.content).toBe("Caption");
+    },
+  );
+
   it.each([
     { pendingPrompt: undefined, pendingImageCount: 0, pendingTokens: 0 },
     { pendingPrompt: "𠀀", pendingImageCount: 0, pendingTokens: 5 },
