@@ -424,6 +424,19 @@ openclaw gateway call logs.tail --params '{"limit": 200}'
 To add an existing checkout to the Control UI's Place picker, use the
 [project registration and listing examples](/web/control-ui/sessions-and-sidebar#register-an-existing-repository).
 
+For `sessions.create`, choose a fresh session key before the call and keep it. A
+JSON timeout tells you the CLI stopped waiting, but not whether it sent the
+request. Look up that exact key on the same Gateway with the same session access.
+
+```bash
+openclaw gateway call sessions.resolve --params '{"key":"<session-key>","allowMissing":true}' --json
+```
+
+A match means the session exists. It does not tell you which call created it or
+whether a first turn ran. `{"ok":false}` means no match was visible at that
+moment. The original request could still complete, so a missing session alone
+does not mean it is safe to retry.
+
 For `sessions.send` and `chat.send`, JSON `timeoutMs` is the receiving agent's
 execution budget, not an acknowledgment timeout. Omit it for ordinary
 coordination; `--timeout` independently limits how long this CLI waits:
