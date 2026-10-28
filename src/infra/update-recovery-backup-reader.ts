@@ -545,37 +545,28 @@ export async function readUpdateRecoveryBackups(): Promise<UpdateRecoveryBackupR
       continue;
     }
     for (const captureId of await fs.readdir(store)) {
-      if (captureId === UPDATE_CAPTURE_PRIVACY_MARKER) {
-        continue;
-      }
       const directory = path.join(store, captureId);
       const entry = await lstatIfExists(directory, "ENOENT");
-      // Doctor's schema archives share this root but are not recovery captures.
-      if (entry?.isFile() && /^agent-schema-.+\.tar\.gz$/u.test(captureId)) {
-        continue;
-      }
-      const manifestPath = path.join(directory, "manifest.json");
-      const manifestEntry = entry?.isDirectory()
-        ? await lstatIfExists(manifestPath, "ENOENT")
-        : undefined;
-      // Rehearsal scratch uses this prefix on every platform. A present manifest
-      // still belongs to recovery validation, even under a scratch-like name.
+      // Producers mark capture directories before staging payloads. Other entries
+      // (including OS metadata, schema archives, and rehearsal scratch) are unrelated.
       if (
-        entry?.isDirectory() &&
-        /^openclaw-update-canary-.+$/u.test(captureId) &&
-        !manifestEntry
+        !entry?.isDirectory() ||
+        !(
+          await lstatIfExists(path.join(directory, UPDATE_CAPTURE_PRIVACY_MARKER), "ENOENT")
+        )?.isFile()
       ) {
         continue;
       }
+      const manifestPath = path.join(directory, "manifest.json");
+      const manifestEntry = await lstatIfExists(manifestPath, "ENOENT");
       if (
-        entry?.isDirectory() &&
         /^[a-zA-Z0-9_-]{1,128}$/u.test(captureId) &&
         (!manifestEntry || (await hasPendingUpdateRecoverySeal(directory)))
       ) {
         result.push({ kind: "incomplete", directory });
         continue;
       }
-      if (!entry?.isDirectory() || !manifestEntry?.isFile()) {
+      if (!manifestEntry?.isFile()) {
         throw new Error(
           `Unresolved update capture ${directory} has incomplete publication. Inspection only: openclaw update status --json; npx openclaw@latest doctor --fix. Earlier captures are retained.`,
         );

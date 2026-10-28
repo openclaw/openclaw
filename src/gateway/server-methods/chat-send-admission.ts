@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
-import { resolveQueueSettings } from "../../auto-reply/reply/queue/settings-runtime.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import {
@@ -89,7 +88,6 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   const {
     rawSessionKey,
     clientRunId,
-    cfg,
     storePath,
     entry,
     sessionKey,
@@ -110,7 +108,8 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     }
   };
   const cachedMeta = { cached: true, runId: clientRunId };
-  const { chatSendTraceAttributes, originatingRoute } = prepareChatSendAdmissionContext(params);
+  const { chatSendTraceAttributes, originatingRoute, queuePolicy } =
+    prepareChatSendAdmissionContext(params);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const pendingAttemptId = randomUUID();
   const reservation = createPendingChatSendReservationAccess({
@@ -187,13 +186,9 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     incarnation: admittedSessionId,
   });
   const admittedRunAbort = registerChatAbortController({
+    sourceInput: params.controllerInput,
     target: sessionTarget,
-    policy: resolveQueueSettings({
-      cfg,
-      channel: originatingRoute.originatingChannel,
-      sessionEntry: entry,
-      inlineMode: p.queueMode,
-    }),
+    policy: queuePolicy,
     authority: { assertCurrent: () => assertSourceAuthority?.() },
     runId: clientRunId,
     sessionId: admittedSessionId,

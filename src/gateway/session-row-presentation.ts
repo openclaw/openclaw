@@ -325,7 +325,9 @@ export function prepareProjectedSessionPresentation(
             record,
             sharing.getCacheKey(),
             (key, entry, agentId, storePath) => {
-              const owner = agentId ? undefined : resolveRequestedSessionAgentId(cfg, key);
+              const owner = agentId
+                ? undefined
+                : resolveRequestedSessionAgentId(cfg, key, undefined, "read");
               return canReadLinkedEntry(
                 key,
                 entry,

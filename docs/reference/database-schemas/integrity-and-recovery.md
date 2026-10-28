@@ -267,14 +267,17 @@ table check. Explicit FULL, foreign-key checks, private-image certification, and
 rollback validation retain their existing coverage.
 
 Gateway agent inspections share a five-second foreground wait. Unfinished stores
-remain unavailable while the startup admission owner completes their inspection
+remain pending while the startup admission owner completes their inspection
 and session/model preparation after the listener is ready. Other agents and the
 Control UI can start in the meantime. Inspection starts during foreground
 readiness and continues without an idle retry delay. Deferred writable admission
 starts after Gateway sidecars are ready, with at most two databases opening
-concurrently. The shared-state writer has its own SQLite carrier and cold-open
-queue, so agent integrity scans cannot hold durable channel intake or shared
-configuration reads behind them. Channels and accounts prepare independently;
+concurrently. Agent writers, generic plugin stores, and shared state use separate
+SQLite carriers and cold-open queues, so agent integrity scans cannot hold plugin
+reads, durable channel intake, or shared configuration reads behind them. Agent
+and generic stores each retain up to two carriers; shared state retains one. Each
+class can lend one additional carrier to a retained runtime generation during an
+update. Physical database ownership and the global store/input budgets stay shared. Channels and accounts prepare independently;
 pending channel starts remain tracked for shutdown while plugin services and
 recovery continue. Agent-local session preparation then
 runs with up to four agents concurrently. Only credential/model publication
@@ -792,14 +795,22 @@ and leaves those receipts queued for ordinary recovery.
 The inspection continues in the background within
 the same concurrency limit. Expiring either wait does not establish corruption.
 
-A successful inspection alone does not make the agent available. The Gateway
-opens each agent's database and completes its session validation and transcript
-preparation independently, then takes a FIFO turn to publish credentials, prepare
-models, and clear the pending refusal. Current database, config, runtime ownership,
-and deletion status remain checked before publication. A failed inspection or
-preparation leaves the agent degraded with the recorded reason; it does not stop
-healthy agents. Shared-state database failures retain their existing startup
-checks.
+For an existing SQLite database with the current schema and no pending schema or
+index repair, the startup owner publishes read readiness after checking ownership,
+configuration, and deletion status and preparing credentials and models. Session
+reads can then use the existing read-only workers while full integrity inspection
+continues to block writes. Other databases retain complete preparation before
+serving requests. Shared-state database startup checks are unchanged.
+Reads that require a mutation, such as restoring a cold transcript or reconciling
+abandoned queued inputs, still wait for writable admission.
+
+Each early read observes a committed SQLite snapshot, including committed WAL
+pages, never an incomplete transaction or partially applied schema migration.
+Readers still validate schema, ownership, canonical session rows, file identity,
+and quarantine. Read readiness does not certify unchecked pages elsewhere in the
+database and does not publish an integrity receipt. A failed inspection or retired
+startup owner revokes read readiness. The Gateway clears writable refusal only
+after integrity inspection, session validation, and transcript preparation finish.
 
 Operator `send` requests check admission before delivery even when they specify
 only an `agentId` and omit `sessionKey`. Pending preparation returns a retryable
@@ -840,18 +851,19 @@ databases when another physical database in the family is unavailable.
 Cron retries after the admission owner publishes the
 agent's availability; it does not log an admission failure while inspection is pending.
 Database admission refusals do not schedule periodic sweeps of healthy stores.
-Session requests retain the typed, retryable inspection-pending response until
-preparation completes. No ordinary reads or writes bypass the integrity gate.
+Writes retain the typed, retryable inspection-pending response until preparation
+completes. Eligible reads use their separate owner-published readiness; writes
+never bypass the integrity gate.
 New database opens wait for an available worker before selecting their execution
 carrier, so a brief busy period on one worker does not bind them behind another
-agent's full integrity scan. Worker limits and existing command ordering are unchanged.
+agent's full integrity scan. Existing per-actor command ordering is unchanged.
 Genuine migration warnings remain recorded for the boot. This changes no stored state or update
 migration behavior.
 
 The initial startup pass reports fleet-wide legacy-session migration guidance.
 Deferred preparation of one agent does not repeat that advisory scan across other
 agents and retired stores. Its own schema, canonical-session, and ACP checks still
-finish before the agent becomes available; Doctor remains the repair owner.
+finish before writable admission; Doctor remains the repair owner.
 
 Every 60 seconds while recovery is pending, `agent database startup preparation
 still running` reports `agentId`, `phase`, `elapsedMs`, and `phaseElapsedMs`;

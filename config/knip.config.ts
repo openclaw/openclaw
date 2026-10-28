@@ -889,10 +889,12 @@ const repositoryScriptEntries = [
   "scripts/perf/connect-tail-measure.ts!",
   "scripts/perf/device-token-snapshot-measure.ts!",
   "scripts/perf/paired-row-encoding-measure.ts!",
+  "scripts/perf/patch-file-read-measure.ts!",
   "scripts/perf/session-patch-projection-measure.ts!",
   "scripts/perf/session-actor-writer-append-measure.ts!",
   "scripts/perf/session-cost-usage-cold-read.ts!",
   "scripts/perf/worker-warm-floor-measure.mjs!",
+  "scripts/perf/workspace-root-measure.ts!",
   "scripts/perf/worktree-branches-measure.ts!",
   // connect-tail-measure.ts loads this diagnostics preload through --gateway-preload.
   "scripts/perf/connect-tail-preload.mjs!",

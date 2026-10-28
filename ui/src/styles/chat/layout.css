@@ -621,7 +621,7 @@ openclaw-pending-session-create {
 }
 
 .chat-virtual-block {
-  /* The outer extent owns scroll height. This translated row window must not
+  /* The outer extent owns scroll height. This positioned row window must not
      contribute a second changing box when saved rows become live rows. */
   contain: size;
   position: absolute;

@@ -105,6 +105,8 @@ export type RestoredGatewayOperatorAuthority = {
   assertPolicyCurrent: () => void;
   authenticatedUserProfile: GatewayAuthenticatedUserProfile;
   controlUiAdmin: boolean;
+  /** The exact interrupted input committed into the ordinary reply owner. */
+  onReplyInputCommitted?: () => void;
   release: () => void;
 };
 
@@ -112,6 +114,7 @@ type PreparedOperatorRecoverySource = {
   snapshot: OperatorRunRecoverySnapshot;
   revalidate: () => Promise<void>;
   onSessionCompactionCommitted?: SessionSourceAssertion["onSessionCompactionCommitted"];
+  onReplyInputCommitted?: () => void;
 };
 
 /** Authentication restoration is shared; each input owner supplies its exact live claim. */
@@ -335,16 +338,11 @@ async function restoreGatewayOperatorSnapshot(params: {
     assertRecoveryCurrent();
     await prepared.revalidate();
     assertRecoveryCurrent();
-    const assertRestoredPolicy = Object.assign(assertRecoveryCurrent, {
-      onSessionCompactionCommitted: prepared.onSessionCompactionCommitted
-        ? (
-            ...args: Parameters<NonNullable<SessionSourceAssertion["onSessionCompactionCommitted"]>>
-          ) => {
-            // The commit already checked authority. Its identity publication follows this callback.
-            if (references === 0) {
-              throw new Error("Restart recovery operator authority is no longer active.");
-            }
-            signal.signal.throwIfAborted();
+    const notifyCompaction: SessionSourceAssertion["onSessionCompactionCommitted"] =
+      prepared.onSessionCompactionCommitted
+        ? (...args) => {
+            // The writer checked authority before commit; identity publication follows this fact.
+            assertLifetime();
             try {
               prepared.onSessionCompactionCommitted?.(...args);
             } catch (error) {
@@ -352,7 +350,9 @@ async function restoreGatewayOperatorSnapshot(params: {
               throw error;
             }
           }
-        : undefined,
+        : undefined;
+    const assertRestoredPolicy = Object.assign(assertRecoveryCurrent, {
+      onSessionCompactionCommitted: notifyCompaction,
     });
     const live = captureChannelOperatorRunAuthority({
       profileId: snapshot.profileId,
@@ -406,6 +406,7 @@ async function restoreGatewayOperatorSnapshot(params: {
       },
       authenticatedUserProfile: { profileId: id, ...display, updatedAt: profile.updated_at },
       controlUiAdmin: snapshot.controlUiAdmin,
+      onReplyInputCommitted: prepared.onReplyInputCommitted,
       release,
     };
   } catch (error) {
@@ -493,6 +494,7 @@ export async function restoreGatewayRunRecovery(params: {
   };
   let operator: RestoredGatewayOperatorAuthority | undefined;
   let expectedCompaction: { previousSessionId: string; sessionId: string } | undefined;
+  let replyOwned = false;
   if (params.restoreOperator) {
     operator = await restoreGatewayOperatorSnapshot({
       context: params.context,
@@ -543,26 +545,42 @@ export async function restoreGatewayRunRecovery(params: {
         return {
           snapshot: source.snapshot,
           revalidate: async () => assertSource(await read()),
+          onReplyInputCommitted: () => {
+            // Only the actor's committed-input receipt retires recovery-specific checks.
+            replyOwned = true;
+          },
           onSessionCompactionCommitted: (transition, committed) => {
             if (
               target.sessionId === transition.current.sessionId &&
               source.lifecycleRevision === transition.current.lifecycleRevision
             ) {
               // Composed source assertions can deliver the same committed fact more than once.
-              assertRestartClaim(committed, target);
-              assertSource(committed);
+              if (replyOwned) {
+                if (
+                  committed.sessionId !== target.sessionId ||
+                  committed.lifecycleRevision !== source.lifecycleRevision
+                ) {
+                  throw new GatewayOperatorRecoveryOwnershipError();
+                }
+              } else {
+                assertRestartClaim(committed, target);
+                assertSource(committed);
+              }
               return;
             }
             const next = { ...source, sessionId: transition.current.sessionId };
             const successor = { ...target, sessionId: transition.current.sessionId };
-            assertRestartClaim(committed, successor);
+            if (!replyOwned) {
+              assertRestartClaim(committed, successor);
+            }
             if (
               !transition.previous ||
               transition.previous.sessionId !== target.sessionId ||
               transition.previous.lifecycleRevision !== source.lifecycleRevision ||
               transition.current.lifecycleRevision !== source.lifecycleRevision ||
               committed.lifecycleRevision !== source.lifecycleRevision ||
-              !isDeepStrictEqual(committed.restartRecoveryOperatorSource, next)
+              committed.sessionId !== successor.sessionId ||
+              (!replyOwned && !isDeepStrictEqual(committed.restartRecoveryOperatorSource, next))
             ) {
               throw new GatewayOperatorRecoveryOwnershipError();
             }

@@ -254,22 +254,25 @@ export async function scanActualWorkspaceManifest(
   };
   const filePaths: string[] = [];
   const hashContext = activeWorkspaceHashContext();
+  const scanConcurrency = 4;
+  const discoveryBatchSize = 32;
+  // Nested discovery batches must not replace their first failure with a later caller abort.
+  let taskFailureWasFirst = false;
   const runScans = async (
     start: number,
     end: number,
     scan: (index: number) => Promise<void>,
   ): Promise<void> => {
     let next = start;
-    let taskFailureWasFirst = false;
     const result = await runTasksWithConcurrency({
       // Keep the queued graph bounded too: each worker claims an index before
       // awaiting I/O, rather than retaining one task per inventory entry.
-      tasks: Array.from({ length: Math.min(4, end - start) }, () => async () => {
+      tasks: Array.from({ length: Math.min(scanConcurrency, end - start) }, () => async () => {
         while (next < end && !scanSignal.aborted) {
           await scan(next++);
         }
       }),
-      limit: 4,
+      limit: scanConcurrency,
       errorMode: "stop",
       onTaskError: (error) => {
         // Composite signals can resolve reasons lazily; record ordering at the owner.
@@ -409,26 +412,37 @@ export async function scanActualWorkspaceManifest(
     const absoluteDirectory = relativeDirectory ? path.join(root, relativeDirectory) : root;
     let hasDerivedEntry = false;
     let hasNonDerivedEntry = false;
-    for await (const directoryEntry of await fs.opendir(absoluteDirectory)) {
-      const name = directoryEntry.name;
-      const relative = relativeDirectory ? `${relativeDirectory}/${name}` : name;
-      checkTraversal(relative);
-      if (!relativeDirectory && name === ".git") {
-        continue;
-      }
-      if (
-        isDerivedWorkspacePath(
-          relative,
-          retained.has(relative) || (await isStagedInput(relative)),
-          params.buildCacheInputs !== undefined,
-        )
-      ) {
-        hasDerivedEntry = true;
-        continue;
-      }
-      const absolute = path.join(root, relative);
-      const stats = await fs.lstat(absolute, { bigint: true });
-      if (stats.isDirectory() && !stats.isSymbolicLink()) {
+    const batch: string[] = [];
+    const scanBatch = async () => {
+      const directories: Array<string | undefined> = [];
+      await runScans(0, batch.length, async (index) => {
+        const relative = batch[index]!;
+        if (
+          isDerivedWorkspacePath(
+            relative,
+            retained.has(relative) || (await isStagedInput(relative)),
+            params.buildCacheInputs !== undefined,
+          )
+        ) {
+          hasDerivedEntry = true;
+          return;
+        }
+        const absolute = path.join(root, relative);
+        const stats = await fs.lstat(absolute, { bigint: true });
+        if (stats.isDirectory() && !stats.isSymbolicLink()) {
+          directories[index] = relative;
+        } else {
+          // Unsupported nodes and escaping links still make their directory nonempty;
+          // they stay local and become conflicts if a worker changes the same path.
+          hasNonDerivedEntry = true;
+          await addLeaf(relative, absolute, stats);
+        }
+      });
+      // Join sibling I/O before descending, so nested directories share the same bound.
+      for (const relative of directories) {
+        if (relative === undefined) {
+          continue;
+        }
         const child = await walk(relative);
         if (child.included || params.preserveDirectories?.has(relative)) {
           addEntry({ path: relative, type: "directory" });
@@ -436,12 +450,23 @@ export async function scanActualWorkspaceManifest(
         } else {
           hasDerivedEntry ||= child.hasDerivedEntry;
         }
-      } else {
-        // Unsupported nodes and escaping links still make their directory nonempty;
-        // they stay local and become conflicts if a worker changes the same path.
-        hasNonDerivedEntry = true;
-        await addLeaf(relative, absolute, stats);
       }
+      batch.length = 0;
+    };
+    for await (const directoryEntry of await fs.opendir(absoluteDirectory)) {
+      const name = directoryEntry.name;
+      const relative = relativeDirectory ? `${relativeDirectory}/${name}` : name;
+      checkTraversal(relative);
+      if (!relativeDirectory && name === ".git") {
+        continue;
+      }
+      batch.push(relative);
+      if (batch.length === discoveryBatchSize) {
+        await scanBatch();
+      }
+    }
+    if (batch.length) {
+      await scanBatch();
     }
     return {
       hasDerivedEntry,

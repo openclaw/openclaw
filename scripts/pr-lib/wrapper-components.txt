@@ -745,6 +745,7 @@ src/config/sessions/session-row-facts.types.ts
 src/config/sessions/session-skill-snapshot-intern.ts
 src/state/artifact-preserving-state-reads.ts
 src/state/incognito-session-error.ts
+src/config/sessions/session-model-context-entry.ts
 src/config/sessions/session-model-context-projection.ts
 src/config/sessions/session-model-context-navigation.ts
 src/config/sessions/session-model-context-pages.ts

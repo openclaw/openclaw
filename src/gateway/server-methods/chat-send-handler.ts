@@ -77,6 +77,11 @@ export async function handleTrustedInternalChatSend(
     | "beforeDispatch"
     | "stageCreatedInput"
     | "restartResume"
+    | "continuationPolicy"
+    | "controllerInput"
+    | "onExecutionStarted"
+    | "onSourceAdmitted"
+    | "onInputCommitted"
   >,
 ): Promise<void> {
   await handleChatSendWithOptions(options, onAdmissionOwned, undefined, {
