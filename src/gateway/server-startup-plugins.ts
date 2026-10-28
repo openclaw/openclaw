@@ -336,7 +336,20 @@ export async function loadGatewayStartupPluginRuntime(params: {
   startupTrace?: Pick<GatewayStartupTrace, "detail">;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
   resolveGatewayContext?: GatewayContextResolver;
+  signal?: AbortSignal;
 }) {
+  const { confirmPluginStateMigrationReadiness } =
+    await import("../infra/state-migrations.plugin-readiness.js");
+  try {
+    await confirmPluginStateMigrationReadiness({
+      config: params.activationSourceConfig ?? params.cfg,
+      env: process.env,
+      signal: params.signal ?? new AbortController().signal,
+      warn: (message) => params.log.warn(message),
+    });
+  } catch (error) {
+    params.log.warn(`Plugin data/settings readiness could not be confirmed: ${String(error)}`);
+  }
   // Keep server-plugin-bootstrap behind one lazy boundary; startup config tests can exercise
   // planning without importing plugin package runtimes.
   const beforeBootstrapImport = performance.now();

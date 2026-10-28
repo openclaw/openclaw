@@ -12,6 +12,7 @@ import type {
 import * as gatewayService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { createUpdateFailureFact } from "../../infra/update-failure-facts.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import * as nativeExec from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -170,13 +171,15 @@ describe("native manager identity", () => {
     ));
 });
 
-it.runIf(process.platform === "linux").each([
+it.each([
   { account: "user", uid: 2001, update: true },
   { account: "root", uid: 0, update: true },
   { account: "standalone Doctor", uid: 0, update: false },
+  { account: "unprivileged Doctor", uid: 2001, update: false },
   { account: "dueling", uid: 2001, update: true },
 ])("preserves system-service ownership for $account (update=$update)", ({ account, uid, update }) =>
   withServiceHome(async (home) => {
+    mockProcessPlatform("linux");
     vi.spyOn(process, "getuid").mockReturnValue(uid);
     vi.spyOn(process, "geteuid").mockReturnValue(uid);
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
@@ -219,6 +222,23 @@ it.runIf(process.platform === "linux").each([
       });
     const preparation = update ? withUpdateInProgressEnv(undefined, prepare) : prepare();
     if (!update) {
+      if (uid !== 0) {
+        const blocked = await preparation;
+        expect(blocked).toMatchObject({
+          stopped: false,
+          blockMessage: expect.stringContaining(`sudo systemctl stop ${unitName}`),
+          blockFailureFacts: [expect.objectContaining({ check: "gateway-stop" })],
+        });
+        expect(
+          blocked.blockFailureFacts
+            ?.map((fact) => createUpdateFailureFact(fact).message)
+            .join("\n"),
+        ).toContain("sudo systemctl stop");
+        expectNoServiceCalls(service.stop, service.start, service.restart, service.install);
+        expect(mocks.prepareStop).not.toHaveBeenCalled();
+        expect(mocks.drain).not.toHaveBeenCalled();
+        return;
+      }
       expect(await preparation).toMatchObject({ stopped: true });
       expect(service.stop).toHaveBeenCalledOnce();
       return;

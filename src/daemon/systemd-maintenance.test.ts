@@ -93,6 +93,31 @@ const hasBackup = async (f: PolicyFixture) =>
     (file) => file.includes(".reconcile-") && file.endsWith(".bak"),
   );
 
+it("reads a sealed system unit's stop policy from its selected manager", async () => {
+  const f = await policyFixture();
+  native.identity.mockResolvedValue(nativeResult(330));
+  const system = {
+    scope: "system" as const,
+    unitName: "openclaw.service",
+    unitPath: "/etc/systemd/system/openclaw.service",
+  };
+  expect(
+    await readSystemdGatewayStopTimeout({
+      ...installedState(f),
+      systemdInstallation: { kind: "system", system },
+      definitionMutationCapability: { kind: "sealed", reason: "system-owned" },
+    }),
+  ).toBe(330_000);
+  expect(native.identity.mock.calls.at(-1)?.[1]).toEqual([
+    "show",
+    system.unitName,
+    "--no-page",
+    "--property",
+    "LoadState,TimeoutStopUSec",
+  ]);
+  expect(native.transport).not.toHaveBeenCalled();
+});
+
 it.each([false, true])("retains native runner and owner (revoked=%s)", async (revoked) => {
   const f = await policyFixture(30, false);
   const unowned = vi

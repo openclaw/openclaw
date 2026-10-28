@@ -146,6 +146,7 @@ export async function collectPluginDoctorStateMigrationPlans(
     plannedActions?: readonly PlannedPluginDoctorAction[];
     inventory?: PluginDoctorStateMigrationInventory;
     validateDeclarations?: boolean;
+    pluginIds?: readonly string[];
   },
 ): Promise<PluginDoctorPlanCollection> {
   const plans: DetectedPluginDoctorStateMigrationPlan[] = [];
@@ -171,6 +172,7 @@ export async function collectPluginDoctorStateMigrationPlans(
       env,
       inventory: params.inventory,
       validateDeclarations: params.validateDeclarations,
+      pluginIds: params.pluginIds,
       onInspectedPlugin: (pluginId) => inspectedPluginIds.add(pluginId),
       onInspectedStatelessPlugin: (pluginId) => statelessPluginIds.add(pluginId),
       onUnavailablePlugin: (pluginId, error) => {

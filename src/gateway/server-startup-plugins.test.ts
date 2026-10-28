@@ -602,22 +602,17 @@ describe("loadGatewayStartupPluginRuntime", () => {
       let retirement: ReturnType<typeof retirePluginCache> | undefined;
       try {
         expect(publicationStarted).toBe(true);
-        vi.useFakeTimers();
-        let loaded: Awaited<ReturnType<typeof loadGatewayStartupPluginRuntime>> | undefined;
-        const startup = withPluginCache(cache, () =>
+        const loaded = await withPluginCache(cache, () =>
           loadGatewayStartupPluginRuntime({
             cfg: {},
             log: createLog(),
             baseMethods: ["ping"],
             startupPluginIds: ["fixture"],
           }),
-        ).then((result) => {
-          loaded = result;
-        });
-        await vi.runAllTimersAsync();
-        expect(loaded?.gatewayMethods).toEqual(["ping"]);
+        );
+        expect(loaded.gatewayMethods).toEqual(["ping"]);
         expect(publicationFinished).toBe(false);
-        await startup;
+        vi.useFakeTimers();
         const retired = vi.fn();
         retirement = retirePluginCache(cache).finally(retired);
         await vi.runAllTimersAsync();
