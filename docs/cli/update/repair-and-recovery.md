@@ -555,6 +555,9 @@ retained paths, or a candidate root still block regardless of start time.
 Repair then replaces the custody with
 its own claim in one transaction, records the settled keys in the
 `finalize:handoff-settlement` step, and releases its claim after finalization.
+When the cancelled updater also left a package publication journal, repair
+settles that journal under the same claim, so an untouched preparation retires
+in the same run instead of refusing on the custody it is settling.
 A failed or deferred repair keeps the original custody record in its claim and
 reports it as retained custody. A later repair resumes that claim once the
 interrupted repair process has exited; the grace still counts from the cancelled

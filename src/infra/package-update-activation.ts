@@ -3,6 +3,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import type { ManagedUpdateLeaseAuthority } from "../cli/update-cli/update-command-executor-state.js";
 import {
   captureUpdateCommandExecutorAuthority,
   withUpdateCommandExecutor,
@@ -265,7 +266,13 @@ export async function settlePendingPackageActivation(
   installKey: string,
   onSettled?: (settlement: PackageActivationSettlement) => void,
   expectedCompleted?: PackageActivationRecord,
-  options?: { automatic?: boolean; dryRun?: boolean; operationId?: string },
+  options?: {
+    automatic?: boolean;
+    dryRun?: boolean;
+    operationId?: string;
+    /** Explicit repair's exclusive installation claim, e.g. over cancelled custody. */
+    repairClaim?: SettlementFence;
+  },
 ) {
   const anchor = resolvePackageActivationAnchor(installKey);
   if (!expectedCompleted && !fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
@@ -412,10 +419,10 @@ export async function settlePendingPackageActivation(
         ? resolveManagedUpdateLeaseDatabasePath()
         : originalAuthority.databasePath,
     ));
-  return withUpdateCommandExecutor(
-    randomUUID(),
-    async (executor) => {
-      const fence = await executor.enter(installKey);
+  return withSettlementFence(
+    installKey,
+    options?.repairClaim,
+    async (fence) => {
       const assertCurrent = retainMutationAuthority(fence.assertCurrent);
       assertManagedUpdateLeaseDatabaseIdentity(currentDatabase);
       admission!.admit(assertCurrent);
@@ -553,9 +560,29 @@ export async function settlePendingPackageActivation(
           : result.archiveWarning,
       };
     },
-    { existingAuthority: { ...originalAuthority, ...currentDatabase } },
+    { ...originalAuthority, ...currentDatabase },
   );
 }
+
+type SettlementFence = { assertCurrent(): void };
+
+/** Repair's claim already excludes other executors; a fresh admission would meet
+ * that claim, or the cancelled custody it replaced, and refuse. */
+function withSettlementFence<T>(
+  installKey: string,
+  repairClaim: SettlementFence | undefined,
+  operation: (fence: SettlementFence) => Promise<T>,
+  existingAuthority: Omit<ManagedUpdateLeaseAuthority, "owner">,
+): Promise<T> {
+  return repairClaim
+    ? operation(repairClaim)
+    : withUpdateCommandExecutor(
+        randomUUID(),
+        async (executor) => operation(await executor.enter(installKey)),
+        { existingAuthority },
+      );
+}
+
 export async function readPackageActivationStatus(
   anchor: string,
   operationId: string,

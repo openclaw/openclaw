@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   assertManagedHandoffTestConsumer,
@@ -19,6 +19,17 @@ import { writeJsonFile } from "../../../test/helpers/temp-repo.js";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import * as census from "../../infra/openclaw-process-census.js";
+import {
+  openPackageActivationJournal,
+  resolvePackageActivationAnchor,
+} from "../../infra/package-update-activation-journal.js";
+import { assertNoPendingPackageActivation } from "../../infra/package-update-activation.js";
+import {
+  publicationActivation,
+  withPublicationFence,
+} from "../../infra/package-update-publication.test-support.js";
+import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
+import * as runtimeWorker from "../../infra/runtime-worker-url.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import {
@@ -36,6 +47,7 @@ import { killPidIfAlive, waitForPidToExit } from "../../test-utils/process-tree.
 import { withCliProcessScope } from "../runtime-cleanup-scope.js";
 import { registerUpdateCli } from "../update-cli.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import { preparePackagePublication } from "./update-package-publication.test-support.js";
 
 const { createRepairState, mocks } = await import("./update-repair.test-support.js");
 
@@ -130,8 +142,8 @@ const { createUpdateRun } = await import(${url("../../infra/update-run-ledger.ts
 const { readUpdateRunDriver } = await import(${url("../../infra/update-run-driver.ts")});
 const run = createUpdateRun({ trigger: "cli", origin: { driver: readUpdateRunDriver(), admission: { owner: "installed" } } });
 await executor.withUpdateCommandExecutor(run.runId, async (owner) => {
-  const fence = await owner.enter(${JSON.stringify(slot)});
-  await executor.withUpdateCommandExecutorChild(fence, ${JSON.stringify(slot)}, async (_grant, bindChild) => {
+  const fence = await owner.enter(${JSON.stringify(fixture.slot)});
+  await executor.withUpdateCommandExecutorChild(fence, ${JSON.stringify(fixture.slot)}, async (_grant, bindChild) => {
     const candidate = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" });
     bindChild(candidate.pid);
     fs.writeFileSync(${JSON.stringify(pidFile)}, String(candidate.pid));
@@ -162,15 +174,15 @@ await executor.withUpdateCommandExecutor(run.runId, async (owner) => {
       fixture.candidate = Number(fs.readFileSync(pidFile, "utf8"));
       const family = rows();
       const original = family[0];
-      assert(original?.install_root === install, "Missing cancelled original");
+      assert(original?.install_root === fixture.install, "Missing cancelled original");
       expect(JSON.parse(original.payload_json)).toMatchObject({ version: 4 });
       // The original, its occupied-slot mirror, and the candidate lineage under both roots.
       const lineage = String.raw`/\.openclaw-update-child-[a-f0-9-]{36}-lineage-[a-f0-9]{64}$`;
       expect(family.map((row) => row.install_root)).toEqual([
-        install,
-        expect.stringMatching(new RegExp(`^${install}${lineage}`)),
-        slot,
-        expect.stringMatching(new RegExp(`^${slot}${lineage}`)),
+        fixture.install,
+        expect.stringMatching(new RegExp(`^${fixture.install}${lineage}`)),
+        fixture.slot,
+        expect.stringMatching(new RegExp(`^${fixture.slot}${lineage}`)),
       ]);
       const runs = listUpdateRuns();
       expect(runs).toHaveLength(1);
@@ -264,6 +276,59 @@ unix(
     });
     await expect(admit("next-update")).resolves.toBe("admitted");
     expect(f.rows()).toEqual([]);
+  },
+);
+
+unix(
+  "repair settles cancelled custody that also left an untouched package journal",
+  { timeout: 60_000 },
+  async () => {
+    // The killed updater prepared package publication but never started it.
+    const pkg = await createPackageSwapFixture(path.join(fs.realpathSync(state.root), "package"));
+    const helper = path.join(state.root, "sealed.mjs");
+    fs.writeFileSync(helper, "// inert sealed helper bytes\n");
+    const resolveWorkerUrl = runtimeWorker.resolveRuntimeWorkerUrl;
+    vi.spyOn(runtimeWorker, "resolveRuntimeWorkerUrl").mockImplementation((entry) =>
+      entry.sourceWorkerName === "package-update-activation-sealed"
+        ? pathToFileURL(helper)
+        : resolveWorkerUrl(entry),
+    );
+    await withPublicationFence(pkg.packageRoot, (fence) =>
+      preparePackagePublication(pkg, publicationActivation(fence)),
+    );
+    const anchor = resolvePackageActivationAnchor(pkg.packageRoot);
+    expect(openPackageActivationJournal(anchor).read()).toMatchObject({
+      phase: "prepared",
+      intent: null,
+      publications: [],
+    });
+    f.install = pkg.packageRoot;
+    // Rows sort by key: keep the canonical original ahead of its occupied slot.
+    f.slot = path.join(state.root, "slot-package");
+    fs.symlinkSync(f.install, f.slot, "dir");
+    mocks.root.mockResolvedValue(f.slot);
+    const { family } = f.crash();
+    await f.stopCandidate();
+
+    vi.mocked(defaultRuntime.writeJson).mockClear();
+    await repair();
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    expect(lastJson()).toMatchObject({ status: "ok" });
+    expect(lastJson()).not.toHaveProperty("retainedUpdateCustody");
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("publication-not-started"),
+    );
+    expect(f.rows()).toEqual([]);
+    expect(
+      listUpdateRuns()[0]!.steps.find(({ step }) => step === "finalize:handoff-settlement"),
+    ).toMatchObject({
+      status: "completed",
+      detail: expect.stringContaining(
+        `Settled keys: ${family.map((row) => row.install_root).join(", ")}`,
+      ),
+    });
+    expect(() => assertNoPendingPackageActivation(pkg.packageRoot)).not.toThrow();
+    await expect(admit("next-update")).resolves.toBe("admitted");
   },
 );
 
