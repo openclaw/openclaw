@@ -9,6 +9,9 @@ export function createSearchableSelectList(items: SearchableSelectItem[], maxVis
   return new SearchableSelectList(items, maxVisible, searchableSelectListTheme);
 }
 
+// A name like "DeepSeek V4.1 Flash" only restates the id "deepseek-v4.1-flash".
+const comparable = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+
 /**
  * Lists the current model and recommended models first; other models of a
  * provider that recommends any wait behind an "All models" row.
@@ -26,7 +29,7 @@ export function modelSelectItems(
       value: ref,
       label: ref,
       description: [
-        model.name !== model.id ? model.name : "",
+        model.name && comparable(model.name) !== comparable(model.id) ? model.name : "",
         model.available === false ? (model.unavailableReason ?? "unavailable") : "",
       ]
         .filter(Boolean)

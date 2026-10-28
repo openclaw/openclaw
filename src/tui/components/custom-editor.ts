@@ -1,4 +1,14 @@
-import { Editor, getKeybindings, isKeyRelease, Key, matchesKey } from "@earendil-works/pi-tui";
+import {
+  CURSOR_MARKER,
+  Editor,
+  getKeybindings,
+  isKeyRelease,
+  Key,
+  matchesKey,
+  wrapTextWithAnsi,
+  type EditorTheme,
+  type TUI,
+} from "@earendil-works/pi-tui";
 
 // Kitty keyboard protocol uses CSI-u sequences for AltGr on international layouts.
 const KITTY_CSI_U_SUFFIX_REGEX = /^(\d+)(?::(\d*))?(?::(\d+))?(?:;(\d+))?(?::(\d+))?u$/u;
@@ -59,6 +69,57 @@ export class CustomEditor extends Editor {
   onCtrlP?: () => void;
   onCtrlT?: () => void;
   shouldSubmitAutocomplete?: (text: string) => boolean;
+
+  constructor(
+    tui: TUI,
+    theme: EditorTheme,
+    private readonly screenReader = false,
+  ) {
+    // Two columns of left padding hold the "$ " input marker.
+    super(tui, theme, screenReader ? { paddingX: 2 } : undefined);
+  }
+
+  /** Screen reader mode: "$ " opens the input line and decorative borders are dropped. */
+  override render(width: number): string[] {
+    const lines = super.render(width);
+    if (!this.screenReader) {
+      return lines;
+    }
+    // Text and autocomplete rows start with the two padding columns, so a row starting with "─" is
+    // a border. Scroll borders ("── ↑ 3 more ──") keep their count as plain words; at very
+    // narrow widths pi-tui cuts the count off, so only the direction is left. The notice wraps
+    // because pi-tui stops on rows wider than the terminal.
+    const rows = lines.flatMap((line) => {
+      if (!line.startsWith("─")) {
+        return [line];
+      }
+      const hidden = /([↑↓])(?: (\d+) more)?/u.exec(line);
+      if (!hidden) {
+        return [];
+      }
+      const [, direction, count] = hidden;
+      const where = direction === "↑" ? "above" : "below";
+      return wrapTextWithAnsi(
+        count ? `${count} more line${count === "1" ? "" : "s"} ${where}` : `more lines ${where}`,
+        width,
+      );
+    });
+    const first = rows.findIndex((line) => line.startsWith("  "));
+    if (first >= 0) {
+      rows[first] = `$ ${rows[first]?.slice(2)}`;
+    }
+    // The autocomplete list renders last, its selection cue sits after the padding columns.
+    // Moving the cursor there lets a reader follow the selected suggestion.
+    const suggestion = this.isShowingAutocomplete()
+      ? rows.findLastIndex((line) => line.startsWith("  → "))
+      : -1;
+    if (suggestion > first) {
+      const plain = rows.map((line) => line.split(CURSOR_MARKER).join(""));
+      plain[suggestion] = `    ${CURSOR_MARKER}${plain[suggestion]?.slice(4)}`;
+      return plain;
+    }
+    return rows;
+  }
 
   /** Preserve raw submit text so the owner chooses local editor dispatch before trimming. */
   override handleInput(data: string): void {

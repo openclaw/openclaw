@@ -66,6 +66,7 @@ export async function runTuiCliAction(
     session: resolved?.sessionKey ?? opts.session,
     ...(resolved ? { agentId: resolved.agentId } : {}),
     deliver: Boolean(opts.deliver),
+    screenReader: Boolean(opts.screenReader),
     thinking: opts.thinking,
     message: opts.message,
     timeoutMs,
@@ -85,6 +86,7 @@ export function registerTuiCli(program: Command) {
   addTuiOptions(command)
     .option("--session <key>", 'Session key (default: "main", or "global" when scope is global)')
     .option("--deliver", "Deliver assistant replies", false)
+    .option("--screen-reader", "Enable screen reader friendly output", false)
     .option("--thinking <level>", "Thinking level override")
     .option("--message <text>", "Send an initial message after connecting")
     .option("--timeout-ms <ms>", "Agent timeout in ms (defaults to agents.defaults.timeoutSeconds)")

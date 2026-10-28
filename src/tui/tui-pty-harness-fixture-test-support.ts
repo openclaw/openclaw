@@ -678,7 +678,7 @@ export async function writeTuiPtyFixtureScript(dir: string, opts: TuiStartupFixt
             },
             session: { scope: "per-sender", mainKey: "main" },
           },
-          deliver: process.env.OPENCLAW_TUI_PTY_DELIVER === "1",
+          deliver: process.env.OPENCLAW_TUI_PTY_DELIVER === "1", screenReader: ${opts.screenReader === true},
           session: process.env.OPENCLAW_TUI_PTY_SESSION,
           thinking: launchThinkingLevel,
           message: initialMessage,

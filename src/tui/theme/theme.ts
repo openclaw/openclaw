@@ -158,7 +158,10 @@ export const settingsListTheme: SettingsListTheme = {
     selected ? chalk.bold(fg(palette.accent)(text)) : fg(palette.text)(text),
   value: (text, selected) => (selected ? fg(palette.accentSoft)(text) : fg(palette.dim)(text)),
   description: tuiTheme.system,
-  cursor: fg(palette.accent)("→ "),
+  // Lazy so screen reader mode can strip the color.
+  get cursor() {
+    return fg(palette.accent)("→ ");
+  },
   hint: tuiTheme.dim,
 };
 

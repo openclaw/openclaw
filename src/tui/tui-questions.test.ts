@@ -74,7 +74,7 @@ const answered = {
 
 const controllers: Array<ReturnType<typeof createTuiQuestionController>> = [];
 
-function createHarness(initialRecord?: QuestionRecord) {
+function createHarness(initialRecord?: QuestionRecord, screenReader = false) {
   let agentId = "main";
   let sessionKey = "agent:main:main";
   let shown: Component | undefined;
@@ -105,6 +105,7 @@ function createHarness(initialRecord?: QuestionRecord) {
     },
     onPendingChange,
     requestRender: vi.fn(),
+    screenReader,
   });
   controllers.push(controller);
   const harness = {
@@ -420,6 +421,29 @@ describe("TUI questions", () => {
     expect(harness.onPendingChange).toHaveBeenLastCalledWith("");
     harness.expectOutcome("expired");
     expect(harness.resolveQuestion).not.toHaveBeenCalled();
+  });
+
+  it("keeps the expiry text still between ticks in screen reader mode", async () => {
+    const harness = createHarness(questionRecord({ expiresAtMs: 3_000 }), true);
+    const prompt = harness.render();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(harness.render()).toBe(prompt);
+    expect(prompt).toMatch(/Expires at \S/u);
+    harness.input(ESC);
+    const pending = harness.onPendingChange.mock.lastCall?.[0];
+    await vi.advanceTimersByTimeAsync(500);
+    expect(pending).toMatch(/^Question pending · expires at \S.* · \/question to open$/u);
+    expect(harness.onPendingChange).toHaveBeenLastCalledWith(pending);
+  });
+
+  it("warns once when a screen reader question is about to expire", async () => {
+    const harness = createHarness(questionRecord({ expiresAtMs: 61_000 }), true);
+    expect(harness.render()).not.toContain("under 30 seconds left");
+    await vi.advanceTimersByTimeAsync(30_000);
+    const warned = harness.render();
+    expect(warned).toContain("under 30 seconds left");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(harness.render()).toBe(warned);
   });
 
   it("does not print rejected secret values and leaves the question retryable", async () => {

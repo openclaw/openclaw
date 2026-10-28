@@ -504,8 +504,8 @@ export function createSessionActions(context: SessionActionContext) {
               (state.sessionInfo.verboseLevel ?? "off") !== "off"),
         },
       });
+      // Session switches close btw when they apply the selection; a reload keeps an open answer.
       chatLog.clearAll();
-      btw.clear();
       chatLog.addSystem(`session ${state.currentSessionKey}`);
       const activityByMessageId = new Map(
         record.activity?.map((entry) => [entry.messageId, entry.items]),

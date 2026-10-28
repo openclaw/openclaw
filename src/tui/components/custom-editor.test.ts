@@ -1,4 +1,4 @@
-import { CombinedAutocompleteProvider, type TUI } from "@earendil-works/pi-tui";
+import { CombinedAutocompleteProvider, visibleWidth, type TUI } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSlashCommands, shouldSubmitExactArgumentCompletion } from "../commands.js";
 import { editorTheme } from "../theme/theme.js";
@@ -80,5 +80,85 @@ describe("CustomEditor", () => {
     await complete("/hel");
 
     expect(onSubmit).toHaveBeenCalledExactlyOnceWith("/help\n");
+  });
+});
+
+describe("CustomEditor in screen reader mode", () => {
+  const make = (screenReader: boolean) => {
+    const editor = new CustomEditor(
+      { requestRender: vi.fn(), terminal: { rows: 40 } } as unknown as TUI,
+      editorTheme,
+      screenReader,
+    );
+    editor.focused = true;
+    editor.setText("hello");
+    return editor.render(40);
+  };
+
+  it("starts the input line with a $ marker and drops border rows", () => {
+    const lines = make(true);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.startsWith("$ hello")).toBe(true);
+    expect(lines[0]).toContain("\u001b_pi:c\u0007");
+  });
+
+  it("says how many draft lines are hidden and keeps the $ marker on the first text row", () => {
+    const editor = new CustomEditor(
+      { requestRender: vi.fn(), terminal: { rows: 24 } } as unknown as TUI,
+      editorTheme,
+      true,
+    );
+    editor.setText(Array.from({ length: 10 }, (_, index) => `line ${index}`).join("\n"));
+    const lines = editor.render(40);
+    expect(lines).toHaveLength(8);
+    expect(lines[0]).toBe("3 more lines above");
+    expect(lines[1]?.startsWith("$ line 3")).toBe(true);
+    expect(lines.join("\n")).not.toContain("─");
+  });
+
+  it("wraps the hidden line notice to a narrow terminal and keeps the direction", () => {
+    const editor = new CustomEditor(
+      { requestRender: vi.fn(), terminal: { rows: 24 } } as unknown as TUI,
+      editorTheme,
+      true,
+    );
+    editor.setText(Array.from({ length: 10 }, (_, index) => `${index}`).join("\n"));
+    const lines = editor.render(10);
+    expect(lines.slice(0, 2)).toEqual(["more lines", "above"]);
+    expect(lines.every((line) => visibleWidth(line) <= 10)).toBe(true);
+  });
+
+  it("parks the cursor on the selected suggestion while autocomplete is open", async () => {
+    const { default: chalk } = await import("chalk");
+    const saved = chalk.level;
+    chalk.level = 0;
+    try {
+      const editor = new CustomEditor(
+        { requestRender: vi.fn(), terminal: { rows: 40 } } as unknown as TUI,
+        editorTheme,
+        true,
+      );
+      editor.focused = true;
+      editor.setAutocompleteProvider(
+        new CombinedAutocompleteProvider(getSlashCommands(), process.cwd()),
+      );
+      for (const character of "/hel") {
+        editor.handleInput(character);
+      }
+      await vi.waitFor(() => expect(editor.isShowingAutocomplete()).toBe(true));
+      const lines = editor.render(60);
+      const parked = lines.filter((line) => line.includes("\u001b_pi:c\u0007"));
+      expect(parked).toHaveLength(1);
+      expect(parked[0]?.startsWith("    \u001b_pi:c\u0007help")).toBe(true);
+      expect(lines[0]?.startsWith("$ /hel")).toBe(true);
+    } finally {
+      chalk.level = saved;
+    }
+  });
+
+  it("keeps the bordered layout without the marker by default", () => {
+    const lines = make(false);
+    expect(lines.length).toBeGreaterThan(1);
+    expect(lines.join("")).not.toContain("$ ");
   });
 });

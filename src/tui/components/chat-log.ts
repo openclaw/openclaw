@@ -64,7 +64,11 @@ export class ChatLog extends Container {
   private toolsExpanded = false;
   private repeatableSystemMessage: RepeatableSystemMessage | null = null;
 
-  constructor(maxComponents = 180, imageOptions?: TuiImageRendererOptions) {
+  constructor(
+    maxComponents = 180,
+    imageOptions?: TuiImageRendererOptions,
+    private readonly screenReader = false,
+  ) {
     super();
     this.maxComponents = Math.max(20, Math.floor(maxComponents));
     this.imageRenderer = imageOptions ? new TuiImageRenderer(imageOptions) : undefined;
@@ -162,13 +166,16 @@ export class ChatLog extends Container {
   private formatSystemText(text: string, count = 1) {
     const sanitized = sanitizeRenderableText(text);
     const visible = sanitized.trim() || (text ? "(no output)" : "");
-    return theme.system(count > 1 ? `${visible} x${count}` : visible);
+    const line = count > 1 ? `${visible} x${count}` : visible;
+    return this.screenReader ? `System: ${line}` : theme.system(line);
   }
 
   private createSystemMessage(text: string): RepeatableSystemMessage {
     const entry = new Container();
     const textNode = new Text(this.formatSystemText(text), 1, 0);
-    entry.addChild(new Spacer(1));
+    if (!this.screenReader) {
+      entry.addChild(new Spacer(1));
+    }
     entry.addChild(textNode);
     return {
       component: entry,
@@ -221,7 +228,7 @@ export class ChatLog extends Container {
       previous.setImages(options?.images ?? []);
       return previous;
     }
-    const component = new MarkdownMessageComponent("user", text, this.imageRenderer);
+    const component = this.newMessage("user", text, false);
     component.setImages(options?.images ?? []);
     if (options?.messageId) {
       this.userComponents.set(options.messageId, component);
@@ -255,7 +262,7 @@ export class ChatLog extends Container {
       return pending.component;
     }
 
-    const component = new MarkdownMessageComponent("user", text, this.imageRenderer);
+    const component = this.newMessage("user", text, false);
     component.setImages(options.images ?? []);
     this.userComponents.set(options.messageId, component);
     const protectedComponents = new Set<Component>([component]);
@@ -335,7 +342,7 @@ export class ChatLog extends Container {
       existing.component.setText(text);
       return existing.component;
     }
-    const component = new MarkdownMessageComponent("user", text, this.imageRenderer);
+    const component = this.newMessage("user", text, false);
     this.pendingUsers.set(runId, { component, text });
     this.appendNonSystem(component);
     return component;
@@ -367,6 +374,15 @@ export class ChatLog extends Container {
 
   countPendingUsers() {
     return this.pendingUsers.size;
+  }
+
+  private newMessage(role: "user" | "assistant", text: string, streaming: boolean) {
+    return new MarkdownMessageComponent(
+      role,
+      text,
+      this.imageRenderer,
+      this.screenReader ? { streaming } : undefined,
+    );
   }
 
   private getAssistantRun(runId: string): TrackedAssistantRun {
@@ -456,7 +472,7 @@ export class ChatLog extends Container {
       return;
     }
     run.finalized.clear();
-    const component = new MarkdownMessageComponent("assistant", segmentText, this.imageRenderer);
+    const component = this.newMessage("assistant", segmentText, true);
     run.streaming = component;
     this.appendNonSystem(component);
   }
@@ -472,10 +488,10 @@ export class ChatLog extends Container {
     run.committedText = undefined;
     run.latestText = undefined;
     if (segmentText || images.length > 0) {
-      lastAssistant =
-        existing ?? new MarkdownMessageComponent("assistant", segmentText, this.imageRenderer);
+      lastAssistant = existing ?? this.newMessage("assistant", segmentText, false);
       if (existing) {
         existing.setText(segmentText);
+        existing.finish();
       } else {
         this.appendNonSystem(lastAssistant);
       }
@@ -500,6 +516,11 @@ export class ChatLog extends Container {
       this.assistantRuns.set(effectiveRunId, run);
     }
     this.releaseAssistantRunIfEmpty(effectiveRunId, run);
+  }
+
+  /** Reveals text a screen reader run was still holding back, e.g. when the run fails. */
+  finishAssistant(runId: string) {
+    this.assistantRuns.get(runId)?.streaming?.finish();
   }
 
   dropAssistant(runId?: string) {
@@ -567,11 +588,17 @@ export class ChatLog extends Container {
       if (!run.streaming) {
         continue;
       }
+      run.streaming.finish();
       run.frozen.add(run.streaming);
       run.committedText = run.latestText ?? "";
       run.streaming = undefined;
     }
-    const component = new ToolExecutionComponent(toolName, args, this.imageRenderer);
+    const component = new ToolExecutionComponent(
+      toolName,
+      args,
+      this.imageRenderer,
+      this.screenReader,
+    );
     if (activity !== undefined) {
       component.setActivity(activity);
     }

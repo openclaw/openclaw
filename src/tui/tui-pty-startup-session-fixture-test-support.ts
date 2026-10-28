@@ -12,6 +12,7 @@ export type TuiStartupFixtureOptions = {
   failInitialHistory?: boolean;
   holdStartupHistory?: boolean;
   holdSessionDescription?: boolean;
+  screenReader?: boolean;
 };
 
 export function createTuiStartupRelease(tempDir: string, opts: TuiStartupFixtureOptions) {

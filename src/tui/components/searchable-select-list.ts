@@ -15,6 +15,7 @@ import { iterateAnsiSegments } from "../../../packages/terminal-core/src/ansi-se
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { escapeRegExp } from "../../shared/regexp.js";
 import { sanitizeRenderableLine } from "../tui-formatters.js";
+import { stableWindowStart } from "./list-window.js";
 import { SelectListInput } from "./select-list-input.js";
 
 export interface SearchableSelectListTheme extends SelectListTheme {
@@ -41,6 +42,12 @@ export class SearchableSelectList extends SelectListInput implements Component, 
   }>;
   private filteredItems: SearchableSelectItem[];
   private selectedIndex = 0;
+  private windowStart?: number;
+  /**
+   * Screen reader mode: the window moves only when the selection leaves it, and the position
+   * counter is left out because a reader would announce it on every repaint.
+   */
+  stableWindow = false;
   private retainedSelection?: string;
   private highlightPatterns?: RegExp[];
   private emptyMessage = "No matches";
@@ -91,6 +98,7 @@ export class SearchableSelectList extends SelectListInput implements Component, 
       ? this.smartFilter(query)
       : this.items.filter((item) => (this.expanded ? !item.expandsCollapsed : !item.collapsed));
     this.selectedIndex = 0;
+    this.windowStart = undefined;
   }
 
   // Rank exact label matches before description matches, then fuzzy matches.
@@ -201,13 +209,21 @@ export class SearchableSelectList extends SelectListInput implements Component, 
       .toSorted((a, b) => b.length - a.length)
       .map((token) => new RegExp(escapeRegExp(token), "gi")));
 
-    const startIndex = Math.max(
-      0,
-      Math.min(
-        this.selectedIndex - Math.floor(this.maxVisible / 2),
-        this.filteredItems.length - this.maxVisible,
-      ),
-    );
+    const startIndex = this.stableWindow
+      ? stableWindowStart(
+          this.windowStart,
+          this.selectedIndex,
+          this.filteredItems.length,
+          this.maxVisible,
+        )
+      : Math.max(
+          0,
+          Math.min(
+            this.selectedIndex - Math.floor(this.maxVisible / 2),
+            this.filteredItems.length - this.maxVisible,
+          ),
+        );
+    this.windowStart = startIndex;
     const endIndex = Math.min(startIndex + this.maxVisible, this.filteredItems.length);
 
     for (let i = startIndex; i < endIndex; i++) {
@@ -254,7 +270,7 @@ export class SearchableSelectList extends SelectListInput implements Component, 
       lines.push(truncateToWidth(isSelected ? this.theme.selectedText(line) : line, safeWidth, ""));
     }
 
-    if (this.filteredItems.length > this.maxVisible) {
+    if (!this.stableWindow && this.filteredItems.length > this.maxVisible) {
       const scrollInfo = `${this.selectedIndex + 1}/${this.filteredItems.length}`;
       lines.push(truncateToWidth(this.theme.scrollInfo(`  ${scrollInfo}`), safeWidth, ""));
     }

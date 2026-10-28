@@ -32,6 +32,7 @@ type TuiRunLifecycleContext = {
     addSystem: (text: string) => void;
     addPendingSystem: (runId: string, text: string) => void;
     dismissPendingSystem: (runId: string) => void;
+    finishAssistant?: (runId: string) => void;
   };
   btw: { clear: () => void };
   tui: { requestRender: (force?: boolean) => void };
@@ -420,6 +421,7 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     }
     const renderedError = formatRawAssistantErrorForUi(errorMessage);
     chatLog.dismissPendingSystem(runId);
+    chatLog.finishAssistant?.(runId);
     const displayMessage = resolveAuthErrorHint(errorMessage) ?? `run error: ${renderedError}`;
     liveTerminalErrorMessages.set(runId, displayMessage);
     chatLog.addSystem(displayMessage);

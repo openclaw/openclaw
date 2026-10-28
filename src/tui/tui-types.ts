@@ -23,6 +23,7 @@ export type TuiOptions = {
   tlsFingerprint?: string;
   session?: string;
   deliver?: boolean;
+  screenReader?: boolean;
   thinking?: string;
   timeoutMs?: number;
   historyLimit?: number;

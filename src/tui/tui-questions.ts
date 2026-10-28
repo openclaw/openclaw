@@ -14,7 +14,7 @@ import {
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import { createTuiRefreshCoalescer } from "./coalesced-refresh.js";
-import { QuestionPrompt } from "./components/question-prompt.js";
+import { describeQuestionExpiry, QuestionPrompt } from "./components/question-prompt.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { matchesOwnedTuiSession } from "./tui-session-events.js";
 import { TuiSnapshotJournal } from "./tui-snapshot-journal.js";
@@ -28,6 +28,7 @@ type TuiQuestionControllerDeps = {
   closeOverlay: (handle: OverlayHandle) => void;
   requestRender: () => void;
   onPendingChange: (text: string) => void;
+  screenReader?: boolean;
 };
 type QuestionState = {
   record?: QuestionRecord;
@@ -197,24 +198,28 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
     if (!active && record) {
       const prompt =
         questions.get(record.id)?.prompt ??
-        new QuestionPrompt(record, {
-          onSubmit: (answers) =>
-            void resolve(record, { id: record.id, answers, resolutionId: randomUUID() }),
-          onSkip: () => void resolve(record, { id: record.id, cancel: true }),
-          onCollapse: () => {
-            if (active?.id !== record.id) {
-              return;
-            }
-            for (const question of questionRecords()) {
-              if (matchesSession(question)) {
-                update(question.id, { collapsed: true });
+        new QuestionPrompt(
+          record,
+          {
+            onSubmit: (answers) =>
+              void resolve(record, { id: record.id, answers, resolutionId: randomUUID() }),
+            onSkip: () => void resolve(record, { id: record.id, cancel: true }),
+            onCollapse: () => {
+              if (active?.id !== record.id) {
+                return;
               }
-            }
-            closeActive();
-            present();
+              for (const question of questionRecords()) {
+                if (matchesSession(question)) {
+                  update(question.id, { collapsed: true });
+                }
+              }
+              closeActive();
+              present();
+            },
+            requestRender: deps.requestRender,
           },
-          requestRender: deps.requestRender,
-        });
+          deps.screenReader,
+        );
       update(record.id, { prompt });
       active = { id: record.id, handle: deps.openOverlay(prompt, { width: "100%" }) };
     }
@@ -222,7 +227,7 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
     const text = records.some((question) => questions.get(question.id)?.unconfirmed)
       ? "Answer confirmation unavailable · /question to check"
       : firstRecord
-        ? `Question pending${records.length > 1 ? ` (${records.length})` : ""} · ${Math.max(0, Math.ceil((firstRecord.expiresAtMs - Date.now()) / 1_000))}s · /question to open`
+        ? `Question pending${records.length > 1 ? ` (${records.length})` : ""} · ${deps.screenReader ? `expires ${describeQuestionExpiry(firstRecord.expiresAtMs)}` : `${Math.max(0, Math.ceil((firstRecord.expiresAtMs - Date.now()) / 1_000))}s`} · /question to open`
         : "";
     if (text !== pendingText) {
       pendingText = text;

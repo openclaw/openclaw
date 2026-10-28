@@ -263,6 +263,7 @@ export const OpenClawSchemaShape = {
   ui: z
     .strictObject({
       seamColor: HexColorSchema.optional(),
+      tui: z.strictObject({ screenReader: z.boolean().optional() }).optional(),
       // Operator display prefs. Canonical here (agent-writable via approval,
       // synced across devices); the Control UI mirrors them into local
       // storage for instant boot and offline fallback.

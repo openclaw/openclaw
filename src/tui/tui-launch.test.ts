@@ -88,6 +88,12 @@ describe("launchTuiCli", () => {
     expect(resumeSpy).not.toHaveBeenCalled();
   });
 
+  it("passes screen reader mode through to the relaunched TUI", async () => {
+    await launchTuiCli({ screenReader: true, deliver: false });
+
+    expectSpawned([...cli, "--screen-reader"]);
+  });
+
   it.each(["/standalone/runtime/openclaw.mjs", undefined])(
     "launches standalone TUI with entry %s",
     async (entry) => {

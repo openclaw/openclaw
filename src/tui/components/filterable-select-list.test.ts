@@ -1,5 +1,5 @@
 import { renderFakeCursor, visibleWidth } from "@earendil-works/pi-tui";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { FilterableSelectList, type FilterableSelectItem } from "./filterable-select-list.js";
 import { attacks, expectText, select, theme, typeText } from "./render.test-support.js";
@@ -87,5 +87,99 @@ describe("FilterableSelectList", () => {
     list.handleInput("\x1b");
     typeText(list, "picker-title");
     expect(select(list)).toMatchObject({ searchText: "raw-filter-target", value: rawValue });
+  });
+
+  describe("scroll window", () => {
+    const many: FilterableSelectItem[] = Array.from({ length: 20 }, (_, i) => ({
+      value: `s-${i}`,
+      label: `session-${String(i).padStart(2, "0")}`,
+    }));
+    const rows = (list: FilterableSelectList) =>
+      list
+        .render(80)
+        .map((row) =>
+          stripAnsi(row)
+            .replace(/[*]/gu, "")
+            .replace(/^[[]?[→ ]+[\]]?/u, "")
+            .trim(),
+        )
+        .filter((row) => row.startsWith("session-"));
+    const down = (list: FilterableSelectList, count: number) =>
+      Array.from({ length: count }, () => list.handleInput("\u001b[B"));
+
+    const createStableList = () => {
+      const list = createList(many, 5);
+      list.stableWindow = true;
+      return list;
+    };
+
+    it("keeps the centered window outside screen reader mode", () => {
+      const list = createList(many, 5);
+      expect(rows(list)).toEqual([
+        "session-00",
+        "session-01",
+        "session-02",
+        "session-03",
+        "session-04",
+      ]);
+      down(list, 3);
+      expect(rows(list)).toEqual([
+        "session-01",
+        "session-02",
+        "session-03",
+        "session-04",
+        "session-05",
+      ]);
+    });
+
+    it("keeps visible rows still while the selection moves inside the window", () => {
+      const list = createStableList();
+      const first = rows(list);
+      down(list, 4);
+      expect(rows(list)).toEqual(first);
+    });
+
+    it("scrolls by one row only when the selection leaves the window", () => {
+      const list = createStableList();
+      rows(list);
+      down(list, 5);
+      expect(rows(list)).toEqual([
+        "session-01",
+        "session-02",
+        "session-03",
+        "session-04",
+        "session-05",
+      ]);
+    });
+
+    it("wraps from the first row to the last and back, as pi-tui's list does", () => {
+      const list = createList(many, 5);
+      rows(list);
+      list.handleInput("\u001b[A");
+      expect(select(list)?.value).toBe("s-19");
+      list.handleInput("\u001b[B");
+      expect(select(list)?.value).toBe("s-0");
+    });
+
+    it("ignores navigation when the filter matches nothing", () => {
+      const list = createList(many, 5);
+      typeText(list, "zzzzzzzzzz");
+      list.handleInput("\u001b[B");
+      list.handleInput("\u001b[A");
+      const onSelect = vi.fn();
+      list.onSelect = onSelect;
+      list.handleInput("\r");
+      expect(onSelect).not.toHaveBeenCalled();
+      expect(() => list.render(80)).not.toThrow();
+    });
+
+    it("selects the highlighted entry after scrolling and after filtering", () => {
+      const list = createList(many, 5);
+      rows(list);
+      down(list, 7);
+      expect(select(list)?.value).toBe("s-7");
+      typeText(list, "session-15");
+      expect(select(list)?.value).toBe("s-15");
+    });
   });
 });

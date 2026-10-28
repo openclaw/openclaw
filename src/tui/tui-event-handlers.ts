@@ -49,7 +49,7 @@ type EventHandlerContext = Omit<
 > & {
   chatLog: ChatLogOperations;
   btw: {
-    showResult: (params: { question: string; text: string; isError?: boolean }) => void;
+    showResult: (params: Pick<BtwEvent, "question" | "text" | "isError" | "runId">) => void;
     clear: () => void;
   };
   updateFooter: () => void;
@@ -57,7 +57,7 @@ type EventHandlerContext = Omit<
   applySessionEventRow?: (row: TuiSessionRow) => boolean;
   noteLocalRunId?: (runId: string) => void;
   isLocalBtwRunId?: (runId: string) => boolean;
-  forgetLocalBtwRunId?: (runId: string) => void;
+  forgetLocalBtwRunId?: (runId: string, outcome?: "empty") => void;
 };
 
 export function createEventHandlers(context: EventHandlerContext) {
@@ -266,7 +266,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       const status = terminalStopReason === "error" ? "error" : "idle";
       const runOutcome = status === "error" ? undefined : "completed";
       if (!evt.message && isLocalBtwRun) {
-        forgetLocalBtwRunId?.(evt.runId);
+        forgetLocalBtwRunId?.(evt.runId, "empty");
         runCoordinator.noteFinalizedRun(evt.runId);
         clearStaleStreamingIfNoTrackedRunRemains();
         tui.requestRender(true);
@@ -726,7 +726,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (!question || !text) {
       return;
     }
-    btw.showResult({ question, text, isError: evt.isError });
+    btw.showResult({ question, text, isError: evt.isError, runId: evt.runId });
     tui.requestRender();
   });
 

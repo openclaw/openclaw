@@ -24,4 +24,12 @@ describe("modelSelectItems", () => {
     ]);
     expect(items[4]?.label).toBe("All models (1)");
   });
+
+  it("drops a name that only restates the id", () => {
+    const items = modelSelectItems([
+      { provider: "go", id: "deepseek-v4.1-flash", name: "DeepSeek V4.1 Flash" },
+      { provider: "go", id: "glm-5.3-air", name: "GLM 5.3" },
+    ]);
+    expect(items.map((item) => item.description)).toEqual(["", "GLM 5.3"]);
+  });
 });

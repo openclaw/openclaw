@@ -129,6 +129,10 @@ describe("bare-root session URL options", () => {
       ),
     ).toEqual({ target, options: { deliver: true, token: "direct-token" } });
     expect(parse(target, "--deliver")).toEqual({ target, options: { deliver: true } });
+    expect(parse("--screen-reader", target)).toEqual({
+      target,
+      options: { screenReader: true },
+    });
   });
 
   it.each([["gateway.example/main/a1166b81"], ["unowned-command", target]])(

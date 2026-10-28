@@ -16,6 +16,13 @@ import { hasTerminalControl } from "../../../packages/terminal-core/src/safe-tex
 import { tuiTheme as theme } from "../theme/theme.js";
 import { sanitizeRenderableLine } from "../tui-formatters.js";
 
+// Screen reader mode: a ticking countdown would be read out every second. A clock time stays
+// put and changes once, as the warning, when little time is left.
+export function describeQuestionExpiry(expiresAtMs: number): string {
+  const clock = `at ${new Date(expiresAtMs).toLocaleTimeString()}`;
+  return expiresAtMs - Date.now() <= 30_000 ? `${clock}, under 30 seconds left` : clock;
+}
+
 function safeText(value: string): string {
   return sanitizeRenderableLine(
     value.replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, ""),
@@ -110,6 +117,7 @@ export class QuestionPrompt implements Component, Focusable {
   constructor(
     private readonly record: QuestionRecord,
     private readonly actions: QuestionPromptActions,
+    private readonly screenReader = false,
   ) {
     this.enterStep();
   }
@@ -331,7 +339,11 @@ export class QuestionPrompt implements Component, Focusable {
         `Question ${this.step + 1}/${this.record.questions.length} · ${safeText(question.header)}`,
       ),
       safeText(question.question),
-      theme.dim(`Expires in ${seconds}s`),
+      theme.dim(
+        this.screenReader
+          ? `Expires ${describeQuestionExpiry(this.record.expiresAtMs)}`
+          : `Expires in ${seconds}s`,
+      ),
     ];
     const binding = question.secretStore;
     if (binding) {
@@ -347,13 +359,19 @@ export class QuestionPrompt implements Component, Focusable {
       }
     }
     appendText(lines.join("\n"));
+    let cursorRow = -1;
     for (const [index, row] of this.rows().entries()) {
       const selected = !this.editing && index === this.selectedRow;
+      if (selected) {
+        cursorRow = rendered.length;
+      }
       const checked = row.kind === "option" && this.selections.get(this.step)?.has(row.index);
       const marker =
         row.kind === "option" && question.multiSelect ? `[${checked ? "x" : " "}] ` : "";
       appendText(
-        (selected ? theme.accent : theme.fg)(`${selected ? "›" : " "} ${marker}${row.label}`),
+        (selected ? theme.accent : theme.fg)(
+          `${selected && !this.screenReader ? "›" : " "} ${marker}${row.label}`,
+        ),
       );
       if (row.kind === "option") {
         const description = question.options[row.index]?.description;
@@ -382,6 +400,11 @@ export class QuestionPrompt implements Component, Focusable {
     }
     if (this.message) {
       appendText(theme.error(this.message));
+    }
+    // Screen reader mode parks the real cursor on the selected row; the "›" cue would be
+    // repainted on every arrow press.
+    if (this.screenReader && this.focused && cursorRow >= 0) {
+      rendered[cursorRow] = CURSOR_MARKER + rendered[cursorRow];
     }
     return rendered;
   }

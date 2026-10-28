@@ -499,7 +499,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(h.btw.showResult).toHaveBeenCalledExactlyOnceWith({
       question: "what changed?",
       text: "answer for the replacement session",
-      isError: undefined,
+      runId: "replacement-btw-run",
     });
   });
 
@@ -521,7 +521,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(h.btw.showResult).toHaveBeenCalledWith({
       question: "what changed?",
       text: "nothing important",
-      isError: undefined,
+      runId: "run-btw",
     });
   });
 

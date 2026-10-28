@@ -136,7 +136,7 @@ function isCodeModeResult(toolName: string, result?: ToolResult): boolean {
 
 /** Displays a running or completed tool call with optional expandable output. */
 export class ToolExecutionComponent extends Container {
-  private box = new Box(1, 1, theme.toolPendingBg);
+  private box: Box;
   private header = new Text("", 0, 0);
   private argsLine = new Text("", 0, 0);
   private output = new ToolOutputComponent("", 0, 0, markdownTheme, {
@@ -153,9 +153,14 @@ export class ToolExecutionComponent extends Container {
     private readonly toolName: string,
     args: unknown,
     imageRenderer?: TuiImageRenderer,
+    private readonly screenReader = false,
   ) {
     super();
-    this.addChild(new Spacer(1));
+    const padding = screenReader ? 0 : 1;
+    this.box = new Box(padding, padding, theme.toolPendingBg);
+    if (!screenReader) {
+      this.addChild(new Spacer(1));
+    }
     this.addChild(this.box);
     this.box.addChild(this.header);
     this.box.addChild(this.argsLine);
@@ -171,7 +176,7 @@ export class ToolExecutionComponent extends Container {
     this.title = display.label;
     this.refreshTitle();
     const argLine = formatArgs(formatToolDetail(display), args);
-    this.argsLine.setText(argLine ? theme.dim(argLine) : theme.dim(" "));
+    this.argsLine.setText(argLine ? theme.dim(argLine) : this.screenReader ? "" : theme.dim(" "));
   }
 
   setExpanded(expanded: boolean) {
@@ -215,11 +220,22 @@ export class ToolExecutionComponent extends Container {
 
   private refreshTitle() {
     const title = tuiFormatters.sanitizeRenderableLine(
-      this.activity
-        ? `${this.activity.title}${this.activity.status ? ` (${this.activity.status})` : ""}`
-        : `${this.title}${this.isPartial ? " (running)" : ""}`,
+      this.screenReader
+        ? `Tool ${this.activity?.title ?? this.title}: ${this.statusTag()}`
+        : this.activity
+          ? `${this.activity.title}${this.activity.status ? ` (${this.activity.status})` : ""}`
+          : `${this.title}${this.isPartial ? " (running)" : ""}`,
     );
     this.header.setText(theme.toolTitle(theme.bold(title)));
+  }
+
+  // Text state replaces the color-only background cue in screen reader mode.
+  private statusTag() {
+    if (this.isActive) {
+      return "[running]";
+    }
+    const failed = this.activity ? this.activity.status === "failed" : this.isError;
+    return failed ? "[failed]" : "[ok]";
   }
 
   private refreshResult() {

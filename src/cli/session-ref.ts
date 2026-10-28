@@ -49,7 +49,7 @@ export type BareSessionTuiOptions = Partial<
     (typeof BARE_SESSION_TUI_VALUE_OPTIONS)[keyof typeof BARE_SESSION_TUI_VALUE_OPTIONS],
     string
   >
-> & { deliver?: boolean };
+> & { deliver?: boolean; screenReader?: boolean };
 
 function refFromPathTarget(target: ControlUiSessionPathTarget): SessionTargetRef {
   if (target.kind === "main") {
@@ -217,6 +217,10 @@ export function parseBareSessionInvocation(argv: readonly string[]) {
     }
     if (arg === "--deliver") {
       options.deliver = true;
+      continue;
+    }
+    if (arg === "--screen-reader") {
+      options.screenReader = true;
       continue;
     }
     if (!arg.startsWith("-")) {

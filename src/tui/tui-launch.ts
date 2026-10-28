@@ -36,6 +36,9 @@ export async function launchTuiCli(opts: TuiOptions): Promise<void> {
   if (opts.deliver) {
     args.push("--deliver");
   }
+  if (opts.screenReader) {
+    args.push("--screen-reader");
+  }
   const invocation = resolveOpenClawCliInvocation({
     args,
     execArgv: filterOpenClawChildExecArgv(process.execArgv),

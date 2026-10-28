@@ -2,6 +2,10 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   ui: "UI presentation settings for accenting and operator display preferences. Use this for readability customization without changing runtime behavior.",
   "ui.seamColor":
     "Primary accent color used by UI surfaces for emphasis, badges, and visual identity cues. Use high-contrast values that remain readable across light/dark themes.",
+  "ui.tui":
+    "Terminal UI presentation settings. Use this for terminal-only options that do not change Gateway or other UI behavior.",
+  "ui.tui.screenReader":
+    "Enable screen reader friendly Terminal UI output. The --screen-reader flag enables it regardless of this setting. Default: false.",
   "ui.prefs.accent":
     "Control UI accent: #RRGGBB for a custom color, or 'theme' for the selected theme’s palette. Overrides ui.seamColor; clear it to inherit the configured accent color or theme default.",
   "ui.prefs.locale":
