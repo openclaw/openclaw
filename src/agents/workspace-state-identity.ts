@@ -119,7 +119,6 @@ export const WORKSPACE_VANISHED_ERROR_CODE = "WORKSPACE_VANISHED";
 
 export class WorkspaceVanishedError extends Error {
   readonly code = WORKSPACE_VANISHED_ERROR_CODE;
-  readonly workspaceDir: string;
 
   constructor(params: { workspaceDir: string }) {
     super(
@@ -128,6 +127,5 @@ export class WorkspaceVanishedError extends Error {
         "Restore the workspace or run a full OpenClaw reset if this reset was intentional.",
     );
     this.name = "WorkspaceVanishedError";
-    this.workspaceDir = params.workspaceDir;
   }
 }

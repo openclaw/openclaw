@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium, type BrowserContext } from "playwright-core";
@@ -32,6 +31,7 @@ import { createPluginRecord } from "../../src/plugin-sdk/plugin-test-runtime.js"
 import { runPluginRegisterSyncInRegistry } from "../../src/plugins/loader-module-runtime.js";
 import { ensureProfileForEmail } from "../../src/state/user-profiles.js";
 import { getFreePort } from "../../src/test-utils/ports.js";
+import { closeHttpServer, listenLoopback } from "../helpers/gateway-integration-fixtures.js";
 import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -49,12 +49,9 @@ it.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
       response.setHeader("Content-Type", "text/html");
       response.end("<!doctype html><title>Authority fixture</title>");
     });
-    await new Promise<void>((resolve) => {
-      destination.listen(0, "127.0.0.1", resolve);
-    });
+    const origin = await listenLoopback(destination);
     let browser: BrowserContext | undefined;
     try {
-      const origin = `http://127.0.0.1:${(destination.address() as AddressInfo).port}`;
       const port = await getFreePort();
       const cdpUrl = `http://127.0.0.1:${port}`;
       browser = await chromium.launchPersistentContext(path.join(root, "chromium"), {
@@ -65,6 +62,7 @@ it.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
       const browserOrigin = "https://control.example.test";
       const cfg: OpenClawConfig = {
         agents: { entries: { main: {} } },
+        tools: { allow: ["group:plugins"] },
         gateway: {
           trustedProxies: ["127.0.0.1"],
           controlUi: { allowedOrigins: [browserOrigin] },
@@ -123,6 +121,7 @@ it.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
         id: "browser",
         name: "Browser",
         origin: "bundled",
+        contracts: { tools: ["browser"] },
         source: fileURLToPath(new URL("../../extensions/browser/index.ts", import.meta.url)),
       });
       registerTestPlugin({
@@ -130,7 +129,6 @@ it.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
         config: cfg,
         record,
         register: (api) => {
-          // Match loader registration ownership so subsequent RPCs share its runtime slots.
           runPluginRegisterSyncInRegistry(
             browserPlugin.register,
             api,
@@ -155,11 +153,13 @@ it.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
             prePairDevice: true,
             scopes: ["operator.write"],
             client: CONTROL_UI_CLIENT,
-            deviceIdentityPath: path.join(root, `${email}.sqlite`),
+            deviceIdentityPath: path.join(root, email, "client", "credentials.sqlite"),
             browserOrigin,
           });
-          expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
-          expect(connected.payload).toMatchObject({ auth: { scopes: ["operator.write"] } });
+          expect(connected, JSON.stringify(connected.error)).toMatchObject({
+            ok: true,
+            payload: { auth: { scopes: ["operator.write"] } },
+          });
           return socket;
         };
         const invoke = (
@@ -176,18 +176,44 @@ it.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
             body,
             timeoutMs: 120_000,
           });
-        let release: (() => void) | undefined;
+        let entered = createDeferred();
+        let resumed = createDeferred();
+        let hold: "navigation" | "allocation" | undefined;
         let pending: ReturnType<typeof invoke> | undefined;
         try {
           const writerSocket = await connectWriter(writerEmail);
           const outsiderSocket = await connectWriter(outsiderEmail);
           expect((await invoke("denied", outsiderSocket)).ok).toBe(false);
           expect(requests).toEqual([]);
-          let entered = createDeferred();
-          let resumed = createDeferred();
-          release = () => resumed.resolve();
-          let holdAllocation = false;
-          let holdNavigation = false;
+          const revokeDuring = async (
+            phase: typeof hold,
+            request: () => ReturnType<typeof invoke>,
+          ) => {
+            entered = createDeferred();
+            resumed = createDeferred();
+            hold = phase;
+            pending = request();
+            void pending.catch(() => {});
+            await withTestTimeout(
+              Promise.race([
+                entered.promise,
+                pending.then((result) => {
+                  throw new Error(`Browser settled before ${phase}: ${JSON.stringify(result)}`);
+                }),
+              ]),
+              15_000,
+              `Browser did not enter ${phase}`,
+            );
+            await removeSessionMember(target, writer.id);
+            resumed.resolve();
+            expect((await pending).ok).toBe(false);
+            expect(requests).toEqual(["/authority/allowed", "/authority/navigated"]);
+            hold = undefined;
+          };
+          const pause = async () => {
+            entered.resolve();
+            await resumed.promise;
+          };
           const connect = chromium.connectOverCDP.bind(chromium);
           // Delay only the real dependency's settlement; authentication and effects remain real.
           vi.spyOn(chromium, "connectOverCDP").mockImplementation(async (...args) => {
@@ -201,17 +227,15 @@ it.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
                 const route = page.route.bind(page);
                 vi.spyOn(page, "route").mockImplementation(async (...routeArgs) => {
                   const registration = await route(...routeArgs);
-                  if (holdNavigation) {
-                    entered.resolve();
-                    await resumed.promise;
+                  if (hold === "navigation") {
+                    await pause();
                   }
                   return registration;
                 });
                 return page;
               });
-              if (holdAllocation) {
-                entered.resolve();
-                await resumed.promise;
+              if (hold === "allocation") {
+                await pause();
               }
               return allocated;
             });
@@ -225,48 +249,15 @@ it.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
           });
           expect(navigated.ok, JSON.stringify(navigated.error)).toBe(true);
           expect(requests).toEqual(["/authority/allowed", "/authority/navigated"]);
-          holdNavigation = true;
-          pending = invoke("allowed", writerSocket, "/navigate", {
-            url: `${origin}/authority/revoked-navigation`,
-          });
-          void pending.catch(() => {});
-          await withTestTimeout(
-            Promise.race([
-              entered.promise,
-              pending.then((result) => {
-                throw new Error(`Browser settled before navigation: ${JSON.stringify(result)}`);
-              }),
-            ]),
-            15_000,
-            "Browser did not enter existing-page navigation preparation",
+          await revokeDuring("navigation", () =>
+            invoke("allowed", writerSocket, "/navigate", {
+              url: `${origin}/authority/revoked-navigation`,
+            }),
           );
-          await removeSessionMember(target, writer.id);
-          resumed.resolve();
-          expect((await pending).ok).toBe(false);
-          expect(requests).toEqual(["/authority/allowed", "/authority/navigated"]);
-          holdNavigation = false;
           await addSessionMember(target, { identityId: writer.id, addedBy: owner.id });
-          entered = createDeferred();
-          resumed = createDeferred();
-          holdAllocation = true;
-          pending = invoke("revoked", writerSocket);
-          void pending.catch(() => {});
-          await withTestTimeout(
-            Promise.race([
-              entered.promise,
-              pending.then((result) => {
-                throw new Error(`Browser settled before allocation: ${JSON.stringify(result)}`);
-              }),
-            ]),
-            15_000,
-            "Browser did not enter context allocation",
-          );
-          await removeSessionMember(target, writer.id);
-          resumed.resolve();
-          expect((await pending).ok).toBe(false);
-          expect(requests).toEqual(["/authority/allowed", "/authority/navigated"]);
+          await revokeDuring("allocation", () => invoke("revoked", writerSocket));
         } finally {
-          release?.();
+          resumed.resolve();
           await pending?.catch(() => {});
           vi.restoreAllMocks();
           for (const socket of sockets) {
@@ -275,13 +266,7 @@ it.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
         }
       });
     } finally {
-      destination.closeAllConnections();
-      await Promise.all([
-        browser?.close(),
-        new Promise<void>((resolve) => {
-          destination.close(() => resolve());
-        }),
-      ]);
+      await Promise.all([browser?.close(), closeHttpServer(destination)]);
     }
   },
   60_000,

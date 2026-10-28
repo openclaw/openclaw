@@ -10,8 +10,16 @@ import {
   createTestPluginApi,
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  createPluginRecord,
+  createPluginRegistry,
+  createPluginRuntimeMock,
+  disposePluginRegistryInstances,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -29,16 +37,30 @@ import {
 vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", { spy: true });
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
+const backgroundOwners = new Set<ReturnType<typeof createPluginRegistry>>();
 const NOW_MS = Date.parse("2026-04-05T10:00:00.000Z");
 const DAY = "2026-04-05";
 const FRAGMENT = "Move archive backups to encrypted cold storage.";
+const LASTING = "Memories that crystallized into something lasting";
 type CompletionInput = Parameters<DreamingCompletion["complete"]>[0];
 type BeforeReply = (
   event: { cleanedBody: string },
   context: { trigger: string; agentId: string; workspaceDir: string; sessionKey: string },
 ) => Promise<unknown>;
 
-afterEach(() => {
+const execution = (model: string) => ({ execution: { model }, limit: 10 });
+const logText = (mock: ReturnType<typeof vi.fn>) => mock.mock.calls.flat().join("\n");
+const expectHandled = (result: unknown, status = "processed") =>
+  expect(result).toEqual({ handled: true, reason: `memory-core: short-term dreaming ${status}` });
+
+afterEach(async () => {
+  await Promise.all(
+    [...backgroundOwners].map(async (owner) => {
+      const result = await disposePluginRegistryInstances(owner.registry);
+      expect(result.failures).toEqual([]);
+    }),
+  );
+  backgroundOwners.clear();
   resetSystemEventsForTest();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -53,6 +75,8 @@ async function createSweep(
     failDeepReport?: boolean;
     failRemReport?: boolean;
     narrativeGate?: Promise<void>;
+    timeoutSeconds?: number | null;
+    managedBackground?: boolean;
   } = {},
 ) {
   const workspaceDir = await createTempWorkspace("sweep-narrative-");
@@ -76,7 +100,12 @@ async function createSweep(
   }
   const config: OpenClawConfig = {
     agents: {
-      defaults: { workspace: workspaceDir, timeoutSeconds: 180 },
+      defaults: {
+        workspace: workspaceDir,
+        ...(options.timeoutSeconds === null
+          ? {}
+          : { timeoutSeconds: options.timeoutSeconds ?? 180 }),
+      },
       entries: { main: { workspace: workspaceDir } },
     },
     plugins: {
@@ -89,21 +118,18 @@ async function createSweep(
               storage: { mode: "separate", separateReports: true },
               phases: {
                 light: {
+                  ...execution("anthropic/claude-haiku-4-5"),
                   enabled: true,
-                  limit: 10,
                   lookbackDays: 2,
-                  execution: { model: "anthropic/claude-haiku-4-5" },
                 },
                 rem: {
+                  ...execution("xai/grok-4.1-fast"),
                   enabled: true,
-                  limit: 10,
                   lookbackDays: 2,
                   minPatternStrength: 0,
-                  execution: { model: "xai/grok-4.1-fast" },
                 },
                 deep: {
-                  limit: 10,
-                  execution: { model: "openai/gpt-5.4" },
+                  ...execution("openai/gpt-5.4"),
                   minScore: options.promote ? 0 : 1,
                   minRecallCount: options.promote ? 0 : 100,
                   minUniqueQueries: 0,
@@ -115,10 +141,13 @@ async function createSweep(
       },
     },
   };
+  setRuntimeConfigSnapshot(config);
   const narratives: CompletionInput[] = [];
+  const consolidations: CompletionInput[] = [];
   const complete = vi.fn(async (input: CompletionInput) => {
     if (!input.extraSystemPrompt?.includes("You are keeping a dream diary")) {
       // Deliberately use the real append-only promotion fallback, not a fabricated plan.
+      consolidations.push(input);
       return { text: "" };
     }
     narratives.push(input);
@@ -129,6 +158,7 @@ async function createSweep(
     // Different replies make duplicate publications observable even without exact-text dedupe.
     return { text: `The archive glowed softly, entry ${narratives.length}.` };
   });
+
   const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const unexpectedSessionCall = vi.fn(async () => {
     throw new Error("Unexpected session-based subagent call");
@@ -137,24 +167,36 @@ async function createSweep(
   const registerService =
     vi.fn<Parameters<typeof registerShortTermPromotionDreaming>[0]["registerService"]>();
   const baseApi = createTestPluginApi({ config, logger, pluginConfig: {} });
+  if (options.managedBackground) {
+    const owner = createPluginRegistry({
+      logger,
+      runtime: createPluginRuntimeMock(),
+      activateGlobalSideEffects: false,
+    });
+    const record = createPluginRecord({ id: "memory-core" });
+    owner.registry.plugins.push(record);
+    baseApi.lifecycle = owner.createApi(record, { config }).lifecycle;
+    backgroundOwners.add(owner);
+    await baseApi.lifecycle.runInBackgroundContext!(() =>
+      configureMemoryCoreDreamingStateForTests(),
+    );
+  }
   const agent = createPluginRuntimeMock().agent;
   const resolveTimeout = vi.mocked(agent.resolveAgentTimeoutMs).mockReturnValue(180_000);
   registerShortTermPromotionDreaming({
     ...baseApi,
-    config,
-    pluginConfig: {},
     runtime: {
       ...baseApi.runtime,
       agent,
       subagent: {
         complete,
+        forkSession: unexpectedSessionCall,
         run: unexpectedSessionCall,
         waitForRun: unexpectedSessionCall,
         getSessionMessages: unexpectedSessionCall,
         deleteSession: unexpectedSessionCall,
       },
     },
-    logger,
     on,
     registerService,
   });
@@ -199,13 +241,26 @@ async function createSweep(
     workspaceDir,
     config,
     narratives,
+    consolidations,
     resolveTimeout,
     logger,
     run,
     readDreams,
     service,
     serviceContext,
+    readReport: (phase: string) =>
+      fs.readFile(path.join(workspaceDir, "memory", "dreaming", phase, `${DAY}.md`), "utf8"),
   };
+}
+
+function expectNarrative(sweep: Awaited<ReturnType<typeof createSweep>>, model?: string) {
+  expect(sweep.narratives).toHaveLength(1);
+  const input = sweep.narratives[0];
+  expect(input?.message).toContain(FRAGMENT);
+  if (model) {
+    expect(input?.model).toBe(model);
+  }
+  return input;
 }
 
 function diaryEntryCount(dreams: string): number {
@@ -217,6 +272,16 @@ function diaryEntryCount(dreams: string): number {
 }
 
 describe("dreaming sweep diary publication", () => {
+  it("retains the bounded consolidation timeout when agents.defaults.timeoutSeconds is absent", async () => {
+    const sweep = await createSweep({ promote: true, timeoutSeconds: null });
+
+    expectHandled(await sweep.run());
+    const narrative = expectNarrative(sweep, "openai/gpt-5.4");
+    expect(narrative).toMatchObject({ timeoutMs: 180_000 });
+    expect(sweep.consolidations).toHaveLength(1);
+    expect(sweep.consolidations[0]).toMatchObject({ timeoutMs: 60_000 });
+  });
+
   it.each([false, true])(
     "publishes one entry for Light/REM with deep promotion=%s",
     async (promote) => {
@@ -230,32 +295,25 @@ describe("dreaming sweep diary publication", () => {
           timezone: "UTC",
         });
       }
-      expect(await sweep.run()).toEqual({
-        handled: true,
-        reason: "memory-core: short-term dreaming processed",
-      });
-      expect(sweep.narratives).toHaveLength(1);
-      expect(sweep.narratives[0]).toMatchObject({ agentId: "main", timeoutMs: 180_000 });
+      expectHandled(await sweep.run());
+      const narrative = expectNarrative(sweep, promote ? "openai/gpt-5.4" : "xai/grok-4.1-fast");
+      expect(narrative).toMatchObject({ agentId: "main", timeoutMs: 180_000 });
+      if (promote) {
+        expect(sweep.consolidations).toHaveLength(1);
+        expect(sweep.consolidations[0]).toMatchObject({ timeoutMs: 180_000 });
+      } else {
+        expect(sweep.consolidations).toHaveLength(0);
+      }
       expect(sweep.resolveTimeout).toHaveBeenCalledWith({ cfg: sweep.config });
-      expect(sweep.narratives[0]?.message).toContain(FRAGMENT);
-      expect(sweep.narratives[0]?.message).toContain(`Current sweep: ${DAY}`);
-      expect(sweep.narratives[0]?.model).toBe(promote ? "openai/gpt-5.4" : "xai/grok-4.1-fast");
+      expect(narrative?.message).toContain(`Current sweep: ${DAY}`);
       if (!promote) {
-        expect(sweep.narratives[0]?.message).toContain(previousEntry);
+        expect(narrative?.message).toContain(previousEntry);
       }
       const dreams = await sweep.readDreams();
       expect(diaryEntryCount(dreams)).toBe(promote ? 1 : 2);
       expect(dreams).toContain("The archive glowed softly, entry 1.");
-      const light = await fs.readFile(
-        path.join(sweep.workspaceDir, "memory", "dreaming", "light", `${DAY}.md`),
-        "utf8",
-      );
-      expect(light).toContain(FRAGMENT);
-      const rem = await fs.readFile(
-        path.join(sweep.workspaceDir, "memory", "dreaming", "rem", `${DAY}.md`),
-        "utf8",
-      );
-      expect(rem).toContain("Theme:");
+      expect(await sweep.readReport("light")).toContain(FRAGMENT);
+      expect(await sweep.readReport("rem")).toContain("Theme:");
       const signals = await shortTermTestState.readPhaseSignalStore(
         sweep.workspaceDir,
         new Date(NOW_MS).toISOString(),
@@ -267,22 +325,13 @@ describe("dreaming sweep diary publication", () => {
         }),
       ]);
       if (promote) {
-        expect(sweep.narratives[0]?.message).toContain(
-          "Memories that crystallized into something lasting",
-        );
+        expect(narrative?.message).toContain(LASTING);
         expect(await fs.readFile(path.join(sweep.workspaceDir, "MEMORY.md"), "utf8")).toContain(
           FRAGMENT,
         );
-        expect(
-          await fs.readFile(
-            path.join(sweep.workspaceDir, "memory", "dreaming", "deep", `${DAY}.md`),
-            "utf8",
-          ),
-        ).toContain("Promoted 1 candidate(s)");
+        expect(await sweep.readReport("deep")).toContain("Promoted 1 candidate(s)");
       } else {
-        expect(sweep.narratives[0]?.message).not.toContain(
-          "Memories that crystallized into something lasting",
-        );
+        expect(narrative?.message).not.toContain(LASTING);
       }
     },
   );
@@ -292,62 +341,44 @@ describe("dreaming sweep diary publication", () => {
     { label: "completion is request-scoped", error: new RequestScopedSubagentRuntimeError() },
   ])("writes one generic fallback when $label", async ({ error }) => {
     const sweep = await createSweep({ narrativeError: error });
-    expect(await sweep.run()).toEqual({
-      handled: true,
-      reason: "memory-core: short-term dreaming degraded",
-    });
+    expectHandled(await sweep.run(), "degraded");
     expect(sweep.narratives).toHaveLength(1);
     const dreams = await sweep.readDreams();
     expect(diaryEntryCount(dreams)).toBe(1);
     expect(dreams).toContain("A memory trace surfaced, but details were unavailable in this run.");
     expect(dreams).not.toContain(FRAGMENT);
-    expect(sweep.logger.warn.mock.calls.flat().join("\n")).toContain(
-      "failed=0, degraded=1, narrativesPending=0",
-    );
+    expect(logText(sweep.logger.warn)).toContain("failed=0, degraded=1, narrativesPending=0");
   });
 
   it("still publishes the prepared Light/REM entry when the deep report fails", async () => {
     const sweep = await createSweep({ promote: true, failDeepReport: true });
     await sweep.run();
-    expect(sweep.logger.error.mock.calls.flat().join("\n")).toContain("dreaming promotion failed");
-    expect(sweep.logger.warn.mock.calls.flat().join("\n")).toContain(
-      "failed=1, degraded=0, narrativesPending=0",
-    );
-    expect(sweep.narratives).toHaveLength(1);
-    expect(sweep.narratives[0]?.message).toContain(FRAGMENT);
-    expect(sweep.narratives[0]?.message).toContain(
-      "Memories that crystallized into something lasting",
-    );
+    expect(logText(sweep.logger.error)).toContain("dreaming promotion failed");
+    expect(logText(sweep.logger.warn)).toContain("failed=1, degraded=0, narrativesPending=0");
+    expect(expectNarrative(sweep)?.message).toContain(LASTING);
     expect(diaryEntryCount(await sweep.readDreams())).toBe(1);
   });
 
   it("publishes prepared Light material when REM report publication fails", async () => {
     const sweep = await createSweep({ failRemReport: true });
     await sweep.run();
-    expect(sweep.logger.error.mock.calls.flat().join("\n")).toContain("rem dreaming failed");
-    expect(sweep.logger.warn.mock.calls.flat().join("\n")).toContain(
-      "failed=1, degraded=0, narrativesPending=0",
-    );
-    expect(sweep.narratives).toHaveLength(1);
-    expect(sweep.narratives[0]?.message).toContain(FRAGMENT);
-    expect(sweep.narratives[0]?.model).toBe("anthropic/claude-haiku-4-5");
+    expect(logText(sweep.logger.error)).toContain("rem dreaming failed");
+    expect(logText(sweep.logger.warn)).toContain("failed=1, degraded=0, narrativesPending=0");
+    expectNarrative(sweep, "anthropic/claude-haiku-4-5");
     expect(diaryEntryCount(await sweep.readDreams())).toBe(1);
   });
 
   it.each([false, true])("settles the detached diary with Forget=%s", async (forget) => {
     const publish = createDeferred<void>();
-    const sweep = await createSweep({ narrativeGate: publish.promise });
+    const sweep = await createSweep({ narrativeGate: publish.promise, managedBackground: true });
     // Cron management is optional; starting without it admits no timers or fake scheduler work.
     await sweep.service.start(sweep.serviceContext);
     let stopped = false;
     let stopping: Promise<void> | undefined;
     try {
-      expect(await sweep.run("cron")).toEqual({
-        handled: true,
-        reason: "memory-core: short-term dreaming processed",
-      });
-      expect(sweep.narratives).toHaveLength(1);
-      expect(sweep.narratives[0]?.message).toContain(FRAGMENT);
+      expectHandled(await sweep.run("cron"));
+      expect(logText(sweep.logger.info)).toContain("narrativesPending=1");
+      expectNarrative(sweep);
       stopping = Promise.resolve(sweep.service.stop?.(sweep.serviceContext)).then(() => {
         stopped = true;
       });
@@ -394,9 +425,7 @@ describe("dreaming sweep diary publication", () => {
     expect(diaryEntryCount(dreams)).toBe(forget ? 0 : 1);
     if (forget) {
       expect(dreams).not.toContain("The archive glowed softly, entry 1.");
-      expect(sweep.logger.info.mock.calls.flat().join("\n")).toContain(
-        "narrative publication skipped",
-      );
+      expect(logText(sweep.logger.info)).toContain("narrative publication skipped");
     } else {
       expect(dreams).toContain("The archive glowed softly, entry 1.");
     }
@@ -405,10 +434,7 @@ describe("dreaming sweep diary publication", () => {
 
   it("does not invent a diary entry for an empty sweep", async () => {
     const sweep = await createSweep({ empty: true });
-    expect(await sweep.run()).toEqual({
-      handled: true,
-      reason: "memory-core: short-term dreaming processed",
-    });
+    expectHandled(await sweep.run());
     expect(sweep.narratives).toHaveLength(0);
     const dreams = await sweep.readDreams();
     expect(diaryEntryCount(dreams)).toBe(0);

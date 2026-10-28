@@ -70,9 +70,6 @@ export function readSessionEntryReplacementState(
       ? readPrepared(sessionKey)
       : readExactSessionEntryRow(database, sessionKey);
     if (!row) {
-      if (!selectedSessionKeys) {
-        throw new Error(`SQLite session entry changed before replacement for ${sessionKey}`);
-      }
       return [];
     }
     expectedRows.set(sessionKey, row);

@@ -10,7 +10,7 @@ export async function resolveAgentDeletionRecoveryHoldsInWorker(
   assertCurrent: () => void,
 ): Promise<void> {
   const context = captureOpenClawStateWorkerContext();
-  const input = { predicate: structuredClone(predicate), paths };
+  const input = { predicate, paths };
   await runOpenClawStateWorkerOperation(
     context,
     (scope) => scope.execute({ type: "agentRecovery.resolveHolds", input }),

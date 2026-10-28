@@ -8,15 +8,12 @@ import type {
   ModelInputContent,
   ProviderContext,
 } from "../../../../packages/ai/src/provider-types.js";
-import { formatErrorMessage } from "../../../infra/errors.js";
 import type { Context, ImageContent, TextContent } from "../../../llm/types.js";
-import { redactSensitiveText } from "../../../logging/redact.js";
 import {
-  attachRuntimePromptMediaFacts,
+  applyRunHydrationSuppression,
   isImageMediaFact,
   isVideoMediaFact,
   normalizeMediaFacts,
-  readRuntimePromptImageOrder,
   readRuntimePromptMediaFacts,
   readPersistedMediaFacts,
   type MediaFact,
@@ -44,6 +41,7 @@ import {
   type MediaFileRef,
   type MediaImageRef,
 } from "./images.media-refs.js";
+import { resolvePromptImageDecisions } from "./prompt-image-decisions.js";
 import {
   type ImageFactIndex,
   type MediaImageLayout,
@@ -133,6 +131,28 @@ export function detectImageReferences(prompt: string): MediaFileRef[] {
   return refs;
 }
 
+function applySandboxStagedImagePaths(
+  selected: MediaFact[],
+  attemptMedia: readonly MediaFact[] | undefined,
+): MediaFact[] {
+  const stagedByUrl = new Map<string, string>();
+  for (const fact of attemptMedia ?? []) {
+    if (fact.staged === true && fact.path && fact.url?.startsWith("media://")) {
+      stagedByUrl.set(fact.url, fact.path);
+    }
+  }
+  if (stagedByUrl.size === 0) {
+    return selected;
+  }
+  return selected.map((fact) => {
+    const stagedPath = fact.url ? stagedByUrl.get(fact.url) : undefined;
+    if (!stagedPath || fact.hydrationSuppressed === true) {
+      return fact;
+    }
+    return { ...fact, path: stagedPath, staged: true };
+  });
+}
+
 function refDedupeKey(ref: MediaFileRef, workspaceDir?: string): string {
   const resolved =
     ref.type === "path" && workspaceDir && !path.isAbsolute(ref.resolved)
@@ -170,7 +190,6 @@ async function loadMediaFromRef(
   const localRoots = gatewayAttachment
     ? [getMediaDir()]
     : (options.localRoots ?? (options.workspaceOnly ? [options.workspaceDir] : undefined));
-  const redactedRef = redactSensitiveText(ref.raw || ref.resolved);
   try {
     let targetPath = ref.resolved;
 
@@ -189,10 +208,19 @@ async function loadMediaFromRef(
           inboundFallbackDir: "media/inbound",
         });
         targetPath = resolved.resolved;
-      } catch (err) {
-        log.warn(
-          `${label}: sandbox validation failed for ${redactedRef}: ${redactSensitiveText(formatErrorMessage(err))}`,
-        );
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : "";
+        const reason = detail.startsWith("Sandbox media reference is not staged:")
+          ? "not-staged"
+          : /escapes|outside|not within/i.test(detail)
+            ? "outside-workspace"
+            : "invalid-path";
+        const pathClass = targetPath.startsWith("media://")
+          ? "managed-media"
+          : path.isAbsolute(targetPath)
+            ? "absolute"
+            : "relative";
+        log.warn(`${label}: sandbox validation failed (reason=${reason}, pathClass=${pathClass})`);
         return null;
       }
     } else if (!path.isAbsolute(targetPath)) {
@@ -212,11 +240,9 @@ async function loadMediaFromRef(
 
     options.signal?.throwIfAborted();
     return media;
-  } catch (err) {
+  } catch {
     options.signal?.throwIfAborted();
-    log.warn(
-      `${label}: failed to load ${redactedRef}: ${redactSensitiveText(formatErrorMessage(err))}`,
-    );
+    log.warn(`${label}: failed to load`);
     return null;
   }
 }
@@ -250,9 +276,14 @@ export async function detectAndLoadPromptImages(
   }
   // Deferred transcript preparation can carry fresher facts than the recorder's
   // initial message. Resolve without persisting before choosing image ownership.
+  // Sandbox staging is newer than that snapshot and is the only copy the bridge can read.
   const message = await params.userTurnTranscriptRecorder?.resolveMessage();
-  const media = normalizeMediaFacts(
-    (message ? readPersistedMediaFacts(message) : undefined) ?? params.media,
+  const recordedMedia = message ? readPersistedMediaFacts(message) : undefined;
+  const media = applySandboxStagedImagePaths(
+    normalizeMediaFacts(
+      recordedMedia ? applyRunHydrationSuppression(recordedMedia, params.media) : params.media,
+    ),
+    params.sandbox ? params.media : undefined,
   );
   const mediaImageLayout =
     (message ? readPersistedMediaImageLayout(message) : undefined) ?? params.mediaImageLayout;
@@ -367,7 +398,6 @@ export async function detectAndLoadPromptImages(
       mimeType: loadedMedia.contentType ?? "image/jpeg",
     };
     counts.loadedCount++;
-    log.debug(`Native image: loaded ${ref.type} ${ref.resolved}`);
     return image;
   };
   const promptImages: PromptImageEntry[] = [];
@@ -406,7 +436,11 @@ export async function detectAndLoadPromptImages(
     const result = await sanitizeImageBlocks([entry.image], "prompt:images", imageSanitization);
     const image = result.images[0];
     if (image) {
-      sanitized.push({ image, factIndex: entry.factIndex });
+      // Attachment display metadata never belongs in the provider's image block.
+      sanitized.push({
+        image: { type: "image", data: image.data, mimeType: image.mimeType },
+        factIndex: entry.factIndex,
+      });
     }
     dropped += result.dropped;
     if (result.dropped > 0 && entry.factIndex !== null) {
@@ -437,6 +471,7 @@ type PromptMediaOptions = {
   provider?: boolean;
   signal?: AbortSignal;
   onCurrentTurnImageFailure?: (count: number) => void;
+  imageSessionKey?: string;
 };
 
 export function buildPromptImageFailureNotice(count: number): string {
@@ -481,47 +516,6 @@ async function materializeVideoFact(
   return { type: "video", data: loaded.buffer.toString("base64"), mimeType };
 }
 
-async function projectOrderedPromptMedia(params: {
-  content: Array<TextContent | ImageContent>;
-  media: MediaFact[];
-  images: ImageContent[];
-  imageFactIndexes: ImageFactIndex[];
-  options: PromptMediaOptions;
-  budget: { remaining: number };
-}): Promise<ModelInputContent[]> {
-  const generatedMarkers = new Set<string>(Object.values(VIDEO_OMISSION));
-  const projected: ModelInputContent[] = params.content.filter(
-    (block): block is TextContent => block.type === "text" && !generatedMarkers.has(block.text),
-  );
-  // Hydration already resolved image order, including inline blocks with no managed fact.
-  if (!params.media.some(isVideoMediaFact)) {
-    return [...projected, ...params.images];
-  }
-  const imagesByFact = new Map<number, ImageContent[]>();
-  const factlessImages: ImageContent[] = [];
-  params.images.forEach((image, index) => {
-    const factIndex = params.imageFactIndexes[index];
-    if (factIndex == null) {
-      factlessImages.push(image);
-    } else {
-      imagesByFact.set(factIndex, [...(imagesByFact.get(factIndex) ?? []), image]);
-    }
-  });
-  for (const [factIndex, fact] of params.media.entries()) {
-    if (isImageMediaFact(fact)) {
-      projected.push(...(imagesByFact.get(factIndex) ?? []));
-    } else if (isVideoMediaFact(fact)) {
-      projected.push(
-        params.options.provider
-          ? await materializeVideoFact(fact, params.budget, params.options)
-          : { type: "text", text: VIDEO_OMISSION.unsupported },
-      );
-    }
-  }
-  projected.push(...factlessImages);
-  return projected;
-}
-
 /** Hydrates exact-message media facts for canonical replay or one provider call. */
 async function materializePromptMediaMessages(
   messages: AgentMessage[],
@@ -537,7 +531,6 @@ async function materializePromptMediaMessages(
     const runtimeMedia = readRuntimePromptMediaFacts(message);
     const meta = Reflect.get(message, "__openclaw");
     const resolvedMedia = runtimeMedia ?? readPersistedMediaFacts(message) ?? [];
-    const runtimeImageOrder = readRuntimePromptImageOrder(message);
     const mediaImageLayout = readPersistedMediaImageLayout(message);
     if (!resolvedMedia.length) {
       continue;
@@ -546,32 +539,78 @@ async function materializePromptMediaMessages(
       ? message.content
       : [{ type: "text" as const, text: message.content }];
     const existingImages = content.filter((block): block is ImageContent => block.type === "image");
-    const result = await detectAndLoadPromptImages({
-      ...options,
-      prompt: "",
-      media: resolvedMedia,
-      existingImages,
-      existingImageFactIndexes: readPersistedImageBlockFactIndexes(message),
-      mediaImageLayout,
-    });
-    const projectedContent = await projectOrderedPromptMedia({
-      content,
-      media: resolvedMedia,
-      images: result.images,
-      imageFactIndexes: result.imageFactIndexes,
-      options,
-      budget: videoBudget,
-    });
-    if (
-      (options.provider || options.onCurrentTurnImageFailure) &&
-      index === activeUserIndex &&
-      result.failedMediaCount > 0
-    ) {
-      options.onCurrentTurnImageFailure?.(result.failedMediaCount);
-      projectedContent.push({
-        type: "text",
-        text: buildPromptImageFailureNotice(result.failedMediaCount),
+    const load = (media: readonly MediaFact[], inlineImages: ImageContent[]) =>
+      detectAndLoadPromptImages({
+        ...options,
+        prompt: "",
+        media,
+        existingImages: inlineImages,
+        existingImageFactIndexes: readPersistedImageBlockFactIndexes(message),
+        mediaImageLayout,
       });
+    const result = !options.model.input?.includes("image")
+      ? { images: [], imageFactIndexes: [], failedMediaCount: 0 }
+      : options.imageSessionKey &&
+          (existingImages.length > 0 || resolvedMedia.some(isImageMediaFact))
+        ? await resolvePromptImageDecisions({
+            sessionKey: options.imageSessionKey,
+            message,
+            messageIndex: index,
+            media: resolvedMedia,
+            existingImages,
+            load,
+          })
+        : await load(resolvedMedia, existingImages);
+    const { images, imageFactIndexes } = result;
+    const projectedContent = await (async (): Promise<ModelInputContent[]> => {
+      const generatedMarkers = new Set<string>(Object.values(VIDEO_OMISSION));
+      const projected: ModelInputContent[] = content.filter(
+        (block): block is TextContent => block.type === "text" && !generatedMarkers.has(block.text),
+      );
+      // Hydration already resolved image order, including inline blocks with no managed fact.
+      if (!resolvedMedia.some(isVideoMediaFact)) {
+        return [...projected, ...images];
+      }
+      const imagesByFact = new Map<number, ImageContent[]>();
+      const factlessImages: ImageContent[] = [];
+      images.forEach((image, imageIndex) => {
+        const factIndex = imageFactIndexes[imageIndex];
+        if (factIndex == null) {
+          factlessImages.push(image);
+        } else {
+          imagesByFact.set(factIndex, [...(imagesByFact.get(factIndex) ?? []), image]);
+        }
+      });
+      for (const [factIndex, fact] of resolvedMedia.entries()) {
+        if (isImageMediaFact(fact)) {
+          projected.push(...(imagesByFact.get(factIndex) ?? []));
+        } else if (isVideoMediaFact(fact)) {
+          projected.push(
+            options.provider
+              ? await materializeVideoFact(fact, videoBudget, options)
+              : { type: "text", text: VIDEO_OMISSION.unsupported },
+          );
+        }
+      }
+      projected.push(...factlessImages);
+      return projected;
+    })();
+    if ((options.provider || options.onCurrentTurnImageFailure) && result.failedMediaCount > 0) {
+      if (index === activeUserIndex) {
+        options.onCurrentTurnImageFailure?.(result.failedMediaCount);
+      }
+      if (
+        !projectedContent.some(
+          (block) =>
+            block.type === "text" &&
+            block.text === buildPromptImageFailureNotice(result.failedMediaCount),
+        )
+      ) {
+        projectedContent.push({
+          type: "text",
+          text: buildPromptImageFailureNotice(result.failedMediaCount),
+        });
+      }
     }
     hydrated ??= messages.slice();
     if (options.provider) {
@@ -601,15 +640,12 @@ async function materializePromptMediaMessages(
     } else {
       Reflect.deleteProperty(hydratedMessage, "__openclaw");
     }
-    if (runtimeMedia) {
-      attachRuntimePromptMediaFacts(hydratedMessage, runtimeMedia, runtimeImageOrder);
-    }
     hydrated[index] = hydratedMessage;
   }
   return hydrated ?? messages;
 }
 
-/** Hydrates non-enumerable facts carried by queued user turns before canonical replay. */
+/** Hydrates runtime facts carried by queued user turns before canonical replay. */
 export async function hydratePromptMediaMessages(
   messages: AgentMessage[],
   options: Omit<PromptMediaOptions, "provider">,

@@ -49,7 +49,7 @@ describe("saveMediaStreamWithIdleTimeout", () => {
       saveMediaStreamWithIdleTimeout(stalled, "image/jpeg", 1024, undefined, 10),
     ).rejects.toMatchObject({
       name: "FeishuInboundMediaTimeoutError",
-      chunkTimeoutMs: 10,
+      message: "Feishu media download stalled: no data received for 10ms",
     });
   });
 
@@ -67,7 +67,7 @@ describe("saveMediaStreamWithIdleTimeout", () => {
           saveMediaStreamWithIdleTimeout(stalled, "image/jpeg", 1024, undefined, 50),
         ).rejects.toMatchObject({
           name: "FeishuInboundMediaTimeoutError",
-          chunkTimeoutMs: 50,
+          message: "Feishu media download stalled: no data received for 50ms",
         });
         expect(stalled.destroyed).toBe(true);
         await socketClosed.promise;

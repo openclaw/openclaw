@@ -1,0 +1,818 @@
+[
+  {
+    "source": "ACP",
+    "target": "ACP"
+  },
+  {
+    "source": "Active Memory",
+    "target": "Active Memory"
+  },
+  {
+    "source": "ClawHub",
+    "target": "ClawHub"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "Compaction",
+    "target": "Compaction"
+  },
+  {
+    "source": "Cron",
+    "target": "Cron"
+  },
+  {
+    "source": "Dreaming",
+    "target": "Dreaming"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway"
+  },
+  {
+    "source": "Heartbeat",
+    "target": "Heartbeat"
+  },
+  {
+    "source": "LINE",
+    "target": "LINE"
+  },
+  {
+    "source": "Node",
+    "target": "Node"
+  },
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Pi",
+    "target": "Pi"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "TaskFlow",
+    "target": "TaskFlow"
+  },
+  {
+    "source": "TUI",
+    "target": "TUI"
+  },
+  {
+    "source": "Webhook",
+    "target": "Webhook"
+  },
+  {
+    "source": "Get started",
+    "target": "Kom igång"
+  },
+  {
+    "source": "Overview",
+    "target": "Översikt"
+  },
+  {
+    "source": "First steps",
+    "target": "Första stegen"
+  },
+  {
+    "source": "Setup guides and reference",
+    "target": "Konfigurationsguider och referens"
+  },
+  {
+    "source": "Install",
+    "target": "Installation"
+  },
+  {
+    "source": "Install overview",
+    "target": "Installationsöversikt"
+  },
+  {
+    "source": "Runtimes",
+    "target": "Körmiljöer"
+  },
+  {
+    "source": "Maintenance",
+    "target": "Underhåll"
+  },
+  {
+    "source": "Updating",
+    "target": "Uppdatering"
+  },
+  {
+    "source": "Migrating",
+    "target": "Migrering"
+  },
+  {
+    "source": "Containers",
+    "target": "Containrar"
+  },
+  {
+    "source": "Docker",
+    "target": "Docker"
+  },
+  {
+    "source": "Hosting",
+    "target": "Drift"
+  },
+  {
+    "source": "App platforms",
+    "target": "Applikationsplattformar"
+  },
+  {
+    "source": "Cloud servers",
+    "target": "Molnservrar"
+  },
+  {
+    "source": "Self-hosted and local",
+    "target": "Egen och lokal drift"
+  },
+  {
+    "source": "Advanced setup",
+    "target": "Avancerad konfiguration"
+  },
+  {
+    "source": "Channels",
+    "target": "Kanaler"
+  },
+  {
+    "source": "Mainstream messaging",
+    "target": "Vanliga meddelandeplattformar"
+  },
+  {
+    "source": "Discord",
+    "target": "Discord"
+  },
+  {
+    "source": "iMessage",
+    "target": "iMessage"
+  },
+  {
+    "source": "Matrix",
+    "target": "Matrix"
+  },
+  {
+    "source": "Microsoft Teams",
+    "target": "Microsoft Teams"
+  },
+  {
+    "source": "Slack",
+    "target": "Slack"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Developer and self-hosted",
+    "target": "Utveckling och egen drift"
+  },
+  {
+    "source": "Regional platforms",
+    "target": "Regionala plattformar"
+  },
+  {
+    "source": "Feishu",
+    "target": "Feishu"
+  },
+  {
+    "source": "Configuration",
+    "target": "Konfiguration"
+  },
+  {
+    "source": "Agents",
+    "target": "Agenter"
+  },
+  {
+    "source": "Agent runtime",
+    "target": "Agentens körmiljö"
+  },
+  {
+    "source": "Agent workspace",
+    "target": "Agentens arbetsyta"
+  },
+  {
+    "source": "Sessions and memory",
+    "target": "Sessioner och minne"
+  },
+  {
+    "source": "Memory",
+    "target": "Minne"
+  },
+  {
+    "source": "Active memory",
+    "target": "Active Memory"
+  },
+  {
+    "source": "Multi-agent",
+    "target": "Flera agenter"
+  },
+  {
+    "source": "Messages and delivery",
+    "target": "Meddelanden och leverans"
+  },
+  {
+    "source": "Capabilities",
+    "target": "Funktioner"
+  },
+  {
+    "source": "Plugins",
+    "target": "Pluginer"
+  },
+  {
+    "source": "Plugin guides",
+    "target": "Pluginguider"
+  },
+  {
+    "source": "Codex",
+    "target": "Codex"
+  },
+  {
+    "source": "Codex harness",
+    "target": "Codex harness"
+  },
+  {
+    "source": "Meetings and calls",
+    "target": "Möten och samtal"
+  },
+  {
+    "source": "Google Meet",
+    "target": "Google Meet"
+  },
+  {
+    "source": "Voice call",
+    "target": "Röstsamtal"
+  },
+  {
+    "source": "Models and memory",
+    "target": "Modeller och minne"
+  },
+  {
+    "source": "Secrets and vaults",
+    "target": "Hemligheter och valv"
+  },
+  {
+    "source": "Automation and integrations",
+    "target": "Automatisering och integrationer"
+  },
+  {
+    "source": "Building plugins",
+    "target": "Bygga pluginer"
+  },
+  {
+    "source": "Channel plugins",
+    "target": "Kanalpluginer"
+  },
+  {
+    "source": "Provider plugins",
+    "target": "Leverantörspluginer"
+  },
+  {
+    "source": "Plugin hooks",
+    "target": "Pluginhändelser"
+  },
+  {
+    "source": "Automation",
+    "target": "Automatisering"
+  },
+  {
+    "source": "Automations",
+    "target": "Automatiseringar"
+  },
+  {
+    "source": "Hooks",
+    "target": "Händelsekrokar"
+  },
+  {
+    "source": "Tools",
+    "target": "Verktyg"
+  },
+  {
+    "source": "Running code and approvals",
+    "target": "Kodkörning och godkännanden"
+  },
+  {
+    "source": "Media and documents",
+    "target": "Medier och dokument"
+  },
+  {
+    "source": "Text to speech",
+    "target": "Text till tal"
+  },
+  {
+    "source": "Tool catalogs and workflows",
+    "target": "Verktygskataloger och arbetsflöden"
+  },
+  {
+    "source": "Code Mode",
+    "target": "Code Mode"
+  },
+  {
+    "source": "Context and reasoning",
+    "target": "Kontext och resonemang"
+  },
+  {
+    "source": "Chat and UI tools",
+    "target": "Chatt- och gränssnittsverktyg"
+  },
+  {
+    "source": "Browsing and fetching pages",
+    "target": "Surfa och hämta sidor"
+  },
+  {
+    "source": "Browser",
+    "target": "Webbläsare"
+  },
+  {
+    "source": "Web search",
+    "target": "Webbsökning"
+  },
+  {
+    "source": "Agent coordination",
+    "target": "Agentsamordning"
+  },
+  {
+    "source": "Sub-agents",
+    "target": "Underagenter"
+  },
+  {
+    "source": "ACP agents",
+    "target": "ACP-agenter"
+  },
+  {
+    "source": "Models",
+    "target": "Modeller"
+  },
+  {
+    "source": "Concepts and configuration",
+    "target": "Begrepp och konfiguration"
+  },
+  {
+    "source": "Model providers",
+    "target": "Modellleverantörer"
+  },
+  {
+    "source": "Providers",
+    "target": "Leverantörer"
+  },
+  {
+    "source": "Chat and coding models",
+    "target": "Chatt- och kodmodeller"
+  },
+  {
+    "source": "OpenAI",
+    "target": "OpenAI"
+  },
+  {
+    "source": "Decision models",
+    "target": "Beslutsmodeller"
+  },
+  {
+    "source": "Speech and audio",
+    "target": "Tal och ljud"
+  },
+  {
+    "source": "Image, video, and music",
+    "target": "Bild, video och musik"
+  },
+  {
+    "source": "Gateways and routers",
+    "target": "Gateways och routrar"
+  },
+  {
+    "source": "Local runtimes",
+    "target": "Lokala körmiljöer"
+  },
+  {
+    "source": "Ollama",
+    "target": "Ollama"
+  },
+  {
+    "source": "Platforms",
+    "target": "Plattformar"
+  },
+  {
+    "source": "Platforms overview",
+    "target": "Plattformsöversikt"
+  },
+  {
+    "source": "macOS companion app",
+    "target": "macOS-kompanjonapp"
+  },
+  {
+    "source": "Setup",
+    "target": "Konfiguration"
+  },
+  {
+    "source": "Runtime",
+    "target": "Körmiljö"
+  },
+  {
+    "source": "Features",
+    "target": "Funktioner"
+  },
+  {
+    "source": "Gateway & Ops",
+    "target": "Gateway och drift"
+  },
+  {
+    "source": "Authentication and secrets",
+    "target": "Autentisering och hemligheter"
+  },
+  {
+    "source": "Secrets management",
+    "target": "Hantering av hemligheter"
+  },
+  {
+    "source": "Health and diagnostics",
+    "target": "Hälsa och diagnostik"
+  },
+  {
+    "source": "Doctor",
+    "target": "Doctor"
+  },
+  {
+    "source": "OpenTelemetry",
+    "target": "OpenTelemetry"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "Felsökning"
+  },
+  {
+    "source": "Scaling and operations",
+    "target": "Skalning och drift"
+  },
+  {
+    "source": "Cloud Workers",
+    "target": "Cloud Workers"
+  },
+  {
+    "source": "Security and sandboxing",
+    "target": "Säkerhet och sandlådor"
+  },
+  {
+    "source": "Sandboxing",
+    "target": "Sandlådor"
+  },
+  {
+    "source": "Protocols and APIs",
+    "target": "Protokoll och API:er"
+  },
+  {
+    "source": "Gateway protocol",
+    "target": "Gateway-protokoll"
+  },
+  {
+    "source": "Models and local providers",
+    "target": "Modeller och lokala leverantörer"
+  },
+  {
+    "source": "Networking and discovery",
+    "target": "Nätverk och identifiering"
+  },
+  {
+    "source": "Remote access",
+    "target": "Fjärråtkomst"
+  },
+  {
+    "source": "Security",
+    "target": "Säkerhet"
+  },
+  {
+    "source": "Nodes and media",
+    "target": "Noder och medier"
+  },
+  {
+    "source": "Media capabilities",
+    "target": "Mediefunktioner"
+  },
+  {
+    "source": "Node features",
+    "target": "Nodfunktioner"
+  },
+  {
+    "source": "Talk mode",
+    "target": "Samtalsläge"
+  },
+  {
+    "source": "Web interfaces",
+    "target": "Webbgränssnitt"
+  },
+  {
+    "source": "Control UI",
+    "target": "Kontrollgränssnitt"
+  },
+  {
+    "source": "Reference",
+    "target": "Referens"
+  },
+  {
+    "source": "CLI commands",
+    "target": "CLI-kommandon"
+  },
+  {
+    "source": "Running the service",
+    "target": "Köra tjänsten"
+  },
+  {
+    "source": "Setup and maintenance",
+    "target": "Konfiguration och underhåll"
+  },
+  {
+    "source": "Update",
+    "target": "Uppdatering"
+  },
+  {
+    "source": "Diagnostics and security",
+    "target": "Diagnostik och säkerhet"
+  },
+  {
+    "source": "Agents, models, and sessions",
+    "target": "Agenter, modeller och sessioner"
+  },
+  {
+    "source": "Events and audit records",
+    "target": "Händelser och granskningsposter"
+  },
+  {
+    "source": "Channels and messaging",
+    "target": "Kanaler och meddelanden"
+  },
+  {
+    "source": "Tools and execution",
+    "target": "Verktyg och körning"
+  },
+  {
+    "source": "Plugins and skills",
+    "target": "Pluginer och Skills"
+  },
+  {
+    "source": "Plugins CLI",
+    "target": "CLI för pluginer"
+  },
+  {
+    "source": "Policy",
+    "target": "Policy"
+  },
+  {
+    "source": "Interfaces",
+    "target": "Gränssnitt"
+  },
+  {
+    "source": "Utility",
+    "target": "Hjälpverktyg"
+  },
+  {
+    "source": "MCP",
+    "target": "MCP"
+  },
+  {
+    "source": "RPC and API",
+    "target": "RPC och API"
+  },
+  {
+    "source": "Codex runtime reference",
+    "target": "Referens för Codex körmiljö"
+  },
+  {
+    "source": "Codex harness reference",
+    "target": "Referens för Codex harness"
+  },
+  {
+    "source": "Codex harness runtime",
+    "target": "Körmiljö för Codex harness"
+  },
+  {
+    "source": "Plugin reference",
+    "target": "Pluginreferens"
+  },
+  {
+    "source": "Plugin SDK reference",
+    "target": "Referens för Plugin SDK"
+  },
+  {
+    "source": "Plugin SDK overview",
+    "target": "Översikt över Plugin SDK"
+  },
+  {
+    "source": "Plugin manifest",
+    "target": "Pluginmanifest"
+  },
+  {
+    "source": "Plugin entry points",
+    "target": "Pluginernas startpunkter"
+  },
+  {
+    "source": "Plugin runtime helpers",
+    "target": "Hjälpfunktioner för pluginernas körmiljö"
+  },
+  {
+    "source": "Agent harness plugins",
+    "target": "Pluginer för agentharness"
+  },
+  {
+    "source": "Plugin internals",
+    "target": "Pluginernas interna struktur"
+  },
+  {
+    "source": "Plugin architecture internals",
+    "target": "Pluginarkitekturens interna struktur"
+  },
+  {
+    "source": "Plugin SDK migration",
+    "target": "Migrering av Plugin SDK"
+  },
+  {
+    "source": "Templates",
+    "target": "Mallar"
+  },
+  {
+    "source": "Dev agent templates",
+    "target": "Agentmallar för utveckling"
+  },
+  {
+    "source": "Retired workspace files",
+    "target": "Avvecklade arbetsytefiler"
+  },
+  {
+    "source": "Technical reference",
+    "target": "Teknisk referens"
+  },
+  {
+    "source": "Session management deep dive",
+    "target": "Fördjupning i sessionshantering"
+  },
+  {
+    "source": "Database schemas",
+    "target": "Databasscheman"
+  },
+  {
+    "source": "Schemas and formatting",
+    "target": "Scheman och formatering"
+  },
+  {
+    "source": "Project and contributing",
+    "target": "Projekt och bidrag"
+  },
+  {
+    "source": "Maintainer scripts",
+    "target": "Underhållsskript"
+  },
+  {
+    "source": "Releases",
+    "target": "Utgåvor"
+  },
+  {
+    "source": "Release notes",
+    "target": "Versionsinformation"
+  },
+  {
+    "source": "Release process",
+    "target": "Utgivningsprocess"
+  },
+  {
+    "source": "Full release validation",
+    "target": "Fullständig utgåvevalidering"
+  },
+  {
+    "source": "Contributing",
+    "target": "Bidra"
+  },
+  {
+    "source": "Maturity",
+    "target": "Mognad"
+  },
+  {
+    "source": "Testing and CI",
+    "target": "Testning och CI"
+  },
+  {
+    "source": "Tests",
+    "target": "Tester"
+  },
+  {
+    "source": "CI",
+    "target": "CI"
+  },
+  {
+    "source": "Scope and routing",
+    "target": "Omfattning och routning"
+  },
+  {
+    "source": "Release validation",
+    "target": "Utgåvevalidering"
+  },
+  {
+    "source": "QA stack",
+    "target": "QA-verktyg"
+  },
+  {
+    "source": "Testing guide",
+    "target": "Testguide"
+  },
+  {
+    "source": "Live testing guide",
+    "target": "Guide för livetester"
+  },
+  {
+    "source": "Help",
+    "target": "Hjälp"
+  },
+  {
+    "source": "Start here",
+    "target": "Börja här"
+  },
+  {
+    "source": "FAQ",
+    "target": "Vanliga frågor"
+  },
+  {
+    "source": "FAQ topics",
+    "target": "Ämnen för vanliga frågor"
+  },
+  {
+    "source": "First-run FAQ",
+    "target": "Vanliga frågor vid första körningen"
+  },
+  {
+    "source": "Diagnostics",
+    "target": "Diagnostik"
+  },
+  {
+    "source": "Community and meta",
+    "target": "Gemenskap och projektinformation"
+  },
+  {
+    "source": "Plugin",
+    "target": "Plugin"
+  },
+  {
+    "source": "plugin",
+    "target": "plugin"
+  },
+  {
+    "source": "plugins",
+    "target": "pluginer"
+  },
+  {
+    "source": "onboarding",
+    "target": "första konfigurationen"
+  },
+  {
+    "source": "Onboarding",
+    "target": "Första konfigurationen"
+  },
+  {
+    "source": "Quick start",
+    "target": "Snabbstart"
+  },
+  {
+    "source": "Quick Start",
+    "target": "Snabbstart"
+  },
+  {
+    "source": "Settings",
+    "target": "Inställningar"
+  },
+  {
+    "source": "Appearance",
+    "target": "Utseende"
+  },
+  {
+    "source": "Language",
+    "target": "Språk"
+  },
+  {
+    "source": "Note",
+    "target": "Obs"
+  },
+  {
+    "source": "Tip",
+    "target": "Tips"
+  },
+  {
+    "source": "Web browser",
+    "target": "Webbläsare"
+  },
+  {
+    "source": "Web tools",
+    "target": "Webbverktyg"
+  },
+  {
+    "source": "Pull request review flow",
+    "target": "Granskningsflöde för pull requests"
+  },
+  {
+    "source": "CI pipeline",
+    "target": "CI-pipeline"
+  }
+]

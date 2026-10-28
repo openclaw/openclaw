@@ -1,4 +1,3 @@
-/** Store binding for ACP session metadata: resolves which session-store row owns a key. */
 import {
   AgentSelectionRequiredError,
   listAgentIds,
@@ -75,7 +74,7 @@ export function resolveSessionStorePathForAcp(params: {
   ) {
     throw new AgentSelectionRequiredError(listAgentIds(cfg), {
       surface: `ACP session key "${storeSessionKey}"`,
-      hint: "The canonical fixed-store session has a different or retired owner. Select its recorded owner.",
+      hint: "The stored fixed-store session has a different or retired owner. Select its recorded owner.",
     });
   }
   return {

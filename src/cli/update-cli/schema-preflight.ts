@@ -27,9 +27,20 @@ type TargetDatabaseSchemaContext = {
 
 export type TargetDatabaseSchemaContextOptions = {
   legacyConfigPlan?: LegacyConfigUpdatePlan;
-  /** Candidate admission owns schema validation; the installed process still pins source bytes. */
-  configValidation?: "candidate";
-};
+} & (
+  | {
+      /** Read-only candidate validation; the result must never become a config write plan. */
+      validateConfigForAdmission: (
+        snapshot: ConfigFileSnapshot,
+      ) => Promise<OpenClawConfig | undefined>;
+      configValidation?: never;
+    }
+  | {
+      validateConfigForAdmission?: never;
+      /** Candidate admission owns schema validation; the installed process still pins source bytes. */
+      configValidation?: "candidate";
+    }
+);
 
 export function assertReadableGitMetadata(
   metadataUnreadable: string | undefined,
@@ -125,8 +136,20 @@ export async function captureTargetDatabaseSchemaContext(
       await import("../../commands/doctor/legacy-config-repair.js");
     legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
   }
+  const validateConfigForAdmission = options?.validateConfigForAdmission;
+  if (validateConfigForAdmission && !isArtifactPreservingStateRead()) {
+    throw new Error("Candidate config projection requires artifact-preserving admission.");
+  }
+  // Validate the freshly read source, never a projection captured before an awaited read.
+  const admissionConfig =
+    validateConfigForAdmission && !legacyConfigPlan
+      ? await validateConfigForAdmission(snapshot)
+      : undefined;
   if (
-    (!snapshot.valid && !legacyConfigPlan && configValidation !== "candidate") ||
+    ((!snapshot.valid || validateConfigForAdmission) &&
+      !legacyConfigPlan &&
+      !admissionConfig &&
+      configValidation !== "candidate") ||
     snapshot.readError
   ) {
     throw createUpdateConfigFailure(snapshot);
@@ -136,10 +159,13 @@ export async function captureTargetDatabaseSchemaContext(
     config:
       configValidation === "candidate"
         ? snapshot.sourceConfig
-        : (legacyConfigPlan?.config ?? snapshot.sourceConfig ?? snapshot.config),
+        : (legacyConfigPlan?.config ?? admissionConfig ?? snapshot.sourceConfig ?? snapshot.config),
     configSnapshot: snapshot,
     readEnv,
     ...(legacyConfigPlan ? { legacyConfigPlan } : {}),
+    ...(admissionConfig && !isDeepStrictEqual(admissionConfig, snapshot.sourceConfig)
+      ? { configProjectedForAdmission: true }
+      : {}),
     ...(configValidation ? { configValidation } : {}),
   };
 }
@@ -152,22 +178,29 @@ export async function checkTargetDatabaseSchemasForContexts(
   if (!supportedVersions) {
     return { incompatible: [], indeterminate: [] };
   }
-  const inspectionContexts = contexts.map((context) => {
-    try {
-      return {
-        env: context.env,
-        configuredAgentDatabaseCandidatePaths: resolveConfiguredAgentDatabaseCandidatePaths(
-          context.config,
-          { env: context.env },
-        ),
-      };
-    } catch (error) {
-      throw new UpdatePreMutationError(
-        "database-schema-preflight",
-        `Update refused: could not inspect configured database paths: ${formatErrorMessage(error)}`,
-      );
-    }
-  });
+  const { resolveDatabaseEngineSelection } = await import("../../infra/database-engine/config.js");
+  const inspectionContexts = await Promise.all(
+    contexts.map(async (context) => {
+      try {
+        return {
+          env: context.env,
+          databaseEngineSelection: await resolveDatabaseEngineSelection(
+            context.config,
+            context.env,
+          ),
+          configuredAgentDatabaseCandidatePaths: resolveConfiguredAgentDatabaseCandidatePaths(
+            context.config,
+            { env: context.env },
+          ),
+        };
+      } catch (error) {
+        throw new UpdatePreMutationError(
+          "database-schema-preflight",
+          `Update refused: could not inspect configured database paths: ${formatErrorMessage(error)}`,
+        );
+      }
+    }),
+  );
   return preflightOpenClawDatabaseSchemaContexts({
     contexts: inspectionContexts,
     supportedVersions,

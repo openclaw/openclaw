@@ -1,8 +1,48 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { hasSameCompactionWriter } from "../../auto-reply/reply/agent-runner-compaction-accounting.js";
 import { incrementCompactionCount } from "../../auto-reply/reply/session-updates.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { CompactionAccountingFact } from "../embedded-agent-runner/run/internal-params.js";
 import type { CompactionRequestBudget } from "../sessions/compaction/request-budget.js";
+import type { AgentCommandOpts } from "./types.js";
+
+const log = createSubsystemLogger("agents/agent-command");
+
+export function createCompactionSessionIdReporter(
+  sessionId: string,
+  onSessionIdChanged: AgentCommandOpts["onSessionIdChanged"],
+) {
+  let notifiedSessionId = sessionId;
+  let pendingCompactionSessionId: string | undefined;
+  const notifySessionIdChanged = (nextSessionId: string) => {
+    notifiedSessionId = nextSessionId;
+    pendingCompactionSessionId = undefined;
+    onSessionIdChanged?.(nextSessionId);
+  };
+  return {
+    onSessionIdChanged: notifySessionIdChanged,
+    onCompactionCommitted: (nextSessionId: string | undefined) => {
+      if (nextSessionId !== undefined) {
+        pendingCompactionSessionId = nextSessionId;
+      }
+    },
+    reportCommitted: () => {
+      // Compaction can commit before abort or maintenance fails. The command's
+      // finally reports it outside commit bookkeeping so cleanup targets its row.
+      if (
+        pendingCompactionSessionId !== undefined &&
+        pendingCompactionSessionId !== notifiedSessionId
+      ) {
+        try {
+          notifySessionIdChanged(pendingCompactionSessionId);
+        } catch (error) {
+          log.warn(`failed to report settled session identity: ${coerceErrorMessage(error)}`);
+        }
+      }
+    },
+  };
+}
 
 type DurableCompactionFact = Extract<CompactionAccountingFact, { kind: "durable" }>;
 
@@ -61,8 +101,13 @@ export function createCommandCompactionAccounting(params: {
           const carriedCount = hasSameCompactionWriter(accounting?.target, fact.target)
             ? (accounting?.count ?? 0)
             : 0;
+          const transitions = [
+            ...(accounting?.admissionTransitions ?? []),
+            ...(fact.admissionTransitions ?? []),
+          ];
           accounting = {
             ...fact,
+            ...(transitions.length ? { admissionTransitions: transitions } : {}),
             count: carriedCount + fact.count,
             currentContextSnapshot:
               fact.currentContextSnapshot ?? accounting?.currentContextSnapshot,

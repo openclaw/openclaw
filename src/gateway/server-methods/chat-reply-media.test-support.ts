@@ -1,6 +1,6 @@
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadSessionEntryAsync } from "../session-entry-load.test-support.js";
 import { captureWebchatReplyMediaScope } from "./chat-reply-media.js";
 
 export async function seedWebchatReplyMediaScope(
@@ -8,7 +8,7 @@ export async function seedWebchatReplyMediaScope(
 ) {
   const { sessionEntry, ...captureParams } = params;
   const sessionLoadOptions = { agentId: params.agentId, ...params.sessionLoadOptions };
-  const target = loadSessionEntry(params.sessionKey, sessionLoadOptions);
+  const target = await loadSessionEntryAsync(params.sessionKey, sessionLoadOptions);
   await replaceSessionEntry(
     {
       agentId: target.agentId,
@@ -17,5 +17,5 @@ export async function seedWebchatReplyMediaScope(
     },
     sessionEntry,
   );
-  return captureWebchatReplyMediaScope({ ...captureParams, sessionLoadOptions });
+  return await captureWebchatReplyMediaScope({ ...captureParams, sessionLoadOptions });
 }

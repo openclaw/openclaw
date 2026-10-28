@@ -18,7 +18,9 @@ starting the runtime. Commands, RPC calls, and agent tools still return the
 exact missing configuration when used.
 
 <Note>
-Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twilio.authToken`, `plugins.entries.voice-call.config.realtime.providers.*.apiKey`, `plugins.entries.voice-call.config.streaming.providers.*.apiKey`, and `plugins.entries.voice-call.config.tts.providers.*.apiKey` resolve through the standard SecretRef surface; see [SecretRef credential surface](/reference/secretref-credential-surface).
+Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twilio.authToken`, `plugins.entries.voice-call.config.realtime.providers.*.apiKey`, `plugins.entries.voice-call.config.streaming.providers.*.apiKey`, `plugins.entries.voice-call.config.tts.providers.*.apiKey`, and `plugins.entries.voice-call.config.numbers.*.tts.providers.*.apiKey` resolve through the standard SecretRef surface; see [SecretRef credential surface](/reference/secretref-credential-surface).
+
+For an enabled plugin, an unavailable per-number SecretRef blocks startup or rejects a config reload, even if that number has not received a call. A rejected reload preserves the active config. Disabled plugins skip credential resolution.
 </Note>
 
 ```json5
@@ -98,6 +100,11 @@ multiple agents, set `plugins.entries.voice-call.config.agentId` to the intended
 response and session owner. `main` is an ordinary agent ID, not a fallback for
 a multi-agent fleet. Per-number routes may choose different agents for inbound
 calls, but do not replace the plugin's startup owner.
+
+Classic voice responses use the routed agent's configured tool policy for the
+conversation. A finite allowlist can keep a compatible restricted Codex thread
+across turns; it does not become a temporary per-turn restriction. Real temporary
+tool restrictions and grants still use isolated threads.
 
 If startup reports that Voice Call has no explicit owner, list your agents with
 `openclaw agents list`, set the existing `agentId` field, and rerun
@@ -213,7 +220,7 @@ that shared context is intentional.
 
 For `per-phone` and `per-call`, Voice Call stores generated session keys under
 the configured agent namespace (`agent:<agentId>:voice:*`). Raw explicit
-integration keys resolve into the same namespace: a canonical
+integration keys resolve into the same namespace: a normalized
 `agent:<configuredAgentId>:*` key keeps that owner and honors core
 main-session/global-scope aliasing; foreign or malformed `agent:*` input
 is scoped as an opaque key under the configured agent; `global` and `unknown`

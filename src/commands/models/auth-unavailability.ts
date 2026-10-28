@@ -1,4 +1,5 @@
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { readAuthProfileUsageStats } from "../../agents/auth-profiles/usage-state.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
 
 export function listUnavailableAuthProfiles(store: AuthProfileStore) {
@@ -8,7 +9,7 @@ export function listUnavailableAuthProfiles(store: AuthProfileStore) {
     if (!until || now >= until) {
       return [];
     }
-    const stats = store.usageStats?.[profileId];
+    const stats = readAuthProfileUsageStats(store, profileId);
     const kind: "disabled" | "cooldown" =
       typeof stats?.disabledUntil === "number" && now < stats.disabledUntil
         ? "disabled"

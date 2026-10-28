@@ -84,24 +84,24 @@ export async function runDirectiveBehaviorPreparedReply(params: unknown) {
 
 export const runPreparedReplyMock: Mock = vi.fn(runDirectiveBehaviorPreparedReply);
 
-vi.mock("../agents/embedded-agent.js", () => ({
+vi.mock("../agents/embedded-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/embedded-agent.js")>()),
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   compactEmbeddedAgentSession: (...args: unknown[]) => compactEmbeddedAgentSessionMock(...args),
   runEmbeddedAgent: (...args: unknown[]) => runEmbeddedAgentMock(...args),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
+  isSessionRunActive: vi.fn().mockReturnValue(false),
+  isSessionNativeAttemptStreaming: vi.fn().mockReturnValue(false),
 }));
 
-vi.mock("../agents/embedded-agent.runtime.js", () => ({
+vi.mock("../agents/embedded-agent.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/embedded-agent.runtime.js")>()),
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   compactEmbeddedAgentSession: (...args: unknown[]) => compactEmbeddedAgentSessionMock(...args),
   runEmbeddedAgent: (...args: unknown[]) => runEmbeddedAgentMock(...args),
-  resolveActiveEmbeddedRunSessionId: vi.fn().mockReturnValue(undefined),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
-  waitForEmbeddedAgentRunEnd: vi.fn().mockResolvedValue(true),
+  resolveActiveSessionRunId: vi.fn().mockReturnValue(undefined),
+  isSessionRunActive: vi.fn().mockReturnValue(false),
+  isSessionNativeAttemptStreaming: vi.fn().mockReturnValue(false),
+  waitForSessionRunEnd: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({

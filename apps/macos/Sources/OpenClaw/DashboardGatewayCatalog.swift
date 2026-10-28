@@ -99,7 +99,7 @@ enum DashboardGatewayCatalog {
             }
         }
         let primaryName: String = if mode == .local {
-            "Local Gateway"
+            String(localized: "This Mac")
         } else if let duplicate {
             duplicate.profile.name
         } else {
@@ -125,7 +125,12 @@ enum DashboardGatewayCatalog {
                 health: .unknown)
         }
         let local: [DashboardGatewayEntry] = mode == .remote && hostsLocalGateway ? [.init(
-            id: "local", name: "This Mac", kind: "local", isPrimary: false, canPromote: false, health: localHealth)] :
+            id: "local",
+            name: String(localized: "This Mac"),
+            kind: "local",
+            isPrimary: false,
+            canPromote: false,
+            health: localHealth)] :
             []
         return mode == .unconfigured ? saved : [primary] + local + saved
     }

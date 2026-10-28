@@ -2,8 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { isMissingPathError } from "../infra/errors.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import {
   getServiceInspectionClock,
   withServiceInspectionBudget,
@@ -139,12 +141,13 @@ async function inspectLoadedSystemOwnership(
           throw unavailable();
         }
         if (result.code !== 0) {
+          // systemd 245 busctl colors this line even when stderr is not a terminal.
           if (
             allowMissing &&
             [
               `Call failed: Unit ${unitName} not loaded.`,
               `Call failed: Unit ${unitName} not found.`,
-            ].includes(result.stderr.trim())
+            ].includes(stripAnsi(result.stderr).trim())
           ) {
             return missingUnit;
           }
@@ -195,14 +198,11 @@ async function inspectLoadedSystemOwnership(
         if (installed.status !== "absent") {
           return installed;
         }
-        if (await readLoaded()) {
-          return { status: "loaded", unitName };
-        }
-        if (owner !== (await readOwner())) {
-          throw unavailable();
-        }
         return { status: "absent", unitName };
       } catch (error) {
+        if (hasCommandProcessCleanupError(error)) {
+          throw error;
+        }
         return unverifiableSystemOwnership(
           unitName,
           formatServiceInspectionDetail(error),
@@ -238,9 +238,7 @@ async function inspectSystemSystemdOwnership(
   if (installed.status !== "absent") {
     return installed;
   }
-  // Close the manager-query-to-filesystem-snapshot race. Publication and
-  // activation repeat the complete probe because root installers share no lock.
-  return await querySystemManager(unitName, run);
+  return { status: "absent", unitName };
 }
 
 function formatSystemSystemdOwnershipError(ownership: SystemSystemdConflict): string {

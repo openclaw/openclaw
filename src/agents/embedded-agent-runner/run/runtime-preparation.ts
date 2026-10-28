@@ -1,8 +1,5 @@
-import { readSourceReplyDeliveryRuntime } from "../../../auto-reply/reply/source-reply-delivery-runtime.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { resolveProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
-import { createStageTimingTracker } from "../../../shared/stage-timing.js";
-import { resolvePreparedRunAdmission } from "../../admitted-run-context.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { resolvePreparedModelThinkingCompat } from "../../model-catalog-lookup.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
@@ -18,7 +15,6 @@ import {
 } from "../../runtime-plan/prepare-auth.js";
 import { resolveCandidateThinkingLevel } from "../../thinking-runtime.js";
 import { log } from "../logger.js";
-import { formatEmbeddedRunStageSummary } from "./attempt-stage-timing.js";
 import {
   createEmbeddedRunAuthController,
   createEmbeddedAuthProfileAdmission,
@@ -32,7 +28,7 @@ import { resolveEmbeddedRunModelSetup } from "./model-setup.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { resolveInitialThinkLevel } from "./runtime-resolution.js";
 
-export async function prepareEmbeddedRunRuntime(input: {
+export async function prepareEmbeddedRunTransport(input: {
   assertCurrent: () => void;
   runParams: RunEmbeddedAgentInternalParams;
   sessionAdmission?: Parameters<typeof resolveEmbeddedRunModelSetup>[0]["sessionAdmission"];
@@ -50,6 +46,13 @@ export async function prepareEmbeddedRunRuntime(input: {
   ) => void;
   fallbackConfigured: boolean;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  /** Refreshing transport cannot admit another model, harness, or credential source. */
+  refreshTransport?: {
+    provider: string;
+    modelId: string;
+    api: string;
+    harnessId: string;
+  };
 }) {
   const params = input.runParams;
   const modelSetup = await resolveEmbeddedRunModelSetup({
@@ -138,12 +141,26 @@ export async function prepareEmbeddedRunRuntime(input: {
           requestStreamTransportOverrides,
           pinnedHarnessId,
         });
+  const assertRefreshTarget = () => {
+    const expected = input.refreshTransport;
+    if (
+      expected &&
+      (provider !== expected.provider ||
+        modelId !== expected.modelId ||
+        models.effective.api !== expected.api ||
+        agentHarness.id !== expected.harnessId ||
+        nativeModelOwned ||
+        requestStreamTransportOverrides)
+    ) {
+      throw new Error("Connection recovery cannot change the admitted model or harness.");
+    }
+  };
+  assertRefreshTarget();
   input.markStartupStage("model-resolution");
   input.notifyExecutionPhase("model_resolution", { provider, model: modelId });
 
   agentHarness = selectHarness(models.effective);
   let pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
-  const authStages = log.isEnabled("trace") ? createStageTimingTracker(Date.now) : undefined;
   const preparedAuthPlan = await prepareEmbeddedRunAuthPlan({
     assertCurrent: input.assertCurrent,
     runParams: params,
@@ -159,6 +176,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     authStorage,
     modelRegistry,
     preparedModelRuntime: input.preparedModelRuntime,
+    requireConfiguredTransportAuth: input.refreshTransport !== undefined,
     getAgentHarness: () => agentHarness,
     setAgentHarness: (nextHarness) => {
       agentHarness = nextHarness;
@@ -168,8 +186,8 @@ export async function prepareEmbeddedRunRuntime(input: {
     getEffectiveModel: () => models.effective,
     applyResolvedRuntimeModel,
     selectHarnessForPreparedAttempts: selectHarness,
-    markStage: (stage) => authStages?.mark(stage),
   });
+  assertRefreshTarget();
   const {
     attemptAuthProfileStore,
     lockedProfileId,
@@ -182,7 +200,8 @@ export async function prepareEmbeddedRunRuntime(input: {
   let { activePreparedAuthPlan } = preparedAuthPlan;
   preparedThinkingCapabilityReady = true;
   applyResolvedRuntimeModel(models.runtime);
-  const genericCompactionRecoveryAllowed = !pluginHarnessOwnsTransport;
+  const genericCompactionRecoveryAllowed =
+    !pluginHarnessOwnsTransport && !params.disableCompactionRecovery;
   const profileCandidates = preparedAuthAttempts.map((attempt) => attempt.profileId);
   const forwardedPluginHarnessProfileId = pluginHarnessOwnsTransport
     ? activePreparedAuthPlan.forwardedAuthProfileId
@@ -314,6 +333,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     authStorage,
     profileCandidates,
     lockedProfileId,
+    authProfileBinding: params.authProfileBinding,
     initialThinkLevel,
     attemptedThinking,
     fallbackConfigured: input.fallbackConfigured,
@@ -324,210 +344,188 @@ export async function prepareEmbeddedRunRuntime(input: {
     provider,
     modelId,
     state: authState,
+    assertCurrent: input.assertCurrent,
+    signal: params.abortSignal,
     ...(prepareModelForAuthProfile ? { prepareModelForAuthProfile } : {}),
     log,
   });
-  authStages?.mark("controller");
-  const admitAuthProfile = createEmbeddedAuthProfileAdmission({
-    authStore: attemptAuthProfileStore,
-    profileCandidates,
-    lockedProfileId,
-    modelId,
-    provider,
-    log,
-    allowTransientCooldownProbe: params.allowTransientCooldownProbe === true,
-  });
-  const advancePluginHarnessAuthAttempt = async (): Promise<boolean> => {
-    if (!pluginHarnessOwnsTransport) {
-      return false;
-    }
-    let nextIndex = authState.profileIndex + 1;
-    while (nextIndex < preparedAuthAttempts.length) {
-      const candidateIndex = nextIndex++;
-      const candidateAttempt = preparedAuthAttempts[candidateIndex];
-      // Harness-owned auth shares the controller's run-local exhaustion invariant.
-      authState.profileIndex = candidateIndex;
-      if (!candidateAttempt) {
-        continue;
-      }
-      const candidate = candidateAttempt.profileId;
-      if (!admitAuthProfile(candidate)) {
-        continue;
-      }
-      if (
-        !canRunPreparedAgentRuntimeAuthAttempt({
-          attempt: candidateAttempt,
-          priorProfileAttempted: preparedProfileAttempted,
-        })
-      ) {
-        authState.profileIndex = preparedAuthAttempts.length;
+  try {
+    const admitAuthProfile = createEmbeddedAuthProfileAdmission({
+      authStore: attemptAuthProfileStore,
+      profileCandidates,
+      lockedProfileId,
+      modelId,
+      provider,
+      log,
+      allowTransientCooldownProbe: params.allowTransientCooldownProbe === true,
+    });
+    const advancePluginHarnessAuthAttempt = async (): Promise<boolean> => {
+      if (!pluginHarnessOwnsTransport) {
         return false;
       }
-      if (candidateAttempt.plan.modelRoute?.authRequirement === "api-key") {
-        try {
-          await authController.applyAuthProfileCandidate(candidate, candidateIndex);
-        } catch {
+      let nextIndex = authState.profileIndex + 1;
+      while (nextIndex < preparedAuthAttempts.length) {
+        const candidateIndex = nextIndex++;
+        const candidateAttempt = preparedAuthAttempts[candidateIndex];
+        // Harness-owned auth shares the controller's run-local exhaustion invariant.
+        authState.profileIndex = candidateIndex;
+        if (!candidateAttempt) {
           continue;
+        }
+        const candidate = candidateAttempt.profileId;
+        if (!admitAuthProfile(candidate)) {
+          continue;
+        }
+        if (
+          !canRunPreparedAgentRuntimeAuthAttempt({
+            attempt: candidateAttempt,
+            priorProfileAttempted: preparedProfileAttempted,
+          })
+        ) {
+          authState.profileIndex = preparedAuthAttempts.length;
+          return false;
+        }
+        if (candidateAttempt.plan.modelRoute?.authRequirement === "api-key") {
+          try {
+            await authController.applyAuthProfileCandidate(candidate, candidateIndex);
+          } catch {
+            continue;
+          }
+        } else {
+          if (!candidate || candidateAttempt.plan.forwardedAuthProfileId !== candidate) {
+            continue;
+          }
+          const prepared = await prepareAuthAttempt(candidateAttempt);
+          authController.stopRuntimeAuthRefreshTimer();
+          authState.apiKeyInfo = null;
+          authState.runtimeAuthState = null;
+          prepared.commit();
+          authState.lastProfileId = candidate;
+        }
+        authState.thinkLevel = initialThinkLevel;
+        attemptedThinking.clear();
+        return true;
+      }
+      authState.profileIndex = preparedAuthAttempts.length;
+      return false;
+    };
+    const advanceAttemptAuthProfile = pluginHarnessOwnsAuthBootstrap
+      ? advancePluginHarnessAuthAttempt
+      : authController.advanceAuthProfile;
+
+    if (!pluginHarnessOwnsTransport || pluginHarnessNeedsOpenClawAuthBootstrap) {
+      await authController.initializeAuthProfile();
+    } else if (forwardedPluginHarnessProfileId) {
+      const initialAttempt = preparedAuthAttempts[authState.profileIndex];
+      if (
+        !admitAuthProfile(initialAttempt?.kind === "profile" ? initialAttempt.profileId : undefined)
+      ) {
+        if (!(await advancePluginHarnessAuthAttempt())) {
+          throw new Error(
+            `Prepared auth profiles are temporarily unavailable for ${provider}/${modelId}.`,
+          );
         }
       } else {
-        if (!candidate || candidateAttempt.plan.forwardedAuthProfileId !== candidate) {
-          continue;
-        }
-        const prepared = await prepareAuthAttempt(candidateAttempt);
-        authController.stopRuntimeAuthRefreshTimer();
-        authState.apiKeyInfo = null;
-        authState.runtimeAuthState = null;
-        prepared.commit();
-        authState.lastProfileId = candidate;
+        preparedProfileAttempted = initialAttempt?.kind === "profile";
+        authState.lastProfileId = forwardedPluginHarnessProfileId;
       }
-      authState.thinkLevel = initialThinkLevel;
-      attemptedThinking.clear();
-      return true;
     }
-    authState.profileIndex = preparedAuthAttempts.length;
-    return false;
-  };
-  const advanceAttemptAuthProfile = pluginHarnessOwnsAuthBootstrap
-    ? advancePluginHarnessAuthAttempt
-    : authController.advanceAuthProfile;
-
-  if (!pluginHarnessOwnsTransport || pluginHarnessNeedsOpenClawAuthBootstrap) {
-    await authController.initializeAuthProfile();
-  } else if (forwardedPluginHarnessProfileId) {
-    const initialAttempt = preparedAuthAttempts[authState.profileIndex];
-    if (
-      !admitAuthProfile(initialAttempt?.kind === "profile" ? initialAttempt.profileId : undefined)
-    ) {
-      if (!(await advancePluginHarnessAuthAttempt())) {
-        throw new Error(
-          `Prepared auth profiles are temporarily unavailable for ${provider}/${modelId}.`,
-        );
-      }
-    } else {
-      preparedProfileAttempted = initialAttempt?.kind === "profile";
-      authState.lastProfileId = forwardedPluginHarnessProfileId;
-    }
-  }
-  authStages?.mark("initialize");
-  if (authStages) {
-    log.trace(
-      formatEmbeddedRunStageSummary(
-        `[trace:embedded-run] auth stages: runId=${params.runId} sessionId=${params.sessionId} phase=auth`,
-        authStages.snapshot(),
-      ),
-    );
-  }
-  input.markStartupStage("auth");
-  input.notifyExecutionPhase("auth", { provider, model: modelId });
-  const routeFacts = getModelProviderRequestRouteFacts(models.effective);
-  const fallbackEndpointClass = routeFacts
-    ? undefined
-    : resolveProviderEndpoint(models.effective.baseUrl, pluginMetadataSnapshot?.owners)
-        .endpointClass;
-  const providerOwner =
-    routeFacts?.providerOwner ??
-    (fallbackEndpointClass &&
-    !["default", "invalid", "local", "custom"].includes(fallbackEndpointClass)
-      ? fallbackEndpointClass
-      : undefined);
-  const providerRuntimeHandle = {
-    ...resolveProviderRuntimePluginHandle({
-      provider,
-      providerOwner,
+    input.markStartupStage("auth");
+    input.notifyExecutionPhase("auth", { provider, model: modelId });
+    const routeFacts = getModelProviderRequestRouteFacts(models.effective);
+    const fallbackEndpointClass = routeFacts
+      ? undefined
+      : resolveProviderEndpoint(models.effective.baseUrl, pluginMetadataSnapshot?.owners)
+          .endpointClass;
+    const providerOwner =
+      routeFacts?.providerOwner ??
+      (fallbackEndpointClass &&
+      !["default", "invalid", "local", "custom"].includes(fallbackEndpointClass)
+        ? fallbackEndpointClass
+        : undefined);
+    const providerRuntimeHandle = {
+      ...resolveProviderRuntimePluginHandle({
+        provider,
+        providerOwner,
+        modelId,
+        config: params.config,
+        workspaceDir: input.workspaceDir,
+        env: process.env,
+        ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+      }),
       modelId,
-      config: params.config,
-      workspaceDir: input.workspaceDir,
-      env: process.env,
-      ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
-    }),
-    modelId,
-    prepared: true as const,
-  };
+      prepared: true as const,
+    };
 
-  const admittedRunContext = await resolvePreparedRunAdmission({
-    runId: params.runId,
-    runtimeKind: pluginHarnessOwnsTransport ? "plugin-harness" : "embedded",
-    admittedRunContext: params.admittedRunContext,
-    preparedRunAdmission: params.preparedRunAdmission,
-  });
-
-  const sourceReplyDeliveryRuntime = readSourceReplyDeliveryRuntime(params);
-  if (sourceReplyDeliveryRuntime?.origin === "runtime_default") {
-    // Route/auth/transport preparation owns the final harness selection. Publishing
-    // an earlier guess can either suppress a valid final or leak a private one.
-    const visibleReplies =
-      agentHarness.deliveryDefaults?.visibleReplies ??
-      agentHarness.deliveryDefaults?.sourceVisibleReplies;
-    const mode = visibleReplies === "message_tool" ? "message_tool_only" : "automatic";
-    sourceReplyDeliveryRuntime.applyPreparedMode(params, mode);
-    params.forceMessageTool = mode === "message_tool_only";
-  }
-  return {
-    admittedRunContext,
-    provider,
-    modelId,
-    requestedModelId,
-    expectedHarnessArtifact,
-    nativeModelOwned,
-    nativeSessionRuntime,
-    model,
-    authStorage,
-    modelRegistry,
-    attemptAuthProfileStore,
-    lockedProfileId,
-    preferredProfileId,
-    profileCandidates,
-    profileFailureStore: attemptAuthProfileStore,
-    genericCompactionRecoveryAllowed,
-    pluginHarnessOwnsAuthBootstrap,
-    attemptedThinking,
-    advanceAttemptAuthProfile,
-    maybeRefreshRuntimeAuthForAuthError: authController.maybeRefreshRuntimeAuthForAuthError,
-    stopRuntimeAuthRefreshTimer: authController.stopRuntimeAuthRefreshTimer,
-    getApiKeyInfo: () => authState.apiKeyInfo,
-    setThinkLevel: (next: ThinkLevel) => {
-      authState.thinkLevel = next;
-    },
-    resolveRunAttemptAuthProfileStore: (): AuthProfileStore => {
-      if (!pluginHarnessOwnsTransport) {
-        return attemptAuthProfileStore;
-      }
-      const activeProfileIds = activePreparedAuthPlan.modelRoute
-        ? [
-            activePreparedAuthPlan.forwardedAuthProfileId,
-            ...(activePreparedAuthPlan.forwardedAuthProfileCandidateIds ?? []),
-          ]
-        : [authState.lastProfileId];
-      return createScopedAuthProfileStore(
-        attemptAuthProfileStore,
-        activeProfileIds.filter((profileId): profileId is string => Boolean(profileId)),
-      );
-    },
-    snapshot: () => ({
-      agentHarness,
-      pluginHarnessOwnsTransport,
-      effectiveModel: models.effective,
-      modelContextWindow: models.runtime.contextWindow,
-      contextTokenBudget: resolvedRuntimeModel.contextTokenBudget,
-      authoredContextTokenCap: resolvedRuntimeModel.authoredContextTokenCap,
-      contextWindowInfo: resolvedRuntimeModel.contextWindowInfo,
-      outerContextTokenMeta: {
-        contextTokens: resolvedRuntimeModel.contextTokenBudget,
-        contextTokensSource: resolvedRuntimeModel.contextTokensSource,
+    return {
+      provider,
+      modelId,
+      requestedModelId,
+      expectedHarnessArtifact,
+      nativeModelOwned,
+      nativeSessionRuntime,
+      model,
+      authStorage,
+      modelRegistry,
+      attemptAuthProfileStore,
+      lockedProfileId,
+      preferredProfileId,
+      profileCandidates,
+      profileFailureStore: attemptAuthProfileStore,
+      genericCompactionRecoveryAllowed,
+      pluginHarnessOwnsAuthBootstrap,
+      attemptedThinking,
+      advanceAttemptAuthProfile,
+      maybeRefreshRuntimeAuthForAuthError: authController.maybeRefreshRuntimeAuthForAuthError,
+      stopRuntimeAuthRefreshTimer: authController.stopRuntimeAuthRefreshTimer,
+      getApiKeyInfo: () => authState.apiKeyInfo,
+      setThinkLevel: (next: ThinkLevel) => {
+        authState.thinkLevel = next;
       },
-      activePreparedAuthPlan: authState.apiKeyInfo
-        ? {
-            ...activePreparedAuthPlan,
-            selectedAuthMode: authState.apiKeyInfo.mode,
-            selectedAuthFlow: authState.apiKeyInfo.authFlow,
-          }
-        : activePreparedAuthPlan,
-      thinkLevel: authState.thinkLevel,
-      apiKeyInfo: authState.apiKeyInfo,
-      lastProfileId: authState.lastProfileId,
-      runtimeAuthState: authState.runtimeAuthState,
-      pluginMetadataSnapshot,
-      providerRuntimeHandle,
-    }),
-  };
+      resolveRunAttemptAuthProfileStore: (): AuthProfileStore => {
+        if (!pluginHarnessOwnsTransport) {
+          return attemptAuthProfileStore;
+        }
+        const activeProfileIds = activePreparedAuthPlan.modelRoute
+          ? [
+              activePreparedAuthPlan.forwardedAuthProfileId,
+              ...(activePreparedAuthPlan.forwardedAuthProfileCandidateIds ?? []),
+            ]
+          : [authState.lastProfileId];
+        return createScopedAuthProfileStore(
+          attemptAuthProfileStore,
+          activeProfileIds.filter((profileId): profileId is string => Boolean(profileId)),
+        );
+      },
+      snapshot: () => ({
+        agentHarness,
+        pluginHarnessOwnsTransport,
+        effectiveModel: models.effective,
+        modelContextWindow: models.runtime.contextWindow,
+        contextTokenBudget: resolvedRuntimeModel.contextTokenBudget,
+        authoredContextTokenCap: resolvedRuntimeModel.authoredContextTokenCap,
+        contextWindowInfo: resolvedRuntimeModel.contextWindowInfo,
+        outerContextTokenMeta: {
+          contextTokens: resolvedRuntimeModel.contextTokenBudget,
+          contextTokensSource: resolvedRuntimeModel.contextTokensSource,
+        },
+        activePreparedAuthPlan: authState.apiKeyInfo
+          ? {
+              ...activePreparedAuthPlan,
+              selectedAuthMode: authState.apiKeyInfo.mode,
+              selectedAuthFlow: authState.apiKeyInfo.authFlow,
+            }
+          : activePreparedAuthPlan,
+        thinkLevel: authState.thinkLevel,
+        apiKeyInfo: authState.apiKeyInfo,
+        lastProfileId: authState.lastProfileId,
+        runtimeAuthState: authState.runtimeAuthState,
+        pluginMetadataSnapshot,
+        providerRuntimeHandle,
+      }),
+    };
+  } catch (error) {
+    authController.stopRuntimeAuthRefreshTimer();
+    throw error;
+  }
 }

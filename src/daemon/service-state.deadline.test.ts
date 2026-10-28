@@ -1,10 +1,10 @@
 import { setImmediate } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { ServiceOwnershipRefusalError } from "./service-inspection-error.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
-import type { GatewayServiceCommandConfig } from "./service-types.js";
+import type { GatewayService, ReadGatewayServiceStateArgs } from "./service-types.js";
 import {
   assertGatewayServiceUpdateCurrent,
   withGatewayServiceUpdateAuthority,
@@ -12,11 +12,31 @@ import {
 import { readGatewayServiceState } from "./service.js";
 import { createMockGatewayService } from "./service.test-helpers.js";
 
-const command: GatewayServiceCommandConfig = {
-  programArguments: ["/bin/node", "/opt/openclaw/entry.js", "gateway", "--port", "18789"],
-  environment: { OPENCLAW_GATEWAY_PORT: "18789" },
-};
+const command = { programArguments: ["node", "gateway"], environment: { PORT: "18789" } };
 let now = 0;
+const unknown = { status: "unknown" };
+const unknownState = { loadState: unknown, runtime: unknown, running: false };
+const boundaries = ["initial-absence", "strict-absence", "installed", "capability"] as const;
+const refusals = ["cleanup", "ownership"] as const;
+function inspect(service: GatewayService, options: ReadGatewayServiceStateArgs = {}) {
+  return readGatewayServiceState(service, { env: {}, timeoutMs: 100, ...options });
+}
+function refusal(kind: "cleanup" | "ownership") {
+  return kind === "cleanup"
+    ? new CommandProcessCleanupError()
+    : new ServiceOwnershipRefusalError("systemd-manager-changed");
+}
+function expire<T>(value: T) {
+  now = 101;
+  return value;
+}
+function guarded<T>(value: T, spent = 0) {
+  return vi.fn(async () => {
+    assertGatewayServiceUpdateCurrent();
+    now += spent;
+    return value;
+  });
+}
 
 beforeEach(() => {
   now = 0;
@@ -39,223 +59,137 @@ function deferredReaders() {
   return { load, runtime, entered, service };
 }
 
-describe("ordinary service inspection deadline", () => {
-  it.each(["diagnostic", "positive", "strict"] as const)(
-    "handles native observations settling after expiry: %s",
-    async (scenario) => {
-      const { load, runtime, entered, service } = deferredReaders();
-      const nativeRuntime: GatewayServiceRuntime =
-        scenario === "positive"
-          ? { status: "running", pid: 4242 }
-          : {
-              status: "unknown",
-              detail: "native service inspection timed out",
-              inspectionFailure: {
-                code: "service-runtime-inspection-failed",
-                detail: "native runtime timeout",
-                timeoutMs: 100,
-              },
-            };
-      const pending = readGatewayServiceState(service, {
-        env: {},
-        timeoutMs: 100,
-        requireEffective: scenario === "strict",
-      });
-      const rejected =
-        scenario === "strict"
-          ? expect(pending).rejects.toThrow("Service inspection deadline expired.")
-          : undefined;
-      await entered.promise;
-      now = 101;
-      if (scenario === "diagnostic") {
-        load.reject(new Error("native load timeout"));
-      } else {
-        load.resolve(scenario === "positive");
-      }
-      runtime.resolve(nativeRuntime);
-      if (rejected) {
-        await rejected;
-        return;
-      }
-      const state = await pending;
-      expect(state).toMatchObject({
-        installed: true,
-        running: false,
-        command,
-        loadState: { status: "unknown" },
-        runtime: { status: "unknown" },
-      });
-      if (scenario === "diagnostic") {
-        expect(state.loadState).toEqual({
-          status: "unknown",
-          detail: "Error: native load timeout",
-        });
-        expect(state.runtime).toBe(nativeRuntime);
-        expect(service.isLoaded).toHaveBeenCalledWith({ env: command.environment, timeoutMs: 100 });
-        expect(service.readRuntime).toHaveBeenCalledWith(command.environment, { timeoutMs: 100 });
-      } else {
-        expect(state.runtime?.pid).toBeUndefined();
-        expect(state.runtime?.missingUnit).not.toBe(true);
-      }
-    },
-  );
-
-  it.each(["initial", "command", "absence"] as const)(
-    "does not admit native status reads after expiry at %s",
-    async (boundary) => {
-      const service = createMockGatewayService({
-        ...(boundary === "command"
-          ? {
-              readCommand: vi.fn(async () => {
-                now = 101;
-                return command;
-              }),
-            }
-          : {}),
-        ...(boundary === "absence"
-          ? {
-              isAbsent: vi.fn(async () => {
-                now = 101;
-                return true;
-              }),
-            }
-          : {}),
-      });
-      const state = await readGatewayServiceState(service, {
-        env: { HOME: "/fixture" },
-        timeoutMs: boundary === "initial" ? 0 : 100,
-      });
-      expect(state).toMatchObject({
-        loadState: { status: "unknown" },
-        runtime: { status: "unknown" },
-        running: false,
-      });
-      if (boundary === "command") {
-        expect(state).toMatchObject({
-          installed: true,
-          command,
-          env: { HOME: "/fixture", OPENCLAW_GATEWAY_PORT: "18789" },
-        });
-      } else {
-        expect(service.readCommand).not.toHaveBeenCalled();
-      }
-      expect(state.runtime?.missingUnit).not.toBe(true);
-      expect(service.isLoaded).not.toHaveBeenCalled();
-      expect(service.readRuntime).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(
-    (
-      [
-        "initial-absence",
-        "strict-absence",
-        "installed-definition",
-        "definition-capability",
-      ] as const
-    ).flatMap((boundary) =>
-      (["cleanup", "ownership"] as const).map((kind) => ({ boundary, kind })),
-    ),
-  )(
-    "does not consume $kind refusal in the $boundary fallback after expiry",
-    async ({ boundary, kind }) => {
-      const error =
-        kind === "cleanup"
-          ? new CommandProcessCleanupError()
-          : new ServiceOwnershipRefusalError("systemd-manager-changed");
-      const refuse = vi.fn(async () => {
-        now = 101;
-        throw error;
-      });
-      const service = createMockGatewayService({ readCommand: vi.fn(async () => command) });
-      if (boundary === "initial-absence") {
-        service.isAbsent = refuse;
-      } else if (boundary === "strict-absence") {
-        service.readCommand = vi.fn(async () => null);
-        service.isAbsent = vi.fn(async (args) => (args.strictCommandAbsent ? refuse() : false));
-      } else if (boundary === "installed-definition") {
-        service.readCommand = vi.fn(async () => null);
-        service.hasInstalledDefinition = refuse;
-      } else {
-        service.readDefinitionMutationCapability = refuse;
-      }
-      await expect(
-        readGatewayServiceState(service, {
-          env: {},
-          timeoutMs: 100,
-          ...(boundary === "strict-absence" || boundary === "definition-capability"
-            ? { requireEffective: true, requireLoadedCommand: true }
-            : {}),
-        }),
-      ).rejects.toBe(error);
-      expect(refuse).toHaveBeenCalledOnce();
-    },
-  );
-
-  it.each(["cleanup", "ownership"] as const)(
-    "joins admitted readers and preserves %s refusal after expiry",
-    async (kind) => {
-      const { load, runtime, entered, service } = deferredReaders();
-      const error =
-        kind === "cleanup"
-          ? new CommandProcessCleanupError()
-          : new ServiceOwnershipRefusalError("systemd-manager-changed");
-      const pending = readGatewayServiceState(service, { env: {}, timeoutMs: 100 });
-      const rejected = expect(pending).rejects.toBe(error);
-      let settled = false;
-      void pending.then(
-        () => {
-          settled = true;
-        },
-        () => {
-          settled = true;
-        },
-      );
-      await entered.promise;
-      now = 101;
-      runtime.reject(error);
-      // Drain the owner's rejection propagation while keeping the sibling open.
-      // A raw fixture-promise checkpoint would run before fail-fast propagation.
-      await setImmediate();
-      try {
-        expect(settled).toBe(false);
-      } finally {
-        load.resolve(false);
-      }
-      await rejected;
-      expect(settled).toBe(true);
-    },
-  );
-});
-
-it.each([1, 101])(
-  "outer inspection excludes custody but charges %s ms of native work",
-  async (spent) => {
-    const service = createMockGatewayService({
-      readCommand: vi.fn(async () => {
-        assertGatewayServiceUpdateCurrent();
-        return command;
-      }),
-      isLoaded: vi.fn(async () => {
-        assertGatewayServiceUpdateCurrent();
-        return true;
-      }),
-      readRuntime: vi.fn(async () => {
-        assertGatewayServiceUpdateCurrent();
-        now += spent;
-        return { status: "running" as const, pid: 4242 };
-      }),
-    });
-    const work = withGatewayServiceUpdateAuthority(
-      () => {
-        now += 2_000;
-      },
-      () => readGatewayServiceState(service, { env: {}, timeoutMs: 100, requireEffective: true }),
-    );
-    if (spent > 100) {
-      await expect(work).rejects.toThrow("Service inspection deadline expired.");
+it.each(["diagnostic", "positive", "strict"] as const)(
+  "expires late native observations: %s",
+  async (scenario) => {
+    const { load, runtime, entered, service } = deferredReaders();
+    const nativeRuntime: GatewayServiceRuntime =
+      scenario === "positive"
+        ? { status: "running", pid: 4242 }
+        : { status: "unknown", detail: "native timeout" };
+    const pending = inspect(service, { requireEffective: scenario === "strict" });
+    const rejected =
+      scenario === "strict"
+        ? expect(pending).rejects.toThrow("Service inspection deadline expired.")
+        : undefined;
+    await entered.promise;
+    if (scenario === "diagnostic") {
+      load.reject(new Error("load timeout"));
     } else {
-      await expect(work).resolves.toMatchObject({ running: true, command });
+      load.resolve(scenario === "positive");
+    }
+    runtime.resolve(expire(nativeRuntime));
+    if (rejected) {
+      await rejected;
+      return;
+    }
+    const state = await pending;
+    expect(state).toMatchObject({ ...unknownState, installed: true, command });
+    if (scenario === "diagnostic") {
+      expect(state.loadState).toEqual({ status: "unknown", detail: "Error: load timeout" });
+      expect(state.runtime).toBe(nativeRuntime);
+      expect(service.isLoaded).toHaveBeenCalledWith({ env: command.environment, timeoutMs: 100 });
+      expect(service.readRuntime).toHaveBeenCalledWith(command.environment, { timeoutMs: 100 });
+    } else {
+      expect(state.runtime?.pid).toBeUndefined();
+      expect(state.runtime?.missingUnit).not.toBe(true);
     }
   },
 );
+
+it.each(["initial", "command", "absence"] as const)(
+  "blocks native reads after expiry at %s",
+  async (boundary) => {
+    const service = createMockGatewayService();
+    if (boundary === "command") {
+      service.readCommand = vi.fn(async () => expire(command));
+    } else if (boundary === "absence") {
+      service.isAbsent = vi.fn(async () => expire(true));
+    }
+    const state = await inspect(service, {
+      env: { HOME: "/fixture" },
+      timeoutMs: boundary === "initial" ? 0 : 100,
+    });
+    expect(state).toMatchObject(unknownState);
+    if (boundary === "command") {
+      expect(state).toMatchObject({
+        installed: true,
+        command,
+        env: { HOME: "/fixture", PORT: "18789" },
+      });
+    } else {
+      expect(service.readCommand).not.toHaveBeenCalled();
+    }
+    expect(state.runtime?.missingUnit).not.toBe(true);
+    expect(service.isLoaded).not.toHaveBeenCalled();
+    expect(service.readRuntime).not.toHaveBeenCalled();
+  },
+);
+
+it.each(boundaries.flatMap((boundary) => refusals.map((kind) => ({ boundary, kind }))))(
+  "preserves expired $boundary refusal: $kind",
+  async ({ boundary, kind }) => {
+    const error = refusal(kind);
+    const refuse = vi.fn(async () => {
+      throw expire(error);
+    });
+    const service = createMockGatewayService({ readCommand: vi.fn(async () => command) });
+    if (boundary === "initial-absence") {
+      service.isAbsent = refuse;
+    } else if (boundary === "strict-absence") {
+      service.readCommand = vi.fn(async () => null);
+      service.isAbsent = vi.fn(async (args) => (args.strictCommandAbsent ? refuse() : false));
+    } else if (boundary === "installed") {
+      service.readCommand = vi.fn(async () => null);
+      service.hasInstalledDefinition = refuse;
+    } else {
+      service.readDefinitionMutationCapability = refuse;
+    }
+    const strict = boundary === "strict-absence" || boundary === "capability";
+    await expect(
+      inspect(service, { requireEffective: strict, requireLoadedCommand: strict }),
+    ).rejects.toBe(error);
+    expect(refuse).toHaveBeenCalledOnce();
+  },
+);
+
+it.each(refusals)("joins readers before propagating expired %s refusal", async (kind) => {
+  const { load, runtime, entered, service } = deferredReaders();
+  const error = refusal(kind);
+  const pending = inspect(service);
+  const rejected = expect(pending).rejects.toBe(error);
+  let settled = false;
+  const onSettled = () => {
+    settled = true;
+  };
+  void pending.then(onSettled, onSettled);
+  await entered.promise;
+  runtime.reject(expire(error));
+  // Let owner rejection handlers run while the sibling remains pending.
+  await setImmediate();
+  try {
+    expect(settled).toBe(false);
+  } finally {
+    load.resolve(false);
+  }
+  await rejected;
+});
+
+it.each([1, 101])("excludes custody but charges %s ms of native work", async (spent) => {
+  const service = createMockGatewayService({
+    readCommand: guarded(command),
+    isLoaded: guarded(true),
+    readRuntime: guarded({ status: "running" as const, pid: 4242 }, spent),
+  });
+  const work = withGatewayServiceUpdateAuthority(
+    () => {
+      now += 2_000;
+    },
+    () => inspect(service, { requireEffective: true }),
+  );
+  if (spent > 100) {
+    await expect(work).rejects.toThrow("Service inspection deadline expired.");
+  } else {
+    await expect(work).resolves.toMatchObject({ running: true, command });
+  }
+});

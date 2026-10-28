@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { hasErrnoCode } from "../../infra/errors.js";
+import { ignoreMissingPath } from "../../infra/errno.js";
 import { pathExists } from "../../infra/fs-safe.js";
 
 const WORKSHOP_CHANGE_ACTIONS = [
@@ -38,10 +38,7 @@ export async function listVersions(versionsDir: string): Promise<SkillVersion[]>
     }
     entries = await fs.readdir(versionsDir, { withFileTypes: true });
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return [];
-    }
-    throw error;
+    return ignoreMissingPath(error) ?? [];
   }
   const versions: SkillVersion[] = [];
   for (const entry of entries) {

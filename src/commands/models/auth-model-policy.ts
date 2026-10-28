@@ -50,10 +50,10 @@ export function applyProviderLoginDefaultModel(
 }
 
 /** Provider setup defaults cannot supply consent to change model restrictions. */
-export function withoutProviderModelPolicy(
-  patch: Partial<OpenClawConfig>,
+export function withoutProviderModelPolicy<T extends Pick<Partial<OpenClawConfig>, "agents">>(
+  patch: T,
   config: OpenClawConfig,
-): Partial<OpenClawConfig> {
+): T {
   const connection = structuredClone(patch);
   if (connection.agents?.defaults) {
     delete connection.agents.defaults.modelPolicy;

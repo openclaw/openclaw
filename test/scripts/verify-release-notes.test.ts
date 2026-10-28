@@ -33,6 +33,7 @@ import {
   withoutExcludedContributionRecords,
 } from "../../.agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs";
 import { splitChangelog, writeReleaseChangelog } from "../../scripts/lib/release-changelog.mjs";
+import { renderGithubReleaseNotes } from "../../scripts/render-github-release-notes.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -45,17 +46,39 @@ function createReleaseNotesFixtureLines(): string[] {
     "",
     "### Highlights",
     "",
-    "- One.",
-    "- Two.",
-    "- Three.",
-    "- Four.",
-    "- Five.",
+    ...["One", "Two", "Three", "Four", "Five"].map((word) => `- ${word}.`),
     "",
     "### Changes",
     "",
     "### Fixes",
     "",
   ];
+}
+
+function contributionRecord(
+  base: string,
+  target: string,
+  rows: string[],
+  partition = `${rows.length} in-range PRs + 0 retained seed-only PRs = ${rows.length} unique PRs.`,
+) {
+  return `### Complete contribution record\n\nThis audited record covers the complete ${base}..${target} history: ${partition}\n\n#### Pull requests\n\n${rows.join("\n")}\n`;
+}
+
+function commitAll(cwd: string, message: string, extraEnv: Record<string, string> = {}) {
+  git(cwd, ["add", "."]);
+  git(cwd, ["commit", "--allow-empty", "-qm", message], extraEnv);
+  return git(cwd, ["rev-parse", "HEAD"]);
+}
+
+function seedRepository(
+  prefix: string,
+  branch?: string,
+  changelog = createReleaseNotesFixtureLines().join("\n"),
+) {
+  const cwd = tempDirs.make(prefix);
+  git(cwd, ["init", "-q", ...(branch ? ["-b", branch] : [])]);
+  writeFileSync(join(cwd, "CHANGELOG.md"), changelog);
+  return { cwd, base: commitAll(cwd, "chore: baseline"), changelog };
 }
 
 const verifier = resolve(
@@ -124,6 +147,104 @@ function runVerifier(
 }
 
 describe("release-note verification", () => {
+  it("rejects an off-branch generation target before release-note discovery", () => {
+    const cwd = tempDirs.make("openclaw-off-branch-notes-");
+    git(cwd, ["init", "-q", "-b", "main"]);
+    git(cwd, ["config", "commit.gpgsign", "false"]);
+    writeFileSync(join(cwd, "CHANGELOG.md"), createReleaseNotesFixtureLines().join("\n"));
+    splitChangelog({ rootDir: cwd });
+    git(cwd, ["add", "."]);
+    git(cwd, ["commit", "-qm", "docs: seed changelog"]);
+    const base = git(cwd, ["rev-parse", "HEAD"]);
+    git(cwd, ["branch", "release/2026.7.1", base]);
+    writeFileSync(join(cwd, "off-branch.txt"), "wrong worktree\n");
+    git(cwd, ["add", "off-branch.txt"]);
+    git(cwd, ["commit", "-qm", "docs: prepare notes elsewhere"]);
+
+    const result = runVerifier(cwd, {
+      base,
+      target: "HEAD",
+      extraArgs: ["--release-branch", "release/2026.7.1"],
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "is not reachable from canonical release branch release/2026.7.1",
+    );
+    expect(readdirSync(join(cwd, ".git"))).not.toContain("openclaw-release-cache");
+  });
+
+  it("initializes a missing target section before writing its contribution record", () => {
+    const cwd = tempDirs.make("openclaw-initial-release-notes-");
+    git(cwd, ["init", "-q"]);
+    git(cwd, ["config", "commit.gpgsign", "false"]);
+    writeFileSync(
+      join(cwd, "CHANGELOG.md"),
+      createReleaseNotesFixtureLines().join("\n").replace("2026.7.1", "2026.6.11"),
+    );
+    splitChangelog({ rootDir: cwd });
+    git(cwd, ["add", "."]);
+    git(cwd, ["commit", "-qm", "docs: seed changelog"]);
+    const target = git(cwd, ["rev-parse", "HEAD"]);
+    const version = "2026.7.1-beta.1";
+
+    const result = runVerifier(cwd, { base: target, target, version });
+
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(readFileSync(join(cwd, `CHANGELOG/${version}.md`), "utf8")).toContain(
+      [`## ${version}`, "", "### Highlights", "", "### Changes", "", "### Fixes"].join("\n"),
+    );
+    expect(readFileSync(join(cwd, `CHANGELOG/records/${version}.md`), "utf8")).toContain(
+      "0 in-range PRs + 0 retained seed-only PRs = 0 unique PRs",
+    );
+  });
+
+  it("verifies extended-stable GitHub notes with their regular-stable context", () => {
+    const cwd = tempDirs.make("openclaw-extended-stable-notes-");
+    const bin = join(cwd, "bin");
+    mkdirSync(bin);
+    git(cwd, ["init", "-q", "-b", "main"]);
+    const version = "2026.8.35";
+    const tag = `v${version}`;
+    const regularStableVersion = "2026.9.5";
+    const changelog = createReleaseNotesFixtureLines().join("\n").replace("2026.7.1", version);
+    writeFileSync(join(cwd, "CHANGELOG.md"), changelog);
+    git(cwd, ["add", "CHANGELOG.md"]);
+    git(cwd, ["commit", "-qm", "initial"]);
+    const target = git(cwd, ["rev-parse", "HEAD"]);
+    const verifiedChangelog = `${changelog}\n${contributionRecord("HEAD", target, [], "0 in-range PRs + 0 retained seed-only PRs = 0 unique PRs.")}`;
+    writeFileSync(join(cwd, "CHANGELOG.md"), verifiedChangelog);
+    const body = renderGithubReleaseNotes({
+      changelog: verifiedChangelog,
+      version,
+      tag,
+      repository: "openclaw/openclaw",
+      regularStableVersion,
+    }).body;
+    const gh = join(bin, "gh");
+    writeFileSync(
+      gh,
+      `#!${process.execPath}\nprocess.stdout.write(${JSON.stringify(JSON.stringify({ id: 1, body }))});\n`,
+    );
+    chmodSync(gh, 0o755);
+
+    const result = runVerifier(cwd, {
+      version,
+      write: false,
+      extraArgs: [
+        "--release-tag",
+        tag,
+        "--check-github",
+        "--regular-stable-version",
+        regularStableVersion,
+      ],
+      env: { PATH: `${bin}:${process.env.PATH}` },
+    });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(JSON.parse(result.stdout).github).toMatchObject([{ tag, matches: true }]);
+  });
+
   it.each([
     { previous: "2026.6.11", divergent: false },
     { previous: "2026.7.1-beta.2", divergent: false },
@@ -228,9 +349,9 @@ describe("release-note verification", () => {
     expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toBe(index);
   });
 
-  it("excludes maintainer and automation identities from contributor credit", () => {
+  it("credits human maintainers but excludes automation identities", () => {
     expect(isEligibleHandle("human-contributor")).toBe(true);
-    expect(isEligibleHandle("steipete")).toBe(false);
+    expect(isEligibleHandle("steipete")).toBe(true);
     expect(isEligibleHandle("steipete-oai")).toBe(false);
     expect(isEligibleHandle("hugin-bot")).toBe(false);
     expect(isEligibleHandle("roboclaw-bot")).toBe(false);
@@ -253,28 +374,13 @@ describe("release-note verification", () => {
     const target = "a".repeat(40);
     expect(
       contributionRecordTarget({
-        source: [
-          "## 2026.7.2",
-          "",
-          "### Complete contribution record",
-          "",
-          `This audited record covers the complete base..${target} history: 1 in-range PR + 0 retained seed-only PRs = 1 unique PR.`,
-          "",
-          "#### Pull requests",
-          "",
-          "- **PR #123** fix: example.",
-        ].join("\n"),
+        source: `## 2026.7.2\n\n${contributionRecord("base", target, ["- **PR #123** fix: example."])}`,
       }),
     ).toBe(target);
   });
 
   it("reports deleted contextual references without rendering or crediting them", () => {
-    const cwd = tempDirs.make("openclaw-release-notes-deleted-ref-");
-    git(cwd, ["init", "-q", "-b", "main"]);
-    writeFileSync(join(cwd, "CHANGELOG.md"), createReleaseNotesFixtureLines().join("\n"));
-    git(cwd, ["add", "CHANGELOG.md"]);
-    git(cwd, ["commit", "-qm", "chore: baseline"]);
-    const base = git(cwd, ["rev-parse", "HEAD"]);
+    const { cwd, base } = seedRepository("openclaw-release-notes-deleted-ref-", "main");
     git(cwd, [
       "commit",
       "--allow-empty",
@@ -335,73 +441,54 @@ process.exitCode = errors.length ? 1 : 0;
     expect(record).not.toContain("155121");
   });
 
-  it.each([
-    { name: "unavailable body context with sorted, unique commits", contextual: true },
-    { name: "subject PR suffix", subject: "fix: implementation (#155121)" },
-    { name: "closing reference", body: "Fixes #155121." },
-    { name: "closing reference list", body: "Resolves #12 and #155121." },
-    { name: "release-note prose/record or provenance", protectedReference: true },
-    { name: "other GraphQL error", errorType: "FORBIDDEN" },
-    { name: "missing node without an error", errorType: "" },
-    { name: "number above the resolved maximum", highestResolved: 155120 },
-    { name: "number equal to the resolved maximum", highestResolved: 155121 },
-    { name: "no resolved references", highestResolved: 0 },
-    { name: "no active body occurrence", body: "No contextual reference." },
-    { name: "subject reference in another active commit", otherSubject: "fix: #155121" },
-  ])("classifies contextual references: $name", (scenario) => {
-    const number = 155121;
-    const response = {
-      data: { n155121: { issueOrPullRequest: null } },
-      errors:
-        scenario.errorType === ""
-          ? []
-          : [{ type: scenario.errorType ?? "NOT_FOUND", path: ["n155121", "issueOrPullRequest"] }],
-    };
+  it("sorts and deduplicates unavailable contextual references", () => {
+    const hash = "b".repeat(40);
     expect(
       classifyUnavailableContextualReferences({
-        unresolved: scenario.contextual ? [155121, 155120, 155119] : [number],
-        notFound: new Set(
-          scenario.contextual ? [155120, 155121] : githubNotFoundReferences(response, [number]),
-        ),
-        activeCommits: scenario.contextual
-          ? [
-              {
-                hash: "b6b45244ab750".padEnd(40, "0"),
-                subject: "fix: preserve release references (#156166)",
-                body: "#155121 took a similar approach and was closed by its author. See #155121 and #155120.",
-              },
-              {
-                hash: "a".repeat(40),
-                subject: "fix: follow-up",
-                body: "Related discussion: #155121.",
-              },
-            ]
-          : [
-              {
-                hash: "a".repeat(40),
-                subject: scenario.subject ?? "fix: implementation (#156166)",
-                body: scenario.body ?? "#155121 took a similar approach.",
-              },
-              {
-                hash: "b".repeat(40),
-                subject: scenario.otherSubject ?? "fix: follow-up",
-                body: "",
-              },
-            ],
-        protectedReferences: new Set(scenario.protectedReference ? [number] : []),
+        unresolved: [155121, 155120, 155119],
+        notFound: new Set([155120, 155121]),
+        activeCommits: [
+          { hash, subject: "fix: source", body: "#155121 #155121 #155120" },
+          { hash: "a".repeat(40), subject: "fix: follow-up", body: "#155121" },
+        ],
+        protectedReferences: new Set(),
+        highestResolved: 156166,
+      }),
+    ).toEqual({
+      unavailable: [
+        { number: 155120, commits: ["bbbbbbbbbbbb"] },
+        { number: 155121, commits: ["aaaaaaaaaaaa", "bbbbbbbbbbbb"] },
+      ],
+      stillUnresolved: [155119],
+    });
+  });
+
+  it.each([
+    { subject: "fix: implementation (#155121)" },
+    { body: "Fixes #155121." },
+    { body: "Resolves #12 and #155121." },
+    { protectedReference: true },
+    { notFound: false },
+    { highestResolved: 155121 },
+    { body: "No contextual reference." },
+    { otherSubject: "fix: #155121" },
+  ])("preserves required or unclassified references: %j", (scenario) => {
+    expect(
+      classifyUnavailableContextualReferences({
+        unresolved: [155121],
+        notFound: new Set(scenario.notFound === false ? [] : [155121]),
+        activeCommits: [
+          {
+            hash: "a".repeat(40),
+            subject: scenario.subject ?? "fix: source",
+            body: scenario.body ?? "#155121 took a similar approach.",
+          },
+          { hash: "b".repeat(40), subject: scenario.otherSubject ?? "fix: follow-up", body: "" },
+        ],
+        protectedReferences: new Set(scenario.protectedReference ? [155121] : []),
         highestResolved: scenario.highestResolved ?? 156166,
       }),
-    ).toEqual(
-      scenario.contextual
-        ? {
-            unavailable: [
-              { number: 155120, commits: ["b6b45244ab75"] },
-              { number: 155121, commits: ["aaaaaaaaaaaa", "b6b45244ab75"] },
-            ],
-            stillUnresolved: [155119],
-          }
-        : { unavailable: [], stillUnresolved: [number] },
-    );
+    ).toEqual({ unavailable: [], stillUnresolved: [155121] });
   });
 
   it.each([
@@ -431,7 +518,7 @@ process.exitCode = errors.length ? 1 : 0;
     (mode) => {
       const number = 102147;
       const commit = {
-        authorHandle: undefined,
+        authorHandle: "release-operator",
         closingReferences: [102146],
         coauthors: [],
         committedAt: "2026-07-01T12:00:00Z",
@@ -459,7 +546,6 @@ process.exitCode = errors.length ? 1 : 0;
               ]
             : []),
         ],
-        coauthorsByReference: new Map<number, Set<string>>(),
         pullRequests: new Set<number>(),
         target: "c".repeat(40),
       };
@@ -489,11 +575,11 @@ process.exitCode = errors.length ? 1 : 0;
         title: "Fix silent maintenance delivery status",
         mergedAt: commit.committedAt,
         mergeCommit: { oid: commit.hash },
-        author: { __typename: "User", login: "coolmanns" },
+        recordedThanks: ["coolmanns"],
       });
       expect(commit.pullRequests).toEqual([number]);
       expect(source.pullRequests).toEqual(new Set([number]));
-      expect(source.coauthorsByReference.get(number)).toEqual(new Set(["coolmanns"]));
+      expect(recovered.get(number)).not.toHaveProperty("author");
     },
   );
 
@@ -509,21 +595,9 @@ process.exitCode = errors.length ? 1 : 0;
   });
 
   it.each(["commit", "CLI"])("accepts exact release provenance from %s inputs", (mode) => {
-    const releaseCommit = "a".repeat(40);
-    const mappings: Array<[string, number[]]> =
-      mode === "CLI"
-        ? [
-            ["bdde3d1c6dd7cc415588a72cf27ebe27f83bfe47", [120085]],
-            ["5090cae6d0cc3f2ec272b2448970c6238f525610", [120479]],
-            ["8ff1724067c1dcfb9a63574e6f3771261033ffae", [120479]],
-            ["0cd3075adf7cd201e17d25c95cbe190991f8aab1", [120538]],
-          ]
-        : [[releaseCommit, [104905, 102980, 104956]]];
-    const payloads = mappings.map(
-      ([commit, pullRequests]) =>
-        `${commit} -> ${pullRequests.map((number) => `#${number}`).join(", ")}`,
-    );
-    const releaseProvenance =
+    const hash = "a".repeat(40);
+    const payload = `${hash} -> #1, #2`;
+    const args =
       mode === "CLI"
         ? parseArgs([
             "--base",
@@ -532,90 +606,74 @@ process.exitCode = errors.length ? 1 : 0;
             "target",
             "--version",
             "2026.8.1",
-            ...payloads.flatMap((payload) => ["--release-provenance", payload]),
+            "--release-provenance",
+            payload,
           ]).releaseProvenance
         : [];
-    const body = [
-      `Release provenance: ${payloads[0]}`,
-      `Release provenance for ${"c".repeat(40)} -> #123`,
-    ].join("\n");
-    expect(
-      collectReleaseProvenanceOverrides(
-        [
-          ...mappings.map(([hash]) => ({ body: "", hash })),
-          ...(mode === "commit" ? [{ body, hash: "b".repeat(40) }] : []),
-        ],
-        releaseProvenance,
-      ),
-    ).toEqual(new Map(mappings));
+    const body =
+      mode === "commit"
+        ? `Release provenance: ${payload}
+Release provenance for ${hash} -> #3`
+        : "";
+    expect(collectReleaseProvenanceOverrides([{ hash, body }], args)).toEqual(
+      new Map([[hash, [1, 2]]]),
+    );
     if (mode === "CLI") {
-      expect(releaseProvenance).toEqual(payloads);
-      return;
+      expect(args).toEqual([payload]);
+    } else {
+      expect(releaseProvenanceMarkers(body)).toEqual([{ commit: hash, pullRequests: [1, 2] }]);
+      expect(resolvedReleasePullRequests([3], [], false, [1, 2])).toEqual([1, 2]);
+      expect(releasePullRequestReferencesToSuppress([], "fix: subject (#3)", [1, 2], true)).toEqual(
+        [3],
+      );
     }
-    expect(releaseProvenanceMarkers(body)).toEqual([
-      {
-        commit: releaseCommit,
-        pullRequests: [104905, 102980, 104956],
-      },
-    ]);
-    expect(resolvedReleasePullRequests([104939], [], false, [104905, 102980, 104956])).toEqual([
-      104905, 102980, 104956,
-    ]);
-    expect(
-      releasePullRequestReferencesToSuppress(
-        [],
-        "test(live): harden GPT-5.6 nonce retries for July (#104939)",
-        [104905, 102980, 104956],
-        true,
-      ),
-    ).toEqual([104939]);
   });
 
   it.each(["commit", "CLI"])(
     "rejects malformed, out-of-range, or conflicting %s provenance",
     (mode) => {
-      const activeCommit = "a".repeat(40);
-      for (const payload of mode === "CLI"
-        ? [
-            "short -> #1",
-            `${activeCommit} -> #1 trailing`,
-            `${activeCommit} -> #1\nRelease provenance: ${activeCommit} -> #2`,
-            `${activeCommit} -> #1\n`,
-            `${activeCommit} -> #1,\n#2`,
-            `${activeCommit} -> #1\r\n`,
-          ]
-        : ["short -> #123"]) {
-        expect(() =>
-          mode === "CLI"
-            ? collectReleaseProvenanceOverrides([{ body: "", hash: activeCommit }], [payload])
-            : releaseProvenanceMarkers(`Release provenance: ${payload}`),
-        ).toThrow("invalid release provenance marker");
+      const hash = "a".repeat(40);
+      const collect = (payloads: string[]) =>
+        collectReleaseProvenanceOverrides(
+          [
+            {
+              hash,
+              body:
+                mode === "commit"
+                  ? payloads.map((value) => `Release provenance: ${value}`).join("\n")
+                  : "",
+            },
+          ],
+          mode === "CLI" ? payloads : [],
+        );
+      const malformed =
+        mode === "CLI"
+          ? [
+              "short -> #1",
+              `${hash} -> #1 trailing`,
+              `${hash} -> #1\nRelease provenance: ${hash} -> #2`,
+              `${hash} -> #1\n`,
+              `${hash} -> #1,\n#2`,
+              `${hash} -> #1\r\n`,
+            ]
+          : ["short -> #1"];
+      for (const value of malformed) {
+        expect(() => collect([value])).toThrow("invalid release provenance marker");
       }
-      expect(() =>
-        collectReleaseProvenanceOverrides(
-          mode === "CLI"
-            ? [{ body: "", hash: activeCommit }]
-            : [
-                {
-                  body: `Release provenance: ${"d".repeat(40)} -> #104905`,
-                  hash: "b".repeat(40),
-                },
-              ],
-          mode === "CLI" ? [`${"b".repeat(40)} -> #1`] : [],
-        ),
-      ).toThrow("release provenance marker targets commit outside the active range");
-      expect(() =>
-        collectReleaseProvenanceOverrides(
-          mode === "CLI"
-            ? [{ body: `Release provenance: ${activeCommit} -> #1`, hash: activeCommit }]
-            : [
-                { body: "", hash: activeCommit },
-                { body: `Release provenance: ${activeCommit} -> #104905`, hash: "b".repeat(40) },
-                { body: `Release provenance: ${activeCommit} -> #104956`, hash: "c".repeat(40) },
-              ],
-          mode === "CLI" ? [`${activeCommit} -> #2`] : [],
-        ),
-      ).toThrow(`conflicting release provenance markers for ${activeCommit}`);
+      expect(() => collect([`${"b".repeat(40)} -> #1`])).toThrow(
+        "targets commit outside the active range",
+      );
+      expect(() => collect([`${hash} -> #1`, `${hash} -> #2`])).toThrow(
+        `conflicting release provenance markers for ${hash}`,
+      );
+      if (mode === "CLI") {
+        expect(() =>
+          collectReleaseProvenanceOverrides(
+            [{ hash, body: `Release provenance: ${hash} -> #1` }],
+            [`${hash} -> #2`],
+          ),
+        ).toThrow(`conflicting release provenance markers for ${hash}`);
+      }
     },
   );
 
@@ -631,182 +689,134 @@ process.exitCode = errors.length ? 1 : 0;
       mergedAt: "2026-07-12T00:00:00Z",
     };
 
-    expect(() =>
+    const validate = (
+      node: Omit<typeof validNode, "mergedAt"> & { mergedAt: string | null },
+      ancestor = true,
+    ) =>
       validateReleaseProvenanceOverrides(
         overrides,
-        new Map([[104905, validNode]]),
+        new Map([[104905, node]]),
         mainCommit,
-        () => true,
-      ),
-    ).not.toThrow();
+        () => ancestor,
+      );
+    expect(() => validate(validNode)).not.toThrow();
     for (const node of [
       { ...validNode, baseRefName: "release/2026.7.1" },
       { ...validNode, mergedAt: null },
     ]) {
-      expect(() =>
-        validateReleaseProvenanceOverrides(
-          overrides,
-          new Map([[104905, node]]),
-          mainCommit,
-          () => true,
-        ),
-      ).toThrow("references non-main PR #104905");
+      expect(() => validate(node)).toThrow("references non-main PR #104905");
     }
-    expect(() =>
-      validateReleaseProvenanceOverrides(
-        overrides,
-        new Map([[104905, validNode]]),
-        mainCommit,
-        () => false,
-      ),
-    ).toThrow("references non-main PR #104905");
+    expect(() => validate(validNode, false)).toThrow("references non-main PR #104905");
   });
 
-  it.each(["backports", "ambiguous", "direct"])(
-    "resolves canonical main provenance: %s",
-    (mode) => {
-      if (mode === "direct") {
-        expect(canonicalPullRequests([456], [], true)).toEqual([]);
-        return;
-      }
-      const mainCommit = {
-        authorEmail: "maintainer@example.com",
-        authorName: "Maintainer",
-        changedPaths: new Set(["src/channel.ts"]),
-        hash: "a".repeat(40),
-        pullRequests: [123],
-        subject: "fix(channel): preserve durable replies",
-      };
-      const explicitBackport = {
+  it("validates release provenance PRs that shipped-ref subtraction left unresolved", () => {
+    const releaseCommit = "a".repeat(40);
+    const mainCommit = "b".repeat(40);
+    const overrides = new Map([[releaseCommit, [104905]]]);
+    const mainNode = {
+      __typename: "PullRequest",
+      baseRefName: "main",
+      mergeCommit: { oid: "c".repeat(40) },
+      mergedAt: "2026-07-12T00:00:00Z",
+    };
+    const requested: number[][] = [];
+    const resolveWith = (node?: unknown) => (numbers: number[]) => {
+      requested.push(numbers);
+      return new Map(node ? [[104905, node]] : []);
+    };
+
+    const validate = (node?: unknown) =>
+      validateReleaseProvenanceOverrides(
+        overrides,
+        new Map(),
+        mainCommit,
+        () => true,
+        resolveWith(node),
+      );
+    expect(() => validate(mainNode)).not.toThrow();
+    expect(requested).toEqual([[104905]]);
+    for (const node of [{ ...mainNode, baseRefName: "release/2026.7.1" }, undefined]) {
+      expect(() => validate(node)).toThrow("references non-main PR #104905");
+    }
+  });
+
+  it("matches canonical main commits only by unambiguous provenance", () => {
+    const identity = {
+      authorEmail: "maintainer@example.com",
+      authorName: "Maintainer",
+      changedPaths: new Set(["src/channel.ts"]),
+      subject: "fix(channel): preserve durable replies",
+    };
+    const main = { ...identity, body: "", hash: "a".repeat(40), pullRequests: [123] };
+    const release = {
+      ...identity,
+      body: "Backport of #123 to release/2026.7.1.",
+      hash: "b".repeat(40),
+    };
+    const matches = (patch = {}, candidates = [main]) =>
+      canonicalMainCommitMatches({ ...release, ...patch }, candidates);
+    expect(matches()).toEqual([main.hash]);
+    expect(
+      matches({
+        body: `(cherry picked from commit ${main.hash})`,
         authorEmail: "other@example.com",
         authorName: "Other",
-        body: `(cherry picked from commit ${mainCommit.hash})`,
-        changedPaths: new Set(["src/channel.ts"]),
-        hash: "b".repeat(40),
-        subject: "fix(channel): preserve durable replies",
-      };
-      const integratedBackport = {
-        authorEmail: mainCommit.authorEmail,
-        authorName: mainCommit.authorName,
-        body: "",
-        changedPaths: new Set(["src/channel.ts", "src/release.ts"]),
-        hash: "c".repeat(40),
-        subject: "fix(channel): preserve durable replies",
-      };
-      if (mode === "ambiguous") {
-        const releaseCommit = { ...integratedBackport, changedPaths: new Set(["src/channel.ts"]) };
-        const candidates = ["a", "b"].map((prefix) => ({
-          authorEmail: releaseCommit.authorEmail,
-          authorName: releaseCommit.authorName,
-          changedPaths: new Set(["src/channel.ts"]),
-          hash: prefix.repeat(40),
-          subject: "fix(channel): preserve durable replies (#123)",
-        }));
-        expect(canonicalMainCommitMatches(releaseCommit, candidates)).toEqual([]);
-        expect(canonicalPullRequests([456], [])).toEqual([456]);
-        return;
-      }
-      const pullRequestBackport = {
-        authorEmail: mainCommit.authorEmail,
-        authorName: mainCommit.authorName,
-        body: "Backport of #123 to release/2026.7.1.",
-        changedPaths: new Set(["src/channel.ts"]),
-        hash: "d".repeat(40),
-        subject: "fix(channel): keep replies after renewal",
-      };
-
-      expect(canonicalMainCommitMatches(explicitBackport, [mainCommit])).toEqual([mainCommit.hash]);
-      expect(canonicalMainCommitMatches(integratedBackport, [mainCommit])).toEqual([
-        mainCommit.hash,
-      ]);
-      expect(canonicalMainCommitMatches(pullRequestBackport, [mainCommit])).toEqual([
-        mainCommit.hash,
-      ]);
-      expect(
-        canonicalMainCommitMatches(pullRequestBackport, [
-          {
-            ...mainCommit,
-            pullRequests: [],
-            body: "Original main PR #123.",
-            subject: "fix(channel): preserve durable replies",
-          },
-        ]),
-      ).toEqual([]);
-      expect(
-        canonicalMainCommitMatches(pullRequestBackport, [
-          {
-            ...mainCommit,
-            pullRequests: [999],
-            subject: "fix(channel): keep replies after renewal",
-          },
-        ]),
-      ).toEqual([]);
-      expect(
-        canonicalMainCommitMatches(
-          { ...pullRequestBackport, authorEmail: "other@example.com", authorName: "Other" },
-          [mainCommit],
-        ),
-      ).toEqual([]);
-      expect(
-        canonicalMainCommitMatches(
-          { ...pullRequestBackport, changedPaths: new Set(["src/other.ts"]) },
-          [mainCommit],
-        ),
-      ).toEqual([]);
-      expect(
-        canonicalMainCommitMatches({ ...pullRequestBackport, body: "Related #123." }, [mainCommit]),
-      ).toEqual([]);
-      expect(
-        canonicalMainCommitMatches(pullRequestBackport, [
-          mainCommit,
-          { ...mainCommit, hash: "e".repeat(40), pullRequests: [123] },
-        ]),
-      ).toEqual([]);
-      expect(
-        canonicalMainCommitMatches(pullRequestBackport, [
-          mainCommit,
-          {
-            ...mainCommit,
-            body: "Original main PR #123.",
-            hash: "f".repeat(40),
-            pullRequests: [],
-          },
-        ]),
-      ).toEqual([mainCommit.hash]);
-      const backportSubject = "fix(gateway): retain work admission across hosted wizard steps";
-      mainCommit.subject = `${backportSubject} (#120582)`;
-      integratedBackport.subject = `${mainCommit.subject} (#120584)`;
-      expect(canonicalMainCommitMatches(integratedBackport, [mainCommit])).toEqual([
-        mainCommit.hash,
-      ]);
-      const malformed = { ...integratedBackport, subject: `${backportSubject}(#120582) (#120584)` };
-      expect(canonicalMainCommitMatches(malformed, [mainCommit])).toEqual([]);
-      expect(canonicalPullRequests([456], [123])).toEqual([123]);
-    },
-  );
+      }),
+    ).toEqual([main.hash]);
+    expect(
+      matches({ body: "", changedPaths: new Set(["src/channel.ts", "src/release.ts"]) }),
+    ).toEqual([main.hash]);
+    for (const patch of [
+      { authorEmail: "other@example.com", authorName: "Other" },
+      { changedPaths: new Set(["src/other.ts"]) },
+      { body: "Related #123.", subject: "different" },
+    ]) {
+      expect(matches(patch)).toEqual([]);
+    }
+    expect(matches({}, [{ ...main, pullRequests: [], body: "Original main PR #123." }])).toEqual(
+      [],
+    );
+    expect(matches({}, [{ ...main, pullRequests: [999], subject: release.subject }])).toEqual([]);
+    expect(matches({}, [main, { ...main, hash: "c".repeat(40) }])).toEqual([]);
+    expect(matches({ body: "" }, [main, { ...main, hash: "c".repeat(40) }])).toEqual([]);
+    expect(
+      matches({}, [
+        main,
+        { ...main, hash: "c".repeat(40), pullRequests: [], body: "Original main PR #123." },
+      ]),
+    ).toEqual([main.hash]);
+    const subject = "fix(gateway): retain work admission";
+    expect(
+      matches({ body: "", subject: `${subject} (#120582) (#120584)` }, [
+        { ...main, subject: `${subject} (#120582)` },
+      ]),
+    ).toEqual([main.hash]);
+    expect(
+      matches({ body: "", subject: `${subject}(#120582) (#120584)` }, [
+        { ...main, subject: `${subject} (#120582)` },
+      ]),
+    ).toEqual([]);
+    expect(canonicalPullRequests([456], [], true)).toEqual([]);
+    expect(canonicalPullRequests([456], [])).toEqual([456]);
+    expect(canonicalPullRequests([456], [123])).toEqual([123]);
+  });
 
   it.each(["reuse", "checkpoint", "transient-error", "target-mismatch"])(
     "preserves exact-range GitHub snapshot lifecycle: %s",
     (mode) => {
-      const cwd = tempDirs.make("openclaw-release-notes-snapshot-");
-      const filePath = join(cwd, "snapshot.json");
+      const filePath = join(tempDirs.make("release-snapshot-"), "snapshot.json");
       let fetches = 0;
+      const fetchedArgs: string[][] = [];
       const fetchApi = (args: string[]) => {
         fetches += 1;
-        if (mode === "transient-error") {
-          return fetches === 1
-            ? { errors: [{ message: "rate limited" }] }
-            : { data: { repository: { id: "repository-id" } } };
-        }
-        if (mode === "target-mismatch") {
-          return { data: true };
-        }
-        return { data: { request: args, ...(mode === "reuse" ? { fetches } : {}) } };
+        fetchedArgs.push(args);
+        return mode === "transient-error" && fetches === 1
+          ? { errors: [{ message: "rate limited" }] }
+          : { data: fetches };
       };
+      const options = { base: "a".repeat(40), target: "b".repeat(40), filePath };
       const state = createGithubSnapshotState({
-        base: "a".repeat(40),
-        filePath,
-        target: "b".repeat(40),
+        ...options,
         ...(mode === "checkpoint" ? { checkpointEvery: 2 } : {}),
       });
       const args = ["graphql", "-f", "query=one"];
@@ -815,110 +825,47 @@ process.exitCode = errors.length ? 1 : 0;
         expect(first).toEqual({ errors: [{ message: "rate limited" }] });
         expect(state.dirty).toBe(false);
         expect(state.responses).toEqual({});
-        expect(githubApiWithSnapshot(args, fetchApi, state)).toEqual({
-          data: { repository: { id: "repository-id" } },
-        });
-        expect(state.misses).toBe(2);
-        expect(fetches).toBe(2);
-        return;
-      }
-      if (mode === "checkpoint") {
-        expect(state.dirty).toBe(true);
-        expect(state.writesSincePersist).toBe(1);
-        githubApiWithSnapshot(["graphql", "-f", "query=two"], fetchApi, state);
-        expect(state.dirty).toBe(false);
-        expect(state.writesSincePersist).toBe(0);
+        expect(githubApiWithSnapshot(args, fetchApi, state)).toEqual({ data: 2 });
+        expect([state.misses, fetches]).toEqual([2, 2]);
+      } else if (mode === "checkpoint") {
+        expect(state).toMatchObject({ dirty: true, writesSincePersist: 1 });
+        const secondArgs = ["graphql", "-f", "query=two"];
+        githubApiWithSnapshot(secondArgs, fetchApi, state);
+        expect(state).toMatchObject({ dirty: false, writesSincePersist: 0 });
         expect(JSON.parse(readFileSync(filePath, "utf8")).responses).toHaveProperty(
-          JSON.stringify(["graphql", "-f", "query=two"]),
+          JSON.stringify(secondArgs),
         );
-        return;
-      }
-      if (mode === "target-mismatch") {
+      } else if (mode === "target-mismatch") {
         persistGithubSnapshot(state);
-        expect(() =>
-          createGithubSnapshotState({ base: "a".repeat(40), filePath, target: "c".repeat(40) }),
-        ).toThrow("use --refresh-github-snapshot");
-        return;
+        expect(() => createGithubSnapshotState({ ...options, target: "c".repeat(40) })).toThrow(
+          "use --refresh-github-snapshot",
+        );
+      } else {
+        expect(first).toEqual({ data: 1 });
+        expect(
+          githubApiWithSnapshot(["repos/openclaw/openclaw/releases/tags/v1"], fetchApi, state),
+        ).toEqual({ data: 2 });
+        persistGithubSnapshot(state);
+        const second = createGithubSnapshotState(options);
+        expect(githubApiWithSnapshot(args, fetchApi, second)).toEqual({ data: 1 });
+        expect(fetchedArgs).toEqual([args, ["repos/openclaw/openclaw/releases/tags/v1"]]);
+        expect(second).toMatchObject({ hits: 1, misses: 0 });
+        expect(fetches).toBe(2);
       }
-      expect(first).toEqual({
-        data: {
-          request: ["graphql", "-f", "query=one"],
-          fetches: 1,
-        },
-      });
-      expect(
-        githubApiWithSnapshot(["repos/openclaw/openclaw/releases/tags/v1"], fetchApi, state),
-      ).toEqual({
-        data: {
-          request: ["repos/openclaw/openclaw/releases/tags/v1"],
-          fetches: 2,
-        },
-      });
-      persistGithubSnapshot(state);
-
-      const second = createGithubSnapshotState({
-        base: "a".repeat(40),
-        filePath,
-        target: "b".repeat(40),
-      });
-      expect(githubApiWithSnapshot(["graphql", "-f", "query=one"], fetchApi, second)).toEqual({
-        data: {
-          request: ["graphql", "-f", "query=one"],
-          fetches: 1,
-        },
-      });
-      expect(second.hits).toBe(1);
-      expect(second.misses).toBe(0);
-      expect(fetches).toBe(2);
     },
   );
 
-  it("ignores nested revert markers in squash-merge bodies", () => {
-    const nestedRevert = [
-      "feat(android): render display math (#101435)",
-      "",
-      "* feat(android): render display math",
-      "",
-      ' * Revert "docs(changelog): note display math"',
-      "",
-      `This reverts commit ${"a".repeat(40)}.`,
-    ].join("\n");
-    const topLevelRevert = [
-      'Revert "fix(qa): keep smoke profile on one channel (#101173)" (#101184)',
-      "",
-      `This reverts commit ${"b".repeat(40)}.`,
-    ].join("\n");
-    const squashRevert = [
-      "Revert chat session picker inline search (#85527)",
-      "",
-      '* Revert "fix(ui): keep chat session search inline (#85490)"',
-      "",
-      `This reverts commit ${"c".repeat(40)}.`,
-      "",
-      "* fix(ui): clear applied chat picker search on empty input",
-    ].join("\n");
-    const conventionalSquashRevert = [
-      "chore: revert dependency guard backfill machinery (#87867)",
-      "",
-      '* Revert "ci: isolate dependency guard backfill label (#87882)"',
-      "",
-      `This reverts commit ${"d".repeat(40)}.`,
-      "",
-      "* ci: preserve clawsweeper bot label filter",
-    ].join("\n");
-    const explainedTopLevelRevert = [
-      "revert: restore a provider default",
-      "",
-      "The replacement broke non-native endpoints.",
-      "",
-      `This reverts commit ${"e".repeat(40)}.`,
-    ].join("\n");
-
-    expect(standardRevertedHash(nestedRevert)).toBeUndefined();
-    expect(standardRevertedHash(topLevelRevert)).toBe("b".repeat(40));
-    expect(standardRevertedHash(squashRevert)).toBe("c".repeat(40));
-    expect(standardRevertedHash(conventionalSquashRevert)).toBe("d".repeat(40));
-    expect(standardRevertedHash(explainedTopLevelRevert)).toBe("e".repeat(40));
+  it.each([
+    ["feat: squash", '* Revert "nested"', undefined],
+    ['Revert "fix: original"', "", "b"],
+    ["Revert squash", '* Revert "nested"', "c"],
+    ["chore: revert dependency guard", '* Revert "nested"', "d"],
+    ["revert: restore default", "The replacement broke endpoints.", "e"],
+  ])("recognizes top-level revert: %s", (subject, context, expected) => {
+    const hash = (expected ?? "a").repeat(40);
+    expect(standardRevertedHash(`${subject}\n\n${context}\n\nThis reverts commit ${hash}.`)).toBe(
+      expected ? hash : undefined,
+    );
   });
 
   it("counts only top-level Highlights bullets and enforces the 5-8 policy input", () => {
@@ -976,38 +923,16 @@ process.exitCode = errors.length ? 1 : 0;
 
   it("ignores the stale generated record while rewriting it", () => {
     const record = {
-      pullRequests: new Map([[104732, { references: [102289], thanks: ["fuller-stack-dev"] }]]),
+      pullRequests: new Map([[1, { references: [2], thanks: [] }]]),
       legacyIssues: new Map(),
     };
-
     expect(renderedContributionRecordReferences(record, true)).toEqual([]);
-    expect(renderedContributionRecordReferences(record, false)).toEqual([104732, 102289]);
+    expect(renderedContributionRecordReferences(record, false)).toEqual([1, 2]);
   });
 
   it("excludes Unreleased records from a cumulative shipped tag boundary", () => {
-    const changelog = [
-      "# Changelog",
-      "",
-      "## Unreleased",
-      "",
-      "### Complete contribution record",
-      "",
-      `This audited record covers the complete base..${"a".repeat(40)} history: 1 merged PR.`,
-      "",
-      "#### Pull requests",
-      "",
-      "- **PR #1** fix: not shipped.",
-      "",
-      "## 2026.6.11",
-      "",
-      "### Complete contribution record",
-      "",
-      "This audited record covers the complete base..HEAD history: 0 merged PRs.",
-      "",
-      "#### Pull requests",
-      "",
-      "- **PR #2** fix: shipped.",
-    ].join("\n");
+    const changelog = `## Unreleased\n\n${contributionRecord("base", "a".repeat(40), ["- **PR #1** fix: not shipped."])}
+## 2026.6.11\n\n${contributionRecord("base", "HEAD", ["- **PR #2** fix: shipped."])}`;
 
     expect([...cumulativeShippedPullRequests(changelog, "test baseline")]).toEqual([2]);
   });
@@ -1160,6 +1085,94 @@ process.exitCode = errors.length ? 1 : 0;
     ).toEqual(expected);
   });
 
+  it("credits the original PR, not its backport, and rejects stale generated thanks", () => {
+    const { cwd, base, changelog } = seedRepository("openclaw-release-credit-", "main");
+    const originalMessage =
+      "fix: preserve playback errors (#21)\n\nFixes #20\nCo-authored-by: Helper <helper@example.invalid>";
+    writeFileSync(join(cwd, "playback.txt"), "fixed\n");
+    const original = commitAll(cwd, originalMessage);
+    git(cwd, ["checkout", "-qb", "release", base]);
+    commitAll(cwd, "chore: release preparation");
+    git(cwd, ["cherry-pick", "-x", original]);
+    git(cwd, [
+      "commit",
+      "--amend",
+      "-qm",
+      `${git(cwd, ["log", "-1", "--format=%B"])}\nCo-authored-by: RomneyDa <6581799+RomneyDa@users.noreply.github.com>`,
+    ]);
+    const target = git(cwd, ["rev-parse", "HEAD"]);
+    const stale = `${changelog}- Preserve playback errors by @steipete and @original-helper. (#21) Thanks @RomneyDa.\n\n${contributionRecord(base, target, ["- **PR #21** Related #20. Thanks @RomneyDa."])}`;
+    writeFileSync(join(cwd, "CHANGELOG.md"), stale);
+    const seed = commitAll(cwd, "docs: old credit");
+    const gh = join(cwd, "gh");
+    writeFileSync(
+      gh,
+      `#!${process.execPath}\n
+const original = ${JSON.stringify(original)};
+const target = ${JSON.stringify(target)};
+const query = process.argv.find((arg) => arg.startsWith("query="))?.slice(6) ?? "";
+const data = {};
+for (const [, alias, hash] of query.matchAll(/(c\\d+): repository[\\s\\S]*?object\\(expression: "([0-9a-f]+)"\\)/g)) {
+  data[alias] = { object: {
+    associatedPullRequests: { nodes: hash === original ? [{ number: 21, mergedAt: "2020-01-01T00:00:00Z", mergeCommit: { oid: original } }] : [], pageInfo: { hasNextPage: false } },
+    authors: { nodes: [{ email: "helper@example.invalid", user: { login: "original-helper" } }, ...(hash === target ? [{ email: "6581799+RomneyDa@users.noreply.github.com", user: { login: "RomneyDa" } }] : [])] },
+    author: { user: { login: "release-operator" } }
+  } };
+}
+for (const [, alias, rawNumber] of query.matchAll(/(n\\d+): repository[\\s\\S]*?issueOrPullRequest\\(number: (\\d+)\\)/g)) {
+  const number = Number(rawNumber);
+  data[alias] = { issueOrPullRequest: number === 21 ? {
+    __typename: "PullRequest", number, title: "fix: preserve playback errors", baseRefName: "main",
+    mergedAt: "2020-01-01T00:00:00Z", mergeCommit: { oid: original, message: ${JSON.stringify(originalMessage)} },
+    author: { __typename: "User", login: "steipete" }, closingIssuesReferences: { nodes: [{ number: 20 }], pageInfo: { hasNextPage: false } }
+  } : { __typename: "Issue", number, title: "Playback failed", author: { __typename: "User", login: "reporter" }, closedByPullRequestsReferences: { nodes: [], pageInfo: { hasNextPage: false } } } };
+}
+for (const [, alias, login] of query.matchAll(/(u\\d+): user\\(login: "([^"]+)"\\)/g)) data[alias] = { __typename: "User", login };
+console.log(JSON.stringify({ data }));
+`,
+    );
+    chmodSync(gh, 0o755);
+    splitChangelog({ rootDir: cwd });
+    const run = (write: boolean) =>
+      runVerifier(cwd, {
+        base,
+        target,
+        mainRef: original,
+        write,
+        extraArgs: ["--seed-ref", seed],
+        env: { PATH: `${cwd}:${process.env.PATH}` },
+      });
+    const generated = run(true);
+    expect(generated.stderr).toBe("");
+    expect(generated.status, generated.stdout).toBe(0);
+    const entryPath = join(cwd, "CHANGELOG/2026.7.1.md");
+    const section = readFileSync(entryPath, "utf8");
+    expect(section).toContain(
+      "- **PR #21** Related #20. Thanks @steipete and @original-helper and @reporter.",
+    );
+    expect(section).toContain("(#21) Thanks @steipete, @original-helper, and @reporter.");
+    expect(section).not.toContain("@RomneyDa");
+    expect(section).not.toContain("@release-operator");
+    const checked = run(false);
+    expect(checked.status, checked.stderr + checked.stdout).toBe(0);
+    writeReleaseChangelog({
+      rootDir: cwd,
+      version: "2026.7.1",
+      section: section.replaceAll("Thanks @steipete", "Thanks @RomneyDa and @steipete"),
+    });
+    const rejected = run(false);
+    expect(rejected.status).toBe(1);
+    expect(JSON.parse(rejected.stdout).errors).toEqual(
+      expect.arrayContaining([
+        "unexpected Thanks @RomneyDa for #21",
+        "unexpected editorial Thanks @RomneyDa",
+      ]),
+    );
+    const repaired = run(true);
+    expect(repaired.status, repaired.stderr + repaired.stdout).toBe(0);
+    expect(readFileSync(entryPath, "utf8")).toBe(section);
+  });
+
   it.each([0, 1, 2])(
     "accounts for merged side ancestry with %i reversals without duplicating shipped PRs",
     (reversals) => {
@@ -1199,18 +1212,7 @@ process.exitCode = errors.length ? 1 : 0;
       git(cwd, ["checkout", "-qb", "shipped-release", base]);
       writeFileSync(
         join(cwd, "CHANGELOG.md"),
-        [
-          "## 2026.6.1",
-          "",
-          "### Complete contribution record",
-          "",
-          `This audited record covers the complete ${base}..${base} history: 1 in-range PR + 0 retained seed-only PRs = 1 unique PR.`,
-          "",
-          "#### Pull requests",
-          "",
-          "- **PR #12** Thanks @contributor.",
-          "",
-        ].join("\n"),
+        `## 2026.6.1\n\n${contributionRecord(base, base, ["- **PR #12** Thanks @contributor."], "1 in-range PR + 0 retained seed-only PRs = 1 unique PR.")}`,
       );
       git(cwd, ["add", "CHANGELOG.md"]);
       git(cwd, ["commit", "-qm", "docs: shipped record"]);
@@ -1297,15 +1299,11 @@ console.log(JSON.stringify({ data }));
     { message: "CI #34244092230 passed.", identity: "wrong-repo", accepted: false },
   ])("classifies active workflow references without losing issue accounting: %j", (scenario) => {
     const referenceNumber = Number(scenario.message.match(/#(\d+)/)?.[1]);
-    const cwd = tempDirs.make("openclaw-release-notes-runs-");
-    git(cwd, ["init", "-q", "-b", "main"]);
-    writeFileSync(
-      join(cwd, "CHANGELOG.md"),
+    const { cwd, base } = seedRepository(
+      "openclaw-release-notes-runs-",
+      "main",
       [...createReleaseNotesFixtureLines(), scenario.note ?? "", ""].join("\n"),
     );
-    git(cwd, ["add", "CHANGELOG.md"]);
-    git(cwd, ["commit", "-qm", "chore: base"]);
-    const base = git(cwd, ["rev-parse", "HEAD"]);
     writeFileSync(join(cwd, "validation.txt"), scenario.message);
     git(cwd, ["add", "validation.txt"]);
     git(cwd, ["commit", "-qm", "chore: validation", "-m", scenario.message]);
@@ -1719,15 +1717,8 @@ console.log(JSON.stringify({ data }));
     { mode: "missing-data", attempts: 1, error: "did not include data", waits: [] },
     { mode: "schema", attempts: 1, error: "Field unknownField does not exist", waits: [] },
   ])("handles GraphQL transport failure at the CLI boundary: $mode", (scenario) => {
-    const cwd = tempDirs.make("openclaw-release-notes-transport-");
-    git(cwd, ["init", "-q", "-b", "main"]);
-    const changelog = createReleaseNotesFixtureLines().join("\n");
-    writeFileSync(join(cwd, "CHANGELOG.md"), changelog);
-    git(cwd, ["add", "CHANGELOG.md"]);
-    git(cwd, ["commit", "-qm", "chore: baseline"]);
-    const base = git(cwd, ["rev-parse", "HEAD"]);
-    git(cwd, ["commit", "--allow-empty", "-qm", "chore: source contribution"]);
-    const target = git(cwd, ["rev-parse", "HEAD"]);
+    const { cwd, base, changelog } = seedRepository("openclaw-release-notes-transport-", "main");
+    const target = commitAll(cwd, "chore: source contribution");
     const gh = join(cwd, "gh");
     writeFileSync(
       gh,
@@ -1814,33 +1805,24 @@ Atomics.wait = function (...args) {
   it.each(["symbolic target", "release-only base", "nonancestor base"])(
     "validates the release range at the CLI boundary: %s",
     (mode) => {
-      const cwd = tempDirs.make("openclaw-release-notes-");
-      git(cwd, ["init", "-q"]);
-      writeFileSync(join(cwd, "CHANGELOG.md"), createReleaseNotesFixtureLines().join("\n"));
-      git(cwd, ["add", "CHANGELOG.md"]);
-      git(cwd, ["commit", "-qm", "initial"]);
-      const root = git(cwd, ["rev-parse", "HEAD"]);
+      const { cwd, base: root } = seedRepository("openclaw-release-notes-");
       if (mode === "release-only base") {
         writeFileSync(join(cwd, "main.txt"), "main\n");
-        git(cwd, ["add", "main.txt"]);
-        git(cwd, ["commit", "-qm", "main"]);
+        commitAll(cwd, "main");
         git(cwd, ["branch", "main-ref"]);
 
         git(cwd, ["checkout", "-qb", "release", root]);
         writeFileSync(join(cwd, "release.txt"), "release\n");
-        git(cwd, ["add", "release.txt"]);
-        git(cwd, ["commit", "-qm", "release"]);
+        commitAll(cwd, "release");
         git(cwd, ["tag", "beta-base"]);
       } else if (mode === "nonancestor base") {
         git(cwd, ["branch", "target"]);
         writeFileSync(join(cwd, "base.txt"), "base\n");
-        git(cwd, ["add", "base.txt"]);
-        git(cwd, ["commit", "-qm", "base"]);
+        commitAll(cwd, "base");
         git(cwd, ["tag", "base-ref"]);
         git(cwd, ["checkout", "-q", "target"]);
         writeFileSync(join(cwd, "target.txt"), "target\n");
-        git(cwd, ["add", "target.txt"]);
-        git(cwd, ["commit", "-qm", "target"]);
+        commitAll(cwd, "target");
       }
       if (mode !== "nonancestor base") {
         splitChangelog({ rootDir: cwd });
@@ -1875,25 +1857,13 @@ Atomics.wait = function (...args) {
   );
 
   it("leaves split artifacts untouched when the rendered ledger fails validation", () => {
-    const cwd = tempDirs.make("openclaw-release-notes-");
-    git(cwd, ["init", "-q"]);
-    const changelog = [
-      "# Changelog",
-      "",
-      "## 2026.7.1",
-      "",
-      "### Highlights",
-      "",
-      "- Only one highlight.",
-      "",
-      "### Changes",
-      "",
-      "### Fixes",
-      "",
-    ].join("\n");
-    writeFileSync(join(cwd, "CHANGELOG.md"), changelog);
-    git(cwd, ["add", "CHANGELOG.md"]);
-    git(cwd, ["commit", "-qm", "initial"]);
+    const { cwd, changelog } = seedRepository(
+      "openclaw-release-notes-",
+      undefined,
+      createReleaseNotesFixtureLines()
+        .filter((line) => !["- Two.", "- Three.", "- Four.", "- Five."].includes(line))
+        .join("\n"),
+    );
     const manifestPath = join(cwd, "release-manifest.json");
 
     splitChangelog({ rootDir: cwd });
@@ -1902,6 +1872,7 @@ Atomics.wait = function (...args) {
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("1 errors");
+    expect(result.stdout).toContain("- ### Highlights must contain 5-8 top-level bullets; found 1");
     expect(JSON.parse(readFileSync(manifestPath, "utf8"))).toMatchObject({
       schemaVersion: 3,
       version: "2026.7.1",

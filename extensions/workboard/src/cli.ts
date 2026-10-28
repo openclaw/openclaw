@@ -1,4 +1,8 @@
-import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
+import {
+  WORKBOARD_STATUSES,
+  type WorkboardCard,
+  type WorkboardCardCursor,
+} from "@openclaw/workboard-contract";
 import type { Command } from "commander";
 import { runWithLocalStateOwner } from "openclaw/plugin-sdk/cli-state-owner";
 import {
@@ -11,6 +15,7 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
 import { redactClaimToken, redactDispatchResult } from "./card-redaction.js";
+import { compareCards } from "./store-card-helpers.js";
 import type { WorkboardStore } from "./store.js";
 
 type JsonOptions = {
@@ -102,10 +107,22 @@ export function registerWorkboardCli(params: {
           return await action(store, assertCurrent);
         }),
     });
-  const list = (boardId?: string) =>
-    local("workboard.cards.list", { boardId }, async (store) => ({
-      cards: await store.list({ boardId }),
-    }));
+  const list = async (boardId?: string) => {
+    const cards = new Map<string, WorkboardCard>();
+    let after: WorkboardCardCursor | undefined;
+    do {
+      const page = await local<{ cards: WorkboardCard[]; nextCursor?: WorkboardCardCursor }>(
+        "workboard.cards.list",
+        { boardId, ...(after ? { after } : {}) },
+        (store) => store.listCards(boardId, undefined, after),
+      );
+      for (const card of page.cards) {
+        cards.set(card.id, card);
+      }
+      after = page.nextCursor;
+    } while (after);
+    return { cards: [...cards.values()].toSorted(compareCards) };
+  };
   const workboard = params.program
     .command("workboard")
     .description("Manage Workboard cards and worker dispatch");

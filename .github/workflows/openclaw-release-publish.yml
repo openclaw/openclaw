@@ -123,7 +123,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.21.0"
+  NODE_VERSION: "24.22.1"
 
 jobs:
   resolve_release_target:
@@ -476,7 +476,7 @@ jobs:
 
       - name: Download full release validation manifest
         if: ${{ inputs.release_evidence_mode == 'full-release-validation' && (inputs.publish_openclaw_npm || inputs.plugin_publish_scope == 'all-publishable' || inputs.preflight_run_id != '' || inputs.full_release_validation_run_id != '') }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ steps.full_run.outputs.attempt }}
           path: ${{ runner.temp }}/full-release-validation-manifest
@@ -485,7 +485,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -681,9 +681,16 @@ jobs:
           }
           const archivesDir = join(env.RUNNER_TEMP, 'openclaw-npm-preflight-archives');
           mkdirSync(archivesDir, { recursive: true });
-          for (const [artifact, directory, expectedEntries] of [
-            [preflight[0], 'openclaw-npm-preflight-manifest', undefined],
-            [sdk[0], 'openclaw-plugin-sdk-api-evidence', ['plugin-sdk-api-release-diff.json', 'plugin-sdk-api-release-evidence.json']],
+          const sdkRequiredEntries = ['plugin-sdk-api-release-diff.json', 'plugin-sdk-api-release-evidence.json'];
+          // Preflights also upload the readable diff summary; older ones carry only the JSON pair.
+          const sdkAllowedEntries = new Set([...sdkRequiredEntries, 'plugin-sdk-api-release-diff.md']);
+          for (const [artifact, directory, entryPolicy] of [
+            [preflight[0], 'openclaw-npm-preflight-manifest', { minEntries: 1, maxEntries: 1024, allowPath: () => true }],
+            [sdk[0], 'openclaw-plugin-sdk-api-evidence', {
+              minEntries: sdkRequiredEntries.length,
+              maxEntries: sdkAllowedEntries.size,
+              allowPath: (name) => sdkAllowedEntries.has(name),
+            }],
           ]) {
             const outputDir = join(env.RUNNER_TEMP, directory);
             const archivePath = join(archivesDir, `${artifact.id}.zip`);
@@ -723,10 +730,7 @@ jobs:
                 runStatePolicy: 'completed-success',
               },
               archivePolicy: {
-                expectedEntries,
-                minEntries: 1,
-                maxEntries: 1024,
-                allowPath: () => true,
+                ...entryPolicy,
                 maxEntryBytes: () => 256 * 1024 * 1024,
               },
             };
@@ -735,6 +739,13 @@ jobs:
             const files = qualified
               ? inspectActionsArtifactZipWithPolicy((await downloadExactActionsArtifactArchive(download)).archiveBytes, download.archivePolicy)
               : (await readPublicationArtifactArchive(download)).files;
+            if (artifact === sdk[0]) {
+              const names = new Set([...files].map(([name]) => name));
+              const missing = sdkRequiredEntries.filter((name) => !names.has(name));
+              if (missing.length > 0) {
+                throw new Error(`${artifact.name} is missing ${missing.join(', ')}.`);
+              }
+            }
             rmSync(outputDir, { recursive: true, force: true });
             mkdirSync(outputDir, { recursive: true });
             for (const [name, bytes] of files) {
@@ -926,7 +937,7 @@ jobs:
 
       - name: Download focused release evidence
         if: ${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: authorized-beta-focused-v1-${{ inputs.focused_release_evidence_run_id }}-${{ steps.focused_run.outputs.attempt }}
           path: ${{ runner.temp }}/authorized-beta-focused-evidence
@@ -1049,7 +1060,7 @@ jobs:
           (Path(env["RUNNER_TEMP"]) / "openclaw-release-children" / "dispatch.json").write_text(json.dumps(record) + "\n")
           PYTHON
       - name: Upload exact release child dispatch record
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-release-children-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/openclaw-release-children/dispatch.json
@@ -1119,7 +1130,7 @@ jobs:
           wait_for_run ci.yml "${run_id}" "${PARENT_WORKFLOW_SHA}" "" false
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -1175,7 +1186,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -1232,7 +1243,7 @@ jobs:
           subject-path: ${{ runner.temp }}/android-release-approval/approval.json
 
       - name: Upload Android release approval
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: android-release-approval-${{ github.run_id }}
           path: ${{ runner.temp }}/android-release-approval/approval.json
@@ -1315,7 +1326,7 @@ jobs:
 
       - name: Download full release validation manifest
         if: ${{ inputs.publish_openclaw_npm && inputs.release_evidence_mode == 'full-release-validation' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}
           path: ${{ runner.temp }}/full-release-validation-manifest
@@ -1325,7 +1336,7 @@ jobs:
 
       - name: Download focused release evidence
         if: ${{ inputs.publish_openclaw_npm && inputs.release_evidence_mode == 'authorized-beta-focused-v1' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: authorized-beta-focused-v1-${{ inputs.focused_release_evidence_run_id }}-${{ needs.resolve_release_target.outputs.focused_release_evidence_run_attempt }}
           path: ${{ runner.temp }}/authorized-beta-focused-evidence
@@ -1335,7 +1346,7 @@ jobs:
 
       - name: Setup supported Node runtime
         if: ${{ always() }}
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -1420,7 +1431,7 @@ jobs:
           subject-path: ${{ runner.temp }}/openclaw-release-approval/approval.json
 
       - name: Upload release approval receipt
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.approval_receipt.outputs.artifact_name }}
           path: ${{ runner.temp }}/openclaw-release-approval/approval.json
@@ -1566,7 +1577,7 @@ jobs:
 
       - name: Upload ClawHub bootstrap approval
         if: ${{ steps.clawhub_plan.outputs.bootstrap_should_dispatch == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: clawhub-bootstrap-approval-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/clawhub-bootstrap-approval/approval.json
@@ -1626,7 +1637,7 @@ jobs:
 
       - name: Upload stable npm bootstrap approval
         if: ${{ inputs.npm_dist_tag == 'latest' && inputs.release_evidence_mode == 'full-release-validation' && (needs.resolve_release_target.outputs.release_profile == 'stable' || needs.resolve_release_target.outputs.release_profile == 'full') }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: npm-stable-bootstrap-approval-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/npm-stable-bootstrap-approval/approval.json
@@ -1835,7 +1846,7 @@ jobs:
           NODE
 
       - name: Upload exact release child dispatch record
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-release-children-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/openclaw-release-children/dispatch.json
@@ -1931,7 +1942,7 @@ jobs:
         id: ledger_token
         if: ${{ !cancelled() && inputs.publish_openclaw_npm && inputs.npm_dist_tag == 'latest' && steps.core_start.outcome == 'success' }}
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
@@ -1955,7 +1966,7 @@ jobs:
       - name: Upload immutable ClawHub parent authorization
         id: clawhub_receipt
         if: steps.children.outputs.plugin_clawhub_run_id != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.clawhub_authorization.outputs.artifact_name }}
           path: ${{ runner.temp }}/clawhub-parent-authorization/authorization.json
@@ -2156,7 +2167,7 @@ jobs:
       - name: Upload postpublish diagnostics
         if: ${{ always() }}
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-release-postpublish-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/openclaw-release-postpublish-evidence/release-postpublish-diagnostics.json
@@ -2164,7 +2175,7 @@ jobs:
 
       - name: Upload postpublish evidence
         if: ${{ always() && inputs.publish_openclaw_npm && (steps.complete.outcome == 'success' || steps.complete.outputs.postpublish_evidence_ready == 'true') }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-release-postpublish-evidence-${{ inputs.tag }}
           path: ${{ runner.temp }}/openclaw-release-postpublish-evidence/release-postpublish-evidence.json
@@ -2194,7 +2205,7 @@ jobs:
       contents: read
     steps:
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -2314,7 +2325,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -2382,7 +2393,7 @@ jobs:
 
       - name: Retain Linux updater continuity evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-updater-continuity-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
           path: |
@@ -2436,7 +2447,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -2460,7 +2471,7 @@ jobs:
           echo "- Legacy Linux bridge: degraded; dispatch acceptance is not mirror success." >> "$GITHUB_STEP_SUMMARY"
       - name: Retain Linux mirror dispatch evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-mirror-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/linux-mirror-dispatch.json
@@ -2487,14 +2498,14 @@ jobs:
           persist-credentials: false
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
 
       - name: Create Linux release request token
         id: linux_request_token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
@@ -2523,7 +2534,7 @@ jobs:
 
       - name: Retain Linux request evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-release-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/linux-dispatch.json
@@ -2582,7 +2593,7 @@ jobs:
 
       - name: Upload Windows dispatch evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-release-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/windows-dispatch.json
@@ -2607,7 +2618,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -2616,7 +2627,7 @@ jobs:
         id: recovery_manifest
         if: ${{ needs.publish.outputs.clawhub_run_id != '' && needs.publish.outputs.clawhub_receipt != 'success' }}
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: openclaw-clawhub-recovery-manifest-${{ needs.publish.outputs.clawhub_run_id }}-1
           path: ${{ runner.temp }}/clawhub-recovery-manifest
@@ -2653,7 +2664,7 @@ jobs:
 
       - name: Upload sealed cleanup evidence
         id: cleanup_evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: clawhub-cleanup-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: |

@@ -107,7 +107,6 @@ export function scanBundledPluginLoadPathMigrations(
   return hits;
 }
 
-/** Format user-facing warnings for redundant bundled plugin load path aliases. */
 export function collectBundledPluginLoadPathWarnings(params: {
   hits: BundledPluginLoadPathHit[];
   doctorFixCommand: string;

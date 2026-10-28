@@ -139,7 +139,6 @@ describe("maybeRestartService", () => {
     "initial-stopped-reachable",
     "initial-plugin-error",
     "initial-plugin-unavailable",
-    "initial-channel-error",
     "initial-readyz-error",
     "initial-readyz-rollback",
     "initial-version-error",
@@ -206,9 +205,6 @@ describe("maybeRestartService", () => {
                 ],
               }
             : {}),
-          ...(change === "initial-channel-error"
-            ? { channelProbeErrors: [{ id: "fixture-channel", error: "connection failed" }] }
-            : {}),
         };
         mocks.waitForGatewayHealthyRestart.mockResolvedValue(observedHealth);
         mocks.inspectGatewayRestart.mockResolvedValue(observedHealth);
@@ -252,18 +248,11 @@ describe("maybeRestartService", () => {
             ? { check: "versionMatch", code: "version-mismatch" }
             : change === "initial-build-error"
               ? { check: "versionMatch", code: "build-id-mismatch" }
-              : change === "initial-channel-error"
-                ? {
-                    check: "channelsReady",
-                    code: "channel-errors",
-                    pluginId: "fixture-channel",
-                    message: "connection failed",
-                  }
-                : change === "initial-readyz-error" || rollback
-                  ? { check: "readyz", code: "readyz-unhealthy" }
-                  : change === "initial-settle-error"
-                    ? { check: "settled", code: "timeout" }
-                    : { check: "service", code: "service-not-running" };
+              : change === "initial-readyz-error" || rollback
+                ? { check: "readyz", code: "readyz-unhealthy" }
+                : change === "initial-settle-error"
+                  ? { check: "settled", code: "timeout" }
+                  : { check: "service", code: "service-not-running" };
         expect(updateResult.steps).toContainEqual(
           expect.objectContaining({
             name: "gateway verification",
@@ -775,7 +764,7 @@ describe("maybeRestartService", () => {
     },
   );
 
-  it("rejects channel failures even when a Git target has no build identity", async () => {
+  it("rejects unverified Git readiness despite channel warnings", async () => {
     mocks.waitForGatewayHealthyRestart.mockResolvedValue({
       runtime: { status: "running", pid: 8000 },
       portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
@@ -797,7 +786,7 @@ describe("maybeRestartService", () => {
         onVerificationFailure,
       }),
     ).resolves.toBe("restart-health-failed");
-    expect(onVerificationFailure).toHaveBeenCalledWith("channel-errors");
+    expect(onVerificationFailure).toHaveBeenCalledWith("timeout");
   });
 
   it.for([

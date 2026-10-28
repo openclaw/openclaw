@@ -88,10 +88,17 @@ available while the Gateway is still draining. Controllers may reconnect after t
 call resume. The
 [Admin HTTP RPC plugin](/plugins/admin-http-rpc) remains available for hosts
 that cannot speak WebSocket at all. If every control path is lost, the
-two-minute lease expiry reopens admission automatically.
+lease expiry reopens admission automatically: 45 seconds for a drain, or two
+minutes for an idle freeze/snapshot lease.
 
 Closing the Gateway cancels background work queued by operator reconnects without
 waiting for suspension expiry. Shutdown still waits for work already running to finish.
+
+Lifecycle operator requests take priority over unrelated queued work. Their
+authentication, live authority checks, and same-connection mutation ordering
+still apply. Hello does not wait for session membership refreshes: people remain
+visible, while pending watched-session references are omitted until a subsequent
+presence publication.
 
 The hello snapshot includes `suspension: { phase }`, and `gateway.suspension`
 events publish admission changes immediately. The phase is `accepting`,
@@ -99,9 +106,7 @@ events publish admission changes immediately. The phase is `accepting`,
 The Control UI's bottom-left connection indicator shows **Suspending…** during
 preparation or draining and **Suspended** while prepared, including in Settings.
 It clears when suspension admission reopens, not when a request succeeds.
-Offline and restart indicators take precedence. Scheduler recovery keeps the
-suspension indicator until admission actually reopens; there is no separate
-resuming phase.
+Offline and restart indicators take precedence; there is no separate resuming phase.
 
 The RPC contract is:
 
@@ -142,7 +147,7 @@ IDs are trimmed, must contain a non-whitespace character, and are limited to
 }
 ```
 
-If `drain: true` finds active work, preparation acquires a renewable lease,
+If `drain: true` finds active work, preparation acquires a bounded lease,
 pauses new automatic cron scheduling, closes admission to unrelated new work,
 and returns:
 
@@ -151,7 +156,7 @@ and returns:
   "status": "draining",
   "suspensionId": "2c3f...",
   "expiresAtMs": 1770000000000,
-  "retryAfterMs": 20000,
+  "retryAfterMs": 5000,
   "activeCount": 2,
   "blockers": [
     { "kind": "root-request", "count": 1, "message": "1 active request" },
@@ -168,13 +173,27 @@ it closes, the controller resumes the Gateway, or the lease expires. With
 block readiness. Neither policy terminates or detaches terminals during
 preparation, polling, renewal, resume, or lease expiry.
 
+Drain leases expire **45 seconds after initial preparation**: a 30-second drain
+budget plus 15 seconds for handoff or cleanup. Repeating prepare, polling, and
+reaching `ready` do not extend that deadline. A lost controller therefore cannot
+leave users fenced for minutes. RPC connections may close and reconnect without
+releasing the lease; CLI and HTTP controllers use separate connections for each
+call. A successful handoff must commit shutdown before expiry. Expiry never
+interrupts admitted work or discards pending writes; it resumes scheduling and
+reopens admission, logging a warning. Controllers must defer if they cannot
+complete handoff within the deadline. Entry and exit logs identify the owner
+request, lease, caller, and reason; suspension IDs remain absent from public
+presence events.
+
 Poll `gateway.suspend.status` with the returned `suspensionId`, honoring
-`retryAfterMs`. While blockers remain, status returns `status: "draining"`
+`retryAfterMs`. A held drain recommends five-second polling so completed work
+does not leave new work waiting through the longer busy-preparation retry.
+While blockers remain, status returns `status: "draining"`
 together with `expiresAtMs`, `retryAfterMs`, `activeCount`, and `blockers`.
-Each status call refreshes the active-work snapshot. If protected lifecycle or
-final-chat writes are pending, the RPC waits up to 15 seconds for them to settle,
-then returns a fresh observation. Writes still pending at that deadline remain
-reported; polling never cancels work, releases custody, or renews the lease.
+Each status call immediately returns a fresh active-work snapshot, including
+pending protected lifecycle or final-chat writes. Polling never waits for those
+writes, cancels work, releases custody, or renews the lease. The handoff owner
+checks write custody again before authorizing a stop.
 Once every blocker has finished, the same lease transitions to
 `{"status":"ready","expiresAtMs":...}`.
 Status preserves the original response shape by default for published validators.
@@ -248,12 +267,11 @@ change an older resident's responses. Request lifecycle metadata only once a
 Gateway version supporting it is running. Drivers must still verify their exact
 predecessor and handle transport closure through their lifecycle owner.
 
-A competing request ID or transient scheduler-resume failure returns retryable
-`UNAVAILABLE` with `retryAfterMs`. During scheduler recovery, prepare, status,
-and resume all return that error, the Gateway remains not-ready and
-fail-closed, and the host must not freeze or snapshot it. OpenClaw retries the
-scheduler automatically and reopens admission only after recovery succeeds. A
-mismatched resume ID returns `INVALID_REQUEST`. Prepare is subject to the
+A competing request ID returns retryable `UNAVAILABLE` with `retryAfterMs`.
+Resume and lease expiry request cron scheduling to resume, then reopen admission.
+Cron worker refresh failures are reported in logs; suspension does not add a
+separate fail-closed scheduler recovery loop. A mismatched resume ID returns
+`INVALID_REQUEST`. Prepare is subject to the
 Gateway's control-plane write limit of 30 attempts per minute; honor the
 returned retry delay. WebSocket clients are bucketed by device and IP. Admin HTTP
 controllers are bucketed by resolved client IP, so controllers behind one
@@ -267,14 +285,14 @@ With `drain: true`, the same suspension owner instead keeps admission closed
 and cron scheduling paused until existing work settles. Already-owned cron
 completion and reconciliation continue.
 
-Both draining and ready leases share a two-minute budget starting before work
-inspection. Preparation that exhausts that budget resumes scheduling and fails
-instead of returning an expired lease. Clock rollback does not extend the budget.
-Repeat `prepare` before
-`expiresAtMs` with the same `requestId`, terminal policy, and drain mode to renew
-the same `suspensionId` unless a restart handoff is armed; changing any of those values conflicts with the
-existing lease. Use `status` for routine polling and reserve `prepare` for
-renewal to avoid consuming the write budget. Explicit resume and lease expiry
+The lease budget starts before work inspection: 45 seconds with `drain: true`,
+or two minutes for refuse-only freeze/snapshot preparation. Preparation that
+exhausts its budget resumes scheduling and fails instead of returning an expired
+lease. Clock rollback does not extend the budget. Repeat `prepare` before
+`expiresAtMs` with the same `requestId`, terminal policy, and drain mode to
+observe the same `suspensionId`; changing any of those values conflicts with the
+existing lease. Only refuse-only leases renew, and only before a restart handoff
+is armed. Use `status` for routine polling to avoid consuming the write budget. Explicit resume and lease expiry
 restore scheduling before reopening admission. Leases remain in memory and
 disappear if the Gateway process exits.
 Restart emission that becomes due during a ready lease waits until the lease
@@ -311,7 +329,8 @@ contract.
 
 <Tip>
   For host wake scheduling, keep the OpenClaw-facing part in an in-process
-  plugin and project idempotent full snapshots to the external host adapter.
+  plugin and send full snapshots to the external host adapter. Applying the same
+  snapshot again must have no additional effect.
   The hosting controller should not import the Plugin SDK or reconstruct cron
   state from event deltas. See [Safe external cron
   projection](/plugins/hooks/lifecycle#safe-external-cron-projection).

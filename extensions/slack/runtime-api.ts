@@ -43,5 +43,4 @@ export {
   type SlackUserLookup,
   type SlackUserResolution,
 } from "./src/resolve-users.js";
-export { registerSlackPluginHttpRoutes } from "./src/http/plugin-routes.js";
 export { setSlackRuntime } from "./src/runtime.js";

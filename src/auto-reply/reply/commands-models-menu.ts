@@ -1,12 +1,12 @@
 import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
-import { resolveModelRuntimeRoute } from "../../shared/model-runtime-route.js";
+import {
+  CLAUDE_CLI_SETUP_GUIDANCE,
+  resolveModelRuntimeRoute,
+} from "../../shared/model-runtime-route.js";
 import { formatProviderLoginCommand } from "../../shared/provider-login-command.js";
 
 const CUSTOM_MODEL_SETUP_GUIDANCE =
   "Set up this connection with the custom-provider guide: https://docs.openclaw.ai/concepts/model-providers/custom-providers";
-// missing-auth on a Claude CLI route also covers a disabled plugin, so stay conditional.
-const CLAUDE_CLI_SETUP_GUIDANCE =
-  "If Claude Code is signed out, run claude auth login on the Gateway host, or choose another model.";
 const MODEL_PROVIDER_ROUTE_DETAILS = {
   claudeCli:
     "Claude CLI runs through Claude Code using its native login or a selected saved account. An explicitly selected API-key account has separate API billing; CLI does not mean free or subscription-only.",

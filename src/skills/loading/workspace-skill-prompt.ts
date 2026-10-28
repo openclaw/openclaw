@@ -1,15 +1,12 @@
+import { resolveAgentEntry } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveEffectiveAgentSkillsLimits } from "../discovery/agent-filter.js";
-import { isSkillPromptVisible } from "../discovery/skill-index.js";
-import { resolveSkillFileHost } from "../skill-file-host.js";
+import { projectSkillSnapshot } from "../runtime/refresh.js";
 import type { SkillEligibilityContext, SkillEntry, SkillSnapshot } from "../types.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import { hasUnavailableSkillSecretOwners, isSkillSecretOwnerUnavailable } from "./config.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import { compactSkillsPromptForContext, escapeSkillXml } from "./skill-contract.js";
-import { compactPromptSkills } from "./skill-paths.js";
-import { prepareSkillsForPrompt } from "./skill-prompt-limits.js";
 import { resolveWorkspaceSkillPromptEntries } from "./workspace-skill-loader.js";
 
 const skillsLogger = createSubsystemLogger("skills");
@@ -25,43 +22,40 @@ export async function buildSkillSnapshot(
   opts?: WorkspaceSkillBuildOptions & { snapshotVersion?: number },
 ): Promise<SkillSnapshot> {
   const { eligible, skillFilter } = await resolveWorkspaceSkillPromptEntries(workspaceDir, opts);
-  const promptEntries = eligible.filter(isSkillPromptVisible);
-  const remoteNote = opts?.eligibility?.remote?.note?.trim();
-  const resolvedSkills = promptEntries.map((entry) => entry.skill);
-  const limits = opts?.config?.skills?.limits;
-  const agentLimits = resolveEffectiveAgentSkillsLimits(opts?.config, opts?.agentId);
-  const prepared = prepareSkillsForPrompt({
-    skills: compactPromptSkills(resolvedSkills, {
-      config: opts?.config,
-      agentId: opts?.agentId,
-    }),
-    maxSkillsInPrompt: limits?.maxSkillsInPrompt,
-    maxSkillsPromptChars: agentLimits?.maxSkillsPromptChars ?? limits?.maxSkillsPromptChars,
-    remoteNote,
-    preserveOrder: opts?.preserveEntryOrder,
+  const agent =
+    opts?.config && opts.agentId ? resolveAgentEntry(opts.config, opts.agentId) : undefined;
+  const snapshot = await projectSkillSnapshot({
+    workspaceDir,
+    eligible,
+    skillFilter,
+    // Eligibility is already selected. Rendering needs no channel, provider, or plugin config.
+    config: opts?.config
+      ? {
+          skills: { limits: opts.config.skills?.limits },
+          ...(agent
+            ? {
+                agents: {
+                  entries: {
+                    [agent.id]: { agentDir: agent.agentDir, skillsLimits: agent.skillsLimits },
+                  },
+                },
+              }
+            : {}),
+        }
+      : undefined,
+    agentId: opts?.agentId,
+    skillOverrides: opts?.skillOverrides,
+    eligibility: opts?.eligibility
+      ? {
+          nodeSkills: opts.eligibility.nodeSkills,
+          remote: opts.eligibility.remote ? { note: opts.eligibility.remote.note } : undefined,
+        }
+      : undefined,
+    preserveEntryOrder: opts?.preserveEntryOrder,
+    snapshotVersion: opts?.snapshotVersion,
   });
-  const byName = new Map(resolvedSkills.map((skill) => [skill.name, skill]));
-  return {
-    prompt: prepared.prompt,
-    skills: eligible.map((entry) => ({
-      name: entry.skill.name,
-      source: { filePath: entry.skill.filePath, fileHost: resolveSkillFileHost(entry.skill) },
-      gatewayFilePath:
-        resolveSkillFileHost(entry.skill) === "gateway" ? entry.skill.filePath : undefined,
-      skillKey: resolveSkillKey(entry),
-      primaryEnv: entry.metadata?.primaryEnv,
-      requiredEnv: entry.metadata?.requires?.env?.slice(),
-    })),
-    ...(skillFilter === undefined ? {} : { skillFilter }),
-    ...(opts?.skillOverrides ? { skillOverrides: opts.skillOverrides } : {}),
-    ...(opts?.eligibility?.nodeSkills
-      ? { nodeSkillsEligibility: opts.eligibility.nodeSkills }
-      : {}),
-    resolvedSkills: prepared.skills.map((skill) => byName.get(skill.name)!),
-    discoverySkills: resolvedSkills,
-    version: opts?.snapshotVersion,
-    promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
-  };
+  opts?.assertCurrent?.();
+  return snapshot;
 }
 
 type ResolveSkillsPromptParams = {

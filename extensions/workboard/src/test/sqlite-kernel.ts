@@ -1,7 +1,12 @@
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { readSqliteDatabaseWriteTokenForPath } from "openclaw/plugin-sdk/sqlite-runtime";
 import type { WorkboardKeyedStore } from "../persistence-types.js";
-import { createWorkboardSqliteKernel } from "../sqlite-store-kernel.js";
-import type { createWorkboardSqliteStores } from "../sqlite-store.js";
+import { workboardSqliteBackendEntrypoint } from "../sqlite-backend-entrypoint.test-support.js";
+import {
+  createWorkboardSqliteKernel,
+  createWorkboardSqliteStores,
+  workboardTestDatabaseInput,
+} from "./database-config.js";
 
 // Native statement counts and error ordering stay with the synchronous worker kernel.
 function asyncKeyedStore<T>(store: {
@@ -21,6 +26,12 @@ function asyncKeyedStore<T>(store: {
 export function createKernelStores(
   dbPath: string,
 ): Omit<ReturnType<typeof createWorkboardSqliteStores>, "runWithWriteAuthority"> {
+  if (workboardTestDatabaseInput()) {
+    return createWorkboardSqliteStores({
+      dbPath,
+      workerModuleUrl: resolveRuntimeWorkerUrl(workboardSqliteBackendEntrypoint),
+    });
+  }
   const kernel = createWorkboardSqliteKernel(dbPath);
   return {
     ready: Promise.resolve(),

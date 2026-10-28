@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import type { createQaGatewayChild, QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
@@ -36,7 +37,7 @@ import type { NodeWorkerContainerEngine } from "../../../../src/node-host/node-w
 import type { createNodeWorkerSupervisor } from "../../../../src/node-host/node-worker-supervisor.js";
 import type { NodeWorkerWorkspaceRuntime } from "../../../../src/node-host/node-worker-workspace.js";
 import { VERSION } from "../../../../src/version.js";
-import { createDeferred, withTestTimeout } from "../../../helpers/promise.js";
+import { createDeferred, withinTest, withTestTimeout } from "../../../helpers/promise.js";
 import { MODEL_REF, PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture.js";
 
 const execFileAsync = promisify(execFile);
@@ -58,8 +59,75 @@ async function waitUntil<T>(read: () => Promise<T | undefined>): Promise<T> {
 
 export type WireGateway = QaGatewayChild;
 type WireGatewayEvent = { event: string; payload?: unknown };
+
+export function createWireWorkspaceSettlementWaiter() {
+  const waiting = new Map<
+    string,
+    { accept: (placement: unknown) => void; refresh: () => Promise<void> }
+  >();
+  const settled = (placement: unknown, previousManifestRef?: string) =>
+    isRecord(placement) &&
+    placement.state === "active" &&
+    placement.workspaceResultReconciling !== true &&
+    (previousManifestRef === undefined ||
+      (typeof placement.workspaceBaseManifestRef === "string" &&
+        placement.workspaceBaseManifestRef !== previousManifestRef));
+  return {
+    onEvent: (event: WireGatewayEvent) => {
+      if (event.event !== "sessions.changed" || !isRecord(event.payload)) {
+        return;
+      }
+      const session = event.payload.session;
+      const key = event.payload.sessionKey ?? (isRecord(session) ? session.key : undefined);
+      if (isRecord(session)) {
+        if (typeof key === "string") {
+          waiting.get(key)?.accept(session.placement);
+        }
+      } else {
+        // Preparation failures publish a refresh notice instead of a session snapshot.
+        const entries = typeof key === "string" ? [waiting.get(key)] : waiting.values();
+        for (const entry of entries) {
+          void entry?.refresh();
+        }
+      }
+    },
+    async wait(
+      client: { request<T>(method: string, params: unknown): Promise<T> },
+      key: string,
+      signal: AbortSignal,
+      previousManifestRef?: string,
+    ) {
+      const changed = createDeferred();
+      const accept = (placement: unknown) => {
+        if (settled(placement, previousManifestRef)) {
+          changed.resolve();
+        }
+      };
+      const refresh = async () => {
+        try {
+          const current = await client.request<{ session: { placement?: unknown } }>(
+            "sessions.describe",
+            { key },
+          );
+          accept(current.session.placement);
+        } catch (error) {
+          changed.reject(error);
+        }
+      };
+      // Register before the current read so fast reconciliation needs no later event.
+      waiting.set(key, { accept, refresh });
+      try {
+        void refresh();
+        await withinTest(changed.promise, signal);
+      } finally {
+        waiting.delete(key);
+      }
+    },
+  };
+}
 export type WireNodeRead = {
   nodeId: string;
+  commands?: string[];
   approvalState?: string;
   connected?: boolean;
   paired?: boolean;
@@ -157,10 +225,7 @@ export async function connectWireClient(params: {
   timeoutMs?: number;
   nodeManifest?: { caps: string[]; commands: string[] };
 }): Promise<GatewayClient> {
-  const [{ prepareGatewayClientDeviceAuth }, { acquireGatewayTestClient }] = await Promise.all([
-    import("../../../../src/gateway/client.js"),
-    import("../../../helpers/gateway-client.js"),
-  ]);
+  const { acquireGatewayTestClient } = await import("../../../helpers/gateway-client.js");
   const node = params.role === "node";
   const connectionOptions = {
     url: params.gateway.wsUrl,
@@ -168,8 +233,6 @@ export async function connectWireClient(params: {
     env: params.gateway.runtimeEnv,
     deviceIdentity: params.identity,
   };
-  // Source QA must prepare the auth worker before starting the handshake budget.
-  await prepareGatewayClientDeviceAuth(connectionOptions);
   return await acquireGatewayTestClient(
     {
       ...connectionOptions,
@@ -254,6 +317,7 @@ async function ensureNodeApproved(operator: GatewayClient, nodeId: string): Prom
 async function waitForApprovedWireNode(
   operator: GatewayClient,
   nodeId: string,
+  requiredCommands: readonly string[],
 ): Promise<WireNodeRead> {
   return await waitUntil(async () => {
     const result = await operator.request<{ nodes?: WireNodeRead[] }>("node.list", {});
@@ -261,7 +325,8 @@ async function waitForApprovedWireNode(
     return approved?.approvalState === "approved" &&
       approved.connected === true &&
       approved.paired === true &&
-      approved.sessionHost === true
+      approved.sessionHost === true &&
+      requiredCommands.every((command) => approved.commands?.includes(command))
       ? approved
       : undefined;
   });
@@ -273,7 +338,6 @@ type WireWorkerHostOptions = {
   root: string;
   label?: string;
   capacity?: number;
-  capacityWaitMs?: number;
   containerEngine?: NodeWorkerContainerEngine;
   containerImage?: string;
   workerGatewayUrl?: string;
@@ -364,9 +428,7 @@ export async function createPairedNodeWorkerHost(
   const invokeErrors: unknown[] = [];
   const commands: string[] = [];
   const frames: NodeInvokeRequestPayload[] = [];
-  const identity = loadOrCreateDeviceIdentity({
-    path: path.join(options.root, `${label}-identity.sqlite`),
-  });
+  const identity = loadOrCreateDeviceIdentity({ env: nodeEnv });
 
   const inventory = () => ({
     protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
@@ -389,7 +451,6 @@ export async function createPairedNodeWorkerHost(
     env: nodeEnv,
     workspace,
     capacity: options.capacity,
-    capacityWaitMs: options.capacityWaitMs,
     nativeInferenceSnapshot,
     ...(options.containerEngine ? { containerEngine: options.containerEngine } : {}),
     ...(options.containerImage ? { containerImage: options.containerImage } : {}),
@@ -623,7 +684,11 @@ export async function createPairedNodeWorkerHost(
 
   await supervisor.initialize();
   await connect();
-  await waitForApprovedWireNode(options.operator, identity.deviceId);
+  await waitForApprovedWireNode(
+    options.operator,
+    identity.deviceId,
+    options.pluginRuntime?.manifest.commands ?? [],
+  );
   return host;
 }
 

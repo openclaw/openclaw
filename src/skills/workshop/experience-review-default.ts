@@ -14,9 +14,9 @@ const lastUnusedArchiveByAgent = new Map<string, number>();
 
 const defaultScheduler = createSkillExperienceReviewScheduler({
   isSystemActive: async () => {
-    const { getActiveEmbeddedRunCount } =
-      await import("../../agents/embedded-agent-runner/active-run-projections.js");
-    return getActiveEmbeddedRunCount() > 0;
+    const { getActiveSessionRunCount } =
+      await import("../../sessions/session-controller.queries.js");
+    return getActiveSessionRunCount() > 0;
   },
   runReview: async (candidate) => {
     const { getRuntimeConfig } = await import("../../config/config.js");
@@ -34,7 +34,7 @@ export function scheduleSkillExperienceReview(
   params: Omit<SkillExperienceReviewParams, "workshopMutated">,
 ): void {
   const runId = params.ctx.runId?.trim();
-  if (resolveSkillWorkshopConfig(params.config).autonomous.mode !== "auto" || !runId) {
+  if (resolveSkillWorkshopConfig(params.config).autonomous.mode === "off" || !runId) {
     defaultScheduler.schedule(params);
     return;
   }

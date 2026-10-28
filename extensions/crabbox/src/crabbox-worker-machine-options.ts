@@ -5,12 +5,13 @@ import {
   isRecord,
   normalizeOptionalString as nonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
+import { runCrabboxProcess } from "./crabbox-process.js";
 import {
   type CrabboxMachineShape,
   type CrabboxOperatingSystem,
   CRABBOX_ENROLLABLE_TARGETS,
   CRABBOX_OS_LABELS,
+  isCrabboxSetupTargetCompatible,
   listCrabboxMachineOptions,
   parseCrabboxProfile,
 } from "./crabbox-worker-profile.js";
@@ -24,7 +25,6 @@ type CrabboxMachineShapes = ReadonlyMap<string, CrabboxCatalog>;
 
 type CrabboxMachineOptionsResolverDependencies = {
   resolveBinary: (explicit?: string) => Promise<string>;
-  runCommand: CrabboxCommandRunner;
   warn: (message: string) => void;
 };
 
@@ -82,14 +82,14 @@ function parseCrabboxMachineShapes(stdout: string): CrabboxMachineShapes {
   );
 }
 
-export function createCrabboxMachineOptionsResolver(
+export function createCrabboxMachineCatalogResolver(
   dependencies: CrabboxMachineOptionsResolverDependencies,
-): Required<Pick<WorkerProvider, "listMachineOptions" | "listOperatingSystems">> {
+) {
   const machineShapesByBinary = new Map<string, Promise<CrabboxMachineShapes>>();
   const loadMachineShapes = async (binary: string): Promise<CrabboxMachineShapes> => {
     // The full provider matrix exceeds the lifecycle command's 64 KiB log cap.
     // Keep catalog JSON intact or every provider loses its machine shapes.
-    const result = await dependencies.runCommand([binary, "providers", "--json"], {
+    const result = await runCrabboxProcess([binary, "providers", "--json"], {
       maxOutputBytes: 1024 * 1024,
       killProcessTree: true,
       timeoutMs: CRABBOX_MACHINE_CATALOG_TIMEOUT_MS,
@@ -102,9 +102,8 @@ export function createCrabboxMachineOptionsResolver(
     return parseCrabboxMachineShapes(result.stdout);
   };
 
-  const resolveCatalog = async (profile: WorkerProfile) => {
-    const parsed = parseCrabboxProfile(profile);
-    const binary = await dependencies.resolveBinary(parsed.binary);
+  return async (provider: string, explicitBinary?: string): Promise<CrabboxCatalog | undefined> => {
+    const binary = await dependencies.resolveBinary(explicitBinary);
     // Cache successful metadata per binary; different builds may advertise different sizes.
     // One rejection handler per load runs after insertion, including synchronous runner throws.
     let shapes = machineShapesByBinary.get(binary);
@@ -116,20 +115,35 @@ export function createCrabboxMachineOptionsResolver(
       });
       machineShapesByBinary.set(binary, shapes);
     }
-    const catalog = (await shapes).get(parsed.provider);
+    return (await shapes).get(provider);
+  };
+}
+
+export function createCrabboxMachineOptionsResolver(
+  dependencies: CrabboxMachineOptionsResolverDependencies,
+): Required<Pick<WorkerProvider, "listMachineOptions" | "listOperatingSystems">> {
+  const resolveMachineCatalog = createCrabboxMachineCatalogResolver(dependencies);
+  const resolveCatalog = async (profile: WorkerProfile) => {
+    const parsed = parseCrabboxProfile(profile);
+    const catalog = await resolveMachineCatalog(parsed.provider, parsed.binary);
     return { parsed, catalog };
   };
   return {
     async listMachineOptions(profile) {
       const { parsed, catalog } = await resolveCatalog(profile);
-      return listCrabboxMachineOptions(parsed.class, catalog?.machines);
+      return listCrabboxMachineOptions(
+        parsed.class,
+        catalog?.machines.filter(({ os }) => isCrabboxSetupTargetCompatible(parsed, os)),
+      );
     },
     async listOperatingSystems(profile) {
       const { parsed, catalog } = await resolveCatalog(profile);
-      return (catalog?.operatingSystems ?? []).map((id) => {
-        const label = CRABBOX_OS_LABELS[id];
-        return id === parsed.target ? { id, label, default: true } : { id, label };
-      });
+      return (catalog?.operatingSystems ?? [])
+        .filter((id) => isCrabboxSetupTargetCompatible(parsed, id))
+        .map((id) => {
+          const label = CRABBOX_OS_LABELS[id];
+          return id === parsed.target ? { id, label, default: true } : { id, label };
+        });
     },
   };
 }

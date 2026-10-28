@@ -27,6 +27,11 @@ At startup, OpenClaw does roughly this:
 7. call native `register(api)` hooks and collect registrations into the plugin registry
 8. expose the registry to commands/runtime surfaces
 
+The asynchronous host loader prepares up to four independent external plugin source
+captures at a time. Module evaluation, registration, and diagnostics remain in
+manifest order; readiness waits for the complete registry. Each capture keeps its
+existing artifact and worker owner. Synchronous CLI loads acquire sources inline.
+
 Native plugin imports evaluate each requested SDK entry synchronously before
 linking the plugin's asynchronous module graph. This lets CommonJS bundles
 `require()` the same SDK entry during concurrent channel startup without seeing
@@ -56,6 +61,10 @@ one is known (including ids resolved from a manifest inside an
 otherwise-rejected directory), so config referencing that id sees a blocked
 plugin tied to a path-safety warning instead of an unrelated "unknown plugin"
 error.
+
+When every candidate is rejected, installation and capability inspection surface
+the discovery warning, including the unsafe path, so you can correct permissions
+or ownership before retrying.
 
 ### Manifest-first behavior
 
@@ -90,23 +99,9 @@ loading before broader registry materialization:
   imports; plugins without startup metadata load only through narrower
   activation triggers
 
-The activation planner exposes both an ids-only API for existing callers and a
-plan API for diagnostics. Plan entries report why a plugin was selected,
-separating explicit `activation.*` hints from manifest-ownership fallback:
-
-| Reason (from `activation.*` hints)   | Reason (from manifest ownership)                                                             |
-| ------------------------------------ | -------------------------------------------------------------------------------------------- |
-| `activation-agent-harness-hint`      | —                                                                                            |
-| `activation-capability-hint`         | —                                                                                            |
-| `activation-channel-hint`            | `manifest-channel-owner` (`channels`)                                                        |
-| `activation-command-hint`            | `manifest-cli-command-owner` (`cliCommands`), `manifest-command-alias` (`commandAliases`)    |
-| `activation-provider-hint`           | `manifest-provider-owner` (`providers`), `manifest-setup-provider-owner` (`setup.providers`) |
-| `activation-route-hint`              | —                                                                                            |
-| — (hook trigger has no hint variant) | `manifest-hook-owner` (`hooks`), `manifest-tool-contract` (`contracts.tools`)                |
-
-That reason split is the compatibility boundary: existing plugin metadata
-keeps working, while new code can detect broad hints or fallback behavior
-without changing runtime loading semantics.
+The activation planner returns unique, sorted plugin ids selected by explicit
+`activation.*` hints or existing manifest ownership metadata. Both paths respect
+plugin policy and the caller's requested scope without importing runtime modules.
 
 Request-time runtime preloads that ask for the broad `all` scope still derive
 an explicit effective plugin id set from config, startup planning, configured
@@ -143,13 +138,32 @@ or an explicit manifest registry. Plugin scopes are in-memory projections;
 ordinary lookups, account changes, and run workspace changes do not trigger
 filesystem scanning, `stat`/`realpath` freshness polling, manifest rereads, or
 hashing. Plugin lifecycle operations prepare fresh metadata in their own cache
-generation. Account health and authentication state are not part of the
+generation. Gateway runtime work after a lifecycle commit, including config
+reload listeners and owners started by the reload, reads the published
+generation instead. Account health and authentication state are not part of the
 immutable package inventory.
 
-Native SDK alias resolution retains each importing file's canonical path, root
+Gateway model admission uses the configured agent's workspace and plugin inventory,
+including its published discovery catalog. A session opened in another folder keeps
+that folder as its execution cwd without losing discovered models. Standalone hosts
+continue to scope plugin discovery to their requested workspace.
+
+Setup provider detection loads providers from the metadata snapshot that
+selected its choices. Its operation cache owns only the probe registrations and
+plugin instances, which retire after the probes settle, so repeated detection
+does not rediscover plugin packages. Setup activation still prepares fresh
+metadata because it can install the plugin it is about to load.
+
+An explicit install or refresh clears mutable discovery caches for the command,
+so its next metadata phase observes the updated inventory. Immutable runtime
+generations keep their captured metadata. Each process normally owns one Gateway.
+Overlapping independent Gateways in one process are best effort rather than
+coordinated owners of the same inventory.
+
+Native SDK alias resolution retains each importing file's resolved filesystem path, root
 membership, and alias targets in that same generation. Alias registration or
 replacement clears those results, as does metadata invalidation; repeated
-imports do not repeat filesystem canonicalization or containment checks.
+imports do not repeat filesystem path resolution or containment checks.
 
 The same cache generation prepares installed-index scope lookups, compiled model
 matching patterns, parsed install-record projections, and manifest fingerprints
@@ -181,6 +195,13 @@ the registry retires or the load cache is cleared.
 Validation, full registration, and CLI metadata loads have separate cache entries;
 validating a module cannot satisfy a later request for its registrations.
 
+An uncached inspection releases its execution authority immediately, while borrowed
+registrations keep physical resources alive until the last claim releases them.
+After registration cleanup, instance retirement, work drains, and donor releases
+finish, the inspection drops its retirement callback, registry, and cleanup captures.
+Keeping a released handle does not keep those completed discovery graphs alive.
+Pending disposal and failures that retain resource custody keep their references.
+
 Outbound channel bootstrap remembers successful and unavailable senders within
 the selected plugin cache and metadata scope. Inventory replacement or metadata
 invalidation permits a fresh attempt; repeated deliveries within the same scope
@@ -195,7 +216,7 @@ Only narrowed metadata views without a workspace field inherit the active
 workspace. The registry's existing load context retains its workspace so a request or active
 registry from another workspace cannot replace a prepared selection.
 
-Provider hooks share the canonical provider registry selection. Declared providers
+Provider hooks use the shared provider registry selection. Declared providers
 reserve their names, while provider-triggered helpers still activate beside them.
 Required load owners and eligible hook receivers are captured separately in that
 selection. Declared provider owners need matching physical records and provider
@@ -251,19 +272,21 @@ When selection supplies a manifest owner, artifacts resolve from that owner's
 root and entry, preserving source overlays and retained module instances.
 
 Bundled provider policy lookups retain their resolved surface, including absence,
-in the metadata cache. Repeated model-reference canonicalization reuses that
+in the metadata cache. Repeated model-reference normalization reuses that
 surface without resolving artifact candidates again. The memo follows the
-selected registry's publication version and bundled-directory selection;
-registration and unpublished registries remain uncached. A new generation or
-explicit metadata invalidation resolves the surface again, and managed surfaces
+selected registry's publication version and bundled-directory selection, with
+separate weakly held entries for each registry. Completed private registries
+become cacheable when their loader publishes its identity; registration and
+incomplete registries remain uncached. A new generation or explicit metadata
+invalidation resolves the surface again, and managed surfaces
 retain their instance's admission checks.
 
 The CLI invocation owns one operation cache across config reads, output metadata,
 command ownership, nested registration, and actions. Standalone registration uses
 its caller's active generation. Config validation covers every
 workspace; execution uses the original selected workspace snapshot, or shared
-roots when no workspace owner is proven. Exact config/source identities and
-revision checks fence retained registrars. Preparation closes before Commander
+roots when no workspace owner is proven. Prepared registrars keep their captured
+metadata if configuration changes during the operation. Preparation closes before Commander
 actions, while its cache scope lasts through action completion for late imports.
 Changed package files require a new operation; changing activation inputs does
 not retire compatible package facts. SDK alias maps are prepared on first alias

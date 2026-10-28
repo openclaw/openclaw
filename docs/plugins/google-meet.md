@@ -109,7 +109,7 @@ openclaw googlemeet create --no-join
 
 `create` has two paths, reported in the result's `source` field:
 
-- **`api`**: used when Google Meet OAuth credentials are configured. Deterministic; does not depend on browser UI state.
+- **`api`**: used when Google Meet OAuth credentials are configured. Uses the API directly; does not depend on browser UI state.
 - **`browser`**: used without OAuth credentials. OpenClaw opens `https://meet.google.com/new` on the pinned Chrome node and waits for Google to redirect to a real meeting-code URL; the OpenClaw Chrome profile on that node must already be signed in to Google. Join and create both reuse an existing Meet tab (or an in-progress `.../new` / Google account prompt tab) before opening a new one; tab matching ignores harmless query strings like `authuser`.
 
 `create` joins by default and returns `joined: true` plus the join session. Pass `--no-join` (CLI) or `"join": false` (tool) to mint the URL only.

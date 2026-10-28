@@ -3,13 +3,9 @@ import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OutboundMediaAccess, OutboundMediaReadFile } from "openclaw/plugin-sdk/media-runtime";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
-import type { RequestClient } from "./internal/discord.js";
+import type { RequestClient } from "./internal/rest.js";
 
 export class DiscordSendError extends Error {
-  kind?: "missing-permissions" | "dm-blocked";
-  channelId?: string;
-  missingPermissions?: string[];
-  discordCode?: number;
   status?: number;
 
   constructor(message: string, opts?: Partial<DiscordSendError>) {

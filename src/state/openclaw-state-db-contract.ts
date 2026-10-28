@@ -1,35 +1,26 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 
 export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() => void) | undefined;
 
-// v20 fences possibly delivered cron completions across restart recovery.
-// v19 preserves original channel-owner authorization across recovery.
-// v18 binds shared GitHub publication to its original requesting authority.
-// v17 records one-use prepared worker capacity and node workspace ownership.
-// v16 makes Skill Workshop ownership directory-based instead of row-provenance-based.
-// v15 removes redundant agent/session projections from conversation bindings.
-// v14 retains unknown creator namespaces on historical cron jobs.
-// v13 keeps cron jobs and subagent runs canonical in JSON, removing unused projections.
-// v12 folds singleton state into config_machine_state and retires write-only cron epochs.
-// v11 retires the legacy skill curator lifecycle and write-only proposal origin runs.
-// v10 retires six dead tables that shipped without runtime owners.
-// v9 stores in-root agent database registry paths relative to the state dir.
-// v8 records cloud-placement execution mode and mode-aware turn claims.
-// v7 retires the inert shared commitments table.
-// v6 makes every committed shared-state table part of the canonical runtime schema.
-// v5 records durable cloud-worker result refs on pending workspace fences.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 20;
+export const MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION = 23;
+export const CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION = 29;
+export { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 // Absence records lost history; only Doctor may reconstruct these on existing state.
 export const DOCTOR_OWNED_STATE_TABLES = ["agent_deletion_journal"] as const;
 // Privacy-sensitive feature tables remain absent even in fresh databases until
 // their feature-local first write. The canonical SQL still owns their shape.
 export const FIRST_USE_STATE_TABLES = [
+  "sandbox_persistent_execs",
   "user_profile_identities",
   "user_background_images",
   "local_workspace_projections",
+  "local_workspace_manifest_nodes",
+  "local_workspace_tree_packs",
+  "local_workspace_source_path_sets",
   "update_runs",
   "session_repository_workspaces",
   "github_repository_publication_requests",
@@ -44,6 +35,7 @@ export const FIRST_USE_STATE_TABLES = [
   "execution_identity_contexts",
   "mcp_oauth_pending_authorizations",
   "node_worker_launch_containers",
+  "node_worker_launch_boots",
   "node_worker_launch_cleanup",
   "node_worker_launch_process_scopes",
   "node_worker_launches",
@@ -59,6 +51,9 @@ export const FIRST_USE_STATE_TABLES = [
   "outbound_message_progress",
 ] as const;
 export const FIRST_USE_STATE_INDEXES = [
+  "idx_sandbox_persistent_execs_container",
+  "idx_sandbox_persistent_execs_container_name",
+  "idx_sandbox_persistent_execs_source",
   "idx_user_profile_identities_profile_id",
   "idx_user_profile_identities_authorization",
   "idx_update_runs_created",
@@ -73,6 +68,7 @@ export const FIRST_USE_STATE_INDEXES = [
   "idx_operator_approval_standing_grants_binding",
   "idx_web_push_approval_deliveries_subscription",
   "execution_identity_contexts_run_created_idx",
+  "execution_decision_facts_cursor_id_idx",
   "execution_decision_facts_context_occurred_idx",
   "execution_decision_facts_run_occurred_idx",
   "outbound_message_execution_bindings_execution_event_idx",
@@ -99,10 +95,12 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
 ] as const;
 export const LAZY_ADDITIVE_STATE_INDEXES = [
   ...FIRST_USE_STATE_INDEXES,
+  "cron_run_receipts_cursor_id_idx",
   "idx_cron_run_receipts_active_job",
   "idx_cron_run_receipts_job_history",
   "idx_github_publication_requests_pending",
   "secret_store_entries_live_idx",
+  "skill_workshop_changes_cursor_id_idx",
   "idx_skill_workshop_changes_agent_time",
 ] as const;
 /** Maximum time one synchronous SQLite call may wait for a lock. */
@@ -113,7 +111,7 @@ export const OPENCLAW_DATABASE_SCHEMA_DOCS_URL =
 
 /** Open shared SQLite database handle plus WAL maintenance lifecycle. */
 export type OpenClawStateDatabase = {
-  db: DatabaseSync;
+  db: EngineConnection;
   path: string;
   walMaintenance: SqliteWalMaintenance;
 };
@@ -156,6 +154,21 @@ export const STATE_SCHEMA_MIGRATION_DESCRIPTIONS = {
     "prepared workers → one-use capacity and fixed workspace ownership",
   "github-publication-requester-authority-v18":
     "GitHub publication receipts → original requesting authority",
+  "meeting-transcript-start-time": "meeting transcript start dates → persisted milliseconds",
+  "portable-identity-columns-v22": "ACP resume keys and receipt cursors → portable columns",
+  "task-run-indexes-v24": "retained task indexes → ordered cron history and runtime/run lookup",
+  "subagent-operator-recovery-v25": "subagent recovery → original operator authority required",
+  "session-state-head-layout-v26": "session state heads → composite primary-key storage",
+  "state-write-indexes-v27": "replay, skill usage, and lease writes → smaller index maintenance",
+  "github-publication-draft-v28": "GitHub publication requests → durable draft choice",
+  "local-client-credentials-v29": "client credentials and native socket material → local owner",
+  "predicate-columns-v21": "meeting transcripts and delivery retention → derived predicate columns",
+  "automation-policy-fence-v30":
+    "Heartbeat monitors → ordinary automation timing and delivery policy fence",
+  "local-workspace-manifests-v31":
+    "local workspace baselines → per-path manifests and recoverable checkpoint deltas",
+  "local-workspace-cas-v35":
+    "local workspace baselines → shared immutable trees and compact scan fingerprints",
   "operator-approvals-system-agent": "operator approvals → OpenClaw system changes",
   "session-watch-cursor-provenance-v4": "session watch cursors → provenance column",
   "strict-tables-v3": "tables → SQLite STRICT typing",

@@ -191,7 +191,7 @@ export function createFinalizableDraftLifecycle<TMessageId, TUpdate = string>(
     retirement.attempt ??= Promise.resolve().then(async () => {
       try {
         const deleted = await deleteFinalizableDraftMessage(retirement.owner, messageId);
-        if (deleted && pending.get(messageId) === retirement) {
+        if (deleted) {
           pending.delete(messageId);
         }
         return deleted;

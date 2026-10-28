@@ -514,6 +514,14 @@ describe("audit run explanation", () => {
           schemaVersion: 1,
           selectorId: "decision-fact:1",
           occurredAt: 3,
+          representedSubject: {
+            state: "present",
+            principal: {
+              kind: "person",
+              domainRef: "recorded-domain",
+              principalRef: "recorded-person",
+            },
+          },
           action: { family: "decision", operation: "record" },
           decision: { outcome: "unknown", reasonCode: "decision_fact_display_unverified" },
           enforcement: {
@@ -574,6 +582,9 @@ describe("audit run explanation", () => {
     expect(output).toContain("Grant refs: 0");
     expect(output).toContain("Context used: contextId, executionId, runId");
     expect(output).toContain("producer display contract unverified; receipt prose omitted");
+    expect(output).toContain(
+      "Recorded authority subject: person recorded-person in recorded-domain",
+    );
     vi.mocked(runtime.log).mockClear();
     await auditListCommand({ explain: true, runId: "run-1", json: true }, runtime);
     const jsonOutput = vi.mocked(runtime.log).mock.calls.flat().join("\n");

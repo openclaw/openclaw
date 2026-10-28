@@ -22,9 +22,9 @@ import type {
 export const MAX_PENDING_CHILD_ADMISSION_EVIDENCE = 32;
 
 export function notifyNativeModelSourceWaiters(state: ParentState): void {
-  const waiters = [...(state.modelSourceWaiters ?? [])];
-  state.modelSourceWaiters?.clear();
-  for (const resolve of waiters) {
+  const waiters = state.modelSourceWaiters;
+  state.modelSourceWaiters = undefined;
+  for (const resolve of waiters ?? []) {
     resolve();
   }
 }
@@ -118,6 +118,12 @@ export function retainNativeModelExecution(
     return undefined;
   }
   const nativeOwner: ParentOwner = {
+    requestCustody: owner.requestCustody,
+    requesterTurnRunId: owner.requesterTurnRunId,
+    requesterAgentId: owner.requesterAgentId,
+    requesterSessionKey: owner.requesterSessionKey,
+    requesterSessionId: owner.requesterSessionId,
+    requesterLifecycleRevision: owner.requesterLifecycleRevision,
     modelSource: owner.modelSource,
     modelMapping: owner.modelMapping,
     configurationQualification: owner.configurationQualification,
@@ -226,6 +232,10 @@ export function admitNativeChildModelExecution(
 ): void {
   if (known) {
     known.configurationQualification = owner.configurationQualification;
+  }
+  if (!child.modelExecution) {
+    child.requesterTurnRunId = owner.requesterTurnRunId;
+    child.requestCustody = owner.requestCustody;
   }
   child.modelExecution ??= retainNativeModelExecution(
     owner,

@@ -1,27 +1,37 @@
+import { createHash } from "node:crypto";
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
-import { consolidateLiveModelSwitchAfterRun } from "../../agents/live-model-switch.js";
+import { prepareLiveModelSwitchAfterRun } from "../../agents/live-model-switch.js";
+import { areRuntimeModelRefsEquivalent } from "../../agents/model-runtime-aliases.js";
+import { resolvePersistedOverrideModelRef } from "../../agents/model-selection-persisted.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { SessionActorReducer } from "../../config/sessions/session-actor-contract.js";
+import { reduceSessionActorEntry } from "../../config/sessions/session-actor-reducers.js";
+import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
+import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
+import { MODEL_FALLBACK_NOTICE_KIND } from "../../shared/model-fallback-notice.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
-import { refreshSessionEntryFromStore, resolveFallbackOriginModel } from "./agent-runner-core.js";
+import type { AgentTurnCompletion } from "./agent-runner-completion.types.js";
+import { resolveFallbackOriginModel } from "./agent-runner-core.js";
 import type { AgentTurnCompaction } from "./agent-runner-execution.types.js";
 import { buildReplyDiagnosticsPayload } from "./agent-runner-result-diagnostics.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
-import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
-import { replyRunRegistry } from "./reply-run-registry.js";
-import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
+import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
 import { buildReplyUsageState, recordReplyUsageState } from "./reply-usage-state.js";
 import { incrementCompactionCount } from "./session-updates.js";
-import { persistSessionUsageUpdate } from "./session-usage.js";
+import { prepareSessionUsageUpdate } from "./session-usage.js";
+
+const modelFallbackLog = createSubsystemLogger("model-fallback");
 
 type AgentTurnAccountingContext = Pick<
   FinalizeReplyAgentRunInput,
@@ -31,7 +41,6 @@ type AgentTurnAccountingContext = Pick<
   | "cfg"
   | "defaultModel"
   | "followupRun"
-  | "isHeartbeat"
   | "pendingToolTasks"
   | "preflightCompactionApplied"
   | "resolvedVerboseLevel"
@@ -42,7 +51,10 @@ type AgentTurnAccountingContext = Pick<
   | "sessionKey"
   | "shouldInjectGroupIntro"
   | "storePath"
-> & { replyOperation?: FinalizeReplyAgentRunInput["replyOperation"] };
+> & {
+  replyOperation?: FinalizeReplyAgentRunInput["replyOperation"];
+  completion?: AgentTurnCompletion;
+};
 
 /** Persists only host-bound facts while the exact logical turn still owns accounting. */
 export async function accountAgentTurnCompaction(params: {
@@ -54,7 +66,7 @@ export async function accountAgentTurnCompaction(params: {
   if (!operation) {
     return undefined;
   }
-  const authorize = () => replyRunRegistry.get(operation.key) === operation;
+  const authorize = () => isCurrentSessionControllerOperation(operation);
   let count: number | undefined;
   for (const fact of params.compaction?.durable ?? []) {
     const persistedCount = await incrementCompactionCount({
@@ -80,7 +92,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     cfg,
     defaultModel,
     followupRun,
-    isHeartbeat,
     pendingToolTasks,
     preflightCompactionApplied,
     resolvedVerboseLevel,
@@ -90,9 +101,26 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     sessionKey,
     sessionCtx,
     shouldInjectGroupIntro,
-    storePath,
   } = context;
   let { activeSessionEntry } = context;
+  const completion = context.completion;
+  activeSessionEntry = completion?.current() ?? activeSessionEntry;
+  const patchBookkeeping = (entry: SessionEntry | undefined, reducers: SessionActorReducer[]) => {
+    if (completion) {
+      for (const reducer of reducers) {
+        completion.patch(reducer);
+      }
+      return completion.current();
+    }
+    // Entry-only callers keep their transient projection, without a second durable writer.
+    if (entry && !context.storePath) {
+      Object.assign(entry, reduceSessionActorEntry(entry, reducers));
+      if (activeSessionStore && sessionKey) {
+        activeSessionStore[sessionKey] = entry;
+      }
+    }
+    return entry;
+  };
   const latestCompaction = execution.compaction?.durable.at(-1);
   const currentContextSnapshot = execution.compaction
     ? (latestCompaction?.currentContextSnapshot ?? { tokens: undefined })
@@ -102,9 +130,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     lifecycleRevision: activeSessionEntry?.lifecycleRevision,
   };
   const operation = context.replyOperation;
-  const authorize = latestCompaction
-    ? () => operation !== undefined && replyRunRegistry.get(operation.key) === operation
-    : undefined;
 
   const runResult = execution.result;
   const { provider: fallbackProvider, model: fallbackModel } = execution.resolved;
@@ -112,7 +137,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   const hasDirectlySentBlockReply = execution.hasDirectlySentBlockReply;
   const directBlockDeliveries = execution.directBlockDeliveries;
   const terminalFailurePayload = execution.terminalFailurePayload;
-  const { autoCompactionCount, didLogHeartbeatStrip } = execution;
+  const { autoCompactionCount } = execution;
 
   if (
     shouldInjectGroupIntro &&
@@ -121,23 +146,10 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     sessionKey &&
     activeSessionEntry.groupActivationNeedsSystemIntro
   ) {
-    const updatedAt = Date.now();
-    activeSessionEntry.groupActivationNeedsSystemIntro = false;
-    activeSessionEntry.updatedAt = updatedAt;
-    activeSessionStore[sessionKey] = activeSessionEntry;
-    if (storePath) {
-      await updateSessionEntry(
-        { storePath, sessionKey },
-        () => ({
-          groupActivationNeedsSystemIntro: false,
-          updatedAt,
-        }),
-        {
-          skipMaintenance: true,
-          takeCacheOwnership: true,
-        },
-      );
-    }
+    activeSessionEntry = patchBookkeeping(activeSessionEntry, [
+      { kind: "group-intro", needsSystemIntro: false },
+      { kind: "activity", updatedAt: Date.now() },
+    ]);
   }
 
   const payloadArray = runResult.payloads ?? [];
@@ -149,7 +161,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   if (pendingToolTasks.size > 0) {
     await drainPendingToolTasks({
       tasks: pendingToolTasks,
-      onTimeout: logVerbose,
     });
   }
 
@@ -179,8 +190,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     fallbackExhausted,
     winnerProvider,
     winnerModel,
-    reasoningEffort:
-      typeof followupRun.run.thinkLevel === "string" ? followupRun.run.thinkLevel : undefined,
+    reasoningEffort: followupRun.run.thinkLevel,
     fastMode: resolveFastModeState({
       cfg,
       provider: providerUsed ?? "",
@@ -191,13 +201,13 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     fallbackUsed: runResult.meta?.executionTrace?.fallbackUsed === true,
     agentId: followupRun.run.agentId,
     sessionId: followupRun.run.sessionId,
-    chatType: typeof sessionCtx.ChatType === "string" ? sessionCtx.ChatType : undefined,
-    authMode: runResult.meta?.requestShaping?.authMode ?? undefined,
-    overrideSource: activeSessionEntry?.modelOverrideSource ?? undefined,
+    chatType: sessionCtx.ChatType,
+    authMode: runResult.meta?.requestShaping?.authMode,
+    overrideSource: activeSessionEntry?.modelOverrideSource,
     requestedProvider: followupRun.run.provider,
     requestedModel: followupRun.run.model,
     durationMs: Date.now() - runStartedAt,
-    compactionCount: typeof compactions === "number" ? compactions : undefined,
+    compactionCount: compactions,
     contextTokenBudget: ctxTokens,
     contextUsedTokens: promptTokens,
     promptTokens,
@@ -209,8 +219,9 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
     followupRun.run.inputProvenance,
   );
-  const fallbackStateEntry =
-    activeSessionEntry ?? (sessionKey ? activeSessionStore?.[sessionKey] : undefined);
+  const fallbackStateEntry: InternalSessionEntry | undefined =
+    (completion ? await completion.refresh() : activeSessionEntry) ??
+    (sessionKey ? activeSessionStore?.[sessionKey] : undefined);
   const configuredFallbackModel = resolveFallbackOriginModel({
     run: followupRun.run,
     fallbackStateEntry,
@@ -227,6 +238,112 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     state: fallbackStateEntry,
     cfg,
   });
+  if (fallbackTransition.fallbackCleared) {
+    const agentMeta = runResult.meta?.agentMeta;
+    const selectedRunSucceeded =
+      execution.status === "ok" &&
+      !fallbackExhausted &&
+      runResult.meta?.aborted !== true &&
+      !runResult.meta?.error &&
+      !runResult.meta?.replayInvalid &&
+      !runResult.meta?.failureSignal &&
+      !payloadArray.some((payload) => payload.isError) &&
+      operation?.abortSignal.aborted !== true &&
+      agentMeta !== undefined &&
+      areRuntimeModelRefsEquivalent(
+        buildModelCatalogRef(sessionModel.provider, sessionModel.model),
+        fallbackTransition.selectedModelRef,
+        { config: cfg },
+      );
+    const selectionUnchanged = (entry: SessionEntry) => {
+      const override =
+        entry.modelOverrideSource !== "auto"
+          ? resolvePersistedOverrideModelRef({
+              defaultProvider: selectedProvider,
+              overrideProvider: entry.providerOverride,
+              overrideModel: entry.modelOverride,
+              routeResolution: "resolved",
+            })
+          : null;
+      return (
+        entry.fallbackNotice?.selectedModel === fallbackTransition.selectedModelRef &&
+        (!override ||
+          areRuntimeModelRefsEquivalent(
+            buildModelCatalogRef(override.provider, override.model),
+            fallbackTransition.selectedModelRef,
+            { config: cfg },
+          ))
+      );
+    };
+    if (!selectedRunSucceeded) {
+      // A failed primary attempt is not recovery. Keep its prior fallback for the next success.
+      fallbackTransition.fallbackCleared = false;
+      fallbackTransition.stateChanged = false;
+    } else if (!fallbackStateEntry || !selectionUnchanged(fallbackStateEntry)) {
+      // A new user selection can retire stale notice state, but cannot restore the old primary.
+      fallbackTransition.fallbackCleared = false;
+    } else if (completion && sessionKey && context.storePath && !preserveUserFacingSessionState) {
+      const fromModel = fallbackTransition.previousState.activeModel!;
+      const agentId = followupRun.run.agentId;
+      const storePath = context.storePath;
+      const toModel = fallbackTransition.selectedModelRef;
+      let recorded = false;
+      if (
+        runId &&
+        runId.length <= 4096 &&
+        fromModel &&
+        fromModel.length <= 512 &&
+        toModel &&
+        toModel.length <= 512 &&
+        fromModel !== toModel
+      ) {
+        const assertCurrent = () => {
+          operation?.abortSignal.throwIfAborted();
+          completion.assertCurrent();
+        };
+        try {
+          assertCurrent();
+          const { appendAssistantMessageToSessionTranscript } =
+            await import("../../config/sessions/transcript.js");
+          assertCurrent();
+          const transition = createHash("sha256").update(runId).digest("hex");
+          const result = await appendAssistantMessageToSessionTranscript({
+            agentId,
+            sessionKey,
+            storePath,
+            expectedSessionId: fallbackStateEntry.sessionId,
+            expectedLifecycleRevision: fallbackStateEntry.lifecycleRevision ?? null,
+            expectedWriterRunId: fallbackStateEntry.activeWriterRunId,
+            runId,
+            config: cfg,
+            assertCurrent,
+            idempotencyKey: `model-fallback-restored:${transition}`,
+            text: `Selected model ${toModel} restored (was ${fromModel}).`,
+            deliveryMirror: {
+              kind: MODEL_FALLBACK_NOTICE_KIND,
+              phase: "restored",
+              runId,
+              fromModel,
+              toModel,
+            },
+          });
+          recorded = result.ok;
+          if (!result.ok && result.code !== "session-rebound") {
+            modelFallbackLog.warn("Model restoration transcript notice was not persisted.");
+          }
+        } catch {
+          // Keep the successful reply usable; retain fallback state so a later success can record it.
+          modelFallbackLog.warn("Model restoration transcript notice was not persisted.");
+        }
+      }
+      if (recorded) {
+        runResult.meta.modelFallbackTranscriptToModel = toModel;
+      } else {
+        fallbackTransition.fallbackCleared = false;
+        fallbackTransition.stateChanged = false;
+      }
+    }
+  }
   if (fallbackTransition.stateChanged && !fallbackExhausted && !preserveUserFacingSessionState) {
     const fallbackNotice = fallbackTransition.nextState.selectedModel
       ? {
@@ -238,23 +355,13 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
             : {}),
         }
       : undefined;
-    if (fallbackStateEntry) {
-      fallbackStateEntry.fallbackNotice = fallbackNotice;
-      fallbackStateEntry.updatedAt = Date.now();
-      activeSessionEntry = fallbackStateEntry;
-    }
-    if (sessionKey && fallbackStateEntry && activeSessionStore) {
-      activeSessionStore[sessionKey] = fallbackStateEntry;
-    }
-    if (sessionKey && storePath) {
-      await updateSessionEntry({ storePath, sessionKey }, () => ({ fallbackNotice }), {
-        skipMaintenance: true,
-        takeCacheOwnership: true,
-      });
-    }
+    activeSessionEntry = patchBookkeeping(fallbackStateEntry, [
+      { kind: "fallback-notice", notice: fallbackNotice },
+      { kind: "activity", updatedAt: Date.now() },
+    ]);
   }
   const runtimeContextTokens =
-    typeof ctxTokens === "number" && Number.isFinite(ctxTokens) && ctxTokens > 0
+    ctxTokens !== undefined && Number.isFinite(ctxTokens) && ctxTokens > 0
       ? Math.floor(ctxTokens)
       : undefined;
   const resolvedContextTokens =
@@ -285,22 +392,23 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     sessionStore: activeSessionStore,
     replyOperation: operation,
   });
-  const usageCommit = await persistSessionUsageUpdate({
-    agentId: latestCompaction?.target.agentId ?? followupRun.run.agentId,
-    sessionStore: activeSessionStore,
-    storePath: latestCompaction?.target.storePath ?? storePath,
-    sessionKey: latestCompaction?.target.sessionKey ?? sessionKey,
-    expectedSession,
-    authorize,
+  if (completion) {
+    activeSessionEntry = await completion.refresh();
+  }
+  const hadPendingLiveModelSwitch = activeSessionEntry?.liveModelSwitchPending === true;
+  const usageParams = {
     cfg,
     agentDir: followupRun.run.agentDir,
     usage,
     lastCallUsage,
     currentContextSnapshot,
     promptTokens,
-    isHeartbeat,
     preserveRuntimeModel:
-      fallbackExhausted || fallbackTransition.nextState.selectedModel !== undefined,
+      fallbackExhausted ||
+      (fallbackTransition.stateChanged
+        ? fallbackTransition.nextState
+        : fallbackTransition.previousState
+      ).selectedModel !== undefined,
     preserveUserFacingSessionModelState: preserveUserFacingSessionState,
     modelUsed,
     providerUsed,
@@ -312,28 +420,47 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     systemPromptReport: runResult.meta?.systemPromptReport,
     preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
     agentHarnessId: runResult.meta?.agentMeta?.agentHarnessId,
-  });
-  if (!isHeartbeat && !preserveUserFacingSessionState && !fallbackExhausted) {
+  } satisfies Parameters<typeof prepareSessionUsageUpdate>[0];
+  if (completion) {
+    completion.patch((entry) => {
+      try {
+        const prepared = prepareSessionUsageUpdate(usageParams);
+        return prepared
+          ? {
+              kind: "usage",
+              update: { ...prepared.update, estimatedCostUsd: prepared.estimateCost(entry) },
+              updatedAt: entry.updatedAt,
+            }
+          : undefined;
+      } catch (error) {
+        logVerbose(`failed to prepare usage update: ${String(error)}`);
+        return undefined;
+      }
+    });
+  }
+  if (!preserveUserFacingSessionState && !fallbackExhausted) {
     // A completed run that executed the persisted selection consumes the
     // pending live-switch flag; CLI harness runs never hit the embedded
     // attempt-recovery clear, so /status would report the switch forever.
-    await consolidateLiveModelSwitchAfterRun({
-      cfg,
-      sessionKey,
-      agentId: followupRun.run.agentId,
-      providerUsed: sessionModel.provider,
-      modelUsed: sessionModel.model,
-      usageCommit:
-        usageCommit?.entry.sessionId === expectedSession.sessionId &&
-        usageCommit.entry.lifecycleRevision === expectedSession.lifecycleRevision
-          ? usageCommit
-          : undefined,
-    });
+    if (completion && sessionKey && hadPendingLiveModelSwitch) {
+      const reducer = prepareLiveModelSwitchAfterRun({
+        cfg,
+        sessionKey,
+        agentId: followupRun.run.agentId,
+        providerUsed: sessionModel.provider,
+        modelUsed: sessionModel.model,
+        entry: completion.current(),
+      });
+      if (reducer) {
+        completion.patch(reducer);
+      }
+    }
   }
 
-  if (compactionCount !== undefined && sessionKey) {
+  if (!completion && compactionCount !== undefined && sessionKey) {
     activeSessionEntry = activeSessionStore?.[sessionKey] ?? activeSessionEntry;
   }
+  activeSessionEntry = completion?.current() ?? activeSessionEntry;
 
   return {
     activeSessionEntry,
@@ -342,7 +469,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     expectedSession,
     configuredFallbackModel,
     contextTokensUsed,
-    didLogHeartbeatStrip,
     hasDirectlySentBlockReply,
     directBlockDeliveries,
     fallbackAttempts,
@@ -372,8 +498,9 @@ export async function accountFollowupTurn(params: {
   turn: AdmittedFollowupTurn;
   defaults: FollowupRunnerParams;
   execution: FollowupExecutionResult;
+  completion?: AgentTurnCompletion;
 }) {
-  const { turn, defaults, execution } = params;
+  const { turn, defaults, execution, completion } = params;
   const settled = execution.execution.outcome;
   const sessionKey = turn.session.kind === "session" ? turn.session.key : undefined;
   if (settled.kind !== "settled") {
@@ -384,6 +511,10 @@ export async function accountFollowupTurn(params: {
       replyOperation: turn.operation,
     });
     return undefined;
+  }
+  if (turn.queued.goalContinuation) {
+    // Queue settlement, not enqueue or native provider subruns, counts one automatic turn.
+    completion?.patch({ kind: "goal-continuation", goalId: turn.queued.goalContinuation.goalId });
   }
   const resolvedVerboseLevel =
     normalizeVerboseLevel(
@@ -398,9 +529,9 @@ export async function accountFollowupTurn(params: {
     cfg: turn.config,
     defaultModel: defaults.defaultModel,
     followupRun: turn.queued,
-    isHeartbeat: false,
     pendingToolTasks: execution.pendingToolTasks,
     replyOperation: turn.operation,
+    completion,
     preflightCompactionApplied: turn.preflightCompactionApplied,
     resolvedVerboseLevel,
     execution: settled,
@@ -411,7 +542,6 @@ export async function accountFollowupTurn(params: {
     shouldInjectGroupIntro: false,
     storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
   });
-  turn.session.publish(accounting.activeSessionEntry);
   const queueKey = turn.queued.run.sessionKey ?? defaults.sessionKey ?? sessionKey;
   if (
     queueKey &&
@@ -419,7 +549,7 @@ export async function accountFollowupTurn(params: {
     !accounting.fallbackExhausted &&
     !accounting.preserveUserFacingSessionState
   ) {
-    const entry = turn.session.current();
+    const entry = accounting.activeSessionEntry;
     refreshQueuedFollowupSession({
       key: queueKey,
       previousSessionId: turn.queued.run.sessionId,
@@ -437,9 +567,8 @@ export async function accountFollowupTurn(params: {
   if (accounting.autoCompactionCount > 0) {
     const previousSessionId = turn.queued.run.sessionId;
     const count = accounting.compactionCount;
-    const refreshed = turn.session.current();
+    const refreshed = accounting.activeSessionEntry;
     if (refreshed) {
-      turn.session.publish(refreshed);
       refreshQueuedFollowupSession({
         key: queueKey ?? "",
         previousSessionId,
@@ -448,23 +577,12 @@ export async function accountFollowupTurn(params: {
       });
     }
     if (accounting.verboseEnabled) {
-      const suffix = typeof count === "number" ? ` (count ${count})` : "";
+      const suffix = count !== undefined ? ` (count ${count})` : "";
       compactionNotice = { text: `🧹 Auto-compaction complete${suffix}.` };
     }
   }
-  if (turn.queued.run.verboseLevelOverride !== "off" || turn.queued.run.traceAuthorized === true) {
-    turn.session.publish(
-      await refreshSessionEntryFromStore({
-        storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
-        sessionKey,
-        fallbackEntry: turn.session.current(),
-        expectedGeneration: accounting.expectedSession,
-        reader: getReplyOperationSessionReader(turn.operation),
-      }),
-    );
-  }
   const diagnosticsPayload = await buildReplyDiagnosticsPayload({
-    activeSessionEntry: turn.session.current(),
+    activeSessionEntry: accounting.activeSessionEntry,
     followupRun: turn.queued,
     accounting,
     cfg: turn.config,

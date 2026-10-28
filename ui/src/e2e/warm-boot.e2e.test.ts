@@ -4,11 +4,13 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
-import type { ApplicationRuntime } from "../app/bootstrap.ts";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { captureUiProofEnabled, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
+  holdModuleResponse,
 } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -18,6 +20,17 @@ const suite = createControlUiE2eSuite({
 // A literal conversation can restore before hello; the shorthand main route needs live defaults.
 const sessionKey = "agent:main:thread:warm-reload";
 const transcriptText = "This conversation is ready before the Gateway reconnects.";
+const reloadProfiles = [
+  "matching",
+  "different",
+  "device-token",
+  "trusted-proxy",
+  "legacy-rail",
+  "large",
+  "short-tail",
+  "imported",
+  "offline",
+];
 
 async function expectOwnMessageAlignment(page: Page): Promise<void> {
   const own = page.locator(".chat-group.user", { hasText: "Morgan's saved message." });
@@ -31,92 +44,175 @@ async function expectOwnMessageAlignment(page: Page): Promise<void> {
     .toEqual({ peer: false, alignment: "end" });
 }
 
+type SidebarRecord = { model: { entries: string[] } };
+
+// Passed whole to Playwright: request and transaction helpers stay in the browser realm.
+async function snapshotStorage(operation: "check" | "legacy" | SidebarRecord[]) {
+  const name = "openclaw-chat-snapshots";
+  const result = <T>(request: IDBRequest<T>, blockedMessage?: string) =>
+    new Promise<T>((resolve, reject) => {
+      request.addEventListener("success", () => resolve(request.result));
+      request.addEventListener("error", () =>
+        reject(request.error ?? new Error("Snapshot request failed")),
+      );
+      if (blockedMessage) {
+        request.addEventListener("blocked", () => reject(new Error(blockedMessage)));
+      }
+    });
+  const bootRecord = Object.keys(localStorage).some((key) =>
+    key.startsWith("openclaw.control.bootRecord.v1:"),
+  );
+  if (operation === "check" && !(await indexedDB.databases()).some((db) => db.name === name)) {
+    return { records: [], state: { bootRecord, roster: false, transcript: false } };
+  }
+  const restoring = Array.isArray(operation);
+  if (restoring) {
+    await result(indexedDB.deleteDatabase(name), "Old snapshot database remained open");
+  }
+  const open = restoring ? indexedDB.open(name, 6) : indexedDB.open(name);
+  if (restoring) {
+    open.addEventListener("upgradeneeded", () => {
+      for (const store of ["snapshots", "snapshotMetadata", "sidebarSnapshots"]) {
+        open.result.createObjectStore(store, { keyPath: "sessionKey" });
+      }
+    });
+  }
+  const database = await result(open);
+  try {
+    const transaction = database.transaction(
+      operation === "check" ? ["sidebarSnapshots", "snapshots"] : "sidebarSnapshots",
+      restoring ? "readwrite" : "readonly",
+    );
+    const complete = new Promise<void>((resolve, reject) => {
+      transaction.addEventListener("complete", () => resolve());
+      transaction.addEventListener("error", () =>
+        reject(transaction.error ?? new Error("Snapshot transaction failed")),
+      );
+    });
+    const store = transaction.objectStore("sidebarSnapshots");
+    if (restoring) {
+      for (const record of operation) {
+        store.put(record);
+      }
+      await complete;
+      return { records: operation };
+    }
+    const [records, snapshots] = await Promise.all([
+      result<SidebarRecord[]>(store.getAll()),
+      operation === "check"
+        ? result<unknown[]>(transaction.objectStore("snapshots").getAll())
+        : Promise.resolve([]),
+      complete,
+    ]);
+    if (operation === "legacy") {
+      for (const record of records) {
+        record.model.entries = ["route:usage", "route:cron"];
+      }
+      return { records };
+    }
+    const field = (value: unknown, ...keys: string[]): unknown =>
+      keys.reduce<unknown>(
+        (current, key) =>
+          typeof current === "object" && current !== null && key in current
+            ? Reflect.get(current, key)
+            : undefined,
+        value,
+      );
+    return {
+      records,
+      state: {
+        bootRecord,
+        roster: records.some((record) => {
+          const sessions = field(record, "model", "roster", "result", "sessions");
+          return (
+            Array.isArray(sessions) &&
+            sessions.some((row) => field(row, "key") === "agent:main:cached-only")
+          );
+        }),
+        transcript: snapshots.some(
+          (snapshot) =>
+            field(snapshot, "snapshot", "deltaCursor") === "warm-reload-cursor" &&
+            field(snapshot, "snapshot", "composer", "name") === "Remembered model",
+        ),
+      },
+    };
+  } finally {
+    database.close();
+  }
+}
+
 async function waitForPersistedWarmState(page: Page): Promise<void> {
   await expect
-    .poll(() =>
-      page.evaluate(async () => {
-        const hasBootRecord = Object.keys(localStorage).some((key) =>
-          key.startsWith("openclaw.control.bootRecord.v1:"),
-        );
-        const databases = await indexedDB.databases();
-        async function readRecords(databaseName: string, storeName: string): Promise<unknown[]> {
-          if (!databases.some((database) => database.name === databaseName)) {
-            return [];
-          }
-          return new Promise((resolve, reject) => {
-            const open = indexedDB.open(databaseName);
-            open.addEventListener("error", () =>
-              reject(open.error ?? new Error("IndexedDB open failed")),
-            );
-            open.addEventListener("success", () => {
-              const database = open.result;
-              const transaction = database.transaction(storeName, "readonly");
-              const request = transaction.objectStore(storeName).getAll();
-              request.addEventListener("error", () =>
-                reject(request.error ?? new Error("IndexedDB read failed")),
-              );
-              transaction.addEventListener("complete", () => {
-                database.close();
-                resolve(request.result);
-              });
-            });
-          });
-        }
-        const [rosters, snapshots] = await Promise.all([
-          readRecords("openclaw-session-roster", "rosters"),
-          readRecords("openclaw-chat-snapshots", "snapshots"),
-        ]);
-        return {
-          bootRecord: hasBootRecord,
-          roster: rosters.some((record) => {
-            if (typeof record !== "object" || record === null || !("result" in record)) {
-              return false;
-            }
-            const result = record.result;
-            return (
-              typeof result === "object" &&
-              result !== null &&
-              "sessions" in result &&
-              Array.isArray(result.sessions) &&
-              result.sessions.some(
-                (row: unknown) =>
-                  typeof row === "object" &&
-                  row !== null &&
-                  "key" in row &&
-                  row.key === "agent:main:cached-only",
-              )
-            );
-          }),
-          transcript: snapshots.some(
-            (snapshot) =>
-              typeof snapshot === "object" &&
-              snapshot !== null &&
-              "snapshot" in snapshot &&
-              typeof snapshot.snapshot === "object" &&
-              snapshot.snapshot !== null &&
-              "deltaCursor" in snapshot.snapshot &&
-              snapshot.snapshot.deltaCursor === "warm-reload-cursor",
-          ),
-        };
-      }),
+    .poll(
+      async () =>
+        (
+          await page.evaluate<
+            Awaited<ReturnType<typeof snapshotStorage>>,
+            Parameters<typeof snapshotStorage>[0]
+          >(snapshotStorage, "check")
+        ).state,
     )
     .toEqual({ bootRecord: true, roster: true, transcript: true });
 }
 
 suite.define(() => {
-  it.each(["matching", "different", "device-token", "trusted-proxy"])(
+  it.each(reloadProfiles)(
     "reconciles the cached shell, roster, and transcript with a %s profile",
-    async (profile) => {
-      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+    (profile) =>
+      suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const capture = async (name: string) => {
+          await waitForControlUiProofSurface(page.locator("body"), []);
+          if (captureUiProofEnabled) {
+            await page.screenshot({ path: path.join(suite.artifactDir, name) });
+          }
+        };
         const timestamp = Date.now();
-        const currentRow = {
-          key: sessionKey,
-          sessionId: "warm-reload-session",
+        const imported = profile === "imported";
+        const shortTail = profile === "short-tail";
+        const olderMessages =
+          profile === "large" || shortTail || imported
+            ? Array.from({ length: imported ? 119 : 1_099 }, (_, index) => ({
+                role: shortTail && index >= 1_020 ? "toolResult" : index % 2 ? "assistant" : "user",
+                content: `Older history ${index + 1}`,
+                ...(shortTail && index >= 1_020
+                  ? { toolCallId: `older-tool-${index}`, toolName: "read" }
+                  : {}),
+                __openclaw: {
+                  id: `older-${index + 1}`,
+                  ...(imported ? { importedFrom: "claude-cli" } : { seq: index + 1 }),
+                },
+              }))
+            : [];
+        const rememberedMessage = {
+          role: "assistant",
+          content: transcriptText,
+          openclawResponsesInputReplay: { items: ["retained for reconciliation identity"] },
+          __openclaw: {
+            id: "cached-message",
+            ...(imported ? { importedFrom: "claude-cli" } : { seq: olderMessages.length + 1 }),
+          },
+        };
+        const sessionRow = (
+          id: string,
+          label: string,
+          updatedAt = timestamp,
+          owner = "profile-a",
+        ) => ({
+          key: `agent:main:${id}`,
+          sessionId: `${id}-session`,
           kind: "direct" as const,
-          label: "Warm reload conversation",
-          updatedAt: timestamp,
+          label,
+          owner: { actor: { type: "human" as const, id: owner } },
+          updatedAt,
+        });
+        const currentRow = {
+          ...sessionRow("warm-reload", "Warm reload conversation"),
+          key: sessionKey,
+          model: "warm-model",
+          modelProvider: "openai",
         };
         const gateway = await installMockGateway(page, {
+          subscriptionInitialHistory: false,
           sessionKey,
           assistantName: "Observatory",
           // The typed hold applies again after reload and releases the normal hello payload.
@@ -132,26 +228,29 @@ suite.define(() => {
                 : {}),
             },
           ],
-          sessions: [
-            currentRow,
-            {
-              key: "agent:main:cached-only",
-              sessionId: "cached-only-session",
-              kind: "direct",
-              label: "Cached only session",
-              updatedAt: timestamp - 1,
-            },
-          ],
+          sessions: [currentRow, sessionRow("cached-only", "Cached only session", timestamp - 1)],
           methodResponses: {
+            "sessions.list": {
+              cases: [
+                {
+                  match: { includeOwnerSessionCounts: true },
+                  response: {
+                    ts: timestamp,
+                    path: "",
+                    count: 0,
+                    sessions: [],
+                    defaults: { model: null, modelProvider: null, contextTokens: null },
+                    ownerSessionCounts: [],
+                  },
+                },
+              ],
+            },
             "chat.startup": {
               sessionId: "warm-reload-session",
               sessionInfo: currentRow,
               messages: [
-                {
-                  role: "assistant",
-                  content: transcriptText,
-                  __openclaw: { id: "cached-message", seq: 1 },
-                },
+                ...olderMessages,
+                rememberedMessage,
                 ...(profile === "matching"
                   ? [
                       {
@@ -170,9 +269,39 @@ suite.define(() => {
               ],
               deltaCursor: "warm-reload-cursor",
               hasMore: false,
-              metadata: { models: [] },
+              ...(olderMessages.length ? { totalMessages: olderMessages.length + 1 } : {}),
+              metadata: {
+                models: [{ id: "warm-model", provider: "openai", name: "Remembered model" }],
+              },
+            },
+            "models.list": {
+              models: [{ id: "warm-model", provider: "openai", name: "Remembered model" }],
             },
           },
+        });
+        // Observe the mock's real wire response, without reading renderer-owned runtime fields.
+        await page.addInitScript(() => {
+          window.WebSocket = new Proxy(window.WebSocket, {
+            construct(Target, args) {
+              const socket = Reflect.construct(Target, args) as WebSocket;
+              socket.addEventListener("message", (event: MessageEvent) => {
+                if (typeof event.data !== "string") {
+                  return;
+                }
+                const frame = JSON.parse(event.data) as {
+                  type?: string;
+                  payload?: { type?: string };
+                };
+                if (frame.type === "res" && frame.payload?.type === "hello-ok") {
+                  sessionStorage.setItem(
+                    "openclaw.warm-boot-proof.hello",
+                    JSON.stringify(frame.payload),
+                  );
+                }
+              });
+              return socket;
+            },
+          });
         });
         await page.goto(
           controlUiSessionUrl(suite.server.baseUrl, sessionKey) +
@@ -180,7 +309,7 @@ suite.define(() => {
         );
         await gateway.waitForRequest("connect");
         await page.locator(".connect-splash").waitFor();
-        await page.screenshot({ path: path.join(suite.artifactDir, "cold-connecting.png") });
+        await capture("cold-connecting.png");
         await gateway.resolveDeferred("connect");
         const sidebar = page.locator("openclaw-app-sidebar");
         const transcript = page.locator(".chat-thread-inner");
@@ -188,18 +317,47 @@ suite.define(() => {
         await transcript.getByText(transcriptText, { exact: true }).waitFor();
         if (profile === "matching") {
           await expectOwnMessageAlignment(page);
+          await page
+            .locator(".agent-chat__composer-combobox textarea")
+            .fill("A draft before reconnect");
         }
         await waitForPersistedWarmState(page);
-        const hello = await page.evaluate(() => {
-          const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
-            "openclaw-app",
+        const hello: unknown = await page.evaluate(() =>
+          JSON.parse(sessionStorage.getItem("openclaw.warm-boot-proof.hello") ?? "null"),
+        );
+        if (!isRecord(hello) || !isRecord(hello.auth) || !isRecord(hello.snapshot)) {
+          throw new Error("Expected the mock Gateway's first hello response");
+        }
+        expect(hello.snapshot.presence).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ user: expect.objectContaining({ id: "profile-a" }) }),
+          ]),
+        );
+
+        if (profile === "legacy-rail") {
+          const { records } = await page.evaluate<
+            Awaited<ReturnType<typeof snapshotStorage>>,
+            Parameters<typeof snapshotStorage>[0]
+          >(snapshotStorage, "legacy");
+          expect(records.length).toBeGreaterThan(0);
+          const url = page.url();
+          await page.goto("about:blank");
+          const modules = await holdModuleResponse(page, /\/assets\/.*\.js(?:\?|$)/u);
+          await page.goto(url, { waitUntil: "commit" });
+          await modules.request;
+          await page.evaluate(snapshotStorage, records);
+          modules.release();
+          await gateway.waitForRequest("connect");
+          await sidebar.locator("aside.sidebar").waitFor();
+          expect(await sidebar.locator(".sidebar-rail__pin").count()).toBe(0);
+          expect(await sidebar.locator("aside.sidebar").getAttribute("data-snapshot-state")).toBe(
+            "live",
           );
-          const snapshot = app?.runtime?.context.gateway.snapshot;
-          if (snapshot?.selfUser?.id !== "profile-a" || !snapshot.hello) {
-            throw new Error("Expected the first connection to belong to profile-a");
-          }
-          return snapshot.hello;
-        });
+          expect(await gateway.getRequests("sessions.list")).toEqual([]);
+          await gateway.resolveDeferred("connect");
+          await transcript.getByText(transcriptText, { exact: true }).waitFor();
+          return;
+        }
 
         let bootstrapRequests = 0;
         if (profile === "trusted-proxy") {
@@ -232,49 +390,121 @@ suite.define(() => {
             }
           });
         }
-        await page.reload();
-        const connect = await gateway.waitForRequest("connect");
-        await sidebar.locator(".nav-item--home").waitFor();
+        if (profile === "offline" || profile === "matching") {
+          // The service worker's offline document has no embedded bootstrap identity,
+          // and an unreachable Gateway cannot answer the bootstrap config fetch.
+          await page.route("**/control-ui-config.json", (route) => route.abort());
+          await page.addInitScript(() => {
+            const names: string[] = [];
+            sessionStorage.setItem("openclaw.identity-proof.placeholders", "[]");
+            new MutationObserver(() => {
+              const composer = document.querySelector<HTMLTextAreaElement>(
+                ".agent-chat__composer-combobox textarea",
+              );
+              if (composer && names.at(-1) !== composer.placeholder) {
+                names.push(composer.placeholder);
+                sessionStorage.setItem(
+                  "openclaw.identity-proof.placeholders",
+                  JSON.stringify(names),
+                );
+              }
+            }).observe(document, { subtree: true, childList: true, attributes: true });
+          });
+        }
+        if (profile === "offline") {
+          await gateway.setOnline(false);
+          await page.reload();
+          await transcript.getByText(transcriptText, { exact: true }).waitFor();
+          await sidebar.getByText("Cached only session", { exact: true }).waitFor();
+          await page.locator(".chat-pane__connection-state").waitFor({ state: "visible" });
+          expect(
+            await page.evaluate(() =>
+              JSON.parse(sessionStorage.getItem("openclaw.identity-proof.placeholders") ?? "null"),
+            ),
+          ).toEqual(["Message Observatory"]);
+          expect(await page.locator(".chat-pane-cache__pane--active .skeleton").count()).toBe(0);
+          expect(await gateway.getRequests("connect")).toEqual([]);
+          expect(await gateway.getRequests("chat.send")).toEqual([]);
+          await capture("warm-offline-before-socket.png");
+          return;
+        }
+        if (profile === "matching") {
+          // A cached reload must render even if the Gateway never sends its challenge.
+          await page.addInitScript(() => {
+            let heldChallenge = false;
+            window.WebSocket = new Proxy(window.WebSocket, {
+              construct(Target, args) {
+                const socket = Reflect.construct(Target, args) as WebSocket;
+                const dispatch = socket.dispatchEvent.bind(socket);
+                socket.dispatchEvent = (event) => {
+                  if (
+                    !heldChallenge &&
+                    event instanceof MessageEvent &&
+                    typeof event.data === "string" &&
+                    JSON.parse(event.data).event === "connect.challenge"
+                  ) {
+                    heldChallenge = true;
+                    document.addEventListener(
+                      "openclaw-proof-release-challenge",
+                      () => dispatch(event),
+                      { once: true },
+                    );
+                    return true;
+                  }
+                  return dispatch(event);
+                };
+                return socket;
+              },
+            });
+          });
+        }
+        await page.reload({ waitUntil: "commit" });
+        await sidebar.locator(".sidebar-footer-bar__home").waitFor();
         await sidebar.getByText("Cached only session", { exact: true }).waitFor();
         await transcript.getByText(transcriptText, { exact: true }).waitFor();
         expect(await gateway.getRequests("sessions.list")).toEqual([]);
         expect(await gateway.getRequests("chat.startup")).toEqual([]);
         if (profile === "trusted-proxy") {
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "bootstrap-before-hello.png"),
-          });
-          expect(
-            await page.evaluate(
-              () =>
-                document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
-                  "openclaw-app",
-                )?.runtime?.context.config.current.assistantIdentity.name,
-            ),
-          ).toBe("Observatory");
+          await capture("bootstrap-before-hello.png");
           expect(bootstrapRequests).toBe(0);
-          await sidebar.getByText("Observatory", { exact: true }).waitFor();
+          await sidebar.getByRole("button", { name: /^Observatory ·/u }).waitFor();
         }
         if (profile === "matching") {
           await expectOwnMessageAlignment(page);
+          const composer = page.locator(".agent-chat__composer-combobox textarea");
+          await expect.poll(() => composer.inputValue()).toBe("A draft before reconnect");
+          await expect.poll(() => composer.isEnabled()).toBe(true);
+          await expect
+            .poll(() => page.locator("[data-chat-model-select]").textContent())
+            .toContain("Remembered model");
+          await page.locator("[data-composer-catalog-state=stale]").waitFor({ state: "visible" });
+          await composer.fill("Typing while the Gateway is still connecting");
+          expect(await gateway.getRequests("chat.send")).toEqual([]);
         }
-        await page.screenshot({
-          path: path.join(suite.artifactDir, `warm-${profile}-before-hello.png`),
-        });
+        if (profile === "matching") {
+          expect(await gateway.getRequests("connect")).toEqual([]);
+          expect(await gateway.getSocketCount()).toBe(1);
+          await page.evaluate(() =>
+            document.dispatchEvent(new Event("openclaw-proof-release-challenge")),
+          );
+        }
+        const connect = await gateway.waitForRequest("connect");
+        await capture(`warm-${profile}-before-hello.png`);
 
         await gateway.setSessionsListResponse({
+          ownerSessionCounts: [],
           ts: timestamp + 1,
           path: "",
           count: 2,
           defaults: { model: null, modelProvider: null, contextTokens: null },
           sessions: [
             { ...currentRow, label: "Live reload conversation", updatedAt: timestamp + 1 },
-            {
-              key: "agent:main:live-only",
-              sessionId: "live-only-session",
-              kind: "direct",
-              label: "Live only session",
-              updatedAt: timestamp,
-            },
+            sessionRow(
+              "live-only",
+              "Live only session",
+              timestamp,
+              profile === "different" ? "profile-b" : "profile-a",
+            ),
           ],
         });
         await gateway.setMethodResponse("chat.startup", {
@@ -295,9 +525,7 @@ suite.define(() => {
             // Presence attribution alone does not change the authenticated storage owner.
             auth: { ...hello.auth, recoveryScope: "e2e-profile-b-recovery-scope" },
             snapshot: {
-              ...(typeof hello.snapshot === "object" && hello.snapshot !== null
-                ? hello.snapshot
-                : {}),
+              ...hello.snapshot,
               presence: [
                 { instanceId: client.instanceId, reason: "connect", user: { id: "profile-b" } },
               ],
@@ -325,18 +553,78 @@ suite.define(() => {
           expect(startup.params).toMatchObject({ sessionKey, cursor: "warm-reload-cursor" });
         }
         await gateway.waitForRequest("sessions.list");
-        await sidebar.locator(".nav-item--home").waitFor();
+        await sidebar.locator(".sidebar-footer-bar__home").waitFor();
         await sidebar.getByText("Live only session", { exact: true }).waitFor();
         expect(await sidebar.getByText("Cached only session", { exact: true }).count()).toBe(0);
-        await transcript
-          .getByText(
-            profile === "different" ? "This is profile B's conversation." : transcriptText,
-            { exact: true },
-          )
-          .waitFor();
-        await page.screenshot({
-          path: path.join(suite.artifactDir, `warm-${profile}-after-hello.png`),
-        });
+        const finalText =
+          profile === "different" ? "This is profile B's conversation." : transcriptText;
+        await transcript.getByText(finalText, { exact: true }).waitFor();
+        if (profile === "matching") {
+          expect(
+            await page.evaluate(() =>
+              JSON.parse(sessionStorage.getItem("openclaw.identity-proof.placeholders") ?? "null"),
+            ),
+          ).toEqual(["Message Observatory"]);
+        }
+        await capture(`warm-${profile}-after-hello.png`);
+        if (profile === "large" || shortTail || imported) {
+          await waitForChatScrollIdle(page);
+          expect(await gateway.getRequests("chat.history")).toEqual([]);
+          const messages = [
+            ...olderMessages,
+            {
+              ...rememberedMessage,
+              __openclaw: {
+                ...rememberedMessage["__openclaw"],
+                senderProfileAvatarUrl: "/api/users/synthetic/avatar?v=2",
+              },
+            },
+          ];
+          const pageSize = imported ? 50 : 1_000;
+          const firstPage = messages.slice(-pageSize);
+          await gateway.setMethodResponse("chat.history", {
+            // Every long-history fixture spans two pages: 1,100/1,000 or 120/50.
+            cases: [firstPage, messages.slice(0, -pageSize)].map((pageMessages, index) => ({
+              match: { offset: index * pageSize },
+              response: {
+                messages: pageMessages,
+                sessionId: currentRow.sessionId,
+                totalMessages: messages.length,
+                hasMore: index === 0,
+                ...(index === 0 ? { nextOffset: pageSize } : {}),
+              },
+            })),
+          });
+          const messageCount = () =>
+            page
+              .locator(".chat-pane-cache__pane--active")
+              .evaluate((element) => Reflect.get(element, "state").chatMessages.length);
+          const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+          await thread.hover();
+          await page.mouse.wheel(0, -100_000);
+          const history = await gateway.waitForRequest("chat.history", { match: { offset: 0 } });
+          expect(history.params).toMatchObject({ offset: 0 });
+          await expect.poll(messageCount).toBe(firstPage.length);
+          await page
+            .getByText(
+              `Older history ${Math.max(messages.length - pageSize + 1, olderMessages.length - 79)}`,
+              { exact: true },
+            )
+            .waitFor({ state: "attached" });
+          await waitForChatScrollIdle(page);
+          await page.mouse.wheel(0, -1_000_000);
+          const older = await gateway.waitForRequest("chat.history", {
+            match: { offset: pageSize },
+          });
+          expect(older.params).toMatchObject({ offset: pageSize });
+          await expect.poll(messageCount).toBe(messages.length);
+          await page
+            .getByText(`Older history ${messages.length - pageSize}`, { exact: true })
+            .waitFor({ state: "attached" });
+          await page
+            .getByText(`Older history ${messages.length - pageSize + 1}`, { exact: true })
+            .waitFor();
+        }
         if (profile === "matching") {
           await expectOwnMessageAlignment(page);
           const connectCount = (await gateway.getRequests("connect")).length;
@@ -349,7 +637,6 @@ suite.define(() => {
           await gateway.waitForRequest("chat.startup", { after: startupCount });
           await expectOwnMessageAlignment(page);
         }
-      });
-    },
+      }),
   );
 });

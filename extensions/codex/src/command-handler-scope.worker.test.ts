@@ -1,12 +1,11 @@
 import { getSessionEntry, patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it } from "vitest";
-import { resolveCodexCommandDeps } from "./command-handler-deps.js";
 import { resolvePreparedCodexCommandAuthority } from "./command-handler-scope.js";
+import { createCodexCommandHost } from "./command-host.test-support.js";
 import {
   createContext,
   createCodexRuntimeContextOverrides,
-  createDeps,
   useCodexCommandTestState,
   writeTestBinding,
 } from "./commands.test-support.js";
@@ -28,7 +27,7 @@ describe("codex command", () => {
       { threadId: "thread-manual-source", cwd: tempDir, model: "gpt-5.4" },
     );
     const authority = await resolvePreparedCodexCommandAuthority(
-      resolveCodexCommandDeps(createDeps()),
+      createCodexCommandHost(),
       createContext("model gpt-5.5", undefined, context),
     );
     const sql = observeHostDataSql();

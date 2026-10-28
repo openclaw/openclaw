@@ -7,8 +7,6 @@ import {
 } from "../../plugins/memory-audience.js";
 
 /**
- * Input facts used to build the agent portion of plugin hook events.
- *
  * Only stable run/session/model facts are forwarded to plugin hooks; config remains a local
  * construction input so hooks do not accidentally depend on mutable raw configuration.
  */
@@ -23,7 +21,6 @@ export type AgentHarnessHookContext = Omit<
   config?: OpenClawConfig;
 };
 
-/** Builds the sparse hook context object passed to agent harness plugin hooks. */
 export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHookAgentContext {
   const { memoryAudience } = params;
   if (memoryAudience) {
@@ -60,11 +57,6 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
     ...(params.contextWindowReferenceTokens
       ? { contextWindowReferenceTokens: params.contextWindowReferenceTokens }
       : {}),
-    ...buildAgentHookContextIdentityFields({
-      trigger: params.trigger,
-      senderId: params.senderId,
-      chatId: params.chatId,
-      channelContext: params.channelContext,
-    }),
+    ...buildAgentHookContextIdentityFields(params),
   };
 }

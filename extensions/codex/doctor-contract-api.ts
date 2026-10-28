@@ -13,6 +13,10 @@ function hasRetiredDynamicToolsProfile(value: unknown): boolean {
   return Object.hasOwn(asNullableRecord(value) ?? {}, "codexDynamicToolsProfile");
 }
 
+function hasRetiredCyberFailoverModel(value: unknown): boolean {
+  return Object.hasOwn(asNullableRecord(value) ?? {}, "model");
+}
+
 function hasLegacyPluginDestructivePolicy(value: unknown): boolean {
   const codexPlugins = asNullableRecord(value);
   if (!codexPlugins) {
@@ -59,6 +63,12 @@ function hasRetiredTurnIdleTimeout(value: unknown): boolean {
 }
 
 export const legacyConfigRules: LegacyConfigRule[] = [
+  {
+    path: ["plugins", "entries", "codex", "config", "appServer", "cyberFailover"],
+    message:
+      'plugins.entries.codex.config.appServer.cyberFailover.model is retired; automatic cyber-policy retries use the active model through approved Daybreak access. Run "openclaw doctor --fix" to remove it.',
+    match: hasRetiredCyberFailoverModel,
+  },
   {
     path: ["plugins", "entries", "codex", "config"],
     message:
@@ -108,6 +118,7 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
       !hasLegacyPluginDestructivePolicy(rawCodexPlugins) &&
       !hasRetiredApprovalPolicy(rawAppServer) &&
       !hasRetiredTurnIdleTimeout(rawAppServer) &&
+      !hasRetiredCyberFailoverModel(rawAppServer?.cyberFailover) &&
       !hasBlankNetworkProxyOptionalFields(rawAppServer))
   ) {
     return { config: cfg, changes: [] };
@@ -142,6 +153,14 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   }
 
   const nextAppServer = asNullableRecord(nextPluginConfig.appServer);
+  const nextCyberFailover = asNullableRecord(nextAppServer?.cyberFailover);
+  if (nextCyberFailover && hasRetiredCyberFailoverModel(nextCyberFailover)) {
+    delete nextCyberFailover.model;
+    changes.push(
+      "Removed retired plugins.entries.codex.config.appServer.cyberFailover.model; automatic cyber-policy retries use the active model through approved Daybreak access. Existing mode and cooloffMs settings were not changed.",
+    );
+  }
+
   if (nextAppServer && hasRetiredTurnIdleTimeout(nextAppServer)) {
     for (const key of RETIRED_TURN_IDLE_TIMEOUT_KEYS) {
       if (Object.hasOwn(nextAppServer, key)) {
@@ -186,7 +205,11 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     id: "codex-app-server-sidecars-to-plugin-state",
     label: "Codex app-server thread bindings",
     // Config normalization loads this artifact too; state-only imports belong
-    // behind the detection and migration callbacks.
+    // behind the inventory, detection, and migration callbacks.
+    collectBackupResources: async (params) =>
+      (
+        await import("./src/migration/session-binding-sidecars.js")
+      ).collectLegacySessionBindingBackupResources(params),
     detectLegacyState: async (params) =>
       (
         await import("./src/migration/session-binding-sidecars.js")
@@ -199,6 +222,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "codex-native-task-assignments",
     label: "Codex native pending assignments",
+    sqliteOnly: { family: "state" },
     collectBackupResources: async (params) =>
       (
         await import("./src/migration/native-task-assignments.js")
@@ -211,6 +235,21 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       (
         await import("./src/migration/native-task-assignments.js")
       ).codexNativeTaskAssignmentMigration.migrateLegacyState(params),
+  },
+  {
+    id: "codex-native-assignment-repair",
+    label: "Codex native pending assignment repair",
+    doctorOnly: true,
+    phase: "after-session-repair",
+    collectBackupResources: () => [],
+    detectLegacyState: async (params) =>
+      (
+        await import("./src/migration/native-assignment-repair.js")
+      ).codexNativeAssignmentRepair.detectLegacyState(params),
+    migrateLegacyState: async (params) =>
+      (
+        await import("./src/migration/native-assignment-repair.js")
+      ).codexNativeAssignmentRepair.migrateLegacyState(params),
   },
   codexOrphanedSessionBindingMigration,
 ];

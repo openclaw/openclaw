@@ -9,8 +9,14 @@ import {
 } from "../messages.js";
 import type { SessionContext, SessionTreeEntry } from "../types.js";
 import { selectResetKeptEntries } from "./tool-result-pairing.js";
+import { isTranscriptArtifactProvider } from "./transcript-model.js";
 
 const SESSION_HISTORY_PRELUDE = Symbol.for("openclaw.sessionHistoryPrelude");
+
+function isExcludedCustomMessage(entry: Extract<SessionTreeEntry, { type: "custom_message" }>) {
+  // Existing failure receipts predate the generic context exclusion marker.
+  return entry.excludeFromContext === true || entry.customType === "run-failed-before-reply";
+}
 
 /** The same semantic cut is used before payload acquisition and when building messages. */
 function resolveSessionContextWindow(
@@ -38,6 +44,9 @@ export function projectSessionEntryMessage(entry: SessionTreeEntry): AgentMessag
         ? undefined
         : entry.message;
     case "custom_message":
+      if (isExcludedCustomMessage(entry)) {
+        return undefined;
+      }
       return createCustomMessage(
         entry.customType,
         entry.content,
@@ -96,6 +105,7 @@ export function* iterateSessionContextEntries<T extends SessionTreeEntry>(
       entry.type === "branch_summary";
     if (
       !hasMessage ||
+      (entry.type === "custom_message" && isExcludedCustomMessage(entry)) ||
       (!resetKept?.has(entry) &&
         entry.type === "message" &&
         "excludeFromContext" in entry.message &&
@@ -151,9 +161,13 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
   for (const entry of pathEntries) {
     if (entry.type === "thinking_level_change") {
       thinkingLevel = entry.thinkingLevel;
-    } else if (entry.type === "model_change") {
+    } else if (entry.type === "model_change" && !isTranscriptArtifactProvider(entry.provider)) {
       model = { provider: entry.provider, modelId: entry.modelId };
-    } else if (entry.type === "message" && entry.message.role === "assistant") {
+    } else if (
+      entry.type === "message" &&
+      entry.message.role === "assistant" &&
+      !isTranscriptArtifactProvider(entry.message.provider)
+    ) {
       model = { provider: entry.message.provider, modelId: entry.message.model };
     }
   }

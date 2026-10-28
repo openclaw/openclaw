@@ -14,13 +14,14 @@ export function resolveAgentAvatarUrl(
   agent: { identity?: { avatar?: string; avatarUrl?: string } },
   agentIdentity?: AgentIdentityResult | null,
 ): string | null {
-  const candidates = [
-    normalizeOptionalString(agentIdentity?.avatar),
-    normalizeOptionalString(agent.identity?.avatarUrl),
-    normalizeOptionalString(agent.identity?.avatar),
-  ];
+  // A resolved identity owns absence too; stale roster metadata cannot restore its image.
+  const candidates = agentIdentity
+    ? [agentIdentity.avatar]
+    : [agent.identity?.avatarUrl, agent.identity?.avatar];
   return (
-    candidates.find((candidate) => candidate && isRenderableControlUiAvatarUrl(candidate)) ?? null
+    candidates
+      .map(normalizeOptionalString)
+      .find((candidate) => candidate && isRenderableControlUiAvatarUrl(candidate)) ?? null
   );
 }
 

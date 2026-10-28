@@ -25,14 +25,14 @@ export function normalizeClaudeCliStreamJsonRecord(
       continue;
     }
     const source = node.source;
-    const data = isRecord(source) && source.type === "base64" ? source.data : undefined;
     if (
-      typeof data === "string" &&
       isRecord(source) &&
+      source.type === "base64" &&
+      typeof source.data === "string" &&
       (node.type === "image" ||
         (node.type === "document" && source.media_type === "application/pdf"))
     ) {
-      const { data: _omitted, ...rest } = source;
+      const { data, ...rest } = source;
       node.source = rest;
       node.omitted = true;
       node.bytes = estimateBase64DecodedBytes(data);

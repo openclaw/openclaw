@@ -3,7 +3,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { getSelfAndAncestorPidsSync } from "../infra/restart-stale-pids.js";
 import { probeLaunchAgentState, resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
 import { ServiceInspectionError } from "./service-inspection-error.js";
-import { inspectServiceProcessMembershipSync } from "./service-process-membership.js";
+import {
+  inspectServiceProcessMembershipSync,
+  resolveServiceProcessMembershipBlock,
+} from "./service-process-membership.js";
 
 /** Environment hints for launchd identity; inherited markers do not prove ancestry. */
 export function isCurrentProcessLaunchdServiceLabel(
@@ -34,15 +37,16 @@ export async function isCurrentProcessInsideLaunchdService(label: string): Promi
     if (ancestors.has(probe.runtime.pid)) {
       return true;
     }
-    const membership = inspectServiceProcessMembershipSync(probe.runtime.pid, "darwin");
-    if (membership === "inside") {
+    const block = resolveServiceProcessMembershipBlock(
+      inspectServiceProcessMembershipSync(probe.runtime.pid, "darwin"),
+      ancestors.has(1),
+      "darwin",
+    );
+    if (block === "inside-gateway-service") {
       return true;
     }
-    if (membership === "unknown") {
-      throw new ServiceInspectionError("service-membership-unverified");
-    }
-    if (!ancestors.has(1)) {
-      throw new ServiceInspectionError("service-ancestry-unverified");
+    if (block) {
+      throw new ServiceInspectionError(block);
     }
     return false;
   }

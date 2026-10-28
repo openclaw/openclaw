@@ -1,3 +1,8 @@
+import { registerSessionMaintenancePreserveKeysProvider } from "../../config/sessions/store-maintenance-preserve.js";
+import {
+  sessionChanges,
+  sessionChangeScopeAffectsStoredRows,
+} from "../../sessions/session-row-changes.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "./placement-target.js";
@@ -11,7 +16,7 @@ export type PlacementSessionEvidenceResolver = (
 type PlacementSessionRetirementDeps = {
   placements: Pick<
     WorkerSessionPlacementStore,
-    "getAsync" | "listAsync" | "retireSessionPlacementAsync"
+    "getAsync" | "getManyAsync" | "listAsync" | "retireSessionPlacementAsync"
   >;
   environments: Pick<WorkerEnvironmentService, "get">;
   forceDestroyEnvironment: (
@@ -20,15 +25,67 @@ type PlacementSessionRetirementDeps = {
   ) => Promise<unknown>;
   createSessionEvidenceResolver: (
     placements: readonly WorkerSessionPlacementRecord[],
+    signal?: AbortSignal,
   ) => Promise<PlacementSessionEvidenceResolver>;
-  reportChanges: (
-    operation: () => Promise<void>,
-    before: readonly WorkerSessionPlacementRecord[],
-  ) => Promise<void>;
+  reportChanges: (operation: () => Promise<void>) => Promise<void>;
   warn: (message: string) => void;
 };
 
 export function createPlacementSessionRetirement(deps: PlacementSessionRetirementDeps) {
+  const pending = new Set<string>();
+  let fullScanPending = true;
+  const markPending = (sessionId: string) => {
+    pending.add(sessionId);
+  };
+  const invalidateAll = () => {
+    fullScanPending = true;
+  };
+  const installMaintenancePreservation = (
+    placements: Pick<WorkerSessionPlacementStore, "prepareMaintenancePlacements">,
+  ) => {
+    const unsubscribeFacts = sessionChanges.subscribeFacts((change) => {
+      if ("all" in change) {
+        if (
+          change.scope === "config" ||
+          change.scope === "worker-environments" ||
+          sessionChangeScopeAffectsStoredRows(change)
+        ) {
+          invalidateAll();
+        }
+      } else if (
+        change.factsInvalidated === true &&
+        change.scope !== "transcript" &&
+        sessionChangeScopeAffectsStoredRows(change)
+      ) {
+        // Unknown storage outcomes have no committed identity to enqueue.
+        invalidateAll();
+      }
+    });
+    const unregisterPreservation = registerSessionMaintenancePreserveKeysProvider(async () => {
+      const prepared = await placements.prepareMaintenancePlacements();
+      return {
+        // Session evidence survives until its remote owner is reclaimed or proven gone.
+        *capture() {
+          for (const placement of prepared.placements) {
+            if (
+              placement.state !== "failed" ||
+              !isFailedWorkerPlacementEnvironmentGone({
+                environmentService: deps.environments,
+                placement,
+              })
+            ) {
+              yield placement.sessionKey;
+            }
+          }
+        },
+        dispose: prepared.release,
+      };
+    });
+    return () => {
+      unsubscribeFacts();
+      unregisterPreservation();
+    };
+  };
   const retireCurrent = async (placement: WorkerSessionPlacementRecord): Promise<boolean> => {
     if (placement.turnClaim) {
       return false;
@@ -64,27 +121,31 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
   const reconcilePlacement = async (
     placement: WorkerSessionPlacementRecord,
     resolveSessionEvidence: PlacementSessionEvidenceResolver,
-  ): Promise<void> => {
+    signal?: AbortSignal,
+  ): Promise<boolean> => {
     const evidence = await resolveSessionEvidence(placement);
+    signal?.throwIfAborted();
     if (evidence !== "absent") {
-      return;
+      return evidence === "current";
     }
 
     let current = await deps.placements.getAsync(placement.sessionId);
+    signal?.throwIfAborted();
     if (!current) {
-      return;
+      return true;
     }
     try {
       if (await retireCurrent(current)) {
-        return;
+        return true;
       }
     } catch {
-      return;
+      return false;
     }
 
+    signal?.throwIfAborted();
     const environmentId = current.environmentId;
     if (!environmentId) {
-      return;
+      return false;
     }
     try {
       await deps.forceDestroyEnvironment(environmentId, (error) => {
@@ -96,39 +157,69 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
       deps.warn(
         `Worker placement orphan teardown failed for ${current.sessionId}: ${String(error)}`,
       );
-      return;
+      return false;
     }
 
     current = await deps.placements.getAsync(placement.sessionId);
     if (!current) {
+      return true;
+    }
+    try {
+      return await retireCurrent(current);
+    } catch {
+      // A concurrent placement transition owns the next reconciliation pass.
+      return false;
+    }
+  };
+
+  const reconcile = async (signal?: AbortSignal): Promise<void> => {
+    if (signal?.aborted) {
+      return;
+    }
+    const readAll = fullScanPending;
+    const sessionIds = [...pending];
+    // Drain before yielding so receipts arriving during this pass remain queued.
+    fullScanPending = false;
+    pending.clear();
+    if (!readAll && sessionIds.length === 0) {
       return;
     }
     try {
-      await retireCurrent(current);
-    } catch {
-      // A concurrent placement transition owns the next reconciliation pass.
-    }
-  };
-
-  const reconcile = async (): Promise<void> => {
-    const placements = await deps.placements.listAsync();
-    if (placements.length === 0) {
-      return;
-    }
-    // The retirement scan already supplies the complete before-snapshot for reporting.
-    await deps.reportChanges(async () => {
-      const resolveSessionEvidence = await deps.createSessionEvidenceResolver(placements);
-      for (const placement of placements) {
-        try {
-          await reconcilePlacement(placement, resolveSessionEvidence);
-        } catch (error) {
-          deps.warn(
-            `Worker placement session evidence check failed for ${placement.sessionId}: ${String(error)}`,
-          );
-        }
+      const placements = readAll
+        ? await deps.placements.listAsync()
+        : [...(await deps.placements.getManyAsync(sessionIds)).values()];
+      if (placements.length === 0) {
+        return;
       }
-    }, placements);
+      await deps.reportChanges(async () => {
+        signal?.throwIfAborted();
+        const resolveSessionEvidence = await deps.createSessionEvidenceResolver(placements, signal);
+        for (const placement of placements) {
+          signal?.throwIfAborted();
+          try {
+            if (!(await reconcilePlacement(placement, resolveSessionEvidence, signal))) {
+              markPending(placement.sessionId);
+            }
+          } catch (error) {
+            if (signal?.aborted && error === signal.reason) {
+              throw error;
+            }
+            markPending(placement.sessionId);
+            deps.warn(
+              `Worker placement session evidence check failed for ${placement.sessionId}: ${String(error)}`,
+            );
+          }
+        }
+      });
+    } catch (error) {
+      fullScanPending ||= readAll;
+      sessionIds.forEach(markPending);
+      if (signal?.aborted && error === signal.reason) {
+        return;
+      }
+      throw error;
+    }
   };
 
-  return { reconcile };
+  return { reconcile, markPending, installMaintenancePreservation };
 }

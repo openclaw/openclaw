@@ -3,8 +3,8 @@ import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import { resolveNonNegativeIntegerOption } from "../../packages/normalization-core/src/number-coercion.js";
 import { wrapPluginStateError } from "../plugin-state/plugin-state-store.database.js";
 import {
-  createCorePluginStateKeyedStore,
-  createPluginStateKeyedStore,
+  createCorePluginStateKeyedStoreV2,
+  createPluginStateKeyedStoreV2,
 } from "../plugin-state/plugin-state-store.js";
 import type { PluginStateKeyedStore } from "../plugin-state/plugin-state-store.types.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -83,7 +83,7 @@ function resolveStateMaxEntries(options: PersistentDedupeOptions): number {
 
 export type CapturedPersistentStore = {
   namespace: string;
-  get: () => Required<PluginStateKeyedStore<PersistentDedupeEntry>>;
+  get: () => PluginStateKeyedStore<PersistentDedupeEntry, 2>;
 };
 
 export function createPersistentStoreResolver(options: PersistentDedupeOptions) {
@@ -115,11 +115,13 @@ export function createPersistentStoreResolver(options: PersistentDedupeOptions) 
           context.admission.assertCurrent();
           return (store ??=
             pluginId !== undefined
-              ? createPluginStateKeyedStore<PersistentDedupeEntry>(pluginId, storeOptions)
-              : createCorePluginStateKeyedStore<PersistentDedupeEntry>({
-                  ...storeOptions,
-                  ownerId: LEGACY_PATH_OWNER_ID,
-                }));
+              ? createPluginStateKeyedStoreV2<PersistentDedupeEntry>(pluginId, storeOptions, {
+                  assertCurrent: () => context.admission.assertCurrent(),
+                })
+              : createCorePluginStateKeyedStoreV2<PersistentDedupeEntry>(
+                  { ...storeOptions, ownerId: LEGACY_PATH_OWNER_ID },
+                  { assertCurrent: () => context.admission.assertCurrent() },
+                ));
         },
       };
     } catch (error) {

@@ -28,12 +28,11 @@ export const nativeHookRelayOperations = {
   "nativeHookRelay.read": (input: { relayId: string }, { stateOptions }) =>
     withOpenClawStateDatabaseReadOnly(
       (database) =>
-        store.readNativeHookRelayBridgeSnapshotFromDatabase({ database, relayId: input.relayId })
-          ?.record,
+        store.readNativeHookRelayBridgeRecordFromDatabase({ database, relayId: input.relayId }),
       stateOptions(),
     ),
-  "nativeHookRelay.listSnapshots": (_input: undefined, { open }) =>
-    store.listNativeHookRelayBridgeSnapshotsInDatabase(open()),
+  "nativeHookRelay.listRecords": (_input: undefined, { open }) =>
+    store.listNativeHookRelayBridgeRecordsInDatabase(open()),
   "nativeHookRelay.write": relayMutation(store.writeNativeHookRelayBridgeRecordInDatabase, true),
   "nativeHookRelay.renew": relayMutation(
     store.renewOrRestoreNativeHookRelayBridgeRecordInDatabase,

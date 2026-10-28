@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 
 export function writeProvisionedSnapshotInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: { worktreeId: string } & (
     | { kind: "reset" }
     | { kind: "chunk"; path: string; chunkIndex: number; data: Uint8Array }

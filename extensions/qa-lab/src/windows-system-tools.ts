@@ -46,19 +46,6 @@ function resolveQaWindowsSystemRoot(env: Record<string, string | undefined> = pr
   );
 }
 
-export function resolveQaWindowsSystem32ExePath(
-  executableName: string,
-  env: Record<string, string | undefined> = process.env,
-): string {
-  if (
-    path.win32.basename(executableName) !== executableName ||
-    !/^[A-Za-z0-9_.-]+\.exe$/u.test(executableName)
-  ) {
-    throw new Error(`Invalid Windows System32 executable name: ${executableName}`);
-  }
-  return path.win32.join(resolveQaWindowsSystemRoot(env), "System32", executableName);
-}
-
 export function runQaWindowsTaskkill(params: {
   pid: number;
   signal: NodeJS.Signals;
@@ -66,7 +53,11 @@ export function runQaWindowsTaskkill(params: {
   runCommand?: typeof spawnSync;
 }) {
   const runCommand = params.runCommand ?? spawnSync;
-  const taskkillPath = resolveQaWindowsSystem32ExePath("taskkill.exe", params.env);
+  const taskkillPath = path.win32.join(
+    resolveQaWindowsSystemRoot(params.env),
+    "System32",
+    "taskkill.exe",
+  );
   for (const force of params.signal === "SIGKILL" ? [true] : [false, true]) {
     const result = runCommand(
       taskkillPath,

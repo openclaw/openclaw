@@ -15,13 +15,10 @@ function normalizeChildBlockIds(children: string[] | string | undefined): string
 }
 
 function calculateAdaptiveColumnWidths(
-  blocks: FeishuDocxBlock[],
-  tableBlockId: string,
+  tableBlock: FeishuDocxBlock,
   getBlockMap: () => ReadonlyMap<string, FeishuDocxBlock>,
 ): number[] {
-  const tableBlock = blocks.find((b) => b.block_id === tableBlockId && b.block_type === 31);
-
-  if (!tableBlock?.table?.property) {
+  if (!tableBlock.table?.property) {
     return [];
   }
 
@@ -134,7 +131,7 @@ export function cleanBlocksForDescendant(blocks: FeishuDocxBlock[]): FeishuDocxB
 
     if (cleanBlock.block_type === 31 && cleanBlock.table) {
       const adaptiveWidths = block.block_id
-        ? calculateAdaptiveColumnWidths(blocks, block.block_id, getBlockMap)
+        ? calculateAdaptiveColumnWidths(block, getBlockMap)
         : undefined;
       const { row_size, column_size } = cleanBlock.table.property || {};
       cleanBlock.table = {

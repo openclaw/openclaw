@@ -1,147 +1,73 @@
-import { describe, expect, it } from "vitest";
-import {
-  enrichChatHistoryCompactionMarkers,
-  prepareChatHistoryResponsePage,
-} from "./chat-history-response-page.js";
+import { expect, it } from "vitest";
+import { prepareChatHistoryResponsePage } from "../chat-history-response-page.js";
 
-describe("enrichChatHistoryCompactionMarkers", () => {
-  it("joins retained legacy token metrics to the matching transcript marker", () => {
-    const marker = {
-      role: "system",
-      __openclaw: { kind: "compaction", id: "compact-entry-1", seq: 4 },
-    };
-    const entry = {
-      sessionId: "session-1",
-      updatedAt: 1_000,
-      compactionCheckpoints: [
-        {
-          checkpointId: "checkpoint-1",
-          sessionKey: "main",
-          sessionId: "session-1",
-          createdAt: 1_000,
-          reason: "auto-threshold",
-          tokensBefore: 900_000,
-          tokensAfter: 24_700,
-          preCompaction: { sessionId: "session-1" },
-          postCompaction: { sessionId: "session-1", entryId: "compact-entry-1" },
-        },
-      ],
-    };
-
-    const result = enrichChatHistoryCompactionMarkers([marker], entry);
-
-    expect(result[0]).toEqual({
-      ...marker,
-      __openclaw: {
-        ...marker["__openclaw"],
-        tokensBefore: 900_000,
-        tokensAfter: 24_700,
-      },
-    });
-    expect(marker["__openclaw"]).not.toHaveProperty("tokensBefore");
-  });
-
-  it("preserves message identity without legacy token metrics", () => {
-    const marker = {
-      role: "system",
-      __openclaw: { kind: "compaction", id: "compact-entry-1" },
-    };
-
-    const result = enrichChatHistoryCompactionMarkers([marker], undefined);
-
-    expect(result[0]).toBe(marker);
-  });
-
-  it("keeps readable history when legacy checkpoint metadata is malformed", () => {
-    const marker = {
-      role: "system",
-      __openclaw: { kind: "compaction", id: "compact-entry-1" },
-    };
-    const entry = { sessionId: "session-1", updatedAt: 1_000, compactionCheckpoints: [{}] };
-    const messages = [marker];
-
-    expect(enrichChatHistoryCompactionMarkers(messages, entry)).toBe(messages);
-  });
+it("reuses a history page when budgeting does not replace or omit messages", () => {
+  const messages = [
+    { role: "assistant", content: "Calling read", __openclaw: { id: "call", seq: 1 } },
+    { role: "toolResult", content: "File contents", __openclaw: { id: "result", seq: 2 } },
+  ];
+  Object.freeze(messages);
+  const page = prepareChatHistoryResponsePage(
+    { messages, pagination: { offset: 0, totalMessages: 2, rawPageMessages: 2 } },
+    { entry: undefined, maxHistoryBytes: 512 * 1024, messageId: undefined },
+  );
+  expect(page.messages).toBe(messages);
+  expect(page.messagesBytes).toBe(Buffer.byteLength(JSON.stringify(messages)));
+  expect(page.omission).toBeUndefined();
+  expect(page.hasMore).toBe(false);
 });
 
-describe("chat history source-row byte limits", () => {
-  it("keeps oversized cursor identities inside the response byte limit", () => {
-    const messageId = "x".repeat(1_000_000);
-    const page = prepareChatHistoryResponsePage(
-      {
-        messages: [
-          { role: "assistant", content: "Visible", __openclaw: { id: messageId, seq: 2 } },
-        ],
-        anchor: {
-          sessionId: "bounded-cursor",
-          source: "source",
-          hasOlder: true,
-          hasNewer: true,
-          oldestMessageId: messageId,
-          newestMessageId: messageId,
-        },
+it("keeps oversized cursor identities inside the response byte limit", () => {
+  const messageId = "x".repeat(1_000_000);
+  const page = prepareChatHistoryResponsePage(
+    {
+      messages: [{ role: "assistant", content: "Visible", __openclaw: { id: messageId, seq: 2 } }],
+      anchor: {
+        sessionId: "bounded-cursor",
+        source: "source",
+        hasOlder: true,
+        hasNewer: true,
+        oldestMessageId: messageId,
+        newestMessageId: messageId,
       },
-      { entry: undefined, maxHistoryBytes: 512 * 1024, messageId },
-    );
-    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(1_000_000);
-    expect(page.olderCursor).toBeUndefined();
-    expect(page.newerCursor).toBeUndefined();
-  });
-
-  it.each([undefined, "sibling-1"])(
-    "keeps a fetchable reference for oversized CLI siblings (anchor=%s)",
-    (messageId) => {
-      const messages = Array.from({ length: 5 }, (_, index) => ({
-        role: "assistant",
-        content: [{ type: "text", text: `sibling-${index}: ${"x".repeat(120_000)}` }],
-        __openclaw: { id: `sibling-${index}`, seq: index + 20 },
-      }));
-      const page = prepareChatHistoryResponsePage(
-        {
-          messages,
-          pagination: {
-            offset: 1,
-            totalMessages: 3,
-            rawPageMessages: 1,
-            messageSequences: Object.fromEntries(
-              messages.map((message) => [`id:${message["__openclaw"].id}`, 2]),
-            ),
-          },
-        },
-        { entry: undefined, maxHistoryBytes: 512 * 1024, messageId },
-      );
-      expect(page.messages).toHaveLength(1);
-      expect(page.messages[0]).toMatchObject({
-        __openclaw: { id: messageId ?? "sibling-4", truncated: true },
-      });
-      expect(page.nextOffset).toBe(2);
-      expect(page.messagesBytes).toBeLessThan(512 * 1024);
     },
+    { entry: undefined, maxHistoryBytes: 512 * 1024, messageId },
   );
+  expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(1_000_000);
+  expect([page.olderCursor, page.newerCursor]).toEqual([undefined, undefined]);
+});
 
-  it("bounds an oversized indivisible source row and its activity by reference", () => {
-    const messages = Array.from({ length: 60 }, (_, index) => ({
-      role: "toolResult",
-      content: [{ type: "text", text: `sibling-${index}: ${"x".repeat(120_000)}` }],
-      __openclaw: { id: `sibling-${index}`, seq: 2 },
-    }));
-    const page = prepareChatHistoryResponsePage(
-      {
-        messages,
-        activity: messages.map((message) => ({ messageId: message["__openclaw"].id, items: [] })),
-        pagination: { offset: 1, totalMessages: 3, rawPageMessages: 1 },
-      },
-      { entry: undefined, maxHistoryBytes: 512 * 1024, messageId: undefined },
-    );
-    expect(page.messages).toHaveLength(1);
-    expect(page.messages[0]).toMatchObject({ __openclaw: { id: "sibling-59", truncated: true } });
-    const bytes =
-      Buffer.byteLength(JSON.stringify(page.messages)) +
-      (page.activity ? Buffer.byteLength(JSON.stringify({ activity: page.activity })) - 1 : 0);
-    expect(bytes).toBeLessThanOrEqual(512 * 1024);
-    expect(page.messagesBytes).toBe(bytes);
-    expect(page.activity).toBeUndefined();
-    expect(page.nextOffset).toBe(2);
+it.each([
+  ["CLI tail", undefined, false],
+  ["CLI anchor", "sibling-1", false],
+  ["indivisible row with activity", undefined, true],
+] as const)("keeps a fetchable reference for oversized %s", (_name, messageId, withActivity) => {
+  const messages = Array.from({ length: withActivity ? 60 : 5 }, (_, index) => ({
+    role: withActivity ? "toolResult" : "assistant",
+    content: [{ type: "text", text: `sibling-${index}: ${"x".repeat(120_000)}` }],
+    __openclaw: { id: `sibling-${index}`, seq: withActivity ? 2 : index + 20 },
+  }));
+  const activity = withActivity
+    ? messages.map((message) => ({ messageId: message["__openclaw"].id, items: [] }))
+    : undefined;
+  const messageSequences = withActivity
+    ? undefined
+    : Object.fromEntries(messages.map((message) => [`id:${message["__openclaw"].id}`, 2]));
+  const page = prepareChatHistoryResponsePage(
+    {
+      messages,
+      activity,
+      pagination: { offset: 1, totalMessages: 3, rawPageMessages: 1, messageSequences },
+    },
+    { entry: undefined, maxHistoryBytes: 512 * 1024, messageId },
+  );
+  const id = messageId ?? (withActivity ? "sibling-59" : "sibling-4");
+  expect(page.messages).toMatchObject([{ __openclaw: { id, truncated: true } }]);
+  expect(page.nextOffset).toBe(2);
+  if (withActivity) {
     expect(page.hasMore).toBe(true);
-  });
+    expect(page.activity).toBeUndefined();
+    expect(page.messagesBytes).toBe(Buffer.byteLength(JSON.stringify(page.messages)));
+  }
+  expect(page.messagesBytes).toBeLessThan(512 * 1024);
 });

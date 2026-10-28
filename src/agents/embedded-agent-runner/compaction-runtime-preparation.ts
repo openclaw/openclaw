@@ -12,8 +12,8 @@ import {
 import { projectPreparedModelProvider } from "../harness/support.js";
 import type { AgentHarness } from "../harness/types.js";
 import {
-  ensureAuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreAsync,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
 } from "../model-auth.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { isOpenAIProvider } from "../openai-routing.js";
@@ -32,28 +32,6 @@ import {
   resolveCompactionTargetRuntime,
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
-
-export function projectCodexHostTranscriptBytePreflightConfig(
-  config: OpenClawConfig | undefined,
-  active: boolean,
-): OpenClawConfig | undefined {
-  const compaction = config?.agents?.defaults?.compaction;
-  if (
-    !active ||
-    !compaction ||
-    (!Object.hasOwn(compaction, "model") && !Object.hasOwn(compaction, "provider"))
-  ) {
-    return config;
-  }
-  const { model: _model, provider: _provider, ...projectedCompaction } = compaction;
-  return {
-    ...config,
-    agents: {
-      ...config.agents,
-      defaults: { ...config.agents?.defaults, compaction: projectedCompaction },
-    },
-  };
-}
 
 /** Resolves the shared policy, target, and harness ownership for either compaction entry point. */
 export function resolveCompactionRuntimeSelection(params: {
@@ -136,8 +114,8 @@ export function resolveCompactionRuntimeSelection(params: {
       authProfileId: target.authProfileId,
     }),
     provider,
-    runtimeProvider: target.runtimeProvider ?? provider,
-    contextConfigProvider: target.contextProvider ?? provider,
+    runtimeProvider: provider,
+    contextConfigProvider: provider,
     modelId,
   };
 }
@@ -162,7 +140,7 @@ export async function prepareCompactionHarnessAuth(params: {
 }): Promise<
   | {
       ok: true;
-      runtimeAuthProfileStore: ReturnType<typeof ensureAuthProfileStore>;
+      runtimeAuthProfileStore: Awaited<ReturnType<typeof ensureAuthProfileStoreAsync>>;
       runtimeAuthPreparation: PreparedAgentRuntimeAuth;
       selectedPreparedHarness: AgentHarness;
       providerUsesProfileScopedModelMetadata: boolean;
@@ -171,9 +149,9 @@ export async function prepareCompactionHarnessAuth(params: {
 > {
   const useOpenAi = isOpenAIProvider(params.provider);
   const ensureStore = useOpenAi
-    ? ensureAuthProfileStore
-    : ensureAuthProfileStoreWithoutExternalProfiles;
-  const runtimeAuthProfileStore = ensureStore(params.agentDir, {
+    ? ensureAuthProfileStoreAsync
+    : ensureAuthProfileStoreWithoutExternalProfilesAsync;
+  const runtimeAuthProfileStore = await ensureStore(params.agentDir, {
     profileId: params.authProfileId ?? params.reusableRuntimeAuthPlan?.forwardedAuthProfileId,
     ...(useOpenAi ? { externalCliProviderIds: ["openai"] } : {}),
     allowKeychainPrompt: false,

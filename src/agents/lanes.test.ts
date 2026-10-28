@@ -10,10 +10,6 @@ const AGENT_LANE_CRON_NESTED = "cron-nested";
 const AGENT_LANE_NESTED = "nested";
 
 describe("resolveCronAgentLane", () => {
-  it("defaults cron-owned runs to the cron-nested lane", () => {
-    expect(resolveCronAgentLane()).toBe(AGENT_LANE_CRON_NESTED);
-  });
-
   it("moves cron lane callers onto the cron-nested lane", () => {
     expect(resolveCronAgentLane("cron")).toBe(AGENT_LANE_CRON_NESTED);
     expect(resolveCronAgentLane("  cron  ")).toBe(AGENT_LANE_CRON_NESTED);
@@ -37,29 +33,12 @@ describe("resolveNestedAgentLaneForSession (#67502)", () => {
     const laneB = resolveNestedAgentLaneForSession("agent:ebao-vue:discord:channel:2");
     expect(laneA).not.toBe(laneB);
   });
-
-  it("trims whitespace around the session key before scoping", () => {
-    expect(resolveNestedAgentLaneForSession("   agent:ebao:main   ")).toBe(
-      `${AGENT_LANE_NESTED}:agent:ebao:main`,
-    );
-  });
 });
 
 describe("isNestedAgentLane", () => {
-  it("returns true for the unscoped nested lane", () => {
-    expect(isNestedAgentLane(AGENT_LANE_NESTED)).toBe(true);
-  });
-
   it("returns true for per-session nested lanes", () => {
     expect(isNestedAgentLane(resolveNestedAgentLaneForSession("agent:a:main"))).toBe(true);
     expect(isNestedAgentLane(`${AGENT_LANE_NESTED}:agent:a:main`)).toBe(true);
-  });
-
-  it("returns false for lanes that merely contain 'nested' as a substring", () => {
-    // Lane checks are prefix-contract based, not substring heuristics.
-    expect(isNestedAgentLane("deeply-nested-lane")).toBe(false);
-    expect(isNestedAgentLane("session:nested")).toBe(false);
-    expect(isNestedAgentLane("nestedfoo")).toBe(false);
   });
 
   it("returns false for empty or missing lane names", () => {

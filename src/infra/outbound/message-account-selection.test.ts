@@ -2,9 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
-import { validateExplicitMessageAccountSelection } from "./message-account-selection.js";
+import {
+  resolveMessageBroadcastAccountPlan,
+  validateExplicitMessageAccountSelection,
+} from "./message-account-selection.js";
 
 afterEach(() => {
   setActiveDegradedSecretOwners([]);
@@ -24,27 +28,20 @@ describe("validateExplicitMessageAccountSelection", () => {
       }),
     },
   } as unknown as ChannelPlugin;
-
-  it("accepts the plugin-resolved default when it is intentionally unlisted", async () => {
-    expect(
-      await validateExplicitMessageAccountSelection({
-        cfg,
-        channel: "feishu",
-        accountId: "OPS",
-        plugin,
-      }),
-    ).toBe("ops");
-  });
+  const select = (
+    accountId = "OPS",
+    overrides: Partial<Parameters<typeof validateExplicitMessageAccountSelection>[0]> = {},
+  ) =>
+    validateExplicitMessageAccountSelection({
+      cfg,
+      channel: "feishu",
+      accountId,
+      plugin,
+      ...overrides,
+    });
 
   it("still rejects a non-default unlisted account", async () => {
-    await expect(
-      validateExplicitMessageAccountSelection({
-        cfg,
-        channel: "feishu",
-        accountId: "missing",
-        plugin,
-      }),
-    ).rejects.toThrow('Unknown account "missing"');
+    await expect(select("missing")).rejects.toThrow('Unknown account "missing"');
   });
 
   it("uses awaited account state and rejects accounts disabled during resolution", async () => {
@@ -59,12 +56,7 @@ describe("validateExplicitMessageAccountSelection", () => {
         resolveAccountAsync: () => pending.promise,
       },
     };
-    const selected = validateExplicitMessageAccountSelection({
-      cfg,
-      channel: "feishu",
-      accountId: "OPS",
-      plugin: asyncPlugin,
-    });
+    const selected = select("OPS", { plugin: asyncPlugin });
     pending.resolve({ enabled: false });
     await expect(selected).rejects.toThrow('Account "ops" for channel feishu is disabled');
   });
@@ -82,33 +74,13 @@ describe("validateExplicitMessageAccountSelection", () => {
     ]);
     const resolveAccount = vi.spyOn(plugin.config, "resolveAccount");
 
-    await expect(
-      validateExplicitMessageAccountSelection({
-        cfg,
-        channel: "feishu",
-        accountId: "OPS",
-        plugin,
-      }),
-    ).rejects.toThrowError(expect.objectContaining({ code: "SECRET_SURFACE_UNAVAILABLE" }));
+    await expect(select()).rejects.toThrowError(
+      expect.objectContaining({ code: "SECRET_SURFACE_UNAVAILABLE" }),
+    );
     expect(resolveAccount).not.toHaveBeenCalled();
 
-    expect(
-      await validateExplicitMessageAccountSelection({
-        cfg,
-        channel: "feishu",
-        accountId: "OPS",
-        plugin,
-        checkResolvedAccount: false,
-      }),
-    ).toBe("ops");
-    expect(
-      await validateExplicitMessageAccountSelection({
-        cfg,
-        channel: "feishu",
-        accountId: "default",
-        plugin,
-      }),
-    ).toBe("default");
+    expect(await select("OPS", { checkResolvedAccount: false })).toBe("ops");
+    expect(await select("default")).toBe("default");
   });
 });
 
@@ -141,24 +113,14 @@ describe("resolveMessageBroadcastAccountPlan (registry-scoped channel plugins)",
     },
   } as unknown as OpenClawConfig;
 
-  it("plans candidates from a channel plugin that is only registry-scoped", async () => {
-    const { withPluginRuntimeRegistryScope } =
-      await import("../../plugins/runtime/gateway-request-scope.js");
-    const { resolveMessageBroadcastAccountPlan } = await import("./message-account-selection.js");
-
+  it("limits broadcast candidates and secret access to the registry scope", async () => {
     const plan = await withPluginRuntimeRegistryScope(
       { channels: [{ plugin: scopedPlugin }, { plugin: unavailablePlugin }] } as never,
       () => resolveMessageBroadcastAccountPlan({ cfg: scopedCfg, accountId: "ops" }),
     );
-    expect(plan?.candidateChannels).toEqual(["scopex"]);
-    expect(plan?.secretChannels).toEqual(["scopex"]);
-  });
-
-  it("does not see the scoped channel outside the scope", async () => {
-    const { resolveMessageBroadcastAccountPlan } = await import("./message-account-selection.js");
-
-    const plan = await resolveMessageBroadcastAccountPlan({ cfg: scopedCfg, accountId: "ops" });
-    expect(plan?.candidateChannels).not.toContain("scopex");
-    expect(plan?.secretChannels).toEqual([]);
+    expect(plan).toMatchObject({ candidateChannels: ["scopex"], secretChannels: ["scopex"] });
+    const outside = await resolveMessageBroadcastAccountPlan({ cfg: scopedCfg, accountId: "ops" });
+    expect(outside?.candidateChannels).not.toContain("scopex");
+    expect(outside?.secretChannels).toEqual([]);
   });
 });

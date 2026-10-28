@@ -206,20 +206,23 @@ internal fun OpenClawWearApp(
 
   fun submitMessage(rawMessage: String) {
     val message = rawMessage.trim()
-    val sessionId = snapshot?.activeSessionId
+    // System input can return after the composition that registered its callback.
+    val currentState = viewModel.state.value
+    val currentSnapshot = currentState.toConversationSnapshot()
+    val sessionId = currentSnapshot?.activeSessionId
     if (message.isEmpty()) {
       interaction = WearInteractionState.READY
       return
     }
     if (
-      !state.canSubmitReply || !state.connected || sessionId == null ||
+      !currentState.canSubmitReply || !currentState.connected || sessionId == null ||
       !viewModel.sendReply(message) { awaitingReplyRunId = it }
     ) {
       interaction = WearInteractionState.READY
       view.performHapticFeedback(HapticFeedbackConstants.REJECT)
       return
     }
-    expectedAssistantKey = snapshot.latestAssistantMessage()?.stableKey()
+    expectedAssistantKey = currentSnapshot.latestAssistantMessage()?.stableKey()
     awaitingReplySessionId = sessionId
     interaction = WearInteractionState.SENDING
     speaker.stop()

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { requireValidExecTarget } from "../infra/exec-approvals.js";
-import { resolveExecTarget } from "./bash-tools.exec-runtime.js";
+import { resolveExecHost, resolveExecTarget } from "./bash-tools.exec-target.js";
 import { createExecTool } from "./bash-tools.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import { createLazyExecTool } from "./lazy-exec-tool.js";
@@ -171,6 +171,24 @@ describe("removed exec timeout field", () => {
   });
 });
 
+describe("named node host policy", () => {
+  const sandbox = {
+    containerName: "test-sandbox",
+    workspaceDir: "/workspace",
+    containerWorkdir: "/workspace",
+  };
+
+  it.each([
+    { host: "gateway" as const },
+    { sandbox },
+    { host: "node" as const, sandbox, sandboxRequired: true },
+  ])("keeps node-only calls within configured policy %j", (defaults) => {
+    expect(() => resolveExecHost({ node: "node-1" }, defaults)).toThrow(
+      /exec host not allowed.*node/,
+    );
+  });
+});
+
 describe("foreground node exec wait budgets", () => {
   it.each([
     { timeoutSec: undefined, timeoutSeconds: undefined, expectedMs: 1_810_000 },
@@ -182,12 +200,14 @@ describe("foreground node exec wait budgets", () => {
         const tool = createTool({ host: "node", timeoutSec });
         const args = { command: "echo ready", timeoutSeconds };
         expect(tool.getExecutionTimeoutMs?.(args)).toBe(expectedMs);
+        const defaultTool = createTool({ timeoutSec });
+        expect(defaultTool.getExecutionTimeoutMs?.({ ...args, node: "node-1" })).toBe(expectedMs);
 
         const nodeTool = pinExecToolTarget(tool, { host: "node" });
         expect(nodeTool.getExecutionTimeoutMs?.({ ...args, host: "gateway" })).toBe(expectedMs);
 
         const gatewayTool = pinExecToolTarget(tool, { host: "gateway" });
-        expect(gatewayTool.getExecutionTimeoutMs?.({ ...args, host: "node" })).toBeUndefined();
+        expect(gatewayTool.getExecutionTimeoutMs?.(args)).toBeUndefined();
       }
     },
   );

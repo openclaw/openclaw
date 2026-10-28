@@ -3,49 +3,64 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import {
-  loadSessionEntryReadOnly,
   patchSessionEntryCore,
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
   resetSessionEntryLifecycle,
 } from "../../config/sessions/session-accessor.js";
-import * as sessionEntryReads from "../../config/sessions/session-entry-read-runtime.js";
+import { promptReport } from "../../config/sessions/system-prompt-report.test-support.js";
 import * as sessionCostUsage from "../../infra/session-cost-usage.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import {
+  createSessionRowProjection,
+  type SessionRowProjection,
+} from "../session-row-projection.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import * as usageOverviewReport from "./usage-overview-report.js";
 import * as usageSessionSelection from "./usage-session-selection.js";
 
 it.for([
   "session reset",
   "incognito transition",
-  "revocation during target read",
   "revocation after context read",
+  "page backfill after revocation",
 ] as const)(
   "does not expose revoked usage context after %s",
   async (change, { signal, onTestFinished }) => {
-    const state = await createOpenClawTestState({ label: "usage-context-lifecycle" });
+    const reset = change === "session reset";
+    const revoke = change === "revocation after context read";
+    const backfill = change === "page backfill after revocation";
+    const afterContext = revoke || backfill;
+    const state = await createOpenClawTestState({
+      label: "usage-context-lifecycle",
+      prepareProfileCatalog: true,
+    });
     const release = createDeferred();
     const targetReadStarted = createDeferred();
-    const summaryLoaded =
-      createDeferred<
-        Awaited<ReturnType<typeof sessionCostUsage.loadSessionCostSummariesFromCache>>
-      >();
+    const summaryLoaded = createDeferred();
     let request: Promise<unknown> | undefined;
+    let projection: SessionRowProjection | undefined;
     let restoreSummaryLoader: (() => void) | undefined;
     let restoreTargetReader: (() => void) | undefined;
     let cleanupPromise: Promise<void> | undefined;
+    let releaseProfileCatalog: (() => void) | undefined;
     const releaseSummary = () => release.resolve();
     const cleanup = () =>
       (cleanupPromise ??= (async () => {
         releaseSummary();
         await Promise.allSettled(request ? [request] : []);
         try {
+          projection?.dispose();
+          releaseProfileCatalog?.();
           await state.cleanup();
         } finally {
           restoreSummaryLoader?.();
@@ -69,7 +84,7 @@ it.for([
             default: "guest",
             definitions: {
               guest: {
-                sessions: { others: change === "revocation after context read" ? "view" : "none" },
+                sessions: { others: revoke ? "view" : "none" },
                 agents: "*",
                 scopes: ["operator.read", "operator.write"],
               },
@@ -77,27 +92,12 @@ it.for([
           },
         },
       });
-      const config = getRuntimeConfig();
+      const config = await captureRuntimeConfigAsyncReader()();
       const viewer = ensureProfileForEmail("usage-viewer@example.com");
+      releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
       const client: GatewayClient = {
-        connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          client: {
-            id: "openclaw-control-ui",
-            version: "test",
-            platform: "test",
-            mode: "webchat",
-          },
-          role: "operator",
-          scopes: ["operator.read", "operator.write"],
-        },
-        authenticatedUserProfile: {
-          profileId: viewer.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: 1,
-        },
+        connect: gatewayConnect(["operator.read", "operator.write"]),
+        authenticatedUserProfile: gatewayProfile(viewer.id),
       };
       const sessionId = "usage-before-change";
       const scope = {
@@ -107,14 +107,11 @@ it.for([
       };
       const timestamp = Date.now();
       const originalReport = {
-        source: "run" as const,
-        generatedAt: timestamp,
+        ...promptReport(timestamp, 100, 0),
         systemPrompt: { chars: 100, projectContextChars: 40, nonProjectContextChars: 60 },
-        injectedWorkspaceFiles: [],
-        skills: { promptChars: 0, entries: [] },
-        tools: { listChars: 0, schemaChars: 0, entries: [] },
       };
       const changedReport = { ...originalReport, generatedAt: timestamp + 1 };
+      const siblingReport = { ...originalReport, generatedAt: timestamp + 2 };
       replaceSessionEntrySync(scope, {
         sessionId,
         updatedAt: timestamp,
@@ -122,19 +119,40 @@ it.for([
         visibility: "shared",
         systemPromptReport: originalReport,
       });
-      await persistSessionTranscriptTurn(
-        { ...scope, sessionId },
-        {
+      const sibling = {
+        ...scope,
+        sessionKey: "agent:main:usage-unaffected",
+        sessionId: "usage-unaffected",
+      };
+      replaceSessionEntrySync(sibling, {
+        sessionId: sibling.sessionId,
+        updatedAt: timestamp - 1,
+        createdActor: { type: "human", source: "profile", id: viewer.id },
+        visibility: "shared",
+        ...(backfill ? { systemPromptReport: siblingReport } : {}),
+      });
+      for (const [target, tokens] of [
+        [{ ...scope, sessionId }, 17],
+        [sibling, 23],
+      ] as const) {
+        await persistSessionTranscriptTurn(target, {
           cwd: state.workspaceDir,
           updateMode: "none",
           messages: [
             {
-              message: { role: "user", content: "Synthetic usage", timestamp },
+              message: {
+                role: "assistant",
+                content: "Synthetic usage",
+                timestamp,
+                provider: "synthetic",
+                model: "synthetic",
+                usage: { input: tokens, output: 0, totalTokens: tokens, cost: { total: 0 } },
+              },
               now: timestamp,
             },
           ],
-        },
-      );
+        });
+      }
       await sessionCostUsage.loadCostUsageSummary({
         config,
         agentId: scope.agentId,
@@ -142,19 +160,20 @@ it.for([
         endMs: timestamp + 1,
       });
 
+      projection = await createSessionRowProjection({ cfg: config, getConfig: () => config });
       const actualLoad = sessionCostUsage.loadSessionCostSummariesFromCache;
       const summaryLoader = vi
         .spyOn(sessionCostUsage, "loadSessionCostSummariesFromCache")
         .mockImplementation(async (params) => {
           const result = await actualLoad(params);
-          summaryLoaded.resolve(result);
-          if (change !== "revocation after context read") {
+          summaryLoaded.resolve();
+          if (!afterContext) {
             await release.promise;
           }
           return result;
         });
       restoreSummaryLoader = () => summaryLoader.mockRestore();
-      if (change === "revocation after context read") {
+      if (afterContext) {
         const actualRead = usageSessionSelection.loadUsageSessionContext;
         const reader = vi
           .spyOn(usageSessionSelection, "loadUsageSessionContext")
@@ -162,17 +181,6 @@ it.for([
             await actualRead(...args);
             targetReadStarted.resolve();
             await release.promise;
-          });
-        restoreTargetReader = () => reader.mockRestore();
-      }
-      if (change === "revocation during target read") {
-        const actualRead = sessionEntryReads.withSessionEntryReadOnlyInWorker;
-        const reader = vi
-          .spyOn(sessionEntryReads, "withSessionEntryReadOnlyInWorker")
-          .mockImplementationOnce(async (input, assertCurrent, consume) => {
-            targetReadStarted.resolve();
-            await release.promise;
-            return actualRead(input, assertCurrent, consume);
           });
         restoreTargetReader = () => reader.mockRestore();
       }
@@ -186,32 +194,28 @@ it.for([
           params: {
             agentId: "main",
             range: "all",
-            limit: 1,
+            limit: backfill ? 1 : 2,
             includeContextWeight: true,
-            ...(change === "revocation during target read" ? { key: scope.sessionKey } : {}),
           },
           respond,
           client,
           isWebchatConnect: () => false,
-          context: { getRuntimeConfig: () => config } as GatewayRequestContext,
+          context: bindSessionRowProjection(
+            { getRuntimeConfig: () => config } as GatewayRequestContext,
+            () => projection,
+          ),
         }),
       );
-      const loaded = await Promise.race([
-        change === "revocation during target read" || change === "revocation after context read"
-          ? targetReadStarted.promise
-          : summaryLoaded.promise,
+      await Promise.race([
+        afterContext ? targetReadStarted.promise : summaryLoaded.promise,
         request.then(() => {
           throw new Error("Usage request returned before the read hold");
         }),
       ]);
-      if (loaded) {
-        expect(loaded.cacheStatus.status).toBe("fresh");
-        expect(loaded.summaries).toHaveLength(1);
-      }
       expect(respond).not.toHaveBeenCalled();
       signal.throwIfAborted();
 
-      if (change === "session reset") {
+      if (reset) {
         await resetSessionEntryLifecycle({
           agentId: scope.agentId,
           storePath: scope.storePath,
@@ -229,16 +233,10 @@ it.for([
           systemPromptReport: changedReport,
         }));
       }
-      expect(loadSessionEntryReadOnly(scope)).toMatchObject({
-        sessionId: change === "session reset" ? "usage-after-reset" : sessionId,
-        systemPromptReport: changedReport,
-        ...(change === "session reset" ? {} : { incognito: true }),
-      });
-
-      if (change === "revocation after context read") {
+      if (revoke) {
         invalidateOperatorRolePolicy(viewer.id);
       }
-      const sql = change === "revocation after context read" ? observeHostDataSql() : undefined;
+      const sql = revoke ? observeHostDataSql() : undefined;
       try {
         releaseSummary();
         await request;
@@ -249,27 +247,182 @@ it.for([
         sql?.restore();
       }
       expect(respond).toHaveBeenCalledOnce();
-      if (change === "revocation during target read") {
-        expect(summaryLoader).not.toHaveBeenCalled();
-        expect(respond.mock.calls[0]).toEqual([
-          false,
-          undefined,
-          { code: "INVALID_REQUEST", message: `Invalid session reference: ${scope.sessionKey}` },
-        ]);
-        return;
-      }
       const [ok, payload] = expectDefined(respond.mock.calls[0], "usage response");
       expect(ok).toBe(true);
       const result = payload as SessionsUsageResult;
-      expect(result.sessions).toHaveLength(1);
-      expect(result.sessions[0]).toMatchObject({
-        key: scope.sessionKey,
-        sessionId,
-        hasContextWeight: false,
-        contextWeight: null,
-      });
+      expect(result.sessions.map((row) => row.key)).toEqual(
+        reset ? [scope.sessionKey, sibling.sessionKey] : [sibling.sessionKey],
+      );
+      expect(result.totals.totalTokens).toBe(reset ? 40 : 23);
+      expect(
+        result.sessions.find((row) => row.key === sibling.sessionKey)?.usage?.totalTokens,
+      ).toBe(23);
+      if (reset) {
+        expect(result.sessions[0]).toMatchObject({
+          key: scope.sessionKey,
+          sessionId,
+          hasContextWeight: false,
+          contextWeight: null,
+        });
+      }
+      if (backfill) {
+        expect(result.sessions).toMatchObject([
+          { key: sibling.sessionKey, hasContextWeight: true, contextWeight: siblingReport },
+        ]);
+      }
     } finally {
       await cleanup();
     }
+  },
+);
+
+it.for([
+  { revoke: false, offset: 0 },
+  { revoke: true, offset: 0 },
+  { revoke: true, offset: 10 },
+] as const)(
+  "publishes overview accounting only for sessions visible after aggregation (revoke=$revoke, offset=$offset)",
+  async ({ revoke, offset }, { onTestFinished }) => {
+    const state = await createOpenClawTestState({
+      label: "usage-overview-revocation",
+      prepareProfileCatalog: true,
+    });
+    const aggregated = createDeferred();
+    const release = createDeferred();
+    // Created after the cleanup hook is registered.
+    const owned: { projection?: SessionRowProjection; releaseProfileCatalog?: () => void } = {};
+    const actualReporter = usageOverviewReport.createUsageOverviewReporter;
+    // Hold every worker report after it completes, so access can change before publication.
+    const reporter = vi
+      .spyOn(usageOverviewReport, "createUsageOverviewReporter")
+      .mockImplementation((params) => {
+        const created = actualReporter(params);
+        return (
+          created && {
+            ...created,
+            async run(rows) {
+              const slice = await created.run(rows);
+              aggregated.resolve();
+              await release.promise;
+              return slice;
+            },
+          }
+        );
+      });
+    onTestFinished(async () => {
+      release.resolve();
+      reporter.mockRestore();
+      owned.projection?.dispose();
+      owned.releaseProfileCatalog?.();
+      await state.cleanup();
+    });
+    await state.writeConfig({
+      agents: { ownership: "explicit", entries: { main: {} } },
+      plugins: { enabled: false },
+      gateway: {
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: {
+              sessions: { others: "view" },
+              agents: "*",
+              scopes: ["operator.read", "operator.write"],
+            },
+          },
+        },
+      },
+    });
+    const config = await captureRuntimeConfigAsyncReader()();
+    const viewer = ensureProfileForEmail("usage-overview-viewer@example.com");
+    owned.releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
+    const client: GatewayClient = {
+      connect: gatewayConnect(["operator.read", "operator.write"]),
+      authenticatedUserProfile: gatewayProfile(viewer.id),
+    };
+    const storePath = path.join(state.sessionsDir(), "sessions.json");
+    const timestamp = Date.now();
+    const sessions = [
+      { sessionKey: "agent:main:usage-revoked", sessionId: "usage-revoked", tokens: 17 },
+      { sessionKey: "agent:main:usage-kept", sessionId: "usage-kept", tokens: 23 },
+    ];
+    for (const [index, { sessionKey, sessionId, tokens }] of sessions.entries()) {
+      const scope = { agentId: "main", sessionKey, sessionId, storePath };
+      replaceSessionEntrySync(scope, {
+        sessionId,
+        updatedAt: timestamp - index,
+        createdActor: { type: "human", source: "profile", id: viewer.id },
+        visibility: "shared",
+      });
+      await persistSessionTranscriptTurn(scope, {
+        cwd: state.workspaceDir,
+        updateMode: "none",
+        messages: [
+          {
+            message: {
+              role: "assistant",
+              content: "Synthetic usage",
+              timestamp,
+              provider: "synthetic",
+              model: "synthetic",
+              usage: { input: tokens, output: 0, totalTokens: tokens, cost: { total: 0 } },
+            },
+            now: timestamp,
+          },
+        ],
+      });
+    }
+    await sessionCostUsage.loadCostUsageSummary({
+      config,
+      agentId: "main",
+      startMs: 0,
+      endMs: timestamp + 1,
+    });
+    owned.projection = await createSessionRowProjection({ cfg: config, getConfig: () => config });
+    const respond = vi.fn();
+    const request = Promise.resolve(
+      expectDefined(
+        coreGatewayHandlers["sessions.usage"],
+        "registered usage handler",
+      )({
+        req: { type: "req", id: "overview-revocation", method: "sessions.usage" },
+        params: { agentId: "main", range: "all", projection: "overview", offset },
+        respond,
+        client,
+        isWebchatConnect: () => false,
+        context: bindSessionRowProjection(
+          { getRuntimeConfig: () => config } as GatewayRequestContext,
+          () => owned.projection,
+        ),
+      }),
+    );
+    await Promise.race([
+      aggregated.promise,
+      request.then(() => {
+        throw new Error("Usage request returned before the report hold");
+      }),
+    ]);
+    if (revoke) {
+      await patchSessionEntryCore(
+        { agentId: "main", sessionKey: sessions[0]!.sessionKey, storePath },
+        () => ({ incognito: true }),
+      );
+      invalidateOperatorRolePolicy(viewer.id);
+    }
+    release.resolve();
+    await request;
+    expect(respond).toHaveBeenCalledOnce();
+    const [ok, payload] = expectDefined(respond.mock.calls[0], "usage response");
+    expect(ok).toBe(true);
+    const result = payload as SessionsUsageResult;
+    const visible = revoke ? sessions.slice(1) : sessions;
+    expect(result.totals.totalTokens).toBe(visible.reduce((sum, { tokens }) => sum + tokens, 0));
+    expect(result.aggregates.sessionCount).toBe(visible.length);
+    expect(result.overview).toMatchObject({
+      total: visible.length,
+      unfilteredSessionCount: visible.length,
+    });
+    expect(result.sessions.map((row) => row.key)).toEqual(
+      offset === 0 ? visible.map(({ sessionKey }) => sessionKey) : [],
+    );
   },
 );

@@ -22,7 +22,6 @@ openclaw-chat-outbox-recovery:empty {
 }
 
 .chat-outbox-recovery__kind,
-.chat-outbox-recovery__warning,
 .chat-outbox-recovery__actions {
   flex-shrink: 0;
 }
@@ -43,12 +42,8 @@ openclaw-chat-outbox-recovery:empty {
   white-space: nowrap;
 }
 
-.chat-outbox-recovery__error,
-.chat-outbox-recovery__warning {
-  color: color-mix(in srgb, var(--warn) 75%, var(--muted));
-}
-
 .chat-outbox-recovery__error {
+  color: color-mix(in srgb, var(--warn) 75%, var(--muted));
   overflow: hidden;
   padding: 6px var(--chat-stack-leading-inset, 13px);
   text-overflow: ellipsis;
@@ -75,12 +70,5 @@ openclaw-chat-outbox-recovery:empty {
   .chat-outbox-recovery-row {
     gap: 6px;
     padding-inline: 6px;
-  }
-
-  .chat-outbox-recovery__warning {
-    max-width: 72px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 }

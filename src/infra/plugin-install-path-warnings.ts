@@ -1,7 +1,7 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { canAccess } from "./path-existence.js";
 
 type PluginInstallPathIssue = {
   kind: "custom-path" | "missing-path";
@@ -25,15 +25,12 @@ export async function detectPluginInstallPathIssue(params: {
   }
 
   for (const candidatePath of candidatePaths) {
-    try {
-      await fs.access(path.resolve(candidatePath));
+    if (await canAccess(path.resolve(candidatePath))) {
       return {
         kind: "custom-path",
         pluginId: params.pluginId,
         path: candidatePath,
       };
-    } catch {
-      // Keep checking remaining candidate paths before warning about a stale install.
     }
   }
 

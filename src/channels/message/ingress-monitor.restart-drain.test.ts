@@ -233,9 +233,9 @@ it("releases a claim without an attempt when suspension closes during the claim"
     const payload: StoredEvent = { version: 1, rawEvent: JSON.stringify(raw) };
     const claimReady = createDeferredCore();
     const returnClaim = createDeferredCore();
-    const claimNext = queue.claimNext.bind(queue);
-    const claimNextSpy = vi.spyOn(queue, "claimNext").mockImplementationOnce(async (...args) => {
-      const claim = await claimNext(...args);
+    const claimEvent = queue.claim.bind(queue);
+    const claimSpy = vi.spyOn(queue, "claim").mockImplementationOnce(async (...args) => {
+      const claim = await claimEvent(...args);
       // Keep the monitor awaiting the result after the real SQLite claim commits.
       claimReady.resolve();
       await returnClaim.promise;
@@ -269,7 +269,7 @@ it("releases a claim without an attempt when suspension closes during the claim"
       ]);
       expect(pending[0]).not.toHaveProperty("lastAttemptAt");
       expect(pending[0]).not.toHaveProperty("lastError");
-      expect(claimNextSpy).toHaveBeenCalledOnce();
+      expect(claimSpy).toHaveBeenCalledOnce();
       expect(activity.at(-1)).toBe(false);
 
       expect(suspension?.release()).toBe(true);
@@ -288,7 +288,7 @@ it("releases a claim without an attempt when suspension closes during the claim"
       await monitor.stop();
       suspension?.rollback();
       suspension?.release();
-      claimNextSpy.mockRestore();
+      claimSpy.mockRestore();
     }
   });
 });

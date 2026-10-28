@@ -191,7 +191,7 @@ function buildRuntimePluginSdkPackageExports(
   );
 }
 
-function ensureOpenClawExtensionAlias(params: {
+export function ensureOpenClawExtensionAlias(params: {
   distExtensionsRoot: string;
   repoRoot: string;
   aliasDir?: string;
@@ -207,6 +207,7 @@ function ensureOpenClawExtensionAlias(params: {
   });
   const finalAliasDir = path.join(params.distExtensionsRoot, "node_modules", "openclaw");
   const aliasDir = params.aliasDir ?? finalAliasDir;
+  assertRealOutputRoot(aliasDir);
   const pluginSdkAliasPath = path.join(aliasDir, "plugin-sdk");
   fs.mkdirSync(aliasDir, { recursive: true });
   writeJsonFile(path.join(aliasDir, "package.json"), {

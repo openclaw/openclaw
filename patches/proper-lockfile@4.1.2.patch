@@ -1,0 +1,260 @@
+diff --git a/README.md b/README.md
+index 9355730f8b7716685223ff6fd45b8a4afe0dcb14..264aa47627bf74ce245d61c9391c992b0cdb8e9f 100644
+--- a/README.md
++++ b/README.md
+@@ -77,7 +77,7 @@ Available options:
+ - `update`: The interval in milliseconds in which the lockfile's `mtime` will be updated, defaults to `stale/2` (minimum value is `1000`, maximum value is `stale/2`)
+ - `retries`: The number of retries or a [retry](https://www.npmjs.org/package/retry) options object, defaults to `0`
+ - `realpath`: Resolve symlinks using realpath, defaults to `true` (note that if `true`, the `file` must exist previously)
+-- `fs`: A custom fs to use, defaults to `graceful-fs`
++- `fs`: A custom fs to use, defaults to Node.js `fs`
+ - `onCompromised`: Called if the lock gets compromised, defaults to a function that simply throws the error which will probably cause the process to die
+ - `lockfilePath`: Custom lockfile path. e.g.: If you want to lock a directory and create the lock file inside it, you can pass `file` as `<dir path>` and `options.lockfilePath` as `<dir path>/dir.lock`
+ 
+@@ -112,7 +112,7 @@ Whenever possible you should use the `release` function instead (as exemplified
+ Available options:
+ 
+ - `realpath`: Resolve symlinks using realpath, defaults to `true` (note that if `true`, the `file` must exist previously)
+-- `fs`: A custom fs to use, defaults to `graceful-fs`
++- `fs`: A custom fs to use, defaults to Node.js `fs`
+ - `lockfilePath`: Custom lockfile path. e.g.: If you want to lock a directory and create the lock file inside it, you can pass `file` as `<dir path>` and `options.lockfilePath` as `<dir path>/dir.lock`
+ 
+ 
+@@ -136,7 +136,7 @@ Available options:
+ 
+ - `stale`: Duration in milliseconds in which the lock is considered stale, defaults to `10000` (minimum value is `5000`)
+ - `realpath`: Resolve symlinks using realpath, defaults to `true` (note that if `true`, the `file` must exist previously)
+-- `fs`: A custom fs to use, defaults to `graceful-fs`
++- `fs`: A custom fs to use, defaults to Node.js `fs`
+ - `lockfilePath`: Custom lockfile path. e.g.: If you want to lock a directory and create the lock file inside it, you can pass `file` as `<dir path>` and `options.lockfilePath` as `<dir path>/dir.lock`
+ 
+ 
+@@ -167,7 +167,7 @@ Returns a boolean or throws on error.
+ 
+ ## Graceful exit
+ 
+-`proper-lockfile` automatically removes locks if the process exits, except if the process is killed with SIGKILL or it crashes due to a VM fatal error (e.g.: out of memory).
++`proper-lockfile` installs native exit and signal listeners while it owns locks and removes those listeners after the last lock is released or compromised. It removes owned locks when the process exits, except if the process is killed with SIGKILL or it crashes due to a VM fatal error (e.g.: out of memory). Applications that handle a signal and keep running retain their locks until release or exit.
+ 
+ 
+ ## Tests
+diff --git a/lib/adapter.js b/lib/adapter.js
+index 85789672d98fb8a48ba305ae166de194ff068a1e..640bb19cd7309cbd8131e2b6741ff310dd78d0c3 100644
+--- a/lib/adapter.js
++++ b/lib/adapter.js
+@@ -1,6 +1,6 @@
+ 'use strict';
+ 
+-const fs = require('graceful-fs');
++const fs = require('node:fs');
+ 
+ function createSyncFs(fs) {
+     const methods = ['mkdir', 'realpath', 'stat', 'rmdir', 'utimes'];
+diff --git a/lib/cleanup.js b/lib/cleanup.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..192fcb5192a269839d4ce7bebec97660066cd274
+--- /dev/null
++++ b/lib/cleanup.js
+@@ -0,0 +1,125 @@
++'use strict';
++
++const handlerMarker = Symbol.for('proper-lockfile.exit-handler');
++const signalExitEmitter = Symbol.for('signal-exit emitter');
++const signals = ['SIGABRT', 'SIGALRM', 'SIGHUP', 'SIGINT', 'SIGTERM'];
++
++// Match signal-exit's supported fatal signals without loading its process wrappers.
++if (process.platform !== 'win32') {
++    signals.push('SIGVTALRM', 'SIGXCPU', 'SIGXFSZ', 'SIGUSR2', 'SIGTRAP', 'SIGSYS', 'SIGQUIT', 'SIGIOT');
++}
++if (process.platform === 'linux') {
++    signals.push('SIGIO', 'SIGPOLL', 'SIGPWR', 'SIGSTKFLT', 'SIGUNUSED');
++}
++
++module.exports = function createCleanup(locks) {
++    let installed = false;
++    const handlers = new Map();
++    const deferredSignals = new Set();
++
++    function releaseLocks() {
++        for (const file in locks) {
++            const lock = locks[file];
++
++            try { lock.options.fs.rmdirSync(lock.lockfilePath); } catch (e) { /* Best effort during exit. */ }
++        }
++    }
++
++    function removeListeners() {
++        if (!installed) {
++            return;
++        }
++
++        installed = false;
++        deferredSignals.clear();
++        process.removeListener('removeListener', restoreSignal);
++        process.removeListener('exit', onExit);
++        for (const [signal, handler] of handlers) {
++            process.removeListener(signal, handler);
++        }
++        handlers.clear();
++    }
++
++    function onExit() {
++        releaseLocks();
++        removeListeners();
++    }
++
++    function restoreSignal(signal) {
++        if (!deferredSignals.has(signal) ||
++            process.listeners(signal).some((listener) => !listener[handlerMarker])) {
++            return;
++        }
++
++        deferredSignals.delete(signal);
++        process.prependListener(signal, handlers.get(signal));
++        if (deferredSignals.size === 0) {
++            process.removeListener('removeListener', restoreSignal);
++        }
++    }
++
++    function install() {
++        if (installed) {
++            return;
++        }
++
++        installed = true;
++        process.once('exit', onExit);
++
++        for (const signal of signals) {
++            const handler = () => {
++                const listeners = process.listeners(signal);
++                const lockHandlers = listeners.filter((listener) => listener[handlerMarker]).length;
++                // signal-exit v4 uses these same counts to coexist with v3.
++                // They describe passive observers, not application signal handlers.
++                const passiveHandlers = lockHandlers +
++                    (process.__signal_exit_emitter__?.count || 0) +
++                    (globalThis[signalExitEmitter]?.count || 0);
++
++                if (listeners.length !== passiveHandlers) {
++                    return;
++                }
++
++                if (passiveHandlers > lockHandlers) {
++                    // Let signal-exit decide whether to terminate: v4 may veto exit.
++                    // Its unload removes the signal listener before invoking callbacks.
++                    // Reattach after that removal, so only a re-raised signal releases locks.
++                    if (deferredSignals.size === 0) {
++                        process.on('removeListener', restoreSignal);
++                    }
++                    deferredSignals.add(signal);
++                    process.removeListener(signal, handler);
++
++                    return;
++                }
++
++                releaseLocks();
++                removeListeners();
++
++                // Another lockfile copy or signal-exit observer owns the remaining dispatch.
++                if (process.listenerCount(signal) === 0) {
++                    process.kill(process.pid, process.platform === 'win32' && signal === 'SIGHUP' ? 'SIGINT' : signal);
++                }
++            };
++
++            handler[handlerMarker] = true;
++            handlers.set(signal, handler);
++            try {
++                // Inspect application once-handlers before EventEmitter removes them.
++                process.prependListener(signal, handler);
++            } catch (e) {
++                // Some signals are unavailable on this platform.
++                handlers.delete(signal);
++            }
++        }
++    }
++
++    return {
++        install,
++        removeIfEmpty() {
++            if (Object.keys(locks).length === 0) {
++                removeListeners();
++            }
++        },
++    };
++};
+diff --git a/lib/lockfile.js b/lib/lockfile.js
+index 97b66373d5c5057de38884bb870ee68134e5a7ee..2fc6b916fc12ecf2f6d77682bf1d967ccbb738fe 100644
+--- a/lib/lockfile.js
++++ b/lib/lockfile.js
+@@ -1,12 +1,13 @@
+ 'use strict';
+ 
+ const path = require('path');
+-const fs = require('graceful-fs');
++const fs = require('node:fs');
+ const retry = require('retry');
+-const onExit = require('signal-exit');
+ const mtimePrecision = require('./mtime-precision');
++const createCleanup = require('./cleanup');
+ 
+ const locks = {};
++const cleanup = createCleanup(locks);
+ 
+ function getLockFile(file, options) {
+     return options.lockfilePath || `${file}.lock`;
+@@ -197,6 +198,8 @@ function setLockAsCompromised(file, lock, err) {
+         delete locks[file];
+     }
+ 
++    cleanup.removeIfEmpty();
++
+     lock.options.onCompromised(err);
+ }
+ 
+@@ -248,6 +251,8 @@ function lock(file, options, callback) {
+                     lastUpdate: Date.now(),
+                 };
+ 
++                cleanup.install();
++
+                 // We must keep the lock fresh to avoid staleness
+                 updateLock(file, options);
+ 
+@@ -288,6 +293,7 @@ function unlock(file, options, callback) {
+         lock.updateTimeout && clearTimeout(lock.updateTimeout); // Cancel lock mtime update
+         lock.released = true; // Signal the lock has been released
+         delete locks[file]; // Delete from locks
++        cleanup.removeIfEmpty();
+ 
+         removeLock(file, options, callback);
+     });
+@@ -326,16 +332,6 @@ function getLocks() {
+     return locks;
+ }
+ 
+-// Remove acquired locks on exit
+-/* istanbul ignore next */
+-onExit(() => {
+-    for (const file in locks) {
+-        const options = locks[file].options;
+-
+-        try { options.fs.rmdirSync(getLockFile(file, options)); } catch (e) { /* Empty */ }
+-    }
+-});
+-
+ module.exports.lock = lock;
+ module.exports.unlock = unlock;
+ module.exports.check = check;
+diff --git a/package.json b/package.json
+index b74750c7c20621ff35e39e098f8eab2ea1160147..09469bc68ff4d55ea467004d9e55994dc72d0453 100644
+--- a/package.json
++++ b/package.json
+@@ -19,7 +19,8 @@
+   "license": "MIT",
+   "main": "index.js",
+   "files": [
+-    "lib"
++    "lib",
++    "CHANGELOG.md"
+   ],
+   "scripts": {
+     "lint": "eslint .",

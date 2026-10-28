@@ -1,3 +1,4 @@
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeStringEntries,
@@ -9,7 +10,7 @@ import { loadMSTeamsDelegatedTokens } from "./delegated-state.js";
 import { formatUnknownError } from "./errors.js";
 import { withMSTeamsRequestDeadline } from "./request-timeout.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
-import { resolveMSTeamsCredentials } from "./token.js";
+import { resolveMSTeamsCredentials } from "./token-config.js";
 
 export type ProbeMSTeamsResult = BaseProbeResult<string> & {
   appId?: string;
@@ -32,11 +33,8 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
   if (parts.length < 2) {
     return null;
   }
-  const payload = parts[1] ?? "";
-  const padded = payload.padEnd(payload.length + ((4 - (payload.length % 4)) % 4), "=");
-  const normalized = padded.replace(/-/g, "+").replace(/_/g, "/");
   try {
-    const decoded = Buffer.from(normalized, "base64").toString("utf8");
+    const decoded = Buffer.from(parts[1] ?? "", "base64url").toString("utf8");
     const parsed = JSON.parse(decoded) as Record<string, unknown>;
     return parsed && typeof parsed === "object" ? parsed : null;
   } catch {
@@ -56,8 +54,18 @@ function readScopes(value: unknown): string[] | undefined {
   return typeof value === "string" ? readStringArray(value.split(/\s+/)) : undefined;
 }
 
-export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsResult> {
-  const creds = resolveMSTeamsCredentials(cfg);
+export async function probeMSTeams(
+  cfg?: MSTeamsConfig,
+  params?: { accountId?: string | null },
+): Promise<ProbeMSTeamsResult> {
+  const accountId = normalizeAccountId(params?.accountId ?? DEFAULT_ACCOUNT_ID);
+  const creds = resolveMSTeamsCredentials(cfg, {
+    allowEnvFallback: accountId === DEFAULT_ACCOUNT_ID,
+    pathPrefix:
+      accountId === DEFAULT_ACCOUNT_ID
+        ? "channels.msteams"
+        : `channels.msteams.accounts.${accountId}`,
+  });
   if (!creds) {
     return {
       ok: false,
@@ -96,7 +104,7 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
     let delegatedAuth: ProbeMSTeamsResult["delegatedAuth"];
     if (cfg?.delegatedAuth?.enabled) {
       try {
-        const tokens = await loadMSTeamsDelegatedTokens();
+        const tokens = await loadMSTeamsDelegatedTokens(accountId);
         if (tokens) {
           const isExpired = !isFutureDateTimestampMs(tokens.expiresAt);
           delegatedAuth = {

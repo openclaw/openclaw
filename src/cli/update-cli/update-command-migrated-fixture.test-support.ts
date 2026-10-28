@@ -1,4 +1,5 @@
 import { registerHooks } from "node:module";
+import { fixtureReceiptClientSource } from "../../../test/helpers/fixture-receipts.js";
 import { MIGRATED_FIXTURE_NO_SERVICE } from "./update-command-migrated-fixture-entrypoint.test-support.js";
 
 const scratch = process.env.OPENCLAW_STATE_DIR;
@@ -8,32 +9,27 @@ if (!scratch || !runtimeEntry) {
     "Migrated finalization fixture requires isolated state and its read-only worker.",
   );
 }
-const {
-  readOnlyEntrypoint,
-  replay,
-}: {
+const input: {
   readOnlyEntrypoint: unknown;
   replay?: { path: string; refuseStep?: string };
+  progressGate?: string;
 } = JSON.parse(runtimeEntry);
+const { readOnlyEntrypoint, replay, progressGate } = input;
 const source = (relative: string) =>
   new URL(
     import.meta.url.endsWith(".js") ? relative.replace(/\.ts$/u, ".js") : relative,
     import.meta.url,
   ).href;
-const overrides = new Map([
-  [
-    source("../../infra/runtime-process-entrypoints.ts"),
-    `import {runtimeProcessEntrypoints as actual} from ${JSON.stringify(source("../../infra/runtime-process-entrypoints.ts") + "?fixture-original")};
+const overrides = new Map<string, string>();
+const replace = (file: string, contents: string) => overrides.set(source(file), contents);
+let serviceImports = progressGate ? fixtureReceiptClientSource(progressGate) : "";
+let serviceAction = `process.stderr.write('fixture-finalizer-progress\\n');
+       ${progressGate ? "sendReceipt('finalizer', 'waiting'); await awaitRelease('finalizer', 'finish');" : ""}`;
+replace(
+  "../../infra/runtime-process-entrypoints.ts",
+  `import {runtimeProcessEntrypoints as actual} from ${JSON.stringify(source("../../infra/runtime-process-entrypoints.ts") + "?fixture-original")};
      export const runtimeProcessEntrypoints = {...actual, sqliteReadOnly: ${JSON.stringify(readOnlyEntrypoint)}};`,
-  ],
-  [
-    source("./update-command-service-plan.ts"),
-    `export async function readManagedGatewayServiceForUpdate(env) {
-       if (env.OPENCLAW_STATE_DIR !== ${JSON.stringify(scratch)}) throw new Error("Non-fixture service environment");
-       throw new Error(${JSON.stringify(MIGRATED_FIXTURE_NO_SERVICE)});
-     }`,
-  ],
-]);
+);
 if (replay && process.argv[2] !== "--check") {
   // Observe real receipt settlement and refuse only the selected native commit.
   const control = `data:text/javascript,${encodeURIComponent(`
@@ -43,8 +39,8 @@ if (replay && process.argv[2] !== "--check") {
     export const record = (event) => appendFileSync(${JSON.stringify(replay.path)}, JSON.stringify(event)+'\\n');
     export const refuseStep = ${JSON.stringify(replay.refuseStep ?? null)};
   `)}`;
-  overrides.set(
-    source("../../infra/update-run-write.async.ts"),
+  replace(
+    "../../infra/update-run-write.async.ts",
     `import {recordUpdateRunStepAsync as actual} from ${JSON.stringify(source("../../infra/update-run-write.async.ts") + "?fixture-original")};
      import {context, record} from ${JSON.stringify(control)};
      export async function recordUpdateRunStepAsync(...args) {
@@ -63,8 +59,8 @@ if (replay && process.argv[2] !== "--check") {
        });
      }`,
   );
-  overrides.set(
-    source("../../infra/sqlite-worker-store.ts"),
+  replace(
+    "../../infra/sqlite-worker-store.ts",
     `import {createSqliteWorkerWriteAdmission as actual} from ${JSON.stringify(source("../../infra/sqlite-worker-store.ts") + "?fixture-original")};
      import {context, record, refuseStep} from ${JSON.stringify(control)};
      export function createSqliteWorkerWriteAdmission(assertCurrent, locations) {
@@ -80,16 +76,18 @@ if (replay && process.argv[2] !== "--check") {
        }, locations);
      }`,
   );
-  overrides.set(
-    source("./update-command-service-plan.ts"),
-    `import {record} from ${JSON.stringify(control)};
+  serviceImports = `import {record} from ${JSON.stringify(control)};`;
+  serviceAction = "record({event:'service'});";
+}
+replace(
+  "./update-command-service-plan.ts",
+  `${serviceImports}
      export async function readManagedGatewayServiceForUpdate(env) {
        if (env.OPENCLAW_STATE_DIR !== ${JSON.stringify(scratch)}) throw new Error("Non-fixture service environment");
-       record({event:'service'});
+       ${serviceAction}
        throw new Error(${JSON.stringify(MIGRATED_FIXTURE_NO_SERVICE)});
      }`,
-  );
-}
+);
 // Keep the candidate, executor delegation, recovery recording, and terminal ledger real.
 // This fencing fixture owns no native service; probing the host can outlive its test.
 registerHooks({

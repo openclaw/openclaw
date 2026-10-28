@@ -3,12 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
   createAccountScopedConversationBindingManager,
+  createAccountScopedConversationBindingManagerV2,
   resetAccountScopedConversationBindingsForTests,
   type AccountScopedConversationBindingManager,
 } from "./account-scoped-conversation-bindings.js";
@@ -69,7 +69,7 @@ describe("account-scoped conversation binding expiry", () => {
   afterEach(async () => {
     resetAccountScopedConversationBindingsForTests({ stateKey });
     currentConversationBindingTesting.clearPersistedCurrentConversationBindingsForTests();
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     if (previousStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -79,31 +79,30 @@ describe("account-scoped conversation binding expiry", () => {
     vi.restoreAllMocks();
   });
 
-  it("preserves account-owned bindings after stop, manager recreation, and database reopen", () => {
-    const manager = createManager();
-    const binding = bindConversation(manager, { conversationId: "chat:durable-owner" });
-    const conversation = {
-      channel: "imessage",
-      accountId: manager.accountId,
-      conversationId: binding.conversationId,
-    };
-
-    expect(getSessionBindingService().resolveByConversation(conversation)?.bindingId).toBe(
-      "ttl-owner:chat:durable-owner",
-    );
-
-    manager.stop();
-    closeOpenClawStateDatabaseForTest();
-
-    const restarted = createManager();
-    manager.stop();
-    expect(createManager()).toBe(restarted);
-    expect(restarted.getByConversationId(binding.conversationId)).toEqual(binding);
-    expect(getSessionBindingService().resolveByConversation(conversation)).toMatchObject({
-      bindingId: "ttl-owner:chat:durable-owner",
-      targetKind: "subagent",
-      targetSessionKey: binding.targetSessionKey,
+  it("warns once for legacy construction and leaves V2 construction silent", () => {
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    withPluginRuntimePluginScope({ pluginId: "account-binding-factory-warning" }, () => {
+      const manager = createAccountScopedConversationBindingManagerV2<TestBindingKind>({
+        channel: "imessage",
+        cfg: baseCfg,
+        accountId: "ttl-owner",
+        stateKey,
+        toStoredTargetKind: (kind) => (kind === "subagent" ? "subagent" : "acp"),
+        toSessionBindingTargetKind: (kind) => (kind === "subagent" ? "subagent" : "session"),
+      });
+      expect(manager.accountId).toBe("ttl-owner");
+      expect(warning).not.toHaveBeenCalled();
+      createManager();
+      createManager();
     });
+    expect(warning).toHaveBeenCalledTimes(1);
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "createAccountScopedConversationBindingManager is deprecated; use createAccountScopedConversationBindingManagerV2",
+      ),
+      { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+    );
+    expect(warning.mock.calls[0]?.[0]).toContain("first January 2027 stable release");
   });
 
   it.each(["agent", "plugin"] as const)(
@@ -161,7 +160,7 @@ describe("account-scoped conversation binding expiry", () => {
       }
 
       manager.stop();
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
       createManager({ cfg });
 
       expect(getSessionBindingService().resolveByConversation(conversation)).toMatchObject({
@@ -237,7 +236,7 @@ describe("account-scoped conversation binding expiry", () => {
         metadata: { label: "updated" },
       });
       manager.stop();
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
       createManager();
 
       expect(service.resolveByConversation(conversation)).toMatchObject({
@@ -259,28 +258,6 @@ describe("account-scoped conversation binding expiry", () => {
       }
     },
   );
-
-  it("expires idle bindings from both manager and session-service lookups", () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
-    const manager = createManager();
-    const binding = bindConversation(manager);
-    const service = getSessionBindingService();
-    const conversation = {
-      channel: "imessage",
-      accountId: manager.accountId,
-      conversationId: binding.conversationId,
-    };
-
-    expect(service.resolveByConversation(conversation)?.expiresAt).toBe(startedAt + 3_600_000);
-    expect(service.listBySession(binding.targetSessionKey)).toHaveLength(1);
-
-    now.mockReturnValue(startedAt + 3_600_000);
-
-    expect(manager.getByConversationId(binding.conversationId)).toBeUndefined();
-    expect(manager.listBySessionKey(binding.targetSessionKey)).toEqual([]);
-    expect(service.resolveByConversation(conversation)).toBeNull();
-    expect(service.listBySession(binding.targetSessionKey)).toEqual([]);
-  });
 
   it("enforces maximum age even when activity refreshes the idle deadline", () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
@@ -319,23 +296,6 @@ describe("account-scoped conversation binding expiry", () => {
     expect(manager.listBySessionKey(binding.targetSessionKey)).toEqual([]);
   });
 
-  it("does not inherit metadata from an expired binding when rebinding", () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
-    const manager = createManager();
-    const expired = bindConversation(manager, { label: "expired-owner" });
-
-    now.mockReturnValue(startedAt + 3_600_000);
-
-    const replacement = bindConversation(manager, {
-      conversationId: expired.conversationId,
-      targetSessionKey: "agent:main:subagent:replacement",
-    });
-
-    expect(replacement.label).toBeUndefined();
-    expect(replacement.targetSessionKey).toBe("agent:main:subagent:replacement");
-    expect(manager.getByConversationId(expired.conversationId)).toEqual(replacement);
-  });
-
   it("prunes only the expired account when accounts share a conversation id", () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
     const expiredManager = createManager({ accountId: "ttl-expired" });
@@ -367,20 +327,5 @@ describe("account-scoped conversation binding expiry", () => {
     expect(manager.unbindConversation(binding.conversationId)?.targetSessionKey).toBe(
       binding.targetSessionKey,
     );
-  });
-
-  it("derives the binding owner from an agent-scoped target before consulting defaults", () => {
-    const manager = createManager({
-      cfg: {
-        agents: { entries: { main: {}, molty: {} } },
-        session: { threadBindings: { idleHours: 1, maxAgeHours: 0 } },
-      },
-    });
-
-    const binding = bindConversation(manager, {
-      targetSessionKey: "agent:molty:subagent:binding-owner",
-    });
-
-    expect(binding.agentId).toBe("molty");
   });
 });

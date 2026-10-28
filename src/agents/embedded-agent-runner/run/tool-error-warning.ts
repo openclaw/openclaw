@@ -3,7 +3,11 @@ import type { VerboseLevel } from "../../../auto-reply/thinking.js";
 import { formatToolAggregateParts } from "../../../auto-reply/tool-meta.js";
 import { formatInlineCodeSpan } from "../../../shared/markdown-code.js";
 import { resolveToolDisplay } from "../../tool-display.js";
-import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
+import {
+  isExecLikeToolName,
+  summarizeToolValidationError,
+  type ToolErrorSummary,
+} from "../../tool-error-summary.js";
 
 function formatWarningToolLabel(
   toolName: string,
@@ -27,7 +31,11 @@ export function buildFailureWarning(params: {
     return undefined;
   }
   const includeDetails = params.verboseLevel === "full";
-  const failureVerb = params.lastToolError.executionStarted === false ? "blocked" : "failed";
+  const validationErrorSummary = summarizeToolValidationError(params.lastToolError);
+  const failureVerb =
+    params.lastToolError.executionStarted === false && !validationErrorSummary
+      ? "blocked"
+      : "failed";
   const terminalDiagnostic = params.lastToolError.terminalDiagnostic;
   if (terminalDiagnostic?.kind === "timeout") {
     const toolLabel = resolveToolDisplay({ name: params.lastToolError.toolName }).label;
@@ -60,7 +68,11 @@ export function buildFailureWarning(params: {
 
   const includeError = includeDetails || params.lastToolError.errorCode === "approval_timeout";
   const errorSuffix =
-    includeError && params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
+    includeError && params.lastToolError.error
+      ? `: ${params.lastToolError.error}`
+      : validationErrorSummary
+        ? ": invalid arguments"
+        : "";
   if (isExecLikeToolName(params.lastToolError.toolName)) {
     const toolLabel = resolveToolDisplay({ name: params.lastToolError.toolName }).label;
     const subject = includeDetails

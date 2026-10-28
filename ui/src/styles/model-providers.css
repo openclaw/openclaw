@@ -2,6 +2,14 @@
    provider-usage-* styles from usage.css and .provider-brand-icon from
    components.css. Structural surfaces come from settings.css. */
 
+.model-providers__catalog-feedback {
+  min-block-size: 3.6rem;
+}
+
+.model-providers__installed-agent .settings-row__desc {
+  min-block-size: 2.6em;
+}
+
 .model-providers__catalog-progress {
   display: flex;
   align-items: center;
@@ -19,13 +27,13 @@
   justify-content: space-between;
   gap: var(--space-4);
   min-width: 0;
+  min-block-size: 2.75rem;
 }
 
-.model-providers__identity {
-  display: flex;
+.model-providers__checking {
+  display: inline-flex;
   align-items: center;
-  gap: var(--space-3);
-  min-width: 0;
+  gap: var(--space-2);
 }
 
 .model-providers__icon {
@@ -38,49 +46,24 @@
   font-size: 12px;
 }
 
-.model-providers__no-stats,
-.model-providers__local-cost-detail,
 .model-providers__profiles-heading-copy span,
-.model-providers__profile-copy span,
-.model-providers__updated {
+.model-providers__profile-copy span {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
-}
-
-.model-providers__local-cost {
-  display: grid;
-  gap: var(--space-1);
-  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  padding-top: var(--space-3);
-}
-
-.model-providers__global-metrics {
-  display: grid;
-  gap: var(--space-3);
-}
-
-.model-providers__global-metrics-title {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
 .model-providers__profiles {
   width: 100%;
   container-name: provider-profiles;
   container-type: inline-size;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
 
 .model-providers__profiles-heading {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: var(--space-3);
-  padding-block: var(--space-3);
 }
 
 .model-providers__profiles-heading-copy,
@@ -117,7 +100,9 @@
 }
 
 .model-providers__profiles-heading-actions .btn {
-  min-height: 44px;
+  min-height: 1.75rem;
+  padding-inline: var(--space-2);
+  font-size: var(--control-ui-text-xs);
 }
 
 .model-providers__profile {
@@ -130,9 +115,13 @@
   border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
 }
 
+/* The accounts section already has its divider. */
+.model-providers__profile:first-child {
+  border-top: 0;
+}
+
 .model-providers__profile-grip,
-.model-providers__profile-logout,
-.model-providers__account-refresh {
+.model-providers__profile-logout {
   display: inline-grid;
   width: 44px;
   min-width: 44px;
@@ -144,15 +133,13 @@
   color: var(--muted);
 }
 
-.model-providers__profile-logout:disabled,
-.model-providers__account-refresh:disabled {
+.model-providers__profile-logout:disabled {
   color: color-mix(in srgb, var(--muted) 24%, transparent);
   cursor: default;
 }
 
 .model-providers__profile-grip svg,
-.model-providers__profile-logout svg,
-.model-providers__account-refresh svg {
+.model-providers__profile-logout svg {
   width: 16px;
   height: 16px;
 }
@@ -269,24 +256,6 @@
   font-weight: 600;
 }
 
-.model-providers__credentials {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 9px 0;
-  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.model-providers__credentials strong {
-  color: var(--text);
-  font-weight: 600;
-  text-align: right;
-}
-
 .model-providers__card-actions,
 .model-providers__form-actions {
   display: flex;
@@ -385,115 +354,95 @@
   gap: calc(var(--space-3) * 1.5);
 }
 
+.model-providers__search {
+  margin-bottom: var(--space-3);
+}
+
 .settings-section__actions .model-providers__refresh-button.btn--icon.btn--xs svg {
   width: var(--control-ui-text-xs);
   height: var(--control-ui-text-xs);
 }
 
-.model-providers__defaults .model-picker {
-  width: min(420px, 100%);
+.model-providers__defaults .settings-row__control {
+  flex: 0 1 420px;
+  width: 420px;
+}
+
+.model-providers__defaults .model-picker,
+.model-providers__defaults .settings-segmented {
+  width: 100%;
+}
+
+.model-providers__defaults .model-picker .picker-select__trigger {
+  min-height: 48px;
+}
+
+/* Access metadata belongs to the option list, beside the model name. */
+.model-providers__defaults .model-picker .picker-select__option .picker-select__copy {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.model-providers__defaults .model-picker .picker-select__option .picker-select__label {
+  flex: 1;
+  white-space: nowrap;
+}
+
+.model-providers__defaults .model-picker .picker-select__option .picker-select__description {
+  flex: 0 1 auto;
+  max-width: 50%;
+  color: var(--muted);
+  text-align: end;
+  white-space: nowrap;
+}
+
+.model-providers__defaults .settings-segmented__btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 @media (max-width: 768px) {
+  .model-providers__defaults .settings-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
+  }
+
+  .model-providers__defaults .settings-row__control {
+    flex: 0 1 auto;
+    width: 100%;
+    max-width: none;
+  }
+
   .model-providers__head {
     align-items: flex-start;
     flex-wrap: wrap;
   }
 
-  .model-providers__identity,
   .model-providers__head > .settings-row__control {
     flex: 1 1 100%;
+    justify-content: flex-start;
     width: 100%;
   }
-
-  .model-providers__head > .settings-row__control {
-    justify-content: flex-start;
-  }
-
-  .model-providers__credentials {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .model-providers__credentials strong {
-    text-align: left;
-  }
 }
 
-openclaw-model-account-usage,
-.model-providers__account-usage {
-  display: contents;
-}
-
-.model-providers__profile:has(.model-providers__account-refresh) {
-  --account-action-gap: var(--space-3);
-
-  grid-template-columns: max-content 28px minmax(0, max-content) minmax(0, 1fr) max-content calc(
-      44px - var(--account-action-gap)
-    ) max-content;
-
-  .model-providers__profile-status {
-    grid-column: 5;
-    grid-row: 1;
-    padding-inline-end: calc((44px - 16px) / 2 - var(--account-action-gap));
-  }
-
-  .model-providers__profile-actions {
-    grid-column: 7;
-    grid-row: 1;
-  }
-}
-
-.model-providers__account-refresh {
-  grid-column: 6;
-  grid-row: 1;
-}
-
-.model-providers__account-usage > :not(button) {
+/* Codex account limits span the whole account row. */
+.model-providers__account-limits {
   grid-column: 1 / -1;
-  margin: var(--space-3) var(--space-4);
+  display: grid;
+  gap: var(--space-2);
   min-width: 0;
+  padding: 0 var(--space-4) var(--space-3);
   font-size: var(--control-ui-text-sm);
 }
 
-.model-providers__account-usage > strong {
+.model-providers__account-limits > strong {
   text-transform: capitalize;
-  grid-column: 4;
-  grid-row: 1;
-  justify-self: start;
-  margin: 0;
   font-weight: 600;
-}
-
-@container provider-profiles (max-width: 640px) {
-  .model-providers__profile:has(.model-providers__account-refresh) {
-    --account-action-gap: var(--space-2);
-
-    grid-template-columns: max-content minmax(0, 1fr) max-content calc(
-        44px - var(--account-action-gap)
-      ) max-content;
-
-    .model-providers__profile-status {
-      grid-column: 3;
-      grid-row: 2;
-    }
-
-    .model-providers__profile-actions {
-      grid-column: 5;
-      grid-row: 2;
-    }
-  }
-
-  .model-providers__account-refresh {
-    grid-column: 4;
-    grid-row: 2;
-  }
-
-  .model-providers__account-usage > strong {
-    grid-column: 1 / 3;
-    grid-row: 2;
-    margin-left: var(--space-4);
-  }
 }
 
 /* Agent-scoped provider connection picker; the secure wizard keeps its own layout. */
@@ -585,6 +534,15 @@ openclaw-model-account-usage,
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
+/* Apps missing from the Gateway computer share one quiet line instead of rows with switches. */
+.model-providers__agents-missing {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
 .model-providers__installed-agent .settings-row--toggle {
   gap: var(--space-3);
 }
@@ -603,4 +561,218 @@ openclaw-model-account-usage,
 
 .model-providers__installed-agent-message {
   margin: 0 var(--space-4) var(--space-3);
+}
+
+/* Provider access: one master list. Each connected provider is a dense summary
+ * row that expands in place; providers without credentials sit below, quieter. */
+.provider-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.provider-list__title {
+  margin: var(--oc-space-2) 0 0;
+  color: var(--oc-text-muted);
+  font-size: var(--oc-font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.provider-row {
+  border-top: 1px solid var(--oc-border-subtle);
+}
+
+.provider-row:first-child {
+  border-top: 0;
+}
+
+.provider-row__summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(6.5rem, auto) auto;
+  align-items: center;
+  gap: var(--oc-space-4);
+  inline-size: 100%;
+  min-height: 3.75rem;
+  padding: var(--oc-space-3) var(--oc-space-4);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: default;
+  box-shadow: inset 2px 0 0 var(--oc-chart-color, transparent);
+  transition: background var(--oc-duration-fast, 140ms) var(--oc-ease-out, ease-out);
+}
+
+.provider-row__summary:hover {
+  background: color-mix(in srgb, var(--oc-text-primary) 3%, transparent);
+}
+
+.provider-row__summary:focus-visible {
+  outline: 2px solid var(--oc-focus-ring);
+  outline-offset: -2px;
+}
+
+.provider-row__icon {
+  inline-size: 22px;
+  block-size: 22px;
+}
+
+.provider-row__identity {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.provider-row__name {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--oc-space-2);
+  color: var(--oc-text-primary);
+  font-size: var(--oc-font-size-base);
+  font-weight: 600;
+}
+
+.provider-row__plan {
+  padding: 0 var(--oc-space-1);
+  border: 1px solid var(--oc-border-subtle);
+  border-radius: var(--oc-radius-control);
+  color: var(--oc-text-secondary);
+  font-family: var(--oc-font-mono);
+  font-size: var(--oc-font-size-xs);
+  font-weight: 400;
+  line-height: 1.5;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-row__meta {
+  overflow: hidden;
+  color: var(--oc-text-muted);
+  font-size: var(--oc-font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-row__status {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.provider-row__chevron {
+  inline-size: 16px;
+  block-size: 16px;
+  color: var(--oc-text-muted);
+  transition: transform var(--oc-duration-fast, 140ms) var(--oc-ease-out, ease-out);
+}
+
+.provider-row--open .provider-row__chevron {
+  transform: rotate(180deg);
+}
+
+.provider-row__detail {
+  display: grid;
+  gap: var(--oc-space-3);
+  padding: var(--oc-space-4) var(--oc-space-4) var(--oc-space-4)
+    calc(var(--oc-space-4) + 22px + var(--oc-space-4));
+  border-top: 1px solid var(--oc-border-subtle);
+  background: color-mix(in srgb, var(--oc-bg-page) 45%, var(--oc-bg-surface));
+}
+
+.provider-row .model-providers__profile-avatar svg {
+  width: 14px;
+  height: 14px;
+}
+
+.provider-row__accounts {
+  display: grid;
+  gap: var(--oc-space-2);
+  min-width: 0;
+}
+
+.provider-row__limits-pane + .provider-row__accounts {
+  padding-top: var(--oc-space-3);
+  border-top: 1px solid var(--oc-border-subtle);
+}
+
+/* Destructive action on its own side; routine actions sit together at the end. */
+.provider-row__footer {
+  justify-content: flex-end;
+  padding-top: var(--oc-space-3);
+  border-top: 1px solid var(--oc-border-subtle);
+}
+
+.provider-row__footer .provider-row__remove {
+  margin-inline-end: auto;
+}
+
+.provider-row--quiet .provider-row__summary {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  min-height: 3.25rem;
+  box-shadow: none;
+}
+
+.provider-row--quiet .provider-row__summary:hover {
+  background: transparent;
+}
+
+.provider-row--quiet .provider-row__icon {
+  opacity: 0.7;
+}
+
+.provider-row--quiet .provider-row__name {
+  color: var(--oc-text-secondary);
+  font-weight: 500;
+}
+
+.provider-row--quiet .model-providers__card-actions {
+  padding: 0;
+  border: 0;
+}
+
+.provider-row--quiet .model-providers__inline-form,
+.provider-row--quiet > .callout {
+  margin: 0 var(--oc-space-4) var(--oc-space-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .provider-row__summary,
+  .provider-row__chevron {
+    transition: none;
+  }
+}
+
+@media (max-width: 1100px) {
+  .provider-row__summary {
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+  }
+
+  .provider-row__summary .provider-usage__chips {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .provider-row__summary {
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    gap: var(--oc-space-3);
+  }
+
+  .provider-row__detail {
+    padding-inline-start: var(--oc-space-4);
+  }
+
+  .provider-row--quiet .provider-row__summary {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .provider-row--quiet .model-providers__card-actions {
+    grid-column: 1 / -1;
+  }
 }

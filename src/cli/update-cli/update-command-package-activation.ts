@@ -44,6 +44,7 @@ export function assertUpdatePackageActivationAdmission(
   if (options?.serviceRoot && options.serviceRoot !== root) {
     assertUpdatePackageActivationAdmission(options.serviceRoot, {
       continuation: options.continuation,
+      dryRun: options.dryRun,
     });
   }
 }

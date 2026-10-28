@@ -11,11 +11,11 @@ import {
   readSessionTranscriptVisibleMessageDeltaCore,
   readSessionTranscriptWatermark,
   readTranscriptRawDelta,
-  replaceTranscriptEventsSync,
   SessionTranscriptProjectionUnavailableError,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-context.js";
+import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSessionTranscriptDatabasePath } from "../../config/sessions/session-accessor.transcript-target.js";
 import {
   SYNC_REBUILD_MAX_BYTES,
@@ -30,6 +30,9 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
+import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
 
 const { uuidQueue } = vi.hoisted(() => ({ uuidQueue: [] as string[] }));
@@ -56,12 +59,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 async function createSessionScope(sessionId: string, filename = "sessions.json") {
   const dir = tempDirs.make("openclaw-session-manager-");
-  const scope = {
-    agentId: "main",
-    sessionId,
-    sessionKey: `agent:main:${sessionId}`,
-    storePath: path.join(dir, filename),
-  };
+  const scope = sessionScope(path.join(dir, filename), sessionId);
   await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
   return { dir, scope };
 }
@@ -73,14 +71,7 @@ function buildAssistantMessage(text: string) {
     api: "messages" as const,
     provider: "anthropic" as const,
     model: "sonnet-4.6" as const,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop" as const,
     timestamp: Date.now(),
   };
@@ -177,12 +168,7 @@ it("retries a stale bounded append without parsing transcript rows outside the b
 
 it("accepts a prepared assistant whose parent is the admitted user", async () => {
   const dir = tempDirs.make("openclaw-session-manager-admitted-assistant-");
-  const scope = {
-    agentId: "main",
-    sessionId: "admitted-assistant",
-    sessionKey: "agent:main:admitted-assistant",
-    storePath: path.join(dir, "sessions.json"),
-  };
+  const scope = sessionScope(path.join(dir, "sessions.json"), "admitted-assistant");
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   const manager = SessionManager.open(scope, dir);
   const admitted = manager.appendMessageWithTranscriptAnchor({
@@ -198,12 +184,15 @@ it("accepts a prepared assistant whose parent is the admitted user", async () =>
     agentId: scope.agentId,
     path: resolveSessionTranscriptDatabasePath(scope),
   });
-  const reads = trackSqliteStatementExecutions(database.db, ["identity"], (sql) =>
-    /^select\b/iu.test(sql) &&
-    /from "transcript_event_identities" where/iu.test(sql) &&
-    /"event_id" = \?/u.test(sql)
-      ? "identity"
-      : null,
+  const reads = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["identity"],
+    (sql) =>
+      /^select\b/iu.test(sql) &&
+      /from "transcript_event_identities" where/iu.test(sql) &&
+      /"event_id" = \?/u.test(sql)
+        ? "identity"
+        : null,
   );
   const reply = buildAssistantMessage("reply");
   let replyId: string;
@@ -617,12 +606,7 @@ it("preserves the durable leaf when bounded cleanup removes the whole selected w
 it("bounds runtime hydration while preserving older durable transcript rows on rewrites", async () => {
   const dir = tempDirs.make("openclaw-session-manager-bounded-");
   const storePath = path.join(dir, "sessions.json");
-  const scope = {
-    agentId: "main",
-    sessionId: "bounded-runtime-session",
-    sessionKey: "agent:main:bounded-runtime-session",
-    storePath,
-  };
+  const scope = sessionScope(storePath, "bounded-runtime-session");
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   for (const content of ["oldest", "middle", "latest"]) {
     await appendTranscriptMessage(scope, { cwd: dir, message: { role: "user", content } });
@@ -781,12 +765,10 @@ it.each([
   { corruptSeq: 2, name: "newly exposed bounded row" },
 ])("removes a bounded tail without parsing a $name", async ({ corruptSeq }) => {
   const dir = tempDirs.make("openclaw-session-manager-unparsed-prefix-");
-  const scope = {
-    agentId: "main",
-    sessionId: `unparsed-prefix-session-${corruptSeq}`,
-    sessionKey: `agent:main:unparsed-prefix-session-${corruptSeq}`,
-    storePath: path.join(dir, "sessions.json"),
-  };
+  const scope = sessionScope(
+    path.join(dir, "sessions.json"),
+    `unparsed-prefix-session-${corruptSeq}`,
+  );
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   const seed = SessionManager.open(scope, dir);
   seed.appendMessage({ role: "user", content: "older", timestamp: 1 });

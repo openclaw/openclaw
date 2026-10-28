@@ -1,4 +1,3 @@
-/** Runtime dependency bundle for provider/model picker flows. */
 import { runProviderPluginAuthMethod } from "../plugins/provider-auth-choice.js";
 import {
   resolveProviderPluginChoiceCore,

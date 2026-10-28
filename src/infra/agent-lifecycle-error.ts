@@ -10,7 +10,7 @@ export function createAgentRunStaleLifecycleError(): Error {
   });
 }
 
-function hasLifecycleErrorCode(value: unknown, code: string): boolean {
+export function hasLifecycleErrorCode(value: unknown, code: string): boolean {
   try {
     return value instanceof Error && "code" in value && value.code === code;
   } catch {

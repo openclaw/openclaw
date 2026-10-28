@@ -3,33 +3,42 @@ import path from "node:path";
 import { getSupportedThinkingLevels } from "@openclaw/ai/internal/runtime";
 import { projectSessionEntryMessage } from "../../packages/agent-core/src/harness/session/session.js";
 import type { WorkerToolSurface } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
+import type { WorkerTurnAdmissionParams } from "../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { toToolDefinitions } from "../agents/agent-tool-definition-adapter.js";
 import { copyAgentToolMetadata } from "../agents/agent-tool-metadata.js";
 import { wrapToolWithAbortSignal } from "../agents/agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.wrapper.js";
 import { projectMemoryFlushTools } from "../agents/agent-tools.memory-flush.js";
+import { listRunningSessions } from "../agents/bash-process-registry.js";
+import type { ExecToolDefaults } from "../agents/bash-tools.exec-types.js";
 import { disposeAllCodeModeRuns } from "../agents/code-mode-state.js";
 import { createNativeModelOwnedRuntimeModel } from "../agents/defaults.js";
+import { classifyAssistantTurn } from "../agents/embedded-agent-runner/run/incomplete-turn-classification.js";
+import { resolveSettledToolTerminalContinuation } from "../agents/embedded-agent-runner/run/incomplete-turn-recovery.js";
 import { buildRuntimeContextCustomMessage } from "../agents/embedded-agent-runner/run/runtime-context-prompt.js";
+import { readSubscriptionCompletionEvidence } from "../agents/embedded-agent-runner/run/subscription-completion-evidence.js";
+import { subscribeEmbeddedAgentSession } from "../agents/embedded-agent-subscribe.js";
 import { recordModelFallbackStop } from "../agents/failover-error.js";
 import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identity.types.js";
+import { assertSettledTurnFinalizationResult } from "../agents/harness/settled-turn-finalization-result.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
 import { projectRuntimeContextFragments } from "../agents/internal-runtime-context.js";
 import { buildExecutionHostRuntimeFacts } from "../agents/runtime-execution-facts.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { AuthStorage } from "../agents/sessions/auth-storage.js";
+import { convertToLlm } from "../agents/sessions/messages.js";
 import { ModelRegistry } from "../agents/sessions/model-registry.js";
 import { DefaultResourceLoader } from "../agents/sessions/resource-loader.js";
 import { createAgentSession } from "../agents/sessions/sdk.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { SettingsManager } from "../agents/sessions/settings-manager.js";
 import { detectRuntimeShell, getShellConfig } from "../agents/shell-utils.js";
+import { buildAssistantMessage, buildUsageWithNoCost } from "../agents/stream-message-shared.js";
 import { resolveSystemPromptRepoRoot } from "../agents/system-prompt-params.js";
 import { completeSystemPromptRuntime } from "../agents/system-prompt-runtime.js";
 import { wrapToolWithGatewayCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../infra/os-summary.js";
-import type { AssistantMessage } from "../llm/types.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { toAgentStoreSessionKey } from "../routing/session-key.js";
 import { materializeSkillResources } from "../skills/runtime/resources.js";
@@ -77,9 +86,11 @@ type RunWorkerEmbeddedTurnParams = Omit<
   toolSurface: WorkerToolSurface;
   allowedToolNames: readonly string[];
   execAuthority: WorkerLaunchPlan["assignment"]["toolAuthority"]["exec"];
+  createApprovalTransport?: ExecToolDefaults["createApprovalTransport"];
   browserRuntime?: WorkerBrowserRuntime;
   computer?: Omit<Parameters<typeof createWorkerComputerTool>[0], "runId" | "registerRunCleanup">;
   signal?: AbortSignal;
+  admitTurn?: (event: Omit<WorkerTurnAdmissionParams, "runEpoch">) => Promise<boolean>;
 };
 
 export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams): Promise<void> {
@@ -366,22 +377,27 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       return params.inference.stream({
         modelRef: params.modelRef,
         context: projected.context,
-        options: structuredClone(params.inferenceOptions),
+        options: params.inferenceOptions,
         ...(options?.signal ? { signal: options.signal } : {}),
       });
     };
 
     const liveRuntime = createWorkerLiveRuntime(params.live);
+    const completion = subscribeEmbeddedAgentSession({
+      session,
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      terminalLifecyclePhase: "finishing",
+      codeModeExecToolNames: new Set(toolSurfaceRuntime?.codeModeControlsEnabled ? ["exec"] : []),
+    });
     const unsubscribe = session.subscribe(liveRuntime.handleSessionEvent);
+    const existingProcesses = new Set(listRunningSessions().map(({ id }) => id));
 
     const abortTurn = () => session.agent.abort();
     params.signal?.addEventListener("abort", abortTurn, { once: true });
 
     let runFailure: Error | undefined;
     try {
-      if (params.signal?.aborted) {
-        throw toWorkerAgentError(params.signal.reason, "Worker agent turn aborted.");
-      }
       const content =
         typeof params.prompt === "string"
           ? [{ type: "text" as const, text: params.prompt }]
@@ -395,7 +411,10 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       }
       const fragments = params.runtimeContext
         ? [
-            ...buildExecutionHostRuntimeFacts({ ...params, capabilityToolNames: activeToolNames }),
+            ...(await buildExecutionHostRuntimeFacts({
+              ...params,
+              capabilityToolNames: activeToolNames,
+            })),
             ...params.runtimeContext,
           ]
         : [];
@@ -404,22 +423,97 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
         fragments,
         params.inHistorySystemUpdates,
       );
-      await session.agent.prompt([
-        { role: "user", content, timestamp: Date.now() },
-        ...(runtimeContext ? [runtimeContext] : []),
-      ]);
-      await session.agent.waitForIdle();
-      if (params.signal?.aborted) {
-        throw toWorkerAgentError(params.signal.reason, "Worker agent turn aborted.");
+      params.signal?.throwIfAborted();
+      let inputAllowed = true;
+      if (params.admitTurn) {
+        const history = toWorkerInferenceContext({
+          messages: convertToLlm(session.agent.state.messages),
+        });
+        if (history.kind !== "complete") {
+          throw new Error(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
+        }
+        inputAllowed = await params.admitTurn({
+          systemPrompt: session.agent.state.systemPrompt,
+          prompt: content
+            .filter((part) => part.type === "text")
+            .map((part) => part.text)
+            .join("\n"),
+          messages: history.context.messages,
+        });
+        params.signal?.throwIfAborted();
       }
-      const terminalAssistant = session.agent.state.messages
-        .toReversed()
-        .find((message): message is AssistantMessage => message.role === "assistant");
-      if (terminalAssistant?.stopReason === "error") {
-        throw new Error(terminalAssistant.errorMessage ?? "Worker inference failed.");
-      }
-      if (terminalAssistant?.stopReason === "aborted") {
-        throw new Error(terminalAssistant.errorMessage ?? "Worker inference was aborted.");
+      if (!inputAllowed) {
+        liveRuntime.handleSessionEvent({ type: "agent_end", messages: [], willRetry: false });
+      } else {
+        await session.agent.prompt([
+          { role: "user", content, timestamp: Date.now() },
+          ...(runtimeContext ? [runtimeContext] : []),
+        ]);
+        await completion.waitForPendingEvents();
+        params.signal?.throwIfAborted();
+        let terminalAssistant = completion.getCurrentAttemptAssistant();
+        const running = listRunningSessions().filter(
+          ({ id, scopeKey }) => scopeKey === params.sessionKey && !existingProcesses.has(id),
+        );
+        const attempt = {
+          ...readSubscriptionCompletionEvidence(completion),
+          currentAttemptAssistant: terminalAssistant,
+          messagesSnapshot: session.agent.state.messages,
+          terminal: { kind: "ok" as const },
+        };
+        const answer = classifyAssistantTurn({ attempt, payloadCount: 0 });
+        const continuation = resolveSettledToolTerminalContinuation({
+          provider: model.provider,
+          modelId: model.id,
+          modelApi: model.api,
+          terminalReplyExpectation: "result-required",
+          replyDeliveryState: completion.getSourceReplyDeliveryState() ?? "missing",
+          aborted: false,
+          timedOut: false,
+          attempt,
+          allowEmptyStopContinuation: !answer.silent,
+          payloadCount: answer.visibleText || running.length ? 1 : 0,
+        });
+        if (continuation && terminalAssistant?.stopReason === "stop") {
+          if (continuation.disableTools) {
+            session.agent.state.tools = [];
+          }
+          await session.sendCustomMessage(
+            {
+              customType: "openclaw.settled-tool-finalization",
+              content: continuation.instruction,
+              display: false,
+            },
+            { triggerTurn: true },
+          );
+          terminalAssistant = completion.getCurrentAttemptAssistant();
+          assertSettledTurnFinalizationResult({ assistant: terminalAssistant! });
+        }
+        params.signal?.throwIfAborted();
+        if (
+          terminalAssistant?.stopReason === "error" ||
+          terminalAssistant?.stopReason === "aborted"
+        ) {
+          throw new Error(
+            terminalAssistant.errorMessage ?? `Worker inference ${terminalAssistant.stopReason}.`,
+          );
+        }
+        if (running.length > 0) {
+          const message = buildAssistantMessage({
+            model,
+            stopReason: "stop",
+            usage: buildUsageWithNoCost({}),
+            content: [
+              {
+                type: "text",
+                text: `Background commands are still running (process sessions: ${running.map(({ id }) => id).join(", ")}). This turn has ended before their results were available.`,
+              },
+            ],
+          });
+          liveRuntime.handleSessionEvent({ type: "message_start", message });
+          liveRuntime.handleSessionEvent({ type: "message_end", message });
+          await sessionManager.appendMessageAsync(message);
+        }
       }
     } catch (error) {
       runFailure = params.signal?.aborted
@@ -453,6 +547,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       turnLifetime.abort();
       params.signal?.removeEventListener("abort", abortTurn);
       unsubscribe();
+      completion.unsubscribe();
       session.dispose();
     }
     if (runFailure !== undefined) {

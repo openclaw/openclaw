@@ -1,9 +1,10 @@
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
+  createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
-  createMessageReceiptFromOutboundResults,
   resolveOutboundSendDep,
   type MessageReceipt,
   type OutboundSendDeps,
@@ -23,6 +24,7 @@ import {
   normalizeStringEntries,
   type ChannelOutboundAdapter,
 } from "../runtime-api.js";
+import { resolveDefaultMSTeamsAccountId, resolveMSTeamsAccountConfig } from "./accounts.js";
 import { msteamsOutboundConfig, resolveMSTeamsEffectiveTextChunkLimit } from "./outbound-config.js";
 import { createMSTeamsPollStoreState } from "./polls.js";
 import { buildMSTeamsPresentationCard } from "./presentation.js";
@@ -38,7 +40,7 @@ type MSTeamsMediaSendOptions = Pick<
   Parameters<typeof sendMessageMSTeams>[0],
   "mediaUrl" | "mediaAccess" | "mediaLocalRoots" | "mediaReadFile"
 > &
-  MSTeamsSendOptions;
+  MSTeamsSendOptions & { cfg?: MSTeamsSendConfig; accountId?: string | null };
 type MSTeamsSendFn = (
   to: string,
   text: string,
@@ -87,22 +89,19 @@ async function sendWithDeliveryResults(
     if (earlierResults.length === 0) {
       throw error;
     }
-    const receipt = createMessageReceiptFromOutboundResults({
-      results: [
-        ...earlierResults.map((result) => attachChannelToResult("msteams", result)),
-        ...(partial?.deliveryResult.receipt
-          ? [{ receipt: partial.deliveryResult.receipt }]
-          : (partial?.deliveryResult.messageIds ?? []).map((messageId) => ({
-              channel: "msteams",
-              messageId,
-            }))),
-      ],
-    });
     throw createChannelPartialDeliveryError(partial?.cause ?? error, {
       ...partial?.deliveryResult,
-      messageIds: receipt.platformMessageIds,
-      receipt,
-      visibleReplySent: true,
+      ...createAcceptedChannelDeliveryResult({
+        results: [
+          ...earlierResults.map((result) => attachChannelToResult("msteams", result)),
+          ...(partial?.deliveryResult.receipt
+            ? [{ receipt: partial.deliveryResult.receipt }]
+            : (partial?.deliveryResult.messageIds ?? []).map((messageId) => ({
+                channel: "msteams",
+                messageId,
+              }))),
+        ],
+      }),
     });
   }
 }
@@ -125,12 +124,17 @@ function resolveMSTeamsThreadTarget(to: string, threadId?: string | number | nul
 
 function resolveMSTeamsSend(params: {
   cfg: MSTeamsSendConfig;
+  accountId?: string | null;
   deps?: OutboundSendDeps;
 }): MSTeamsSendFn {
-  return (
-    resolveOutboundSendDep<MSTeamsSendFn>(params.deps, "msteams") ??
-    ((to, text, opts) => sendMessageMSTeams({ cfg: params.cfg, to, text, ...opts }))
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultMSTeamsAccountId(params.cfg),
   );
+  const send = resolveOutboundSendDep<MSTeamsSendFn>(params.deps, "msteams");
+  return (to, text, opts) =>
+    send
+      ? send(to, text, { ...opts, cfg: params.cfg, accountId })
+      : sendMessageMSTeams({ ...opts, cfg: params.cfg, accountId, to, text });
 }
 
 async function sendMSTeamsOutbound(
@@ -190,12 +194,14 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
     mediaLocalRoots,
     mediaReadFile,
     payload,
+    accountId,
     deps,
     onDeliveryResult,
     assertDirectAdapterHandoff,
     onPlatformSendDispatch,
     threadId,
   }) => {
+    const effectiveAccountId = normalizeAccountId(accountId ?? resolveDefaultMSTeamsAccountId(cfg));
     const handoff = { assertDirectAdapterHandoff, onPlatformSendDispatch };
     const acceptedResults: MSTeamsSendResult[] = [];
     const deliveryTarget = resolveMSTeamsThreadTarget(to, threadId);
@@ -206,6 +212,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
         (report) =>
           sendAdaptiveCardMSTeams({
             cfg,
+            accountId: effectiveAccountId,
             to: deliveryTarget,
             card: presentationCard,
             ...handoff,
@@ -223,7 +230,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       }),
     );
     if (mediaUrls.length > 0) {
-      const send = resolveMSTeamsSend({ cfg, deps });
+      const send = resolveMSTeamsSend({ cfg, accountId: effectiveAccountId, deps });
       const result = await sendPayloadMediaSequence<MSTeamsSendResult>({
         text,
         mediaUrls,
@@ -247,12 +254,14 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       }
     }
     if (text.trim()) {
-      const send = resolveMSTeamsSend({ cfg, deps });
+      const send = resolveMSTeamsSend({ cfg, accountId: effectiveAccountId, deps });
       const chunks = resolveTextChunksWithFallback(
         text,
         chunkTextForOutbound(
           text,
-          resolveMSTeamsEffectiveTextChunkLimit(cfg.channels?.msteams?.textChunkLimit),
+          resolveMSTeamsEffectiveTextChunkLimit(
+            resolveMSTeamsAccountConfig(cfg, effectiveAccountId).textChunkLimit,
+          ),
         ),
       );
       let result: Awaited<ReturnType<MSTeamsSendFn>>;
@@ -275,13 +284,18 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       cfg,
       to,
       poll,
+      accountId,
       threadId,
       assertDirectAdapterHandoff,
       onPlatformSendDispatch,
     }) => {
+      const effectiveAccountId = normalizeAccountId(
+        accountId ?? resolveDefaultMSTeamsAccountId(cfg),
+      );
       const maxSelections = poll.maxSelections ?? 1;
       const result = await sendPollMSTeams({
         cfg,
+        accountId: effectiveAccountId,
         to: resolveMSTeamsThreadTarget(to, threadId),
         question: poll.question,
         options: poll.options,
@@ -289,7 +303,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
         assertDirectAdapterHandoff,
         onPlatformSendDispatch,
       });
-      const pollStore = createMSTeamsPollStoreState();
+      const pollStore = createMSTeamsPollStoreState({ accountId: effectiveAccountId });
       await pollStore.createPoll({
         id: result.pollId,
         question: poll.question,
@@ -298,7 +312,6 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
         createdAt: new Date().toISOString(),
         conversationId: result.conversationId,
         messageId: result.messageId,
-        votes: {},
       });
       return result;
     },

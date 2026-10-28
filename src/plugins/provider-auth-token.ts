@@ -1,4 +1,3 @@
-// Resolves provider auth tokens from plugin-owned auth configuration.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 

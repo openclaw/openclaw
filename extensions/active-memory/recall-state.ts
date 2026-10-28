@@ -1,10 +1,7 @@
 import crypto from "node:crypto";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { closeActiveMemorySearchManager } from "openclaw/plugin-sdk/memory-host-search";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import type {
   OpenClawPluginApi,
   OpenClawPluginToolContext,
@@ -54,34 +51,19 @@ export function isCircuitBreakerOpen(
   if (!entry || entry.consecutiveTimeouts < maxTimeouts) {
     return false;
   }
-  if (Date.now() - entry.lastTimeoutAt >= cooldownMs) {
-    // Cooldown expired — reset and allow one attempt through.
-    timeoutCircuitBreaker.delete(key);
-    return false;
-  }
-  return true;
+  // Cooldown allows another attempt; only a completed recall clears the streak.
+  return Date.now() - entry.lastTimeoutAt < cooldownMs;
 }
 
-export function recordCircuitBreakerTimeout(key: string, cooldownMs: number): void {
-  const now = Date.now();
-  for (const [entryKey, entry] of timeoutCircuitBreaker) {
-    if (now - entry.lastTimeoutAt >= cooldownMs) {
-      timeoutCircuitBreaker.delete(entryKey);
-    }
-  }
+export function recordCircuitBreakerTimeout(key: string): void {
   const entry = timeoutCircuitBreaker.get(key);
   // Reinsertion keeps refreshed keys newer than peers when capacity eviction runs.
   timeoutCircuitBreaker.delete(key);
   timeoutCircuitBreaker.set(key, {
     consecutiveTimeouts: (entry?.consecutiveTimeouts ?? 0) + 1,
-    lastTimeoutAt: now,
+    lastTimeoutAt: Date.now(),
   });
-  if (timeoutCircuitBreaker.size > DEFAULT_MAX_CACHE_ENTRIES) {
-    const oldestKey = timeoutCircuitBreaker.keys().next().value;
-    if (oldestKey !== undefined) {
-      timeoutCircuitBreaker.delete(oldestKey);
-    }
-  }
+  pruneMapToMaxSize(timeoutCircuitBreaker, DEFAULT_MAX_CACHE_ENTRIES);
 }
 
 export function resetCircuitBreaker(key: string): void {
@@ -186,10 +168,10 @@ export function buildCacheKey(params: {
         authorityFingerprint: params.authorityFingerprint,
         memoryAudience: buildMemoryAudienceCacheIdentity(params.memoryAudience),
         memorySlot: params.memorySlot,
-        activeProjectKeys: [...(params.activeProjectKeys ?? [])].toSorted(),
+        activeProjectKeys: params.activeProjectKeys?.toSorted() ?? [],
         modelProviderId: params.modelProviderId,
         modelId: params.modelId,
-        recallToolNames: [...params.recallToolNames].toSorted(),
+        recallToolNames: params.recallToolNames.toSorted(),
         resourceScope: params.resourceScope,
       }),
     )
@@ -202,8 +184,7 @@ export function getCachedResult(cacheKey: string): ActiveRecallResult | undefine
   if (!cached) {
     return undefined;
   }
-  const now = asDateTimestampMs(Date.now());
-  if (now === undefined || cached.expiresAt <= now) {
+  if (cached.expiresAt <= Date.now()) {
     activeRecallCache.delete(cacheKey);
     return undefined;
   }
@@ -211,43 +192,23 @@ export function getCachedResult(cacheKey: string): ActiveRecallResult | undefine
 }
 
 export function setCachedResult(cacheKey: string, result: ActiveRecallResult, ttlMs: number): void {
-  const rawNow = Date.now();
-  const now = asDateTimestampMs(rawNow);
+  const now = Date.now();
   if (
     activeRecallCache.size >= DEFAULT_MAX_CACHE_ENTRIES ||
-    (now !== undefined && now - lastActiveRecallCacheSweepAt >= CACHE_SWEEP_INTERVAL_MS)
+    now - lastActiveRecallCacheSweepAt >= CACHE_SWEEP_INTERVAL_MS
   ) {
     sweepExpiredCacheEntries(now);
-    if (now !== undefined) {
-      lastActiveRecallCacheSweepAt = now;
-    }
+    lastActiveRecallCacheSweepAt = now;
   }
-  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
-  if (expiresAt === undefined) {
-    activeRecallCache.delete(cacheKey);
-    return;
-  }
-  if (activeRecallCache.has(cacheKey)) {
-    activeRecallCache.delete(cacheKey);
-  }
+  activeRecallCache.delete(cacheKey);
   activeRecallCache.set(cacheKey, {
-    expiresAt,
+    expiresAt: now + ttlMs,
     result,
   });
-  while (activeRecallCache.size > DEFAULT_MAX_CACHE_ENTRIES) {
-    const oldestKey = activeRecallCache.keys().next().value;
-    if (!oldestKey) {
-      break;
-    }
-    activeRecallCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(activeRecallCache, DEFAULT_MAX_CACHE_ENTRIES);
 }
 
-function sweepExpiredCacheEntries(now = asDateTimestampMs(Date.now())): void {
-  if (now === undefined) {
-    activeRecallCache.clear();
-    return;
-  }
+function sweepExpiredCacheEntries(now: number): void {
   for (const [cacheKey, cached] of activeRecallCache.entries()) {
     if (cached.expiresAt <= now) {
       activeRecallCache.delete(cacheKey);
@@ -268,15 +229,4 @@ export function toSingleLineErrorMessage(error: unknown): string {
 
 export function shouldCacheResult(result: ActiveRecallResult): boolean {
   return result.status === "ok" && result.summary.length > 0;
-}
-
-export function resetActiveRecallStateForTests(): void {
-  activeRecallCache.clear();
-  activeRecallRuns.clear();
-  timeoutCircuitBreaker.clear();
-  lastActiveRecallCacheSweepAt = 0;
-}
-
-export function getCircuitBreakerEntry(key: string): CircuitBreakerEntry | undefined {
-  return timeoutCircuitBreaker.get(key);
 }

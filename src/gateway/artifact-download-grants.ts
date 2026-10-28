@@ -10,22 +10,37 @@ import type { GatewayClient } from "./server-methods/types.js";
 const DOWNLOAD_TTL_MS = 5 * 60_000;
 const MAX_DOWNLOADS_PER_CONNECTION = 128;
 
+type DownloadSource =
+  | {
+      kind: "bytes";
+      digest: string;
+      image: boolean;
+      read: (
+        request: ArtifactDownloadResponseRequest,
+      ) => Promise<ArtifactDownloadResponse | undefined>;
+    }
+  | { kind: "managed"; path: string };
+
 type Download = {
   expiresAt: number;
-  digest: string;
-  image: boolean;
+  source: DownloadSource;
   assertCurrent: () => void;
-  read: (request: ArtifactDownloadResponseRequest) => Promise<ArtifactDownloadResponse | undefined>;
   release: () => void;
+  readers: number;
+  retired: boolean;
 };
 
-// Connection-owned grants retain only a reader, never artifact bytes or durable state.
-const downloads = new WeakMap<GatewayClient, Map<string, Download>>();
+// Issuer buckets retain readers, never bytes. Managed grants survive socket loss;
+// the existing TTL sweep and Gateway teardown release their retained authority.
+const downloads = new Map<GatewayClient, Map<string, Download>>();
 
 function removeDownload(grants: Map<string, Download>, ticket: string) {
   const grant = grants.get(ticket);
   if (grant && grants.delete(ticket)) {
-    grant.release();
+    grant.retired = true;
+    if (grant.readers === 0) {
+      grant.release();
+    }
   }
 }
 
@@ -37,27 +52,46 @@ export function canCreateArtifactDownload(
   );
 }
 
-export function pruneExpiredArtifactDownloads(clients: Iterable<GatewayClient>, now: number) {
+export function pruneExpiredArtifactDownloads(
+  now: number,
+  clients: Iterable<GatewayClient> = downloads.keys(),
+) {
   for (const client of clients) {
     const grants = downloads.get(client);
     if (!grants) {
       continue;
     }
     for (const [ticket, grant] of grants) {
-      if (!canCreateArtifactDownload(client) || grant.expiresAt <= now) {
+      if (
+        (grant.source.kind === "bytes" && !canCreateArtifactDownload(client)) ||
+        grant.expiresAt <= now
+      ) {
         removeDownload(grants, ticket);
       }
+    }
+    if (grants.size === 0 && !canCreateArtifactDownload(client)) {
+      downloads.delete(client);
     }
   }
 }
 
-export function createArtifactDownload(params: {
+/** Gateway teardown clears grants; the HTTP lifetime owner cancels active transfers. */
+export function clearArtifactDownloads() {
+  for (const grants of downloads.values()) {
+    for (const ticket of grants.keys()) {
+      removeDownload(grants, ticket);
+    }
+  }
+  downloads.clear();
+}
+
+type DownloadAuthority = {
   client: GatewayClient | null;
-  prepared: PreparedArtifactDownload;
   assertCurrent: Download["assertCurrent"];
-  read: Download["read"];
   release: Download["release"];
-}): { url: string; expiresAt: string } {
+};
+
+function createDownloadGrant(params: DownloadAuthority & { source: DownloadSource }) {
   const { client } = params;
   if (!canCreateArtifactDownload(client)) {
     throw new Error("Artifact download connection is no longer available");
@@ -71,16 +105,20 @@ export function createArtifactDownload(params: {
     client.connectionSignal.addEventListener(
       "abort",
       () => {
-        for (const ticket of owned.keys()) {
-          removeDownload(owned, ticket);
+        for (const [ticket, grant] of owned) {
+          if (grant.source.kind === "bytes") {
+            removeDownload(owned, ticket);
+          }
         }
-        downloads.delete(client);
+        if (owned.size === 0 && downloads.get(client) === owned) {
+          downloads.delete(client);
+        }
       },
       { once: true },
     );
   }
   const now = Date.now();
-  pruneExpiredArtifactDownloads([client], now);
+  pruneExpiredArtifactDownloads(now, [client]);
   for (const ticket of grants.keys()) {
     if (grants.size < MAX_DOWNLOADS_PER_CONNECTION) {
       break;
@@ -91,20 +129,60 @@ export function createArtifactDownload(params: {
   const expiresAt = now + DOWNLOAD_TTL_MS;
   grants.set(ticket, {
     expiresAt,
-    digest: params.prepared.digest,
-    image: params.prepared.artifact.type === "image",
+    source: params.source,
     assertCurrent: params.assertCurrent,
-    read: params.read,
     release: params.release,
+    readers: 0,
+    retired: false,
   });
   return {
-    url: `${ARTIFACT_DOWNLOAD_PATH}${encodeURIComponent(client.connId)}/${ticket}`,
+    locator: `${encodeURIComponent(client.connId)}/${ticket}`,
     expiresAt: new Date(expiresAt).toISOString(),
   };
 }
 
-export function getArtifactDownloadGrant(client: GatewayClient, ticket: string) {
-  return downloads.get(client)?.get(ticket);
+export function createArtifactDownload(
+  params: DownloadAuthority & {
+    prepared: PreparedArtifactDownload;
+    read: Extract<DownloadSource, { kind: "bytes" }>["read"];
+  },
+): { url: string; expiresAt: string } {
+  const grant = createDownloadGrant({
+    ...params,
+    source: {
+      kind: "bytes",
+      digest: params.prepared.digest,
+      image: params.prepared.artifact.type === "image",
+      read: params.read,
+    },
+  });
+  return { url: `${ARTIFACT_DOWNLOAD_PATH}${grant.locator}`, expiresAt: grant.expiresAt };
+}
+
+/** Keep the managed media adapter's thumbnail and playback routes on the same grant lifetime. */
+export function createManagedArtifactDownload(params: DownloadAuthority & { path: string }) {
+  const grant = createDownloadGrant({ ...params, source: { kind: "managed", path: params.path } });
+  return {
+    url: `${params.path}?${new URLSearchParams({ mediaTicket: grant.locator })}`,
+    expiresAt: grant.expiresAt,
+  };
+}
+
+export function resolveArtifactDownloadGrant(clients: ReadonlySet<GatewayClient>, locator: string) {
+  const [connection, ticket, extra] = locator.split("/");
+  if (!ticket || extra !== undefined) {
+    return undefined;
+  }
+  for (const [client, grants] of downloads) {
+    if (!client.connId || encodeURIComponent(client.connId) !== connection) {
+      continue;
+    }
+    const grant = grants.get(ticket);
+    if (grant && (grant.source.kind === "managed" || clients.has(client))) {
+      return { client, grant, ticket };
+    }
+  }
+  return undefined;
 }
 
 export function assertArtifactDownloadGrantCurrent(
@@ -115,8 +193,8 @@ export function assertArtifactDownloadGrantCurrent(
 ) {
   const grants = downloads.get(client);
   if (
-    !clients.has(client) ||
-    !canCreateArtifactDownload(client) ||
+    (grant.source.kind === "bytes" &&
+      (!clients.has(client) || !canCreateArtifactDownload(client))) ||
     grant.expiresAt <= Date.now() ||
     grants?.get(ticket) !== grant
   ) {
@@ -126,4 +204,32 @@ export function assertArtifactDownloadGrantCurrent(
     throw new Error("Artifact download expired");
   }
   grant.assertCurrent();
+}
+
+/** URL expiry closes admission, not an already admitted, backpressured transfer. */
+export function retainArtifactDownloadStream(
+  clients: ReadonlySet<GatewayClient>,
+  client: GatewayClient,
+  ticket: string,
+  grant: Download,
+) {
+  assertArtifactDownloadGrantCurrent(clients, client, ticket, grant);
+  grant.readers++;
+  return {
+    assertCurrent: () => {
+      if (
+        grant.source.kind === "bytes" &&
+        (!clients.has(client) || !canCreateArtifactDownload(client))
+      ) {
+        throw new Error("Artifact download connection is no longer available");
+      }
+      grant.assertCurrent();
+    },
+    release() {
+      grant.readers--;
+      if (grant.retired && grant.readers === 0) {
+        grant.release();
+      }
+    },
+  };
 }

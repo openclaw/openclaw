@@ -28,7 +28,7 @@ type ReportedUsage = Pick<
   "input" | "output" | "cacheRead" | "cacheWrite" | "total"
 > & { costUsd?: number };
 
-export type MatrixLedgerRow = {
+type MatrixLedgerRow = {
   storeId: string;
   sessionId: string;
   sessionKey: string;
@@ -557,19 +557,18 @@ export function collectMatrixUsage(
     if (message.stopReason === "error" || message.stopReason === "aborted") {
       modelErrors += 1;
     }
-    const raw = isRecord(message.usage) ? message.usage : {};
-    const usage = normalizeUsage(raw);
+    const usage = normalizeUsage(isRecord(message.usage) ? message.usage : undefined);
     const buckets = {
-      input: count(raw.input),
-      output: count(raw.output),
-      cacheRead: count(raw.cacheRead),
-      cacheWrite: count(raw.cacheWrite),
+      input: count(usage?.input),
+      output: count(usage?.output),
+      cacheRead: count(usage?.cacheRead),
+      cacheWrite: count(usage?.cacheWrite),
     };
     const bucketTotal = Object.values(buckets).reduce<number>(
       (sum, value) => sum + (value ?? 0),
       0,
     );
-    const reportedTotal = count(raw.totalTokens ?? raw.total);
+    const reportedTotal = count(usage?.total);
     const knownTotal = Math.max(bucketTotal, reportedTotal ?? 0);
     scope.knownTotalTokens += knownTotal;
     sessionUsage.knownTotalTokens += knownTotal;
@@ -580,11 +579,12 @@ export function collectMatrixUsage(
     if (
       Object.values(buckets).some((value) => value === undefined) ||
       (reportedTotal !== undefined && reportedTotal !== bucketTotal) ||
-      knownTotal === 0
+      // Adapter-default zeros are unmeasured unless the response explicitly reports usage.
+      (knownTotal === 0 && usage?.usageReport?.state !== "available")
     ) {
       issues.push(`Incomplete or incoherent model usage: ${identity}`);
     }
-    const reasoning = count(raw.reasoningTokens);
+    const reasoning = count(usage?.reasoningTokens);
     if (reasoning === undefined || reasoning > (buckets.output ?? 0)) {
       reasoningComplete = false;
     } else {

@@ -880,7 +880,7 @@ private class OperationalCaptionsGateway(
             "connect" -> {
               val role = params.getValue("role").jsonPrimitive.content
               json.parseToJsonElement(
-                """{"type":"hello-ok","protocol":3,"server":{"host":"caption-proof","version":"proof"},"features":{"methods":["cron.status","cron.list","exec.approval.list","approval.get","approval.resolve","chat.history","chat.metadata","health","sessions.list"],"events":[]},"auth":{"role":"$role","scopes":${if (role == "operator") "[\"operator.read\",\"operator.write\",\"operator.approvals\"]" else "[]"}},"snapshot":{"sessionDefaults":{"mainSessionKey":"agent:main:main"}}}""",
+                """{"type":"hello-ok","protocol":3,"server":{"host":"caption-proof","version":"proof"},"features":{"methods":["agents.list","cron.status","cron.list","exec.approval.list","approval.get","approval.resolve","chat.history","chat.metadata","health","sessions.list"],"events":[]},"auth":{"role":"$role","scopes":${if (role == "operator") "[\"operator.read\",\"operator.write\",\"operator.approvals\"]" else "[]"}},"snapshot":{"sessionDefaults":{"mainSessionKey":"agent:main:main"}}}""",
               )
             }
 
@@ -915,6 +915,10 @@ private class OperationalCaptionsGateway(
 
             "chat.metadata" -> {
               json.parseToJsonElement("""{"commands":[],"models":[]}""")
+            }
+
+            "agents.list" -> {
+              json.parseToJsonElement("""{"defaultId":"main","mainKey":"main","agents":[{"id":"main"}]}""")
             }
 
             "sessions.list" -> {

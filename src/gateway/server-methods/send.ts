@@ -30,10 +30,6 @@ import {
   ensureOutboundSessionEntry,
   resolveOutboundSessionRoute,
 } from "../../infra/outbound/outbound-session.js";
-import {
-  createOutboundPayloadPlan,
-  projectOutboundPayloadPlanForMirror,
-} from "../../infra/outbound/payloads.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import {
   beginTerminalSourceReplyDelivery,
@@ -62,7 +58,7 @@ import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveSandboxedSessionCreation } from "../operator-session-run.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import { formatForLog } from "../ws-log.js";
 import {
@@ -80,6 +76,7 @@ import {
   scheduleDeliveredSourceReplyTranscriptMirror,
 } from "./message-operation-result.js";
 import { withMessageOperationRoute } from "./message-operation-route.js";
+import { respondError } from "./response.js";
 import {
   resolveGatewayOutboundTarget,
   resolveMessageActionRuntimeConfig,
@@ -173,13 +170,10 @@ export const sendHandlers: GatewayRequestHandlers = {
           (!plugin?.actions?.handleAction ||
             plugin.actions.supportsAction?.({ action: request.action }) === false);
         if (!plugin || (!plugin.actions?.handleAction && !canonicalAction)) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `Channel ${channel} does not support action ${request.action}.`,
-            ),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            `Channel ${channel} does not support action ${request.action}.`,
           );
           return undefined;
         }
@@ -244,7 +238,7 @@ export const sendHandlers: GatewayRequestHandlers = {
               ) {
                 // Native sends could use account defaults without a target. Resolve that
                 // owner fact before core routing and source-reply receipts require it.
-                const target = resolveOutboundTarget({ channel, plugin, cfg, accountId });
+                const target = await resolveOutboundTarget({ channel, plugin, cfg, accountId });
                 if (!target.ok) {
                   throw target.error;
                 }
@@ -400,10 +394,10 @@ export const sendHandlers: GatewayRequestHandlers = {
                   const result = await runMessageAction({
                     ...actionContext,
                     gatewayOwnedDelivery: true,
+                    // The delegating client records the confirmed send in its destination.
+                    callerRecordsDestinationHistory: true,
                     ...(request.action === "send"
                       ? {
-                          // This RPC owns source-reply receipts and their transcript mirror.
-                          suppressTranscriptMirror: true,
                           actionOrigin: trustedContext.runtimeAgentId
                             ? ("message-tool" as const)
                             : undefined,
@@ -487,10 +481,10 @@ export const sendHandlers: GatewayRequestHandlers = {
     const mediaUrls = normalizeArrayBackedTrimmedStringList(request.mediaUrls);
     const buffer = readStringValue(request.buffer);
     if (!message && !mediaUrl && (mediaUrls?.length ?? 0) === 0 && !buffer) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid send params: text or media is required"),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "invalid send params: text or media is required",
       );
       return;
     }
@@ -538,18 +532,14 @@ export const sendHandlers: GatewayRequestHandlers = {
         const { cfg, channel } = resolved;
         const plugin = resolveOutboundChannelPlugin({ channel, cfg });
         if (!plugin) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, `unsupported channel: ${channel}`),
-          );
+          respondError(respond, ErrorCodes.INVALID_REQUEST, `unsupported channel: ${channel}`);
           return undefined;
         }
         return { cfg, channel, plugin };
       },
       work: async ({ cfg, channel, accountId, idem, dedupeKey, authorize }) => {
         try {
-          const resolvedTarget = resolveGatewayOutboundTarget({
+          const resolvedTarget = await resolveGatewayOutboundTarget({
             channel,
             to,
             cfg,
@@ -623,9 +613,6 @@ export const sendHandlers: GatewayRequestHandlers = {
               ...(request.asVoice === true ? { audioAsVoice: true } : {}),
             },
           ];
-          const outboundPayloadPlan = createOutboundPayloadPlan(outboundPayloads);
-          const { text: mirrorText, mediaUrls: mirrorMediaUrls } =
-            projectOutboundPayloadPlanForMirror(outboundPayloadPlan);
           const derivedRoute = await resolveOutboundSessionRoute({
             cfg,
             channel,
@@ -646,8 +633,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             normalizeOptionalLowercaseString(derivedRoute?.baseSessionKey) ===
               normalizeOptionalLowercaseString(providedSessionBaseKey) &&
             normalizeOptionalLowercaseString(derivedRoute?.sessionKey) !== providedSessionKey;
-          // sessionKey selects the transcript mirror, not the saved delivery route.
-          // Message-scoped threads may refine that mirror within the same base session.
+          // Explicit session hints retain routing policy; only an admitted runtime is a producer.
           const outboundSessionKey = shouldUseDerivedThreadSessionKey
             ? derivedRoute?.sessionKey
             : (providedSessionKey ?? derivedRoute?.sessionKey);
@@ -662,7 +648,12 @@ export const sendHandlers: GatewayRequestHandlers = {
             }
           }
           if (outboundSessionKey && isAgentHarnessSessionKey(outboundSessionKey)) {
-            const { canonicalKey, entry } = loadSessionEntry(outboundSessionKey);
+            const { canonicalKey, entry } = await loadGatewaySessionEntryReadOnlyInWorker({
+              cfg,
+              key: outboundSessionKey,
+              assertActive: commitAgentRuntimeAuthority,
+              excludeInternalEffects: true,
+            });
             const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
               canonicalKey,
               entry,
@@ -677,8 +668,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           }
           // Durable route/session persistence commits only after platform
           // evidence: a failed send must not rebind the folded main session's
-          // delivery route. Once-only across multi-payload results, and before
-          // the in-delivery transcript mirror so first contacts have a row.
+          // delivery route. First contacts bind before the canonical delivered row.
           let outboundRoutePersisted = false;
           const commitOutboundSessionRoute = async () => {
             if (outboundRoutePersisted || !derivedRoute) {
@@ -690,7 +680,6 @@ export const sendHandlers: GatewayRequestHandlers = {
               channel,
               accountId,
               route: derivedRoute,
-              mirrorSessionKey: outboundSessionKey,
               workerGuard: { assertCurrent: commitAgentRuntimeAuthority },
               creation: resolveSandboxedSessionCreation(client, cfg),
               sourceSessionKey: client?.internal?.agentRuntimeIdentity?.sessionKey,
@@ -699,7 +688,8 @@ export const sendHandlers: GatewayRequestHandlers = {
           const outboundSession = buildOutboundSessionContext({
             cfg,
             agentId: effectiveAgentId,
-            sessionKey: outboundSessionKey,
+            sessionKey: client?.internal?.agentRuntimeIdentity?.sessionKey,
+            policySessionKey: outboundSessionKey,
             conversationType: derivedRoute?.chatType,
           });
           // Target, attachment, route, and session preparation may all yield.
@@ -738,15 +728,7 @@ export const sendHandlers: GatewayRequestHandlers = {
               onPlatformSendDispatch,
               assertDirectAdapterHandoff: commitAgentRuntimeAuthority,
               skipQueue: hasAgentRuntimeAuthority,
-              mirror: outboundSessionKey
-                ? {
-                    sessionKey: outboundSessionKey,
-                    agentId: effectiveAgentId,
-                    text: mirrorText || message,
-                    mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
-                    idempotencyKey: idem,
-                  }
-                : undefined,
+              transcriptRoute: derivedRoute ?? undefined,
             },
             undefined,
             undefined,
@@ -836,23 +818,16 @@ export const sendHandlers: GatewayRequestHandlers = {
           ["isAnonymous", "supportsAnonymousPolls"],
         ] as const) {
           if (request[parameter] !== undefined && outbound?.[capability] !== true) {
-            respond(
-              false,
-              undefined,
-              errorShape(
-                ErrorCodes.INVALID_REQUEST,
-                `${parameter} is not supported for ${channel} polls`,
-              ),
+            respondError(
+              respond,
+              ErrorCodes.INVALID_REQUEST,
+              `${parameter} is not supported for ${channel} polls`,
             );
             return undefined;
           }
         }
         if (!plugin || !outbound?.sendPoll) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, `unsupported poll channel: ${channel}`),
-          );
+          respondError(respond, ErrorCodes.INVALID_REQUEST, `unsupported poll channel: ${channel}`);
           return undefined;
         }
         return { cfg, channel, plugin, outbound, sendPoll: outbound.sendPoll };
@@ -867,7 +842,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         };
         const threadId = normalizeOptionalString(request.threadId);
         try {
-          const resolvedTarget = resolveGatewayOutboundTarget({
+          const resolvedTarget = await resolveGatewayOutboundTarget({
             channel,
             to: request.to.trim(),
             cfg,

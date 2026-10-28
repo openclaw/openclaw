@@ -4,7 +4,7 @@ const CJK_RE = /[\u3040-\u309f\u30a0-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7
 const CJK_RUN_RE = new RegExp(`${CJK_RE.source}+`, "g");
 
 // Only adjacent CJK characters form bigrams: "我喜欢hello你好" must not yield "欢你".
-export function tokenize(text: string): Set<string> {
+function tokenize(text: string): Set<string> {
   const lower = normalizeLowercaseStringOrEmpty(text).normalize("NFC");
   // Keep CJK in its existing bigram/unigram lane; word marks stay attached to a base.
   const words = lower.replace(CJK_RUN_RE, " ").match(/[\p{L}\p{N}_][\p{L}\p{M}\p{N}_]*/gu) ?? [];
@@ -25,7 +25,7 @@ export function tokenize(text: string): Set<string> {
   return tokens;
 }
 
-export function jaccardSimilarity(setA: Set<string>, setB: Set<string>): number {
+function jaccardSimilarity(setA: Set<string>, setB: Set<string>): number {
   if (setA.size === 0 && setB.size === 0) {
     return 1;
   }
@@ -43,14 +43,28 @@ export function jaccardSimilarity(setA: Set<string>, setB: Set<string>): number 
   return intersectionSize / unionSize;
 }
 
+export type PreparedSimilarityText = {
+  tokens: Set<string>;
+  // Set only for token-less text, which compares by literal equality.
+  emptyTokenText: string | undefined;
+};
+
+// Tokenize once so repeated comparisons against the same text skip re-tokenizing.
+export function prepareSimilarityText(text: string): PreparedSimilarityText {
+  const tokens = tokenize(text);
+  return {
+    tokens,
+    emptyTokenText: tokens.size === 0 ? normalizeLowercaseStringOrEmpty(text) : undefined,
+  };
+}
+
 // Distinct text outside the tokenizer's alphabet must not collapse as two empty sets.
-export function textSimilarity(contentA: string, contentB: string): number {
-  const tokensA = tokenize(contentA);
-  const tokensB = tokenize(contentB);
-  if (tokensA.size === 0 && tokensB.size === 0) {
-    return normalizeLowercaseStringOrEmpty(contentA) === normalizeLowercaseStringOrEmpty(contentB)
-      ? 1
-      : 0;
+export function preparedTextSimilarity(
+  a: PreparedSimilarityText,
+  b: PreparedSimilarityText,
+): number {
+  if (a.tokens.size === 0 && b.tokens.size === 0) {
+    return a.emptyTokenText === b.emptyTokenText ? 1 : 0;
   }
-  return jaccardSimilarity(tokensA, tokensB);
+  return jaccardSimilarity(a.tokens, b.tokens);
 }

@@ -17,16 +17,6 @@ describe("summarizeToolGroup", () => {
     ...extra,
   });
 
-  it("counts prepared operations without copying their free-form titles", () => {
-    expect(
-      summarizeToolGroup([
-        prepared("first", "Check samples", { name: "custom_tool" }),
-        prepared("second", "Edit report", { name: "edit" }),
-        prepared("third", "Check samples"),
-      ]),
-    ).toBe("1 edit · 2 other operations");
-  });
-
   it("counts launched subagents apart from the launcher's other operations", () => {
     const launches = ["story", "puzzle", "cafe"].map((id) =>
       prepared(`tool:${id}`, "Sub-agent", { name: "sessions_spawn", toolCallId: id }),
@@ -68,8 +58,9 @@ describe("summarizeToolGroup", () => {
         prepared("approval", "Write report", { status: "blocked" }),
         prepared("steering", "Read context", { status: "skipped" }),
         prepared("unknown", "Outcome unknown", { status: undefined }),
+        prepared("unpaired", "Run build", { status: undefined, unpairedCall: true }),
       ]),
-    ).toBe("4 other operations · 1 failed · 1 blocked · 1 skipped · 1 unknown");
+    ).toBe("5 other operations · 1 failed · 1 blocked · 1 skipped · 1 unknown");
   });
 
   it("keeps the diagnostic disclosure label when all prepared work is quiet", () => {
@@ -77,20 +68,5 @@ describe("summarizeToolGroup", () => {
       summarizeToolGroup([prepared("quiet", "Wait", { hideFromChannelProgress: true })]),
     );
     expect(summarizeToolGroup([])).not.toBe("");
-  });
-
-  it("bounds dense summaries independently of command, title, and custom-name length", () => {
-    const items = Array.from({ length: 500 }, (_, index) =>
-      prepared(`call-${index}`, `print text → ${"/workspace/deep/path ".repeat(100)}`, {
-        name: index % 2 === 0 ? "exec" : `custom_${"long".repeat(100)}_${index}`,
-      }),
-    );
-    expect(summarizeToolGroup(items)).toBe("250 commands · 250 other operations");
-    expect(summarizeToolGroup([prepared("custom", "constructor", { name: "constructor" })])).toBe(
-      "1 other operation",
-    );
-    expect(
-      summarizeToolGroup([prepared("command", "Native command", { commandBearing: true })]),
-    ).toBe("1 command");
   });
 });

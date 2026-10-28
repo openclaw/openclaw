@@ -2,13 +2,19 @@ import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { loadJsonFileThroughSymlink } from "../infra/json-file.js";
+import {
+  attestClaudeNativeLoginOwner,
+  readClaudeNativeLoginOwner,
+} from "../plugin-sdk/provider-auth-claude-compat.js";
 import type { OAuthProvider } from "./auth-profiles/types.js";
 
 const CODEX_CLI_AUTH_FILENAME = "auth.json";
@@ -76,6 +82,22 @@ export function resolveCodexCliHomePath(codexHome?: string, env: NodeJS.ProcessE
 function readCodexAuthMode(data: Record<string, unknown>): string {
   const authMode = typeof data.auth_mode === "string" ? data.auth_mode.toLowerCase() : undefined;
   return authMode || (typeof data.OPENAI_API_KEY === "string" ? "api_key" : "chatgpt");
+}
+
+/** Presence is only a discovery hint; Codex verifies the login without exporting its tokens. */
+export function hasCodexCliAuthFile(codexHome?: string): boolean {
+  try {
+    const file = fs.statSync(
+      path.join(resolveCodexCliHomePath(codexHome), CODEX_CLI_AUTH_FILENAME),
+    );
+    return file.isFile() && file.size > 0;
+  } catch (error) {
+    const code = extractErrorCode(error);
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return false;
+    }
+    throw error;
+  }
 }
 
 function readFileMtimeMs(filePath: string): number | null {
@@ -461,4 +483,56 @@ export function readGeminiCliCredentialsCached(
   options?: CliFileCredentialOptions,
 ): GeminiCliCredential | null {
   return readCachedGemini(options);
+}
+
+/** Native login owner attested at a boundary that may wait on the network. */
+export type NativeCliLoginAttestation = {
+  /** Non-secret owner reference, set only when the provider attested the credential. */
+  owner?: string;
+  /** From this time the CLI rotates the credential before it accepts a prompt. */
+  refreshDueAt?: number;
+};
+
+/**
+ * Attestation sends the CLI's own access token to its provider, so it runs only when the
+ * owning plugin opts in. For Claude that is
+ * `plugins.entries.anthropic.config.historyRecovery.attestNativeLogin: true`. Off by default:
+ * the native login then has no owner and history stays refused, as before.
+ */
+export function isNativeCliLoginAttestationEnabled(
+  backendId: string,
+  config: OpenClawConfig | undefined,
+): boolean {
+  const pluginConfig = asOptionalRecord(config?.plugins?.entries?.anthropic?.config);
+  return (
+    backendId === "claude-cli" &&
+    asOptionalRecord(pluginConfig?.historyRecovery)?.attestNativeLogin === true
+  );
+}
+
+/**
+ * Owner of the native login a local run of this CLI backend would use under
+ * `env`, attested by the provider for the credential itself rather than read
+ * from local account metadata. No owner when the backend has no native login or
+ * the attestation fails; callers must then treat history as unknown.
+ */
+export async function resolveNativeCliLoginOwner(
+  backendId: string,
+  /** Environment the CLI process receives; the Gateway process is not the identity source. */
+  env: NodeJS.ProcessEnv,
+): Promise<NativeCliLoginAttestation> {
+  return backendId === "claude-cli" ? await attestClaudeNativeLoginOwner({ env }) : {};
+}
+
+/**
+ * Synchronous recheck for spawn, send and commit boundaries: the owner this
+ * process already attested for the credential `env` selects now, or undefined
+ * when that credential changed since and has not been attested. Never waits on
+ * the network.
+ */
+export function readAttestedNativeCliLoginOwner(
+  backendId: string,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  return backendId === "claude-cli" ? readClaudeNativeLoginOwner({ env }) : undefined;
 }

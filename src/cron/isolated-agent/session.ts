@@ -8,7 +8,6 @@ import {
   type resolveSessionLifecycleTimestamps,
   resolveSessionWorkStartError,
 } from "../../config/sessions/lifecycle.js";
-import { hasSessionAutoModelFallbackProvenance } from "../../config/sessions/model-override-provenance.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   evaluateSessionFreshness,
@@ -24,6 +23,7 @@ import { preserveCreationStamp } from "../../config/sessions/session-entry-prove
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveCarriedCronModelSelection } from "./session-carried-model.js";
 
 const FRESH_CRON_CARRIED_PREFERENCE_FIELDS = [
   "chatType",
@@ -81,39 +81,9 @@ function copySessionFields<K extends keyof SessionEntry>(
   }
 }
 
-function preserveNonAutoModelOverride(target: Partial<SessionEntry>, entry: SessionEntry): void {
-  if (entry.modelOverrideSource === "default") {
-    target.modelOverrideSource = "default";
-    return;
-  }
-  const recoveredAutoFallbackOverride =
-    entry.modelOverrideSource === undefined && hasSessionAutoModelFallbackProvenance(entry);
-  if (entry.modelOverrideSource !== "auto" && !recoveredAutoFallbackOverride) {
-    let preservedModelSelection = false;
-    if (entry.modelOverride !== undefined) {
-      target.modelOverride = entry.modelOverride;
-      preservedModelSelection = true;
-    }
-    if (entry.providerOverride !== undefined) {
-      target.providerOverride = entry.providerOverride;
-    }
-    if (entry.modelOverrideSource !== undefined) {
-      target.modelOverrideSource = entry.modelOverrideSource;
-    }
-    if (entry.modelOverrideRouteResolution !== undefined) {
-      target.modelOverrideRouteResolution = entry.modelOverrideRouteResolution;
-    }
-    // Runtime overrides qualify an explicit model selection; carrying one alone
-    // would pin a fresh cron session to a stale engine after its model resets.
-    if (preservedModelSelection && entry.agentRuntimeOverride !== undefined) {
-      target.agentRuntimeOverride = entry.agentRuntimeOverride;
-    }
-  }
-}
-
 function preserveUserAuthOverride(target: Partial<SessionEntry>, entry: SessionEntry): void {
   const source = resolveSessionAuthProfileOverrideSource(entry);
-  if (source === "user") {
+  if (source === "user" || source === "user-link") {
     if (entry.authProfileOverride !== undefined) {
       target.authProfileOverride = entry.authProfileOverride;
     }
@@ -126,7 +96,7 @@ function preserveUserAuthOverride(target: Partial<SessionEntry>, entry: SessionE
 
 function sanitizeFreshCronSessionEntry(
   entry: SessionEntry,
-  options: { preserveAmbientContext: boolean },
+  options: { preserveAmbientContext: boolean; carryInference: boolean },
 ): Partial<SessionEntry> {
   const next: Partial<SessionEntry> = {};
 
@@ -140,8 +110,10 @@ function sanitizeFreshCronSessionEntry(
     copySessionFields(next, entry, AMBIENT_SESSION_CONTEXT_FIELDS);
     Object.assign(next, preserveSessionInheritedToolPolicy(entry));
   }
-  preserveNonAutoModelOverride(next, entry);
-  preserveUserAuthOverride(next, entry);
+  if (options.carryInference) {
+    Object.assign(next, resolveCarriedCronModelSelection(entry));
+    preserveUserAuthOverride(next, entry);
+  }
 
   return next;
 }
@@ -173,6 +145,12 @@ type CronSessionParams = {
    */
   exactRunSession?: boolean;
   hookExternalContentSource?: SessionEntry["hookExternalContentSource"];
+  /**
+   * The job recorded its inference runtime and account at creation. A differing source
+   * row then seeds no model, runtime or account selection, so a creating conversation
+   * that later switches model or runtime does not change the job's runs.
+   */
+  inferenceCaptured?: boolean;
 };
 
 export async function prepareCronSession(params: CronSessionParams) {
@@ -196,7 +174,7 @@ export async function prepareCronSession(params: CronSessionParams) {
   });
 }
 
-/** Resolves prepared rows; heartbeat can supply its writer-owned current row. */
+/** Resolves prepared rows for ordinary cron execution. */
 export function resolveCronSession(
   params: CronSessionParams & {
     store: Record<string, SessionEntry>;
@@ -215,16 +193,9 @@ export function resolveCronSession(
   const sourceSessionDiffers = Boolean(sourceSessionKey && sourceSessionKey !== params.sessionKey);
   const targetEntry = store[params.sessionKey];
   const entry = store[sourceSessionKey || params.sessionKey];
-  // Guard the run's target row even when a differing source session seeds the
-  // carried preferences. A forced isolated heartbeat may replace its archived
-  // synthetic row, but trusted initialization must still finish first.
-  const canRollArchivedHeartbeat =
-    params.forceNew === true &&
-    targetEntry?.archivedAt !== undefined &&
-    targetEntry.initializationPending !== true &&
-    Boolean(targetEntry.heartbeatIsolatedBaseSessionKey?.trim());
+  // Guard the target row even when a differing source seeds its preferences.
   const sessionWorkStartError = resolveSessionWorkStartError(params.sessionKey, targetEntry);
-  if (sessionWorkStartError && !canRollArchivedHeartbeat) {
+  if (sessionWorkStartError) {
     throw new Error(sessionWorkStartError);
   }
 
@@ -273,7 +244,10 @@ export function resolveCronSession(
 
   const baseEntry = entry
     ? isNewSession
-      ? sanitizeFreshCronSessionEntry(entry, { preserveAmbientContext: !params.forceNew })
+      ? sanitizeFreshCronSessionEntry(entry, {
+          preserveAmbientContext: !params.forceNew,
+          carryInference: !(sourceSessionDiffers && params.inferenceCaptured),
+        })
       : entry
     : undefined;
 
@@ -295,7 +269,9 @@ export function resolveCronSession(
     ),
     sessionId,
     lifecycleRevision,
-    updatedAt: params.nowMs,
+    // Preparing a scheduled check is not conversation activity. New rows still
+    // need an initial timestamp; visible results advance existing rows later.
+    updatedAt: targetEntry?.updatedAt ?? params.nowMs,
     sessionStartedAt: isNewSession
       ? params.nowMs
       : (baseEntry?.sessionStartedAt ?? params.lifecycleTimestamps.sessionStartedAt),

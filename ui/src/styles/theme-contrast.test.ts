@@ -26,6 +26,7 @@ describe("Control UI theme contrast", () => {
   const groupedCss = readFileSync(path.join(here, "chat", "grouped.css"), "utf8");
   const chatComposerCss = readFileSync(path.join(here, "chat", "composer.css"), "utf8");
   const layoutCss = readFileSync(path.join(here, "layout.css"), "utf8");
+  const settingsCss = readFileSync(path.join(here, "settings.css"), "utf8");
 
   it("keeps chat timestamps and slash-arg hints AA without opacity dimming", () => {
     const timestampRule = readRuleBody(groupedCss, ".chat-group-timestamp");
@@ -39,8 +40,8 @@ describe("Control UI theme contrast", () => {
   });
 
   it("keeps sidebar metadata on the AA-tested muted token without opacity dimming", () => {
-    const groupLabelRule = readRuleBody(layoutCss, ".settings-sidebar__group-label");
-    const buildRule = readRuleBody(layoutCss, ".settings-sidebar__footer .sidebar-footer-build");
+    const groupLabelRule = readRuleBody(settingsCss, ".settings-sidebar__group-label");
+    const buildRule = readRuleBody(settingsCss, ".settings-sidebar__footer .sidebar-footer-build");
     const sessionLabelRule = readRuleBody(
       layoutCss,
       ".sidebar-recent-sessions__label-text,\n.sidebar-session-catalog-host__label",

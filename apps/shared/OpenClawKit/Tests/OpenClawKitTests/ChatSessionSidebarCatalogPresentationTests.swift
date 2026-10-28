@@ -195,7 +195,6 @@ struct ChatSessionSidebarCatalogPresentationTests {
         let response = Data(self.sourceJSON.utf8)
         events.continuation.yield(.connected(.init(
             profileID: "profile",
-            changedEvents: false,
             allowsArchive: true,
             request: { _ in response },
             isCurrent: { true },

@@ -8,7 +8,6 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { loadGatewayConfigRevisionProjector } from "./config-revision-token.js";
 import { createGatewayRequest, createHooksConfig } from "./hooks-test-helpers.js";
 import { createGatewayHttpServer } from "./server-http.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
@@ -72,7 +71,7 @@ export function createHookRequest(params?: {
 }
 
 /** Build a ServerResponse-like mock and body reader for handler tests. */
-export function createResponse(): {
+export function createResponse(req = new IncomingMessage(new Socket())): {
   res: ServerResponse;
   setHeader: ReturnType<typeof vi.fn>;
   end: ReturnType<typeof vi.fn>;
@@ -98,7 +97,7 @@ export function createResponse(): {
     resolveEnd();
   });
   const res = Object.assign(new EventEmitter(), {
-    req: new IncomingMessage(new Socket()),
+    req,
     writableFinished: false,
     headersSent: false,
     statusCode: 200,
@@ -142,10 +141,7 @@ export async function dispatchRequest(
   }
 }
 
-export async function withGatewayTempConfig(
-  prefix: string,
-  run: () => Promise<void>,
-): Promise<void> {
+async function withGatewayTempConfig(prefix: string, run: () => Promise<void>): Promise<void> {
   await withTempConfig({
     cfg: { gateway: { trustedProxies: [] } },
     prefix,
@@ -157,10 +153,7 @@ export function createTestGatewayServer(options: {
   resolvedAuth: ResolvedGatewayAuth;
   overrides?: GatewayServerOptions;
 }): GatewayHttpServer {
-  const context = createGatewayRequestContext({
-    ...makeContextParams(),
-    configRevisionProjector: loadGatewayConfigRevisionProjector(),
-  });
+  const context = createGatewayRequestContext(makeContextParams());
   context.resolveGatewayContext = () => context;
   return createGatewayHttpServer({
     clients: new Set(),

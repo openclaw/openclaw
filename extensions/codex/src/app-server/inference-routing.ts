@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { defineCodexBuildState } from "../build-state.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
@@ -23,6 +24,13 @@ import { isJsonObject, type CodexConfigReadResponse, type JsonObject } from "./p
 import { CODEX_RESPONSES_OAUTH_PROVIDER, type CodexResponsesOAuth } from "./responses-oauth.js";
 import type { CodexBindingAuthority, CodexAppServerThreadBinding } from "./session-binding.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
+
+const loadSsrfRuntime = createLazyRuntimeModule(() => import("openclaw/plugin-sdk/ssrf-runtime"));
+const loadInferenceProxy = createLazyRuntimeModule(() => import("./inference-proxy.js"));
+const loadNativeSubagentMonitor = createLazyRuntimeModule(
+  () => import("./native-subagent-monitor.js"),
+);
+const loadInferenceDispatch = createLazyRuntimeModule(() => import("./inference-dispatch.js"));
 
 export type CodexInferenceProviderRoutes = ReadonlyMap<string, CodexInferenceProxy>;
 type ThreadRoutes = {
@@ -93,12 +101,15 @@ export function ownCodexInferenceClient(
   };
   client.addCloseHandler(close);
   client.addNotificationHandler((notification) => {
+    // Unsubscribe releases the subscription, but native configuration stays loaded until teardown.
     if (
-      notification.method === "thread/closed" &&
+      (notification.method === "thread/closed" ||
+        notification.method === "thread/archived" ||
+        notification.method === "thread/deleted") &&
       isJsonObject(notification.params) &&
       typeof notification.params.threadId === "string"
     ) {
-      owner.threads.delete(notification.params.threadId);
+      forgetCodexInferenceThread(client, notification.params.threadId);
     }
     if (notification.method !== "account/updated" || !owner.authRoute) {
       return;
@@ -282,7 +293,7 @@ async function prepareCodexInferenceRoute(params: {
     configured ||
       (type === "apiKey" ? "https://api.openai.com/v1" : "https://chatgpt.com/backend-api/codex"),
   );
-  const { isBlockedHostnameOrIp } = await import("openclaw/plugin-sdk/ssrf-runtime");
+  const { isBlockedHostnameOrIp } = await loadSsrfRuntime();
   assertCurrent();
   if (isBlockedHostnameOrIp(target.hostname)) {
     return unsupported();
@@ -334,13 +345,14 @@ async function prepareCodexInferenceRoute(params: {
         );
       }
       pending = Promise.all([
-        import("./inference-proxy.js"),
-        import("./native-subagent-monitor.js"),
-        import("./inference-dispatch.js"),
+        loadInferenceProxy(),
+        loadNativeSubagentMonitor(),
+        loadInferenceDispatch(),
       ]).then(([{ createCodexInferenceProxy }, native, { createCodexInferenceModelBinding }]) => {
         assertClient();
         return createCodexInferenceProxy({
           upstream: target,
+          configurationIdentity: key,
           assertCurrent: assertClient,
           oauth: owner.oauth,
           preserveAzureUrlFeatures,
@@ -596,7 +608,7 @@ export function bindCodexInferenceThread(
     throw new Error("Codex inference client is closed");
   }
   if (!route) {
-    owner.threads.delete(threadId);
+    forgetCodexInferenceThread(client, threadId);
     return;
   }
   route.assertCurrent();
@@ -637,7 +649,17 @@ export function bindCodexInferenceThread(
         },
       })
     : undefined;
+  const previous = owner.threads.get(threadId)?.route;
+  if (previous && previous !== route) {
+    previous.context.forget(threadId);
+  }
   owner.threads.set(threadId, { route, providers: projected, qualification });
+}
+
+function forgetCodexInferenceThread(client: CodexAppServerClient, threadId: string): void {
+  const owner = owners.get(client);
+  owner?.threads.get(threadId)?.route.context.forget(threadId);
+  owner?.threads.delete(threadId);
 }
 
 export function getCodexInferenceThread(

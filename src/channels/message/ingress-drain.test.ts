@@ -537,6 +537,65 @@ describe("channel ingress drain", () => {
     });
   });
 
+  it("refreshClaim rejection is logged without aborting the handler", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 1_000;
+      const queue = createTestIngressQueue(stateDir, { now: () => clock });
+      await queue.enqueue("evt-refresh-reject", { text: "x" }, { laneKey: "l1" });
+
+      const refreshClaim = vi
+        .fn<NonNullable<typeof queue.refreshClaim>>()
+        .mockRejectedValueOnce(new Error("refresh storage failed"))
+        .mockResolvedValue(true);
+      queue.refreshClaim = refreshClaim;
+
+      const logs: string[] = [];
+      let sawAbort = false;
+      let adoptError: unknown;
+      const { promise: holdDispatch, resolve: releaseDispatch } = createDeferred();
+
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        now: () => clock,
+        claimLeaseMs: 3_000,
+        onLog: (message) => logs.push(message),
+        dispatchClaimedEvent: async (_event, lifecycle) => {
+          lifecycle.abortSignal.addEventListener(
+            "abort",
+            () => {
+              sawAbort = true;
+            },
+            { once: true },
+          );
+          await holdDispatch;
+          try {
+            await lifecycle.onAdopted();
+          } catch (err) {
+            adoptError = err;
+          }
+        },
+      });
+
+      await drain.drainOnce();
+      clock += 1_000;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(refreshClaim).toHaveBeenCalledTimes(1);
+      clock += 1_000;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(refreshClaim).toHaveBeenCalledTimes(2);
+
+      releaseDispatch();
+      await drain.waitForIdle();
+      expect(sawAbort).toBe(false);
+      expect(adoptError).toBeUndefined();
+      expect(await queue.listClaims()).toEqual([]);
+      expect(logs).toEqual([
+        "ingress drain: claim refresh failed for event evt-refresh-reject; holding claim: refresh storage failed",
+      ]);
+      drain.dispose();
+    });
+  });
+
   it("late supersede predicate does not kill an adopted turn", async () => {
     // Failure window: async shouldSupersedePending resolves after the pending
     // handler has already adopted — must revalidate and no-op.

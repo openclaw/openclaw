@@ -3,15 +3,23 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
+import type { MessagePort } from "node:worker_threads";
 import { createFileWatchNotifier, root } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   buildFileEntry,
   buildMultimodalChunkForIndexing,
   listMemoryFiles,
   readMemoryFile,
-  type MemoryWorkspaceFiles,
-  type MemoryWorkspaceWatchRequest,
+} from "openclaw/plugin-sdk/memory-core-host-engine-fs";
+import type {
+  MemoryWorkspaceFiles,
+  MemoryWorkspaceWatchRequest,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+
+export async function serveLocalMemoryWatches(port: MessagePort): Promise<void> {
+  const worker = await import("./memory-watch.worker.js");
+  await worker.serveLocalMemoryWatches(port);
+}
 
 type MemoryWorkspaceMaintenance = NonNullable<MemoryWorkspaceFiles["maintenance"]>;
 
@@ -19,7 +27,9 @@ type MaintenanceCommand = {
   [K in keyof MemoryWorkspaceMaintenance]: {
     operation: "maintenance";
     method: K;
-    args: Parameters<MemoryWorkspaceMaintenance[K]>;
+    args: K extends "writeDreams" | "appendCorpus"
+      ? [filePath: string, content: string]
+      : Parameters<MemoryWorkspaceMaintenance[K]>;
   };
 }[keyof MemoryWorkspaceMaintenance];
 

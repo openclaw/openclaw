@@ -3,6 +3,7 @@ import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coerc
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import {
   CONTEXT_OVERFLOW_ERROR_MESSAGE,
@@ -44,6 +45,8 @@ export const ERROR_DETAILS_HINT =
   "For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
 
 const STORAGE_FAILURE_COPY: Record<GatewayStorageFailure, string> = {
+  unavailable:
+    "The database connection was lost. This operation was rolled back; nothing from it was saved. Please retry.",
   SQLITE_BUSY:
     "OpenClaw is busy saving your conversation. Wait a moment, then check the conversation before trying again.",
   SQLITE_LOCKED:
@@ -56,6 +59,10 @@ const STORAGE_FAILURE_COPY: Record<GatewayStorageFailure, string> = {
     "OpenClaw couldn't save your conversation. Check the storage on the computer running OpenClaw before continuing.",
   transcript_writer_fenced:
     "This conversation changed while OpenClaw was working. Check its latest messages before continuing.",
+  session_actor_reconciliation:
+    "OpenClaw couldn't confirm the last update to this conversation. Some work may have been saved. Wait for current work to finish, then reopen the conversation and check its history before trying again. If it still fails, restart OpenClaw.",
+  "57014":
+    "PostgreSQL canceled a database operation or its statement timed out. Check the conversation for completed work before trying again. If it happens again, ask the operator to check PostgreSQL timeouts and server activity.",
 };
 
 const RUNTIME_COORDINATION_FAILURE_CODE_COPY: Readonly<Record<string, string>> = {
@@ -90,6 +97,13 @@ const ASSISTANT_REQUEST_FAILURE_COPY = {
   unknown: "",
 } satisfies Record<FailoverReason, string>;
 
+/** Plain storage copy for length-limited surfaces such as session rows. */
+export function renderStorageFailureSummary(
+  storageFailure: GatewayStorageFailure | undefined,
+): string | undefined {
+  return storageFailure ? STORAGE_FAILURE_COPY[storageFailure] : undefined;
+}
+
 /** Render classified facts without exposing raw provider response text. */
 export function renderAssistantRequestFailureCopy(
   facts: AssistantRequestFailureCopyFacts,
@@ -109,7 +123,7 @@ export function renderAssistantRequestFailureCopy(
     return `⚠️ ${copy}`;
   }
   const hasStatus =
-    typeof facts.status === "number" &&
+    facts.status !== undefined &&
     Number.isInteger(facts.status) &&
     facts.status >= 100 &&
     facts.status <= 599;
@@ -306,6 +320,7 @@ export function renderRecordedAssistantFailureCopy(message: {
     return formatCopy;
   }
   const classifiedCopy = renderAssistantRequestFailureCopy({
+    storageFailure: classifyGatewayStorageFailure(message),
     code,
     status,
     // The legacy timeout retry bucket also includes explicit server failures.

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { bundledPluginCallsite } from "./lib/bundled-plugin-paths.mjs";
 import { runCallsiteGuard } from "./lib/callsite-guard.mts";
 import {

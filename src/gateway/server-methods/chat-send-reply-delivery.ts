@@ -1,4 +1,5 @@
 import type { ReplyDeliveryState } from "../../agents/reply-completion.js";
+import { warnLegacyAgentRunStart } from "../../auto-reply/agent-run-start.js";
 import type { PreparedReplyTranscriptStart } from "../../auto-reply/get-reply-options.types.js";
 import type { SessionTranscriptWatermark } from "../../config/sessions/session-accessor.sqlite-transcript-watermark-read.js";
 import { readSessionTranscriptWatermark } from "../../config/sessions/session-accessor.sqlite-transcript-watermark.js";
@@ -11,7 +12,7 @@ export function resolveChatReplyTranscriptStart(
     backingSessionId?: string;
   },
   current: { entry?: { sessionId?: string }; storePath: string },
-  prepared?: PreparedReplyTranscriptStart | null,
+  prepared: PreparedReplyTranscriptStart | null,
 ) {
   const scope = {
     agentId: session.agentId,
@@ -28,16 +29,36 @@ export function resolveChatReplyTranscriptStart(
   ) {
     return undefined;
   }
-  // Released SDK callbacks may omit prepared facts; bundled producers supply them.
-  const watermark =
-    prepared === undefined && scope.sessionId
-      ? readSessionTranscriptWatermark({ ...scope, sessionId: scope.sessionId })
-      : (prepared ?? { generation: null, maxSeq: null });
+  const watermark = prepared ?? { generation: null, maxSeq: null };
   return {
     sessionId: scope.sessionId,
     generation: watermark.generation,
     afterSeq: watermark.maxSeq ?? 0,
   };
+}
+
+/** Released SDK producers may still omit transcript facts until the next SDK major. */
+export function resolveLegacyChatReplyTranscriptStart(
+  session: Parameters<typeof resolveChatReplyTranscriptStart>[0],
+  current: Parameters<typeof resolveChatReplyTranscriptStart>[1],
+) {
+  warnLegacyAgentRunStart();
+  const sessionId = current.entry?.sessionId ?? session.backingSessionId;
+  const prepared = sessionId
+    ? {
+        agentId: session.agentId,
+        sessionId,
+        sessionKey: session.sessionKey,
+        storePath: current.storePath,
+        ...readSessionTranscriptWatermark({
+          agentId: session.agentId,
+          sessionId,
+          sessionKey: session.sessionKey,
+          storePath: current.storePath,
+        }),
+      }
+    : null;
+  return resolveChatReplyTranscriptStart(session, current, prepared);
 }
 
 /** Decide receipt coverage from one current anchor snapshot and the observed transcript bounds. */

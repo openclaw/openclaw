@@ -1,0 +1,22 @@
+{
+  "data": [
+    {
+      "id": "meta/muse-wonder",
+      "canonical_slug": "meta/muse-wonder-20261012",
+      "name": "Meta: Muse Wonder",
+      "context_length": 1048576
+    },
+    {
+      "id": "meta/muse-spark-1.3-contributor",
+      "canonical_slug": "meta/muse-spark-1.3-contributor-20260902",
+      "name": "Meta: Muse Spark 1.3 Contributor",
+      "context_length": 1048576
+    },
+    {
+      "id": "meta/muse-spark-1.3",
+      "canonical_slug": "meta/muse-spark-1.3-20260902",
+      "name": "Meta: Muse Spark 1.3",
+      "context_length": 1048576
+    }
+  ]
+}

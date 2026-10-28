@@ -13,8 +13,27 @@ import {
 } from "../../config/model-provider-config.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { TranscriptTokenEstimate } from "./agent-runner-memory-transcript-context.js";
 
-export function resolveEffectivePromptTokens(
+// Leave room for large assistant outputs when checking near-threshold usage.
+export const TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS = 8192;
+
+/** Refresh unknown usage, or include the last output when it could cross the flush threshold. */
+export function shouldReadMemoryFlushTranscript(params: {
+  persistedPromptTokens?: number;
+  promptTokenEstimate?: number;
+  flushThreshold: number;
+}): boolean {
+  return (
+    params.persistedPromptTokens === undefined ||
+    (params.promptTokenEstimate !== undefined &&
+      params.flushThreshold > 0 &&
+      params.persistedPromptTokens + params.promptTokenEstimate >=
+        params.flushThreshold - TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS)
+  );
+}
+
+function resolveEffectivePromptTokens(
   basePromptTokens?: number,
   lastOutputTokens?: number,
   promptTokenEstimate?: number,
@@ -27,14 +46,31 @@ export function resolveEffectivePromptTokens(
   return base + output + estimate;
 }
 
+export function resolveProjectedPromptTokens(
+  persistedPromptTokens: number | undefined,
+  promptTokenEstimate: number | undefined,
+  transcript: TranscriptTokenEstimate | undefined,
+): number {
+  const project = (promptTokens: number | undefined, outputTokens: number | undefined) =>
+    promptTokens !== undefined
+      ? resolveEffectivePromptTokens(promptTokens, outputTokens, promptTokenEstimate)
+      : 0;
+  return Math.max(
+    project(persistedPromptTokens, transcript?.outputTokens),
+    project(
+      transcript?.promptTokens,
+      transcript?.promptIncludesOutput ? undefined : transcript?.outputTokens,
+    ),
+  );
+}
+
 export function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
   const trimmed = normalizeOptionalString(prompt);
   if (!trimmed) {
     return undefined;
   }
   const message: AgentMessage = { role: "user", content: trimmed, timestamp: Date.now() };
-  const tokens = asPositiveFiniteNumber(estimateMessagesTokens([message]));
-  return tokens === undefined ? undefined : Math.ceil(tokens);
+  return Math.ceil(estimateMessagesTokens([message]));
 }
 
 export function resolveCompactionThreshold(params: {
@@ -144,12 +180,7 @@ export function shouldRunPreflightCompaction(params: {
     projectedTokens === undefined
       ? resolveFreshSessionTotalTokens(params.entry)
       : Math.floor(projectedTokens);
-  return (
-    typeof totalTokens === "number" &&
-    totalTokens > 0 &&
-    params.threshold > 0 &&
-    totalTokens >= params.threshold
-  );
+  return totalTokens !== undefined && params.threshold > 0 && totalTokens >= params.threshold;
 }
 
 /** One flush per compaction cycle, regardless of token or transcript-size trigger. */
@@ -157,6 +188,5 @@ export function hasAlreadyFlushedForCurrentCompaction(
   entry: Pick<SessionEntry, "compactionCount" | "memoryFlush">,
 ): boolean {
   const compactionCount = entry.compactionCount ?? 0;
-  const lastFlushAt = entry.memoryFlush?.compactionCount;
-  return typeof lastFlushAt === "number" && lastFlushAt === compactionCount;
+  return entry.memoryFlush?.compactionCount === compactionCount;
 }

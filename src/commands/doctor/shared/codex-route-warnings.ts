@@ -1,4 +1,3 @@
-// Doctor warnings and repairs for legacy OpenAI Codex model/provider routing.
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeFastMode,
@@ -70,7 +69,7 @@ function formatUnsupportedCompactionWarning(params: {
   fixHint: string;
 }): string {
   return [
-    "- Codex runtime uses native server-side compaction and ignores OpenClaw compaction summarizer overrides.",
+    "- Codex runtime ignores compaction.provider; compaction.model still applies to OpenClaw host summaries.",
     ...params.hits.map(
       (hit) => `- ${hit.path}: ${hit.value} is ignored while this agent uses Codex runtime.`,
     ),
@@ -424,7 +423,7 @@ export function collectCodexRouteWarnings(params: {
       formatUnsupportedCompactionWarning({
         hits: preservedSharedDefaultHits,
         fixHint:
-          "- Move or remove shared `agents.defaults.compaction.model/provider` settings manually; doctor keeps shared defaults while non-Codex agents can inherit them.",
+          "- Move or remove shared `agents.defaults.compaction.provider` manually; doctor keeps shared defaults while non-Codex agents can inherit them.",
       }),
     );
   }
@@ -444,7 +443,6 @@ export function collectCodexRouteWarnings(params: {
 export function maybeRepairCodexRoutes(params: {
   cfg: OpenClawConfigWithLegacyRoster;
   env?: NodeJS.ProcessEnv;
-  shouldRepair: boolean;
   blockedProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
 }): { cfg: OpenClawConfigWithLegacyRoster; warnings: string[]; changes: string[] } {
   const env = params.env ?? process.env;
@@ -461,13 +459,12 @@ export function maybeRepairCodexRoutes(params: {
     (hit) => hit.removable,
   );
   if (
-    !params.shouldRepair ||
-    (hits.length === 0 &&
-      disabledCodexPluginHits.length === 0 &&
-      unsupportedCompactionOverrides.length === 0 &&
-      legacyLosslessCompactionConfigs.length === 0 &&
-      !hasRemovableServiceTier &&
-      !blockedProviderPlan.warning)
+    hits.length === 0 &&
+    disabledCodexPluginHits.length === 0 &&
+    unsupportedCompactionOverrides.length === 0 &&
+    legacyLosslessCompactionConfigs.length === 0 &&
+    !hasRemovableServiceTier &&
+    !blockedProviderPlan.warning
   ) {
     return {
       cfg: params.cfg,

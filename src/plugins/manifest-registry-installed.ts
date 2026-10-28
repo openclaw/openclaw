@@ -1,6 +1,6 @@
 /** Builds manifest registry records from installed plugin index snapshots. */
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, omitUndefinedFields } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -11,6 +11,7 @@ import {
   type ChannelSetupFieldMetadata,
 } from "../channels/plugins/setup-contract.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
@@ -26,7 +27,6 @@ import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./install
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index.js";
 import {
   normalizeManifestObjectList,
-  omitUndefinedManifestFields,
   optionalManifestFields,
 } from "./manifest-capability-normalizers.js";
 import {
@@ -49,6 +49,7 @@ import {
   pluginCacheRealpathSync,
   readPluginCacheFile,
 } from "./plugin-cache-files.js";
+import { getPluginCache } from "./plugin-cache.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import { normalizePluginDependencySpecs } from "./status-dependencies-core.js";
 import type { PluginDependencySpecMap } from "./status-dependencies.types.js";
@@ -155,10 +156,12 @@ function normalizePackageChannelPersistedAuthState(
   }
   const specifier = normalizeOptionalString(persistedAuthState.specifier);
   const exportName = normalizeOptionalString(persistedAuthState.exportName);
-  return specifier || exportName
-    ? omitUndefinedManifestFields({
+  const exportNameAsync = normalizeOptionalString(persistedAuthState.exportNameAsync);
+  return specifier || exportName || exportNameAsync
+    ? omitUndefinedFields({
         specifier,
         exportName,
+        exportNameAsync,
         backingStore:
           persistedAuthState.backingStore === "plugin-state"
             ? ("plugin-state" as const)
@@ -208,7 +211,7 @@ function normalizePackageChannelCliOptions(
     }
     const valueType =
       option.valueType === "int" || option.valueType === "list" ? option.valueType : undefined;
-    return omitUndefinedManifestFields<PluginPackageChannelCliOption>({
+    return omitUndefinedFields<PluginPackageChannelCliOption>({
       flags,
       description,
       defaultValue:
@@ -460,7 +463,7 @@ function toPluginCandidate(
   const rootDir = resolveInstalledPluginRootDir(record);
   const packageMetadata = resolveInstalledPackageMetadata(record, env);
   return recordPluginCandidateInstallOwner(
-    omitUndefinedManifestFields({
+    omitUndefinedFields({
       idHint: record.pluginId,
       effectivePluginId: record.pluginId,
       source: record.source ?? resolveFallbackPluginSource(record),
@@ -574,7 +577,22 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
           })
         : params.index.diagnostics;
       if (params.manifestRegistry && !params.bundledChannelConfigCollector) {
-        return {
+        const cache = getInstalledPluginIndexFacts(params.index)
+          ? getPluginCache().metadata.preparedManifests
+          : undefined;
+        let selections = cache?.get(params.manifestRegistry);
+        const key = cache
+          ? JSON.stringify([
+              resolveInstalledManifestRegistryIndexFingerprint(params.index),
+              pluginIdSet ? [...pluginIdSet].toSorted() : null,
+              params.includeDisabled === true,
+            ])
+          : undefined;
+        const cached = key ? selections?.get(key) : undefined;
+        if (cached) {
+          return cached;
+        }
+        const prepared = {
           plugins: selectInstalledPluginManifestRecords(
             params.index,
             params.manifestRegistry,
@@ -583,6 +601,14 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
           ).map(normalizePreparedManifestRecord),
           diagnostics: [...diagnostics],
         };
+        if (cache && key) {
+          if (!selections) {
+            cache.set(params.manifestRegistry, (selections = new Map()));
+          }
+          selections.set(key, prepared);
+          pruneMapToMaxSize(selections, 64);
+        }
+        return prepared;
       }
       const resolveCandidate = prepareInstalledPluginCandidateResolver({
         config: params.config,

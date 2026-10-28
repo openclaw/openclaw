@@ -60,7 +60,7 @@ export async function prepareOwnedServiceParent(params: {
   assertPathAtOrInside(
     rootIdentity.realPath,
     parentIdentity.realPath,
-    "canonical Computer Use service parent",
+    "resolved Computer Use service parent",
   );
   return parentIdentity;
 }
@@ -103,16 +103,13 @@ export async function readRealDirectoryIdentity(
   }
 }
 
-export async function assertDirectoryIdentityStable(
-  expected: OwnedServiceParent,
-  label: string,
-): Promise<void> {
-  if (!(await directoryIdentityIsStable(expected))) {
+export function assertDirectoryIdentityStable(expected: OwnedServiceParent, label: string): void {
+  if (!directoryIdentityIsStable(expected)) {
     throw new Error(`${label} changed during refresh; refusing to mutate the replacement path.`);
   }
 }
 
-export async function directoryIdentityIsStable(expected: OwnedServiceParent): Promise<boolean> {
+export function directoryIdentityIsStable(expected: OwnedServiceParent): boolean {
   try {
     assertDirectoryIdentitySync(expected.logicalPath, expected);
     return true;

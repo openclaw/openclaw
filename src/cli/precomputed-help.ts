@@ -1,22 +1,12 @@
 import { getCommandPathWithRootOptions, isSimpleCommandHelpInvocation } from "./argv.js";
 import { PRECOMPUTED_SUBCOMMAND_HELP_NAMES } from "./precomputed-help-commands.js";
 
-const PRECOMPUTED_COMMAND_HELP_NAMES = new Set(["browser", "secrets", "nodes"] as const);
-
-const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = new Set(PRECOMPUTED_SUBCOMMAND_HELP_NAMES);
-
-function resolvePrecomputedCommandHelpName<T extends string>(
-  argv: string[],
-  commandNames: ReadonlySet<T>,
-): T | null {
-  if (!isSimpleCommandHelpInvocation(argv, commandNames)) {
-    return null;
-  }
-  const [commandName, extra] = getCommandPathWithRootOptions(argv, 2);
-  return extra === undefined
-    ? ([...commandNames].find((name) => name === commandName) ?? null)
-    : null;
-}
+const PRECOMPUTED_COMMAND_HELP_NAMES = new Set([
+  "browser",
+  "secrets",
+  "nodes",
+  ...PRECOMPUTED_SUBCOMMAND_HELP_NAMES,
+] as const);
 
 export async function tryOutputPrecomputedCommandHelp(argv: string[]): Promise<boolean> {
   const env = process.env;
@@ -24,14 +14,14 @@ export async function tryOutputPrecomputedCommandHelp(argv: string[]): Promise<b
     return false;
   }
 
-  const commandName = resolvePrecomputedCommandHelpName(argv, PRECOMPUTED_COMMAND_HELP_NAMES);
-  const subcommandName = commandName
-    ? null
-    : resolvePrecomputedCommandHelpName(argv, PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS);
-  if (subcommandName) {
-    const { outputPrecomputedSubcommandHelpText } = await import("./root-help-metadata.js");
-    return outputPrecomputedSubcommandHelpText(subcommandName);
+  if (!isSimpleCommandHelpInvocation(argv, PRECOMPUTED_COMMAND_HELP_NAMES)) {
+    return false;
   }
+  const [candidateName, extra] = getCommandPathWithRootOptions(argv, 2);
+  const commandName =
+    extra === undefined
+      ? ([...PRECOMPUTED_COMMAND_HELP_NAMES].find((name) => name === candidateName) ?? null)
+      : null;
   if (!commandName) {
     return false;
   }
@@ -44,11 +34,6 @@ export async function tryOutputPrecomputedCommandHelp(argv: string[]): Promise<b
     }
   }
 
-  const outputName = {
-    browser: "outputPrecomputedBrowserHelpText",
-    secrets: "outputPrecomputedSecretsHelpText",
-    nodes: "outputPrecomputedNodesHelpText",
-  } as const;
-  const output = (await import("./root-help-metadata.js"))[outputName[commandName]];
-  return output();
+  const { outputPrecomputedCommandHelpText } = await import("./root-help-metadata.js");
+  return outputPrecomputedCommandHelpText(commandName);
 }

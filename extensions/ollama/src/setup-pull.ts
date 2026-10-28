@@ -5,7 +5,7 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { buildOllamaBaseUrlSsrFPolicy, resolveOllamaApiBase } from "./provider-models.js";
 import { normalizeOllamaModelName } from "./setup-model-selection.js";
-import { checkNdjsonRecordCap } from "./stream-ndjson-cap.js";
+import { readOllamaNdjsonLines } from "./stream-ndjson.js";
 
 const OLLAMA_PULL_RESPONSE_TIMEOUT_MS = 30_000;
 const OLLAMA_PULL_STREAM_IDLE_TIMEOUT_MS = 300_000;
@@ -88,71 +88,47 @@ async function pullOllamaModelCore(params: {
       }
 
       const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let pendingRecordBytes = 0;
       const layers = new Map<string, { total: number; completed: number }>();
 
-      const parseLine = (line: string): OllamaPullResult | undefined => {
-        if (!line.trim()) {
-          return undefined;
-        }
+      for await (const line of readOllamaNdjsonLines(reader, {
+        decoder: new TextDecoder(),
+        read: () => readOllamaPullChunkWithIdleTimeout(reader),
+      })) {
+        let chunk: OllamaPullChunk | null;
         try {
-          const chunk = JSON.parse(line) as OllamaPullChunk;
-          if (chunk.error) {
-            return { ok: false, message: `Download failed: ${chunk.error}` };
-          }
-          if (!chunk.status || chunk.status === "success") {
-            return chunk.status ? { ok: true } : undefined;
-          }
-          if (chunk.total && chunk.completed !== undefined) {
-            layers.set(chunk.status, { total: chunk.total, completed: chunk.completed });
-            const totals = { total: 0, completed: 0 };
-            for (const layer of layers.values()) {
-              totals.total += layer.total;
-              totals.completed += layer.completed;
-            }
-            params.onStatus?.(
-              chunk.status,
-              totals.total > 0 ? Math.round((totals.completed / totals.total) * 100) : null,
-            );
-          } else {
-            params.onStatus?.(chunk.status, null);
-          }
+          chunk = JSON.parse(line) as OllamaPullChunk | null;
         } catch {
-          // Ignore malformed streaming lines from Ollama.
+          // Ignore malformed JSON lines from Ollama, not progress callback failures.
+          continue;
         }
-        return undefined;
-      };
-
-      try {
-        for (;;) {
-          const { done, value } = await readOllamaPullChunkWithIdleTimeout(reader);
-          if (done) {
-            const terminal = parseLine(buffer);
-            if (terminal) {
-              return terminal;
-            }
-            throw new Error("pull stream ended before success");
-          }
-          pendingRecordBytes = checkNdjsonRecordCap(value, pendingRecordBytes);
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-          for (const line of lines) {
-            const parsed = parseLine(line);
-            if (parsed) {
-              return parsed;
-            }
-          }
+        if (!chunk) {
+          continue;
         }
-      } finally {
-        // Overflow and parsed-error returns can leave unread response bytes.
-        // Start cancellation without awaiting a captured tee, then unlock so
-        // the guard's bounded dispatcher release can always run.
-        void reader.cancel().catch(() => undefined);
-        reader.releaseLock();
+        if (chunk.error) {
+          return { ok: false, message: `Download failed: ${chunk.error}` };
+        }
+        if (!chunk.status) {
+          continue;
+        }
+        if (chunk.status === "success") {
+          return { ok: true };
+        }
+        if (chunk.total && chunk.completed !== undefined) {
+          layers.set(chunk.status, { total: chunk.total, completed: chunk.completed });
+          const totals = { total: 0, completed: 0 };
+          for (const layer of layers.values()) {
+            totals.total += layer.total;
+            totals.completed += layer.completed;
+          }
+          params.onStatus?.(
+            chunk.status,
+            totals.total > 0 ? Math.round((totals.completed / totals.total) * 100) : null,
+          );
+        } else {
+          params.onStatus?.(chunk.status, null);
+        }
       }
+      throw new Error("pull stream ended before success");
     } finally {
       await release();
     }

@@ -30,6 +30,7 @@ export function isGooglePromptCacheEligible(params: {
     return false;
   }
   const normalizedModelId = normalizeLowercaseStringOrEmpty(params.modelId);
+  // This gates explicit cachedContents creation; Gemini 4 supports implicit caching only.
   return normalizedModelId.startsWith("gemini-2.5") || normalizedModelId.startsWith("gemini-3");
 }
 

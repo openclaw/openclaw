@@ -1,5 +1,6 @@
+import { listen } from "../../lib/reactive/listener.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import type { ChatPaneElement } from "./route-draft-focus-handoff.ts";
+import { chatPanesWithin, unboundPanesWithin } from "./chat-pane-elements.ts";
 import type { ChatSplitLayout, ChatSplitPane } from "./split-layout-types.ts";
 
 /** Returns keyboard focus only while the closing pane still owns that intent. */
@@ -10,24 +11,23 @@ export class ChatPageCloseFocus {
     sessionKey: string;
     layout: ChatSplitLayout | undefined;
     href: string;
-    abort: AbortController;
+    stop: () => void;
   };
 
   constructor(private readonly host: HTMLElement) {}
 
   clear(): void {
-    this.pending?.abort.abort();
+    this.pending?.stop();
     this.pending = undefined;
   }
 
   capture(paneId: string): Element | null {
     this.clear();
     const source = this.host.ownerDocument.activeElement;
+    // Pane refs remain valid while retained siblings change their presentation.
     return source &&
-      ([...this.host.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].some(
-        (pane) => pane.paneId === paneId && pane.contains(source),
-      ) ||
-        [...this.host.querySelectorAll<HTMLElement>("[data-unbound-pane-id]")].some(
+      (chatPanesWithin(this.host).some((pane) => pane.paneId === paneId && pane.contains(source)) ||
+        unboundPanesWithin(this.host).some(
           (pane) => pane.dataset.unboundPaneId === paneId && pane.contains(source),
         ))
       ? source
@@ -35,18 +35,14 @@ export class ChatPageCloseFocus {
   }
 
   schedule(source: Element, pane: ChatSplitPane, layout: ChatSplitLayout | undefined): void {
-    const abort = new AbortController();
     this.pending = {
       source,
       paneId: pane.id,
       sessionKey: pane.sessionKey,
       layout,
       href: window.location.href,
-      abort,
+      stop: listen(this.host.ownerDocument, "focusin", () => this.clear()),
     };
-    this.host.ownerDocument.addEventListener("focusin", () => this.clear(), {
-      signal: abort.signal,
-    });
   }
 
   restore(layout: ChatSplitLayout | undefined, retiring: boolean): void {
@@ -67,15 +63,15 @@ export class ChatPageCloseFocus {
     if (retiring) {
       return;
     }
-    const pane = [...this.host.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].find(
+    const pane = chatPanesWithin(this.host).find(
       (candidate) =>
         candidate.paneId === pending.paneId &&
         areUiSessionKeysEquivalent(candidate.sessionKey, pending.sessionKey),
     );
     const target =
       pane?.active && pane.presented
-        ? pane.querySelector<HTMLElement>(".chat-pane__header")
-        : [...this.host.querySelectorAll<HTMLElement>("[data-unbound-pane-id]")].find(
+        ? pane.headerElement
+        : unboundPanesWithin(this.host).find(
             (candidate) => candidate.dataset.unboundPaneId === pending.paneId,
           );
     if (target) {

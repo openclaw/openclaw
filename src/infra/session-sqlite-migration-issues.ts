@@ -22,8 +22,10 @@ const SESSION_SQLITE_WARNING_ISSUE_CODES = new Set([
   "retained_plugin_source_index_rebuilt",
   "retained_plugin_receipt_superseded",
   "retained_empty_transcript_superseded",
+  "retained_missing_transcript_superseded",
   "retained_plugin_source_conflict",
   "transcript_archive_failed",
+  "transcript_filename_mismatch",
   "transcript_malformed",
   "transcript_missing",
   "unreferenced_jsonl_archive_failed",
@@ -31,4 +33,15 @@ const SESSION_SQLITE_WARNING_ISSUE_CODES = new Set([
 
 export function isSessionSqliteMigrationWarning(issue: DoctorSessionSqliteIssue): boolean {
   return SESSION_SQLITE_WARNING_ISSUE_CODES.has(issue.code);
+}
+
+/** Retained archive facts do not establish a current session failure. */
+export function isHistoricalSessionSqliteMigrationIssue(issue: DoctorSessionSqliteIssue): boolean {
+  return (
+    issue.code === "historical_transcript_deferred" ||
+    issue.code === "historical_duplicate_settled" ||
+    issue.code === "retained_plugin_receipt_superseded" ||
+    issue.code === "retained_empty_transcript_superseded" ||
+    issue.code === "retained_plugin_source_index_rebuilt"
+  );
 }

@@ -359,6 +359,7 @@ export async function readGuardReview(previousReview) {
       "The pull request has merged; completing security review evidence for the scheduled head.",
     );
   }
+  let issueNotices;
   review = {
     api,
     owner,
@@ -370,6 +371,15 @@ export async function readGuardReview(previousReview) {
     allowMerged: true,
     pullPath,
     issuePath: `/repos/${owner}/${repo}/issues/${number}`,
+    // Notices share one evaluation snapshot; approval comments and authority stay live.
+    readIssueNotices() {
+      issueNotices ??= (async () => {
+        const comments = await api.paginate(`${review.issuePath}/comments`);
+        const labels = await api.paginate(`${review.issuePath}/labels`);
+        return { comments, labelNames: new Set(labels.map((label) => label.name)) };
+      })();
+      return issueNotices;
+    },
     runUrl: `https://github.com/${owner}/${repo}/actions/runs/${GITHUB_RUN_ID}`,
   };
   return review;

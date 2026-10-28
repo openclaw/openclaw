@@ -20,7 +20,8 @@ vi.mock("./openclaw-state-db-cache.js", () => ({
     },
   },
 }));
-vi.mock("./openclaw-state-db-schema-version.js", () => ({
+vi.mock("./openclaw-state-db-schema-version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-state-db-schema-version.js")>()),
   assertSupportedStateSchemaVersion: mocks.schema,
 }));
 

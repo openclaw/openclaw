@@ -1,8 +1,6 @@
-// Ambient trusted caller context for model-mediated Gateway tool calls.
-import { AsyncLocalStorage } from "node:async_hooks";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
-import type { ReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import { narrowSessionEventSettings } from "../../auto-reply/reply/session-event-policy.js";
 import type { SessionEntriesCurrentCheck } from "../../config/sessions/session-entry-current.types.js";
 import {
   composeSessionSourceAssertion,
@@ -11,10 +9,7 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.types.js";
-import type {
-  GatewayContextResolver,
-  GatewayRequestContext,
-} from "../../gateway/server-methods/types.js";
+import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
 import type { WorkerSessionTurnClaim } from "../../gateway/worker-environments/placement-record.js";
 import type { WorkerTurnExecutionIdentityCapability } from "../../gateway/worker-environments/placement-turn-claim-events.js";
@@ -23,9 +18,14 @@ import {
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import {
-  bindGatewayContextResolver,
+  captureGatewayContextResolver,
   getGatewayContextResolver,
-} from "../../plugins/runtime/gateway-request-scope.js";
+} from "../../plugins/runtime/gateway-context-binding.js";
+import type { ReplyTurnParticipants } from "../../sessions/session-controller.contracts.js";
+import type { SessionControllerWatchdogAttempt } from "../../sessions/session-controller.watchdog.js";
+// Ambient trusted caller context for model-mediated Gateway tool calls.
+import { AsyncContext } from "../../shared/async-context.js";
+import { runWithAsyncStore } from "../../shared/async-store.js";
 import {
   captureAdmittedRunActiveAssertion,
   getAdmittedRunDelegatedAuthority,
@@ -34,33 +34,35 @@ import {
   type AdmittedRunContext,
   type OperationalRunInstanceRef,
 } from "../admitted-run-context.js";
-import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
+import { wrapAgentToolExecutionContext } from "../agent-tool-metadata.js";
 import {
   captureActiveEmbeddedRunPersonalToolParticipants,
   type EmbeddedRunToolAuthorityBinding,
 } from "../embedded-agent-runner/run-state.js";
 import {
-  attachInternalToolExecutionPreparer,
-  getInternalToolExecutionPreparer,
-} from "../runtime/internal-hooks.js";
-import { intersectSessionPermissionModes } from "../session-permission-exec-mode.js";
+  captureRequesterOrigin,
+  requesterCreatorProfileId,
+  type RequesterOrigin,
+} from "../requester-origin.js";
 import { readToolStringParam, type AnyAgentTool } from "./common.js";
 import type { GatewayToolCallerReceiptAdmission } from "./gateway-caller-receipt.types.js";
 
 type ReceiptAuthority = (() => boolean | void) &
-  Pick<SessionSourceAssertion, "prepareSessionSource" | "nativeSource" | "opaqueCommitGuard">;
+  Pick<SessionSourceAssertion, keyof SessionSourceAssertion>;
 
 type GatewayToolCallerIdentity = {
+  watchdogAttempt?: SessionControllerWatchdogAttempt;
   personalToolParticipants?: ReplyTurnParticipants;
   personalToolUser?: string;
   personalToolIdentityScoped?: true;
   personalToolSelection?: GatewayToolOperatorSelection;
   agentId: string;
   sessionKey: string;
+  requesterOrigin?: RequesterOrigin;
   /** Restrict-only executable surface captured for internal follow-ups. */
   sessionEventToolsAllow?: readonly string[];
   /** An object with no mode retains the producer's default permission posture. */
-  sessionEventSettings?: { permissionMode?: SessionEntry["permissionMode"] };
+  sessionEventSettings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">>;
   /** Follow-ups cannot add automatic delivery to a message-tool-only source. */
   sessionEventDelivery?: false;
   gatewayUiCommandTarget?: GatewayUiCommandTarget;
@@ -87,6 +89,12 @@ type GatewayToolCallerIdentity = {
   assertToolAllowed?: (toolName: string) => void;
   /** Exact Gateway-owned worker claim; never sourced from model or RPC arguments. */
   workerTurnClaim?: WorkerSessionTurnClaim;
+  /** Prepared caller sandbox for the explicit current-workspace base refresh; never RPC data. */
+  workspaceBaseRefreshSandbox?: import("../sandbox/types.js").SandboxContext;
+  /** Host handoff selects the exact settled conversation; never accepted from RPC input. */
+  workspacePrAdoptionSessionId?: string;
+  /** Current tool's filesystem owner for inspected PR evidence; never serialized in RPC data. */
+  workspaceEvidenceSandbox?: import("../sandbox/types.js").SandboxContext;
   /** Closure-bound Gateway capability; revalidates both owners at child admission. */
   workerTurnExecutionIdentityCapability?: WorkerTurnExecutionIdentityCapability;
   /** Instance-bound routing only; delegated authority is revalidated separately. */
@@ -123,56 +131,31 @@ type GatewayToolCallerSource = {
   agentThreadId?: string | number;
 };
 
-const gatewayToolCallerStorage = new AsyncLocalStorage<GatewayToolCallerIdentity>();
+const gatewayToolCallerStorage = new AsyncContext<GatewayToolCallerIdentity>(
+  Symbol("gatewayToolCaller"),
+);
 
-const receiptAdmissionStorage = new AsyncLocalStorage<
+const receiptAdmissionStorage = new AsyncContext<
   ReadonlyMap<GatewayToolCallerReceiptAdmission, () => boolean>
->();
+>(Symbol("gatewayToolReceiptAdmission"));
 
 export function evaluateGatewayToolCallerReceiptAdmission(
   admission: GatewayToolCallerReceiptAdmission,
   otherwise: () => boolean,
 ): boolean {
-  const prepared = receiptAdmissionStorage.getStore()?.get(admission);
-  return prepared ? prepared() : otherwise();
+  return (receiptAdmissionStorage.getStore()?.get(admission) ?? otherwise)();
 }
 
 export type GatewayToolOperatorSelection = Readonly<{
   /** Raw host-issued source; custody transfers must not retain the turn-bound assertion. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  requesterOrigin?: RequesterOrigin;
   assertCurrent: () => void;
 }>;
 
-// Freeze the admitted instance: a later resolver result is a replacement,
-// which retires this caller's routing authority instead of transferring it.
-function bindGatewayToolContextResolver(
-  resolveGatewayContext: GatewayContextResolver | undefined,
-): GatewayContextResolver | undefined {
-  if (!resolveGatewayContext) {
-    return undefined;
-  }
-  let admittedContext: GatewayRequestContext | undefined;
-  try {
-    admittedContext = resolveGatewayContext();
-  } catch {
-    return () => undefined;
-  }
-  if (!admittedContext) {
-    return () => undefined;
-  }
-  const resolveAdmittedContext = () => {
-    try {
-      return resolveGatewayContext() === admittedContext ? admittedContext : undefined;
-    } catch {
-      return undefined;
-    }
-  };
-  bindGatewayContextResolver(resolveAdmittedContext, admittedContext.resolveGatewayContext);
-  return resolveAdmittedContext;
-}
-
 type AdmittedGatewayToolCallerParams = {
   admittedRunContext: AdmittedRunContext;
+  requesterOrigin?: RequesterOrigin;
   receiptAuthority?: ReceiptAuthority;
   receiptAdmission?: GatewayToolCallerReceiptAdmission;
   cronAuthorityCheck?: () => boolean;
@@ -194,6 +177,7 @@ function composeReceiptAuthority(
     (predicate, index): predicate is ReceiptAuthority =>
       predicate !== undefined && predicates.indexOf(predicate) === index,
   );
+  const sources = checks.map((check) => captureGatewayToolReceiptAssertion(check));
   return checks.length === 0
     ? undefined
     : Object.assign(
@@ -208,9 +192,14 @@ function composeReceiptAuthority(
           }
           return active;
         },
-        composeSessionSourceAssertion(
-          checks.map((check) => captureGatewayToolReceiptAssertion(check)),
-        ),
+        composeSessionSourceAssertion(sources),
+        {
+          assertScopeCurrent: () => {
+            for (const source of sources) {
+              (source.assertScopeCurrent ?? source)();
+            }
+          },
+        },
       );
 }
 
@@ -228,6 +217,8 @@ export function captureGatewayToolReceiptAssertion(
   return Object.assign(() => assertAllowed(receipt()), {
     nativeSource: receipt.nativeSource,
     opaqueCommitGuard: receipt.opaqueCommitGuard,
+    assertScopeCurrent: receipt.assertScopeCurrent?.bind(receipt),
+    prepareSessionSourceScope: receipt.prepareSessionSourceScope?.bind(receipt),
     ...(prepare
       ? {
           async prepareSessionSource() {
@@ -235,6 +226,7 @@ export function captureGatewayToolReceiptAssertion(
             const release = prepared.release?.bind(prepared);
             const assertPrepared = prepared.assertPreparedCurrent?.bind(prepared);
             return {
+              ...prepared,
               nativeSource: prepared.nativeSource,
               opaqueCommitGuard: prepared.opaqueCommitGuard,
               checks: prepared.checks,
@@ -264,13 +256,14 @@ export function createAdmittedGatewayToolCallerIdentity(
   return {
     agentId,
     sessionKey,
+    requesterOrigin: captureRequesterOrigin({ requesterOrigin: params.requesterOrigin }),
     operationalRunInstance: params.admittedRunContext.operationalRunInstance,
     ...(delegatedAuthority ? { approvalAuthority: delegatedAuthority } : {}),
     ...(operatorAuthority ? { operatorAuthority } : {}),
     ...(params.receiptAuthority ? { approvalAuthorityCheck: params.receiptAuthority } : {}),
     ...(params.cronAuthorityCheck ? { cronAuthorityCheck: params.cronAuthorityCheck } : {}),
     executionIdentityToken: params.admittedRunContext.executionIdentityToken,
-    gatewayContextResolver: bindGatewayToolContextResolver(
+    gatewayContextResolver: captureGatewayContextResolver(
       getGatewayContextResolver(params.admittedRunContext),
     ),
     receiptAuthority: composeReceiptAuthority(
@@ -308,7 +301,8 @@ export async function withGatewayPersonalToolUser<T>(
     }
     return await run();
   }
-  return await gatewayToolCallerStorage.run(
+  return await runWithAsyncStore(
+    gatewayToolCallerStorage,
     {
       ...caller,
       personalToolUser: user,
@@ -320,42 +314,62 @@ export async function withGatewayPersonalToolUser<T>(
 }
 
 /** One prepared identity per tool call; execution, approvals and receipts stay turn-owned. */
-export function resolveGatewayToolOperatorSelection(): GatewayToolOperatorSelection {
+export function resolveGatewayToolOperatorSelection(options?: {
+  requireRequesterOrigin?: boolean;
+}): GatewayToolOperatorSelection {
   const caller = getGatewayToolCallerIdentity();
-  if (caller?.personalToolSelection) {
-    return caller.personalToolSelection;
+  let selection = caller?.personalToolSelection;
+  if (!selection) {
+    const participant =
+      caller?.personalToolUser !== undefined ? resolveGatewayPersonalToolParticipant() : undefined;
+    const selectedParticipant =
+      participant?.profileId !== caller?.operatorAuthority?.profileId ? participant : undefined;
+    const operatorAuthority = selectedParticipant?.operatorAuthority ?? caller?.operatorAuthority;
+    selection = Object.freeze({
+      operatorAuthority,
+      requesterOrigin: selectedParticipant?.requesterOrigin
+        ? captureRequesterOrigin({
+            requesterOrigin: {
+              ...selectedParticipant.requesterOrigin,
+              delegatedCreatorProfileId: requesterCreatorProfileId(caller?.requesterOrigin) ?? null,
+            },
+          })
+        : selectedParticipant
+          ? undefined
+          : caller?.requesterOrigin,
+      assertCurrent: composeSessionSourceAssertion([
+        participant?.assertCurrent,
+        operatorAuthority?.assertCurrent,
+      ]),
+    });
+    if (caller?.personalToolIdentityScoped) {
+      caller.personalToolSelection = selection;
+    }
   }
-  const participant = caller?.personalToolIdentityScoped
-    ? resolveGatewayPersonalToolParticipant()
-    : undefined;
-  const operatorAuthority =
-    participant && participant.profileId !== caller?.operatorAuthority?.profileId
-      ? participant.operatorAuthority
-      : caller?.operatorAuthority;
-  const selection = Object.freeze({
-    operatorAuthority,
-    assertCurrent: composeSessionSourceAssertion([
-      participant?.assertCurrent,
-      operatorAuthority?.assertCurrent,
-    ]),
-  });
-  if (caller?.personalToolIdentityScoped) {
-    caller.personalToolSelection = selection;
+  if (
+    options?.requireRequesterOrigin &&
+    selection.operatorAuthority &&
+    selection.operatorAuthority.profileId !== caller?.operatorAuthority?.profileId &&
+    selection.requesterOrigin?.operatorProfileId !== selection.operatorAuthority.profileId
+  ) {
+    throw new Error("Selected user's requester identity is unavailable; ask them in a new turn.");
   }
   return selection;
 }
 
 /** The accepting collector already holds this source independently of the spawning turn. */
 export function withGatewayToolOperatorContinuation<T>(
-  operatorAuthority: AdmittedRunOperatorAuthority | undefined,
+  selection: Pick<GatewayToolOperatorSelection, "operatorAuthority" | "requesterOrigin">,
   run: () => T,
 ): T {
   const caller = getGatewayToolCallerIdentity();
   if (!caller) {
     return run();
   }
+  const { operatorAuthority, requesterOrigin } = selection;
   operatorAuthority?.assertCurrent();
-  return gatewayToolCallerStorage.run(
+  return runWithAsyncStore(
+    gatewayToolCallerStorage,
     {
       ...caller,
       personalToolParticipants: undefined,
@@ -363,6 +377,7 @@ export function withGatewayToolOperatorContinuation<T>(
       personalToolIdentityScoped: true,
       personalToolSelection: Object.freeze({
         operatorAuthority,
+        requesterOrigin,
         assertCurrent: composeSessionSourceAssertion([operatorAuthority?.assertCurrent]),
       }),
     },
@@ -372,28 +387,23 @@ export function withGatewayToolOperatorContinuation<T>(
 
 export function resolveGatewayPersonalToolParticipant(
   runtimeIdentity?: AgentRuntimeIdentity,
-  options?: {
-    requireSingleParticipant?: boolean;
-    allowTurnOwner?: () => boolean;
-    allowMissingRegistry?: boolean;
-  },
+  options?: { requireSingleParticipant?: boolean },
 ) {
   const caller = getGatewayToolCallerIdentity();
   if (caller?.personalToolParticipants) {
     return caller.personalToolParticipants.resolve(
       options?.requireSingleParticipant ? undefined : caller.personalToolUser,
-      options,
     );
   }
   if (caller?.personalToolUser !== undefined) {
     throw new Error("Selecting user requires an active personal-tool turn.");
   }
   if (runtimeIdentity) {
-    const registered = captureActiveEmbeddedRunPersonalToolParticipants(runtimeIdentity, options);
+    const registered = captureActiveEmbeddedRunPersonalToolParticipants(runtimeIdentity);
     if (!registered) {
       return undefined;
     }
-    const participant = registered.participants?.resolve(undefined, options);
+    const participant = registered.participants?.resolve();
     return (
       participant && {
         ...participant,
@@ -428,7 +438,10 @@ export function captureGatewayToolCallerAssertion(
   const assertCurrent = composeSessionSourceAssertion(
     [
       selection?.assertCurrent,
-      caller.operatorAuthority?.assertCurrent,
+      // Selection already checks its exact operator source in this synchronous guard.
+      selection?.operatorAuthority === caller.operatorAuthority
+        ? undefined
+        : caller.operatorAuthority?.assertCurrent,
       composeSessionSourceAssertion(
         isCurrent ? [captureGatewayToolReceiptAssertion(isCurrent)] : [],
         (assertReceipt) => {
@@ -474,7 +487,7 @@ export async function prepareGatewayToolCallerAssertion(): Promise<{
     if (!active) {
       throw new Error("agent tool caller admission is no longer active");
     }
-    receiptAdmissionStorage.run(predicates, () => assertion?.());
+    runWithAsyncStore(receiptAdmissionStorage, predicates, () => assertion?.());
   };
   assertCurrent();
   return {
@@ -523,14 +536,6 @@ export async function withGatewayToolCallerIdentity<T>(
   const inheritedOwner = !suppliedRun || inheritedRun === suppliedRun ? inherited : undefined;
   const inheritedValue = <K extends keyof GatewayToolCallerIdentity>(key: K) =>
     inheritedOwner?.[key] ?? identity[key];
-  const operationalRunInstance = inheritedValue("operationalRunInstance");
-  const embeddedRunToolAuthorityBinding =
-    identity.embeddedRunToolAuthorityBinding ?? inheritedOwner?.embeddedRunToolAuthorityBinding;
-  // Same-run wrappers can narrow a prepared posture, never erase a restriction.
-  const fullPermission =
-    inheritedOwner?.fullPermission === false || identity.fullPermission === false
-      ? false
-      : (inheritedOwner?.fullPermission ?? identity.fullPermission);
   let approvalAuthority = inheritedOwner?.approvalAuthority ?? identity.approvalAuthority;
   if (
     inheritedOwner?.approvalAuthority &&
@@ -553,16 +558,6 @@ export async function withGatewayToolCallerIdentity<T>(
       throw new Error("agent tool caller approval scopes do not retain the same source");
     }
   }
-  const operatorAuthority = inheritedValue("operatorAuthority");
-  const approvalAuthorityCheck = inheritedValue("approvalAuthorityCheck");
-  const signedAgentRuntimeIdentityToken =
-    inheritedOwner?.signedAgentRuntimeIdentityToken ??
-    identity.signedAgentRuntimeIdentityToken?.trim();
-  const executionIdentityToken = inheritedValue("executionIdentityToken");
-  const receiptAuthority = composeReceiptAuthority(
-    inheritedOwner?.receiptAuthority,
-    identity.receiptAuthority,
-  );
   const receiptAdmissions = [
     ...new Set([
       ...(inheritedOwner?.receiptAdmissions ?? []),
@@ -586,49 +581,23 @@ export async function withGatewayToolCallerIdentity<T>(
   const approvalSignals = [
     ...new Set([...(inheritedOwner?.approvalSignals ?? []), ...(identity.approvalSignals ?? [])]),
   ];
-  const workerTurnClaim = inheritedValue("workerTurnClaim");
-  const workerTurnExecutionIdentityCapability = inheritedValue(
-    "workerTurnExecutionIdentityCapability",
-  );
-  const gatewayContextResolver =
-    inheritedOwner?.gatewayContextResolver ??
-    bindGatewayToolContextResolver(identity.gatewayContextResolver);
-  const cronSelfManagementJobId =
-    identity.cronSelfManagementJobId?.trim() ?? inheritedOwner?.cronSelfManagementJobId;
-  const cronToolsAllowCapture =
-    identity.cronToolsAllowCapture ?? inheritedOwner?.cronToolsAllowCapture;
-  const cronExecToolTarget = identity.cronExecToolTarget ?? inheritedOwner?.cronExecToolTarget;
-  const cronCreatorAuthorityGrant =
-    identity.cronCreatorAuthorityGrant ?? inheritedOwner?.cronCreatorAuthorityGrant;
-  const mintCronRequesterGrant = inheritedValue("mintCronRequesterGrant");
-  const cronManagementGrant = identity.cronManagementGrant ?? inheritedOwner?.cronManagementGrant;
-  const cronAuthorityCheck = composeReceiptAuthority(
-    inheritedOwner?.cronAuthorityCheck,
-    identity.cronAuthorityCheck,
-  );
-  const turnSourceChannel = inheritedOwner?.turnSourceChannel ?? identity.turnSourceChannel?.trim();
-  const turnSourceLocal = inheritedValue("turnSourceLocal");
-  const turnSourceTo = inheritedOwner?.turnSourceTo ?? identity.turnSourceTo?.trim();
-  const turnSourceAccountId =
-    inheritedOwner?.turnSourceAccountId ?? identity.turnSourceAccountId?.trim();
-  const turnSourceThreadId = inheritedValue("turnSourceThreadId");
-  const gatewayUiCommandTarget = inheritedValue("gatewayUiCommandTarget");
-  return await gatewayToolCallerStorage.run(
+  return await runWithAsyncStore(
+    gatewayToolCallerStorage,
     {
       agentId: inheritedOwner?.agentId ?? identity.agentId.trim(),
       sessionKey: inheritedOwner?.sessionKey ?? identity.sessionKey.trim(),
+      watchdogAttempt: identity.watchdogAttempt ?? inheritedOwner?.watchdogAttempt,
+      requesterOrigin: inheritedOwner?.requesterOrigin ?? identity.requesterOrigin,
       sessionEventDelivery:
         inheritedOwner?.sessionEventDelivery === false || identity.sessionEventDelivery === false
           ? false
           : undefined,
       sessionEventSettings:
         identity.sessionEventSettings && inheritedOwner?.sessionEventSettings
-          ? {
-              permissionMode: intersectSessionPermissionModes(
-                inheritedOwner.sessionEventSettings.permissionMode,
-                identity.sessionEventSettings.permissionMode,
-              ),
-            }
+          ? narrowSessionEventSettings(
+              inheritedOwner.sessionEventSettings,
+              identity.sessionEventSettings,
+            )
           : (identity.sessionEventSettings ?? inheritedOwner?.sessionEventSettings),
       sessionEventToolsAllow:
         identity.sessionEventToolsAllow && inheritedOwner?.sessionEventToolsAllow
@@ -636,43 +605,69 @@ export async function withGatewayToolCallerIdentity<T>(
               inheritedOwner.sessionEventToolsAllow!.includes(name),
             )
           : (identity.sessionEventToolsAllow ?? inheritedOwner?.sessionEventToolsAllow),
+      workspaceBaseRefreshSandbox: inheritedValue("workspaceBaseRefreshSandbox"),
+      workspacePrAdoptionSessionId: inheritedValue("workspacePrAdoptionSessionId"),
+      workspaceEvidenceSandbox: inheritedValue("workspaceEvidenceSandbox"),
       personalToolParticipants: inheritedValue("personalToolParticipants"),
       personalToolUser: inheritedValue("personalToolUser"),
       personalToolIdentityScoped: inheritedValue("personalToolIdentityScoped"),
       personalToolSelection: inheritedValue("personalToolSelection"),
-      ...(fullPermission !== undefined ? { fullPermission } : {}),
-      ...(operationalRunInstance ? { operationalRunInstance } : {}),
-      ...(embeddedRunToolAuthorityBinding ? { embeddedRunToolAuthorityBinding } : {}),
-      ...(approvalAuthority ? { approvalAuthority } : {}),
-      ...(operatorAuthority ? { operatorAuthority } : {}),
-      ...(approvalAuthorityCheck ? { approvalAuthorityCheck } : {}),
-      ...(identity.approvalOwnerPluginId?.trim()
-        ? { approvalOwnerPluginId: identity.approvalOwnerPluginId.trim() }
-        : inheritedOwner?.approvalOwnerPluginId
-          ? { approvalOwnerPluginId: inheritedOwner.approvalOwnerPluginId }
-          : {}),
-      ...(signedAgentRuntimeIdentityToken ? { signedAgentRuntimeIdentityToken } : {}),
-      ...(cronSelfManagementJobId ? { cronSelfManagementJobId } : {}),
-      ...(cronToolsAllowCapture ? { cronToolsAllowCapture } : {}),
-      ...(cronExecToolTarget ? { cronExecToolTarget } : {}),
-      ...(cronCreatorAuthorityGrant ? { cronCreatorAuthorityGrant } : {}),
-      ...(mintCronRequesterGrant ? { mintCronRequesterGrant } : {}),
-      ...(cronManagementGrant ? { cronManagementGrant } : {}),
-      ...(cronAuthorityCheck ? { cronAuthorityCheck } : {}),
-      ...(executionIdentityToken ? { executionIdentityToken } : {}),
-      ...(receiptAuthority ? { receiptAuthority } : {}),
-      ...(receiptAdmissions.length ? { receiptAdmissions } : {}),
-      ...(assertToolAllowed ? { assertToolAllowed } : {}),
-      ...(approvalSignals.length ? { approvalSignals } : {}),
-      ...(workerTurnClaim ? { workerTurnClaim } : {}),
-      ...(workerTurnExecutionIdentityCapability ? { workerTurnExecutionIdentityCapability } : {}),
-      ...(gatewayContextResolver ? { gatewayContextResolver } : {}),
-      ...(gatewayUiCommandTarget ? { gatewayUiCommandTarget } : {}),
-      ...(turnSourceChannel ? { turnSourceChannel } : {}),
-      ...(turnSourceLocal === true ? { turnSourceLocal: true } : {}),
-      ...(turnSourceTo ? { turnSourceTo } : {}),
-      ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
-      ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
+      // Same-run wrappers can narrow a prepared posture, never erase a restriction.
+      fullPermission:
+        inheritedOwner?.fullPermission === false || identity.fullPermission === false
+          ? false
+          : inheritedValue("fullPermission"),
+      operationalRunInstance: inheritedValue("operationalRunInstance"),
+      embeddedRunToolAuthorityBinding:
+        identity.embeddedRunToolAuthorityBinding ?? inheritedOwner?.embeddedRunToolAuthorityBinding,
+      approvalAuthority,
+      operatorAuthority: inheritedValue("operatorAuthority"),
+      approvalAuthorityCheck: inheritedValue("approvalAuthorityCheck"),
+      approvalOwnerPluginId:
+        identity.approvalOwnerPluginId?.trim() ||
+        inheritedOwner?.approvalOwnerPluginId ||
+        undefined,
+      signedAgentRuntimeIdentityToken:
+        (inheritedOwner?.signedAgentRuntimeIdentityToken ??
+          identity.signedAgentRuntimeIdentityToken?.trim()) ||
+        undefined,
+      cronSelfManagementJobId:
+        (identity.cronSelfManagementJobId?.trim() ?? inheritedOwner?.cronSelfManagementJobId) ||
+        undefined,
+      cronToolsAllowCapture:
+        identity.cronToolsAllowCapture ?? inheritedOwner?.cronToolsAllowCapture,
+      cronExecToolTarget: identity.cronExecToolTarget ?? inheritedOwner?.cronExecToolTarget,
+      cronCreatorAuthorityGrant:
+        identity.cronCreatorAuthorityGrant ?? inheritedOwner?.cronCreatorAuthorityGrant,
+      mintCronRequesterGrant: inheritedValue("mintCronRequesterGrant"),
+      cronManagementGrant: identity.cronManagementGrant ?? inheritedOwner?.cronManagementGrant,
+      cronAuthorityCheck: composeReceiptAuthority(
+        inheritedOwner?.cronAuthorityCheck,
+        identity.cronAuthorityCheck,
+      ),
+      executionIdentityToken: inheritedValue("executionIdentityToken"),
+      receiptAuthority: composeReceiptAuthority(
+        inheritedOwner?.receiptAuthority,
+        identity.receiptAuthority,
+      ),
+      receiptAdmissions: receiptAdmissions.length ? receiptAdmissions : undefined,
+      assertToolAllowed,
+      approvalSignals: approvalSignals.length ? approvalSignals : undefined,
+      workerTurnClaim: inheritedValue("workerTurnClaim"),
+      workerTurnExecutionIdentityCapability: inheritedValue(
+        "workerTurnExecutionIdentityCapability",
+      ),
+      gatewayContextResolver:
+        inheritedOwner?.gatewayContextResolver ??
+        captureGatewayContextResolver(identity.gatewayContextResolver),
+      gatewayUiCommandTarget: inheritedValue("gatewayUiCommandTarget"),
+      turnSourceChannel:
+        (inheritedOwner?.turnSourceChannel ?? identity.turnSourceChannel?.trim()) || undefined,
+      turnSourceLocal: inheritedValue("turnSourceLocal"),
+      turnSourceTo: (inheritedOwner?.turnSourceTo ?? identity.turnSourceTo?.trim()) || undefined,
+      turnSourceAccountId:
+        (inheritedOwner?.turnSourceAccountId ?? identity.turnSourceAccountId?.trim()) || undefined,
+      turnSourceThreadId: inheritedValue("turnSourceThreadId"),
     },
     run,
   );
@@ -698,28 +693,12 @@ export function wrapToolWithGatewayCallerIdentity(
   if (!identity?.agentId?.trim() || !identity.sessionKey?.trim() || !tool.execute) {
     return tool;
   }
-  const wrapped: AnyAgentTool = {
-    ...tool,
-    execute: async (...args) =>
-      await withGatewayToolCallerIdentity(identity, async () => await tool.execute?.(...args)),
-  };
-  copyAgentToolMetadata(tool, wrapped, (source) =>
-    wrapToolWithGatewayCallerIdentity(source, identity),
+  return wrapAgentToolExecutionContext(
+    tool,
+    (...args) => withGatewayToolCallerIdentity(identity, () => tool.execute?.(...args)),
+    (operation) => withGatewayToolCallerIdentity(identity, operation),
+    (source) => wrapToolWithGatewayCallerIdentity(source, identity),
   );
-  const sourcePreparer = getInternalToolExecutionPreparer(tool);
-  if (sourcePreparer) {
-    attachInternalToolExecutionPreparer(wrapped, async (params) => {
-      const prepared = await withGatewayToolCallerIdentity(identity, () => sourcePreparer(params));
-      return prepared.kind === "ready"
-        ? {
-            ...prepared,
-            execute: (start) =>
-              withGatewayToolCallerIdentity(identity, () => prepared.execute(start)),
-          }
-        : prepared;
-    });
-  }
-  return wrapped;
 }
 
 export function createGatewayToolCallerWrapper(

@@ -1,5 +1,8 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
-import { consumeGatewayBootstrapSteps } from "../cli/startup-trace.js";
+import {
+  consumeGatewayBootstrapSteps,
+  formatGatewayStartupMemoryUsage,
+} from "../cli/startup-trace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   emitDiagnosticsTimelineEvent,
@@ -11,11 +14,11 @@ import {
   supportsUpdateCanaryProgress,
   UPDATE_CANARY_PROGRESS_PREFIX,
 } from "../infra/update-candidate-canary-progress.js";
+import { runWithWorkerStartObserver } from "../infra/worker-request-diagnostics.js";
 import { withDiagnosticPhase } from "../logging/diagnostic-phase.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { recordGatewayRestartTraceDetail, recordGatewayRestartTraceSpan } from "./restart-trace.js";
 
-type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 type Awaitable<T> = T | Promise<T>;
 const TIMELINE_NAMES = new Map([
   ["config.snapshot", "config.load"],
@@ -47,6 +50,10 @@ const STARTUP_PROGRESS_PHASES = new Set([
   "plugins.runtime-post-bind",
   "plugins.runtime-attach",
   "sidecars.worker-environments",
+  "sidecars.worker-environments.github-ready",
+  "sidecars.worker-environments.workspaces",
+  "sidecars.worker-environments.active",
+  "sidecars.worker-environments.publications",
   "sidecars.internal-hooks",
   "sidecars.main-session-recovery",
   "sidecars.model-runtime",
@@ -58,6 +65,28 @@ const STARTUP_PROGRESS_PHASES = new Set([
   "runtime.worker-pool-metrics",
   "ready",
 ]);
+const RECOVERY_PHASE = "sidecars.subagent-recovery";
+const RECOVERY_TIMINGS = new Map([
+  ["sidecars.recovery-readers", "readersMs"],
+  ["sidecars.exec-recovery", "execMs"],
+  ["sidecars.subagent-load", "registryLoadMs"],
+  ["sidecars.subagent-activation", "registryActivationMs"],
+  ["sidecars.subagent-bind", "registryActivationBindMs"],
+  ["sidecars.subagent-requesters", "registryActivationRequestersMs"],
+  ["sidecars.subagent-reserve", "registryActivationReserveMs"],
+  ["sidecars.subagent-resume", "registryActivationResumeMs"],
+]);
+
+const RECOVERY_DETAILS = [
+  "registryActivationAuthorityRestoreMs",
+  "registryActivationPublishMs",
+  "registryActivationSessionReadMs",
+  "registryActivationYieldMs",
+  "registryActivationRuns",
+  "registryActivationActiveRuns",
+  "registryActivationRecoveredRuns",
+  "registryActivationPublishedRuns",
+] as const;
 
 export type GatewayStartupTrace = {
   detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
@@ -74,7 +103,7 @@ export async function measureStartup<T>(
 }
 
 export function createGatewayStartupTrace(
-  log: GatewayLogger,
+  log: ReturnType<typeof createSubsystemLogger>,
   startedAt = performance.now(),
   updateCanary = false,
 ) {
@@ -98,15 +127,18 @@ export function createGatewayStartupTrace(
     eventLoopDelay.enable();
   };
   ensureEventLoopDelay();
+  const pluginWorkers = new Map<string, Map<string, number>>();
   const close = () => {
     eventLoopDelay?.disable();
     eventLoopDelay = undefined;
     closed = true;
+    pluginWorkers.clear();
   };
   const started = startedAt;
   let last = started;
   let spanSequence = 0;
   let bootstrapSummary = "";
+  const recoveryTimings = new Map<string, number>();
   const reportProgress = (name: string) => {
     if (progressEnabled && !closed && isUpdateCanaryStartupMilestone(name)) {
       process.stderr.write(`${UPDATE_CANARY_PROGRESS_PREFIX}${name}\n`);
@@ -156,22 +188,62 @@ export function createGatewayStartupTrace(
     totalMs: number,
     eventLoopSample: ReturnType<typeof takeEventLoopSample>,
     extras: ReadonlyArray<readonly [string, number | string]> = [],
+    serviceOutcome?: "success" | "failure",
   ) => {
+    const recoveryTiming = RECOVERY_TIMINGS.get(name);
+    if (recoveryTiming) {
+      recoveryTimings.set(recoveryTiming, (recoveryTimings.get(recoveryTiming) ?? 0) + durationMs);
+    }
+    const recoverySummary =
+      name === RECOVERY_PHASE
+        ? [...RECOVERY_TIMINGS.values(), ...RECOVERY_DETAILS].map(
+            (key) => [key, recoveryTimings.get(key) ?? 0] as const,
+          )
+        : [];
     const metrics = [
       ["eventLoopMax", `${(eventLoopSample?.maxMs ?? 0).toFixed(1)}ms`] as const,
+      ...recoverySummary,
       ...extras,
+      ...(serviceOutcome ? [["outcome", serviceOutcome] as const] : []),
     ];
     recordGatewayRestartTraceSpan(`restart.ready.${name}`, durationMs, totalMs, metrics);
-    if (logEnabled) {
+    if (logEnabled || (serviceOutcome && durationMs >= 250)) {
+      // Bootstrap steps are replayed later; current memory would misattribute their peak.
+      const memory = name.startsWith("process.bootstrap.")
+        ? ""
+        : ` ${formatGatewayStartupMemoryUsage()}`;
       log.info(
-        `startup trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms ${metrics.map(([key, value]) => formatMetric(key, value)).join(" ")}`,
+        `startup trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms ${metrics.map(([key, value]) => formatMetric(key, value)).join(" ")}${memory}`,
       );
     } else if (STARTUP_PROGRESS_PHASES.has(name)) {
-      log.info(`startup phase: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms`);
+      const summary =
+        name === RECOVERY_PHASE
+          ? [...recoverySummary, ...extras]
+              .map(([key, value]) => formatMetric(key, value))
+              .join(" ")
+          : "";
+      log.info(
+        `startup phase: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms${summary ? ` ${summary}` : ""} ${formatGatewayStartupMemoryUsage()}`,
+      );
     }
   };
   return {
     close,
+    run<T>(name: string, run: () => T): T {
+      if (closed) {
+        return run();
+      }
+      let workers = pluginWorkers.get(name);
+      if (!workers) {
+        workers = new Map();
+        pluginWorkers.set(name, workers);
+      }
+      const counts = workers;
+      return runWithWorkerStartObserver(
+        (script) => counts.set(script, (counts.get(script) ?? 0) + 1),
+        run,
+      );
+    },
     setConfig(config: OpenClawConfig) {
       timelineConfig = config;
       ensureEventLoopDelay();
@@ -219,9 +291,34 @@ export function createGatewayStartupTrace(
       }
     },
     detail(name: string, metrics: ReadonlyArray<readonly [string, number | string]>) {
+      const pluginLoad = name.startsWith("plugins.gateway-load.plugin.") && !closed;
+      if (pluginLoad) {
+        const workers = pluginWorkers.get(name);
+        pluginWorkers.delete(name);
+        const workersStarted = [...(workers?.values() ?? [])].reduce(
+          (sum, count) => sum + count,
+          0,
+        );
+        const duration =
+          metrics.find(([key]) => key === "loadAndRegisterMs")?.[1] ??
+          metrics.find(([key]) => key === "loadMs")?.[1];
+        if (logEnabled || workersStarted || (typeof duration === "number" && duration >= 250)) {
+          log.info(
+            `startup trace: ${name} ${metrics.map(([key, value]) => formatMetric(key, value)).join(" ")} workersStarted=${workersStarted} workerScripts=${[...(workers ?? [])].map(([script, count]) => `${script}:${count}`).join(",") || "none"}`,
+          );
+        }
+      }
+      if (name === "sidecars.subagent-activation") {
+        for (const key of RECOVERY_DETAILS) {
+          const value = metrics.find(([metricName]) => metricName === key)?.[1];
+          if (typeof value === "number") {
+            recoveryTimings.set(key, (recoveryTimings.get(key) ?? 0) + value);
+          }
+        }
+      }
       const attributes = Object.fromEntries(metrics);
       recordGatewayRestartTraceDetail(`restart.ready.${name}`, metrics);
-      if (logEnabled) {
+      if (logEnabled && !pluginLoad) {
         log.info(
           `startup trace: ${name} ${metrics.map(([key, value]) => formatMetric(key, value)).join(" ")}`,
         );
@@ -242,6 +339,9 @@ export function createGatewayStartupTrace(
       options: { omitErrorMessage?: boolean } = {},
     ): Promise<T> {
       const before = performance.now();
+      if (name === RECOVERY_PHASE) {
+        recoveryTimings.clear();
+      }
       if (STARTUP_PROGRESS_PHASES.has(name)) {
         log.info(`startup phase: ${name} starting total=${(before - started).toFixed(1)}ms`);
       }
@@ -253,6 +353,7 @@ export function createGatewayStartupTrace(
         attributes: name === mappedName ? undefined : { traceName: name },
       };
       emitDiagnosticsTimelineEvent({ ...span, type: "span.start" }, timelineOptions());
+      let outcome: "success" | "failure" = "success";
       try {
         const result = await withDiagnosticPhase(mappedName, run, { traceName: name });
         reportProgress(name);
@@ -267,6 +368,7 @@ export function createGatewayStartupTrace(
         );
         return result;
       } catch (error) {
+        outcome = "failure";
         const now = performance.now();
         emitDiagnosticsTimelineEvent(
           {
@@ -284,7 +386,14 @@ export function createGatewayStartupTrace(
       } finally {
         const now = performance.now();
         const eventLoopSample = takeEventLoopSample();
-        emit(name, now - before, now - started, eventLoopSample);
+        emit(
+          name,
+          now - before,
+          now - started,
+          eventLoopSample,
+          name === RECOVERY_PHASE ? [["outcome", outcome]] : [],
+          /^sidecars\.plugin-services\.[^.]+\.[^.]+$/u.test(name) ? outcome : undefined,
+        );
         emitEventLoopTimelineSample(name, eventLoopSample);
         last = now;
       }

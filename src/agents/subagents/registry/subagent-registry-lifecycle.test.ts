@@ -1,7 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { withinTest } from "../../../../test/helpers/promise.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/io.js";
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../../config/sessions/session-store-path.js";
 import {
@@ -13,7 +14,7 @@ import {
   listContextEngineQuarantines,
   registerContextEngineInRegistry,
 } from "../../../context-engine/registry.js";
-import { resetContextEngineRuntimeQuarantineForTests } from "../../../context-engine/registry.test-support.js";
+import * as engineTest from "../../../context-engine/registry.test-support.js";
 import type { CallGatewayOptions } from "../../../gateway/call.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
@@ -43,24 +44,23 @@ import {
   trackAsyncWork,
 } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { getOpenClawStateWorkerOwner } from "../../../state/openclaw-state-worker-owner.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
-import {
-  buildAnnounceIdFromChildRun,
-  buildAnnounceIdempotencyKey,
-} from "../../announce-idempotency.js";
 import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../../cron-creator-authority-context.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
+import { createRequesterTranscriptWriter } from "../../test-helpers/requester-transcript-writer.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { createStructuredOutputTool } from "../../tools/structured-output-tool.js";
-import * as sessionEntryRuntime from "../announce/subagent-announce-delivery.runtime.js";
+import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import { readSubagentRunAnnounceResultUsing } from "../announce/subagent-announce-result.js";
 import {
+  captureRequesterContinuationCaller,
   consumeRequesterCronAuthorityAdmission,
   revokeRequesterCronAuthority,
-  withRequesterCronAuthority,
 } from "../requester-cron-authority.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./subagent-control.types.js";
 import { loadPendingFinalDeliveryPayload } from "./subagent-delivery-state.js";
@@ -70,10 +70,10 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
+import * as cleanupPolicy from "./subagent-registry-cleanup.js";
 import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { resolveSubagentKillTargetState } from "./subagent-registry-completion.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
-import { resetSubagentRegistryRuntimeLoadersForTests } from "./subagent-registry-deps.js";
 import { registerRequesterDatabaseAdmissionTests } from "./subagent-registry-lifecycle-admission.test-support.js";
 import {
   registerDetachedCleanupAuthorityTest,
@@ -82,6 +82,10 @@ import {
 } from "./subagent-registry-lifecycle-cleanup.test-support.js";
 import {
   mockBlockedCompletionDeliveryOwner,
+  makeSubagentCompletion,
+  makeKilledSubagentCompletion,
+  makeInterruptedSubagentCompletion,
+  makeRestartRecoveryReceipt,
   registerPrivateCompletionSettlementTests,
   registerRequesterSettleRetirementTests,
   registerNativeCompletionAuthorityTest,
@@ -94,7 +98,12 @@ import {
   type LifecycleFixtureWrite,
   type RunEntryOverrides,
 } from "./subagent-registry-lifecycle-controller.test-support.js";
+import {
+  buildExpectedAnnounceIdempotencyKey,
+  registerDeliveryMirrorCases,
+} from "./subagent-registry-lifecycle-delivery-mirror.test-support.js";
 import { registerLifecycleDeliveryReceiptCases } from "./subagent-registry-lifecycle-delivery.test-support.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import type {
   SubagentLifecycleController,
   SubagentLifecycleOptions,
@@ -107,9 +116,11 @@ import {
   markRequesterTurnYieldedWithAuthority,
 } from "./subagent-registry-requester-yield.test-support.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { registerTerminalStateSignalAuthorityTests } from "./subagent-registry-terminal-state.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { holdLiveRequesterTurns } from "./subagent-requester-turn-liveness.test-support.js";
 
 type LifecycleControllerParams = SubagentLifecycleOptions;
 type LifecycleController = SubagentLifecycleController;
@@ -120,13 +131,55 @@ type SubagentCompletionParams = Parameters<LifecycleController["completeSubagent
 type AnnounceFlowOutcome = Awaited<
   ReturnType<LifecycleControllerParams["runSubagentAnnounceFlow"]>
 >;
-type RestartRecoveryReceipt = NonNullable<SubagentRunRecord["execution"]["restartRecovery"]>;
 
 vi.mock("../../../config/config.js", { spy: true });
 vi.mock("../../../context-engine/init.js", () => ({ ensureContextEnginesInitialized: vi.fn() }));
-vi.mock("../../runtime-plugins.js", () => ({
-  loadAgentRuntimePluginRegistryHandle: vi.fn<typeof loadAgentRuntimePluginRegistryHandle>(),
-}));
+// mock-isolation: Lifecycle fixtures supply their own registries without loading installed plugins.
+vi.mock("../../runtime-plugins.js", () => import("../../runtime-plugins.test-support.js"));
+
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
+
+function seedResidentLifecycleRun(entry: SubagentRunRecord) {
+  const previous = subagentRuns.get(entry.runId);
+  subagentRuns.set(entry.runId, entry);
+  return () => {
+    if (previous) {
+      subagentRuns.set(entry.runId, previous);
+    } else {
+      subagentRuns.delete(entry.runId);
+    }
+  };
+}
+
+function createPendingYieldedHandoffRun() {
+  return createRunEntry({
+    endedAt: 4_000,
+    expectsCompletionMessage: true,
+    requesterSettleWake: {
+      status: "pending",
+      attemptCount: 0,
+      requesterYieldBatch: true,
+      rearmGeneration: 1,
+    },
+  });
+}
+
+function suppressedDeliveryFixture(): SubagentAnnounceDeliveryResult {
+  return {
+    delivered: false,
+    path: "direct",
+    reason: "delivery_suppressed",
+    error: "cancelled_by_message_sending_hook",
+    terminal: true,
+    disposition: "intentional_non_delivery",
+  };
+}
 
 describe("subagent recovery session-effect ownership", () => {
   it("does not treat an ordinary run generation as a recovery suppression receipt", () => {
@@ -184,14 +237,6 @@ const internalSessionEffectsMocks = vi.hoisted(() => ({
   removeInternalSessionEffectsSession: vi.fn(async () => {}),
 }));
 
-vi.mock("../announce/subagent-announce-delivery.runtime.js", { spy: true });
-const nativeSessionEntryRuntime = await vi.importActual<typeof sessionEntryRuntime>(
-  "../announce/subagent-announce-delivery.runtime.js",
-);
-const sessionEntryReadMocks = {
-  loadSessionEntryByKey: vi.mocked(sessionEntryRuntime.loadSessionEntryByKey),
-};
-
 vi.mock("../completion/subagent-completion-admission.store.js", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("../completion/subagent-completion-admission.store.js")
@@ -210,8 +255,9 @@ vi.mock("../../../browser-lifecycle-cleanup.js", () => ({
     browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
 }));
 
+// mock-isolation: Keep process-wide MCP runtime ownership outside lifecycle fixtures.
 vi.mock("../../agent-bundle-mcp-tools.js", () => ({
-  retireSessionMcpRuntimeForSessionKey: bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey,
+  retireSessionMcpRuntime: bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey,
 }));
 
 vi.mock("../../internal-session-effects.js", () => ({
@@ -235,11 +281,14 @@ vi.mock("./subagent-registry-cleanup.js", async (importOriginal) => ({
   resolveDeferredCleanupDecision: () => ({ kind: "give-up", reason: "expiry" }),
 }));
 
+// mock-isolation: Lifecycle cases control retry timing, persistence, and attachment cleanup without touching real session files.
 vi.mock("./subagent-registry-helpers.js", () => ({
   ANNOUNCE_COMPLETION_HARD_EXPIRY_MS: 30 * 60_000,
   ANNOUNCE_EXPIRY_MS: 5 * 60_000,
+  GATEWAY_ADMISSION_RETRY_DELAY_MS: 1_000,
   MIN_ANNOUNCE_RETRY_DELAY_MS: 1_000,
   PROVISIONAL_KILL_RECONCILIATION_MS: 5 * 60_000,
+  SESSION_DELIVERY_DEADLINE_MS: 30 * 60_000,
   capFrozenResultText: (text: string) => text.trim(),
   logAnnounceGiveUp: helperMocks.logAnnounceGiveUp,
   persistSubagentSessionTiming: helperMocks.persistSubagentSessionTiming,
@@ -295,18 +344,6 @@ function makeProvisionalKilledRunEntry(overrides: RunEntryOverrides = {}): Subag
   });
 }
 
-function makeRestartRecoveryReceipt(
-  overrides: Partial<RestartRecoveryReceipt> = {},
-): RestartRecoveryReceipt {
-  return {
-    sessionId: "session-id",
-    sessionMarker: "session-id:1",
-    idempotencyKey: "recovery-run",
-    phase: "accepted",
-    ...overrides,
-  };
-}
-
 function makeRunModeCleanupEntry(
   transcriptSessionId: string,
   overrides: RunModeCleanupEntryOverrides = {},
@@ -329,52 +366,6 @@ function makeRunModeCleanupEntry(
       ...execution,
     },
   });
-}
-
-function makeSubagentCompletion(
-  entry: SubagentRunRecord,
-  overrides: Omit<Partial<SubagentCompletionParams>, "runId"> = {},
-): SubagentCompletionParams {
-  return {
-    runId: entry.runId,
-    endedAt: 4_000,
-    outcome: { status: "ok" },
-    reason: SUBAGENT_ENDED_REASON_COMPLETE,
-    triggerCleanup: false,
-    ...overrides,
-  };
-}
-
-function makeKilledSubagentCompletion(
-  entry: SubagentRunRecord,
-  overrides: Omit<Partial<SubagentCompletionParams>, "runId"> = {},
-): SubagentCompletionParams {
-  return makeSubagentCompletion(entry, {
-    outcome: { status: "error", error: "agent run aborted" },
-    reason: SUBAGENT_ENDED_REASON_KILLED,
-    ...overrides,
-  });
-}
-
-function makeInterruptedSubagentCompletion(
-  entry: SubagentRunRecord,
-  overrides: Omit<Partial<SubagentCompletionParams>, "runId"> = {},
-): SubagentCompletionParams {
-  return makeSubagentCompletion(entry, {
-    outcome: { status: "error", error: "restart interrupted run" },
-    reason: SUBAGENT_ENDED_REASON_ERROR,
-    recoverInterrupted: true,
-    ...overrides,
-  });
-}
-
-function buildExpectedAnnounceIdempotencyKey(entry: SubagentRunRecord): string {
-  return buildAnnounceIdempotencyKey(
-    buildAnnounceIdFromChildRun({
-      childSessionKey: entry.childSessionKey,
-      childRunId: entry.runId,
-    }),
-  );
 }
 
 function createLifecycleController(params: Parameters<typeof createLifecycleControllerFixture>[0]) {
@@ -443,69 +434,17 @@ function createCaptureFixture(entry = createRunEntry()) {
   return { entry, runs, captured, captureSubagentCompletionReply, controller };
 }
 
-async function runNoReplyMirrorScenario(params: {
-  timestamp: number;
-  text?: string;
-  idempotencyKey?: string;
-  idempotencyKeyForEntry?: (entry: SubagentRunRecord) => string;
-}): Promise<SubagentRunRecord> {
-  // A failed direct announce can still be mirrored from the requester history;
-  // the idempotency key prevents stale or unrelated assistant text from winning.
-  const entry = createRunEntry({
-    endedAt: 4_000,
-    expectsCompletionMessage: true,
-    retainAttachmentsOnKeep: true,
-  });
-  const text = params.text ?? "final completion reply";
-  const idempotencyKey =
-    params.idempotencyKeyForEntry?.(entry) ??
-    params.idempotencyKey ??
-    `${buildExpectedAnnounceIdempotencyKey(entry)}:internal-source-reply:0`;
-  const runSubagentAnnounceFlow = vi.fn<LifecycleControllerParams["runSubagentAnnounceFlow"]>(
-    async (announceParams) => {
-      await announceParams.onDeliveryResult?.({
-        delivered: false,
-        path: "direct",
-        error: "completion agent did not produce a visible reply",
-      });
-      return "retryable" as const;
-    },
-  );
-  gatewayMocks.callGateway.mockResolvedValueOnce({
-    messages: [
-      {
-        role: "assistant",
-        provider: "openclaw",
-        model: "delivery-mirror",
-        content: text,
-        timestamp: params.timestamp,
-        idempotencyKey,
-      },
-    ],
-  });
-
-  await createLifecycleController({
-    entry,
-    captureSubagentCompletionReply: vi.fn(async () => text),
-    beforeWrite: vi.fn(),
-    runSubagentAnnounceFlow,
-  }).completeSubagentRun(
-    makeSubagentCompletion(entry, {
-      triggerCleanup: true,
-      terminalReply: { disposition: "visible", text },
-    }),
-  );
-  return entry;
-}
-
 describe("subagent registry lifecycle hardening", () => {
+  const childSessionIdentity = {
+    sessionId: "child-session-id",
+    lifecycleRevision: "child-lifecycle-revision",
+  };
   beforeAll(() => {
     // Session reads and retained generation checks must observe the same canonical row.
     sessionAccessor.replaceSessionEntrySync(
       { agentId: "main", sessionKey: "agent:main:subagent:child" },
       {
-        sessionId: "child-session-id",
-        lifecycleRevision: "child-lifecycle-revision",
+        ...childSessionIdentity,
         updatedAt: 1,
       },
     );
@@ -521,17 +460,12 @@ describe("subagent registry lifecycle hardening", () => {
     bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey.mockClear();
     bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey.mockResolvedValue(true);
     internalSessionEffectsMocks.removeInternalSessionEffectsSession.mockClear();
-    sessionEntryReadMocks.loadSessionEntryByKey
-      .mockReset()
-      .mockImplementation(nativeSessionEntryRuntime.loadSessionEntryByKey);
   });
 
   it.each([
     { change: "identical", current: true },
     { change: "older equivalent", current: true },
     { change: "error", current: false },
-    { change: "timing", current: false },
-    { change: "reply", current: false },
   ] as const)(
     "keeps queued result authority correct after $change completion",
     async ({ change, current }) => {
@@ -542,7 +476,6 @@ describe("subagent registry lifecycle hardening", () => {
       const prepared = await readSubagentRunAnnounceResultUsing(readLifecycleRun(entry), {
         getRuntimeConfig: () => ({}),
         readSubagentRun: (id) => controller.options.runs.get(id),
-        resolveAgentIdFromSessionKey: () => "main",
         resolveSessionStorePathCore: () => "/unused",
         readSubagentSessionEntry: async () => undefined,
         findTranscriptEvent: async () => undefined,
@@ -551,16 +484,8 @@ describe("subagent registry lifecycle hardening", () => {
       expect(prepared.isCurrent()).toBe(true);
 
       await completeRun(controller, entry, {
-        terminalReply:
-          change === "reply"
-            ? { ...terminalReply, text: "corrected result" }
-            : { ...terminalReply },
-        endedAt:
-          change === "older equivalent"
-            ? 3_999
-            : change === "timing" || change === "reply"
-              ? 4_001
-              : 4_000,
+        terminalReply: { ...terminalReply },
+        endedAt: change === "older equivalent" ? 3_999 : 4_000,
         ...(change === "error"
           ? {
               outcome: { status: "error", error: "provider failed" },
@@ -627,33 +552,36 @@ describe("subagent registry lifecycle hardening", () => {
     },
   );
 
-  it("fails a required successful completion without producer reply evidence", async () => {
-    const entry = createRunEntry({ expectsCompletionMessage: true });
-    const captureSubagentCompletionReply = vi.fn(async () => "stale transcript reply");
-    const controller = createLifecycleController({ entry, captureSubagentCompletionReply });
+  it.each([
+    { status: "ok", error: "subagent run ended before producing a final reply" },
+    { status: "error", error: "All models failed (2): timeout" },
+  ] as const)(
+    "rejects stale transcript text for required $status completion",
+    async ({ status, error }) => {
+      const entry = createRunEntry({ expectsCompletionMessage: true });
+      const captureSubagentCompletionReply = vi.fn(async () => "stale transcript reply");
+      const controller = createLifecycleController({ entry, captureSubagentCompletionReply });
 
-    await completeRun(controller, entry, { terminalReply: undefined });
+      await completeRun(controller, entry, {
+        terminalReply: undefined,
+        outcome: status === "ok" ? { status } : { status, error },
+      });
 
-    expect(readLifecycleRun(entry).endedReason).toBe(SUBAGENT_ENDED_REASON_ERROR);
-    expect(readLifecycleRun(entry).execution.outcome).toMatchObject({
-      status: "error",
-      error: "subagent run ended before producing a final reply",
-    });
-    expect(readLifecycleRun(entry).completion?.resultText).toBeNull();
-    expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
-  });
-
-  it("keeps reply-optional successful completion compatible without evidence", async () => {
-    const entry = createRunEntry({ expectsCompletionMessage: false });
-    const captureSubagentCompletionReply = vi.fn(async () => "legacy transcript reply");
-    const controller = createLifecycleController({ entry, captureSubagentCompletionReply });
-
-    await completeRun(controller, entry, { terminalReply: undefined });
-
-    expect(readLifecycleRun(entry).endedReason).toBe(SUBAGENT_ENDED_REASON_COMPLETE);
-    expect(readLifecycleRun(entry).execution.outcome).toMatchObject({ status: "ok" });
-    expect(readLifecycleRun(entry).completion?.resultText).toBe("legacy transcript reply");
-  });
+      expect(readLifecycleRun(entry).endedReason).toBe(
+        status === "ok" ? SUBAGENT_ENDED_REASON_ERROR : SUBAGENT_ENDED_REASON_COMPLETE,
+      );
+      expect(readLifecycleRun(entry).execution.outcome).toMatchObject({
+        status: "error",
+        error,
+      });
+      expect(readLifecycleRun(entry).completion?.resultText).toBeNull();
+      expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
+      expect(resolveSubagentKillTargetState(readLifecycleRun(entry))).toMatchObject({
+        state: "terminal",
+        task: { status: "failed", error },
+      });
+    },
+  );
 
   it.each([
     {
@@ -664,16 +592,24 @@ describe("subagent registry lifecycle hardening", () => {
       terminalReply: { disposition: "silent" } as const,
       resultText: "NO_REPLY",
     },
+    {
+      terminalReply: { disposition: "empty" } as const,
+      resultText: null,
+    },
   ])(
     "persists $terminalReply.disposition producer evidence without transcript inference",
     async ({ terminalReply, resultText }) => {
       const entry = createRunEntry({ expectsCompletionMessage: true });
       const captureSubagentCompletionReply = vi.fn(async () => "stale transcript reply");
       const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
+      const maybeWakeRequesterAfterAllChildrenSettled = vi.fn(async () => false);
       const controller = createLifecycleController({
         entry,
         captureSubagentCompletionReply,
         runSubagentAnnounceFlow,
+        ...(terminalReply.disposition === "empty"
+          ? { maybeWakeRequesterAfterAllChildrenSettled }
+          : {}),
       });
 
       await completeAndJoinCleanup(controller, entry, {
@@ -682,52 +618,33 @@ describe("subagent registry lifecycle hardening", () => {
       });
 
       expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
-      expect(readLifecycleRun(entry).completion).toMatchObject({ terminalReply, resultText });
-      expect(runSubagentAnnounceFlow).toHaveBeenCalledWith(
-        expect.objectContaining({ terminalReply }),
-      );
+      expect(readLifecycleRun(entry).completion?.resultText).toBeUndefined();
+      expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.completion).toMatchObject({
+        terminalReply,
+        resultText,
+      });
+      if (terminalReply.disposition === "empty") {
+        expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
+        expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+        expect(maybeWakeRequesterAfterAllChildrenSettled).not.toHaveBeenCalled();
+        expect(readLifecycleRun(entry).execution.outcome).toMatchObject({ status: "ok" });
+        expect(readLifecycleRun(entry).requesterSettleWake).toBeUndefined();
+        expect(readLifecycleRun(entry).delivery).toMatchObject({
+          status: "not_required",
+          disposition: "intentional_non_delivery",
+        });
+        expect(readLifecycleRun(entry).suppressCompletionDelivery).toBeUndefined();
+        expect(resolveSubagentKillTargetState(readLifecycleRun(entry))).toMatchObject({
+          state: "terminal",
+          task: { status: "succeeded" },
+        });
+      } else {
+        expect(runSubagentAnnounceFlow).toHaveBeenCalledWith(
+          expect.objectContaining({ terminalReply }),
+        );
+      }
     },
   );
-
-  it("records explicit empty success as intentional non-delivery at the lifecycle owner", async () => {
-    const entry = createRunEntry({ expectsCompletionMessage: true });
-    const captureSubagentCompletionReply = vi.fn(async () => "stale transcript reply");
-    const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
-    const maybeWakeRequesterAfterAllChildrenSettled = vi.fn(async () => false);
-    const controller = createLifecycleController({
-      entry,
-      captureSubagentCompletionReply,
-      runSubagentAnnounceFlow,
-      maybeWakeRequesterAfterAllChildrenSettled,
-    });
-
-    await completeRun(controller, entry, {
-      triggerCleanup: true,
-      terminalReply: { disposition: "empty" },
-    });
-    await waitForLifecycleState(() =>
-      expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number"),
-    );
-
-    expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
-    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    expect(maybeWakeRequesterAfterAllChildrenSettled).not.toHaveBeenCalled();
-    expect(readLifecycleRun(entry).execution.outcome).toMatchObject({ status: "ok" });
-    expect(readLifecycleRun(entry).completion).toMatchObject({
-      terminalReply: { disposition: "empty" },
-      resultText: null,
-    });
-    expect(readLifecycleRun(entry).requesterSettleWake).toBeUndefined();
-    expect(readLifecycleRun(entry).delivery).toMatchObject({
-      status: "not_required",
-      disposition: "intentional_non_delivery",
-    });
-    expect(readLifecycleRun(entry).suppressCompletionDelivery).toBeUndefined();
-    expect(resolveSubagentKillTargetState(readLifecycleRun(entry))).toMatchObject({
-      state: "terminal",
-      task: { status: "succeeded" },
-    });
-  });
 
   it("keeps message-tool-required missing output on the requester delivery path", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: true });
@@ -788,15 +705,7 @@ describe("subagent registry lifecycle hardening", () => {
         runTimeoutSeconds?: number;
       }) => "delivered" as AnnounceFlowOutcome,
     );
-    const previous = subagentRuns.get(entry.runId);
-    subagentRuns.set(entry.runId, entry);
-    onTestFinished(() => {
-      if (previous) {
-        subagentRuns.set(entry.runId, previous);
-      } else {
-        subagentRuns.delete(entry.runId);
-      }
-    });
+    onTestFinished(seedResidentLifecycleRun(entry));
     const controller = createLifecycleController({
       entry,
       runs: subagentRuns,
@@ -834,26 +743,6 @@ describe("subagent registry lifecycle hardening", () => {
     expect(runSubagentAnnounceFlow.mock.calls[0]?.[0]?.requesterAgentId).toBe("beta");
   });
 
-  it("merges late visible reply evidence into an already-terminal completion", async () => {
-    const entry = createRunEntry({ expectsCompletionMessage: true });
-    const captureSubagentCompletionReply = vi.fn(async () => "legacy fallback");
-    const controller = createLifecycleController({ entry, captureSubagentCompletionReply });
-
-    await completeRun(controller, entry, {
-      terminalReply: { disposition: "empty" },
-    });
-    await completeRun(controller, entry, {
-      endedAt: 4_001,
-      terminalReply: { disposition: "visible", text: "late authoritative reply" },
-    });
-
-    expect(readLifecycleRun(entry).completion).toMatchObject({
-      resultText: "late authoritative reply",
-      terminalReply: { disposition: "visible", text: "late authoritative reply" },
-    });
-    expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
-  });
-
   registerDetachedCleanupAuthorityTest({ createRunEntry, createLifecycleController });
 
   it("publishes a recovered terminal session status exactly once", async () => {
@@ -876,71 +765,6 @@ describe("subagent registry lifecycle hardening", () => {
     );
   });
 
-  it("does not publish recovered terminal events for an ordinary completion", async () => {
-    const outcome = {
-      status: "error" as const,
-      error: "restart interrupted run",
-      startedAt: 2_000,
-      endedAt: 4_000,
-      elapsedMs: 2_000,
-    };
-    const entry = createRunEntry({
-      endedReason: SUBAGENT_ENDED_REASON_ERROR,
-      terminalOwner: "interrupted-recovery",
-      execution: {
-        status: "terminal",
-        startedAt: 2_000,
-        endedAt: 4_000,
-        outcome,
-      },
-      completion: { required: false, resultText: null, capturedAt: 4_000 },
-    });
-    const emitSubagentProgressEndedForRun = vi.fn(async () => {});
-    const controller = createLifecycleController({ entry, emitSubagentProgressEndedForRun });
-
-    await completeRun(controller, entry, {
-      outcome: { status: "error", error: "restart interrupted run" },
-      reason: SUBAGENT_ENDED_REASON_ERROR,
-    });
-
-    expect(lifecycleEventMocks.emitSessionLifecycleEvent).not.toHaveBeenCalled();
-    expect(emitSubagentProgressEndedForRun).not.toHaveBeenCalled();
-  });
-
-  it("retains a retired accepted receipt until terminal cleanup completes", async () => {
-    const entry = createRunEntry({
-      execution: {
-        status: "running",
-        startedAt: 2_000,
-        restartRecovery: makeRestartRecoveryReceipt({
-          lifecycleGeneration: "retired-generation",
-        }),
-      },
-    });
-    const beforeWrite = vi.fn();
-    const controller = createLifecycleController({ entry, beforeWrite });
-
-    await controller.completeSubagentRun(
-      makeInterruptedSubagentCompletion(entry, {
-        outcome: { status: "error", error: "exact recovery session was lost" },
-        suppressSessionEffects: true,
-      }),
-    );
-
-    expect(readLifecycleRun(entry)).toMatchObject({
-      terminalOwner: "interrupted-recovery",
-      execution: {
-        status: "terminal",
-        endedAt: 4_000,
-        restartRecovery: expect.objectContaining({
-          phase: "accepted",
-          lifecycleGeneration: "retired-generation",
-        }),
-        suppressSessionEffects: true,
-      },
-    });
-  });
-
   it("keeps retired recovery cleanup away from the newer child lifecycle", async () => {
     const entry = createRunEntry({
       cleanup: "delete",
@@ -957,6 +781,7 @@ describe("subagent registry lifecycle hardening", () => {
     const emitSubagentEndedHookForRun = vi.fn(async () => {});
     const notifyContextEngineSubagentEnded = vi.fn(async () => {});
     let recovered: SubagentRunRecord | undefined;
+    let retainedReceipt: SubagentRunRecord["execution"]["restartRecovery"];
     const controller = createLifecycleController({
       entry,
       runs,
@@ -964,6 +789,7 @@ describe("subagent registry lifecycle hardening", () => {
         const value = postimages.get(entry.runId);
         if (value) {
           recovered = value;
+          retainedReceipt ??= value.execution.restartRecovery;
         }
       },
       emitSubagentEndedHookForRun,
@@ -988,6 +814,10 @@ describe("subagent registry lifecycle hardening", () => {
     expect(emitSubagentEndedHookForRun).not.toHaveBeenCalled();
     expect(notifyContextEngineSubagentEnded).not.toHaveBeenCalled();
     expect(recovered?.execution.suppressSessionEffects).toBe(true);
+    expect(retainedReceipt).toMatchObject({
+      phase: "accepted",
+      lifecycleGeneration: "retired-generation",
+    });
     if (!recovered) {
       throw new Error("expected committed recovery before retirement");
     }
@@ -1157,36 +987,30 @@ describe("subagent registry lifecycle hardening", () => {
     gatewayMocks,
     helperMocks,
     completeAndJoinCleanup,
-    sessionEntryReadMocks,
   });
 
   it("settles admitted cleanup and resource retirement during restart drain", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: true });
-    const browserStarted = createDeferredCore();
-    const releaseBrowserCleanup = createDeferredCore();
+    const browserCleanupGate = createEnteredGate();
     browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd.mockImplementationOnce(
-      async () => {
-        browserStarted.resolve();
-        await releaseBrowserCleanup.promise;
-      },
+      browserCleanupGate.wait,
     );
     const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
     const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
     const completion = completeAndJoinCleanup(controller, entry, { triggerCleanup: true });
     try {
-      await browserStarted.promise;
+      await browserCleanupGate.entered;
       markGatewayRestartDraining();
       expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
-      releaseBrowserCleanup.resolve();
+      browserCleanupGate.release();
       await completion;
       expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
       expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
       expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).toHaveBeenCalled();
-      expect(controller.scheduledResumeTimers.size).toBe(0);
       expect(getActiveGatewayRootWorkCount()).toBe(0);
       expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
     } finally {
-      releaseBrowserCleanup.resolve();
+      browserCleanupGate.release();
       await completion;
       resetGatewayWorkAdmission();
     }
@@ -1200,6 +1024,8 @@ describe("subagent registry lifecycle hardening", () => {
   ])(
     "preserves cleanup $phase when another run settles (related=$related)",
     async ({ phase, related }) => {
+      // Retire native idle maintenance before this policy fixture takes over the clock.
+      await getOpenClawStateWorkerOwner().close();
       vi.useFakeTimers();
       const entry = createRunEntry({
         endedAt: Date.now() - 1_000,
@@ -1260,7 +1086,7 @@ describe("subagent registry lifecycle hardening", () => {
         }
       } finally {
         helperMocks.safeRemoveAttachmentsDir.mockReset().mockResolvedValue(undefined);
-        controller.clearScheduledResumeTimers();
+        controller.clearRuntimeState();
         vi.useRealTimers();
       }
     },
@@ -1333,7 +1159,7 @@ describe("subagent registry lifecycle hardening", () => {
         expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number"),
       );
     } finally {
-      controller.clearScheduledResumeTimers();
+      controller.clearRuntimeState();
       vi.useRealTimers();
     }
   });
@@ -1426,6 +1252,137 @@ describe("subagent registry lifecycle hardening", () => {
     },
   );
 
+  it("wakes a cleaned ancestor when its descendant settles without another requester wake", async () => {
+    const ancestor = createRunEntry({
+      runId: "settled-ancestor",
+      childSessionKey: "agent:main:subagent:ancestor",
+      requesterSessionKey: "global",
+      requesterAgentId: "main",
+      requesterStorePath: "/state/main/sessions.json",
+      endedAt: 4_000,
+      cleanupCompletedAt: 5_000,
+      requesterSettleWake: { status: "pending", attemptCount: 0 },
+    });
+    const descendant = createRunEntry({
+      runId: "settling-descendant",
+      childSessionKey: "agent:main:subagent:descendant",
+      requesterSessionKey: ancestor.childSessionKey,
+      requesterAgentId: "main",
+      endedAt: 6_000,
+      expectsCompletionMessage: false,
+    });
+    const foreignAgent = createRunEntry({
+      ...ancestor,
+      runId: "foreign-agent",
+      childSessionKey: "agent:research:subagent:foreign",
+      requesterAgentId: "research",
+    });
+    const foreignStore = createRunEntry({
+      ...ancestor,
+      runId: "foreign-store",
+      childSessionKey: "agent:main:subagent:foreign-store",
+      requesterStorePath: "/state/other/sessions.json",
+    });
+    const runs = new Map(
+      [ancestor, descendant, foreignAgent, foreignStore].map((entry) => [entry.runId, entry]),
+    );
+    const wake = vi.fn(async (params: RequesterSettleWakeParams) => {
+      if (wake.mock.calls.length === 1) {
+        params.onDescendantsPending?.();
+        return false;
+      }
+      await params.completeBatch([params.settledEntry]);
+      return true;
+    });
+    const resumeSubagentRun = vi.fn();
+    const controller = createLifecycleController({
+      entry: ancestor,
+      runs,
+      maybeWakeRequesterAfterAllChildrenSettled: wake,
+      resumeSubagentRun,
+    });
+    controller.resumeRequesterSettleWake(ancestor.runId, ancestor);
+    await waitForLifecycleState(() => {
+      expect(wake).toHaveBeenCalledTimes(1);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    });
+
+    await controller.completeCleanupBookkeeping({
+      runId: descendant.runId,
+      entry: descendant,
+      cleanup: "keep",
+      completedAt: 7_000,
+      preserveTranscript: true,
+      skipRequesterSettleWake: true,
+    });
+    await waitForLifecycleState(() => {
+      expect(wake).toHaveBeenCalledTimes(2);
+      expect(runs.get(ancestor.runId)?.requesterSettleWake).toBeUndefined();
+    });
+    expect(wake.mock.calls.map(([params]) => params.settledEntry.runId)).toEqual([
+      ancestor.runId,
+      ancestor.runId,
+    ]);
+    expect(resumeSubagentRun).not.toHaveBeenCalled();
+  });
+
+  it("arms the terminal descendant deadline before stalled cleanup finishes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const ancestor = createRunEntry({
+      runId: "waiting-ancestor",
+      childSessionKey: "agent:main:subagent:ancestor",
+      endedAt: 4_000,
+      cleanupCompletedAt: 5_000,
+      requesterSettleWake: { status: "pending", attemptCount: 0 },
+    });
+    const descendant = createRunEntry({
+      runId: "running-descendant",
+      childSessionKey: "agent:main:subagent:descendant",
+      requesterSessionKey: ancestor.childSessionKey,
+      requesterAgentId: "main",
+      execution: { status: "running", startedAt: 6_000 },
+    });
+    const runs = new Map([ancestor, descendant].map((entry) => [entry.runId, entry]));
+    const timingGate = createEnteredGate();
+    helperMocks.persistSubagentSessionTiming.mockImplementationOnce(timingGate.wait);
+    const wake = vi.fn(async (params: RequesterSettleWakeParams) => {
+      const endedAt = runs.get(descendant.runId)?.execution.endedAt;
+      if (endedAt === undefined || Date.now() < endedAt + 300_000) {
+        params.onDescendantsPending?.(endedAt === undefined ? undefined : endedAt + 300_000);
+        return false;
+      }
+      await params.completeBatch([params.settledEntry]);
+      return true;
+    });
+    const controller = createLifecycleController({
+      entry: ancestor,
+      runs,
+      maybeWakeRequesterAfterAllChildrenSettled: wake,
+    });
+    let completion: Promise<void> | undefined;
+    try {
+      controller.resumeRequesterSettleWake(ancestor.runId, ancestor);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(wake).toHaveBeenCalledOnce();
+      completion = completeRun(controller, descendant, { endedAt: 10_000, triggerCleanup: false });
+      await timingGate.entered;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(
+        [...controller.waitingRequesterSettleWakes.values()].map(({ deadline }) => deadline),
+      ).toEqual([310_000]);
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(wake).toHaveBeenCalledTimes(3);
+      expect(runs.get(ancestor.runId)?.requesterSettleWake).toBeUndefined();
+      expect(runs.get(descendant.runId)?.cleanupCompletedAt).toBeUndefined();
+    } finally {
+      timingGate.release();
+      await completion;
+      controller.clearRuntimeState();
+      vi.useRealTimers();
+    }
+  });
+
   it("drops a failed-cleanup retry after a newer cleanup generation starts", async () => {
     vi.useFakeTimers();
     const entry = createRunEntry({
@@ -1461,7 +1418,7 @@ describe("subagent registry lifecycle hardening", () => {
       );
     } finally {
       releaseNewCleanup?.();
-      controller.clearScheduledResumeTimers();
+      controller.clearRuntimeState();
       vi.useRealTimers();
     }
   });
@@ -1508,9 +1465,20 @@ describe("subagent registry lifecycle hardening", () => {
     "keeps provider success canonical while a %s callback waits behind capture",
     async (source) => {
       const { entry, controller, captured, captureSubagentCompletionReply } = createCaptureFixture(
-        createRunEntry({ expectsCompletionMessage: source === "killed" ? false : undefined }),
+        createRunEntry({
+          expectsCompletionMessage: false,
+          execution: {
+            status: "running",
+            transcriptTarget: {
+              agentId: "main",
+              sessionId: "session-id",
+              sessionKey: "agent:main:subagent:child",
+              storePath: "/tmp/openclaw-agent.sqlite",
+            },
+          },
+        }),
       );
-      const success = completeRun(controller, entry);
+      const success = completeRun(controller, entry, { terminalReply: undefined });
       await waitForLifecycleState(() =>
         expect(captureSubagentCompletionReply).toHaveBeenCalledOnce(),
       );
@@ -1529,6 +1497,30 @@ describe("subagent registry lifecycle hardening", () => {
         completion: { resultText: reply },
       });
       expect(readLifecycleRun(entry).terminalOwner).toBeUndefined();
+    },
+  );
+
+  it.each([
+    ["with", "requester-revision"],
+    ["without", undefined],
+  ] as const)(
+    "hands a quiet interrupted child to a requester %s a lifecycle revision",
+    async (_label, completionRequesterLifecycleRevision) => {
+      const entry = createRunEntry({
+        expectsCompletionMessage: false,
+        completionRequesterSessionId: "requester-session",
+        completionRequesterLifecycleRevision,
+      });
+      const controller = createLifecycleController({ entry });
+
+      await controller.completeSubagentRun(makeInterruptedSubagentCompletion(entry));
+
+      expect(readLifecycleRun(entry)).toMatchObject({
+        terminalOwner: "interrupted-recovery",
+        completionTarget: "parent",
+        cleanup: "keep",
+        execution: { interruptionReason: "gateway-restart" },
+      });
     },
   );
 
@@ -1558,6 +1550,45 @@ describe("subagent registry lifecycle hardening", () => {
       completion: { resultText: null, capturedAt: 4_000 },
     });
     expect(beforeWrite).toHaveBeenCalledOnce();
+  });
+
+  it.each(["provider", "yield"] as const)(
+    "keeps a cleaned legacy recovery winner after a late %s result",
+    async (source) => {
+      const entry = createRunEntry({ childSessionIdentity: undefined });
+      const beforeWrite = vi.fn();
+      const controller = createLifecycleController({ entry, beforeWrite });
+      const join = observeRootWork();
+      await controller.completeSubagentRun(makeInterruptedSubagentCompletion(entry));
+      await finishCleanup(controller, readLifecycleRun(entry), {
+        preserveTranscript: true,
+        skipRequesterSettleWake: true,
+      });
+      await join();
+      const recovered = structuredClone(readLifecycleRun(entry));
+      const writes = beforeWrite.mock.calls.length;
+      expect(recovered.terminalOwner).toBeUndefined();
+      expect(recovered.execution.suppressSessionEffects).toBe(true);
+      expect(recovered.cleanupCompletedAt).toBe(5_000);
+
+      if (source === "provider") {
+        await completeRun(controller, entry, { endedAt: 5_001 });
+      } else {
+        const lateYield = structuredClone(recovered);
+        expect(markSubagentRunPausedAfterYield({ entry: lateYield, endedAt: 5_001 })).toBe(false);
+        expect(lateYield).toEqual(recovered);
+      }
+      expect(readLifecycleRun(entry)).toEqual(recovered);
+      expect(beforeWrite).toHaveBeenCalledTimes(writes);
+    },
+  );
+
+  it("keeps an already-paused legacy yield idempotent", () => {
+    const entry = createRunEntry({ childSessionIdentity: undefined });
+    expect(markSubagentRunPausedAfterYield({ entry, endedAt: 4_000 })).toBe(true);
+    const paused = structuredClone(entry);
+    markSubagentRunPausedAfterYield({ entry, endedAt: 4_000 });
+    expect(entry).toEqual(paused);
   });
 
   it.each([
@@ -1635,9 +1666,9 @@ describe("subagent registry lifecycle hardening", () => {
       },
     });
     const beforeWrite = vi.fn();
-    await createLifecycleController({ entry, beforeWrite }).completeSubagentRun(
-      makeInterruptedSubagentCompletion(entry),
-    );
+    const runs = new Map([[entry.runId, entry]]);
+    const completion = makeInterruptedSubagentCompletion(entry);
+    await createLifecycleController({ entry, runs, beforeWrite }).completeSubagentRun(completion);
 
     expect(readLifecycleRun(entry)).toMatchObject({
       endedReason: SUBAGENT_ENDED_REASON_ERROR,
@@ -1648,6 +1679,21 @@ describe("subagent registry lifecycle hardening", () => {
         outcome: { status: "error", error: "restart interrupted run" },
       },
     });
+    const settled = readLifecycleRun(entry);
+    beforeWrite.mockClear();
+    helperMocks.persistSubagentSessionTiming.mockClear();
+    const emitSubagentProgressEndedForRun = vi.fn(async () => {});
+    await createLifecycleController({
+      entry: settled,
+      runs,
+      beforeWrite,
+      emitSubagentProgressEndedForRun,
+    }).completeSubagentRun(completion);
+
+    expect(readLifecycleRun(settled)).toEqual(settled);
+    expect(beforeWrite).not.toHaveBeenCalled();
+    expect(helperMocks.persistSubagentSessionTiming).toHaveBeenCalledOnce();
+    expect(emitSubagentProgressEndedForRun).toHaveBeenCalledOnce();
   });
 
   it.each([undefined, "steer-restart"] as const)(
@@ -1693,6 +1739,10 @@ describe("subagent registry lifecycle hardening", () => {
         suppressAnnounceReason,
       });
       expect(readLifecycleRun(entry).killReconciliation).toBeUndefined();
+      expect(resolveSubagentKillTargetState(readLifecycleRun(entry))).toMatchObject({
+        state: "terminal",
+        task: { status: "timed_out" },
+      });
       expect(captureSubagentCompletionReply).toHaveBeenCalledWith(
         entry.childSessionKey,
         expect.objectContaining({ outcome }),
@@ -1712,7 +1762,7 @@ describe("subagent registry lifecycle hardening", () => {
         return "Earlier unbounded result.";
       });
     const controller = createLifecycleController({ entry, captureSubagentCompletionReply });
-    const warn = vi.fn();
+    using warn = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
     const runtime = createSubagentRegistryCompletionRuntime({
       runs: controller.options.runs,
       resumed: new Set(),
@@ -1720,10 +1770,9 @@ describe("subagent registry lifecycle hardening", () => {
       completeSubagentRun: controller.completeSubagentRun,
       scheduleSweep: vi.fn(),
       resumeRun: vi.fn(),
-      warn,
     });
     const completion = runtime.completeSubagentRunWithRecovery(
-      makeSubagentCompletion(entry, { endedAt: 6_000 }),
+      makeSubagentCompletion(entry, { endedAt: 6_000, terminalReply: undefined }),
       "capture-fixture",
     );
     const settled = Promise.allSettled([completion]);
@@ -1744,35 +1793,6 @@ describe("subagent registry lifecycle hardening", () => {
       release.resolve();
       await settled;
     }
-  });
-
-  it("defers provisional killed publication when completion delivery is required", async () => {
-    const entry = createRunEntry({ expectsCompletionMessage: true });
-    const emitSubagentEndedHookForRun = vi.fn(async () => {});
-    const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
-    const controller = createLifecycleController({
-      entry,
-      shouldEmitEndedHookForRun: () => true,
-      emitSubagentEndedHookForRun,
-      runSubagentAnnounceFlow,
-    });
-
-    await controller.completeSubagentRun(
-      makeKilledSubagentCompletion(entry, {
-        triggerCleanup: true,
-      }),
-    );
-
-    expect(readLifecycleRun(entry)).toMatchObject({
-      endedReason: SUBAGENT_ENDED_REASON_KILLED,
-      suppressAnnounceReason: "killed",
-    });
-    expect(emitSubagentEndedHookForRun).not.toHaveBeenCalled();
-    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    expect(resolveSubagentKillTargetState(readLifecycleRun(entry))).toMatchObject({
-      state: "terminal",
-      task: { error: SUBAGENT_KILL_TASK_ERROR },
-    });
   });
 
   it.each([
@@ -1818,7 +1838,7 @@ describe("subagent registry lifecycle hardening", () => {
       captureSubagentCompletionReply,
     });
 
-    await completeRun(controller, entry, { endedAt: 4_001 });
+    await completeRun(controller, entry, { endedAt: 4_001, terminalReply: undefined });
 
     expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
     expect(readLifecycleRun(entry).completion).toMatchObject({
@@ -2039,7 +2059,11 @@ describe("subagent registry lifecycle hardening", () => {
   );
 
   it("rejects a yield after direct delete cleanup has been dispatched", async () => {
-    const entry = createRunEntry({ cleanup: "delete", expectsCompletionMessage: false });
+    const entry = createRunEntry({
+      cleanup: "delete",
+      expectsCompletionMessage: false,
+      childSessionIdentity: { ...childSessionIdentity },
+    });
     const runs = new Map([[entry.runId, entry]]);
     let releaseDelete: (() => void) | undefined;
     gatewayMocks.callGateway.mockImplementation((opts) => {
@@ -2069,48 +2093,6 @@ describe("subagent registry lifecycle hardening", () => {
 
     releaseDelete?.();
     await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-    expect(runs.has(entry.runId)).toBe(false);
-  });
-
-  it("rejects a yield after announce cleanup hands off delete dispatch", async () => {
-    const entry = createRunEntry({ cleanup: "delete", expectsCompletionMessage: true });
-    const runs = new Map([[entry.runId, entry]]);
-    const announceRelease = createDeferredCore<AnnounceFlowOutcome>();
-    const deleteHandoff = createDeferredCore<boolean | undefined>();
-    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
-      async (announceParams) => {
-        try {
-          deleteHandoff.resolve(await announceParams.onBeforeDeleteChildSession?.());
-        } catch (error) {
-          deleteHandoff.reject(error);
-          throw error;
-        }
-        return await announceRelease.promise;
-      },
-    );
-    const controller = createLifecycleController({ entry, runs, runSubagentAnnounceFlow });
-
-    const join = observeRootWork();
-    try {
-      await completeRun(controller, entry, {
-        triggerCleanup: true,
-        terminalReply: { disposition: "visible", text: "final completion reply" },
-      });
-      expect(await deleteHandoff.promise).toBe(true);
-      expect(readLifecycleRun(entry).deleteCleanupDispatchedAt).toBeTypeOf("number");
-
-      expect(
-        markSubagentRunPausedAfterYield({
-          entry: structuredClone(readLifecycleRun(entry)),
-          endedAt: 4_001,
-        }),
-      ).toBe(false);
-      expect(readLifecycleRun(entry).pauseReason).toBeUndefined();
-      expect(readLifecycleRun(entry).endedReason).toBe(SUBAGENT_ENDED_REASON_COMPLETE);
-    } finally {
-      announceRelease.resolve("delivered");
-      await join();
-    }
     expect(runs.has(entry.runId)).toBe(false);
   });
 
@@ -2173,6 +2155,14 @@ describe("subagent registry lifecycle hardening", () => {
         });
         expect(await deleteHandoff.promise).toBe(true);
         expect(readLifecycleRun(entry).deleteCleanupDispatchedAt).toBeTypeOf("number");
+        expect(
+          markSubagentRunPausedAfterYield({
+            entry: structuredClone(readLifecycleRun(entry)),
+            endedAt: 4_001,
+          }),
+        ).toBe(false);
+        expect(readLifecycleRun(entry).pauseReason).toBeUndefined();
+        expect(readLifecycleRun(entry).endedReason).toBe(SUBAGENT_ENDED_REASON_COMPLETE);
 
         const deleteSnapshot = persistedSnapshots.find(
           (snapshot) => snapshot.deleteCleanupDispatchedAt !== undefined,
@@ -2258,7 +2248,10 @@ describe("subagent registry lifecycle hardening", () => {
       createRunEntry({ expectsCompletionMessage: false }),
     );
 
-    const completion = completeRun(controller, entry, { triggerCleanup: true });
+    const completion = completeRun(controller, entry, {
+      triggerCleanup: true,
+      terminalReply: undefined,
+    });
     await waitForLifecycleState(() =>
       expect(captureSubagentCompletionReply).toHaveBeenCalledOnce(),
     );
@@ -2318,7 +2311,10 @@ describe("subagent registry lifecycle hardening", () => {
     expect(readLifecycleRun(entry)).toMatchObject({
       endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
       execution: { outcome: { status: "ok" } },
-      completion: { resultText: "Canonical success." },
+    });
+    expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.completion).toMatchObject({
+      terminalReply: { disposition: "visible", text: "Canonical success." },
+      resultText: "Canonical success.",
     });
     expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
     expect(runSubagentAnnounceFlow.mock.calls[0]?.[0]).toMatchObject({
@@ -2371,38 +2367,6 @@ describe("subagent registry lifecycle hardening", () => {
       }),
     );
   });
-
-  it.each([
-    {
-      name: "failure",
-      reason: SUBAGENT_ENDED_REASON_ERROR,
-      outcome: { status: "error" as const, error: "provider failed" },
-    },
-    {
-      name: "timeout",
-      reason: SUBAGENT_ENDED_REASON_COMPLETE,
-      outcome: { status: "timeout" as const },
-    },
-  ])(
-    "keeps canonical $name when a delayed killed callback arrives",
-    async ({ reason, outcome }) => {
-      const entry = createRunEntry();
-      const controller = createLifecycleController({ entry });
-
-      await completeRun(controller, entry, {
-        outcome,
-        reason,
-      });
-      await controller.completeSubagentRun(
-        makeKilledSubagentCompletion(entry, {
-          endedAt: 4_001,
-        }),
-      );
-
-      expect(readLifecycleRun(entry).execution.outcome?.status).toBe(outcome.status);
-      expect(readLifecycleRun(entry).endedReason).toBe(reason);
-    },
-  );
 
   it.each([
     {
@@ -2493,12 +2457,39 @@ describe("subagent registry lifecycle hardening", () => {
     expect(readLifecycleRun(entry)).toEqual(original);
   });
 
+  it("keeps a confirmed cancellation's pending notice when the killed callback repeats", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      outcome: { status: "error", error: "agent run aborted" },
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: null, capturedAt: 4_000 },
+      delivery: { status: "pending" },
+      cleanupHandled: true,
+    });
+    const original = structuredClone(entry);
+    const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
+    const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
+
+    await controller.completeSubagentRun(
+      makeKilledSubagentCompletion(entry, { triggerCleanup: true }),
+    );
+
+    expect(readLifecycleRun(entry).killReconciliation).toBeUndefined();
+    expect(readLifecycleRun(entry)).toEqual(original);
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+  });
+
   it("keeps cancellation that becomes durable during completion capture", async () => {
     const { entry, controller, captured, captureSubagentCompletionReply } = createCaptureFixture(
       makeProvisionalKilledRunEntry(),
     );
 
-    const completion = completeRun(controller, entry, { endedAt: 4_001, triggerCleanup: true });
+    const completion = completeRun(controller, entry, {
+      endedAt: 4_001,
+      triggerCleanup: true,
+      terminalReply: undefined,
+    });
     await waitForLifecycleState(() => expect(captureSubagentCompletionReply).toHaveBeenCalled());
     expect(readLifecycleRun(entry)).toMatchObject({
       endedReason: SUBAGENT_ENDED_REASON_KILLED,
@@ -2662,7 +2653,10 @@ describe("subagent registry lifecycle hardening", () => {
       retireSupersededRun,
     });
 
-    const completion = completeRun(controller, entry, { triggerCleanup: true });
+    const completion = completeRun(controller, entry, {
+      triggerCleanup: true,
+      terminalReply: undefined,
+    });
     await waitForLifecycleState(() => expect(captureSubagentCompletionReply).toHaveBeenCalled());
     const newer = createRunEntry({ runId: "run-2", createdAt: 5_000, startedAt: 5_000 });
     runs.set(newer.runId, newer);
@@ -2702,12 +2696,11 @@ describe("subagent registry lifecycle hardening", () => {
 
     const completion = completeRun(controller, entry, { triggerCleanup: true });
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         timingEntered.promise,
-        completion.then(() => {
-          throw new Error("Completion settled before entering timing persistence");
-        }),
-      ]);
+        completion,
+        "Completion settled before entering timing persistence",
+      );
       expect(helperMocks.persistSubagentSessionTiming).toHaveBeenCalledOnce();
       const newer = createRunEntry({
         runId: "run-same-millisecond-newer",
@@ -2745,7 +2738,7 @@ describe("subagent registry lifecycle hardening", () => {
     });
     const controller = createLifecycleController({ entry });
 
-    await completeRun(controller, entry);
+    await completeRun(controller, entry, { terminalReply: undefined });
 
     expect(readLifecycleRun(entry).completion?.resultText).toBe("restored final result");
   });
@@ -2853,6 +2846,7 @@ describe("subagent registry lifecycle hardening", () => {
 
   it("persists collector completion and skips announce delivery", async () => {
     const entry = createRunEntry({
+      childSessionIdentity: { ...childSessionIdentity },
       expectsCompletionMessage: false,
       retainAttachmentsOnKeep: true,
       collect: true,
@@ -2866,7 +2860,9 @@ describe("subagent registry lifecycle hardening", () => {
       captureSubagentCompletionReply: vi.fn(async () => "raw collector result"),
     });
 
-    await expect(completeRun(controller, entry, { triggerCleanup: true })).resolves.toBeUndefined();
+    await expect(
+      completeRun(controller, entry, { triggerCleanup: true, terminalReply: undefined }),
+    ).resolves.toBeUndefined();
 
     expect(browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2879,7 +2875,9 @@ describe("subagent registry lifecycle hardening", () => {
     await waitForLifecycleState(() =>
       expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number"),
     );
-    expect(readLifecycleRun(entry).completion?.resultText).toBe("raw collector result");
+    expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.completion?.resultText).toBe(
+      "raw collector result",
+    );
     expect(readLifecycleRun(entry).collectorCompletion).toEqual({ status: "done" });
     expect(readLifecycleRun(entry).delivery?.status).toBe("not_required");
     expect(readLifecycleRun(entry).delivery?.announcedAt).toBeUndefined();
@@ -2887,6 +2885,7 @@ describe("subagent registry lifecycle hardening", () => {
 
   it("deletes collector session resources while retaining the waitable record", async () => {
     const entry = createRunEntry({
+      childSessionIdentity: { ...childSessionIdentity },
       requesterTurnRunId: "run-requester",
       cleanup: "delete",
       expectsCompletionMessage: false,
@@ -2902,7 +2901,7 @@ describe("subagent registry lifecycle hardening", () => {
       captureSubagentCompletionReply: vi.fn(async () => "raw collector result"),
     });
 
-    await completeRun(controller, entry, { triggerCleanup: true });
+    await completeRun(controller, entry, { triggerCleanup: true, terminalReply: undefined });
 
     await waitForLifecycleState(() =>
       expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number"),
@@ -2914,6 +2913,7 @@ describe("subagent registry lifecycle hardening", () => {
           key: entry.childSessionKey,
           deleteTranscript: true,
           emitLifecycleHooks: false,
+          agentId: "main",
           expectedSessionId: "child-session-id",
           expectedLifecycleRevision: "child-lifecycle-revision",
         },
@@ -2937,8 +2937,9 @@ describe("subagent registry lifecycle hardening", () => {
       expect.objectContaining({ runId: entry.runId, childSessionKey: entry.childSessionKey }),
       expect.any(Function),
     );
-    expect(runs.has(entry.runId)).toBe(true);
+    const retained = loadSubagentRegistryFromSqlite().get(entry.runId);
     expect(readLifecycleRun(entry).collectorCompletion).toEqual({ status: "done" });
+    expect(retained?.completion?.resultText).toBe("raw collector result");
     expect(readLifecycleRun(entry).completion?.required).toBe(false);
     expect(readLifecycleRun(entry).requesterSettleWake).toBeUndefined();
     expect(readLifecycleRun(entry).retireAfterRequesterTurn).toBeUndefined();
@@ -2949,6 +2950,7 @@ describe("subagent registry lifecycle hardening", () => {
     async (scenario) => {
       const structured = { answer: "yes" };
       const entry = createRunEntry({
+        childSessionIdentity: { ...childSessionIdentity },
         expectsCompletionMessage: false,
         collect: true,
         outputSchema: { type: "object" },
@@ -3021,6 +3023,7 @@ describe("subagent registry lifecycle hardening", () => {
       cleanup: "delete",
       expectsCompletionMessage: false,
       spawnMode: "session",
+      childSessionIdentity: { ...childSessionIdentity },
     });
     const runs = new Map([[entry.runId, entry]]);
     const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
@@ -3041,6 +3044,7 @@ describe("subagent registry lifecycle hardening", () => {
           key: entry.childSessionKey,
           deleteTranscript: true,
           emitLifecycleHooks: true,
+          agentId: "main",
           expectedSessionId: "child-session-id",
           expectedLifecycleRevision: "child-lifecycle-revision",
         },
@@ -3126,7 +3130,7 @@ describe("subagent registry lifecycle hardening", () => {
       } else {
         expect(retire).toHaveBeenCalledWith(
           expect.objectContaining({
-            sessionKey: entry.childSessionKey,
+            sessionId: entry.childSessionIdentity?.sessionId,
             reason: "subagent-run-cleanup",
             preserveActiveLeases: true,
             onError: expect.any(Function),
@@ -3136,147 +3140,72 @@ describe("subagent registry lifecycle hardening", () => {
     },
   );
 
-  it("enriches registered-run outcomes with persisted timing before cleanup", async () => {
-    const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
-    const entry = createRunEntry({
-      startedAt: 2_000,
-      expectsCompletionMessage: true,
-    });
-
-    const controller = createLifecycleController({
-      entry,
-      runSubagentAnnounceFlow,
-    });
-
-    await expect(
-      completeRun(controller, entry, {
-        endedAt: 4_250,
-        outcome: { status: "timeout" },
-        triggerCleanup: true,
-      }),
-    ).resolves.toBeUndefined();
-
-    const enrichedOutcome = {
-      status: "timeout" as const,
-      startedAt: 2_000,
-      endedAt: 4_250,
-      elapsedMs: 2_250,
-    };
-    expect(readLifecycleRun(entry).execution.outcome).toEqual(enrichedOutcome);
-    expect(resolveSubagentKillTargetState(readLifecycleRun(entry))).toMatchObject({
-      state: "terminal",
-      task: { status: "timed_out" },
-    });
-    expect(runSubagentAnnounceFlow).toHaveBeenCalledWith(
-      expect.objectContaining({
-        startedAt: 2_000,
-        endedAt: 4_250,
-        outcome: enrichedOutcome,
-      }),
-    );
-  });
-
-  it("does not wait for a completion reply when the run does not expect one", async () => {
-    const entry = createRunEntry({
-      expectsCompletionMessage: false,
-      execution: {
-        status: "running",
-        transcriptTarget: {
-          agentId: "main",
-          sessionId: "child-session",
-          sessionKey: "agent:main:subagent:child",
-          storePath: "/tmp/openclaw/agents/main/sessions/sessions.json",
+  it.each([
+    {
+      name: "explicit transcript target",
+      childSessionKey: "agent:main:subagent:child",
+      sessionId: "child-session",
+      storePath: "/tmp/openclaw/agents/main/sessions/sessions.json",
+    },
+    {
+      name: "incognito child store",
+      childSessionKey: "agent:main:subagent:incognito-child",
+      sessionId: "incognito-child-session",
+      storePath: undefined,
+    },
+  ])(
+    "captures optional completion without waiting from $name",
+    async ({ childSessionKey, sessionId, storePath }) => {
+      const durableStorePath = "/tmp/durable-sessions.json";
+      const entry = createRunEntry({
+        childSessionKey,
+        expectsCompletionMessage: false,
+        execution: {
+          status: "running",
+          transcriptTarget: {
+            agentId: "main",
+            sessionId,
+            sessionKey: childSessionKey,
+            ...(storePath ? { storePath } : {}),
+          },
         },
-      },
-    });
-    const captureSubagentCompletionReply = vi.fn(async () => undefined);
+      });
+      const captureSubagentCompletionReply = vi.fn(async () => undefined);
 
-    const controller = createLifecycleController({
-      entry,
-      captureSubagentCompletionReply,
-      runSubagentAnnounceFlow: vi.fn(async () => "retryable" as const),
-    });
+      const controller = createLifecycleController({
+        entry,
+        captureSubagentCompletionReply,
+        getRuntimeConfig: () => ({ session: { store: durableStorePath } }),
+        runSubagentAnnounceFlow: vi.fn(async () => "retryable" as const),
+      });
 
-    await expect(completeRun(controller, entry)).resolves.toBeUndefined();
+      await expect(
+        completeRun(controller, entry, { terminalReply: undefined }),
+      ).resolves.toBeUndefined();
 
-    expect(captureSubagentCompletionReply).toHaveBeenCalledWith(entry.childSessionKey, {
-      waitForReply: false,
-      sessionTarget: entry.execution?.transcriptTarget,
-      outcome: {
-        status: "ok",
-        startedAt: 2_000,
-        endedAt: 4_000,
-        elapsedMs: 2_000,
-      },
-    });
-  });
-
-  it("scopes fallback completion capture to the incognito child store", async () => {
-    const childSessionKey = "agent:main:subagent:incognito-child";
-    const durableStorePath = "/tmp/durable-sessions.json";
-    const entry = createRunEntry({
-      childSessionKey,
-      expectsCompletionMessage: false,
-      execution: {
-        status: "running",
-        transcriptTarget: {
-          agentId: "main",
-          sessionId: "incognito-child-session",
-          sessionKey: childSessionKey,
-        },
-      },
-    });
-    const captureSubagentCompletionReply = vi.fn(async () => undefined);
-    const controller = createLifecycleController({
-      entry,
-      captureSubagentCompletionReply,
-      getRuntimeConfig: () => ({ session: { store: durableStorePath } }),
-      runSubagentAnnounceFlow: vi.fn(async () => "retryable" as const),
-    });
-
-    await completeRun(controller, entry);
-
-    expect(captureSubagentCompletionReply).toHaveBeenCalledWith(
-      childSessionKey,
-      expect.objectContaining({
+      expect(captureSubagentCompletionReply).toHaveBeenCalledWith(entry.childSessionKey, {
+        waitForReply: false,
         sessionTarget: {
           agentId: "main",
-          sessionId: "incognito-child-session",
+          sessionId,
           sessionKey: childSessionKey,
-          storePath: resolveSessionStorePathForScope({
-            agentId: "main",
-            sessionKey: childSessionKey,
-            storePath: durableStorePath,
-          }),
+          storePath:
+            storePath ??
+            resolveSessionStorePathForScope({
+              agentId: "main",
+              sessionKey: childSessionKey,
+              storePath: durableStorePath,
+            }),
         },
-      }),
-    );
-  });
-
-  it("does not freeze stale reply text for terminal error outcomes", async () => {
-    const captureSubagentCompletionReply = vi.fn(async () => "stale assistant text");
-    const entry = createRunEntry({
-      expectsCompletionMessage: true,
-    });
-
-    const controller = createLifecycleController({
-      entry,
-      captureSubagentCompletionReply,
-    });
-
-    await expect(
-      completeRun(controller, entry, {
-        outcome: { status: "error", error: "All models failed (2): timeout" },
-      }),
-    ).resolves.toBeUndefined();
-
-    expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
-    expect(readLifecycleRun(entry).completion?.resultText).toBeNull();
-    expect(resolveSubagentKillTargetState(readLifecycleRun(entry))).toMatchObject({
-      state: "terminal",
-      task: { status: "failed", error: "All models failed (2): timeout" },
-    });
-  });
+        outcome: {
+          status: "ok",
+          startedAt: 2_000,
+          endedAt: 4_000,
+          elapsedMs: 2_000,
+        },
+      });
+    },
+  );
 
   it.each([
     { mode: "optional", waitsForDescendants: false, expectsCompletionMessage: undefined },
@@ -3397,29 +3326,6 @@ describe("subagent registry lifecycle hardening", () => {
     expect(emitted).not.toHaveBeenCalled();
   });
 
-  it("produces valid cleanupCompletedAt on give-up path when completionAnnouncedAt is undefined", async () => {
-    const entry = createRunEntry({
-      endedAt: 4_000,
-      expectsCompletionMessage: false,
-      retainAttachmentsOnKeep: true,
-    });
-
-    const controller = createLifecycleController({
-      entry,
-      captureSubagentCompletionReply: vi.fn(async () => undefined),
-    });
-
-    expect(readLifecycleRun(entry).delivery?.announcedAt).toBeUndefined();
-
-    await controller.finalizeResumedAnnounceGiveUp({
-      entry,
-      reason: "expiry",
-    });
-
-    expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
-    expect(Number.isNaN(readLifecycleRun(entry).cleanupCompletedAt)).toBe(false);
-  });
-
   it.each([
     { name: "original window", required: true, redriven: false, replaced: false },
     { name: "explicit retry window", required: true, redriven: true, replaced: false },
@@ -3492,7 +3398,7 @@ describe("subagent registry lifecycle hardening", () => {
       } finally {
         pendingHandoff.resolve("retryable");
         await vi.advanceTimersByTimeAsync(0);
-        controller.clearScheduledResumeTimers();
+        controller.clearRuntimeState();
         vi.useRealTimers();
       }
     },
@@ -3535,47 +3441,9 @@ describe("subagent registry lifecycle hardening", () => {
     } finally {
       requesterFinished.resolve("delivered");
       await vi.advanceTimersByTimeAsync(0);
-      controller.clearScheduledResumeTimers();
+      controller.clearRuntimeState();
       vi.useRealTimers();
     }
-  });
-
-  it("suspends successful keep-mode final delivery after its deadline", async () => {
-    const entry = createRunEntry({
-      endedAt: 4_000,
-      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
-      expectsCompletionMessage: true,
-      completion: { required: true, resultText: "final answer" },
-      delivery: { status: "pending", lastError: "gateway request timeout for agent" },
-      outcome: { status: "ok" },
-      retainAttachmentsOnKeep: true,
-    });
-
-    const controller = createLifecycleController({
-      entry,
-      captureSubagentCompletionReply: vi.fn(async () => undefined),
-    });
-
-    await controller.finalizeResumedAnnounceGiveUp({
-      entry,
-      reason: "expiry",
-    });
-
-    expect(readLifecycleRun(entry).delivery?.status).toBe("suspended");
-    expect(readLifecycleRun(entry).completion?.resultText).toBe("final answer");
-    expect(readLifecycleRun(entry).delivery?.suspendedAt).toBeTypeOf("number");
-    expect(readLifecycleRun(entry).delivery?.suspendedReason).toBe("expiry");
-    expect(readLifecycleRun(entry).cleanupHandled).toBe(false);
-    expect(readLifecycleRun(entry).cleanupCompletedAt).toBeUndefined();
-    expect(helperMocks.safeRemoveAttachmentsDir).not.toHaveBeenCalled();
-    expect(completionDeliveryMocks.blockSubagentCompletionDelivery).toHaveBeenCalledWith({
-      subagent: expect.objectContaining({
-        runId: entry.runId,
-        childSessionKey: entry.childSessionKey,
-      }),
-      reason: "gateway request timeout for agent",
-      suspendedReason: "expiry",
-    });
   });
 
   it.each([
@@ -3641,65 +3509,78 @@ describe("subagent registry lifecycle hardening", () => {
     },
   );
 
-  it("persists the concrete announce delivery error when cleanup gives up", async () => {
-    const entry = createRunEntry({
-      endedAt: 4_000,
-      expectsCompletionMessage: true,
-      retainAttachmentsOnKeep: true,
-    });
-    const runSubagentAnnounceFlow = vi.fn<LifecycleControllerParams["runSubagentAnnounceFlow"]>(
-      async (announceParams) => {
-        await announceParams.onDeliveryResult?.({
-          delivered: false,
-          path: "direct",
-          error: "UNAVAILABLE: requester wake failed",
-          phases: [
-            {
-              phase: "direct-primary",
-              delivered: false,
-              path: "direct",
-              error: "UNAVAILABLE: requester wake failed",
-            },
-            {
-              phase: "steer-fallback",
-              delivered: false,
-              path: "none",
-            },
-          ],
-        });
-        return "retryable" as const;
-      },
-    );
+  it.each([false, true])(
+    "preserves the concrete delivery error through retries (retry=%s)",
+    async (retry) => {
+      const actualPolicy = await vi.importActual<typeof cleanupPolicy>(
+        "./subagent-registry-cleanup.js",
+      );
+      const decision = vi
+        .spyOn(cleanupPolicy, "resolveDeferredCleanupDecision")
+        .mockImplementation(actualPolicy.resolveDeferredCleanupDecision);
+      onTestFinished(() => decision.mockRestore());
+      vi.useFakeTimers();
+      vi.setSystemTime(2_000_000);
+      const entry = createRunEntry({
+        endedAt: retry ? Date.now() - 1_000 : 4_000,
+        endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+        outcome: { status: "ok" },
+        completion: { required: true, resultText: "final completion reply" },
+        expectsCompletionMessage: true,
+        retainAttachmentsOnKeep: true,
+      });
+      const runSubagentAnnounceFlow = vi.fn<LifecycleControllerParams["runSubagentAnnounceFlow"]>(
+        async (announceParams) => {
+          await announceParams.onDeliveryResult?.({
+            delivered: false,
+            path: "direct",
+            error: "UNAVAILABLE: requester wake failed",
+          });
+          return "retryable" as const;
+        },
+      );
 
-    const controller = createLifecycleController({
-      entry,
-      runSubagentAnnounceFlow,
-    });
+      const controller = createLifecycleController({
+        entry,
+        runSubagentAnnounceFlow,
+      });
+      onTestFinished(() => {
+        controller.clearRuntimeState();
+        vi.useRealTimers();
+      });
 
-    await expect(
-      completeAndJoinCleanup(controller, entry, {
-        triggerCleanup: true,
-        terminalReply: { disposition: "visible", text: "final completion reply" },
-      }),
-    ).resolves.toBeUndefined();
+      const firstCleanup = observeRootWork();
+      expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
+      await firstCleanup();
 
-    expect(completionDeliveryMocks.blockSubagentCompletionDelivery).toHaveBeenCalledWith({
-      subagent: expect.objectContaining({
-        runId: entry.runId,
-        childSessionKey: entry.childSessionKey,
-      }),
-      reason:
-        "UNAVAILABLE: requester wake failed; direct-primary: UNAVAILABLE: requester wake failed",
-      suspendedReason: "expiry",
-    });
-    expect(readLifecycleRun(entry).delivery?.lastError).toBe(
-      "UNAVAILABLE: requester wake failed; direct-primary: UNAVAILABLE: requester wake failed",
-    );
-    expect(readLifecycleRun(entry).delivery?.status).toBe("suspended");
-    expect(readLifecycleRun(entry).delivery?.suspendedAt).toBeTypeOf("number");
-    expect(readLifecycleRun(entry).delivery?.suspendedReason).toBe("expiry");
-    expect(readLifecycleRun(entry).cleanupCompletedAt).toBeUndefined();
-  });
+      if (retry) {
+        expect(readLifecycleRun(entry).delivery?.lastError).toBe(
+          "UNAVAILABLE: requester wake failed",
+        );
+        expect(readLifecycleRun(entry).delivery?.status).toBe("pending");
+        vi.setSystemTime(Date.now() + 30 * 60_000);
+        const join = observeRootWork();
+        controller.startSubagentAnnounceCleanupFlow(readLifecycleRun(entry));
+        await join();
+      }
+
+      expect(completionDeliveryMocks.blockSubagentCompletionDelivery).toHaveBeenCalledWith({
+        subagent: expect.objectContaining({
+          runId: entry.runId,
+          childSessionKey: entry.childSessionKey,
+        }),
+        reason: "UNAVAILABLE: requester wake failed",
+        suspendedReason: "expiry",
+      });
+      expect(readLifecycleRun(entry).delivery?.lastError).toBe(
+        "UNAVAILABLE: requester wake failed",
+      );
+      expect(readLifecycleRun(entry).delivery?.status).toBe("suspended");
+      expect(readLifecycleRun(entry).delivery?.suspendedAt).toBeTypeOf("number");
+      expect(readLifecycleRun(entry).delivery?.suspendedReason).toBe("expiry");
+      expect(readLifecycleRun(entry).cleanupCompletedAt).toBeUndefined();
+    },
+  );
 
   registerNativeCompletionAuthorityTest({
     createRunEntry,
@@ -3764,7 +3645,7 @@ describe("subagent registry lifecycle hardening", () => {
       expect(readLifecycleRun(entry).delivery?.nextAttemptAt).toBeUndefined();
     } finally {
       announce.resolve();
-      controller.clearScheduledResumeTimers();
+      controller.clearRuntimeState();
     }
   });
 
@@ -3851,9 +3732,8 @@ describe("subagent registry lifecycle hardening", () => {
         await waitForLifecycleState(() =>
           expect(readLifecycleRun(entry).delivery?.status).toBe("delivered"),
         );
-        expect
-          .soft(readLifecycleRun(entry).delivery)
-          .toMatchObject({ payload: undefined, attemptCount: undefined });
+        expect.soft(readLifecycleRun(entry).delivery?.payload).toBeUndefined();
+        expect.soft(readLifecycleRun(entry).delivery?.attemptCount).toBeUndefined();
         await waitForLifecycleState(() =>
           expect(readLifecycleRun(entry).requesterSettleWake).toBeUndefined(),
         );
@@ -3884,86 +3764,25 @@ describe("subagent registry lifecycle hardening", () => {
           disposition: "delivered",
           deliveredAt: 12_345,
           announcedAt: 12_345,
-          payload: undefined,
           lastError: undefined,
           attemptCount: undefined,
         });
+        expect(readLifecycleRun(entry).delivery?.payload).toBeUndefined();
       } finally {
         announce.resolve();
         mirror.resolve({ messages: [] });
         await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-        controller.clearScheduledResumeTimers();
+        controller.clearRuntimeState();
       }
     },
   );
 
-  it.each([
-    { source: "current" },
-    { source: "long reply" },
-    { source: "message tool" },
-    { source: "child run" },
-    { source: "stale" },
-    { source: "sibling" },
-  ])("credits only current-run requester delivery mirrors ($source)", async ({ source }) => {
-    const delivered = source !== "stale" && source !== "sibling";
-    const entry = await runNoReplyMirrorScenario({
-      timestamp: source === "stale" ? 1_999 : 12_345,
-      text: source === "long reply" ? "long completion reply ".repeat(500) : undefined,
-      idempotencyKeyForEntry: (candidate) => {
-        if (source === "child run") {
-          return `${candidate.runId}:message-tool:1`;
-        }
-        if (source === "sibling") {
-          return `${buildAnnounceIdempotencyKey(
-            buildAnnounceIdFromChildRun({
-              childSessionKey: "agent:main:subagent:sibling",
-              childRunId: "run-sibling",
-            }),
-          )}:internal-source-reply:0`;
-        }
-        return `${buildExpectedAnnounceIdempotencyKey(candidate)}:${source === "message tool" ? "message-tool:" : ""}internal-source-reply:0`;
-      },
-    });
-    await waitForLifecycleState(() =>
-      expect(
-        delivered
-          ? readLifecycleRun(entry).cleanupCompletedAt
-          : readLifecycleRun(entry).delivery?.suspendedAt,
-      ).toBeTypeOf("number"),
-    );
-    expect(gatewayMocks.callGateway).toHaveBeenCalledWith({
-      method: "chat.history",
-      params: { sessionKey: entry.requesterSessionKey, limit: 25, maxChars: 128 * 1024 },
-      timeoutMs: 5_000,
-    });
-    expect(readLifecycleRun(entry).delivery).toMatchObject({
-      status: delivered ? "delivered" : "suspended",
-      deliveredAt: delivered ? 12_345 : undefined,
-      announcedAt: delivered ? 12_345 : undefined,
-      lastError: delivered ? undefined : "completion agent did not produce a visible reply",
-    });
-    if (delivered) {
-      expect(readLifecycleRun(entry).delivery?.payload).toBeUndefined();
-      expect(readLifecycleRun(entry).delivery?.attemptCount).toBeUndefined();
-      expect(helperMocks.logAnnounceGiveUp).not.toHaveBeenCalled();
-    } else {
-      expect(completionDeliveryMocks.blockSubagentCompletionDelivery).toHaveBeenCalledWith({
-        subagent: expect.objectContaining({
-          runId: entry.runId,
-          childSessionKey: entry.childSessionKey,
-          completion: expect.objectContaining({ resultText: "final completion reply" }),
-        }),
-        reason: "completion agent did not produce a visible reply",
-        suspendedReason: "expiry",
-      });
-      expect(helperMocks.logAnnounceGiveUp).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runId: entry.runId,
-          requesterSessionKey: entry.requesterSessionKey,
-        }),
-        "expiry",
-      );
-    }
+  registerDeliveryMirrorCases({
+    createLifecycleController,
+    waitForLifecycleState,
+    callGateway: gatewayMocks.callGateway,
+    blockSubagentCompletionDelivery: completionDeliveryMocks.blockSubagentCompletionDelivery,
+    logAnnounceGiveUp: helperMocks.logAnnounceGiveUp,
   });
 
   it("skips browser cleanup when steer restart suppresses cleanup flow", async () => {
@@ -3998,19 +3817,15 @@ describe("subagent registry lifecycle hardening", () => {
       execution: { status: "running", startedAt: 5_000 },
     });
     const controller = createLifecycleController({ entry, runs });
-    const firstCleanupEntered = createDeferredCore();
-    const firstCleanupRelease = createDeferredCore();
+    const firstCleanupGate = createEnteredGate();
     browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd.mockImplementationOnce(
-      async () => {
-        firstCleanupEntered.resolve();
-        await firstCleanupRelease.promise;
-      },
+      firstCleanupGate.wait,
     );
 
     const firstCompletion = completeRun(controller, entry, {
       triggerCleanup: true,
     });
-    await firstCleanupEntered.promise;
+    await firstCleanupGate.entered;
     const staleRecovery = controller.completeSubagentRun(
       makeInterruptedSubagentCompletion(entry, {
         expectedEntry: entry,
@@ -4021,7 +3836,7 @@ describe("subagent registry lifecycle hardening", () => {
     );
     runs.set(entry.runId, successor);
 
-    firstCleanupRelease.resolve();
+    firstCleanupGate.release();
     const results = await Promise.allSettled([firstCompletion, staleRecovery]);
     expect(results[0]).toMatchObject({ status: "fulfilled" });
     expect(results[1]).toMatchObject({
@@ -4035,41 +3850,6 @@ describe("subagent registry lifecycle hardening", () => {
     expect(successor.execution).toEqual({ status: "running", startedAt: 5_000 });
     expect(successor.endedReason).toBeUndefined();
     expect(successor.terminalOwner).toBeUndefined();
-  });
-
-  it("dedupes browser cleanup when two callers complete the same run in parallel", async () => {
-    // registerSubagentRun fires both an in-process listener (phase='end') and a
-    // gateway waitForSubagentCompletion RPC; in embedded mode both resolve to
-    // the same runId and call completeSubagentRun. Without a per-entry dispatch
-    // guard, cleanupBrowserSessionsForLifecycleEnd fires once per caller,
-    // duplicating browser driver tab-close IPC.
-    const entry = createRunEntry({
-      expectsCompletionMessage: false,
-    });
-    const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
-
-    const controller = createLifecycleController({
-      entry,
-      runSubagentAnnounceFlow,
-    });
-
-    const completeParams = {
-      runId: entry.runId,
-      endedAt: 4_000,
-      outcome: { status: "ok" as const },
-      reason: SUBAGENT_ENDED_REASON_COMPLETE,
-      triggerCleanup: true,
-    };
-
-    await Promise.all([
-      controller.completeSubagentRun(completeParams),
-      controller.completeSubagentRun(completeParams),
-    ]);
-
-    expect(
-      browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
-    ).toHaveBeenCalledTimes(1);
-    expect(readLifecycleRun(entry).browserCleanupDispatchedAt).toBeTypeOf("number");
   });
 
   it("drains the retire + announce tail for a duplicate completion held behind a slow first browser cleanup", async ({
@@ -4129,7 +3909,9 @@ describe("subagent registry lifecycle hardening", () => {
       expect(
         browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
       ).toHaveBeenCalledTimes(1);
+      expect(readLifecycleRun(entry).browserCleanupDispatchedAt).toBeTypeOf("number");
       expect(readLifecycleRun(entry).execution.endedAt).toBe(4_000);
+      expect(helperMocks.persistSubagentSessionTiming).toHaveBeenCalledOnce();
       expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).toHaveBeenCalled();
       expect(runSubagentAnnounceFlow).toHaveBeenCalled();
       expect(firstCleanupParams?.isCurrent?.()).toBe(true);
@@ -4204,7 +3986,7 @@ describe("requester settle wake trigger", () => {
     "owns context cleanup after its caller scope drains (%s)",
     async (mode) => {
       resetGatewayWorkAdmission();
-      await resetContextEngineRuntimeQuarantineForTests();
+      await engineTest.resetContextEngineRuntimeQuarantineForTests();
       runtimeMocks.log.mockClear();
       const registry = createEmptyPluginRegistry();
       const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
@@ -4231,14 +4013,13 @@ describe("requester settle wake trigger", () => {
       });
       registerContextEngineInRegistry(registry, "cleanup-owned", factory, "plugin:fixture");
       registerContextEngineInRegistry(registry, "legacy", () => new LegacyContextEngine(), "core");
-      vi.mocked(getRuntimeConfig).mockReturnValue({
-        plugins: { slots: { contextEngine: "cleanup-owned" } },
-      });
+      vi.mocked(getRuntimeConfig).mockReturnValue(
+        engineTest.contextEngineConfig("cleanup-owned", "fixture"),
+      );
       vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(registry);
-      const warn = vi.fn();
+      using warn = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
       const cleanup = createSubagentRegistryContextCleanup({
         isEndedHookOwnerCurrent: () => false,
-        warn,
       });
       const entry = makeRunModeCleanupEntry("closed-cleanup-caller", { generation: 1 });
       const runs = new Map([[entry.runId, entry]]);
@@ -4315,8 +4096,7 @@ describe("requester settle wake trigger", () => {
         await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
         vi.mocked(getRuntimeConfig).mockReset();
         vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
-        resetSubagentRegistryRuntimeLoadersForTests();
-        await resetContextEngineRuntimeQuarantineForTests();
+        await engineTest.resetContextEngineRuntimeQuarantineForTests();
         resetGatewayWorkAdmission();
       }
     },
@@ -4327,14 +4107,8 @@ describe("requester settle wake trigger", () => {
     const entry = createRunEntry({ requesterSessionKey: sessionKey, endedAt: 4_000 });
     let disposed = false;
     const wakeReady = createDeferredCore();
-    const requesterTranscriptWrite = vi.fn();
-    const withRequesterTranscriptWrite = async <T>(operation: () => Promise<T> | T): Promise<T> => {
-      requesterTranscriptWrite();
-      if (disposed) {
-        throw new Error("attempt disposed before transcript write");
-      }
-      return await operation();
-    };
+    const { requesterTranscriptWrite, withRequesterTranscriptWrite } =
+      createRequesterTranscriptWriter(() => disposed);
     const freshTranscriptWrite = vi.fn(async () => {});
     const settleWake = vi.fn(async () => {
       await wakeReady.promise;
@@ -4434,17 +4208,15 @@ describe("requester settle wake trigger", () => {
       });
       expect(settleWake).toHaveBeenCalledTimes(mode === "wake" ? 1 : 0);
       if (mode === "wake") {
-        expect(settleWake).toHaveBeenCalledWith({
-          requesterSessionKey: "agent:main:main",
-          requesterOrigin: undefined,
-          settledEntry: expect.objectContaining({
-            runId: entry.runId,
-            childSessionKey: entry.childSessionKey,
+        expect(settleWake).toHaveBeenCalledWith(
+          expect.objectContaining({
+            requesterSessionKey: "agent:main:main",
+            settledEntry: expect.objectContaining({
+              runId: entry.runId,
+              childSessionKey: entry.childSessionKey,
+            }),
           }),
-          transitionBatch: expect.any(Function),
-          completeBatch: expect.any(Function),
-          isSourceCurrent: expect.any(Function),
-        });
+        );
       }
       expect(readLifecycleRun(entry).requesterSettleWake).toEqual(
         mode === "wake" ? { status: "pending", attemptCount: 0 } : undefined,
@@ -4652,12 +4424,15 @@ describe("requester settle wake trigger", () => {
       entry,
       maybeWakeRequesterAfterAllChildrenSettled: settleWake,
     });
+    const requesterTurn = holdLiveRequesterTurns("run-requester");
+    onTestFinished(requesterTurn.restore);
 
     await finishCleanup(controller, entry);
 
     await Promise.resolve();
     expect(settleWake).not.toHaveBeenCalled();
 
+    requesterTurn.end("run-requester");
     await settleRequesterTurn(controller, entry);
 
     await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledOnce());
@@ -4674,16 +4449,7 @@ describe("requester settle wake trigger", () => {
   ] as const)(
     "credits a yielded handoff only from settled delivery evidence: %s",
     async (ownership) => {
-      const entry = createRunEntry({
-        endedAt: 4_000,
-        expectsCompletionMessage: true,
-        requesterSettleWake: {
-          status: "pending",
-          attemptCount: 0,
-          requesterYieldBatch: true,
-          rearmGeneration: 1,
-        },
-      });
+      const entry = createPendingYieldedHandoffRun();
       let gatewayOpen = true;
       const gatewayContext = {};
       if (ownership !== "unbound") {
@@ -4701,6 +4467,7 @@ describe("requester settle wake trigger", () => {
       });
       const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
         async (announceParams) => {
+          expect(announceParams.controllerInput).toBeUndefined();
           await announceParams.onDeliveryResult?.({
             delivered: false,
             path: "none",
@@ -4711,15 +4478,7 @@ describe("requester settle wake trigger", () => {
           return "intentional_non_delivery" as const;
         },
       );
-      const previous = subagentRuns.get(entry.runId);
-      subagentRuns.set(entry.runId, entry);
-      onTestFinished(() => {
-        if (previous) {
-          subagentRuns.set(entry.runId, previous);
-        } else {
-          subagentRuns.delete(entry.runId);
-        }
-      });
+      onTestFinished(seedResidentLifecycleRun(entry));
       const controller = createLifecycleController({
         entry,
         runs: subagentRuns,
@@ -4774,45 +4533,60 @@ describe("requester settle wake trigger", () => {
     },
   );
 
-  it("records suppressed completion delivery without retrying or waking the requester", async () => {
-    const entry = createRunEntry({ endedAt: 4_000, expectsCompletionMessage: true });
-    const maybeWakeRequesterAfterAllChildrenSettled = vi.fn(async () => false);
-    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
-      async (announceParams) => {
-        await announceParams.onDeliveryResult?.({
-          delivered: false,
-          path: "direct",
-          reason: "delivery_suppressed",
-          error: "cancelled_by_message_sending_hook",
-          terminal: true,
-          disposition: "intentional_non_delivery",
-        });
-        return "intentional_non_delivery" as const;
-      },
-    );
-    const controller = createLifecycleController({
-      entry,
-      maybeWakeRequesterAfterAllChildrenSettled,
-      runSubagentAnnounceFlow,
-    });
+  it.each([
+    { requester: "main", suppression: "hook" },
+    { requester: "cron", suppression: "hook" },
+    { requester: "cron", suppression: "requester" },
+  ] as const)(
+    "records completion suppressed by $suppression for $requester without retrying or waking",
+    async ({ requester, suppression }) => {
+      const entry = createRunEntry({
+        endedAt: 4_000,
+        expectsCompletionMessage: true,
+        requesterSessionKey:
+          requester === "cron" ? "agent:main:cron:job-1:run:requester" : "agent:main:main",
+        cleanup: requester === "cron" ? "delete" : "keep",
+        suppressCompletionDelivery: suppression === "requester" ? true : undefined,
+      });
+      const maybeWakeRequesterAfterAllChildrenSettled = vi.fn(async () => false);
+      const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+        async (announceParams) => {
+          await announceParams.onDeliveryResult?.(suppressedDeliveryFixture());
+          return "intentional_non_delivery" as const;
+        },
+      );
+      const controller = createLifecycleController({
+        entry,
+        maybeWakeRequesterAfterAllChildrenSettled,
+        runSubagentAnnounceFlow,
+      });
 
-    await completeRun(controller, entry, {
-      triggerCleanup: true,
-      terminalReply: { disposition: "visible", text: "Generated completion" },
-    });
-    await waitForLifecycleState(() =>
-      expect(readLifecycleRun(entry).cleanupCompletedAt).toBeDefined(),
-    );
+      await completeRun(controller, entry, {
+        triggerCleanup: true,
+        terminalReply: { disposition: "visible", text: "Generated completion" },
+      });
+      await waitForLifecycleState(() =>
+        expect(readLifecycleRun(entry).cleanupCompletedAt).toBeDefined(),
+      );
 
-    expect(readLifecycleRun(entry).delivery).toMatchObject({
-      status: "failed",
-      disposition: "intentional_non_delivery",
-      lastError: "cancelled_by_message_sending_hook; delivery_suppressed",
-    });
-    expect(readLifecycleRun(entry).delivery?.deliveredAt).toBeUndefined();
-    expect(readLifecycleRun(entry).delivery?.nextAttemptAt).toBeUndefined();
-    expect(maybeWakeRequesterAfterAllChildrenSettled).not.toHaveBeenCalled();
-  });
+      expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.completion?.resultText).toBe(
+        "Generated completion",
+      );
+      expect(readLifecycleRun(entry).delivery).toMatchObject(
+        suppression === "requester"
+          ? { status: "not_required" }
+          : {
+              status: "failed",
+              disposition: "intentional_non_delivery",
+              lastError: "cancelled_by_message_sending_hook; delivery_suppressed",
+            },
+      );
+      expect(readLifecycleRun(entry).delivery?.deliveredAt).toBeUndefined();
+      expect(readLifecycleRun(entry).delivery?.nextAttemptAt).toBeUndefined();
+      expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(suppression === "requester" ? 0 : 1);
+      expect(maybeWakeRequesterAfterAllChildrenSettled).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not transfer a partial batch after a suppressed delete-mode child retires", async () => {
     const entry = createRunEntry({
@@ -4850,14 +4624,7 @@ describe("requester settle wake trigger", () => {
       beforeWrite,
       maybeWakeRequesterAfterAllChildrenSettled: settleWake,
       runSubagentAnnounceFlow: async (params) => {
-        await params.onDeliveryResult?.({
-          delivered: false,
-          path: "direct",
-          reason: "delivery_suppressed",
-          error: "cancelled_by_message_sending_hook",
-          terminal: true,
-          disposition: "intentional_non_delivery",
-        });
+        await params.onDeliveryResult?.(suppressedDeliveryFixture());
         return "intentional_non_delivery";
       },
     });
@@ -4883,16 +4650,7 @@ describe("requester settle wake trigger", () => {
   });
 
   it("marks yielded intentional non-delivery blocked after requester-settle exhaustion", async () => {
-    const entry = createRunEntry({
-      endedAt: 4_000,
-      expectsCompletionMessage: true,
-      requesterSettleWake: {
-        status: "pending",
-        attemptCount: 0,
-        requesterYieldBatch: true,
-        rearmGeneration: 1,
-      },
-    });
+    const entry = createPendingYieldedHandoffRun();
     let settleParams: RequesterSettleWakeParams | undefined;
     const maybeWakeRequesterAfterAllChildrenSettled = vi.fn(async (params) => {
       settleParams = params;
@@ -4994,6 +4752,7 @@ describe("requester settle wake trigger", () => {
       const sessionFacts = vi.spyOn(sharing, "prepareSessionMutationFacts").mockResolvedValue({
         storageTarget: target,
         bindCreation: vi.fn(),
+        prepareRead: () => undefined,
         readCurrent: () => ({
           target: { ...target, entry: { sessionId: requesterSessionId, updatedAt: 1 } },
           membership: new Set(),
@@ -5083,30 +4842,27 @@ describe("requester settle wake trigger", () => {
           );
         }
         // The immutable pre-settlement value cannot resurrect committed outbox custody.
-        await withRequesterCronAuthority(
-          {
-            requesterSessionKey,
-            requesterSessionId,
-            requesterAgentId: "main",
-            batch: [capturedEntry],
-            rearmGeneration: wake.rearmGeneration,
+        await captureRequesterContinuationCaller({
+          requesterSessionKey,
+          requesterSessionId,
+          requesterAgentId: "main",
+          batch: [capturedEntry],
+          rearmGeneration: wake.rearmGeneration,
+          runId: "cron-authority-continuation",
+          isCurrent: () => true,
+        }).run(async () => {
+          const admission = consumeRequesterCronAuthorityAdmission({
             runId: "cron-authority-continuation",
-            isCurrent: () => true,
-          },
-          async () => {
-            const admission = consumeRequesterCronAuthorityAdmission({
-              runId: "cron-authority-continuation",
-              sessionKey: requesterSessionKey,
-              sessionId: requesterSessionId,
-              inputProvenance: {
-                kind: "inter_session",
-                sourceTool: "subagent_settle",
-                sourceSessionKey: entry.childSessionKey,
-              },
-            });
-            expect(Boolean(admission)).toBe(mode !== "committed");
-          },
-        );
+            sessionKey: requesterSessionKey,
+            sessionId: requesterSessionId,
+            inputProvenance: {
+              kind: "inter_session",
+              sourceTool: "subagent_settle",
+              sourceSessionKey: entry.childSessionKey,
+            },
+          });
+          expect(Boolean(admission)).toBe(mode !== "committed");
+        });
       } finally {
         revokeRequesterCronAuthority(requesterSessionKey);
         subagentRuns.delete(entry.runId);
@@ -5152,84 +4908,65 @@ describe("requester settle wake trigger", () => {
     expect(readLifecycleRun(entry)).toEqual(before);
   });
 
-  it("retains a delete-mode child after no-wake until its requester turn settles", async () => {
-    const entry = createRunEntry({
-      requesterTurnRunId: "run-requester",
-      cleanup: "delete",
-      expectsCompletionMessage: true,
-      completion: { required: true, resultText: "delete-mode findings" },
-    });
-    const runs = new Map([[entry.runId, entry]]);
-    const settleWake = vi.fn(async (params: RequesterSettleWakeParams) => {
-      await params.completeBatch(
-        [params.settledEntry],
-        params.settledEntry.requesterSettleWake?.rearmGeneration,
-      );
-      return false;
-    });
-    const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
-    const controller = createLifecycleController({
-      entry,
-      runs,
-      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
-      runSubagentAnnounceFlow,
-    });
+  it.each([true, false])(
+    "retires delete cleanup after requester settlement (completion required=%s)",
+    async (required) => {
+      const entry = createRunEntry({
+        requesterTurnRunId: "run-requester",
+        cleanup: "delete",
+        expectsCompletionMessage: required ? true : undefined,
+        completion: { required, resultText: "delete-mode findings" },
+      });
+      const runs = new Map([[entry.runId, entry]]);
+      const settleWake = vi.fn(async (params: RequesterSettleWakeParams) => {
+        await params.completeBatch(
+          [params.settledEntry],
+          params.settledEntry.requesterSettleWake?.rearmGeneration,
+        );
+        return false;
+      });
+      const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
+      const controller = createLifecycleController({
+        entry,
+        runs,
+        maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+        runSubagentAnnounceFlow,
+      });
 
-    await completeAndJoinCleanup(controller, entry, { triggerCleanup: true });
-    await Promise.resolve();
+      const requesterTurn = holdLiveRequesterTurns("run-requester");
+      onTestFinished(requesterTurn.restore);
+      await completeAndJoinCleanup(controller, entry, {
+        triggerCleanup: true,
+        terminalReply: { disposition: "visible", text: "delete-mode findings" },
+      });
+      if (required) {
+        await Promise.resolve();
+        // The child cannot wake its requester while that exact requester turn owns it.
+        expect(readLifecycleRun(entry).completion?.resultText).toBe("delete-mode findings");
+        expect(runs.has(entry.runId)).toBe(true);
+        expect(readLifecycleRun(entry).requesterSettleWake).toMatchObject({
+          status: "pending",
+          retireAfterSettle: true,
+        });
+        expect(readLifecycleRun(entry).retireAfterRequesterTurn).toBeUndefined();
+        expect(settleWake).not.toHaveBeenCalled();
+        requesterTurn.end("run-requester");
+        await settleRequesterTurn(controller, entry, false);
+      }
+      await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledTimes(1));
+      await settleWake.mock.results[0]?.value;
 
-    // The child cannot wake its requester while that exact requester turn owns it.
-    expect(readLifecycleRun(entry).completion?.resultText).toBe("delete-mode findings");
-    expect(runs.has(entry.runId)).toBe(true);
-    expect(readLifecycleRun(entry).requesterSettleWake).toMatchObject({
-      status: "pending",
-      retireAfterSettle: true,
-    });
-    expect(readLifecycleRun(entry).retireAfterRequesterTurn).toBeUndefined();
-    expect(settleWake).not.toHaveBeenCalled();
-
-    await settleRequesterTurn(controller, entry, false);
-    await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledTimes(1));
-    await settleWake.mock.results[0]?.value;
-
-    expect(settleWake).toHaveBeenCalledWith(
-      expect.objectContaining({
-        settledEntry: expect.objectContaining({
-          runId: entry.runId,
-          completion: expect.objectContaining({ resultText: "delete-mode findings" }),
+      expect(settleWake).toHaveBeenCalledWith(
+        expect.objectContaining({
+          settledEntry: expect.objectContaining({
+            runId: entry.runId,
+            completion: expect.objectContaining({ resultText: "delete-mode findings" }),
+          }),
         }),
-      }),
-    );
-    expect(runs.has(entry.runId)).toBe(false);
-  });
-
-  it("retires delete cleanup immediately without a completion message", async () => {
-    const entry = createRunEntry({
-      requesterTurnRunId: "run-requester",
-      cleanup: "delete",
-      completion: { required: false, resultText: "delete-mode findings" },
-    });
-    const runs = new Map([[entry.runId, entry]]);
-    const settleWake = vi.fn(async (params: RequesterSettleWakeParams) => {
-      await params.completeBatch(
-        [params.settledEntry],
-        params.settledEntry.requesterSettleWake?.rearmGeneration,
       );
-      return false;
-    });
-    const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
-    const controller = createLifecycleController({
-      entry,
-      runs,
-      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
-      runSubagentAnnounceFlow,
-    });
-
-    await completeRun(controller, entry, { triggerCleanup: true });
-    await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledTimes(1));
-    await settleWake.mock.results[0]?.value;
-    expect(runs.has(entry.runId)).toBe(false);
-  });
+      expect(runs.has(entry.runId)).toBe(false);
+    },
+  );
 
   it("restores a suspended delete row without cleanup effects when retirement fails", async () => {
     const entry = makeRunModeCleanupEntry("internal-failed-retirement", {
@@ -5278,20 +5015,13 @@ describe("requester settle wake trigger", () => {
     expect(notifyContextEngineSubagentEnded).not.toHaveBeenCalled();
   });
 
-  it("re-arms a deferred frozen batch at its persisted retry deadline", async () => {
+  it("re-evaluates a deferred frozen batch on an explicit resume", async () => {
     const entry = createRunEntry({ endedAt: 4_000 });
-    let invocation = 0;
     const settleWake = vi.fn(async (params: RequesterSettleWakeParams) => {
-      invocation += 1;
-      if (invocation === 1) {
+      if (settleWake.mock.calls.length === 1) {
         await params.transitionBatch(
           [params.settledEntry],
-          {
-            status: "pending",
-            attemptCount: 0,
-            nextAttemptAt: 30_000,
-            batchRunIds: [entry.runId],
-          },
+          { status: "pending", attemptCount: 0, nextAttemptAt: 30_000, batchRunIds: [entry.runId] },
           () => {},
         );
       } else {
@@ -5303,29 +5033,20 @@ describe("requester settle wake trigger", () => {
       entry,
       maybeWakeRequesterAfterAllChildrenSettled: settleWake,
     });
+    const first = observeRootWork();
+    await finishCleanup(controller, entry);
+    await first();
+    expect(settleWake).toHaveBeenCalledOnce();
+    expect(readLifecycleRun(entry).requesterSettleWake).toMatchObject({ nextAttemptAt: 30_000 });
 
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    try {
-      await finishCleanup(controller, entry);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(settleWake).toHaveBeenCalledTimes(1);
-      controller.resumeRequesterSettleWake(entry.runId, entry);
-      controller.resumeRequesterSettleWake(entry.runId, entry);
-      expect(vi.getTimerCount()).toBe(1);
-
-      await vi.advanceTimersByTimeAsync(29_999);
-      expect(settleWake).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(settleWake).toHaveBeenCalledTimes(2);
-      expect(readLifecycleRun(entry).requesterSettleWake).toBeUndefined();
-    } finally {
-      controller.clearScheduledResumeTimers();
-      vi.useRealTimers();
-    }
+    const resumed = observeRootWork();
+    controller.resumeRequesterSettleWake(entry.runId, readLifecycleRun(entry));
+    await resumed();
+    expect(settleWake).toHaveBeenCalledTimes(2);
+    expect(readLifecycleRun(entry).requesterSettleWake).toBeUndefined();
   });
 
-  it("lets a fresh yield wake preempt a stale retry timer", async () => {
+  it("runs a fresh yield without honoring a retired retry deadline", async () => {
     const entry = createRunEntry({
       endedAt: 4_000,
       expectsCompletionMessage: true,
@@ -5333,46 +5054,40 @@ describe("requester settle wake trigger", () => {
       requesterSettleWake: {
         status: "pending",
         attemptCount: 1,
-        nextAttemptAt: 120_000,
+        nextAttemptAt: Date.now() + 120_000,
         rearmGeneration: 1,
       },
     });
     const settleWake = vi.fn(async (params: RequesterSettleWakeParams) => {
-      await params.completeBatch(
-        [params.settledEntry],
-        params.settledEntry.requesterSettleWake?.rearmGeneration,
-      );
+      if (settleWake.mock.calls.length > 1) {
+        await params.completeBatch(
+          [params.settledEntry],
+          params.settledEntry.requesterSettleWake?.rearmGeneration,
+        );
+      }
       return true;
     });
     const controller = createLifecycleController({
       entry,
       maybeWakeRequesterAfterAllChildrenSettled: settleWake,
     });
+    const first = observeRootWork();
+    controller.resumeRequesterSettleWake(entry.runId, entry);
+    await first();
+    expect(settleWake).toHaveBeenCalledOnce();
 
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    try {
-      controller.resumeRequesterSettleWake(entry.runId, entry);
-      expect(vi.getTimerCount()).toBe(1);
-
-      await mutateLifecycleRun(entry, (draft) => {
-        draft.requesterTurnRunId = "run-requester";
-        draft.requesterTurnYielded = true;
-      });
-      expect(await settleRequesterTurn(controller, entry)).toBe(true);
-      await vi.advanceTimersByTimeAsync(0);
-
-      expect(settleWake).toHaveBeenCalledOnce();
-      expect(vi.getTimerCount()).toBe(0);
-      await vi.advanceTimersByTimeAsync(120_000);
-      expect(settleWake).toHaveBeenCalledOnce();
-    } finally {
-      controller.clearScheduledResumeTimers();
-      vi.useRealTimers();
-    }
+    await mutateLifecycleRun(entry, (draft) => {
+      draft.requesterTurnRunId = "run-requester";
+      draft.requesterTurnYielded = true;
+    });
+    const yielded = observeRootWork();
+    expect(await settleRequesterTurn(controller, entry)).toBe(true);
+    await yielded();
+    expect(settleWake).toHaveBeenCalledTimes(2);
+    expect(readLifecycleRun(entry).requesterSettleWake).toBeUndefined();
   });
 
-  it("does not re-arm coalesced batch rows whose retry deadline already passed", async () => {
+  it("evaluates each explicit resume in a shared batch", async () => {
     const state = {
       status: "pending" as const,
       attemptCount: 1,
@@ -5399,63 +5114,14 @@ describe("requester settle wake trigger", () => {
       runs,
       maybeWakeRequesterAfterAllChildrenSettled: settleWake,
     });
-
-    vi.useFakeTimers();
-    vi.setSystemTime(10_000);
-    try {
-      controller.resumeRequesterSettleWake(first.runId, first);
-      controller.resumeRequesterSettleWake(second.runId, second);
-      await vi.advanceTimersByTimeAsync(0);
-
-      expect(settleWake).toHaveBeenCalledTimes(2);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      controller.clearScheduledResumeTimers();
-      vi.useRealTimers();
-    }
+    const joined = observeRootWork();
+    controller.resumeRequesterSettleWake(first.runId, first);
+    controller.resumeRequesterSettleWake(second.runId, second);
+    await joined();
+    expect(settleWake).toHaveBeenCalledTimes(2);
+    expect(readLifecycleRun(first).requesterSettleWake).toMatchObject(state);
+    expect(readLifecycleRun(second).requesterSettleWake).toMatchObject(state);
   });
-
-  it.each(["ok", "timeout"] as const)(
-    "wakes the requester exactly once after %s announce give-up",
-    async (status) => {
-      const entry = createRunEntry({
-        endedAt: 4_000,
-        expectsCompletionMessage: true,
-        cleanup: "keep",
-        endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
-        outcome: { status },
-      });
-      const settleWake = vi.fn<
-        LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]
-      >(async () => false);
-      const controller = createLifecycleController({
-        entry,
-        maybeWakeRequesterAfterAllChildrenSettled: settleWake,
-      });
-      await controller.finalizeResumedAnnounceGiveUp({ entry, reason: "expiry" });
-      expect(readLifecycleRun(entry).delivery?.status).toBe(
-        status === "ok" ? "suspended" : "failed",
-      );
-      expect(settleWake).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          requesterSessionKey: "agent:main:main",
-          settledEntry: expect.objectContaining({ runId: entry.runId }),
-        }),
-      );
-      if (status === "timeout") {
-        expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
-        return;
-      }
-      expect(readLifecycleRun(entry).cleanupCompletedAt).toBeUndefined();
-      expect(readLifecycleRun(entry).requesterSettleWake).toEqual({
-        status: "pending",
-        attemptCount: 0,
-      });
-      const { completeBatch } = settleWake.mock.calls[0]![0];
-      await completeBatch([entry], undefined, { delivered: true, path: "direct" });
-      expect(readLifecycleRun(entry).delivery?.status).toBe("suspended");
-    },
-  );
 
   registerRequesterDatabaseAdmissionTests({ createLifecycleController, waitForLifecycleState });
 
@@ -5567,321 +5233,52 @@ describe("requester settle wake trigger", () => {
     }
   });
 
-  it.each([
-    { replaceQueued: false, canonicalBindings: false },
-    { replaceQueued: true, canonicalBindings: false },
-    { replaceQueued: true, canonicalBindings: true },
-  ])(
-    "reserves Gateway roots before the limiter (queued row replaced: $replaceQueued, canonical bindings: $canonicalBindings)",
-    async ({ replaceQueued, canonicalBindings }) => {
-      resetGatewayWorkAdmission();
-      const entries = [0, 1, 2].map((index) =>
-        createRunEntry({
-          runId: `run-restored-admission-${index}`,
-          requesterSessionKey: `agent:main:requester-${index}`,
-          endedAt: 4_000,
-          requesterSettleWake: { status: "pending", attemptCount: 2 },
-        }),
-      );
-      const bindExecutionResolver = (entry: SubagentRunRecord, owner: () => undefined) => {
-        const resolve = vi.fn(() => {
-          throw new Error("execution resolver is retired");
-        });
-        bindGatewayContextResolver(resolve, owner);
-        bindGatewayContextResolver(entry, resolve);
-        return resolve;
-      };
-      const originalOwner = () => undefined;
-      const executionResolvers = canonicalBindings
-        ? entries.map((entry) => bindExecutionResolver(entry, originalOwner))
-        : [];
-      const runs = new Map(entries.map((entry) => [entry.runId, entry] as const));
-      const releases = new Map<string, () => void>();
-      const settleWake = vi.fn(async (params: RequesterSettleWakeParams) => {
-        await new Promise<void>((resolve) => {
-          releases.set(params.settledEntry.runId, resolve);
-        });
-        // Retired bindings leave delivery pending; limiter admission needs only their owner identity.
-        if (!canonicalBindings) {
-          await params.completeBatch(
-            [params.settledEntry],
-            params.settledEntry.requesterSettleWake?.rearmGeneration,
-          );
-        }
-        return false;
-      });
-      const controller = createLifecycleController({
-        entry: entries[0]!,
-        runs,
-        maybeWakeRequesterAfterAllChildrenSettled: settleWake,
-      });
-
-      try {
-        await runWithGatewayIndependentRootWorkAdmission(async () => {
-          for (const entry of entries) {
-            controller.resumeRequesterSettleWake(entry.runId, entry, "restore");
-          }
-        });
-        await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledTimes(2));
-        // The third callback is queued behind the two wake executions, but its
-        // Gateway root is already reserved and therefore visible to drain.
-        expect(getActiveGatewayRootWorkCount()).toBe(3);
-        expect(getActiveGatewayRootWorkHolders()).toEqual(["subagents:lifecycle-wake (3)"]);
-        const queued = entries[2]!;
-        const current = replaceQueued
-          ? { ...structuredClone(queued), generation: (queued.generation ?? 0) + 1 }
-          : queued;
-        if (replaceQueued) {
-          runs.set(current.runId, current);
-          if (canonicalBindings) {
-            executionResolvers.push(bindExecutionResolver(current, () => undefined));
-          }
-          controller.resumeRequesterSettleWake(current.runId, current, "restore");
-          if (canonicalBindings) {
-            // The replacement Gateway owns a fresh lane while both original slots remain occupied.
-            await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledTimes(3));
-            expect(settleWake.mock.calls[2]![0].settledEntry).toBe(current);
-          }
-        }
-        markGatewayRestartDraining();
-        expect(getActiveGatewayRootWorkCount()).toBe(replaceQueued ? 4 : 3);
-        releases.get(entries[0]!.runId)?.();
-        await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledTimes(3));
-        expect(settleWake.mock.calls[2]![0].settledEntry).toBe(current);
-        await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(2));
-        expect(runs.get(current.runId)?.requesterSettleWake).toEqual({
-          status: "pending",
-          attemptCount: 2,
-        });
-        controller.resumeRequesterSettleWake(current.runId, current, "restore");
-        expect(settleWake).toHaveBeenCalledTimes(3);
-
-        releases.get(current.runId)?.();
-        if (canonicalBindings) {
-          await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
-          expect(runs.get(current.runId)?.requesterSettleWake).toEqual({
-            status: "pending",
-            attemptCount: 2,
-          });
-        } else {
-          await waitForLifecycleState(() =>
-            expect(runs.get(current.runId)?.requesterSettleWake).toBeUndefined(),
-          );
-        }
-        expect(runs.get(entries[1]!.runId)?.requesterSettleWake).toBeDefined();
-        releases.get(entries[1]!.runId)?.();
-        await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-        if (replaceQueued) {
-          expect(queued.requesterSettleWake).toEqual({ status: "pending", attemptCount: 2 });
-        }
-        executionResolvers.forEach((resolve) => expect(resolve).not.toHaveBeenCalled());
-      } finally {
-        while (releases.size > 0) {
-          const pending = Array.from(releases.values());
-          releases.clear();
-          pending.forEach((release) => release());
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
-        }
-        controller.clearScheduledResumeTimers();
-        resetGatewayWorkAdmission();
-      }
-    },
-  );
-
-  it("does not throttle live requester-settle wakes", async () => {
+  it("bounds a recovery cleanup burst while retaining queued work through restart drain", async () => {
     resetGatewayWorkAdmission();
-    const entries = [0, 1, 2].map((index) =>
+    const entries = Array.from({ length: 130 }, (_, index) =>
       createRunEntry({
-        runId: `run-live-admission-${index}`,
-        requesterSessionKey: `agent:main:live-requester-${index}`,
+        runId: `recovery-cleanup-${index}`,
+        childSessionKey: `agent:main:subagent:recovery-cleanup-${index}`,
         endedAt: 4_000,
-        requesterSettleWake: { status: "pending", attemptCount: 0 },
+        expectsCompletionMessage: true,
       }),
     );
-    const runs = new Map(entries.map((entry) => [entry.runId, entry] as const));
-    const releases = new Map<string, () => void>();
-    const settleWake = vi.fn(async (params: RequesterSettleWakeParams) => {
-      await new Promise<void>((resolve) => {
-        releases.set(params.settledEntry.runId, resolve);
-      });
-      await params.completeBatch(
-        [params.settledEntry],
-        params.settledEntry.requesterSettleWake?.rearmGeneration,
-      );
-      return false;
-    });
+    const runs = new Map(entries.map((entry) => [entry.runId, entry]));
+    const gate = createDeferredCore();
+    const started: string[] = [];
+    const announce = vi.fn(
+      async (params: Parameters<SubagentLifecycleOptions["runSubagentAnnounceFlow"]>[0]) => {
+        started.push(params.childSessionKey);
+        await gate.promise;
+        return "delivered" as const;
+      },
+    );
     const controller = createLifecycleController({
       entry: entries[0]!,
       runs,
-      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+      runSubagentAnnounceFlow: announce,
     });
-
     try {
       for (const entry of entries) {
-        controller.resumeRequesterSettleWake(entry.runId, entry);
+        expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
       }
-      await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledTimes(3));
-    } finally {
-      for (const release of releases.values()) {
-        release();
-      }
-      await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-      controller.clearScheduledResumeTimers();
-      resetGatewayWorkAdmission();
-    }
-  });
-
-  it("retires restored classification after a rejected wake settles", async () => {
-    resetGatewayWorkAdmission();
-    const entries = [0, 1, 2].map((index) =>
-      createRunEntry({
-        runId: `run-restored-rejection-${index}`,
-        childSessionKey: `agent:main:subagent:restored-rejection-${index}`,
-        requesterSessionKey: `agent:main:rejection-requester-${index}`,
-        endedAt: 4_000,
-        requesterSettleWake: { status: "pending", attemptCount: 0 },
-      }),
-    );
-    const rejected = entries[0]!;
-    const runs = new Map(entries.map((entry) => [entry.runId, entry] as const));
-    const attempts = new Map<string, number>();
-    const releases = new Map<string, () => void>();
-    const settleWake = vi.fn(async (params: RequesterSettleWakeParams) => {
-      const runId = params.settledEntry.runId;
-      const attempt = (attempts.get(runId) ?? 0) + 1;
-      attempts.set(runId, attempt);
-      if (runId === rejected.runId && attempt === 1) {
-        throw new Error("wake exploded");
-      }
+      await waitForLifecycleState(() => expect(announce).toHaveBeenCalledTimes(2));
       await new Promise<void>((resolve) => {
-        releases.set(runId, resolve);
+        setImmediate(resolve);
       });
-      await params.completeBatch(
-        [params.settledEntry],
-        params.settledEntry.requesterSettleWake?.rearmGeneration,
-      );
-      return false;
-    });
-    const controller = createLifecycleController({
-      entry: rejected,
-      runs,
-      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
-    });
-
-    try {
-      for (const entry of entries) {
-        controller.resumeRequesterSettleWake(entry.runId, entry, "restore");
-      }
-      await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledTimes(3));
-      await waitForLifecycleState(() =>
-        expect(runs.get(rejected.runId)?.requesterSettleWake).toBeUndefined(),
-      );
-
-      await mutateLifecycleRun(rejected, (draft) => {
-        draft.requesterSettleWake = { status: "pending", attemptCount: 0 };
-      });
-      controller.resumeRequesterSettleWake(rejected.runId, rejected);
-      await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledTimes(4));
-    } finally {
-      while (releases.size > 0) {
-        const pending = Array.from(releases.values());
-        releases.clear();
-        pending.forEach((release) => release());
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-      }
+      expect(started).toEqual(entries.slice(0, 2).map((entry) => entry.childSessionKey));
+      expect(getActiveGatewayRootWorkCount()).toBe(entries.length);
+      markGatewayRestartDraining();
+      gate.resolve();
       await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-      controller.clearScheduledResumeTimers();
-      resetGatewayWorkAdmission();
-    }
-  });
-
-  it("keeps restored requester-settle retries behind the recovery cap", async () => {
-    resetGatewayWorkAdmission();
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const entries = [0, 1, 2].map((index) =>
-      createRunEntry({
-        runId: `run-restored-retry-${index}`,
-        childSessionKey: `agent:main:subagent:restored-retry-${index}`,
-        requesterSessionKey: `agent:main:retry-requester-${index}`,
-        endedAt: 4_000,
-        requesterSettleWake: { status: "pending", attemptCount: 0 },
-      }),
-    );
-    const runs = new Map(entries.map((entry) => [entry.runId, entry] as const));
-    const attempts = new Map<string, number>();
-    const releases: Array<() => void> = [];
-    let active = 0;
-    let maxActive = 0;
-    const settleWake = vi.fn(async (params: RequesterSettleWakeParams) => {
-      const runId = params.settledEntry.runId;
-      const attempt = (attempts.get(runId) ?? 0) + 1;
-      attempts.set(runId, attempt);
-      active += 1;
-      maxActive = Math.max(maxActive, active);
-      await new Promise<void>((resolve) => {
-        releases.push(resolve);
-      });
-      if (attempt === 1) {
-        await params.transitionBatch(
-          [params.settledEntry],
-          { status: "pending", attemptCount: 1, nextAttemptAt: 100, batchRunIds: [runId] },
-          () => {},
-        );
-      } else {
-        await params.completeBatch(
-          [params.settledEntry],
-          params.settledEntry.requesterSettleWake?.rearmGeneration,
-        );
-      }
-      active -= 1;
-      return false;
-    });
-    const controller = createLifecycleController({
-      entry: entries[0]!,
-      runs,
-      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
-    });
-
-    try {
-      for (const entry of entries) {
-        controller.resumeRequesterSettleWake(entry.runId, entry, "restore");
-      }
-      await vi.advanceTimersByTimeAsync(0);
-      expect(settleWake).toHaveBeenCalledTimes(2);
-      expect(maxActive).toBe(2);
-      releases.splice(0, 2).forEach((release) => release());
-      await vi.advanceTimersByTimeAsync(0);
-      expect(settleWake).toHaveBeenCalledTimes(3);
-      releases.shift()?.();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(
-        entries.map((entry) => runs.get(entry.runId)?.requesterSettleWake?.nextAttemptAt),
-      ).toEqual([100, 100, 100]);
-      expect(vi.getTimerCount()).toBe(3);
-
-      await vi.advanceTimersByTimeAsync(100);
-      expect(settleWake).toHaveBeenCalledTimes(5);
-      expect(maxActive).toBe(2);
-      releases.splice(0, 2).forEach((release) => release());
-      await vi.advanceTimersByTimeAsync(0);
-      expect(settleWake).toHaveBeenCalledTimes(6);
-      releases.shift()?.();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(active).toBe(0);
-      expect(maxActive).toBe(2);
-      expect(vi.getTimerCount()).toBe(0);
+      expect(started).toEqual(entries.map((entry) => entry.childSessionKey));
+      expect([...runs.values()].every((entry) => entry.cleanupCompletedAt !== undefined)).toBe(
+        true,
+      );
     } finally {
-      for (let attempt = 0; attempt < 4; attempt += 1) {
-        releases.splice(0).forEach((release) => release());
-        await vi.runOnlyPendingTimersAsync();
-      }
-      controller.clearScheduledResumeTimers();
-      vi.useRealTimers();
+      gate.resolve();
+      await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      controller.clearRuntimeState();
       resetGatewayWorkAdmission();
     }
   });

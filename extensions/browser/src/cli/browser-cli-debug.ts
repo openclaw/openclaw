@@ -1,5 +1,8 @@
 import type { Command } from "commander";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { shortenHomePath } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { BrowserNetworkRequest, BrowserPageError } from "../browser/pw-session-contracts.js";
 import {
@@ -116,7 +119,7 @@ export function registerBrowserDebugCommands(
         path: "/trace/stop",
         body: {
           targetId: normalizeOptionalString(opts.targetId),
-          path: normalizeOptionalString(opts.out),
+          path: readStringValue(opts.out),
         },
         successMessage: (result) => `TRACE:${shortenHomePath(result.path)}`,
       });

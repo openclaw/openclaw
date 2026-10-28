@@ -45,7 +45,7 @@
   --oc-surface-card: var(--card);
   --oc-surface-card-strong: var(--popover);
   --oc-surface-interactive: var(--bg-elevated);
-  --oc-surface-interactive-hover: var(--bg-hover);
+  --oc-surface-interactive-hover: var(--surface-hover);
   --oc-surface-accent-soft: var(--accent-subtle);
   --oc-surface-secondary-soft: var(--accent-2-subtle);
   --oc-selection-bg: var(--selection-bg);
@@ -589,7 +589,8 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
   justify-content: flex-start;
 }
 
-.settings-page.oc-app-surface .btn.oc-action {
+.settings-page.oc-app-surface .btn.oc-action,
+.agents-home .btn:is(.agents-home__claw-add, .agents-home__open).oc-action {
   min-height: 0;
   gap: 6px;
   padding: 8px 14px;
@@ -614,12 +615,14 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
   color: var(--primary-foreground);
 }
 
-.settings-page.oc-app-surface .btn.btn--sm.oc-action {
+.settings-page.oc-app-surface .btn.btn--sm.oc-action,
+.agents-home .btn.btn--sm:is(.agents-home__claw-add, .agents-home__open).oc-action {
   padding: 6px 10px;
   font-size: var(--oc-font-size-xs);
 }
 
-.settings-page.oc-app-surface .btn.oc-action:hover:not(:disabled) {
+.settings-page.oc-app-surface .btn.oc-action:hover:not(:disabled),
+.agents-home .btn:is(.agents-home__claw-add, .agents-home__open).oc-action:hover:not(:disabled) {
   border-color: var(--oc-border-strong);
   background: var(--oc-surface-interactive-hover);
   color: var(--oc-text-primary);

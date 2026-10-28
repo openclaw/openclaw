@@ -91,8 +91,6 @@ type GeminiCliAuthHomeContext = GeminiCliRestrictedAuthContext & {
   isolatedCompletionModelId?: string;
 };
 
-type GeminiCliAuthSelectedType = "oauth-personal" | "gemini-api-key";
-
 type GeminiCliPreparedExecution = CliBackendPreparedExecution & {
   isolatedCompletionEnforced?: true;
 };
@@ -424,59 +422,6 @@ async function stageGeminiCliIsolatedCwd(ctx: GeminiCliAuthHomeContext): Promise
   await writeGeminiCliPrivateFile(path.join(cwd, ".env"), "");
 }
 
-async function prepareGeminiCliProfileHome(
-  ctx: GeminiCliAuthHomeContext,
-  selectedType: GeminiCliAuthSelectedType,
-): Promise<{
-  home: string;
-  geminiDir: string;
-  systemSettingsPath: string;
-  isolatedSystemPromptPath?: string;
-  beforeExecution: () => Promise<void>;
-  cleanup: () => Promise<void>;
-}> {
-  const settings = { security: { auth: { selectedType } } };
-  const systemSettings = await buildGeminiCliSystemSettings(ctx, selectedType);
-  const isolated = ctx.isolatedCompletionSystemPrompt !== undefined;
-  const exactToolAvailability = ctx.toolAvailability !== undefined;
-  // Validate persistent profile ownership before allocating per-run state. A
-  // validation failure cannot return the cleanup callback below.
-  const persistentProfileHome =
-    isolated || exactToolAvailability ? undefined : resolveGeminiCliProfileHome(ctx);
-  const workspace = await tempWorkspace({
-    rootDir: resolvePreferredOpenClawTmpDir(),
-    prefix: "openclaw-gemini-cli-",
-  });
-  const { home, geminiDir } = persistentProfileHome ?? {
-    home: path.join(workspace.dir, "home"),
-    geminiDir: path.join(workspace.dir, "home", ".gemini"),
-  };
-  const systemSettingsPath = workspace.path("settings.json");
-  const isolatedSystemPrompt = ctx.isolatedCompletionSystemPrompt;
-  const isolatedSystemPromptPath = isolated ? workspace.path("system.md") : undefined;
-  return {
-    home,
-    geminiDir,
-    systemSettingsPath,
-    ...(isolatedSystemPromptPath ? { isolatedSystemPromptPath } : {}),
-    beforeExecution: async () => {
-      await stageGeminiCliIsolatedCwd(ctx);
-      await fs.mkdir(geminiDir, { recursive: true, mode: 0o700 });
-      await fs.chmod(home, 0o700);
-      await fs.chmod(geminiDir, 0o700);
-      await Promise.all([
-        writeGeminiCliJson(path.join(geminiDir, "settings.json"), settings),
-        writeGeminiCliJson(path.join(home, "settings.json"), settings),
-        writeGeminiCliJson(systemSettingsPath, systemSettings),
-        ...(isolatedSystemPromptPath && isolatedSystemPrompt !== undefined
-          ? [writeGeminiCliPrivateFile(isolatedSystemPromptPath, isolatedSystemPrompt)]
-          : []),
-      ]);
-    },
-    cleanup: workspace[Symbol.asyncDispose],
-  };
-}
-
 async function clearGeminiCliCachedCredentials(geminiDir: string): Promise<void> {
   // Gemini prefers its token store over oauth_creds.json. Rebuild that store
   // from the selected OpenClaw profile each run so stale CLI auth cannot win.
@@ -517,21 +462,51 @@ async function prepareGeminiCliCredentialHome(
   const restrictedTransportEnv = exactToolAvailability
     ? await resolveGeminiCliTrustedTransportEnv(ctx)
     : undefined;
-  const profileHome = await prepareGeminiCliProfileHome(
-    ctx,
-    oauth ? "oauth-personal" : "gemini-api-key",
-  );
+  const selectedType = oauth ? "oauth-personal" : "gemini-api-key";
+  const settings = { security: { auth: { selectedType } } };
+  const systemSettings = await buildGeminiCliSystemSettings(ctx, selectedType);
+  const isolated = ctx.isolatedCompletionSystemPrompt !== undefined;
+  const profileExactToolAvailability = ctx.toolAvailability !== undefined;
+  // Validate persistent profile ownership before allocating per-run state. A
+  // validation failure cannot return the cleanup callback below.
+  const persistentProfileHome =
+    isolated || profileExactToolAvailability ? undefined : resolveGeminiCliProfileHome(ctx);
+  const workspace = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-gemini-cli-",
+  });
+  const { home, geminiDir } = persistentProfileHome ?? {
+    home: path.join(workspace.dir, "home"),
+    geminiDir: path.join(workspace.dir, "home", ".gemini"),
+  };
+  const systemSettingsPath = workspace.path("settings.json");
+  const isolatedSystemPrompt = ctx.isolatedCompletionSystemPrompt;
+  const isolatedSystemPromptPath = isolated ? workspace.path("system.md") : undefined;
+  const beforeProfileExecution = async () => {
+    await stageGeminiCliIsolatedCwd(ctx);
+    await fs.mkdir(geminiDir, { recursive: true, mode: 0o700 });
+    await fs.chmod(home, 0o700);
+    await fs.chmod(geminiDir, 0o700);
+    await Promise.all([
+      writeGeminiCliJson(path.join(geminiDir, "settings.json"), settings),
+      writeGeminiCliJson(path.join(home, "settings.json"), settings),
+      writeGeminiCliJson(systemSettingsPath, systemSettings),
+      ...(isolatedSystemPromptPath && isolatedSystemPrompt !== undefined
+        ? [writeGeminiCliPrivateFile(isolatedSystemPromptPath, isolatedSystemPrompt)]
+        : []),
+    ]);
+  };
   return {
     env: {
-      GEMINI_CLI_HOME: profileHome.home,
-      GEMINI_CLI_SYSTEM_SETTINGS_PATH: profileHome.systemSettingsPath,
+      GEMINI_CLI_HOME: home,
+      GEMINI_CLI_SYSTEM_SETTINGS_PATH: systemSettingsPath,
       GEMINI_FORCE_FILE_STORAGE: "true",
       ...(oauth ? buildGeminiCliProjectEnv(auth.projectId) : { GEMINI_API_KEY: auth.key }),
       ...(exactToolAvailability ? GEMINI_CLI_EXACT_TOOL_ENV_BARRIERS : {}),
       ...restrictedTransportEnv,
-      ...(profileHome.isolatedSystemPromptPath
+      ...(isolatedSystemPromptPath
         ? {
-            GEMINI_SYSTEM_MD: profileHome.isolatedSystemPromptPath,
+            GEMINI_SYSTEM_MD: isolatedSystemPromptPath,
             GEMINI_TELEMETRY_LOG_PROMPTS: "false",
           }
         : {}),
@@ -540,7 +515,7 @@ async function prepareGeminiCliCredentialHome(
       ...GEMINI_CLI_PROFILE_AUTH_ENV,
       ...GEMINI_CLI_PROFILE_SETTINGS_ENV,
       ...(exactToolAvailability ? ["GEMINI_CLI_HOME"] : []),
-      ...(profileHome.isolatedSystemPromptPath
+      ...(isolatedSystemPromptPath
         ? [
             "GEMINI_SYSTEM_MD",
             ...(oauth ? ["GEMINI_CLI_HOME"] : []),
@@ -551,10 +526,10 @@ async function prepareGeminiCliCredentialHome(
       ...Object.keys(restrictedTransportEnv ?? {}),
     ],
     beforeExecution: async () => {
-      await profileHome.beforeExecution();
-      const credentialsPath = path.join(profileHome.geminiDir, "oauth_creds.json");
+      await beforeProfileExecution();
+      const credentialsPath = path.join(geminiDir, "oauth_creds.json");
       if (oauth) {
-        await clearGeminiCliCachedCredentials(profileHome.geminiDir);
+        await clearGeminiCliCachedCredentials(geminiDir);
         await writeGeminiCliJson(credentialsPath, {
           access_token: auth.access,
           refresh_token: auth.refresh,
@@ -565,11 +540,11 @@ async function prepareGeminiCliCredentialHome(
       } else {
         await Promise.all([
           fs.rm(credentialsPath, { force: true }),
-          clearGeminiCliCachedCredentials(profileHome.geminiDir),
+          clearGeminiCliCachedCredentials(geminiDir),
         ]);
       }
     },
-    cleanup: profileHome.cleanup,
+    cleanup: workspace[Symbol.asyncDispose],
     ...(isolatedCompletionEnforced ? { isolatedCompletionEnforced: true as const } : {}),
   };
 }

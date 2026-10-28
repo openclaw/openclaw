@@ -7,16 +7,19 @@ import Testing
 
 final class VoiceOwnerLog: @unchecked Sendable {
     private let lock = NSLock()
+    private let recorded = AsyncTestSignal()
     private var entries: [String] = []
     private var sequences: [String: Int] = [:]
 
     @discardableResult
     func record(_ event: String) -> Int {
-        self.lock.withLock {
+        let count = self.lock.withLock {
             self.entries.append(event)
             self.sequences[event, default: 0] += 1
             return self.sequences[event, default: 0]
         }
+        self.recorded.notify()
+        return count
     }
 
     func count(_ event: String) -> Int {
@@ -25,6 +28,12 @@ final class VoiceOwnerLog: @unchecked Sendable {
 
     func snapshot() -> [String] {
         self.lock.withLock { self.entries }
+    }
+
+    func wait(for event: String) async throws {
+        try await self.recorded.wait(event) {
+            self.count(event) > 0
+        }
     }
 }
 
@@ -165,21 +174,17 @@ final class VoiceOwnerFixture {
         let log = self.log
         return .init(
             appStatePermissions: .init(
-                supported: { true },
                 granted: { appPermissionGranted },
                 ensure: { [appPermission] _ in await appPermission.request() }),
             pttPermissions: .init(
-                supported: { true },
                 granted: { false },
                 ensure: { [pttPermission] _ in await pttPermission.request() }),
             wakePermissions: .init(
-                supported: { true },
                 granted: { log.record("wake.permission")
                     return false
                 },
                 ensure: { _ in false }),
             talkPermissions: .init(
-                supported: { true },
                 granted: { true },
                 ensure: { [talkPermission] _ in await talkPermission.request() }),
             talkAudioCapture: { _ in VoiceOwnerCapture(log: log) },

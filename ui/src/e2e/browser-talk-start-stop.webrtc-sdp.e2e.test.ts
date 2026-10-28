@@ -1,24 +1,17 @@
-// Control UI E2E tests cover WebRTC SDP response handling through a real page.
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  createTalkRegressionSuite,
+  installTalkGateway,
+} from "./browser-talk-regression.test-support.ts";
 import {
   captureWebRtcSdpAlertProof,
   installOversizedWebRtcSdpFixture,
   installWebRtcSdpFailureFixture,
   type WebRtcSdpE2eProof,
-  TALK_READY_HISTORY_MESSAGE,
-  videoTalkCatalog,
   waitForTalkReady,
 } from "./browser-talk-start-stop.fixtures.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-
-const suite = createControlUiE2eSuite({
-  name: "Control UI browser Talk WebRTC SDP responses",
-  browserLaunchOptions: {
-    args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"],
-  },
-});
+const suite = createTalkRegressionSuite("Control UI browser Talk WebRTC SDP responses");
 
 async function waitForWebRtcSdpFetch(page: Page) {
   await expect
@@ -33,35 +26,43 @@ async function waitForWebRtcSdpFetch(page: Page) {
 }
 
 suite.define(() => {
-  it("cancels a failed OpenAI WebRTC SDP response body in the live Control UI", async () => {
+  it.each([
+    {
+      name: "failed",
+      status: 502,
+      install: installWebRtcSdpFailureFixture,
+      message: "Realtime WebRTC setup failed (502)",
+      screenshot: "01-http-failure-alert.png",
+    },
+    {
+      name: "oversized",
+      status: 200,
+      install: installOversizedWebRtcSdpFixture,
+      message: "Realtime WebRTC SDP answer: text response exceeds 262144 bytes",
+      screenshot: "02-oversized-answer-alert.png",
+    },
+  ])("cancels a $name OpenAI SDP response before peer setup", async (scenario) => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
-      await installMockGateway(page, {
-        historyMessages: [TALK_READY_HISTORY_MESSAGE],
-        methodResponses: {
-          "talk.catalog": videoTalkCatalog("openai"),
-          "talk.client.create": {
-            provider: "openai",
-            voiceSessionId: "voice-openai-sdp-error-e2e",
-            transport: "webrtc",
-            clientSecret: "test-client-secret",
-            offerUrl: "https://api.openai.com/v1/realtime/calls",
-            offerResponseMaxBytes: 256 * 1024,
-          },
-        },
+      await installTalkGateway(page, `voice-openai-sdp-${scenario.name}-e2e`, {
+        offerUrl: "https://api.openai.com/v1/realtime/calls",
+        offerResponseMaxBytes: 256 * 1024,
       });
-      await installWebRtcSdpFailureFixture(page);
+      await scenario.install(page);
 
       await page.goto(`${suite.server.baseUrl}chat`);
       await waitForTalkReady(page);
       await expect
         .poll(() => page.locator('[data-chat-talk-capability="realtime"]').count())
         .toBe(0);
-      await page.getByRole("button", { name: "Start voice input" }).click();
+      // The oversized response completes without navigation; don't wait for one.
+      await page
+        .getByRole("button", { name: "Start voice input" })
+        .click({ noWaitAfter: scenario.status === 200 });
       await waitForWebRtcSdpFetch(page);
 
       const alert = page.locator('.agent-chat__talk-status[role="alert"]');
-      await expect.poll(() => alert.textContent()).toContain("Realtime WebRTC setup failed (502)");
-      await captureWebRtcSdpAlertProof(suite, page, "01-http-failure-alert.png");
+      await expect.poll(() => alert.textContent()).toContain(scenario.message);
+      await captureWebRtcSdpAlertProof(suite, page, scenario.screenshot);
       await expect
         .poll(() =>
           page.evaluate(
@@ -75,66 +76,8 @@ suite.define(() => {
           bodyCancelResolvedCount: 1,
           fetchCount: 1,
           remoteDescriptionCount: 0,
-          statuses: [502],
+          statuses: [scenario.status],
         });
-      console.info(
-        `[webrtc-sdp-e2e] trigger=OpenAI WebRTC offer; transition=status:error+502; ` +
-          `body.cancel=1/resolved; outcome=visible setup failure`,
-      );
-    });
-  });
-
-  it("rejects and cancels an oversized OpenAI SDP answer before peer setup", async () => {
-    await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
-      await installMockGateway(page, {
-        historyMessages: [TALK_READY_HISTORY_MESSAGE],
-        methodResponses: {
-          "talk.catalog": videoTalkCatalog("openai"),
-          "talk.client.create": {
-            provider: "openai",
-            voiceSessionId: "voice-openai-sdp-oversized-e2e",
-            transport: "webrtc",
-            clientSecret: "test-client-secret",
-            offerUrl: "https://api.openai.com/v1/realtime/calls",
-            offerResponseMaxBytes: 256 * 1024,
-          },
-        },
-      });
-      await installOversizedWebRtcSdpFixture(page);
-
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await waitForTalkReady(page);
-      await expect
-        .poll(() => page.locator('[data-chat-talk-capability="realtime"]').count())
-        .toBe(0);
-      // The oversized response completes without navigation, but Playwright otherwise waits for one.
-      await page.getByRole("button", { name: "Start voice input" }).click({ noWaitAfter: true });
-      await waitForWebRtcSdpFetch(page);
-
-      const alert = page.locator('.agent-chat__talk-status[role="alert"]');
-      await expect
-        .poll(() => alert.textContent())
-        .toContain("Realtime WebRTC SDP answer: text response exceeds 262144 bytes");
-      await captureWebRtcSdpAlertProof(suite, page, "02-oversized-answer-alert.png");
-      await expect
-        .poll(() =>
-          page.evaluate(
-            () =>
-              (window as Window & { openclawWebRtcSdpE2e?: WebRtcSdpE2eProof })
-                .openclawWebRtcSdpE2e,
-          ),
-        )
-        .toEqual({
-          bodyCancelCount: 1,
-          bodyCancelResolvedCount: 1,
-          fetchCount: 1,
-          remoteDescriptionCount: 0,
-          statuses: [200],
-        });
-      console.info(
-        `[webrtc-sdp-e2e] trigger=oversized OpenAI SDP answer; ` +
-          `body.cancel=1/resolved; remote-description=0; outcome=visible size failure`,
-      );
     });
   });
 });

@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { WorktreeGcProgress } from "../agents/worktrees/gc-progress.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
@@ -21,8 +21,86 @@ import {
   startWorktreeMaintenance,
 } from "./worktree-maintenance.js";
 
+// mock-isolation: Scheduler fixtures have no shared-state broker; CAS sweep behavior has worker tests.
+vi.mock("./worker-environments/local-workspace-gc.js", () => ({
+  sweepLocalWorkspaceManifests: vi.fn(async () => {}),
+}));
+
 function completedResult(): ManagedWorktreeGcResult {
   return { ...new WorktreeGcProgress().result, limitsSatisfied: true };
+}
+
+function maintenanceFixture(config: OpenClawConfig = {}) {
+  const clock = createGatewaySchedulerClock();
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  const params = {
+    scheduler,
+    getRuntimeConfig: () => config,
+    onComplete: vi.fn(),
+    onError: vi.fn(),
+  };
+  const owners: ReturnType<typeof startWorktreeMaintenance>[] = [];
+  const pending: Array<Promise<void> | void> = [];
+  let release = () => {};
+  return {
+    clock,
+    ...params,
+    track: (work: Promise<void>) => pending.push(work),
+    start: (overrides: Partial<typeof params> = {}) => {
+      const owner = startWorktreeMaintenance({ ...params, ...overrides });
+      owners.push(owner);
+      return owner;
+    },
+    run() {
+      const running = clock.advanceBy(0);
+      pending.push(running);
+      return running;
+    },
+    hold(repeat = false, onRun = () => {}) {
+      const held = holdGc(repeat, onRun);
+      release = () => held.release.resolve(completedResult());
+      return held;
+    },
+    async runHeld(repeat = false, overrides: Partial<typeof params> = {}) {
+      const held = this.hold(repeat);
+      const owner = this.start(overrides);
+      const receipt = owner.request();
+      const running = this.run();
+      const guard = await awaitCleanup(held.entered.promise, running);
+      return { ...held, owner, receipt, running, guard };
+    },
+    async [Symbol.asyncDispose]() {
+      release();
+      for (const owner of owners) {
+        await owner.stop();
+      }
+      for (const running of pending) {
+        await running;
+      }
+      await scheduler.stop();
+    },
+  };
+}
+
+function holdGc(repeat = false, onRun = () => {}) {
+  const entered = createDeferred<NonNullable<Parameters<typeof managedWorktrees.gc>[0]>>();
+  const release = createDeferred<ManagedWorktreeGcResult>();
+  const implementation = (params: NonNullable<Parameters<typeof managedWorktrees.gc>[0]> = {}) => {
+    onRun();
+    entered.resolve(params);
+    return release.promise;
+  };
+  const gc = vi.spyOn(managedWorktrees, "gc");
+  if (repeat) {
+    gc.mockImplementation(implementation);
+  } else {
+    gc.mockImplementationOnce(implementation).mockResolvedValue(completedResult());
+  }
+  return { entered, release, gc };
+}
+
+function awaitCleanup<T>(entered: Promise<T>, running: Promise<void> | void) {
+  return awaitGateBeforeSettlement(entered, Promise.resolve(running), "cleanup never started");
 }
 
 afterEach(() => {
@@ -31,369 +109,192 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("worktree maintenance owner", () => {
-  it("coalesces archive notifications into cleanup under the maintenance context", async () => {
-    const clock = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(clock.clock);
-    const context = new AsyncLocalStorage<string>();
-    const observed: Array<string | undefined> = [];
-    const gc = vi.spyOn(managedWorktrees, "gc").mockImplementation(async () => {
-      observed.push(context.getStore());
-      return completedResult();
-    });
-    const config: OpenClawConfig = {};
-    const getRuntimeConfig = () => config;
-    const owner = context.run("maintenance", () =>
-      startWorktreeMaintenance({
-        scheduler,
-        getRuntimeConfig,
-        onComplete: vi.fn(),
-        onError: vi.fn(),
-      }),
-    );
-    try {
-      context.run("archive-request", () => {
-        notifyGatewayWorktreeArchive(getRuntimeConfig);
-        notifyGatewayWorktreeArchive(getRuntimeConfig);
-      });
-      expect(gc).not.toHaveBeenCalled();
-      await context.run("host-wake", () => clock.advanceBy(0));
-      expect(observed).toEqual(["maintenance"]);
-    } finally {
-      await owner.stop();
-      await scheduler.stop();
-    }
+it("coalesces archives in the maintenance context and sweeps again after in-flight commits", async () => {
+  await using fixture = maintenanceFixture();
+  const { clock, getRuntimeConfig, start } = fixture;
+  const context = new AsyncLocalStorage<string>();
+  const observed: Array<string | undefined> = [];
+  const { entered, release, gc } = fixture.hold(false, () => {
+    observed.push(context.getStore());
   });
-
-  it("sweeps again after archive commits during cleanup without overlapping passes", async () => {
-    const clock = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(clock.clock);
-    const entered = createDeferred();
-    const release = createDeferred<ManagedWorktreeGcResult>();
-    const gc = vi
-      .spyOn(managedWorktrees, "gc")
-      .mockImplementationOnce(() => {
-        entered.resolve();
-        return release.promise;
-      })
-      .mockResolvedValue(completedResult());
-    const config: OpenClawConfig = {};
-    const getRuntimeConfig = () => config;
-    const owner = startWorktreeMaintenance({
-      scheduler,
-      getRuntimeConfig,
-      onComplete: vi.fn(),
-      onError: vi.fn(),
-    });
+  context.run("maintenance", start);
+  context.run("archive-request", () => {
     notifyGatewayWorktreeArchive(getRuntimeConfig);
-    const running = clock.advanceBy(0);
-    try {
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        Promise.resolve(running),
-        "cleanup never started",
-      );
-      notifyGatewayWorktreeArchive(getRuntimeConfig);
-      notifyGatewayWorktreeArchive(getRuntimeConfig);
-      await clock.advanceBy(0);
-      expect(gc).toHaveBeenCalledOnce();
-      release.resolve(completedResult());
-      await running;
-      await clock.advanceBy(0);
-      expect(gc).toHaveBeenCalledTimes(2);
-    } finally {
-      release.resolve(completedResult());
-      await owner.stop();
-      await running;
-      await scheduler.stop();
-    }
+    notifyGatewayWorktreeArchive(getRuntimeConfig);
   });
-
-  it.each([
-    { budget: "eight checkouts", batchSize: 8, elapsedMs: 0 },
-    { budget: "five seconds", batchSize: 1, elapsedMs: 5_000 },
-  ])(
-    "yields after $budget while coalescing requests and publishing progress",
-    async ({ batchSize, elapsedMs }) => {
-      const clock = createGatewaySchedulerClock();
-      const scheduler = createTestGatewayScheduler(clock.clock);
-      const config: OpenClawConfig = {};
-      const getRuntimeConfig = () => config;
-      const paused = createDeferred();
-      const onComplete = vi.fn();
-      const onError = vi.fn();
-      const gc = vi.spyOn(managedWorktrees, "gc").mockImplementation(async (params = {}) => {
-        const progress = completedResult();
-        for (let index = 1; index <= batchSize + 1; index++) {
-          progress.protectedCount = index;
-          if (index === batchSize) {
-            clock.setTime(elapsedMs);
-            paused.resolve();
-          }
-          await params.checkpoint!(progress);
-        }
-        return progress;
-      });
-      const owner = startWorktreeMaintenance({ scheduler, getRuntimeConfig, onComplete, onError });
-      const receipt = requestGatewayWorktreeMaintenance(getRuntimeConfig, { retryDeferred: true });
-      expect(owner.request()).toEqual(receipt);
-      const running = clock.advanceBy(0);
-      try {
-        await awaitGateBeforeSettlement(
-          paused.promise,
-          Promise.resolve(running),
-          "cleanup never reached its batch boundary",
-        );
-        expect(owner.request({ jobId: receipt.jobId })).toMatchObject({
-          state: "running",
-          protectedCount: batchSize,
-        });
-        expect(owner.request().jobId).toBe(receipt.jobId);
-        expect(gc).toHaveBeenCalledOnce();
-        expect(gc.mock.calls[0]?.[0]?.retryDeferred).toBe(true);
-        await clock.advanceBy(999);
-        expect(onComplete).not.toHaveBeenCalled();
-        await clock.advanceBy(1);
-        await running;
-        const completed = owner.request({ jobId: receipt.jobId });
-        expect(completed).toMatchObject({
-          state: "completed",
-          protectedCount: batchSize + 1,
-          completedAt: elapsedMs + 1_000,
-        });
-        expect(onComplete).toHaveBeenCalledOnce();
-        expect(onError).not.toHaveBeenCalled();
-        completed.removed.push("client-only");
-        expect(owner.request({ jobId: receipt.jobId }).removed).toEqual([]);
-      } finally {
-        await owner.stop();
-        await running;
-        await scheduler.stop();
-      }
-    },
-  );
-
-  it("waits for admitted cleanup to settle when stopped and withdraws its authority immediately", async () => {
-    const clock = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(clock.clock);
-    const entered = createDeferred<NonNullable<Parameters<typeof managedWorktrees.gc>[0]>>();
-    const release = createDeferred<ManagedWorktreeGcResult>();
-    vi.spyOn(managedWorktrees, "gc").mockImplementation((params = {}) => {
-      entered.resolve(params);
-      return release.promise;
-    });
-    const config: OpenClawConfig = {};
-    const getRuntimeConfig = () => config;
-    const onComplete = vi.fn();
-    const onError = vi.fn();
-    const owner = startWorktreeMaintenance({ scheduler, getRuntimeConfig, onComplete, onError });
-    owner.request();
-    const running = clock.advanceBy(0);
-    let stopped = false;
-    let stopping: Promise<void> | undefined;
-    try {
-      const guard = await awaitGateBeforeSettlement(
-        entered.promise,
-        Promise.resolve(running),
-        "cleanup never started",
-      );
-      stopping = owner.stop().then(() => {
-        stopped = true;
-      });
-      expect(guard.signal?.aborted).toBe(true);
-      expect(() => guard.commitGuard!()).toThrow(/stopping/);
-      expect(() => owner.request()).toThrow(/stopping/);
-      notifyGatewayWorktreeArchive(getRuntimeConfig);
-      await Promise.resolve();
-      expect(stopped).toBe(false);
-      release.resolve(completedResult());
-      await stopping;
-      expect(onComplete).not.toHaveBeenCalled();
-      expect(onError).toHaveBeenCalledWith(expect.stringContaining("stopping"));
-      expect(() => requestGatewayWorktreeMaintenance(getRuntimeConfig)).toThrow(/not running/);
-      notifyGatewayWorktreeArchive(getRuntimeConfig);
-    } finally {
-      release.resolve(completedResult());
-      await owner.stop();
-      await stopping;
-      await running;
-      await scheduler.stop();
-    }
-  });
-
-  it("drains a replaced owner before its successor starts another sweep", async () => {
-    const clock = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(clock.clock);
-    const entered = createDeferred();
-    const release = createDeferred<ManagedWorktreeGcResult>();
-    const gc = vi
-      .spyOn(managedWorktrees, "gc")
-      .mockImplementationOnce(() => {
-        entered.resolve();
-        return release.promise;
-      })
-      .mockResolvedValue(completedResult());
-    const config: OpenClawConfig = {};
-    const getRuntimeConfig = () => config;
-    const onComplete = vi.fn();
-    const params = { scheduler, getRuntimeConfig, onComplete, onError: vi.fn() };
-    const first = startWorktreeMaintenance(params);
-    first.request();
-    const oldRun = clock.advanceBy(0);
-    let successor: ReturnType<typeof startWorktreeMaintenance> | undefined;
-    let newRun: Promise<void> | void = undefined;
-    try {
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        Promise.resolve(oldRun),
-        "cleanup never started",
-      );
-      successor = startWorktreeMaintenance(params);
-      const receipt = successor.request();
-      newRun = clock.advanceBy(0);
-      await Promise.resolve();
-      expect(gc).toHaveBeenCalledOnce();
-      expect(() => first.request()).toThrow(/stopping/);
-      release.resolve(completedResult());
-      await oldRun;
-      await newRun;
-      expect(gc).toHaveBeenCalledTimes(2);
-      expect(onComplete).toHaveBeenCalledOnce();
-      expect(
-        requestGatewayWorktreeMaintenance(getRuntimeConfig, { jobId: receipt.jobId }),
-      ).toMatchObject({ state: "completed" });
-    } finally {
-      release.resolve(completedResult());
-      await first.stop();
-      await successor?.stop();
-      await oldRun;
-      await newRun;
-      await scheduler.stop();
-    }
-  });
-
-  it.each<{
-    name: string;
-    change: OpenClawConfig;
-    cancels: boolean;
-    inPlace?: boolean;
-  }>([
-    {
-      name: "UI sidebar preferences",
-      change: { ui: { prefs: { sidebarEntries: ["sessions"] } } },
-      cancels: false,
-    },
-    { name: "logging", change: { logging: { level: "debug" } }, cancels: false },
-    { name: "worktree capacity", change: { worktreeMaxCount: 8_192 }, cancels: true },
-    { name: "worktree root", change: { worktreeRoot: "/tmp/other-worktrees" }, cancels: true },
-    {
-      name: "session store",
-      change: { session: { store: "/tmp/other-sessions.db" } },
-      cancels: true,
-    },
-    { name: "session alias", change: { session: { mainKey: "other" } }, cancels: true },
-    { name: "session scope", change: { session: { scope: "global" } }, cancels: true },
-    {
-      name: "agent workspace",
-      change: { agents: { entries: { main: { workspace: "/tmp/other-workspace" } } } },
-      cancels: true,
-    },
-    {
-      name: "default sandbox mode",
-      change: { agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {} } } },
-      cancels: true,
-    },
-    {
-      name: "agent model",
-      change: { agents: { entries: { main: { model: "openai/gpt-5" } } } },
-      cancels: false,
-    },
-    {
-      name: "agent roster",
-      change: { agents: { entries: { main: {}, other: {} } } },
-      cancels: true,
-    },
-    {
-      name: "agent sandbox mode",
-      change: { agents: { entries: { main: { sandbox: { mode: "all" } } } } },
-      cancels: true,
-    },
-    {
-      name: "default workspace",
-      change: {
-        agents: { defaults: { workspace: "/tmp/other-workspace" }, entries: { main: {} } },
-      },
-      cancels: true,
-    },
-    {
-      name: "fixed session store owner",
-      change: {
-        agents: { defaults: { sessionStore: { agentId: "other" } }, entries: { main: {} } },
-      },
-      cancels: true,
-    },
-    {
-      name: "ACP session store roster",
-      change: { acp: { allowedAgents: ["other"] } },
-      cancels: true,
-    },
-    {
-      name: "same-object worktree capacity",
-      change: { worktreeMaxCount: 8_192 },
-      cancels: true,
-      inPlace: true,
-    },
-  ])(
-    "handles a $name publication during cleanup (cancels=$cancels)",
-    async ({ change, cancels, inPlace = false }) => {
-      const clock = createGatewaySchedulerClock();
-      const scheduler = createTestGatewayScheduler(clock.clock);
-      const entered = createDeferred<NonNullable<Parameters<typeof managedWorktrees.gc>[0]>>();
-      const release = createDeferred<ManagedWorktreeGcResult>();
-      vi.spyOn(managedWorktrees, "gc").mockImplementation((params = {}) => {
-        entered.resolve(params);
-        return release.promise;
-      });
-      const config: OpenClawConfig = { agents: { entries: { main: {} } } };
-      setRuntimeConfigSnapshot(config);
-      const onComplete = vi.fn();
-      const owner = startWorktreeMaintenance({
-        scheduler,
-        getRuntimeConfig: () => getRuntimeConfigSnapshot()!,
-        onComplete,
-        onError: vi.fn(),
-      });
-      const receipt = owner.request();
-      const running = clock.advanceBy(0);
-      try {
-        const guard = await awaitGateBeforeSettlement(
-          entered.promise,
-          Promise.resolve(running),
-          "cleanup never started",
-        );
-        setRuntimeConfigSnapshot(
-          inPlace ? Object.assign(config, change) : { ...config, ...change },
-        );
-        if (cancels) {
-          expect(() => guard.commitGuard!()).toThrow(/configuration changed/);
-        } else {
-          guard.commitGuard!();
-          await guard.checkpoint!(completedResult());
-        }
-        release.resolve(completedResult());
-        await running;
-        expect(owner.request({ jobId: receipt.jobId })).toMatchObject(
-          cancels
-            ? { state: "failed", error: expect.stringContaining("configuration changed") }
-            : { state: "completed", error: null },
-        );
-        expect(onComplete).toHaveBeenCalledTimes(cancels ? 0 : 1);
-      } finally {
-        release.resolve(completedResult());
-        await owner.stop();
-        await running;
-        await scheduler.stop();
-      }
-    },
-  );
+  expect(gc).not.toHaveBeenCalled();
+  const running = context.run("host-wake", () => fixture.run());
+  await awaitCleanup(entered.promise, running);
+  expect(observed).toEqual(["maintenance"]);
+  notifyGatewayWorktreeArchive(getRuntimeConfig);
+  notifyGatewayWorktreeArchive(getRuntimeConfig);
+  await clock.advanceBy(0);
+  expect(gc).toHaveBeenCalledOnce();
+  release.resolve(completedResult());
+  await running;
+  await clock.advanceBy(0);
+  expect(gc).toHaveBeenCalledTimes(2);
 });
+
+it.each([
+  { budget: "eight checkouts", batchSize: 8, elapsedMs: 0 },
+  { budget: "five seconds", batchSize: 1, elapsedMs: 5_000 },
+])(
+  "yields after $budget while coalescing requests and publishing progress",
+  async ({ batchSize, elapsedMs }) => {
+    await using fixture = maintenanceFixture();
+    const { clock, getRuntimeConfig, onComplete, onError, start } = fixture;
+    const paused = createDeferred();
+    const gitMaintenance: NonNullable<ManagedWorktreeGcResult["gitMaintenance"]> = {
+      repoRoot: "/synthetic/project",
+      stage: "packs",
+      packsBefore: 8800,
+      packsAfter: 7777,
+    };
+    const gc = vi.spyOn(managedWorktrees, "gc").mockImplementation(async (params = {}) => {
+      const progress = completedResult();
+      for (let index = 1; index <= batchSize + 1; index++) {
+        progress.protectedCount = index;
+        progress.gitMaintenance = { ...gitMaintenance };
+        progress.packsRemoved = 1023;
+        if (index === batchSize) {
+          clock.setTime(elapsedMs);
+          paused.resolve();
+        }
+        await params.checkpoint!(progress);
+      }
+      return progress;
+    });
+    const owner = start();
+    const receipt = requestGatewayWorktreeMaintenance(getRuntimeConfig, { retryDeferred: true });
+    expect(owner.request()).toEqual(receipt);
+    const running = fixture.run();
+    await awaitGateBeforeSettlement(
+      paused.promise,
+      Promise.resolve(running),
+      "cleanup never reached its batch boundary",
+    );
+    expect(owner.request({ jobId: receipt.jobId })).toMatchObject({
+      state: "running",
+      protectedCount: batchSize,
+      gitMaintenance,
+      packsRemoved: 1023,
+    });
+    expect(owner.request().jobId).toBe(receipt.jobId);
+    expect(gc).toHaveBeenCalledOnce();
+    expect(gc.mock.calls[0]?.[0]?.retryDeferred).toBe(true);
+    await clock.advanceBy(999);
+    expect(onComplete).not.toHaveBeenCalled();
+    await clock.advanceBy(1);
+    await running;
+    const completed = owner.request({ jobId: receipt.jobId });
+    expect(completed).toMatchObject({
+      state: "completed",
+      protectedCount: batchSize + 1,
+      completedAt: elapsedMs + 1_000,
+    });
+    expect(onComplete).toHaveBeenCalledOnce();
+    expect(onError).not.toHaveBeenCalled();
+    completed.removed.push("client-only");
+    completed.gitMaintenance!.packsAfter = 0;
+    expect(owner.request({ jobId: receipt.jobId }).gitMaintenance?.packsAfter).toBe(7777);
+    expect(owner.request({ jobId: receipt.jobId }).removed).toEqual([]);
+  },
+);
+
+it("waits for admitted cleanup to settle when stopped and withdraws its authority immediately", async () => {
+  await using fixture = maintenanceFixture();
+  const { getRuntimeConfig, onComplete, onError } = fixture;
+  const { owner, guard, release } = await fixture.runHeld(true);
+  let stopped = false;
+  const stopping = owner.stop().then(() => {
+    stopped = true;
+  });
+  fixture.track(stopping);
+  expect(guard.signal?.aborted).toBe(true);
+  expect(() => guard.commitGuard!()).toThrow(/stopping/);
+  expect(() => owner.request()).toThrow(/stopping/);
+  notifyGatewayWorktreeArchive(getRuntimeConfig);
+  await Promise.resolve();
+  expect(stopped).toBe(false);
+  release.resolve(completedResult());
+  await stopping;
+  expect(onComplete).not.toHaveBeenCalled();
+  expect(onError).toHaveBeenCalledWith(expect.stringContaining("stopping"));
+  expect(() => requestGatewayWorktreeMaintenance(getRuntimeConfig)).toThrow(/not running/);
+  notifyGatewayWorktreeArchive(getRuntimeConfig);
+});
+
+it("drains a replaced owner before its successor starts another sweep", async () => {
+  await using fixture = maintenanceFixture();
+  const { getRuntimeConfig, onComplete, start } = fixture;
+  const { owner: first, running: oldRun, release, gc } = await fixture.runHeld();
+  const successor = start();
+  const receipt = successor.request();
+  const newRun = fixture.run();
+  await Promise.resolve();
+  expect(gc).toHaveBeenCalledOnce();
+  expect(() => first.request()).toThrow(/stopping/);
+  release.resolve(completedResult());
+  await oldRun;
+  await newRun;
+  expect(gc).toHaveBeenCalledTimes(2);
+  expect(onComplete).toHaveBeenCalledOnce();
+  expect(
+    requestGatewayWorktreeMaintenance(getRuntimeConfig, { jobId: receipt.jobId }),
+  ).toMatchObject({ state: "completed" });
+});
+
+it.each<[string, OpenClawConfig, boolean?, boolean?]>([
+  ["UI sidebar preferences", { ui: { prefs: { sidebarEntries: ["sessions"] } } }, false],
+  ["logging", { logging: { level: "debug" } }, false],
+  ["worktree capacity", { worktreeMaxCount: 8_192 }],
+  ["worktree root", { worktreeRoot: "/tmp/other-worktrees" }],
+  ["session store", { session: { store: "/tmp/other-sessions.db" } }],
+  ["session alias", { session: { mainKey: "other" } }],
+  ["session scope", { session: { scope: "global" } }],
+  ["agent workspace", { agents: { entries: { main: { workspace: "/tmp/other-workspace" } } } }],
+  [
+    "default sandbox mode",
+    { agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {} } } },
+  ],
+  ["agent model", { agents: { entries: { main: { model: "openai/gpt-5" } } } }, false],
+  ["agent roster", { agents: { entries: { main: {}, other: {} } } }],
+  ["agent sandbox mode", { agents: { entries: { main: { sandbox: { mode: "all" } } } } }],
+  [
+    "default workspace",
+    { agents: { defaults: { workspace: "/tmp/other-workspace" }, entries: { main: {} } } },
+  ],
+  [
+    "fixed session store owner",
+    { agents: { defaults: { sessionStore: { agentId: "other" } }, entries: { main: {} } } },
+  ],
+  ["ACP session store roster", { acp: { allowedAgents: ["other"] } }],
+  ["same-object worktree capacity", { worktreeMaxCount: 8_192 }, true, true],
+])(
+  "handles a %s publication during cleanup",
+  async (_name, change, cancels = true, inPlace = false) => {
+    await using fixture = maintenanceFixture();
+    const { onComplete } = fixture;
+    const config: OpenClawConfig = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(config);
+    const { owner, receipt, running, guard, release } = await fixture.runHeld(true, {
+      getRuntimeConfig: () => getRuntimeConfigSnapshot()!,
+    });
+    setRuntimeConfigSnapshot(inPlace ? Object.assign(config, change) : { ...config, ...change });
+    if (cancels) {
+      expect(() => guard.commitGuard!()).toThrow(/configuration changed/);
+    } else {
+      guard.commitGuard!();
+      await guard.checkpoint!(completedResult());
+    }
+    release.resolve(completedResult());
+    await running;
+    expect(owner.request({ jobId: receipt.jobId })).toMatchObject(
+      cancels
+        ? { state: "failed", error: expect.stringContaining("configuration changed") }
+        : { state: "completed", error: null },
+    );
+    expect(onComplete).toHaveBeenCalledTimes(cancels ? 0 : 1);
+  },
+);

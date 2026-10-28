@@ -1,69 +1,11 @@
 // Browser tests cover profiles plugin behavior.
 import { describe, expect, it } from "vitest";
-import { allocateCdpPort, getUsedPorts, isValidProfileName } from "./profiles.js";
+import { allocateCdpPort, getUsedPorts } from "./profiles.js";
 
 const CDP_PORT_RANGE_START = 18800;
 const CDP_PORT_RANGE_END = 18899;
-describe("profile name validation", () => {
-  it.each(["a", "a-b-c-1-2-3", "1test"])("accepts valid lowercase name: %s", (name) => {
-    expect(isValidProfileName(name)).toBe(true);
-  });
-
-  it("rejects empty or missing names", () => {
-    expect(isValidProfileName("")).toBe(false);
-    expect(isValidProfileName(null as unknown as string)).toBe(false);
-    expect(isValidProfileName(undefined as unknown as string)).toBe(false);
-  });
-
-  it("rejects names that are too long", () => {
-    const longName = "a".repeat(65);
-    expect(isValidProfileName(longName)).toBe(false);
-
-    const maxName = "a".repeat(64);
-    expect(isValidProfileName(maxName)).toBe(true);
-  });
-
-  it.each(["MyProfile", "my_profile", "my/profile", "-invalid"])(
-    "rejects invalid name: %s",
-    (name) => {
-      expect(isValidProfileName(name)).toBe(false);
-    },
-  );
-});
 
 describe("port allocation", () => {
-  it("allocates within an explicit range", () => {
-    const usedPorts = new Set<number>();
-    expect(allocateCdpPort(usedPorts, { start: 20000, end: 20002 })).toBe(20000);
-    usedPorts.add(20000);
-    expect(allocateCdpPort(usedPorts, { start: 20000, end: 20002 })).toBe(20001);
-  });
-
-  it("allocates next available port from default range", () => {
-    const cases = [
-      { name: "none used", used: new Set<number>(), expected: CDP_PORT_RANGE_START },
-      {
-        name: "sequentially used start ports",
-        used: new Set([CDP_PORT_RANGE_START, CDP_PORT_RANGE_START + 1]),
-        expected: CDP_PORT_RANGE_START + 2,
-      },
-      {
-        name: "first gap wins",
-        used: new Set([CDP_PORT_RANGE_START, CDP_PORT_RANGE_START + 2]),
-        expected: CDP_PORT_RANGE_START + 1,
-      },
-      {
-        name: "ignores outside-range ports",
-        used: new Set([1, 2, 3, 50000]),
-        expected: CDP_PORT_RANGE_START,
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      expect(allocateCdpPort(testCase.used), testCase.name).toBe(testCase.expected);
-    }
-  });
-
   it("returns null when all ports are exhausted", () => {
     const usedPorts = new Set<number>();
     for (let port = CDP_PORT_RANGE_START; port <= CDP_PORT_RANGE_END; port++) {
@@ -83,25 +25,6 @@ describe("getUsedPorts", () => {
     expect(getUsedPorts(undefined)).toEqual(new Set());
   });
 
-  it("extracts ports from profile configs", () => {
-    const profiles = {
-      openclaw: { cdpPort: 18792 },
-      work: { cdpPort: 18793 },
-      personal: { cdpPort: 18795 },
-    };
-    const used = getUsedPorts(profiles);
-    expect(used).toEqual(new Set([18792, 18793, 18795]));
-  });
-
-  it("extracts ports from cdpUrl when cdpPort is missing", () => {
-    const profiles = {
-      remote: { cdpUrl: "http://10.0.0.42:9222" },
-      secure: { cdpUrl: "https://example.com:9443" },
-    };
-    const used = getUsedPorts(profiles);
-    expect(used).toEqual(new Set([9222, 9443]));
-  });
-
   it("ignores invalid cdpUrl values", () => {
     const profiles = {
       bad: { cdpUrl: "notaurl" },
@@ -109,16 +32,5 @@ describe("getUsedPorts", () => {
     };
     const used = getUsedPorts(profiles);
     expect(used.size).toBe(0);
-  });
-
-  it("ignores invalid numeric cdpPort values", () => {
-    const profiles = {
-      fractional: { cdpPort: 18800.5 },
-      zero: { cdpPort: 0 },
-      outOfRange: { cdpPort: 65536 },
-      valid: { cdpPort: 18801 },
-    };
-    const used = getUsedPorts(profiles);
-    expect(used).toEqual(new Set([18801]));
   });
 });

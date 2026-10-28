@@ -98,6 +98,7 @@ export const channelIngressOperations = {
     { open },
   ) => kernel.listStaleChannelIngressClaimsInDatabase(open().db, input),
   "channelIngress.enqueue": write(kernel.enqueueChannelIngressInDatabase),
+  "channelIngress.enqueueAndClaim": write(kernel.enqueueChannelIngressInDatabase, true),
   "channelIngress.claim": write(kernel.claimChannelIngressInDatabase, true),
   "channelIngress.claimNext": write(kernel.claimNextChannelIngressInDatabase, true),
   "channelIngress.recover": write(kernel.recoverChannelIngressClaimInDatabase),

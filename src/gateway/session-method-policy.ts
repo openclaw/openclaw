@@ -15,9 +15,11 @@ type SessionTargetPolicy = {
 };
 
 const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
+  ["worktrees.recoverFile", { fields: ["sessionKey"], required: true }],
   ["skills.library.activate", { fields: ["sessionKey"], required: true }],
   ["agent", { fields: ["sessionKey"], runStart: true }],
   ["board.event", { fields: ["sessionKey"], required: true }],
+  ["board.get", { fields: ["sessionKey"], required: true }],
   ["board.update", { fields: ["sessionKey"], required: true }],
   ["board.widget.grant", { fields: ["sessionKey"], required: true }],
   ["board.widget.put", { fields: ["sessionKey"], required: true }],
@@ -55,6 +57,7 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
   ["sessions.dispatch", { fields: ["key"], required: true, runStart: true }],
   ["sessions.files.set", { fields: ["sessionKey"], required: true }],
   ["sessions.github.publish", { fields: ["sessionKey"], required: true }],
+  ["sessions.github.action", { fields: ["sessionKey"], required: true }],
   ["sessions.github.confirm", { fields: ["sessionKey"], required: true }],
   ["sessions.fork", { fields: ["sessionKey"], required: true }],
   ["sessions.patch", { fields: ["key"], required: true, mayCreate: true }],
@@ -78,6 +81,7 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
     "talk.client.create",
     { fields: ["sessionKey"], profileIndependent: true, runStart: true, mayCreate: true },
   ],
+  ["talk.client.say", { fields: ["sessionKey"], required: true, profileIndependent: true }],
   ["talk.client.steer", { fields: ["sessionKey"], required: true, profileIndependent: true }],
   [
     "talk.client.toolCall",
@@ -102,6 +106,8 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
 const DIRECT_SESSION_READ_METHODS = new Set([
   "board.get",
   "chat.history",
+  "controlUi.sessionPullRequests.subscribe",
+  "controlUi.sessionPullRequests.checks",
   "sessions.processes.list",
   "sessions.describe",
   "sessions.get",
@@ -111,6 +117,7 @@ const DIRECT_SESSION_READ_METHODS = new Set([
   "sessions.companion.state",
   "sessions.diff",
   "sessions.files.get",
+  "sessions.files.download",
   "sessions.files.assets",
   "sessions.files.list",
   "sessions.files.reveal",

@@ -64,7 +64,7 @@ end
 
 def testflight_plan_facts(app:, group:, short_version:, versions:)
   group_build_ids = group.fetch_builds.map(&:id)
-  store_build_ids = versions.select { |version| version.version_string == short_version }.filter_map { |version| version.get_build&.id }
+  store_build_ids = versions.select { |version| version.version_string == short_version }.filter_map { |version| selected_app_store_build(version)&.id }
   builds = testflight_train_builds(app: app, short_version: short_version).map { |build| testflight_build_facts(build, group_build_ids, store_build_ids) }
   pending = builds.select { |build| TESTFLIGHT_REVIEW_STATES.include?(build.fetch("externalState")) }
   FastlaneCore::UI.user_error!("Multiple TestFlight builds are in review for #{short_version}; reconcile App Store Connect before continuing.") if pending.length > 1

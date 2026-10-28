@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeAgentId } from "../src/routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../src/state/openclaw-agent-db.paths.js";
-import { resolveOpenClawStateSqliteDir } from "../src/state/openclaw-state-db.paths.js";
+import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
 
 type Options = Parameters<typeof resolveOpenClawAgentSqlitePath>[0];
 
@@ -14,7 +14,7 @@ function baseline(options: Options): string {
   return path.resolve(
     options.path ??
       path.join(
-        path.dirname(resolveOpenClawStateSqliteDir(options.env ?? process.env)),
+        path.dirname(path.dirname(resolveOpenClawStateSqlitePath(options.env ?? process.env))),
         "agents",
         agentId,
         "agent",

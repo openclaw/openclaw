@@ -132,6 +132,7 @@ async function runCommandPreflightMaintenance(
   const assertSourceCurrent = opts.assertSourceCurrent;
   if (
     prepared.isNewSession ||
+    prepared.commandRuntimeContext?.freshChild ||
     !sessionEntry ||
     !prepared.sessionKey ||
     prepared.cfg.agents?.defaults?.compaction?.enabled === false
@@ -176,7 +177,6 @@ async function runCommandPreflightMaintenance(
     sessionKey: prepared.sessionKey,
     runtimePolicySessionKey: prepared.sessionKey,
     storePath: prepared.storePath,
-    isHeartbeat: opts.bootstrapContextRunKind === "heartbeat",
     abortSignal: opts.abortSignal,
   };
   return memory.runSessionCompactionIfNeeded({

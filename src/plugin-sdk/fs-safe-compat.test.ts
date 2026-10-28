@@ -1,9 +1,6 @@
-/**
- * Tests fs-safe compatibility exports used by plugin SDK callers.
- */
 import fs from "node:fs";
 import path from "node:path";
-import { loadSecretFileSync as loadSecretFileSyncFromCore } from "openclaw/plugin-sdk/core";
+import { loadSecretFileSync as coreSecret } from "openclaw/plugin-sdk/core";
 import {
   fileExists,
   readFileWithinRoot,
@@ -78,64 +75,34 @@ describe("plugin SDK fs-safe compatibility exports", () => {
       fs.writeFileSync(secretPath, "secret\n", { mode: 0o600 });
 
       const result: SecretFileReadResult = loadSecretFileSync(secretPath, "token");
-      expect(result.ok).toBe(true);
-      if (!result.ok) {
-        throw new Error("expected secret-file read to succeed");
-      }
-      expect(result.secret).toBe("secret");
-      expect(result.resolvedPath).toBe(secretPath);
-
-      const coreResult = loadSecretFileSyncFromCore(secretPath, "token");
-      expect(coreResult.ok).toBe(true);
-      if (!coreResult.ok) {
-        throw new Error("expected core secret-file read to succeed");
-      }
-      expect(coreResult.secret).toBe("secret");
+      expect(result).toMatchObject({ ok: true, secret: "secret", resolvedPath: secretPath });
+      expect(coreSecret(secretPath, "token")).toMatchObject({ ok: true, secret: "secret" });
     });
   });
 
   it("keeps root-bounded file-access helpers on file-access-runtime", async () => {
-    expectTypeOf(removePathWithinRoot).parameters.toEqualTypeOf<
-      [
-        params: {
-          rootDir: string;
-          relativePath: string;
-          recursive?: boolean;
-          force?: boolean;
-        },
-      ]
+    expectTypeOf(removePathWithinRoot).toEqualTypeOf<
+      (params: {
+        rootDir: string;
+        relativePath: string;
+        recursive?: boolean;
+        force?: boolean;
+      }) => Promise<void>
     >();
-    expectTypeOf<keyof Parameters<typeof removePathWithinRoot>[0]>().toEqualTypeOf<
-      "rootDir" | "relativePath" | "recursive" | "force"
-    >();
-    expectTypeOf(removePathWithinRoot).returns.toEqualTypeOf<Promise<void>>();
 
     await withTestDir({ prefix: "openclaw-sdk-file-access-compat-" }, async (root) => {
-      await writeFileWithinRoot({
-        rootDir: root,
-        relativePath: "nested/file.txt",
-        data: "hello",
-        mkdir: true,
-      });
+      const file = { rootDir: root, relativePath: "nested/file.txt" };
+      const absolutePath = path.join(root, file.relativePath);
+      await writeFileWithinRoot({ ...file, data: "hello", mkdir: true });
 
       for (const nonBlockingRead of [undefined, true, false]) {
-        const result = await readFileWithinRoot({
-          rootDir: root,
-          relativePath: "nested/file.txt",
-          nonBlockingRead,
-        });
-
-        expect(result.buffer.toString("utf8")).toBe("hello");
-        expect(result.realPath).toBe(fs.realpathSync(path.join(root, "nested", "file.txt")));
+        const result = await readFileWithinRoot({ ...file, nonBlockingRead });
+        expect(result.buffer).toEqual(Buffer.from("hello"));
+        expect(result.realPath).toBe(fs.realpathSync(absolutePath));
       }
 
-      await removePathWithinRoot({
-        rootDir: root,
-        relativePath: "nested/file.txt",
-        force: false,
-      });
-
-      expect(fs.existsSync(path.join(root, "nested", "file.txt"))).toBe(false);
+      await removePathWithinRoot({ ...file, force: false });
+      expect(fs.existsSync(absolutePath)).toBe(false);
     });
   });
 
@@ -149,45 +116,29 @@ describe("plugin SDK fs-safe compatibility exports", () => {
 
     await withTestDir({ prefix: "openclaw-sdk-temp-read-compat-" }, async (rootDir) => {
       await using workspace = await tempWorkspace({ rootDir, prefix: "read-" });
-      await workspace.writeText("data.json", '{"ok":true}');
+      const content = '{"ok":true}';
+      const store = workspace.store;
+      await workspace.writeText("data.json", content);
       const filePath = workspace.path("data.json");
       for (const nonBlockingRead of [undefined, true, false]) {
-        expect(
-          (
-            await readLocalFileFromRoots({
-              filePath,
-              roots: [workspace.dir],
-              nonBlockingRead,
-            })
-          )?.buffer.toString(),
-        ).toBe('{"ok":true}');
-        const opened = await workspace.store.open("data.json", { nonBlockingRead });
+        const hints = { nonBlockingRead };
+        const local = await readLocalFileFromRoots({ filePath, roots: [workspace.dir], ...hints });
+        expect(local?.buffer.toString()).toBe(content);
+        const opened = await store.open("data.json", hints);
         await opened.handle.close();
-        expect(
-          (await workspace.store.read("data.json", { nonBlockingRead })).buffer.toString(),
-        ).toBe('{"ok":true}');
-        expect((await workspace.store.readBytes("data.json", { nonBlockingRead })).toString()).toBe(
-          '{"ok":true}',
-        );
-        expect(
-          await workspace.store.readText("data.json", { nonBlockingRead, encoding: "utf8" }),
-        ).toBe('{"ok":true}');
-        expect(
-          await workspace.store.readTextIfExists("missing.json", { nonBlockingRead }),
-        ).toBeNull();
-        const parsed = await workspace.store.readJson<{ ok: boolean }>("data.json", {
-          nonBlockingRead,
-        });
+        expect((await store.read("data.json", hints)).buffer.toString()).toBe(content);
+        expect((await store.readBytes("data.json", hints)).toString()).toBe(content);
+        expect(await store.readText("data.json", { ...hints, encoding: "utf8" })).toBe(content);
+        expect(await store.readTextIfExists("missing.json", hints)).toBeNull();
+        const parsed = await store.readJson<{ ok: boolean }>("data.json", hints);
         expectTypeOf(parsed).toEqualTypeOf<{ ok: boolean }>();
         expect(parsed).toEqual({ ok: true });
-        const missing = await workspace.store.readJsonIfExists<{ ok: boolean }>("missing.json", {
-          nonBlockingRead,
-        });
+        const missing = await store.readJsonIfExists<{ ok: boolean }>("missing.json", hints);
         expectTypeOf(missing).toEqualTypeOf<{ ok: boolean } | null>();
         expect(missing).toBeNull();
-        const nestedRoot = await workspace.store.root();
+        const nestedRoot = await store.root();
         expectTypeOf(nestedRoot.walk).toBeFunction();
-        expect(await nestedRoot.readText("data.json", { nonBlockingRead })).toBe('{"ok":true}');
+        expect(await nestedRoot.readText("data.json", hints)).toBe(content);
       }
       await expect(
         withTempWorkspace({ rootDir, prefix: "callback-" }, async (borrowed) => {
@@ -202,33 +153,26 @@ describe("plugin SDK fs-safe compatibility exports", () => {
     await withTestDir({ prefix: "openclaw-sdk-root-read-compat-" }, async (root) => {
       const filePath = path.join(root, "data.json");
       const content = '{"ok":true}\n';
+      const bytes = Buffer.from(content);
+      const blocking = { nonBlockingRead: false };
+      const nonBlocking = { nonBlockingRead: true };
       fs.writeFileSync(filePath, content);
-      const scoped = await openRoot(root, { nonBlockingRead: false });
+      const scoped = await openRoot(root, blocking);
       expect(scoped.defaults.nonBlockingRead).toBe(false);
 
-      const opened = await scoped.open("data.json", { nonBlockingRead: true });
+      const opened = await scoped.open("data.json", nonBlocking);
       try {
         expect(await opened.handle.readFile({ encoding: "utf8" })).toBe(content);
       } finally {
         await opened.handle.close();
       }
 
-      expect((await scoped.read("data.json", { nonBlockingRead: false })).buffer).toEqual(
-        Buffer.from(content),
-      );
-      expect(await scoped.readBytes("data.json", { nonBlockingRead: true })).toEqual(
-        Buffer.from(content),
-      );
-      expect(await scoped.readText("data.json", { nonBlockingRead: false, encoding: "utf8" })).toBe(
-        content,
-      );
-      expect((await scoped.readAbsolute(filePath, { nonBlockingRead: true })).buffer).toEqual(
-        Buffer.from(content),
-      );
-      expect(await scoped.reader({ nonBlockingRead: false })(filePath)).toEqual(
-        Buffer.from(content),
-      );
-      const parsed = await scoped.readJson<{ ok: boolean }>("data.json", { nonBlockingRead: true });
+      expect((await scoped.read("data.json", blocking)).buffer).toEqual(bytes);
+      expect(await scoped.readBytes("data.json", nonBlocking)).toEqual(bytes);
+      expect(await scoped.readText("data.json", { ...blocking, encoding: "utf8" })).toBe(content);
+      expect((await scoped.readAbsolute(filePath, nonBlocking)).buffer).toEqual(bytes);
+      expect(await scoped.reader(blocking)(filePath)).toEqual(bytes);
+      const parsed = await scoped.readJson<{ ok: boolean }>("data.json", nonBlocking);
       expectTypeOf(parsed).toEqualTypeOf<{ ok: boolean }>();
       expect(parsed).toEqual({ ok: true });
       await expect(

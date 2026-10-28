@@ -196,11 +196,9 @@ final class GatewayIngressController {
         let preCommitOrdinary = self.routes[key]?.ordinaryAdmission
         // A cached host grant must not make an independently admitted profile depend
         // on browser sign-out or expiry. Existing service headers and WARP go first.
-        Self.logger.info("Access challenge discovery started")
         let ordinaryChallenge = try await client.discover(
             gatewayURL: route.url,
             customHeaders: self.customHeaders(route.stableID))
-        Self.logger.info("Access challenge discovery completed managed=\(ordinaryChallenge != nil)")
         try self.checkRegistration(registration)
         guard let ordinaryChallenge else {
             try await self.admitOrdinary(

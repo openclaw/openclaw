@@ -8,72 +8,75 @@ Activity assets use a transparent background and monochrome geometry. They conta
 
 The following defaults reuse the corresponding files in [`ui/public/provider-icons`](../ui/public/provider-icons). Original sources and license notices are retained in [provider icon attribution](../ui/public/provider-icons/ATTRIBUTION.md). The mappings match the existing compact provider picker. Colors are normalized to `currentColor`; geometry and view boxes are retained.
 
-| Plugin                  | Source file                    |
-| ----------------------- | ------------------------------ |
-| `alibaba`               | `ProviderIcon-alibaba.svg`     |
-| `amazon-bedrock`        | `ProviderIcon-bedrock.svg`     |
-| `amazon-bedrock-mantle` | `ProviderIcon-bedrock.svg`     |
-| `anthropic`             | `ProviderIcon-claude.svg`      |
-| `anthropic-vertex`      | `ProviderIcon-claude.svg`      |
-| `arcee`                 | `ProviderIcon-arcee.svg`       |
-| `azure-speech`          | `ProviderIcon-microsoft.svg`   |
-| `baseten`               | `ProviderIcon-baseten.svg`     |
-| `byteplus`              | `ProviderIcon-byteplus.svg`    |
-| `cerebras`              | `ProviderIcon-cerebras.svg`    |
-| `chutes`                | `ProviderIcon-chutes.svg`      |
-| `clawrouter`            | `ProviderIcon-clawrouter.svg`  |
-| `cloudflare-ai-gateway` | `ProviderIcon-cloudflare.svg`  |
-| `codex`                 | `ProviderIcon-codex.svg`       |
-| `cohere`                | `ProviderIcon-cohere.svg`      |
-| `comfy`                 | `ProviderIcon-comfy.svg`       |
-| `copilot`               | `ProviderIcon-copilot.svg`     |
-| `copilot-proxy`         | `ProviderIcon-copilot.svg`     |
-| `deepgram`              | `ProviderIcon-deepgram.svg`    |
-| `deepinfra`             | `ProviderIcon-deepinfra.svg`   |
-| `deepseek`              | `ProviderIcon-deepseek.svg`    |
-| `elevenlabs`            | `ProviderIcon-elevenlabs.svg`  |
-| `fal`                   | `ProviderIcon-fal.svg`         |
-| `featherless`           | `ProviderIcon-featherless.svg` |
-| `fireworks`             | `ProviderIcon-fireworks.svg`   |
-| `github-copilot`        | `ProviderIcon-copilot.svg`     |
-| `google`                | `ProviderIcon-gemini.svg`      |
-| `groq`                  | `ProviderIcon-groq.svg`        |
-| `huggingface`           | `ProviderIcon-huggingface.svg` |
-| `kilocode`              | `ProviderIcon-kilo.svg`        |
-| `kimi-coding`           | `ProviderIcon-kimi.svg`        |
-| `litellm`               | `ProviderIcon-litellm.svg`     |
-| `llama-cpp`             | `ProviderIcon-llamacpp.svg`    |
-| `lmstudio`              | `ProviderIcon-lmstudio.svg`    |
-| `longcat`               | `ProviderIcon-longcat.svg`     |
-| `meta`                  | `ProviderIcon-meta.svg`        |
-| `microsoft`             | `ProviderIcon-microsoft.svg`   |
-| `microsoft-foundry`     | `ProviderIcon-microsoft.svg`   |
-| `minimax`               | `ProviderIcon-minimax.svg`     |
-| `mistral`               | `ProviderIcon-mistral.svg`     |
-| `moonshot`              | `ProviderIcon-kimi.svg`        |
-| `novita`                | `ProviderIcon-novita.svg`      |
-| `nvidia`                | `ProviderIcon-nvidia.svg`      |
-| `ollama`                | `ProviderIcon-ollama.svg`      |
-| `openai`                | `ProviderIcon-codex.svg`       |
-| `opencode`              | `ProviderIcon-opencode.svg`    |
-| `opencode-go`           | `ProviderIcon-opencodego.svg`  |
-| `openrouter`            | `ProviderIcon-openrouter.svg`  |
-| `perplexity`            | `ProviderIcon-perplexity.svg`  |
-| `pixverse`              | `ProviderIcon-pixverse.svg`    |
-| `qianfan`               | `ProviderIcon-qianfan.svg`     |
-| `qwen`                  | `ProviderIcon-alibaba.svg`     |
-| `runway`                | `ProviderIcon-runway.svg`      |
-| `stepfun`               | `ProviderIcon-stepfun.svg`     |
-| `synthetic`             | `ProviderIcon-synthetic.svg`   |
-| `tencent`               | `ProviderIcon-tencent.svg`     |
-| `together`              | `ProviderIcon-together.svg`    |
-| `venice`                | `ProviderIcon-venice.svg`      |
-| `vercel-ai-gateway`     | `ProviderIcon-vercel.svg`      |
-| `vllm`                  | `ProviderIcon-vllm.svg`        |
-| `volcengine`            | `ProviderIcon-volcengine.svg`  |
-| `xai`                   | `ProviderIcon-grok.svg`        |
-| `xiaomi`                | `ProviderIcon-mimo.svg`        |
-| `zai`                   | `ProviderIcon-zai.svg`         |
+| Plugin                  | Source file                     |
+| ----------------------- | ------------------------------- |
+| `abliteration`          | `ProviderIcon-abliteration.svg` |
+| `alibaba`               | `ProviderIcon-alibaba.svg`      |
+| `amazon-bedrock`        | `ProviderIcon-bedrock.svg`      |
+| `amazon-bedrock-mantle` | `ProviderIcon-bedrock.svg`      |
+| `anthropic`             | `ProviderIcon-claude.svg`       |
+| `anthropic-vertex`      | `ProviderIcon-claude.svg`       |
+| `arcee`                 | `ProviderIcon-arcee.svg`        |
+| `azure-speech`          | `ProviderIcon-microsoft.svg`    |
+| `baseten`               | `ProviderIcon-baseten.svg`      |
+| `byteplus`              | `ProviderIcon-byteplus.svg`     |
+| `cerebras`              | `ProviderIcon-cerebras.svg`     |
+| `chutes`                | `ProviderIcon-chutes.svg`       |
+| `clawrouter`            | `ProviderIcon-clawrouter.svg`   |
+| `cloudflare-ai-gateway` | `ProviderIcon-cloudflare.svg`   |
+| `codex`                 | `ProviderIcon-codex.svg`        |
+| `cohere`                | `ProviderIcon-cohere.svg`       |
+| `comfy`                 | `ProviderIcon-comfy.svg`        |
+| `copilot`               | `ProviderIcon-copilot.svg`      |
+| `copilot-proxy`         | `ProviderIcon-copilot.svg`      |
+| `deepgram`              | `ProviderIcon-deepgram.svg`     |
+| `deepinfra`             | `ProviderIcon-deepinfra.svg`    |
+| `deepseek`              | `ProviderIcon-deepseek.svg`     |
+| `elevenlabs`            | `ProviderIcon-elevenlabs.svg`   |
+| `fal`                   | `ProviderIcon-fal.svg`          |
+| `featherless`           | `ProviderIcon-featherless.svg`  |
+| `fireworks`             | `ProviderIcon-fireworks.svg`    |
+| `github-copilot`        | `ProviderIcon-copilot.svg`      |
+| `google`                | `ProviderIcon-gemini.svg`       |
+| `groq`                  | `ProviderIcon-groq.svg`         |
+| `huggingface`           | `ProviderIcon-huggingface.svg`  |
+| `kilocode`              | `ProviderIcon-kilo.svg`         |
+| `kimi-coding`           | `ProviderIcon-kimi.svg`         |
+| `litellm`               | `ProviderIcon-litellm.svg`      |
+| `llama-cpp`             | `ProviderIcon-llamacpp.svg`     |
+| `lmstudio`              | `ProviderIcon-lmstudio.svg`     |
+| `longcat`               | `ProviderIcon-longcat.svg`      |
+| `meta`                  | `ProviderIcon-meta.svg`         |
+| `microsoft`             | `ProviderIcon-microsoft.svg`    |
+| `microsoft-foundry`     | `ProviderIcon-microsoft.svg`    |
+| `minimax`               | `ProviderIcon-minimax.svg`      |
+| `mistral`               | `ProviderIcon-mistral.svg`      |
+| `moonshot`              | `ProviderIcon-kimi.svg`         |
+| `muse`                  | `ProviderIcon-meta.svg`         |
+| `novita`                | `ProviderIcon-novita.svg`       |
+| `nvidia`                | `ProviderIcon-nvidia.svg`       |
+| `ollama`                | `ProviderIcon-ollama.svg`       |
+| `openai`                | `ProviderIcon-codex.svg`        |
+| `opencode`              | `ProviderIcon-opencode.svg`     |
+| `opencode-go`           | `ProviderIcon-opencodego.svg`   |
+| `openrouter`            | `ProviderIcon-openrouter.svg`   |
+| `perplexity`            | `ProviderIcon-perplexity.svg`   |
+| `pixverse`              | `ProviderIcon-pixverse.svg`     |
+| `qianfan`               | `ProviderIcon-qianfan.svg`      |
+| `qwen`                  | `ProviderIcon-alibaba.svg`      |
+| `requesty`              | `ProviderIcon-requesty.svg`     |
+| `runway`                | `ProviderIcon-runway.svg`       |
+| `stepfun`               | `ProviderIcon-stepfun.svg`      |
+| `synthetic`             | `ProviderIcon-synthetic.svg`    |
+| `tencent`               | `ProviderIcon-tencent.svg`      |
+| `together`              | `ProviderIcon-together.svg`     |
+| `venice`                | `ProviderIcon-venice.svg`       |
+| `vercel-ai-gateway`     | `ProviderIcon-vercel.svg`       |
+| `vllm`                  | `ProviderIcon-vllm.svg`         |
+| `volcengine`            | `ProviderIcon-volcengine.svg`   |
+| `xai`                   | `ProviderIcon-grok.svg`         |
+| `xiaomi`                | `ProviderIcon-mimo.svg`         |
+| `zai`                   | `ProviderIcon-zai.svg`          |
 
 For LiteLLM, the small source stroke widths are unified at 1.35 source units before combining paths. Stepfun retains its base cutout mark and omits the duplicate gradient overlay. OpenRouter omits the redundant view-box clipping wrapper. Synthetic’s circle rotation around its own center is omitted; its position, radius, and parent transform are unchanged.
 
@@ -116,9 +119,11 @@ Exa, Firecrawl, Tavily, and Voyage use the corresponding monochrome `exa.svg`, `
 
 TypeSafe AI preserves the single-path header mark from [typesafe.ai](https://typesafe.ai/), with its original `0 0 16.487 24` view box. The fill is normalized to `currentColor`; geometry is unchanged.
 
+Bifrost, Levanto, oMLX, and SubQ preserve their first-party marks: the [getbifrost.ai](https://getbifrost.ai/) header symbol without its wordmark; the leading L of the [levanto.ai](https://levanto.ai/) header wordmark, which its favicon also uses; the [oMLX penguin](https://github.com/jundot/omlx/blob/3df94603c047ec77f5381d11d1d6daff75794870/apps/omlx-web/omlx_web/static/logo-light.svg) (Apache-2.0) with its original transform and without its dark-mode style; and the [subq.ai favicon](https://subq.ai/favicon.svg), whose five squares are combined into one path. Fills are normalized to `currentColor`; geometry and view boxes are unchanged.
+
 ## OpenClaw action glyphs
 
-Browser, Canvas, Diffs, and the memory family preserve the approved shapes from [`icons-tools.ts`](../ui/src/components/icons-tools.ts). The optional overrides preserve Intent, memory store/forget, file fetch/write, and directory list/fetch geometry. Lobster preserves both progress-claw paths, with a solid fill and the jaw’s resting `rotate(-10 8.6 11)` transform from [`working-indicator.css`](../ui/src/styles/chat/working-indicator.css). Linux Node reuses the existing platform silhouette from [`brand-icons.ts`](../ui/src/pages/apps/brand-icons.ts).
+Browser, Canvas, Diffs, and the memory family preserve the approved shapes from [`icon-data-tools.ts`](../ui/src/components/icon-data-tools.ts). The optional overrides preserve Intent, memory store/forget, file fetch/write, and directory list/fetch geometry. Lobster preserves both progress-claw paths, with a solid fill and the jaw’s resting `rotate(-10 8.6 11)` transform from [`working-indicator.css`](../ui/src/styles/chat/working-indicator.css). Linux Node reuses the existing platform silhouette from [`brand-icons.ts`](../ui/src/pages/apps/brand-icons.ts).
 
 FaceTime reuses the existing [Voice Call phone glyph](voice-call/assets/activity.svg) byte-for-byte for its realtime voice carrier.
 
@@ -130,14 +135,14 @@ Other defaults are OpenClaw functional glyphs drawn for the 24-unit activity gri
 
 | Capability              | Plugins                                                                                                          |
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Agent or task flow      | `a2a`, `acpx`, `llm-task`, `raft`, `reef`                                                                        |
-| Connections and sharing | `admin-http-rpc`, `beam`, `bonjour`, `device-pair`, `session-share`                                              |
+| Agent or task flow      | `a2a`, `acpx`, `advisor`, `llm-task`, `mcp-events`, `raft`, `reef`                                               |
+| Connections and sharing | `admin-http-rpc`, `beam`, `bonjour`, `device-pair`, `mcp-relay`, `session-share`                                 |
 | Chat and meetings       | `buzz`, `clickclack`, `feishu`, `irc`, `nostr`, `sms`, `synology-chat`, `tlon`, `zoom-meetings`                  |
 | Files and knowledge     | `document-extract`, `file-transfer`, `imap`, `logbook`, `memory-wiki`, `oc-path`, `web-readability`, `workboard` |
 | Compute and location    | `crabbox`, `cua-computer`, `geolocation`, `gmi`, `radius`, `sglang`                                              |
 | Security and migration  | `migrate-claude`, `migrate-hermes`, `mxc`, `openshell`, `policy`, `visitor-access`                               |
 | Audio and media         | `gradium`, `inworld`, `kie`, `senseaudio`, `talk-voice`, `tts-local-cli`, `voice-call`, `vydra`                  |
-| Utilities and reports   | `parallel`, `qa-channel`, `qa-lab`, `team-reports`, `tokenjuice`                                                 |
+| Utilities and reports   | `autoreview`, `parallel`, `qa-channel`, `qa-lab`, `team-reports`, `tokenjuice`                                   |
 
 ## License notices
 

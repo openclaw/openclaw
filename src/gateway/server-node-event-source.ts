@@ -3,16 +3,22 @@ import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
-import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
+import { getRuntimeConfigSnapshotMetadata } from "../config/runtime-snapshot.js";
+import { acquireSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
+import {
+  captureSessionActorStorageOwner,
+  runWithSessionActorStorage,
+} from "../config/sessions/session-actor-storage-binding.js";
+import { truncateUtf16WithEllipsis } from "../shared/text-truncate.js";
 import type {
   NodeEvent,
   NodeEventHandlerOptions,
   NodeEventHandleResult,
 } from "./server-node-events-types.js";
-import type { loadGatewaySessionEntry } from "./session-utils-store.js";
+import type { GatewaySessionEntryRead } from "./session-utils-store.js";
 
 export type NodeEventSessionSource = {
-  loaded: ReturnType<typeof loadGatewaySessionEntry>;
+  loaded: GatewaySessionEntryRead;
   assertCurrent(this: void): void;
   pending: Promise<unknown>[];
 };
@@ -38,6 +44,23 @@ export function parseNodeEventPayload(payloadJSON?: string | null): Record<strin
   return payloadJSON ? asNullableObjectRecord(safeParseJson(payloadJSON)) : null;
 }
 
+export function compactNodeEventText(raw: string, maxChars: number) {
+  return truncateUtf16WithEllipsis(raw.replace(/\s+/g, " ").trim(), maxChars);
+}
+
+export function captureNodeEventConfig() {
+  const cfg = getRuntimeConfig();
+  const publication = getRuntimeConfigSnapshotMetadata();
+  return {
+    cfg,
+    assertCurrent: () => {
+      if (getRuntimeConfigSnapshotMetadata() !== publication) {
+        throw new Error("Node event configuration changed during preparation");
+      }
+    },
+  };
+}
+
 /** Keep prepared private authority and every accepted consumer with the captured actor. */
 export async function withNodeEventSessionSource(
   evt: NodeEvent,
@@ -47,75 +70,84 @@ export async function withNodeEventSessionSource(
     source?: NodeEventSessionSource,
   ) => Promise<NodeEventHandleResult | undefined>,
 ): Promise<NodeEventHandleResult | undefined> {
-  const requestedKey = normalizeOptionalString(parseNodeEventPayload(evt.payloadJSON)?.sessionKey);
-  const binding =
-    requestedKey &&
-    ["voice.transcript", "agent.request", "notifications.changed"].includes(evt.event)
-      ? captureIncognitoSessionSource({ sessionKey: requestedKey })
-      : undefined;
-  if (!binding || !requestedKey) {
+  const requestedKey = ["voice.transcript", "agent.request", "notifications.changed"].includes(
+    evt.event,
+  )
+    ? normalizeOptionalString(parseNodeEventPayload(evt.payloadJSON)?.sessionKey)
+    : undefined;
+  const namespace = requestedKey
+    ? captureSessionActorStorageOwner(
+        { sessionKey: requestedKey },
+        { assertCurrent() {}, authorize() {} },
+      )
+    : undefined;
+  if (!namespace || !requestedKey) {
     return consume(opts);
   }
-  const claim = "kind" in binding ? undefined : binding.actor.sessions.captureCurrent(requestedKey);
   if (!(await isNodeEventConnectionCurrent(opts))) {
     return pairingChangedResult(evt.event);
   }
-  if ("kind" in binding) {
-    binding.assertCurrent();
+  const binding = await acquireSessionActorStorage(
+    { sessionKey: requestedKey },
+    {
+      lifetime: {
+        assertCurrent: () => namespace.authority.assertCurrent(),
+        assertReadable: () => namespace.authority.assertCurrent(),
+      },
+      authority: namespace.authority,
+    },
+  );
+  if (!binding) {
     return { ok: true, event: evt.event, handled: false, reason: "session_missing" };
   }
-  const { actor, admissionSignal } = binding;
-  return actor.sessions.withSharedState(async () => {
-    const read = await actor.sessions.read(
-      { assertCurrent: () => admissionSignal?.throwIfAborted() },
-      { sessionKey: requestedKey },
-    );
-    read.snapshot.assertCurrent();
-    const entry = read.entry;
-    if (!entry) {
-      return { ok: true, event: evt.event, handled: false, reason: "session_missing" } as const;
-    }
-    const assertCurrent = () => {
-      admissionSignal?.throwIfAborted();
-      actor.assertReadable();
-      claim?.assertCurrent();
-      if (
-        actor.sessions.readPolicy(requestedKey)?.agentHarnessId !== entry.agentHarnessId ||
-        !isDeepStrictEqual(actor.sessions.readDelivery(requestedKey)?.delivery, entry.delivery)
-      ) {
-        throw new Error("Node event session authority changed");
+  try {
+    return await runWithSessionActorStorage(binding, async () => {
+      const entry = binding.actor.snapshot(binding.authority)?.entry;
+      if (!entry) {
+        return { ok: true, event: evt.event, handled: false, reason: "session_missing" } as const;
       }
-    };
-    const pending: Promise<unknown>[] = [];
-    try {
-      return await consume(
-        {
-          ...opts,
-          isConnectionCurrent: async () => {
-            const current = await isNodeEventConnectionCurrent(opts);
-            assertCurrent();
-            return current;
+      const assertCurrent = () => {
+        const current = binding.actor.snapshot(binding.authority)?.entry;
+        if (
+          current?.agentHarnessId !== entry.agentHarnessId ||
+          !isDeepStrictEqual(current?.delivery, entry.delivery)
+        ) {
+          throw new Error("Node event session authority changed");
+        }
+      };
+      const pending: Promise<unknown>[] = [];
+      try {
+        return await consume(
+          {
+            ...opts,
+            isConnectionCurrent: async () => {
+              const current = await isNodeEventConnectionCurrent(opts);
+              assertCurrent();
+              return current;
+            },
           },
-        },
-        {
-          loaded: {
-            cfg: getRuntimeConfig(),
-            agentId: actor.agentId,
-            storePath: actor.path,
-            canonicalKey: requestedKey,
-            storeKeys: [requestedKey],
-            store: { [requestedKey]: entry },
-            legacyKey: undefined,
-            entry,
+          {
+            loaded: {
+              cfg: getRuntimeConfig(),
+              agentId: binding.agentId,
+              storePath: binding.path,
+              canonicalKey: requestedKey,
+              storeKeys: [requestedKey],
+              store: { [requestedKey]: entry },
+              legacyKey: undefined,
+              entry,
+            },
+            assertCurrent,
+            pending,
           },
-          assertCurrent,
-          pending,
-        },
-      );
-    } finally {
-      for (const work of pending) {
-        await Promise.allSettled([work]);
+        );
+      } finally {
+        for (const work of pending) {
+          await Promise.allSettled([work]);
+        }
       }
-    }
-  });
+    });
+  } finally {
+    await binding.actor.release();
+  }
 }

@@ -1,6 +1,7 @@
 import type { Root } from "@openclaw/fs-safe/root";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { readObservationSnapshot } from "../infra/fs-observation-snapshot.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 
 type ConfigWatchFile = { root: Root; relative: string };
 
@@ -13,6 +14,11 @@ export function createConfigFileStability(onChange: () => void, onError: (error:
   let timer: ReturnType<typeof setTimeout> | undefined;
   let checking: Promise<void> | undefined;
   let failure: Error | undefined;
+  let settlement: Deferred | undefined;
+  const settle = () => {
+    settlement?.resolve();
+    settlement = undefined;
+  };
   const schedule = () => {
     if (!stopped && !timer && !checking) {
       timer = setTimeout(check, 50);
@@ -48,16 +54,27 @@ export function createConfigFileStability(onChange: () => void, onError: (error:
       })
       .catch((error: unknown) => {
         failure ??= toErrorObject(error, "Config file settling failed");
+        settle();
         onError(error);
       })
       .finally(() => {
         checking = undefined;
         if (files.size > 0) {
           schedule();
+        } else {
+          settle();
         }
       });
   };
   return {
+    whenSettled(): Promise<void> {
+      // Failed observations keep their existing best-effort retries; startup
+      // must not wait indefinitely for an unreadable path to recover.
+      if (stopped || failure || (!timer && !checking && files.size === 0)) {
+        return Promise.resolve();
+      }
+      return (settlement ??= createDeferredCore()).promise;
+    },
     dirty(paths: Iterable<ConfigWatchFile>) {
       if (stopped) {
         return;
@@ -74,6 +91,7 @@ export function createConfigFileStability(onChange: () => void, onError: (error:
     async close() {
       stopped = true;
       clearTimeout(timer);
+      settle();
       await checking;
       files.clear();
       if (failure !== undefined) {

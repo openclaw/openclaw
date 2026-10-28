@@ -1,33 +1,34 @@
-// Fish completion tests cover fish shell completion script generation.
 import { spawnSync } from "node:child_process";
+import { Command, Option } from "commander";
 import { describe, expect, it } from "vitest";
-import {
-  buildFishOptionCompletionLine,
-  buildFishSubcommandCompletionLine,
-} from "./completion-fish.js";
+import { getCompletionScript } from "./completion-cli.js";
 
-describe("completion-fish helpers", () => {
-  it("builds a subcommand completion line", () => {
-    const line = buildFishSubcommandCompletionLine({
-      rootCmd: "openclaw",
-      condition: "__fish_use_subcommand",
-      name: "plugins",
-      description: "Manage Bob's plugins",
-    });
-    expect(line).toBe(
-      `complete -c openclaw -n "__fish_use_subcommand" -a "plugins" -d 'Manage Bob'\\''s plugins'\n`,
-    );
-  });
+function captureChoices(choices: string[]) {
+  const program = new Command().name("openclaw");
+  program.addOption(new Option("--value <value>", "Value").choices(choices));
+  const line = getCompletionScript("fish", program)
+    .split("\n")
+    .find((entry) => entry.startsWith("complete -c openclaw "));
+  const capture = spawnSync(
+    "bash",
+    [
+      "--noprofile",
+      "--norc",
+      "-c",
+      `complete() { while (( $# )); do if [[ "$1" == "-a" ]]; then printf '%s' "$2"; return; fi; shift; done; }\n${line}`,
+    ],
+    { encoding: "utf8" },
+  );
+  expect(capture).toMatchObject({ status: 0, stderr: "" });
+  return capture.stdout;
+}
 
-  it("builds option line with two long aliases", () => {
-    const line = buildFishOptionCompletionLine({
-      rootCmd: "openclaw",
-      condition: "__fish_use_subcommand",
-      flags: ["--ws", "--workspace"],
-      description: "Workspace",
-    });
-    expect(line).toBe(
-      `complete -c openclaw -n "__fish_use_subcommand" -l ws -l workspace -d 'Workspace'\n`,
+describe("Fish completion scripts", () => {
+  it("quotes apostrophes in subcommand descriptions", () => {
+    const program = new Command().name("openclaw");
+    program.command("plugins").description("Manage Bob's plugins");
+    expect(getCompletionScript("fish", program)).toContain(
+      `complete -c openclaw -n "__openclaw_command_path_matches" -a "plugins" -d 'Manage Bob'\\''s plugins'\n`,
     );
   });
 
@@ -36,20 +37,10 @@ describe("completion-fish helpers", () => {
     .each(["Slash before \\'quote'"])(
     "preserves command, option, and optional-choice descriptions in Fish: %s",
     (description) => {
-      const script =
-        buildFishSubcommandCompletionLine({
-          rootCmd: "openclaw",
-          condition: "true",
-          name: "proof-command",
-          description,
-        }) +
-        buildFishOptionCompletionLine({
-          rootCmd: "openclaw",
-          condition: "true",
-          flags: ["--proof-option"],
-          description,
-          choices: ["auto"],
-        });
+      const program = new Command().name("openclaw");
+      program.command("proof-command").description(description);
+      program.addOption(new Option("--proof-option [value]", description).choices(["auto"]));
+      const script = getCompletionScript("fish", program);
       const result = spawnSync(
         "fish",
         [
@@ -63,9 +54,7 @@ complete --do-complete 'openclaw --proof-option a'
         ],
         { encoding: "utf8", timeout: 15_000 },
       );
-      expect(result.error).toBeUndefined();
-      expect(result.stderr).toBe("");
-      expect(result.status).toBe(0);
+      expect(result).toMatchObject({ error: undefined, stderr: "", status: 0 });
       expect(result.stdout.split(/\r?\n/)).toEqual(
         expect.arrayContaining([
           `proof-command\t${description}`,
@@ -78,46 +67,23 @@ complete --do-complete 'openclaw --proof-option a'
   );
 
   it("preserves optional Commander option values without requiring an argument", () => {
-    const line = buildFishOptionCompletionLine({
-      rootCmd: "openclaw",
-      condition: "__fish_use_subcommand",
-      flags: ["--color"],
-      description: "Color output",
-      choices: ["always", "never"],
-    });
+    const program = new Command().name("openclaw");
+    program.addOption(new Option("--color [value]", "Color output").choices(["always", "never"]));
+    const line = getCompletionScript("fish", program);
 
     expect(line).toContain(` -l color -f -a "'always' 'never'" `);
     expect(line).not.toContain(" -r ");
     expect(line).toContain(
-      `complete -c openclaw -n "__fish_use_subcommand; and contains -- (commandline -opc)[-1] --color" -f -a "'always' 'never'" -d 'Color output'`,
+      `complete -c openclaw -n "__openclaw_command_path_matches; and contains -- (commandline -opc)[-1] --color" -f -a "'always' 'never'" -d 'Color output'`,
     );
   });
 
   it.skipIf(process.platform === "win32")(
     "preserves apostrophes and backslashes through both Fish quoting layers",
     () => {
-      const line = buildFishOptionCompletionLine({
-        rootCmd: "openclaw",
-        condition: "true",
-        flags: ["--theme"],
-        description: "Theme",
-        requiresValue: true,
-        choices: ["Bob's green", "path\\name", "ends\\"],
-      });
-
-      const capture = spawnSync(
-        "bash",
-        [
-          "--noprofile",
-          "--norc",
-          "-c",
-          `complete() { while (( $# )); do if [[ "$1" == "-a" ]]; then printf '%s' "$2"; return; fi; shift; done; }\n${line}`,
-        ],
-        { encoding: "utf8" },
+      expect(captureChoices(["Bob's green", "path\\name", "ends\\"])).toBe(
+        "'Bob\\'s green' 'path\\\\name' 'ends\\\\'",
       );
-      expect(capture.status).toBe(0);
-      expect(capture.stderr).toBe("");
-      expect(capture.stdout).toBe("'Bob\\'s green' 'path\\\\name' 'ends\\\\'");
     },
   );
 
@@ -125,40 +91,15 @@ complete --do-complete 'openclaw --proof-option a'
     "keeps command-shaped Commander choices inert during completion expression parsing",
     () => {
       const marker = "OPENCLAW_FISH_CHOICE_MUST_NOT_EXECUTE";
-      const line = buildFishOptionCompletionLine({
-        rootCmd: "openclaw",
-        condition: "true",
-        flags: ["--channel"],
-        description: "Channel",
-        requiresValue: true,
-        choices: ["(stable)", `$(printf ${marker} >&2)`, "light blue"],
-      });
-
-      const capture = spawnSync(
-        "bash",
-        [
-          "--noprofile",
-          "--norc",
-          "-c",
-          `complete() { while (( $# )); do if [[ "$1" == "-a" ]]; then printf '%s' "$2"; return; fi; shift; done; }\n${line}`,
-        ],
-        { encoding: "utf8" },
-      );
-      expect(capture.status).toBe(0);
-      expect(capture.stderr).toBe("");
-
+      const choices = ["(stable)", `$(printf ${marker} >&2)`, "light blue"];
+      const captured = captureChoices(choices);
       const evaluation = spawnSync(
         "bash",
-        ["--noprofile", "--norc", "-c", `set -- ${capture.stdout}; printf '%s\\n' "$@"`],
+        ["--noprofile", "--norc", "-c", `set -- ${captured}; printf '%s\\n' "$@"`],
         { encoding: "utf8" },
       );
-      expect(evaluation.status).toBe(0);
-      expect(evaluation.stderr).toBe("");
-      expect(evaluation.stdout.split("\n").filter(Boolean)).toEqual([
-        "(stable)",
-        `$(printf ${marker} >&2)`,
-        "light blue",
-      ]);
+      expect(evaluation).toMatchObject({ status: 0, stderr: "" });
+      expect(evaluation.stdout.split("\n").filter(Boolean)).toEqual(choices);
     },
   );
 });

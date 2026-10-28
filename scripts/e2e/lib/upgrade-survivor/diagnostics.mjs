@@ -70,6 +70,19 @@ const pluginPolicyLogs = [
   "webhooks-only-policy/baseline-runtime.out",
   "webhooks-only-policy/candidate-runtime.out",
 ];
+const nativePluginUiLogs = ["", "native-ui-opt-out/"]
+  .flatMap((prefix) =>
+    ["baseline", "candidate"].flatMap((stage) => [
+      `${prefix}native-ui-${stage}-proof.json`,
+      `${prefix}native-ui-${stage}-catalog.out`,
+      `${prefix}native-ui-${stage}-catalog.err`,
+    ]),
+  )
+  .concat([
+    "native-ui-opt-out/update.json",
+    "native-ui-opt-out/update.err",
+    "native-ui-opt-out/candidate-gateway.log",
+  ]);
 const logNames = [
   "baseline-install.log",
   "baseline-companion.json",
@@ -94,6 +107,9 @@ const logNames = [
   "post-update-validate.json",
   "post-update-validate.err",
   "doctor.log",
+  "doctor-lint.json",
+  "doctor-lint.err",
+  "formerly-bundled-doctor.log",
   "volume-doctor-budget.json",
   "baseline-doctor.log",
   "workshop-doctor-recovery.json",
@@ -121,6 +137,7 @@ const logNames = [
   "physical-candidate-repair.json",
   "legacy-operator-cron-history-proof.json",
   ...pluginPolicyLogs,
+  ...nativePluginUiLogs,
   ...nativeAssignmentLogs,
   "webhooks-only-policy/update.err",
   "webhooks-only-policy/gateway.log",
@@ -1679,6 +1696,92 @@ function publishedPostCore(snapshot, sanitize) {
   };
 }
 
+function publishedNativePluginUi(snapshot, sanitize) {
+  const selected =
+    snapshot.scenario === "legacy-operator-state" &&
+    ["2026.10.5", "2026.10.7", "2026.10.8"].includes(snapshot.baseline?.version) &&
+    snapshot.candidate?.kind === "tarball" &&
+    snapshot.updateRestartMode === "manual" &&
+    snapshot.phases?.some(
+      (event) => event.phase === "prepare-native-plugin-ui-upgrade" && event.status === "passed",
+    );
+  if (!selected && !snapshot.nativePluginUi && !snapshot.nativePluginUiOptOut) {
+    return undefined;
+  }
+  const invalid = () => {
+    throw new Error("Invalid or missing native plugin UI upgrade evidence");
+  };
+  if (!selected) {
+    invalid();
+  }
+  const proofs = [snapshot.nativePluginUi, snapshot.nativePluginUiOptOut];
+  for (const [index, proof] of proofs.entries()) {
+    const policy = index === 0 ? "omitted" : "false";
+    const baseline = proof?.baseline;
+    if (
+      proof?.status !== "passed" ||
+      proof.stage !== "candidate" ||
+      proof.policy !== policy ||
+      proof.servingVersion !== snapshot.candidate?.version ||
+      proof.servingVersion !== snapshot.installedVersion ||
+      proof.eligible !== (index === 0) ||
+      proof.pluginSettingsPreserved !== true ||
+      proof.operatorDataPreserved !== true ||
+      baseline?.status !== "passed" ||
+      baseline.stage !== "baseline" ||
+      baseline.policy !== policy ||
+      baseline.servingVersion !== snapshot.baseline.version ||
+      baseline.eligible !== false ||
+      baseline.pluginSettingsPreserved !== true ||
+      baseline.operatorDataPreserved !== true ||
+      !/^[a-f0-9]{64}$/u.test(proof.installed?.archiveSha256 ?? "") ||
+      !Array.isArray(proof.assets)
+    ) {
+      invalid();
+    }
+    const expected =
+      index === 0
+        ? [
+            [true, 200],
+            [true, 200],
+            [false, 401],
+          ]
+        : [
+            [true, 404],
+            [true, 404],
+          ];
+    if (
+      proof.assets.length !== expected.length ||
+      proof.assets.some(
+        (asset, i) =>
+          asset.authenticated !== expected[i][0] ||
+          asset.status !== expected[i][1] ||
+          (asset.status === 200 && !/^[a-f0-9]{64}$/u.test(asset.sha256 ?? "")),
+      )
+    ) {
+      invalid();
+    }
+  }
+  if (proofs[0].installed.archiveSha256 !== proofs[1].installed.archiveSha256) {
+    invalid();
+  }
+  return {
+    status: "passed",
+    baselineVersion: sanitize(snapshot.baseline.version, "native plugin UI"),
+    candidateVersion: sanitize(snapshot.candidate.version, "native plugin UI"),
+    fixtureArchiveSha256: proofs[0].installed.archiveSha256,
+    omittedBecameEligible: true,
+    explicitFalsePreserved: true,
+    authenticatedAssetsServed: true,
+    unauthenticatedAssetsDenied: true,
+    // Cold-start smoke proof; warm cached-asset policy enforcement has its own Gateway test.
+    optedOutAssetsDenied: true,
+    pluginSettingsPreserved: true,
+    // The fixture retains a state-directory sentinel, not a plugin storage-API round trip.
+    operatorDataPreserved: true,
+  };
+}
+
 function publishedSuccessSummary(artifactRoot, sanitize) {
   const raw = readOwned(artifactRoot, "summary.json", "summary");
   if (raw === null) {
@@ -1690,6 +1793,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
   }
   const pluginPolicy = publishedPluginPolicy(snapshot, { sanitize, boundedList });
   const nativeAssignments = publishedNativeAssignments(snapshot);
+  const nativePluginUi = publishedNativePluginUi(snapshot, sanitize);
   let packageActivationRecovery;
   if (
     ["package-publication-recovery", "package-verification-recovery"].includes(snapshot.scenario)
@@ -1814,6 +1918,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
     backupRollback: publishedBackupRollback(snapshot, { sanitize, boundedList, textFields }),
     ...(pluginPolicy ? { pluginPolicy } : {}),
     ...(nativeAssignments ? { nativeAssignments } : {}),
+    ...(nativePluginUi ? { nativePluginUi } : {}),
     ...(packageActivationRecovery ? { packageActivationRecovery } : {}),
     timings,
     phases: boundedList(snapshot.phases).map((event) => {

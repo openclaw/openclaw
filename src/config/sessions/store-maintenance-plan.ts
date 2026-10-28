@@ -26,20 +26,27 @@ export function planSessionEntryMaintenance(params: {
   maintenance: EntryMaintenanceConfig;
   initialUnarchivedCount: number;
   forceMaintenance?: boolean;
+  modelRunPrune?: boolean;
+  nowMs?: number;
   readPreserveKeys: () => ReadonlySet<string> | undefined;
   log?: boolean;
-  readAgeCandidates: (minimumAgeMs: number | null) => Record<string, SessionEntry>;
+  readAgeCandidates: (
+    minimumAgeMs: number | null,
+    modelRunPruneAfterMs: number | null,
+  ) => Record<string, SessionEntry>;
   readCapCandidates: (
     remainingUnarchivedCount: number,
   ) => { store: Record<string, SessionEntry>; maxEntries: number } | undefined;
   onArchived?: (candidate: MaintenanceCandidate, phase: ArchivePhase) => void;
   onRemoved?: (candidate: MaintenanceCandidate, reason: RemovalReason) => void;
 }) {
-  const runModelRunPrune = shouldRunModelRunPrune({
-    maintenance: params.maintenance,
-    entryCount: params.initialUnarchivedCount,
-    force: params.forceMaintenance,
-  });
+  const runModelRunPrune =
+    params.modelRunPrune ??
+    shouldRunModelRunPrune({
+      maintenance: params.maintenance,
+      entryCount: params.initialUnarchivedCount,
+      force: params.forceMaintenance,
+    });
   const candidateAges = [
     params.maintenance.pruneAfterMs,
     params.maintenance.archiveDashboardAfterMs,
@@ -47,11 +54,13 @@ export function planSessionEntryMaintenance(params: {
   ].filter((age): age is number => age != null && age > 0);
   const store = params.readAgeCandidates(
     candidateAges.length > 0 ? Math.min(...candidateAges) : null,
+    runModelRunPrune ? params.maintenance.modelRunPruneAfterMs : null,
   );
   let remainingUnarchivedCount = params.initialUnarchivedCount;
   const counts = { archived: 0, capArchived: 0, modelRunPruned: 0, pruned: 0, capped: 0 };
   const options = {
     log: params.log,
+    nowMs: params.nowMs,
     preserveRecentMs: params.maintenance.preserveRecentMs,
   };
   let protectedOptions: (typeof options & { preserveKeys?: ReadonlySet<string> }) | undefined;

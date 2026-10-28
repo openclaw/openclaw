@@ -14,15 +14,13 @@ import {
   type DiagnosticEventPrivateData,
   type DiagnosticModelCallContent,
 } from "../../infra/diagnostic-events.js";
-import {
-  cloneDiagnosticContentValue,
-  resolveDiagnosticModelContentCapturePolicy,
-} from "../../infra/diagnostic-llm-content.js";
+import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
 import {
   createDiagnosticTraceContextFromActiveScope,
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import type { CliOutput, CliUsage } from "../cli-output-contracts.js";
+import { isClaudeToolUseBlockType } from "../cli-output-records.js";
 import { isFailoverError } from "../failover-error.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -50,6 +48,21 @@ type DiagnosticContentBudget = {
   fallbackReserveBytes: number;
   fallbackReserveItems: number;
   truncated: boolean;
+};
+
+type DiagnosticAssistantBlock =
+  | { type: "text"; text: string }
+  | { type: "thinking"; thinking: string }
+  | { type: "tool_call"; name: string; id?: string };
+type DiagnosticAssistantMessage = {
+  role: "assistant";
+  content: DiagnosticAssistantBlock[];
+  stopReason?: string;
+};
+type ParsedAssistantMessage = {
+  content: (DiagnosticAssistantBlock | undefined)[];
+  truncated: boolean;
+  stopReason?: string;
 };
 
 function serializedStringContentBytes(value: string): number {
@@ -120,105 +133,74 @@ function captureBoundedText(value: string): string {
   return captureTextWithinBudget(value, budget) ?? "";
 }
 
-function assistantContentBlock(
-  block: unknown,
-  budget: DiagnosticContentBudget,
-): Record<string, unknown> | undefined {
+function parseAssistantContentBlock(block: unknown): DiagnosticAssistantBlock | undefined {
   if (!isRecord(block)) {
     return undefined;
   }
-  if (block.type === "text" && typeof block.text === "string" && block.text.length > 0) {
-    const text = captureTextWithinBudget(block.text, budget);
-    return text === undefined ? undefined : { type: "text", text };
+  if (block.type === "text" && typeof block.text === "string") {
+    return { type: "text", text: block.text };
   }
   if (block.type === "thinking" && typeof block.thinking === "string") {
-    const thinking = captureTextWithinBudget(block.thinking, budget);
-    return thinking === undefined ? undefined : { type: "thinking", thinking };
+    return { type: "thinking", thinking: block.thinking };
   }
-  if (
-    (block.type === "tool_use" ||
-      block.type === "server_tool_use" ||
-      block.type === "mcp_tool_use") &&
-    typeof block.name === "string"
-  ) {
-    const name = captureTextWithinBudget(block.name, budget);
-    if (name === undefined) {
-      return undefined;
-    }
-    const id = typeof block.id === "string" ? captureTextWithinBudget(block.id, budget) : undefined;
+  if (isClaudeToolUseBlockType(block.type) && typeof block.name === "string") {
     return {
       type: "tool_call",
-      name,
-      ...(id !== undefined ? { id } : {}),
+      name: block.name,
+      ...(typeof block.id === "string" ? { id: block.id } : {}),
     };
   }
   return undefined;
 }
 
-function isCapturableAssistantContentBlock(block: unknown): boolean {
-  if (!isRecord(block)) {
-    return false;
-  }
-  return (
-    (block.type === "text" && typeof block.text === "string") ||
-    (block.type === "thinking" && typeof block.thinking === "string") ||
-    ((block.type === "tool_use" ||
-      block.type === "server_tool_use" ||
-      block.type === "mcp_tool_use") &&
-      typeof block.name === "string")
-  );
-}
-
-function isTextAssistantContentBlock(block: unknown): boolean {
-  return (
-    isRecord(block) &&
-    block.type === "text" &&
-    typeof block.text === "string" &&
-    block.text.length > 0
-  );
-}
-
-function assistantMessageHasText(message: unknown): boolean {
-  if (!isRecord(message)) {
-    return false;
-  }
-  if (typeof message.content === "string") {
-    return message.content.length > 0;
-  }
-  return (
-    Array.isArray(message.content) &&
-    message.content.slice(0, MAX_CAPTURED_OUTPUT_BLOCKS).some(isTextAssistantContentBlock)
-  );
+function assistantMessageHasText(message: Pick<ParsedAssistantMessage, "content">): boolean {
+  return message.content.some((block) => block?.type === "text" && block.text.length > 0);
 }
 
 // Claude's assistant envelopes can contain native tool arguments and opaque
 // thinking signatures. Keep only the visible response blocks OpenClaw can
 // represent accurately; external harness tool spans stay metadata-only.
+function parseClaudeAssistantMessage(message: unknown): ParsedAssistantMessage | undefined {
+  if (!isRecord(message) || message.content === "") {
+    return undefined;
+  }
+  const rawContent = message.content;
+  const blocks = Array.isArray(rawContent) ? rawContent : undefined;
+  return {
+    content:
+      typeof rawContent === "string"
+        ? [{ type: "text", text: rawContent }]
+        : (blocks?.slice(0, MAX_CAPTURED_OUTPUT_BLOCKS).map(parseAssistantContentBlock) ?? []),
+    truncated: (blocks?.length ?? 0) > MAX_CAPTURED_OUTPUT_BLOCKS,
+    ...(typeof message.stop_reason === "string" ? { stopReason: message.stop_reason } : {}),
+  };
+}
+
 function normalizeClaudeAssistantMessage(
-  message: unknown,
+  message: ParsedAssistantMessage,
   budget: DiagnosticContentBudget,
-): Record<string, unknown> | undefined {
-  if (!isRecord(message)) {
-    return undefined;
-  }
-  if (message.content === "") {
-    return undefined;
-  }
-  const content: Record<string, unknown>[] = [];
-  const sourceBlocks =
-    typeof message.content === "string"
-      ? [{ type: "text", text: message.content }]
-      : Array.isArray(message.content)
-        ? message.content.slice(0, MAX_CAPTURED_OUTPUT_BLOCKS)
-        : [];
-  if (Array.isArray(message.content) && sourceBlocks.length < message.content.length) {
-    budget.truncated = true;
-  }
-  for (const [index, sourceBlock] of sourceBlocks.entries()) {
-    if (isTextAssistantContentBlock(sourceBlock)) {
+): DiagnosticAssistantMessage | undefined {
+  const content: DiagnosticAssistantBlock[] = [];
+  budget.truncated ||= message.truncated;
+  for (const [index, sourceBlock] of message.content.entries()) {
+    let block: DiagnosticAssistantBlock | undefined;
+    if (sourceBlock?.type === "text" && sourceBlock.text.length > 0) {
       releaseFallbackReserve(budget);
+      const text = captureTextWithinBudget(sourceBlock.text, budget);
+      block = text === undefined ? undefined : { type: "text", text };
+    } else if (sourceBlock?.type === "thinking") {
+      const thinking = captureTextWithinBudget(sourceBlock.thinking, budget);
+      block = thinking === undefined ? undefined : { type: "thinking", thinking };
+    } else if (sourceBlock?.type === "tool_call") {
+      const name = captureTextWithinBudget(sourceBlock.name, budget);
+      if (name !== undefined) {
+        const id =
+          sourceBlock.id !== undefined
+            ? captureTextWithinBudget(sourceBlock.id, budget)
+            : undefined;
+        block = { type: "tool_call", name, ...(id !== undefined ? { id } : {}) };
+      }
     }
-    const block = assistantContentBlock(sourceBlock, budget);
     if (block) {
       if (budget.remainingItems > 0) {
         content.push(block);
@@ -228,7 +210,7 @@ function normalizeClaudeAssistantMessage(
       }
     }
     if (budget.remainingBytes <= 0 || budget.remainingItems <= 0) {
-      if (sourceBlocks.slice(index + 1).some(isCapturableAssistantContentBlock)) {
+      if (message.content.slice(index + 1).some((entry) => entry !== undefined)) {
         budget.truncated = true;
       }
       break;
@@ -238,8 +220,8 @@ function normalizeClaudeAssistantMessage(
     return undefined;
   }
   const stopReason =
-    typeof message.stop_reason === "string"
-      ? captureTextWithinBudget(message.stop_reason, budget)
+    message.stopReason !== undefined
+      ? captureTextWithinBudget(message.stopReason, budget)
       : undefined;
   return {
     role: "assistant",
@@ -248,17 +230,17 @@ function normalizeClaudeAssistantMessage(
   };
 }
 
-function appendOutputTruncationMarker(messages: Record<string, unknown>[]): void {
-  const marker = { type: "text", text: TRUNCATED_CONTENT_SUFFIX };
+function appendOutputTruncationMarker(messages: DiagnosticAssistantMessage[]): void {
+  const marker: DiagnosticAssistantBlock = { type: "text", text: TRUNCATED_CONTENT_SUFFIX };
   if (messages.length < MAX_CAPTURED_OUTPUT_MESSAGES) {
     messages.push({ role: "assistant", content: [marker] });
     return;
   }
   const lastIndex = messages.length - 1;
-  const lastMessage = messages[lastIndex];
+  const lastMessage = messages[lastIndex]!;
   messages[lastIndex] = {
     ...lastMessage,
-    content: [...(Array.isArray(lastMessage?.content) ? lastMessage.content : []), marker],
+    content: [...lastMessage.content, marker],
   };
 }
 
@@ -285,7 +267,6 @@ export function createClaudeCliModelCallDiagnostics(params: {
   prompt: string;
   systemPrompt?: string;
   transport: "paired-node-cli" | "stdio" | "stdio-live";
-  now?: () => number;
 }) {
   // Listener registration is process-stable after plugin startup. This attempt-local
   // snapshot avoids trace ids, capture buffers, and byte accounting when nobody consumes them.
@@ -297,7 +278,6 @@ export function createClaudeCliModelCallDiagnostics(params: {
     return undefined;
   }
 
-  const now = params.now ?? (() => Date.now());
   const capture = resolveDiagnosticModelContentCapturePolicy(
     params.context.params.config ?? params.context.contextEngineConfig,
   );
@@ -334,7 +314,7 @@ export function createClaudeCliModelCallDiagnostics(params: {
     },
     trace,
   };
-  const capturedAssistantMessages: Record<string, unknown>[] = [];
+  const capturedAssistantMessages: DiagnosticAssistantMessage[] = [];
   const outputContentBudget: DiagnosticContentBudget = {
     remainingBytes:
       MAX_CAPTURED_CONTENT_BYTES -
@@ -364,12 +344,12 @@ export function createClaudeCliModelCallDiagnostics(params: {
     const content: DiagnosticModelCallContent = {
       ...(capture.inputMessages
         ? {
-            inputMessages: cloneDiagnosticContentValue([
+            inputMessages: [
               {
                 role: "user",
                 content: [{ type: "text", text: captureBoundedText(params.prompt) }],
               },
-            ]),
+            ],
           }
         : {}),
       ...(capture.systemPrompt && params.systemPrompt
@@ -387,7 +367,7 @@ export function createClaudeCliModelCallDiagnostics(params: {
       messages.length < MAX_CAPTURED_OUTPUT_MESSAGES
     ) {
       const fallback = normalizeClaudeAssistantMessage(
-        { content: responseText },
+        { content: [{ type: "text", text: responseText }], truncated: false },
         outputContentBudget,
       );
       if (fallback) {
@@ -397,7 +377,7 @@ export function createClaudeCliModelCallDiagnostics(params: {
     if (outputContentBudget.truncated) {
       appendOutputTruncationMarker(messages);
     }
-    return cloneDiagnosticContentValue(messages);
+    return messages;
   };
   const completedModelContent = (output?: CliOutput): DiagnosticModelCallContent | undefined => {
     const base = baseModelContent();
@@ -423,7 +403,7 @@ export function createClaudeCliModelCallDiagnostics(params: {
         return;
       }
       started = true;
-      startedAt = now();
+      startedAt = Date.now();
       emitTrustedDiagnosticEventWithPrivateData(
         {
           type: "model.call.started",
@@ -443,24 +423,32 @@ export function createClaudeCliModelCallDiagnostics(params: {
       if (!chunk) {
         return;
       }
-      firstCliOutputAt ??= now();
+      firstCliOutputAt ??= Date.now();
       if (stream === "stdout") {
         responseStreamBytes += knownByteLength ?? Buffer.byteLength(chunk, "utf8");
       }
     },
     observeAssistantMessage: (message: unknown): void => {
-      if (
-        !capture.outputMessages ||
-        ((outputContentBudget.remainingBytes <= 0 || outputContentBudget.remainingItems <= 0) &&
-          !(outputContentBudget.fallbackReserveItems > 0 && assistantMessageHasText(message))) ||
-        capturedAssistantMessages.length >= MAX_CAPTURED_OUTPUT_MESSAGES - 1
-      ) {
-        if (capture.outputMessages) {
-          outputContentBudget.truncated = true;
-        }
+      if (!capture.outputMessages) {
         return;
       }
-      const normalized = normalizeClaudeAssistantMessage(message, outputContentBudget);
+      if (
+        capturedAssistantMessages.length >= MAX_CAPTURED_OUTPUT_MESSAGES - 1 ||
+        ((outputContentBudget.remainingBytes <= 0 || outputContentBudget.remainingItems <= 0) &&
+          outputContentBudget.fallbackReserveItems <= 0)
+      ) {
+        outputContentBudget.truncated = true;
+        return;
+      }
+      const parsed = parseClaudeAssistantMessage(message);
+      if (
+        (outputContentBudget.remainingBytes <= 0 || outputContentBudget.remainingItems <= 0) &&
+        !(outputContentBudget.fallbackReserveItems > 0 && parsed && assistantMessageHasText(parsed))
+      ) {
+        outputContentBudget.truncated = true;
+        return;
+      }
+      const normalized = parsed && normalizeClaudeAssistantMessage(parsed, outputContentBudget);
       if (normalized) {
         capturedAssistantMessages.push(normalized);
       }
@@ -480,7 +468,7 @@ export function createClaudeCliModelCallDiagnostics(params: {
         {
           type: "model.call.completed",
           ...baseFields,
-          durationMs: Math.max(0, now() - startedAt),
+          durationMs: Math.max(0, Date.now() - startedAt),
           ...sizeTimingFields(),
           ...usageField(
             output.diagnosticUsage ?? observedTerminalUsage ?? output.usage ?? observedUsage,
@@ -503,7 +491,7 @@ export function createClaudeCliModelCallDiagnostics(params: {
         {
           type: "model.call.error",
           ...baseFields,
-          durationMs: Math.max(0, now() - startedAt),
+          durationMs: Math.max(0, Date.now() - startedAt),
           errorCategory:
             (isFailoverError(error) ? error.reason : undefined) ??
             failureKind ??

@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../plugins/installed-plugin-index-records.js";
 import { listOfficialExternalPluginCatalogEntries } from "../plugins/official-external-plugin-catalog.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
@@ -140,8 +140,8 @@ describe.each(["startup", "repair"] as const)("%s consent inventory", (first) =>
           expect(repair.installRecords).toEqual({});
         });
         // A completed lifecycle changes the next generation, not the invoking snapshot.
-        const persisted = withPluginCache(createPluginCache(), () =>
-          readPersistedInstalledPluginIndexInstallRecords({ env }),
+        const persisted = await withPluginCache(createPluginCache(), () =>
+          readPersistedInstalledPluginIndexInstallRecordsAsync({ env }),
         );
         expect(persisted).toEqual({});
       }

@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import {
   channelHeader,
+  clicks,
   fixture,
   inCall,
   page,
@@ -9,9 +10,29 @@ import {
   qaNode,
 } from "./slack-huddles-platform-adapter.test-helpers.js";
 
+function input(label = "BlackHole 2ch") {
+  return new PageNode("div", { id: "microphone-info" }, label);
+}
+
+function cameraControl(on = true) {
+  return new PageNode("button", {
+    role: "switch",
+    "aria-label": "Camera",
+    "aria-checked": String(on),
+  });
+}
+
+function afterClick(node: PageNode, effect: () => void) {
+  const click = node.onClick;
+  node.onClick = () => {
+    click?.();
+    effect();
+  };
+}
+
 it("selects and verifies the virtual microphone before enabling in-call talk-back", async () => {
   const { document, mic } = inCall(undefined, true);
-  const selected = new PageNode("div", { id: "microphone-info" }, "Built-in Microphone");
+  const selected = input("Built-in Microphone");
   const settings = qaNode("huddle-toolbar-mic-popover-button", "");
   const choice = qaNode("av-microphone-device-menu-item_BlackHole 2ch", "BlackHole 2ch");
   const micStates: Array<string | null> = [];
@@ -25,13 +46,12 @@ it("selects and verifies the virtual microphone before enabling in-call talk-bac
   document.body.append(selected, settings);
   const result = await fixture({ document, joined: true }).status({ mode: "agent" });
   expect(micStates).toEqual(["false"]);
-  expect(settings.clicks).toBe(1);
-  expect(choice.clicks).toBe(1);
+  expect(clicks(settings, choice)).toEqual([1, 1]);
   expect(result).toMatchObject({ audioInputRouted: true, micMuted: false });
 });
 
 it.each(["agent", "transcribe"] as const)(
-  "stops controls and hides metadata when membership vanishes during %s status",
+  "stops controls and metadata after membership loss (%s)",
   async (mode) => {
     const { document, mic } = inCall(undefined, true, false);
     const header = channelHeader(true);
@@ -39,17 +59,14 @@ it.each(["agent", "transcribe"] as const)(
     document.body.append(
       header,
       settings,
-      new PageNode("div", { id: "microphone-info" }, "Built-in Microphone"),
+      input("Built-in Microphone"),
       qaNode("huddle_window_titlebar_title", "Other team huddle"),
     );
-    const toggleMicrophone = mic.onClick;
-    mic.onClick = () => {
-      toggleMicrophone?.();
+    afterClick(mic, () => {
       header.attributes.class = "p-huddle_channel_header_button__container";
-    };
+    });
     const result = await fixture({ document, joined: true }).status({ mode });
-    expect(mic.clicks).toBe(1);
-    expect(settings.clicks).toBe(0);
+    expect(clicks(mic, settings)).toEqual([1, 0]);
     expect(result.inCall).toBe(false);
     expect(result.meetingTitle).toBeUndefined();
   },
@@ -59,40 +76,30 @@ it.each([
   { change: "call", reason: undefined },
   { change: "prompt", reason: "slack-confirmation-required" },
   { change: "camera", reason: "slack-camera-required" },
-])(
-  "refuses Join after $change changes while the preview microphone settles",
-  async ({ change, reason }) => {
-    const { document, join, mic } = preview("Join Huddle", true);
-    const camera = new PageNode("button", {
-      role: "switch",
-      "aria-label": "Camera",
-      "aria-checked": "false",
-    });
+])("refuses Join after $change during microphone settling", async ({ change, reason }) => {
+  const { document, join, mic } = preview("Join Huddle", true);
+  const camera = cameraControl(false);
+  if (change === "camera") {
+    document.body.append(camera);
+  }
+  afterClick(mic, () => {
     if (change === "camera") {
-      document.body.append(camera);
+      camera.setAttribute("aria-checked", "true");
+    } else {
+      document.body.append(
+        change === "call"
+          ? qaNode("huddle_toolbar__leave_button", "Leave Huddle")
+          : qaNode("huddle_join_modal", "Switch huddles?", "div"),
+      );
     }
-    const toggleMicrophone = mic.onClick;
-    mic.onClick = () => {
-      toggleMicrophone?.();
-      if (change === "camera") {
-        camera.setAttribute("aria-checked", "true");
-      } else {
-        document.body.append(
-          change === "call"
-            ? qaNode("huddle_toolbar__leave_button", "Leave Huddle")
-            : qaNode("huddle_join_modal", "Switch huddles?", "div"),
-        );
-      }
-    };
-    const result = await fixture({ document }).status({ mode: "agent" });
-    expect(mic.clicks).toBe(1);
-    expect(join.clicks).toBe(0);
-    expect(result.clickedJoin).not.toBe(true);
-    if (reason) {
-      expect(result).toMatchObject({ manualAction: { reason } });
-    }
-  },
-);
+  });
+  const result = await fixture({ document }).status({ mode: "agent" });
+  expect(clicks(mic, join)).toEqual([1, 0]);
+  expect(result.clickedJoin).not.toBe(true);
+  if (reason) {
+    expect(result).toMatchObject({ manualAction: { reason } });
+  }
+});
 
 it.each([
   { change: "human-mute", initial: true, inPreview: false },
@@ -104,16 +111,8 @@ it.each([
   async ({ change, initial, inPreview }) => {
     const active = inPreview ? preview("Join Huddle", initial) : undefined;
     const { document, mic } = active ?? inCall(undefined, initial);
-    const selected = new PageNode(
-      "div",
-      { id: "microphone-info" },
-      change === "human-mute" ? "Built-in Microphone" : "BlackHole 2ch",
-    );
-    const camera = new PageNode("button", {
-      role: "switch",
-      "aria-label": "Camera",
-      "aria-checked": "true",
-    });
+    const selected = input(change === "human-mute" ? "Built-in Microphone" : "BlackHole 2ch");
+    const camera = cameraControl();
     camera.onClick = () => {
       camera.setAttribute("aria-checked", "false");
       if (change === "human-mute") {
@@ -144,14 +143,12 @@ it.each([
 
 it("re-mutes when Slack leaves the virtual input right after the microphone unmutes", async () => {
   const { document, mic } = inCall(undefined, false);
-  const selected = new PageNode("div", { id: "microphone-info" }, "BlackHole 2ch");
-  const toggleMicrophone = mic.onClick;
-  mic.onClick = () => {
-    toggleMicrophone?.();
+  const selected = input();
+  afterClick(mic, () => {
     if (mic.getAttribute("aria-checked") === "true") {
       selected.textContent = "Built-in Microphone";
     }
-  };
+  });
   document.body.append(selected);
   await fixture({ document, joined: true }).status({ mode: "agent" });
   expect(mic.clicks).toBe(2);
@@ -178,7 +175,7 @@ it("does not mute or route playback when membership ends during device enumerati
     header,
     playback,
     qaNode("huddle_window_titlebar_title", "Other team huddle"),
-    new PageNode("div", { id: "microphone-info" }, "BlackHole 2ch"),
+    input(),
   );
   const result = await fixture({
     document,
@@ -197,7 +194,7 @@ it("does not mute or route playback when membership ends during device enumerati
 it("does not mistake an available virtual microphone for Slack's selected input", async () => {
   const { document } = inCall(undefined, true);
   document.body.append(
-    new PageNode("div", { id: "microphone-info" }, "Built-in Microphone"),
+    input("Built-in Microphone"),
     qaNode("av-microphone-device-menu-item_BlackHole 2ch", "BlackHole 2ch"),
   );
   const result = await fixture({ document, joined: true }).status({
@@ -210,52 +207,42 @@ it("does not mistake an available virtual microphone for Slack's selected input"
   });
 });
 
-it.each(["Mute microphone", "Unmute microphone"])(
-  "reads the alternate %s control",
-  async (label) => {
-    const mic = new PageNode("button", {
-      "data-qa": "segmented-mute-button-main",
-      "aria-label": label,
-    });
-    const document = page(qaNode("huddle_toolbar__leave_button"), mic, channelHeader(true));
-    expect(await fixture({ document, joined: true }).status({ readOnly: true })).toMatchObject({
-      inCall: true,
-      micMuted: label === "Unmute microphone",
-    });
-  },
-);
+it.each(["Mute microphone", "Unmute microphone"])("reads alternate %s control", async (label) => {
+  const mic = new PageNode("button", {
+    "data-qa": "segmented-mute-button-main",
+    "aria-label": label,
+  });
+  const document = page(qaNode("huddle_toolbar__leave_button"), mic, channelHeader(true));
+  expect(await fixture({ document, joined: true }).status({ readOnly: true })).toMatchObject({
+    inCall: true,
+    micMuted: label === "Unmute microphone",
+  });
+});
 
-it.each([false, true])(
-  "rechecks the input after shared routing (readOnly=%s)",
-  async (readOnly) => {
-    const { document, mic } = inCall(undefined, true);
-    const selected = new PageNode("div", { id: "microphone-info" }, "BlackHole 2ch");
-    const playback = Object.assign(new PageNode("audio"), { setSinkId: async () => {} });
-    document.body.append(selected, playback);
-    const result = await fixture({
-      document,
-      joined: true,
-      onEnumerateDevices: () => {
-        selected.textContent = "Built-in Microphone";
-      },
-    }).status({ mode: "agent", readOnly });
-    if (readOnly) {
-      expect(mic.clicks).toBe(0);
-    } else {
-      expect(mic.getAttribute("aria-checked")).toBe("false");
-    }
-    expect(result.audioInputRouted).toBe(false);
-  },
-);
+it.each([false, true])("rechecks input after routing (readOnly=%s)", async (readOnly) => {
+  const { document, mic } = inCall(undefined, true);
+  const selected = input();
+  const playback = Object.assign(new PageNode("audio"), { setSinkId: async () => {} });
+  document.body.append(selected, playback);
+  const result = await fixture({
+    document,
+    joined: true,
+    onEnumerateDevices: () => {
+      selected.textContent = "Built-in Microphone";
+    },
+  }).status({ mode: "agent", readOnly });
+  if (readOnly) {
+    expect(mic.clicks).toBe(0);
+  } else {
+    expect(mic.getAttribute("aria-checked")).toBe("false");
+  }
+  expect(result.audioInputRouted).toBe(false);
+});
 
 it("stops clicking once another session takes over the page during an awaited step", async () => {
   const { document, mic } = inCall(undefined, true);
   const browser = fixture({ document, joined: true });
-  const camera = new PageNode("button", {
-    role: "switch",
-    "aria-label": "Camera",
-    "aria-checked": "true",
-  });
+  const camera = cameraControl();
   camera.onClick = () => {
     camera.setAttribute("aria-checked", "false");
     Object.assign(browser.window, {
@@ -267,6 +254,5 @@ it("stops clicking once another session takes over the page during an awaited st
   };
   document.body.append(camera);
   await browser.status({ mode: "transcribe" });
-  expect(camera.clicks).toBe(1);
-  expect(mic.clicks).toBe(0);
+  expect(clicks(camera, mic)).toEqual([1, 0]);
 });

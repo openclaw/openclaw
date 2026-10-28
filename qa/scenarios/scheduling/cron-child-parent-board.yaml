@@ -1,0 +1,140 @@
+title: Cron child runs author their parent conversation board
+
+scenario:
+  id: cron-child-parent-board
+  surface: cron
+  coverage:
+    primary:
+      - automation.isolated-cron-execution
+    secondary:
+      - automation.manual-cron-runs
+  gatewayConfigPatch:
+    tools:
+      # Keep tools directly declared so the scheduled turn's scripted dashboard call resolves.
+      toolSearch: false
+  objective: Verify a scheduled run created from a conversation writes its dashboard changes to that conversation's board, not to a private run-session board.
+  successCriteria:
+    - A job created for an existing conversation runs and creates one dashboard tab.
+    - The tab appears on the creating conversation's board.
+  docsRefs:
+    - docs/automation/cron-jobs.md
+  codeRefs:
+    - src/cron/execution-context.ts
+    - src/cron/execution-context-admission.ts
+    - src/cron/execution-context-registry.ts
+    - src/agents/openclaw-tools.ts
+    - src/agents/tools/dashboard-tool.ts
+    - extensions/qa-lab/src/providers/mock-openai/mock-openai-cron-parent-board.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Writes a dashboard tab to the job's parent conversation board.
+    channel: qa-channel
+    retryCount: 0
+    timeoutMs: 240000
+    summary: Create a conversation, create an isolated job bound to it that creates a dashboard tab, and prove the tab lands on the conversation's board.
+    config:
+      requiredProviderMode: mock-openai
+      conversationId: qa-cron-parent-board
+      readyMarker: QA-CRON-PARENT-BOARD-READY
+
+flow:
+  steps:
+    - name: a scheduled child writes its tab to the parent board
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: parent board proof requires mock-openai
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: parentSessionKey
+          value:
+            expr: "`agent:qa:qa-channel:group:group:${config.conversationId}`"
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: group
+            senderId: qa-driver
+            senderName: QA Driver
+            text:
+              expr: "`@openclaw Cron parent board QA check: ready. Reply exactly \\`${config.readyMarker}\\`.`"
+        - call: waitForCondition
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.some((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === config.conversationId && message.text.includes(config.readyMarker)) || undefined"
+            - 60000
+            - 100
+        - set: tabId
+          value:
+            expr: "`qa-${randomUUID().slice(0, 8)}`"
+        - call: env.gateway.call
+          saveAs: added
+          args:
+            - cron.add
+            - agentId: qa
+              sessionKey:
+                ref: parentSessionKey
+              name:
+                expr: "`qa-cron-parent-board-${randomUUID()}`"
+              enabled: true
+              deleteAfterRun: false
+              schedule:
+                kind: every
+                everyMs: 3600000
+              sessionTarget: isolated
+              wakeMode: now
+              payload:
+                kind: agentTurn
+                message:
+                  expr: "`Cron parent board QA check: tab=${tabId}`"
+                toolsAllow:
+                  - "*"
+              delivery:
+                mode: none
+            - timeoutMs: 30000
+        - set: jobId
+          value:
+            expr: added.id
+        - set: firstRunStartedAt
+          value:
+            expr: "Date.now()"
+        - call: env.gateway.call
+          args:
+            - cron.run
+            - id:
+                ref: jobId
+              mode: force
+            - timeoutMs: 30000
+        - call: waitForCronRunCompletion
+          saveAs: firstRun
+          args:
+            - callGateway:
+                expr: "env.gateway.call.bind(env.gateway)"
+              jobId:
+                ref: jobId
+              afterTs:
+                ref: firstRunStartedAt
+        - assert:
+            expr: "firstRun.status === 'ok'"
+            message:
+              expr: "`scheduled board run did not succeed: ${JSON.stringify(firstRun)}`"
+        - call: env.gateway.call
+          saveAs: parentBoard
+          args:
+            - board.get
+            - sessionKey:
+                ref: parentSessionKey
+              agentId: qa
+            - timeoutMs: 30000
+        - assert:
+            expr: "(parentBoard.tabs ?? []).some((tab) => tab.tabId === tabId)"
+            message:
+              expr: "`the scheduled run's tab is not on the parent board: ${JSON.stringify(parentBoard.tabs)}`"

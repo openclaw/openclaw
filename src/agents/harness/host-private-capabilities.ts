@@ -1,18 +1,42 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-import type {
-  ReplyToolAuthorityOverlay,
-  ReplyToolAuthorityPreparation,
-  ReplyToolAuthorityRoute,
-} from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import type {
   PreparedSessionEntryWorkerRead,
   SessionEntryWorkerRead,
 } from "../../config/sessions/session-entry-read-runtime.types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
+import type {
+  ReplyToolAuthorityOverlay,
+  ReplyToolAuthorityRequester,
+  ReplyToolAuthorityPreparation,
+  ReplyToolAuthorityRoute,
+} from "../../sessions/session-controller.contracts.js";
+import type { ReplyIncomingExecutionSelection } from "../../sessions/session-controller.execution-selection.js";
+import type { ReplyMessageJoinObservation } from "../../sessions/session-controller.message-join-observation.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { AsyncContext } from "../../shared/async-context.js";
 import type { CronScheduledToolProjectionRequest } from "../exec-tool-target-pinning.js";
+import type { ModelFallbackAvailability } from "../model-fallback.types.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
+
+/** Translation for current bundled sinks; this fact grants no input authority. */
+export type ReplyQueueInputAdapter = "human-and-question-permission" | "legacy-question-category";
+
+const replyQueueInputAdapters = new WeakMap<object, ReplyQueueInputAdapter>();
+
+/** Keep adapter metadata on the existing host owner without changing its public shape. */
+export function bindReplyQueueInputAdapter<T extends object>(
+  owner: T,
+  adapter: ReplyQueueInputAdapter,
+): T {
+  replyQueueInputAdapters.set(owner, adapter);
+  return owner;
+}
+
+export function readReplyQueueInputAdapter(owner: object | undefined): ReplyQueueInputAdapter {
+  return (owner && replyQueueInputAdapters.get(owner)) ?? "legacy-question-category";
+}
 
 export type AgentHarnessScheduledToolProjectionFactory = (
   sourceTool: AnyAgentTool,
@@ -30,7 +54,8 @@ export type PreparedQuestionCallerRead = {
   reads: readonly SessionEntryWorkerRead[];
   prepareCurrent: () => Promise<void>;
   assertPrepared: (reads: readonly PreparedSessionEntryWorkerRead[]) => void;
-  retainNative: () => { assertCurrent: () => void; release: () => void };
+  /** Retain owner-held policy facts; final checks never acquire a durable reader. */
+  retainCurrent: () => { assertCurrent: () => void; release: () => void };
 };
 
 export type QuestionInputAuthority = {
@@ -65,7 +90,7 @@ export function readQuestionDispatchCapability(assertCurrent?: QuestionDispatchC
   return assertCurrent ? questionDispatchCapabilities.get(assertCurrent) : undefined;
 }
 
-/** Preserve reservation refusal tracking on every final policy check and native grant. */
+/** Preserve reservation refusal tracking on every final policy check. */
 export function bindQuestionDispatchGuard(
   assertCurrent: () => void,
   authority: QuestionInputAuthority | undefined,
@@ -103,16 +128,16 @@ export function bindQuestionDispatchGuard(
         prepareCurrent: prepareCurrent!,
         assertPrepared: (reads: Parameters<PreparedQuestionCallerRead["assertPrepared"]>[0]) =>
           guard(() => callerRead.assertPrepared(reads)),
-        retainNative: () => {
-          let native: ReturnType<PreparedQuestionCallerRead["retainNative"]>;
+        retainCurrent: () => {
+          let retained: ReturnType<PreparedQuestionCallerRead["retainCurrent"]>;
           try {
-            native = callerRead.retainNative();
+            retained = callerRead.retainCurrent();
           } catch (error) {
             return refuse(error);
           }
           return {
-            release: native.release,
-            assertCurrent: () => guard(native.assertCurrent),
+            release: retained.release,
+            assertCurrent: () => guard(retained.assertCurrent),
           };
         },
       },
@@ -135,25 +160,46 @@ export function prepareQuestionGatewayDispatch(
   };
 }
 
-type CallerReadPreparer = (
-  caller: ReplyToolAuthorityOverlay | undefined,
+/** Internal continuation input supplies caller policy, never replacement execution settings. */
+export type ReplyToolAuthorityContinuation = Readonly<{
+  kind: "continuation";
+  caller: Omit<ReplyToolAuthorityOverlay, "traceAuthorized" | "allowCollaborativeSteering">;
+  config: OpenClawConfig;
+  executionSelection: ReplyIncomingExecutionSelection;
+  selectedRoute: ReplyToolAuthorityRoute;
+  fallbackAvailability: ModelFallbackAvailability;
+}>;
+
+export type ReplyToolAuthorityCaller =
+  | ReplyToolAuthorityOverlay
+  | ReplyToolAuthorityRequester
+  | ReplyToolAuthorityContinuation;
+
+export type ReplyToolAuthorityCallerBinding = {
+  assertCurrent(): void;
+  joinObservation?: ReplyMessageJoinObservation;
+  prepare(): Promise<PreparedQuestionCallerRead | undefined>;
+};
+
+type CallerBindingSelector = (
+  caller: ReplyToolAuthorityCaller | undefined,
   fingerprint: string,
   route: ReplyToolAuthorityRoute | undefined,
   assertCurrent: () => void,
-) => Promise<PreparedQuestionCallerRead | undefined>;
-const callerReadPreparers = new WeakMap<object, CallerReadPreparer>();
+) => ReplyToolAuthorityCallerBinding | undefined;
+const callerReadPreparers = new WeakMap<object, CallerBindingSelector>();
 
 export type PreparedToolAuthorityRead = {
   reads: readonly SessionEntryWorkerRead[];
   assertPrepared: (reads: readonly PreparedSessionEntryWorkerRead[]) => void;
   /** Ordinary legacy queue admission only; never call from a worker grant. */
   assertLegacyCurrent: () => void;
-  retainNative?: PreparedQuestionCallerRead["retainNative"];
+  retainCurrent?: PreparedQuestionCallerRead["retainCurrent"];
 };
-const toolAuthorityReadScope = new AsyncLocalStorage<{
+const toolAuthorityReadScope = new AsyncContext<{
   reads: PreparedToolAuthorityRead[];
   complete: boolean;
-}>();
+}>(Symbol("toolAuthorityReads"));
 const workerToolPreparations = new WeakMap<() => Promise<void>, { complete: boolean }>();
 
 export function bindWorkerToolPreparation<
@@ -203,28 +249,65 @@ export async function capturePreparedToolAuthorityReads(
 
 export function bindReplyToolAuthorityCallerRead(
   projector: object,
-  prepare: CallerReadPreparer,
+  select: CallerBindingSelector,
 ): void {
-  callerReadPreparers.set(projector, prepare);
+  callerReadPreparers.set(projector, select);
+}
+
+/** Select one policy owner before delivery preparation can yield to a successor attempt. */
+export function captureReplyToolAuthorityCallerBinding(
+  projector: object | undefined,
+  caller: ReplyToolAuthorityCaller | undefined,
+  fingerprint: string | undefined,
+  route: ReplyToolAuthorityRoute | undefined,
+  assertCurrent: () => void,
+): ReplyToolAuthorityCallerBinding | undefined {
+  assertCurrent();
+  const selected =
+    projector && fingerprint
+      ? callerReadPreparers.get(projector)?.(caller, fingerprint, route, assertCurrent)
+      : undefined;
+  if (!selected) {
+    const scope = toolAuthorityReadScope.getStore();
+    if (scope) {
+      scope.complete = false;
+    }
+    return undefined;
+  }
+  selected.assertCurrent();
+  return {
+    assertCurrent: () => selected.assertCurrent(),
+    joinObservation: selected.joinObservation,
+    prepare: async () => {
+      selected.assertCurrent();
+      try {
+        const prepared = await selected.prepare();
+        const scope = toolAuthorityReadScope.getStore();
+        if (scope && !prepared) {
+          scope.complete = false;
+        }
+        return prepared;
+      } finally {
+        selected.assertCurrent();
+      }
+    },
+  };
 }
 
 export async function prepareReplyToolAuthorityCallerRead(
   projector: object | undefined,
-  caller: ReplyToolAuthorityOverlay | undefined,
+  caller: ReplyToolAuthorityCaller | undefined,
   fingerprint: string | undefined,
   route: ReplyToolAuthorityRoute | undefined,
   assertCurrent: () => void,
 ) {
-  assertCurrent();
-  const prepared =
-    projector && fingerprint
-      ? await callerReadPreparers.get(projector)?.(caller, fingerprint, route, assertCurrent)
-      : undefined;
-  const scope = toolAuthorityReadScope.getStore();
-  if (scope && !prepared) {
-    scope.complete = false;
-  }
-  return prepared;
+  return captureReplyToolAuthorityCallerBinding(
+    projector,
+    caller,
+    fingerprint,
+    route,
+    assertCurrent,
+  )?.prepare();
 }
 
 function assertQuestionCompatibilityCurrent(
@@ -233,15 +316,20 @@ function assertQuestionCompatibilityCurrent(
   fallback: () => void,
 ) {
   assertActive();
-  const native = callerRead?.retainNative();
+  const retained = callerRead?.retainCurrent();
   try {
-    if (native) {
-      native.assertCurrent();
+    if (retained) {
+      retained.assertCurrent();
     } else {
+      warnPluginSdkDeprecation({
+        family: "reply-tool-authority-sync-preparation",
+        method: "question dispatcher authority.assertCurrent synchronous preparation",
+        replacement: "await authority.assertCurrentAsync() before the final effect assertion",
+      });
       fallback();
     }
   } finally {
-    native?.release();
+    retained?.release();
   }
   assertActive();
 }
@@ -262,7 +350,7 @@ export async function prepareQuestionInputAuthority(authority: QuestionInputAuth
   const supported =
     !captured.assertCompatibility &&
     captured.reads.length > 0 &&
-    captured.reads.every((read) => read.retainNative);
+    captured.reads.every((read) => read.retainCurrent);
   const assertLegacyReads = () => {
     for (const read of captured.reads) {
       read.assertLegacyCurrent();
@@ -289,8 +377,8 @@ export async function prepareQuestionInputAuthority(authority: QuestionInputAuth
           }
           assertActive();
         },
-        retainNative: () => {
-          const retained: ReturnType<PreparedQuestionCallerRead["retainNative"]>[] = [];
+        retainCurrent: () => {
+          const retained: ReturnType<PreparedQuestionCallerRead["retainCurrent"]>[] = [];
           const release = () => {
             const errors: unknown[] = [];
             for (const read of retained.toReversed()) {
@@ -304,7 +392,7 @@ export async function prepareQuestionInputAuthority(authority: QuestionInputAuth
           };
           try {
             for (const read of captured.reads) {
-              retained.push(read.retainNative!());
+              retained.push(read.retainCurrent!());
             }
             return {
               release,
@@ -380,7 +468,9 @@ export type PreparedQuestionAnswerAuthority = Readonly<{
   admitTranscriptAnswer?: (recorder: UserTurnTranscriptRecorder | undefined) => void;
 }>;
 
-const questionAnswerScope = new AsyncLocalStorage<PreparedQuestionAnswerAuthority | undefined>();
+const questionAnswerScope = new AsyncContext<PreparedQuestionAnswerAuthority>(
+  Symbol("questionAnswerAuthority"),
+);
 const questionAnswerCapabilities = new WeakMap<
   AgentHarnessHostCapabilities,
   PreparedQuestionAnswerAuthority
@@ -489,10 +579,10 @@ export function registerAgentHarnessScheduledToolProjectionCapability(params: {
   ownerPluginId: string;
   create: AgentHarnessScheduledToolProjectionFactory;
 }): void {
-  scheduledToolProjectionCapabilities.set(
-    params.hostCapabilities,
-    Object.freeze({ ownerPluginId: params.ownerPluginId, create: params.create }),
-  );
+  scheduledToolProjectionCapabilities.set(params.hostCapabilities, {
+    ownerPluginId: params.ownerPluginId,
+    create: params.create,
+  });
 }
 
 /** Resolves a private issuer only for the exact authoritative plugin owner. */
@@ -509,10 +599,10 @@ export function registerAgentHarnessTtsProvenanceTransferCapability(params: {
   ownerPluginId: string;
   transfer: AgentHarnessTtsProvenanceTransfer;
 }): void {
-  ttsProvenanceTransferCapabilities.set(
-    params.hostCapabilities,
-    Object.freeze({ ownerPluginId: params.ownerPluginId, transfer: params.transfer }),
-  );
+  ttsProvenanceTransferCapabilities.set(params.hostCapabilities, {
+    ownerPluginId: params.ownerPluginId,
+    transfer: params.transfer,
+  });
 }
 
 /** Resolves private TTS delivery transfer only for the exact authoritative plugin owner. */

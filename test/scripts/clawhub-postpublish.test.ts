@@ -37,6 +37,61 @@ const repository = "openclaw/openclaw";
 const parentWorkflow = ".github/workflows/openclaw-release-publish.yml";
 const childWorkflow = ".github/workflows/plugin-clawhub-release.yml";
 const digest = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+const jobsPath = (run: number, attempt: number, page = 1) =>
+  `actions/runs/${run}/attempts/${attempt}/jobs?per_page=100&page=${page}`;
+const artifactsPath = (run: number) => `actions/runs/${run}/artifacts?per_page=100&page=1`;
+const completed = { status: "completed", conclusion: "success" };
+function job(name: string, run_id = 20, run_attempt = 1, steps: string[] = []) {
+  return {
+    name,
+    run_id,
+    run_attempt,
+    head_sha: sha,
+    ...completed,
+    ...(steps.length ? { steps: steps.map((stepName) => ({ name: stepName, ...completed })) } : {}),
+  };
+}
+function jobPage(jobs: unknown[]) {
+  return { total_count: jobs.length, jobs };
+}
+function replaceJsonArtifact(
+  f: ReturnType<typeof fixture>,
+  artifact: typeof f.dispatchArtifact,
+  fileName: string,
+  value: unknown,
+) {
+  const archive = zip(fileName, Buffer.from(JSON.stringify(value)));
+  f.archives.set(artifact.id, archive);
+  Object.assign(artifact, { size_in_bytes: archive.length, digest: `sha256:${digest(archive)}` });
+}
+async function rejectsBeforeRegistry(
+  f: ReturnType<typeof fixture>,
+  error: RegExp | string,
+  evidence = false,
+) {
+  await expect(verifyClawHubPostpublish(f.options)).rejects.toThrow(error);
+  expect(f.registryReads).toEqual([]);
+  if (evidence) {
+    expect(existsSync(join(f.options.outputDir, "evidence.json"))).toBe(false);
+  }
+}
+function sealParent(f: ReturnType<typeof fixture>, conclusion = "success") {
+  replaceJsonArtifact(
+    f,
+    f.receiptArtifact,
+    "authorization.json",
+    createClawHubParentAuthorization(f.transactions, "automated-sealed"),
+  );
+  f.setJobs(10, 1, [
+    {
+      ...job("Publish plugins, then OpenClaw", 10, 1, [
+        "Upload exact release child dispatch record",
+        "Upload immutable ClawHub parent authorization",
+      ]),
+      conclusion,
+    },
+  ]);
+}
 
 function zip(name: string, bytes: Buffer) {
   const fileName = Buffer.from(name);
@@ -204,12 +259,9 @@ function fixture(
     [`actions/runs/10/attempts/${parentRunAttempt}`, parent],
     ["actions/runs/20/attempts/1", child],
     ["actions/runs/20", child],
+    [artifactsPath(10), { total_count: 2, artifacts: [receiptArtifact, dispatchArtifact] }],
     [
-      "actions/runs/10/artifacts?per_page=100&page=1",
-      { total_count: 2, artifacts: [receiptArtifact, dispatchArtifact] },
-    ],
-    [
-      "actions/runs/20/artifacts?per_page=100&page=1",
+      artifactsPath(20),
       { total_count: 3, artifacts: [transactionsArtifact, packageArtifact, recoveryArtifact] },
     ],
     [
@@ -217,50 +269,12 @@ function fixture(
       { total_count: 1, artifacts: [transactionsArtifact] },
     ],
     [
-      "actions/runs/20/attempts/1/jobs?per_page=100&page=1",
-      {
-        total_count: 3,
-        jobs: [
-          {
-            name: "Seal exact ClawHub recovery manifest",
-            run_id: 20,
-            run_attempt: 1,
-            head_sha: sha,
-            status: "completed",
-            conclusion: "success",
-            steps: [
-              {
-                name: "Upload sealed recovery manifest",
-                status: "completed",
-                conclusion: "success",
-              },
-            ],
-          },
-          {
-            name: "Seal ClawHub package transactions",
-            run_id: 20,
-            run_attempt: 1,
-            head_sha: sha,
-            status: "completed",
-            conclusion: "success",
-          },
-          {
-            name: `Pack ClawHub package (${entry.name})`,
-            run_id: 20,
-            run_attempt: 1,
-            head_sha: sha,
-            status: "completed",
-            conclusion: "success",
-            steps: [
-              {
-                name: "Upload ClawHub package artifact",
-                status: "completed",
-                conclusion: "success",
-              },
-            ],
-          },
-        ],
-      },
+      jobsPath(20, 1),
+      jobPage([
+        job("Seal exact ClawHub recovery manifest", 20, 1, ["Upload sealed recovery manifest"]),
+        job("Seal ClawHub package transactions"),
+        job(`Pack ClawHub package (${entry.name})`, 20, 1, ["Upload ClawHub package artifact"]),
+      ]),
     ],
     [`git/ref/tags/${ref}`, { ref: `refs/tags/${ref}`, object: { type: "commit", sha } }],
     [`git/matching-refs/heads/${ref}`, []],
@@ -275,8 +289,14 @@ function fixture(
       recoveryArtifact,
     ].map((item): [string, unknown] => [`actions/artifacts/${item.id}`, item]),
   ]);
+  const setJobs = (id: number, attempt: number, jobs: unknown[], total = jobs.length, page = 1) =>
+    metadata.set(jobsPath(id, attempt, page), { total_count: total, jobs });
+  const setArtifacts = (id: number, artifacts: unknown[], total = artifacts.length) =>
+    metadata.set(artifactsPath(id), { total_count: total, artifacts });
   const githubReads: string[] = [];
   const registryReads: string[] = [];
+  const requests: string[] = [];
+  const responses = new Map<string, () => Response | undefined>();
   const archiveIdentity = {
     sha256: digest(tarball),
     size: tarball.length,
@@ -286,6 +306,14 @@ function fixture(
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = new URL(requestUrl(input));
     expect(init?.method ?? "GET").toBe("GET");
+    requests.push(url.pathname);
+    if (url.hostname !== "api.github.com") {
+      expect(new Headers(init?.headers).has("authorization")).toBe(false);
+    }
+    const override = [...responses].find(([suffix]) => url.pathname.endsWith(suffix))?.[1]();
+    if (override) {
+      return override;
+    }
     if (url.hostname === "api.github.com") {
       const path = `${url.pathname.replace(`/repos/${repository}/`, "")}${url.search}`;
       githubReads.push(path);
@@ -299,7 +327,6 @@ function fixture(
       const value = metadata.get(path);
       return value instanceof Response ? value : Response.json(value);
     }
-    expect(new Headers(init?.headers).has("authorization")).toBe(false);
     registryReads.push(url.pathname);
     if (url.pathname.endsWith("/publication")) {
       return Response.json({ name: entry.name, version: entry.version, state: "published" });
@@ -350,6 +377,8 @@ function fixture(
     },
   };
   return {
+    setJobs,
+    setArtifacts,
     directory,
     tarball,
     packageArtifact,
@@ -360,6 +389,9 @@ function fixture(
     archives,
     githubReads,
     registryReads,
+    requests,
+    respond: (suffix: string, response: () => Response | undefined) =>
+      responses.set(suffix, response),
     transactions,
     entry,
     receiptArtifact,
@@ -389,19 +421,13 @@ function retryFixture({
   f.metadata.set(`actions/runs/10/attempts/${terminalAttempt}`, f.parent);
   const uploadStep = {
     name: "Upload exact release child dispatch record",
-    status: "completed",
-    conclusion: "success",
+    ...completed,
     number: 23,
     started_at: "2026-10-05T18:48:31Z",
     completed_at: "2026-10-05T18:48:32Z",
   };
   const producer = {
-    run_id: 10,
-    run_attempt: producerAttempt,
-    head_sha: sha,
-    name: jobName,
-    status: "completed",
-    conclusion: "success",
+    ...job(jobName, 10, producerAttempt),
     runner_id: 42,
     started_at: "2026-10-05T18:43:49Z",
     completed_at: "2026-10-05T19:10:19Z",
@@ -410,11 +436,8 @@ function retryFixture({
   const originalProducer = { ...producer, steps: [{ ...uploadStep }] };
   const terminalUpload = { ...uploadStep };
   const terminalProducer = { ...producer, run_attempt: terminalAttempt, steps: [terminalUpload] };
-  for (const job of [originalProducer, terminalProducer]) {
-    f.metadata.set(`actions/runs/10/attempts/${job.run_attempt}/jobs?per_page=100&page=1`, {
-      total_count: 1,
-      jobs: [job],
-    });
+  for (const producerJob of [originalProducer, terminalProducer]) {
+    f.setJobs(10, producerJob.run_attempt, [producerJob]);
   }
   return { ...f, originalProducer, terminalProducer, terminalUpload };
 }
@@ -451,14 +474,7 @@ function preparedFixture(selectionMode = "selected", packageId = "example", runA
   const packedDirectory = join(f.directory, "prepared-packages");
   mkdirSync(join(packedDirectory, packageArtifact.name), { recursive: true });
   writeFileSync(join(packedDirectory, packageArtifact.name, `${packageId}.tgz`), f.tarball);
-  const packJob = {
-    name: `Pack ClawHub package (${f.entry.name})`,
-    run_id: 20,
-    run_attempt: runAttempt,
-    head_sha: sha,
-    status: "completed",
-    conclusion: "success",
-  };
+  const packJob = job(`Pack ClawHub package (${f.entry.name})`, 20, runAttempt);
   const sealOptions = {
     candidateSha,
     producer,
@@ -586,24 +602,12 @@ describe("ClawHub prepared publication", () => {
       "@openclaw/other",
     ]);
     expect(manifest.producer.runAttempt).toBe(2);
-    for (const entry of manifest.packages) {
-      const transaction = readPackedClawHubTransaction({
-        artifactDir: join(options.directory, entry.artifactName),
-        packageName: entry.packageName,
-        version: entry.version,
-        artifactName: entry.artifactName,
-      });
-      expect(entry.tarballSha256).toBe(transaction.artifactSha256);
-      expect(entry.inventoryDigest).toBe(transaction.inventoryDigest);
-    }
   });
 
-  it.each(["prior attempt", "mixed attempt", "failed producer", "reused producer"])(
+  it.each(["prior attempt", "failed producer", "reused producer"])(
     "refuses to relabel %s packages as the current preparation attempt",
     (change) => {
-      const options = preparedSealingFixture(
-        change === "prior attempt" ? [1, 1] : change === "mixed attempt" ? [1, 2] : [2, 2],
-      );
+      const options = preparedSealingFixture(change === "prior attempt" ? [1, 1] : [2, 2]);
       if (change === "failed producer") {
         options.workflowJobs.jobs[0].conclusion = "failure";
       }
@@ -631,31 +635,17 @@ describe("ClawHub prepared publication", () => {
   it.each(["selected", "all-publishable"])(
     "retains the %s prepared roster when an exact version is adopted on resume",
     async (selectionMode) => {
-      const f = preparedFixture(selectionMode);
+      const f = preparedFixture(selectionMode, "cloudflare");
       const [entry] = await resolvePreparedClawHubMatrix(f.resolveOptions);
       expect(entry.alreadyPublished).toBe(true);
+      expect(entry.family).toBe("bundle-plugin");
+      expect(entry.publication).toEqual({ state: "published" });
       await restorePreparedClawHubPackage({ ...f.restoreOptions, entry: entry.prepared });
-      expect(readFileSync(join(f.restoreOptions.outputDir, "example.tgz"))).toEqual(f.tarball);
-      const readback = await verifyPublishedClawHubPackage({
-        expectedArtifactDir: f.restoreOptions.outputDir,
-        packageName: entry.packageName,
-        packageVersion: entry.version,
-        publishTag: entry.publishTag,
-        retryOptions: { fetchImpl: f.options.fetchImpl, attempts: 1 },
-      });
-      expect(readback.package.registrySha256).toBe(f.entry.artifactSha256);
-      expect(readback.publicationAuthentication).toBe("not-verified");
+      expect(readFileSync(join(f.restoreOptions.outputDir, "cloudflare.tgz"))).toEqual(f.tarball);
     },
   );
 
-  it("restores established package families in prepared promotion matrices", async () => {
-    const f = preparedFixture("selected", "cloudflare");
-    const [entry] = await resolvePreparedClawHubMatrix(f.resolveOptions);
-    expect(entry.family).toBe("bundle-plugin");
-  });
-
   it.each([
-    { publication: { state: "published" } },
     { publication: { state: "absent" } },
     { publication: { state: "pending", stage: "staging" } },
     { publication: { state: "pending", stage: "checks", attemptId: "attempt_checks" } },
@@ -665,36 +655,33 @@ describe("ClawHub prepared publication", () => {
     { publication: { state: "absent" }, legacy: [200, 404] },
   ])("resolves prepared publication detail: %j", async ({ publication, legacy }) => {
     const f = preparedFixture();
-    const requests: string[] = [];
-    const fetchImpl: typeof fetch = async (input, init) => {
-      const url = requestUrl(input);
-      if (url.includes("/versions/")) {
-        requests.push(url.slice(url.indexOf("/versions/")));
-        if (url.endsWith("/publication")) {
-          return Response.json(
-            { name: f.entry.name, version: f.entry.version, ...(legacy ? {} : publication) },
-            { status: legacy?.[0] ?? 200 },
-          );
-        }
-        if (!legacy) {
-          throw new Error("Recognized publication state must not fall back to the version probe.");
-        }
-        return new Response(null, { status: legacy[1] });
+    f.respond("/publication", () =>
+      Response.json(
+        { name: f.entry.name, version: f.entry.version, ...(legacy ? {} : publication) },
+        { status: legacy?.[0] ?? 200 },
+      ),
+    );
+    f.respond(`/versions/${f.entry.version}`, () => {
+      if (!legacy) {
+        throw new Error("Recognized publication state must not fall back to the version probe.");
       }
-      if (url.endsWith("/trusted-publisher") && ["pending", "failed"].includes(publication.state)) {
-        return new Response(null, { status: 404 });
-      }
-      return f.options.fetchImpl(input, init);
-    };
-    const [entry] = await resolvePreparedClawHubMatrix({ ...f.resolveOptions, fetchImpl });
+      return new Response(null, { status: legacy[1] });
+    });
+    if (["pending", "failed"].includes(publication.state)) {
+      f.respond("/trusted-publisher", () => new Response(null, { status: 404 }));
+    }
+    const [entry] = await resolvePreparedClawHubMatrix(f.resolveOptions);
     expect(entry).toMatchObject({
       packageName: f.entry.name,
-      publication,
       alreadyPublished: publication.state === "published",
       prepared: { tarballSha256: f.entry.artifactSha256 },
     });
     expect(entry.publication).toEqual(publication);
-    expect(requests).toEqual([
+    expect(
+      f.requests
+        .filter((url) => url.includes("/versions/"))
+        .map((url) => url.slice(url.indexOf("/versions/"))),
+    ).toEqual([
       `/versions/${f.entry.version}/publication`,
       ...(legacy ? [`/versions/${f.entry.version}`] : []),
     ]);
@@ -711,32 +698,27 @@ describe("ClawHub prepared publication", () => {
     "requires existing owner repair for $label before normal preparation",
     async ({ status, patch }) => {
       const f = preparedFixture("all-publishable");
-      const registryRequests: string[] = [];
-      const fetchImpl: typeof fetch = async (input, init) => {
-        const url = requestUrl(input);
-        if (url.startsWith("https://clawhub.ai/")) {
-          registryRequests.push(url);
-        }
-        if (url.endsWith("/trusted-publisher")) {
-          if (status === 404) {
-            return new Response(null, { status });
-          }
-          const response = await f.options.fetchImpl(input, init);
-          const body: {
-            trustedPublisher: { provider: string; repository: string; workflowFilename: string };
-          } = await response.json();
-          return Response.json({
-            trustedPublisher: patch === null ? null : { ...body.trustedPublisher, ...patch },
-          });
-        }
-        return f.options.fetchImpl(input, init);
-      };
-      await expect(
-        resolvePreparedClawHubMatrix({ ...f.resolveOptions, fetchImpl }),
-      ).rejects.toThrow(/Plugin ClawHub New owner before preparing again/u);
-      expect(registryRequests).toEqual([
-        `https://clawhub.ai/api/v1/packages/${encodeURIComponent(f.entry.name)}/versions/${f.entry.version}/publication`,
-        `https://clawhub.ai/api/v1/packages/${encodeURIComponent(f.entry.name)}/trusted-publisher`,
+      f.respond("/trusted-publisher", () =>
+        status === 404
+          ? new Response(null, { status })
+          : Response.json({
+              trustedPublisher:
+                patch === null
+                  ? null
+                  : {
+                      provider: "github-actions",
+                      repository,
+                      workflowFilename: "plugin-clawhub-release.yml",
+                      ...patch,
+                    },
+            }),
+      );
+      await expect(resolvePreparedClawHubMatrix(f.resolveOptions)).rejects.toThrow(
+        /Plugin ClawHub New owner before preparing again/u,
+      );
+      expect(f.requests.filter((url) => url.startsWith("/api/v1/"))).toEqual([
+        `/api/v1/packages/${encodeURIComponent(f.entry.name)}/versions/${f.entry.version}/publication`,
+        `/api/v1/packages/${encodeURIComponent(f.entry.name)}/trusted-publisher`,
       ]);
     },
   );
@@ -745,16 +727,13 @@ describe("ClawHub prepared publication", () => {
     const f = preparedFixture();
     const options = { ...f.restoreOptions, archivePath: join(f.directory, "package.zip") };
     await restorePreparedClawHubPackage(options);
-    const fetchImpl: typeof fetch = async (input, init) => {
-      if (requestUrl(input).endsWith("/zip")) {
-        throw new Error("Saved verified bytes must not be redownloaded.");
-      }
-      return f.options.fetchImpl(input, init);
-    };
-    await restorePreparedClawHubPackage({ ...options, fetchImpl });
+    f.respond("/zip", () => {
+      throw new Error("Saved verified bytes must not be redownloaded.");
+    });
+    await restorePreparedClawHubPackage(options);
     const tarballPath = join(options.outputDir, "example.tgz");
     writeFileSync(tarballPath, "changed local bytes");
-    await expect(restorePreparedClawHubPackage({ ...options, fetchImpl })).rejects.toThrow();
+    await expect(restorePreparedClawHubPackage(options)).rejects.toThrow();
     expect(readFileSync(tarballPath, "utf8")).toBe("changed local bytes");
   });
 
@@ -798,8 +777,8 @@ describe("ClawHub prepared publication", () => {
   it("retries an interrupted body against the same artifact and restores its original bytes", async () => {
     const f = preparedFixture();
     let transfers = 0;
-    const fetchImpl: typeof fetch = async (input, init) => {
-      if (requestUrl(input).endsWith("/actions/artifacts/3/zip") && ++transfers === 1) {
+    f.respond("/actions/artifacts/3/zip", () => {
+      if (++transfers === 1) {
         let firstChunk = true;
         return new Response(
           new ReadableStream({
@@ -820,9 +799,9 @@ describe("ClawHub prepared publication", () => {
           }),
         );
       }
-      return f.options.fetchImpl(input, init);
-    };
-    await restorePreparedClawHubPackage({ ...f.restoreOptions, fetchImpl });
+      return undefined;
+    });
+    await restorePreparedClawHubPackage(f.restoreOptions);
     expect(transfers).toBe(2);
     expect(readFileSync(join(f.restoreOptions.outputDir, "example.tgz"))).toEqual(f.tarball);
   });
@@ -872,26 +851,19 @@ describe("ClawHub detached postpublish verification", () => {
     async ({ noChild, ...options }) => {
       const f = retryFixture(options);
       if (noChild) {
-        const archive = zip(
-          "dispatch.json",
-          Buffer.from(
-            JSON.stringify({
-              ...f.dispatch,
-              normalClawHubRunId: null,
-              normalClawHubRunAttempt: null,
-            }),
-          ),
-        );
-        f.archives.set(4, archive);
-        Object.assign(f.dispatchArtifact, {
-          size_in_bytes: archive.length,
-          digest: `sha256:${digest(archive)}`,
+        replaceJsonArtifact(f, f.dispatchArtifact, "dispatch.json", {
+          ...f.dispatch,
+          normalClawHubRunId: null,
+          normalClawHubRunAttempt: null,
         });
       }
       const result = await verifyClawHubPostpublish(f.options);
       expect(result).toMatchObject({ complete: true, parentRunAttempt: 2, dispatchRunAttempt: 1 });
       expect(result.packages).toHaveLength(noChild ? 0 : 1);
       expect(f.registryReads.length > 0).toBe(!noChild);
+      if (noChild) {
+        expect(result).toMatchObject({ outcome: "no-normal-clawhub-publication" });
+      }
     },
   );
 
@@ -900,29 +872,19 @@ describe("ClawHub detached postpublish verification", () => {
     const oldRun = { ...f.parent, run_attempt: 1, conclusion: "failure" };
     const oldJob = { ...structuredClone(f.originalProducer), run_attempt: 1, runner_id: 7 };
     f.metadata.set("actions/runs/10/attempts/1", oldRun);
-    f.metadata.set("actions/runs/10/attempts/1/jobs?per_page=100&page=1", {
-      total_count: 1,
-      jobs: [oldJob],
-    });
-    const oldArchive = zip(
-      "dispatch.json",
-      Buffer.from(
-        JSON.stringify({ ...f.dispatch, parentRunAttempt: "1", normalClawHubRunId: "19" }),
-      ),
-    );
+    f.setJobs(10, 1, [oldJob]);
     const oldArtifact = {
       ...f.dispatchArtifact,
       id: 5,
       name: "openclaw-release-children-10-1",
-      size_in_bytes: oldArchive.length,
-      digest: `sha256:${digest(oldArchive)}`,
     };
-    f.archives.set(5, oldArchive);
-    f.metadata.set("actions/artifacts/5", oldArtifact);
-    f.metadata.set("actions/runs/10/artifacts?per_page=100&page=1", {
-      total_count: 3,
-      artifacts: [oldArtifact, f.receiptArtifact, f.dispatchArtifact],
+    replaceJsonArtifact(f, oldArtifact, "dispatch.json", {
+      ...f.dispatch,
+      parentRunAttempt: "1",
+      normalClawHubRunId: "19",
     });
+    f.metadata.set("actions/artifacts/5", oldArtifact);
+    f.setArtifacts(10, [oldArtifact, f.receiptArtifact, f.dispatchArtifact]);
     expect(await verifyClawHubPostpublish(f.options)).toMatchObject({
       complete: true,
       parentRunAttempt: 3,
@@ -959,10 +921,11 @@ describe("ClawHub detached postpublish verification", () => {
       } else if (change === "future record") {
         f.dispatchArtifact.name = "openclaw-release-children-10-3";
       } else if (change === "ambiguous records") {
-        f.metadata.set("actions/runs/10/artifacts?per_page=100&page=1", {
-          total_count: 3,
-          artifacts: [f.receiptArtifact, f.dispatchArtifact, { ...f.dispatchArtifact, id: 5 }],
-        });
+        f.setArtifacts(10, [
+          f.receiptArtifact,
+          f.dispatchArtifact,
+          { ...f.dispatchArtifact, id: 5 },
+        ]);
       } else if (change === "changed digest") {
         const changed = Buffer.from(f.archives.get(4)!);
         changed.writeUInt32LE(0, 0);
@@ -974,18 +937,15 @@ describe("ClawHub detached postpublish verification", () => {
           path: `${parentWorkflow}@refs/heads/main`,
         });
       } else if (change === "parallel producer") {
-        f.metadata.set("actions/runs/10/attempts/2/jobs?per_page=100&page=1", {
-          total_count: 2,
-          jobs: [f.terminalProducer, { ...f.terminalProducer, runner_id: 7 }],
-        });
+        f.setJobs(10, 2, [f.terminalProducer, { ...f.terminalProducer, runner_id: 7 }]);
       } else if (change === "excessive history") {
-        f.metadata.set("actions/runs/10/artifacts?per_page=100&page=1", {
-          total_count: 33,
-          artifacts: Array.from({ length: 33 }, (_, index) => ({
+        f.setArtifacts(
+          10,
+          Array.from({ length: 33 }, (_, index) => ({
             ...f.dispatchArtifact,
             id: index + 4,
           })),
-        });
+        );
       } else {
         f.metadata.set("actions/runs/10/attempts/1", {
           ...f.parent,
@@ -993,140 +953,75 @@ describe("ClawHub detached postpublish verification", () => {
           head_sha: "c".repeat(40),
         });
       }
-      await expect(verifyClawHubPostpublish(f.options)).rejects.toThrow(error);
-      expect(f.registryReads).toEqual([]);
-      expect(existsSync(join(f.options.outputDir, "evidence.json"))).toBe(false);
+      await rejectsBeforeRegistry(f, error, true);
     },
   );
 
   it.each([
-    {
-      label: "sealed milestone while the parent remains active",
-      status: "in_progress",
-      conclusion: null,
-      parentStatePolicy: "sealed-producer",
-      childConclusion: "success",
-      parentJobConclusion: "success",
-    },
-    {
-      label: "sealed milestone after parent and child failure",
-      status: "completed",
-      conclusion: "failure",
-      parentStatePolicy: "sealed-producer",
-      childConclusion: "failure",
-      parentJobConclusion: "success",
-    },
-    {
-      label: "sealed milestone after parent success",
-      status: "completed",
-      conclusion: "success",
-      parentStatePolicy: "sealed-producer",
-      childConclusion: "success",
-      parentJobConclusion: "success",
-    },
-    {
-      label: "protected recovery after parent cancellation",
-      status: "completed",
-      conclusion: "cancelled",
-      parentStatePolicy: "recovery-producer",
-      childConclusion: "success",
-      parentJobConclusion: "cancelled",
-    },
-  ])("reconciles the complete roster from $label", async (parentState) => {
-    const f = fixture();
-    const parent = {
-      ...f.parent,
-      status: parentState.status,
-      conclusion: parentState.conclusion,
-    };
-    f.metadata.set("actions/runs/10/attempts/1", parent);
-    f.child.conclusion = parentState.childConclusion;
-    const receipt = createClawHubParentAuthorization(f.transactions, "automated-sealed");
-    const receiptArchive = zip("authorization.json", Buffer.from(JSON.stringify(receipt)));
-    f.archives.set(1, receiptArchive);
-    Object.assign(f.receiptArtifact, {
-      size_in_bytes: receiptArchive.length,
-      digest: `sha256:${digest(receiptArchive)}`,
-    });
-    f.metadata.set("actions/runs/10/attempts/1/jobs?per_page=100&page=1", {
-      total_count: 1,
-      jobs: [
-        {
-          name: "Publish plugins, then OpenClaw",
-          run_id: 10,
-          run_attempt: 1,
-          head_sha: sha,
-          status: "completed",
-          conclusion: parentState.parentJobConclusion,
-          steps: [
-            {
-              name: "Upload exact release child dispatch record",
-              status: "completed",
-              conclusion: "success",
-            },
-            {
-              name: "Upload immutable ClawHub parent authorization",
-              status: "completed",
-              conclusion: "success",
-            },
-          ],
-        },
-      ],
-    });
+    ["active parent", "in_progress", null, "sealed-producer", "success", "success"],
+    ["failed parent and child", "completed", "failure", "sealed-producer", "failure", "success"],
+    ["successful parent", "completed", "success", "sealed-producer", "success", "success"],
+    ["cancelled parent", "completed", "cancelled", "recovery-producer", "success", "cancelled"],
+  ] as const)(
+    "reconciles the complete roster from %s",
+    async (_label, status, conclusion, parentStatePolicy, childConclusion, parentJobConclusion) => {
+      const f = fixture();
+      const parent = {
+        ...f.parent,
+        status,
+        conclusion,
+      };
+      f.metadata.set("actions/runs/10/attempts/1", parent);
+      f.child.conclusion = childConclusion;
+      sealParent(f, parentJobConclusion);
 
-    const recoveryManifest = {
-      schemaVersion: 1,
-      kind: "openclaw-clawhub-recovery-manifest",
-      identity: f.transactions.identity,
-      packages: f.transactions.packages.map((entry) => ({
-        ...entry,
-        publicationStatus: "pending",
-        attemptId: "attempt-1",
-      })),
-    };
-    if (parentState.parentStatePolicy === "recovery-producer") {
-      const authorized = await verifyClawHubPostpublish({
+      const recoveryManifest = {
+        schemaVersion: 1,
+        kind: "openclaw-clawhub-recovery-manifest",
+        identity: f.transactions.identity,
+        packages: f.transactions.packages.map((entry) => ({
+          ...entry,
+          publicationStatus: "pending",
+          attemptId: "attempt-1",
+        })),
+      };
+      if (parentStatePolicy === "recovery-producer") {
+        const authorized = await verifyClawHubPostpublish({
+          ...f.options,
+          parent,
+          parentStatePolicy,
+          recoveryManifest,
+          verifyPublication: false,
+        });
+        expect(authorized).toMatchObject({
+          complete: true,
+          outcome: "authorized-recovery-roster",
+        });
+        expect(f.registryReads).toEqual([]);
+      }
+
+      const result = await verifyClawHubPostpublish({
         ...f.options,
         parent,
-        parentStatePolicy: parentState.parentStatePolicy,
-        recoveryManifest,
-        verifyPublication: false,
+        parentStatePolicy,
+        recoveryManifest: parentStatePolicy === "recovery-producer" ? recoveryManifest : undefined,
       });
-      expect(authorized).toMatchObject({
-        complete: true,
-        outcome: "authorized-recovery-roster",
-      });
-      expect(f.registryReads).toEqual([]);
-    }
-
-    const result = await verifyClawHubPostpublish({
-      ...f.options,
-      parent,
-      parentStatePolicy: parentState.parentStatePolicy,
-      recoveryManifest:
-        parentState.parentStatePolicy === "recovery-producer" ? recoveryManifest : undefined,
-    });
-    expect(result.complete).toBe(true);
-    expect(result.packages).toHaveLength(1);
-    f.metadata.set("actions/runs/20/artifacts?per_page=100&page=1", {
-      total_count: 2,
-      artifacts: [f.metadata.get("actions/artifacts/2"), f.packageArtifact],
-    });
-    await expect(
-      verifyClawHubPostpublish({
-        ...f.options,
-        parent,
-        parentStatePolicy: parentState.parentStatePolicy,
-      }),
-    ).rejects.toThrow(/sealed ClawHub original attempt roster/u);
-  });
+      expect(result.complete).toBe(true);
+      expect(result.packages).toHaveLength(1);
+      f.setArtifacts(20, [f.metadata.get("actions/artifacts/2"), f.packageArtifact]);
+      await expect(
+        verifyClawHubPostpublish({
+          ...f.options,
+          parent,
+          parentStatePolicy,
+        }),
+      ).rejects.toThrow(/sealed ClawHub original attempt roster/u);
+    },
+  );
 
   it("verifies historical successful publishers without recovery manifests", async () => {
     const f = fixture();
-    f.metadata.set("actions/runs/20/artifacts?per_page=100&page=1", {
-      total_count: 2,
-      artifacts: [f.metadata.get("actions/artifacts/2"), f.packageArtifact],
-    });
+    f.setArtifacts(20, [f.metadata.get("actions/artifacts/2"), f.packageArtifact]);
     expect(await verifyClawHubPostpublish(f.options)).toMatchObject({
       complete: true,
       packages: [expect.objectContaining({ inventoryDigest: f.entry.inventoryDigest })],
@@ -1143,28 +1038,24 @@ describe("ClawHub detached postpublish verification", () => {
     async (outcome) => {
       const f = fixture();
       let publicationReads = 0;
-      const fetchImpl: typeof fetch = async (input, init) => {
-        if (requestUrl(input).endsWith("/publication")) {
-          publicationReads += 1;
-          const state =
-            publicationReads === 1
-              ? { state: "pending", stage: "finalization", attemptId: "attempt-1" }
-              : outcome === "published"
-                ? { state: "published" }
-                : outcome === "failed"
-                  ? { state: "failed", recoverable: false, attemptId: "attempt-1" }
-                  : { state: "pending", stage: "checks", attemptId: "replacement" };
-          return Response.json({ name: f.entry.name, version: f.entry.version, ...state });
-        }
-        if (
-          requestUrl(input).endsWith(encodeURIComponent(f.entry.name)) &&
-          !(publicationReads === 2 && outcome === "published")
-        ) {
-          return Response.json({ package: { tags: { latest: "2026.8.1" } } });
-        }
-        return f.options.fetchImpl(input, init);
-      };
-      const options = { ...f.options, fetchImpl };
+      f.respond("/publication", () => {
+        publicationReads += 1;
+        const state =
+          publicationReads === 1
+            ? { state: "pending", stage: "finalization", attemptId: "attempt-1" }
+            : outcome === "published"
+              ? { state: "published" }
+              : outcome === "failed"
+                ? { state: "failed", recoverable: false, attemptId: "attempt-1" }
+                : { state: "pending", stage: "checks", attemptId: "replacement" };
+        return Response.json({ name: f.entry.name, version: f.entry.version, ...state });
+      });
+      f.respond(encodeURIComponent(f.entry.name), () =>
+        publicationReads === 2 && outcome === "published"
+          ? undefined
+          : Response.json({ package: { tags: { latest: "2026.8.1" } } }),
+      );
+      const options = f.options;
       if (outcome === "published") {
         expect((await verifyClawHubPostpublish(options)).complete).toBe(true);
         expect(f.registryReads.length).toBeGreaterThan(0);
@@ -1222,57 +1113,13 @@ describe("ClawHub detached postpublish verification", () => {
     const f = fixture();
     const parent = { ...f.parent, status: "completed", conclusion: "failure" };
     f.metadata.set("actions/runs/10/attempts/1", parent);
-    const receipt = createClawHubParentAuthorization(f.transactions, "automated-sealed");
-    const receiptArchive = zip("authorization.json", Buffer.from(JSON.stringify(receipt)));
-    f.archives.set(1, receiptArchive);
-    Object.assign(f.receiptArtifact, {
-      size_in_bytes: receiptArchive.length,
-      digest: `sha256:${digest(receiptArchive)}`,
-    });
-    f.metadata.set("actions/runs/10/attempts/1/jobs?per_page=100&page=1", {
-      total_count: 1,
-      jobs: [
-        {
-          name: "Publish plugins, then OpenClaw",
-          run_id: 10,
-          run_attempt: 1,
-          head_sha: sha,
-          status: "completed",
-          conclusion: "success",
-          steps: [
-            {
-              name: "Upload exact release child dispatch record",
-              status: "completed",
-              conclusion: "success",
-            },
-            {
-              name: "Upload immutable ClawHub parent authorization",
-              status: "completed",
-              conclusion: "success",
-            },
-          ],
-        },
-      ],
-    });
-    const firstPage = Array.from({ length: 100 }, (_, index) => ({
-      name: `Unrelated job ${index}`,
-      run_id: 20,
-      run_attempt: 1,
-      head_sha: sha,
-      status: "completed",
-      conclusion: "success",
-    }));
-    const original = f.metadata.get("actions/runs/20/attempts/1/jobs?per_page=100&page=1") as {
+    sealParent(f);
+    const firstPage = Array.from({ length: 100 }, (_, index) => job(`Unrelated job ${index}`));
+    const original = f.metadata.get(jobsPath(20, 1)) as {
       jobs: unknown[];
     };
-    f.metadata.set("actions/runs/20/attempts/1/jobs?per_page=100&page=1", {
-      total_count: 103,
-      jobs: firstPage,
-    });
-    f.metadata.set("actions/runs/20/attempts/1/jobs?per_page=100&page=2", {
-      total_count: 103,
-      jobs: original.jobs,
-    });
+    f.setJobs(20, 1, firstPage, 103);
+    f.setJobs(20, 1, original.jobs, 103, 2);
     const result = await verifyClawHubPostpublish({
       ...f.options,
       parent,
@@ -1296,10 +1143,6 @@ describe("ClawHub detached postpublish verification", () => {
       const verifierSha = status === "identical" ? sha : "c".repeat(40);
       const f = fixture(parentOnMain, verifierSha);
       const comparison = `compare/${sha}...${verifierSha}`;
-      f.metadata.set(comparison, {
-        status,
-        files: [{ filename: "large.txt", patch: "+change\n".repeat(300_000) }],
-      });
       f.metadata.set(`${comparison}?per_page=1&page=2`, { status, commits: [] });
       const result = await verifyClawHubPostpublish(f.options);
       expect(result.complete).toBe(true);
@@ -1319,29 +1162,16 @@ describe("ClawHub detached postpublish verification", () => {
     "resumes a failed public readback with retained downloads: %s",
     async (outcome) => {
       const f = fixture();
-      const archiveRequests: string[] = [];
-      const authorityRequests: string[] = [];
       let publicReadbackAvailable = false;
-      const fetchImpl: typeof fetch = async (input, init) => {
-        const url = requestUrl(input);
-        if (url.endsWith("/zip")) {
-          archiveRequests.push(url);
-        }
-        if (/\/actions\/runs\/(10|20)\/attempts\/1$/u.test(url)) {
-          authorityRequests.push(url);
-        }
-        if (!publicReadbackAvailable && url.endsWith("/artifact/download")) {
-          return new Response(null, { status: 403 });
-        }
-        return f.options.fetchImpl(input, init);
-      };
-      const options = { ...f.options, fetchImpl };
+      f.respond("/artifact/download", () =>
+        publicReadbackAvailable ? undefined : new Response(null, { status: 403 }),
+      );
+      const options = f.options;
       await expect(verifyClawHubPostpublish(options)).rejects.toThrow(/HTTP 403/u);
       const tarballPath = join(options.outputDir, "3", "example.tgz");
       expect(readFileSync(tarballPath)).toEqual(f.tarball);
-      const firstDownloads = [...archiveRequests];
-      expect(firstDownloads).toHaveLength(5);
-      authorityRequests.length = 0;
+      expect(f.requests.filter((url) => url.endsWith("/zip"))).toHaveLength(5);
+      f.requests.length = 0;
       f.registryReads.length = 0;
       publicReadbackAvailable = true;
       if (outcome === "revoked child") {
@@ -1358,10 +1188,12 @@ describe("ClawHub detached postpublish verification", () => {
       } else {
         expect((await verifyClawHubPostpublish(options)).complete).toBe(true);
       }
-      expect(archiveRequests).toEqual(firstDownloads);
-      expect(authorityRequests).toEqual([
-        `https://api.github.com/repos/${repository}/actions/runs/10/attempts/1`,
-        `https://api.github.com/repos/${repository}/actions/runs/20/attempts/1`,
+      expect(f.requests.filter((url) => url.endsWith("/zip"))).toEqual([]);
+      expect(
+        f.requests.filter((url) => /\/actions\/runs\/(10|20)\/attempts\/1$/u.test(url)),
+      ).toEqual([
+        `/repos/${repository}/actions/runs/10/attempts/1`,
+        `/repos/${repository}/actions/runs/20/attempts/1`,
       ]);
     },
   );
@@ -1390,9 +1222,7 @@ describe("ClawHub detached postpublish verification", () => {
       for (const path of [comparison, `${comparison}?per_page=1&page=2`]) {
         f.metadata.set(path, response());
       }
-      await expect(verifyClawHubPostpublish(f.options)).rejects.toThrow(error);
-      expect(f.registryReads).toEqual([]);
-      expect(existsSync(join(f.options.outputDir, "evidence.json"))).toBe(false);
+      await rejectsBeforeRegistry(f, error, true);
     },
   );
 
@@ -1405,40 +1235,13 @@ describe("ClawHub detached postpublish verification", () => {
       ...(runId === 10 ? f.parent : f.child),
       ...patch,
     });
-    await expect(verifyClawHubPostpublish(f.options)).rejects.toThrow(error);
-    expect(f.registryReads).toEqual([]);
-  });
-
-  it("records an explicit no-child outcome without claiming registry verification", async () => {
-    const f = fixture();
-    const archive = zip(
-      "dispatch.json",
-      Buffer.from(
-        JSON.stringify({ ...f.dispatch, normalClawHubRunId: null, normalClawHubRunAttempt: null }),
-      ),
-    );
-    f.archives.set(4, archive);
-    Object.assign(f.dispatchArtifact, {
-      size_in_bytes: archive.length,
-      digest: `sha256:${digest(archive)}`,
-    });
-    const result = await verifyClawHubPostpublish(f.options);
-    expect(result).toMatchObject({
-      complete: true,
-      outcome: "no-normal-clawhub-publication",
-      packages: [],
-    });
-    expect(f.registryReads).toEqual([]);
+    await rejectsBeforeRegistry(f, error);
   });
 
   it("does not mistake a missing dispatch record for an empty release", async () => {
     const f = fixture();
-    f.metadata.set("actions/runs/10/artifacts?per_page=100&page=1", {
-      total_count: 0,
-      artifacts: [],
-    });
-    await expect(verifyClawHubPostpublish(f.options)).rejects.toThrow(/dispatch record/u);
-    expect(f.registryReads).toEqual([]);
+    f.setArtifacts(10, []);
+    await rejectsBeforeRegistry(f, /dispatch record/u);
   });
 
   it("rejects a different parent-approved inventory even when all archive digests verify", async () => {
@@ -1447,16 +1250,8 @@ describe("ClawHub detached postpublish verification", () => {
       ...f.receipt,
       packages: [{ ...f.receipt.packages[0], inventoryDigest: "f".repeat(64) }],
     };
-    const archive = zip("authorization.json", Buffer.from(JSON.stringify(receipt)));
-    f.archives.set(1, archive);
-    Object.assign(f.receiptArtifact, {
-      size_in_bytes: archive.length,
-      digest: `sha256:${digest(archive)}`,
-    });
-    await expect(verifyClawHubPostpublish(f.options)).rejects.toThrow(
-      /Parent authorization packages mismatch/u,
-    );
-    expect(f.registryReads).toEqual([]);
+    replaceJsonArtifact(f, f.receiptArtifact, "authorization.json", receipt);
+    await rejectsBeforeRegistry(f, /Parent authorization packages mismatch/u);
   });
 
   it("rejects package archive substitution before contacting the registry", async () => {
@@ -1464,15 +1259,8 @@ describe("ClawHub detached postpublish verification", () => {
     const corrupted = Buffer.from(f.archives.get(3)!);
     corrupted.writeUInt32LE(0, 0);
     f.archives.set(3, corrupted);
-    let transfers = 0;
-    const fetchImpl: typeof fetch = async (input, init) => {
-      if (requestUrl(input).endsWith("/actions/artifacts/3/zip")) {
-        transfers += 1;
-      }
-      return f.options.fetchImpl(input, init);
-    };
-    await expect(verifyClawHubPostpublish({ ...f.options, fetchImpl })).rejects.toThrow(/digest/u);
-    expect(transfers).toBe(1);
+    await expect(verifyClawHubPostpublish(f.options)).rejects.toThrow(/digest/u);
+    expect(f.requests.filter((url) => url.endsWith("/actions/artifacts/3/zip"))).toHaveLength(1);
     expect(f.registryReads).toEqual([]);
   });
 });

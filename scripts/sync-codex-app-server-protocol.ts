@@ -42,5 +42,9 @@ async function main(): Promise<void> {
     await source.cleanup();
   }
 
+  // Import after writing the mirror so generation reads the refreshed JSON modules.
+  const { generateCodexValidators } = await import("./generate-codex-validators.mts");
+  await generateCodexValidators();
+
   console.log(`Synced Codex app-server generated protocol from ${source.codexRepo}`);
 }

@@ -12,7 +12,8 @@ export function createActiveSession(messages: AgentMessage[] = []) {
       state: { messages },
       convertToLlm,
     },
-  } as unknown as Pick<AgentSession, "agent">;
+    subscribe: () => () => {},
+  } as unknown as Pick<AgentSession, "agent" | "subscribe">;
   return { activeSession, convertToLlm, reset };
 }
 
@@ -22,9 +23,17 @@ export function createSessionManager(
   return {
     getHeader: () => ({ version: 3 }),
     getLeafEntry: () => undefined,
+    hasLoadedTranscriptTail: () => true,
     getSessionTarget: () => undefined,
     reloadPersistedTranscriptAsync: async () => {},
     getSessionId: () => "session-boundary",
     ...overrides,
   } as unknown as ReturnType<typeof guardSessionManager>;
 }
+
+export const createBoundaryInputDefaults = () => ({
+  isRawModelRun: false,
+  preparedUserTurnMessage: undefined,
+  sessionManager: createSessionManager(),
+  setActiveSessionSystemPrompt: vi.fn(),
+});

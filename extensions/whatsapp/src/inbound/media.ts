@@ -6,6 +6,11 @@ import { extractContextInfo } from "./extract.js";
 import { resolveInboundMediaMimetype } from "./media-mimetype.js";
 import { downloadMediaMessage, normalizeMessageContent } from "./runtime-api.js";
 
+// WhatsApp Web and Desktop can put media urls on hosts with no DNS record. Baileys rc14
+// builds the directPath download on the url host, so these use the socket's media host
+// until Baileys falls back on its own.
+const NON_MEDIA_URL_HOSTS = new Set(["a.whatsapp.net", "web.whatsapp.net"]);
+
 export async function downloadInboundMedia(
   msg: proto.IWebMessageInfo,
   sock: Awaited<ReturnType<typeof createWaSocket>>,
@@ -18,20 +23,21 @@ export async function downloadInboundMedia(
   }
   const mimetype = resolveInboundMediaMimetype(message);
   const fileName = message.documentMessage?.fileName ?? undefined;
-  if (
-    !message.imageMessage &&
-    !message.videoMessage &&
-    !message.ptvMessage &&
-    !message.documentMessage &&
-    !message.audioMessage &&
-    !message.stickerMessage
-  ) {
+  const media =
+    message.imageMessage ??
+    message.videoMessage ??
+    message.ptvMessage ??
+    message.documentMessage ??
+    message.audioMessage ??
+    message.stickerMessage;
+  if (!media) {
     return undefined;
   }
+  const urlHost = media.url ? URL.parse(media.url)?.hostname : undefined;
   const stream = await downloadMediaMessage(
     msg as WAMessage,
     "stream",
-    {},
+    urlHost && NON_MEDIA_URL_HOSTS.has(urlHost) ? { host: sock.getMediaHost() } : {},
     {
       reuploadRequest: sock.updateMediaMessage,
       logger: sock.logger,

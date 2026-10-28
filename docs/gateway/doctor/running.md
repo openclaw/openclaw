@@ -9,12 +9,45 @@ read_when:
 Run `openclaw doctor` to repair and migrate an OpenClaw install. This page covers the
 command, its automation flags, and the read-only lint mode.
 
+You can run Doctor after an update without first starting the Gateway. Plugin
+health checks use the runtime config prepared by Doctor.
+
+Database migrations use the [efficient integrity-check default](/install/updating#migration-integrity-checks):
+whole-database `quick_check`, full checks of tables the migration rewrites or
+re-indexes, and foreign-key checks. Use `openclaw doctor --fix --full-integrity-check`
+to check all tables and indexes during migration. Explicit verification,
+recovery, and compaction keep their existing checks.
+
+If Doctor cannot verify database readiness because a read-only snapshot did not
+stabilize, let write activity settle and retry the inspection. Doctor still
+refuses to complete repair, but snapshot contention alone does not call for a
+database restore. Integrity failures retain backup-restore guidance for the
+affected database.
+
+If state storage is not writable, Doctor reports the database or sidecar path
+that blocked preparation and gives ownership, permission, writable-mount, and
+immutable-file recovery guidance. It checks effective access rather than treating
+a different file owner or unsupported `chmod` as a storage failure. Doctor does
+not change ownership or clear immutable flags. Fix the reported access problem
+and rerun Doctor; use `openclaw doctor --lint` for read-only diagnostics meanwhile.
+
 When the System agent runs Doctor, it uses a separate process from the same
 OpenClaw installation. Bulk diagnostic checks can then run without blocking the
 Gateway's event loop. This uses the existing `--non-interactive` behavior,
 including its safe migrations; it does not enable additional repairs. Once
 started, Doctor finishes and releases its resources before a cancelled caller
 settles, so cancellation cannot abandon an in-progress migration.
+
+Doctor can run while the Gateway owns a current profile: completed daemon
+runtime-pin migrations do not request offline ownership again. Fresh profiles
+record this completion during setup or Gateway startup when no legacy pins exist, so their first live Doctor run needs no runtime-pin migration. A pending
+runtime-pin migration still needs exclusive ownership, including during
+`--non-interactive` diagnosis. Stop the Gateway and other state owners for that
+profile, run `openclaw doctor --fix` with the same profile/state/config, then
+restart the Gateway. Doctor preserves the pending migration and reports that
+next step rather than taking ownership from a live Gateway. Use `doctor --lint`
+or `doctor --json` for read-only diagnostics when offline migrations cannot be
+completed yet.
 
 ## Quick start
 
@@ -122,6 +155,12 @@ are advisory, environment-sensitive, live-service dependent, account/workspace
 inventory, or historical cleanup. Use `doctor --lint --all` when you want the
 full registered lint audit, including those opt-in checks, or `--only <id>` for
 a targeted check.
+
+The `core/doctor/model-references` check also consults the selected Gateway's
+prepared catalog. Models it publishes do not receive an offline-catalog advisory;
+server-reported missing models and legacy-reference migrations still do. If the
+Gateway is unavailable, Doctor keeps its offline checks without discovering or
+probing providers.
 
 `doctor --fix` does not use the lint default profile and does not accept
 `--all`. It runs Doctor's ordered repair path: modern health checks may provide

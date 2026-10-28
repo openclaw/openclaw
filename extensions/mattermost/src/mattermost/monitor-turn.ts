@@ -1,6 +1,7 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   isChannelPartialDeliveryError,
+  type ChannelBotLoopProtectionFacts,
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -43,6 +44,7 @@ type MattermostInboundTurnParams = {
   historyLimit: number;
   channelHistories: Map<string, HistoryEntry[]>;
   pinnedMainDmOwner: string | null;
+  botLoopProtection?: ChannelBotLoopProtectionFacts;
   turnAdoptionLifecycle?: MattermostIngressLifecycle;
 };
 
@@ -52,6 +54,7 @@ export async function dispatchMattermostInboundTurn(
 ): Promise<void> {
   const { account, cfg, client, core, runtime } = monitor;
   const {
+    botLoopProtection,
     channelHistories,
     ctxPayload,
     eventPlan,
@@ -95,7 +98,6 @@ export async function dispatchMattermostInboundTurn(
         client,
         channelId,
         rootId: effectiveReplyToId,
-        throttleMs: 1200,
         chunkText: (value) =>
           core.channel.text.chunkMarkdownTextWithMode(
             core.channel.text.convertMarkdownTables(value, tableMode),
@@ -179,7 +181,7 @@ export async function dispatchMattermostInboundTurn(
   });
 
   const resolvePreviewFinalText = (text?: string): MattermostPreviewFinalResolution | undefined => {
-    const finalText = typeof text === "string" ? text : "";
+    const finalText = text ?? "";
     const resolution = draftStream?.resolveFinalText(finalText) ?? {
       kind: "full",
       text: finalText,
@@ -290,9 +292,6 @@ export async function dispatchMattermostInboundTurn(
             account.accountId,
             channelId,
             effectiveReplyToId,
-            {
-              agentId: route.agentId,
-            },
           );
         }
       };
@@ -306,11 +305,12 @@ export async function dispatchMattermostInboundTurn(
         resolvePreviewFinalText,
         logVerboseMessage: monitor.logVerboseMessage,
         recordThreadParticipation: markThreadParticipation,
+        findPostAfterPreview: draftStream?.findPostAfter,
         deliverPayload: async (payloadToDeliver) => {
           const finalTextResolution =
             info.kind === "final" &&
             !payloadToDeliver.isError &&
-            typeof payloadToDeliver.text === "string"
+            payloadToDeliver.text !== undefined
               ? draftStream?.resolveFinalText(payloadToDeliver.text)
               : undefined;
           const resolvedPayload = finalTextResolution
@@ -373,6 +373,13 @@ export async function dispatchMattermostInboundTurn(
       channel: "mattermost",
       accountId: route.accountId,
       raw: post,
+      log: (event) => {
+        if (event.reason === "bot-loop-protection") {
+          runtime.log?.(
+            `mattermost: drop bot post (bot-loop-protection channel=${channelId} sender=${senderId})`,
+          );
+        }
+      },
       adapter: {
         ingest: () => ({
           id: post.id ?? `${to}:${Date.now()}`,
@@ -392,6 +399,7 @@ export async function dispatchMattermostInboundTurn(
             sessionKey: route.sessionKey,
           },
           ctxPayload,
+          botLoopProtection,
           record: {
             updateLastRoute:
               kind === "direct"

@@ -4,6 +4,17 @@ import Testing
 @testable import OpenClaw
 
 struct DashboardFailurePageTests {
+    @Test func `generic failure page offers reload through the native bridge`() {
+        let html = DashboardFailurePage.html(
+            title: "Dashboard unavailable", message: "The Gateway returned HTTP 503.",
+            detail: "Choose Reload to try again.", url: nil)
+        #expect(html.contains("class=\"primary\""))
+        #expect(html.contains(">Reload</button>"))
+        #expect(html.contains("window.webkit.messageHandlers.openclawGateways"))
+        #expect(html.contains(".postMessage({type:'reload'})"))
+        #expect(html.contains("Connection Settings…"))
+    }
+
     @Test(arguments: [false, true])
     func `signed out page escapes profile metadata and offers renewal`(signingIn: Bool) {
         let now = Date(timeIntervalSince1970: 10000)
@@ -16,6 +27,8 @@ struct DashboardFailurePageTests {
         #expect(html.contains("Your browser sign-in to gateway.example expired 2m ago. Sign in again to continue."))
         #expect(html.contains("Connection Settings…"))
         #expect(html.contains("data-id=\"profile:test&quot;&#39;&amp;&lt;&gt;\""))
+        #expect(!html.contains(">Reload</button>"))
+        #expect(!html.contains("type:'reload'"))
         #expect(!html.contains("<script>"))
         if signingIn {
             #expect(html.contains(">Cancel</button>"))

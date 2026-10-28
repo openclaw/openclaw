@@ -14,7 +14,9 @@ import {
   removeNotifyOnExit,
   getSession,
   listExecSessionsForCancellation,
+  markCancellationRequested,
   waitForExecSession,
+  waitForExecScope,
   type ProcessSession,
 } from "./bash-process-registry.js";
 
@@ -30,6 +32,34 @@ export function isBackgroundExecCancellable(
   );
 }
 
+/** One-shot runs retain process cleanup and backend finalization for the same exec scope. */
+export function registerOneShotExecScopeCleanup(
+  options:
+    | {
+        oneShotCliRun?: boolean;
+        registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
+      }
+    | undefined,
+  scopeKey: string | undefined,
+): void {
+  if (!options?.oneShotCliRun || !scopeKey || !options.registerRunCleanup) {
+    return;
+  }
+  const supervisor = getProcessSupervisor();
+  // Sandbox runtimes retain their configured lifetime; host commands still
+  // need tree cleanup, including elevated commands from sandboxed sessions.
+  const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { processTree: "owned-only" });
+  options.registerRunCleanup(async () => {
+    // Transport closure can precede backend finalization. Join both owners
+    // before their local artifacts or the invocation state can be released.
+    const settled = await Promise.allSettled([cleanupScope(), waitForExecScope(scopeKey)]);
+    const failed = settled.find((result) => result.status === "rejected");
+    if (failed) {
+      throw failed.reason;
+    }
+  });
+}
+
 export function cancelBackgroundExecSession(sessionId: string): boolean {
   const session = getSession(sessionId);
   if (!isBackgroundExecCancellable(session)) {
@@ -37,7 +67,7 @@ export function cancelBackgroundExecSession(sessionId: string): boolean {
   }
   const supervisor = getProcessSupervisor();
   supervisor.cancel(sessionId, "manual-cancel");
-  session.cancellationRequested = true;
+  markCancellationRequested(session);
   return true;
 }
 
@@ -48,6 +78,42 @@ export function isConfirmedRequestedStop(session: ProcessSession): boolean {
     session.exitReason === "manual-cancel" &&
     session.finalizationFailed !== true
   );
+}
+
+/** Agent retirement also owns independent services after their creating turns settle. */
+export async function drainAgentExecProcesses(
+  agentId: string,
+  assertCurrent: () => void,
+): Promise<void> {
+  const sessions = listExecSessionsForCancellation().filter(
+    (session) => session.agentId === agentId,
+  );
+  const accepted: ProcessSession[] = [];
+  const failures: unknown[] = [];
+  try {
+    for (const session of sessions) {
+      assertCurrent();
+      accepted.push(session);
+      session.requestCancelled = true;
+      if (!session.exited && !session.finalizing) {
+        markCancellationRequested(session);
+        getProcessSupervisor().cancel(session.id, "manual-cancel");
+      }
+      removeNotifyOnExit(session);
+    }
+  } catch (error) {
+    failures.push(error);
+  }
+  // Losing cancellation authority cannot release an already accepted process's cleanup.
+  await Promise.all(accepted.map(waitForExecSession));
+  if (accepted.some((session) => session.finalizationFailed || session.cleanupUncertain)) {
+    failures.push(
+      new Error("Command cleanup could not be confirmed; inspect retained process output."),
+    );
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, `Agent ${agentId} command cleanup is still draining`);
+  }
 }
 
 /** Select before awaited cancellation work; a later human turn cannot enter this plan. */
@@ -74,11 +140,19 @@ export function captureExecRequestCancellation(
     owners: [...owners],
     // Ancestry selects descendants without rewriting completed model receipts.
     requestRunIds: [...new Set([...owners].flatMap((owner) => Array.from(owner.turnRunIds)))],
-    cancel() {
+    cancel(select: (identity: ExecRequestIdentity) => boolean = () => true) {
       if (cancelled || owners.size === 0) {
         return false;
       }
       cancelled = true;
+      for (const owner of owners) {
+        if (!select(owner.identity)) {
+          owners.delete(owner);
+        }
+      }
+      if (owners.size === 0) {
+        return false;
+      }
       cancelExecRequestOwners([...owners]);
       for (const session of listExecSessionsForCancellation().filter(matching)) {
         removeNotifyOnExit(session);

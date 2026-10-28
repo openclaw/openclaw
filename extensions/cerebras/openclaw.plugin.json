@@ -32,23 +32,8 @@
       "cerebras": {
         "baseUrl": "https://api.cerebras.ai/v1",
         "api": "openai-completions",
-        "defaultModel": "gemma-4-31b",
+        "defaultModel": "gpt-oss-120b",
         "models": [
-          {
-            "id": "zai-glm-4.7",
-            "name": "Z.ai GLM 4.7",
-            "status": "deprecated",
-            "input": ["text"],
-            "reasoning": true,
-            "contextWindow": 131072,
-            "maxTokens": 40960,
-            "cost": {
-              "input": 2.25,
-              "output": 2.75,
-              "cacheRead": 2.25,
-              "cacheWrite": 2.75
-            }
-          },
           {
             "id": "gpt-oss-120b",
             "name": "GPT OSS 120B",
@@ -60,20 +45,6 @@
               "input": 0.35,
               "output": 0.75,
               "cacheRead": 0.35,
-              "cacheWrite": 0
-            }
-          },
-          {
-            "id": "gemma-4-31b",
-            "name": "Gemma 4 31B",
-            "input": ["text", "image"],
-            "reasoning": true,
-            "contextWindow": 131072,
-            "maxTokens": 40960,
-            "cost": {
-              "input": 0.99,
-              "output": 1.49,
-              "cacheRead": 0.99,
               "cacheWrite": 0
             }
           }

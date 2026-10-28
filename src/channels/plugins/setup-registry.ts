@@ -3,23 +3,16 @@ import {
   getActivePluginChannelRegistry,
   requireActivePluginRegistry,
 } from "../../plugins/runtime.js";
+import { indexFirstByKey } from "../../shared/dedupe-by-key.js";
 import { listBundledChannelSetupPlugins } from "./bundled.js";
 import { compareChannelPlugins } from "./registry-loaded.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
 function sortChannelSetupPlugins(plugins: readonly ChannelPlugin[]): ChannelPlugin[] {
-  const seen = new Set<string>();
-  const resolved: ChannelPlugin[] = [];
-  for (const plugin of plugins) {
-    const id = normalizeOptionalString(plugin.id) ?? "";
-    if (!id || seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
-    resolved.push(plugin);
-  }
-  return resolved.toSorted(compareChannelPlugins);
+  const byId = indexFirstByKey(plugins, (plugin) => normalizeOptionalString(plugin.id) ?? "");
+  byId.delete("");
+  return [...byId.values()].toSorted(compareChannelPlugins);
 }
 
 export function listChannelSetupPlugins(): ChannelPlugin[] {

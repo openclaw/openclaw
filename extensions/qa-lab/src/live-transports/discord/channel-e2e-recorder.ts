@@ -64,7 +64,6 @@ export function createDiscordE2eRecorder(params: {
   channelId: string;
   driverId: string;
   sutId: string;
-  signal?: AbortSignal;
   assertActive: () => void;
   record: (event: Record<string, unknown>) => void;
 }) {
@@ -85,7 +84,6 @@ export function createDiscordE2eRecorder(params: {
   const stop = () => {
     clearInterval(heartbeat);
     clearTimeout(timeout);
-    params.signal?.removeEventListener("abort", abort);
     socket?.terminate();
   };
   const fail = (error: unknown) => {
@@ -93,7 +91,6 @@ export function createDiscordE2eRecorder(params: {
     rejectReady?.(failure);
     stop();
   };
-  const abort = () => fail(new Error("Discord recorder cancelled"));
   const actor = (id?: string) =>
     id === params.sutId ? "sut" : id === params.driverId ? "driver" : "other";
 
@@ -176,16 +173,13 @@ export function createDiscordE2eRecorder(params: {
   return {
     async connect() {
       params.assertActive();
-      params.signal?.throwIfAborted();
       if (!ready) {
         ready = new Promise<void>((resolve, reject) => {
           rejectReady = reject;
           socket = new WebSocket("wss://gateway.discord.gg/?v=10&encoding=json");
-          params.signal?.addEventListener("abort", abort, { once: true });
           timeout = setTimeout(() => fail(new Error("Discord recorder READY timed out")), 30_000);
           const send = (payload: unknown) => {
             params.assertActive();
-            params.signal?.throwIfAborted();
             if (socket?.readyState !== WebSocket.OPEN) {
               throw new Error("Discord recorder socket is not open");
             }
@@ -208,7 +202,6 @@ export function createDiscordE2eRecorder(params: {
             }
             try {
               params.assertActive();
-              params.signal?.throwIfAborted();
               const packet = dispatchSchema.parse(JSON.parse(rawDataToString(raw)));
               if (typeof packet.s === "number") {
                 sequence = packet.s;
@@ -272,7 +265,6 @@ export function createDiscordE2eRecorder(params: {
       }
       await ready;
       params.assertActive();
-      params.signal?.throwIfAborted();
       if (failure) {
         throw failure;
       }

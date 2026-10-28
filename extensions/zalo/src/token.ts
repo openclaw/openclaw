@@ -9,7 +9,7 @@ import {
 import type { ResolvedZaloAccount, ZaloConfig, ZaloTokenStatus } from "./types.js";
 
 type ZaloTokenResolution = BaseTokenResolution & {
-  source: "env" | "config" | "configFile" | "none";
+  source: ResolvedZaloAccount["tokenSource"];
   status: ZaloTokenStatus;
   credentialDiagnostics?: ResolvedZaloAccount["credentialDiagnostics"];
 };

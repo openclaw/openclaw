@@ -1,51 +1,41 @@
-// Browser tests cover register.navigation plugin behavior.
-import { Command } from "commander";
-import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   createBrowserProgram,
-  getBrowserCliRuntime,
+  mockBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
   mockBrowserGateway,
 } from "../browser-cli.test-support.js";
 
 const gatewayMock = mockBrowserGateway();
-const browserCliRuntime = getBrowserCliRuntime();
-vi.spyOn(defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
-vi.spyOn(defaultRuntime, "writeJson").mockImplementation(browserCliRuntime.writeJson);
-vi.spyOn(defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
-vi.spyOn(defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+const capture = getBrowserCliRuntimeCapture();
+mockBrowserCliRuntime();
 
-const { registerBrowserNavigationCommands } = await import("./register.navigation.js");
+const { registerBrowserActionInputCommands } = await import("./register.js");
 
-function createNavigationProgram(): Command {
+function run(...args: string[]) {
   const { program, browser, parentOpts } = createBrowserProgram();
   browser.option("--timeout <ms>", "Timeout in ms", "30000");
-  registerBrowserNavigationCommands(browser, parentOpts);
-  return program;
+  registerBrowserActionInputCommands(browser, parentOpts);
+  return program.parseAsync(["browser", ...args], { from: "user" });
 }
 
 describe("browser navigation commands", () => {
   beforeEach(() => {
     gatewayMock.mockClear();
     gatewayMock.mockResolvedValue({ url: "https://example.test/landing" });
-    getBrowserCliRuntimeCapture().resetRuntimeCapture();
+    capture.resetRuntimeCapture();
   });
 
   it.each(["30000", "60000"])(
     "sends navigate requests with the URL, target id, and inherited %s ms timeout",
     async (timeout) => {
-      const program = createNavigationProgram();
       const parentArgs = timeout === "30000" ? [] : ["--timeout", timeout];
 
-      await program.parseAsync(
-        ["browser", ...parentArgs, "navigate", "https://example.test/page", "--target-id", "tab-1"],
-        { from: "user" },
-      );
+      await run(...parentArgs, "navigate", "https://example.test/page", "--target-id", "tab-1");
 
       expect(gatewayMock).toHaveBeenLastCalledWith(
         "browser.request",
-        expect.objectContaining({ timeout: String(Number(timeout) + 10_000) }),
+        expect.objectContaining({ timeout: String(Number(timeout) + 130_000) }),
         expect.objectContaining({
           method: "POST",
           path: "/navigate",
@@ -54,36 +44,23 @@ describe("browser navigation commands", () => {
         }),
         expect.objectContaining({ scopes: ["operator.admin"] }),
       );
-      expect(getBrowserCliRuntimeCapture().runtimeLogs).toContain(
-        "navigated to https://example.test/landing",
-      );
+      expect(capture.runtimeLogs).toContain("navigated to https://example.test/landing");
     },
   );
 
   it("sends normalized resize dimensions and target id with the inherited timeout", async () => {
-    const program = createNavigationProgram();
-
-    await program.parseAsync(
-      [
-        "browser",
-        "--timeout",
-        "60000",
-        "--browser-profile",
-        "work",
-        "resize",
-        "1024",
-        "768",
-        "--target-id",
-        "tab-2",
-      ],
-      {
-        from: "user",
-      },
+    await run(
+      "--timeout=60000",
+      "--browser-profile=work",
+      "resize",
+      "1024",
+      "768",
+      "--target-id=tab-2",
     );
 
     expect(gatewayMock).toHaveBeenLastCalledWith(
       "browser.request",
-      expect.objectContaining({ timeout: "70000" }),
+      expect.objectContaining({ timeout: "190000" }),
       expect.objectContaining({
         method: "POST",
         path: "/act",
@@ -93,30 +70,15 @@ describe("browser navigation commands", () => {
       }),
       expect.objectContaining({ scopes: ["operator.admin"] }),
     );
-    expect(getBrowserCliRuntimeCapture().runtimeLogs).toContain("resized to 1024x768");
+    expect(capture.runtimeLogs).toContain("resized to 1024x768");
   });
 
-  it("rejects non-decimal resize dimensions before dispatch", async () => {
-    const program = createNavigationProgram();
-
-    await expect(
-      program.parseAsync(["browser", "resize", "1e3", "768"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
-
-    const capture = getBrowserCliRuntimeCapture();
-    expect(capture.runtimeErrors.join("\n")).toContain("Invalid width: must be a positive integer");
-    expect(gatewayMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects excessive resize dimensions before dispatch", async () => {
-    const program = createNavigationProgram();
-
-    await expect(
-      program.parseAsync(["browser", "resize", "8193", "768"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
-
-    const capture = getBrowserCliRuntimeCapture();
-    expect(capture.runtimeErrors.join("\n")).toContain("Invalid width: maximum is 8192");
+  it.each([
+    ["1e3", "must be a positive integer"],
+    ["8193", "maximum is 8192"],
+  ])("rejects invalid resize width %s before dispatch", async (width, error) => {
+    await expect(run("resize", width, "768")).rejects.toThrow(`Invalid width: ${error}`);
+    expect(capture.runtimeErrors).toEqual([]);
     expect(gatewayMock).not.toHaveBeenCalled();
   });
 });

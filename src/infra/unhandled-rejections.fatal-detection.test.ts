@@ -1,5 +1,6 @@
 import process from "node:process";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerSignalExitOwner, waitForCliSignalExit } from "../cli/signal-exit-barrier.js";
 
 const restoreRuntimeTerminalStateMock = vi.hoisted(() => vi.fn());
 vi.mock("../runtime.js", () => ({
@@ -14,6 +15,7 @@ import {
 } from "./unhandled-rejections.js";
 
 describe("process error handlers", () => {
+  let originalExitCode: typeof process.exitCode;
   let exitCalls: Array<string | number | null>;
   let errorSpy: ReturnType<typeof vi.spyOn>;
   let warnSpy: ReturnType<typeof vi.spyOn>;
@@ -31,6 +33,8 @@ describe("process error handlers", () => {
     rejectionListener = installed;
   });
   beforeEach(() => {
+    originalExitCode = process.exitCode;
+    process.exitCode = undefined;
     exitCalls = [];
     vi.spyOn(process, "exit").mockImplementation((code?: string | number | null): never => {
       if (code !== undefined && code !== null) {
@@ -41,7 +45,9 @@ describe("process error handlers", () => {
     errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
   });
-  afterEach(() => {
+  afterEach(async () => {
+    await waitForCliSignalExit();
+    process.exitCode = originalExitCode;
     vi.restoreAllMocks();
     vi.clearAllMocks();
   });
@@ -56,17 +62,37 @@ describe("process error handlers", () => {
     ["INVALID_CONFIG", 78, "configuration error", "CONFIGURATION ERROR - requires fix:"],
     ["MISSING_API_KEY", 1, "configuration error", "CONFIGURATION ERROR - requires fix:"],
     [undefined, 1, "unhandled rejection", "Unhandled promise rejection:"],
-  ] as const)("restores the terminal and exits for code %s", (code, exitCode, reason, label) => {
-    emitUnhandled(Object.assign(new Error("expected failure"), { code }));
-    expect(exitCalls).toEqual([exitCode]);
-    expect(restoreRuntimeTerminalStateMock).toHaveBeenCalledWith(reason, {
-      resumeStdinIfPaused: false,
-    });
-    expect(errorSpy).toHaveBeenCalledWith(
-      `[openclaw] ${label}`,
-      expect.stringContaining("expected failure"),
-    );
-    expect(warnSpy).not.toHaveBeenCalled();
+  ] as const)(
+    "restores the terminal and records natural exit for code %s",
+    async (code, exitCode, reason, label) => {
+      emitUnhandled(Object.assign(new Error("expected failure"), { code }));
+      expect(await waitForCliSignalExit()).toBe(exitCode);
+      expect(process.exitCode).toBe(exitCode);
+      expect(exitCalls).toEqual([]);
+      expect(restoreRuntimeTerminalStateMock).toHaveBeenCalledWith(reason, {
+        resumeStdinIfPaused: false,
+      });
+      expect(errorSpy).toHaveBeenCalledWith(
+        `[openclaw] ${label}`,
+        expect.stringContaining("expected failure"),
+      );
+      expect(warnSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["ERR_WORKER_OUT_OF_MEMORY", "fatal unhandled rejection"],
+    [undefined, "unhandled rejection"],
+  ] as const)("passes the rejection reason to the process owner for code %s", (code, reason) => {
+    const owner = vi.fn();
+    const release = registerSignalExitOwner(owner);
+    try {
+      emitUnhandled(Object.assign(new Error("expected failure"), { code }));
+      expect(owner).toHaveBeenCalledExactlyOnceWith(1, reason);
+      expect(process.exitCode).toBeUndefined();
+    } finally {
+      release();
+    }
   });
 
   it.each([
@@ -112,7 +138,9 @@ describe("process error handlers", () => {
       rejectionListener(error, Promise.resolve());
       expect(handler).toHaveBeenCalledTimes(1);
       expect(other).not.toHaveBeenCalled();
-      expect(exitCalls).toEqual([1]);
+      expect(await waitForCliSignalExit()).toBe(1);
+      expect(process.exitCode).toBe(1);
+      expect(exitCalls).toEqual([]);
     } finally {
       dispose();
       duplicateDispose();
@@ -124,7 +152,12 @@ describe("process error handlers", () => {
     const error = new Error("registry input");
     const withoutStack = new Error("message fallback");
     delete withoutStack.stack;
-    const thrown = [new Error("stack detail"), withoutStack, { detail: "non-Error" }];
+    // Bun can materialize a bare "Error" header during GC that drops the message
+    // from the stack; the reporter must still name the failure.
+    const bareHeader = Object.assign(new Error("bare header message"), {
+      stack: "Error\n    at handlerThatThrew (source.js:3)",
+    });
+    const thrown = [new Error("stack detail"), withoutStack, bareHeader, { detail: "non-Error" }];
     const calls: string[] = [];
     const disposers = [
       registerUnhandledRejectionHandler((value) => {
@@ -158,13 +191,19 @@ describe("process error handlers", () => {
         }),
       );
       rejectionListener(error, Promise.resolve());
-      expect(calls).toEqual(["false", "throw-0", "throw-1", "throw-2", "handled"]);
-      expect(errorSpy.mock.calls).toEqual(
-        thrown.map((failure) => [
+      expect(calls).toEqual(["false", "throw-0", "throw-1", "throw-2", "throw-3", "handled"]);
+      expect(errorSpy.mock.calls).toEqual([
+        [
           "[openclaw] Unhandled rejection handler failed:",
-          failure instanceof Error ? (failure.stack ?? failure.message) : failure,
-        ]),
-      );
+          expect.stringMatching(/^Error: stack detail\n/),
+        ],
+        ["[openclaw] Unhandled rejection handler failed:", "message fallback"],
+        [
+          "[openclaw] Unhandled rejection handler failed:",
+          "Error: bare header message\n    at handlerThatThrew (source.js:3)",
+        ],
+        ["[openclaw] Unhandled rejection handler failed:", { detail: "non-Error" }],
+      ]);
       expect(exitCalls).toEqual([]);
     } finally {
       for (const dispose of disposers) {

@@ -1,170 +1,44 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GatewayRequestError } from "../api/gateway.ts";
-import type { ApplicationContext } from "../app/context.ts";
-import type { ApplicationGateway } from "../app/gateway.ts";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { sessionProgressCardsForGateway } from "../lib/session-progress-cards.ts";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
-import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
+import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { sessionProgressHoverTargetFromEvent } from "./session-progress-hovercard-target.ts";
-import { SessionProgressHovercardProvider } from "./session-progress-hovercard.runtime.ts";
-
-if (!customElements.get("openclaw-session-progress-hovercard-provider")) {
-  customElements.define(
-    "openclaw-session-progress-hovercard-provider",
-    SessionProgressHovercardProvider,
-  );
-}
+import { createHovercard } from "./session-progress-hovercard.test-support.ts";
 
 function mountHovercard(sessionKey = "global", holdProgress = false) {
-  let selectedId = "research";
-  const selectionListeners = new Set<() => void>();
-  const eventListeners = new Set<Parameters<ApplicationGateway["subscribeEvents"]>[0]>();
-  const sessionListeners = new Set<() => void>();
-  let rowDetails: Partial<SidebarSessionHovercardRow> = {};
-  let releaseProgress: (() => void) | undefined;
-  const request = vi.fn(
-    async (
-      method: string,
-      params: { sessionKey?: string; sessionKeys?: string[]; agentId?: string },
-    ) => {
-      if (method === SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD) {
-        return { sessions: {} };
-      }
-      if (method !== "progressCard.get") {
-        throw new Error(`Unexpected request: ${method}`);
-      }
-      const ownerAtRequest = params.agentId ?? params.sessionKey?.split(":")[1];
-      if (holdProgress && ownerAtRequest === "research") {
-        await new Promise<void>((resolve) => {
-          releaseProgress = resolve;
-        });
-      }
-      return {
-        card: {
-          sessionKey: params.sessionKey?.startsWith("agent:")
-            ? params.sessionKey
-            : `agent:${params.agentId}:${params.sessionKey}`,
-          revision: 1,
-          updatedAt: 1,
-          markdown: `${ownerAtRequest} progress`,
-        },
-      };
-    },
-  );
-  const gateway = {
-    snapshot: {
-      phase: "connected",
-      assistantAgentId: "main",
-      client: { request },
-      hello: {
-        auth: { role: "operator", scopes: ["operator.read"] },
-        features: {
-          methods: ["progressCard.get", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
-        },
-      },
-    },
-    connection: { token: "", password: "" },
-    subscribe: () => () => undefined,
-    subscribeEvents: (listener: Parameters<ApplicationGateway["subscribeEvents"]>[0]) => {
-      eventListeners.add(listener);
-      return () => eventListeners.delete(listener);
-    },
-  } as unknown as ApplicationGateway;
-  const context = {
-    gateway,
-    basePath: "",
-    sessions: {
-      subscribe: (listener: () => void) => {
-        sessionListeners.add(listener);
-        return () => sessionListeners.delete(listener);
-      },
-    },
-    agentSelection: {
-      get state() {
-        return { selectedId, scopeId: selectedId };
-      },
-      subscribe: (listener: () => void) => {
-        selectionListeners.add(listener);
-        return () => selectionListeners.delete(listener);
-      },
-    },
-  } as unknown as ApplicationContext;
-  const provider = document.createElement(
-    "openclaw-session-progress-hovercard-provider",
-  ) as SessionProgressHovercardProvider;
-  provider.context = context;
-  provider.gateway = gateway;
-  const sidebar = Object.assign(document.createElement("openclaw-app-sidebar"), {
-    expandedAgentId: () => selectedId,
-    findSidebarHovercardRowByKey: () => ({
-      key: sessionKey,
-      agentId: selectedId,
-      label: `${selectedId} session`,
-      kind: "direct",
-      ...rowDetails,
-    }),
-  });
-  const row = document.createElement("div");
-  row.className = "sidebar-recent-session";
-  row.dataset.sessionKey = sessionKey;
-  const trigger = document.createElement("a");
-  trigger.className = "sidebar-recent-session__link";
-  trigger.href = "#";
-  trigger.textContent = "Session";
-  row.append(trigger);
-  sidebar.append(row);
-  provider.append(sidebar);
-  document.body.append(provider);
-  return {
-    gateway,
-    request,
-    updateRow: (details: Partial<SidebarSessionHovercardRow>) => {
-      rowDetails = { ...rowDetails, ...details };
-      for (const listener of sessionListeners) {
-        listener();
-      }
-    },
-    emitPullRequestStatus: (status: "ready" | "rate-limited" | "unavailable") => {
-      for (const listener of eventListeners) {
-        listener({
-          type: "event",
-          event: "controlUi.sessionPullRequests.changed",
-          payload: {
-            sessions: {
-              [sessionKey]: { status, rateLimited: status === "rate-limited", pullRequests: [] },
-            },
-          },
-        });
-      }
-    },
-    emitProgressChange: () => {
-      for (const listener of eventListeners) {
-        listener({
-          type: "event",
-          event: "progressCard.changed",
-          payload: { sessionKey, revision: 2 },
-        });
-      }
-    },
-    focus: () =>
-      trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true })),
-    selectMain: () => {
-      selectedId = "main";
-      for (const listener of selectionListeners) {
-        listener();
-      }
-    },
-    releaseProgress: async () => {
-      releaseProgress?.();
-      await Promise.all(request.mock.results.map((result) => result.value));
-    },
-  };
+  const h = createHovercard({ sessionKey, holdProgress });
+  document.body.append(h.provider);
+  flush();
+  return h;
 }
 
-afterEach(() => {
+const getPortal = () => document.querySelector(".session-progress-hovercard");
+const portalText = () => getPortal()?.textContent;
+
+const expectPortalText = (text: string) => waitForSolid(() => expect(portalText()).toContain(text));
+
+function matchPointer(tag: string, className: string, pointerType = "") {
+  const host = document.body.appendChild(document.createElement("div"));
+  const candidate = host.appendChild(document.createElement(tag));
+  candidate.className = className;
+  candidate.dataset.sessionKey = "agent:main:other-session";
+  let matched: HTMLElement | null = null;
+  host.addEventListener("pointerover", (event) => {
+    matched = sessionProgressHoverTargetFromEvent(event);
+  });
+  candidate.dispatchEvent(
+    new PointerEvent("pointerover", { bubbles: true, composed: true, pointerType }),
+  );
+  return matched;
+}
+
+afterEach(async () => {
   document.body.replaceChildren();
+  await Promise.resolve();
+  flush();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -190,71 +64,59 @@ describe("sessionProgressHoverTargetFromEvent", () => {
   });
 
   it("ignores unrelated data carriers", () => {
-    const host = document.body.appendChild(document.createElement("div"));
-    const candidate = host.appendChild(document.createElement("button"));
-    candidate.className = "custom-session-control";
-    candidate.dataset.sessionKey = "agent:main:other-session";
-    let matched: HTMLElement | null = null;
-    host.addEventListener("pointerover", (event) => {
-      matched = sessionProgressHoverTargetFromEvent(event);
-    });
-
-    candidate.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, composed: true }));
-
-    expect(matched).toBeNull();
+    expect(matchPointer("button", "custom-session-control")).toBeNull();
   });
 
   it("ignores touch pointer events", () => {
-    const host = document.body.appendChild(document.createElement("div"));
-    const row = host.appendChild(document.createElement("div"));
-    row.className = "sidebar-recent-session";
-    row.dataset.sessionKey = "agent:main:other-session";
-    let matched: HTMLElement | null = null;
-    host.addEventListener("pointerover", (event) => {
-      matched = sessionProgressHoverTargetFromEvent(event);
-    });
-
-    row.dispatchEvent(
-      new PointerEvent("pointerover", {
-        bubbles: true,
-        composed: true,
-        pointerType: "touch",
-      }),
-    );
-
-    expect(matched).toBeNull();
+    expect(matchPointer("div", "sidebar-recent-session", "touch")).toBeNull();
   });
 });
 
 describe("session progress hovercard ownership", () => {
+  it("reads row facts through its shell callback without a descendant sidebar", async () => {
+    vi.useFakeTimers();
+    const harness = createHovercard({
+      sessionKey: "agent:research:main",
+      triggerKind: "markdown",
+      rowDetails: { label: "Referenced session facts" },
+    });
+    harness.provider.querySelector("openclaw-app-sidebar")!.remove();
+    document.body.append(harness.provider);
+    flush();
+    await harness.focus();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(portalText()).toContain("Referenced session facts");
+  });
+
   it.each([
-    {
-      status: "rate-limited",
-      warning:
-        "GitHub API rate limit reached. Pull request status may be out of date until the limit resets.",
-    },
-    {
-      status: "unavailable",
-      warning:
-        "GitHub status could not be refreshed. Showing the last known state; check GitHub for the latest.",
-    },
+    [
+      "rate-limited",
+      "GitHub API rate limit reached. Pull request status may be out of date until the limit resets.",
+    ],
+    [
+      "unavailable",
+      "GitHub status could not be refreshed. Showing the last known state; check GitHub for the latest.",
+    ],
   ] as const)(
-    "updates a held hovercard when only PR lookup status becomes $status",
-    async ({ status, warning }) => {
+    "updates a held hovercard when only PR lookup status becomes %s",
+    async (status, warning) => {
       vi.useFakeTimers();
       const harness = mountHovercard("agent:research:main");
-      harness.focus();
+      await harness.focus();
       await vi.advanceTimersByTimeAsync(0);
-      const portal = document.querySelector(".session-progress-hovercard");
+      const portal = getPortal();
       expect(portal?.textContent).toContain("research progress");
       harness.emitPullRequestStatus("ready");
+      flush();
       expect(portal?.querySelector('[role="status"]')).toBeNull();
 
       harness.emitPullRequestStatus(status);
+      flush();
       expect(portal?.querySelector('[role="status"]')?.textContent?.trim()).toBe(warning);
       harness.emitPullRequestStatus("ready");
+      flush();
       expect(portal?.querySelector('[role="status"]')).toBeNull();
-      expect(document.querySelector(".session-progress-hovercard")).toBe(portal);
+      expect(getPortal()).toBe(portal);
     },
   );
 
@@ -267,19 +129,21 @@ describe("session progress hovercard ownership", () => {
       placementProfileId: "standard",
       placementMachine: { os: "linux", class: "small" },
     });
-    harness.focus();
+    await harness.focus();
     await vi.advanceTimersByTimeAsync(0);
-    const portal = document.querySelector(".session-progress-hovercard");
+    const portal = getPortal();
     expect(portal?.querySelector(".session-color-dot")?.getAttribute("style")).toContain("blue");
     expect(portal?.textContent).toContain("cloud-a · standard");
     expect(portal?.textContent).toContain("small");
 
     harness.updateRow({ color: "red" });
+    flush();
     expect(portal?.querySelector(".session-color-dot")?.getAttribute("style")).toContain("red");
     harness.updateRow({ placementMachine: { os: "windows", class: "medium" } });
+    flush();
     expect(portal?.textContent).toContain("windows");
     expect(portal?.textContent).toContain("medium");
-    expect(document.querySelector(".session-progress-hovercard")).toBe(portal);
+    expect(getPortal()).toBe(portal);
   });
 
   it.each([true, false])(
@@ -287,10 +151,8 @@ describe("session progress hovercard ownership", () => {
     async (denied) => {
       const sessionKey = "agent:research:main";
       const harness = mountHovercard(sessionKey);
-      harness.focus();
-      const portalText = () =>
-        document.querySelector(".session-progress-hovercard")?.textContent ?? "";
-      await vi.waitFor(() => expect(portalText()).toContain("research progress"));
+      await harness.focus();
+      await expectPortalText("research progress");
       const error = denied
         ? new GatewayRequestError({
             code: "INVALID_REQUEST",
@@ -300,7 +162,7 @@ describe("session progress hovercard ownership", () => {
         : new Error("Temporary connection failure");
       harness.request.mockRejectedValueOnce(error);
       harness.emitProgressChange();
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(sessionProgressCardsForGateway(harness.gateway).getError({ sessionKey })).toBe(
           denied ? "access-denied" : "unavailable",
         ),
@@ -321,51 +183,53 @@ describe("session progress hovercard ownership", () => {
     "uses the hovered session owner for progress and PR data: %s",
     async (sessionKey, artifactKey, agentId) => {
       const harness = mountHovercard(sessionKey);
-      harness.focus();
-      await vi.waitFor(() =>
+      await harness.focus();
+      await waitForSolid(() =>
         expect(harness.request).toHaveBeenCalledWith("progressCard.get", {
           sessionKey,
           ...(sessionKey === "global" ? { agentId } : {}),
         }),
       );
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(harness.request).toHaveBeenCalledWith(
           SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
           expect.objectContaining({ sessionKeys: [artifactKey] }),
           { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
         ),
       );
-      expect(document.querySelector(".session-progress-hovercard")?.textContent).toContain(
-        `${agentId} progress`,
-      );
+      expect(portalText()).toContain(`${agentId} progress`);
     },
   );
 
-  it("retires an in-flight global hover when the sidebar owner changes", async () => {
+  it("retires a removed provider while its progress request is pending", async () => {
     const harness = mountHovercard("global", true);
-    harness.focus();
-    await vi.waitFor(() =>
+    await harness.focus();
+    await waitForSolid(() =>
       expect(harness.request).toHaveBeenCalledWith("progressCard.get", expect.anything()),
     );
-    await vi.waitFor(() =>
-      expect(document.querySelector(".session-progress-hovercard")?.textContent).toContain(
-        "research session",
-      ),
-    );
-    harness.selectMain();
-    expect(document.querySelector(".session-progress-hovercard")).toBeNull();
-    harness.focus();
-    await vi.waitFor(() =>
-      expect(document.querySelector(".session-progress-hovercard")?.textContent).toContain(
-        "main progress",
-      ),
-    );
+    harness.provider.remove();
+    await Promise.resolve();
     await harness.releaseProgress();
-    await vi.waitFor(() =>
-      expect(document.querySelector(".session-progress-hovercard")?.textContent).not.toContain(
-        "research progress",
-      ),
+    flush();
+    expect(getPortal()).toBeNull();
+    const requests = harness.request.mock.calls.length;
+    await harness.focus();
+    expect(harness.request).toHaveBeenCalledTimes(requests);
+  });
+
+  it("retires an in-flight global hover when the sidebar owner changes", async () => {
+    const harness = mountHovercard("global", true);
+    await harness.focus();
+    await waitForSolid(() =>
+      expect(harness.request).toHaveBeenCalledWith("progressCard.get", expect.anything()),
     );
+    await expectPortalText("research session");
+    harness.select("main");
+    expect(getPortal()).toBeNull();
+    await harness.focus();
+    await expectPortalText("main progress");
+    await harness.releaseProgress();
+    await waitForSolid(() => expect(portalText()).not.toContain("research progress"));
     expect(harness.request).toHaveBeenCalledWith("progressCard.get", {
       sessionKey: "global",
       agentId: "main",

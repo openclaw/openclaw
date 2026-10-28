@@ -1,4 +1,9 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  hasNonEmptyString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { isMessageToolSendActionName } from "../../agents/embedded-agent-messaging.js";
+import { resolveChannelMessageActionFacts } from "../../channels/plugins/message-action-names.js";
 import type {
   ChannelMessageActionName,
   ChannelThreadingToolContext,
@@ -13,7 +18,6 @@ import {
   actionHasResourceReference,
   actionHasTarget,
   actionRequiresTarget,
-  applyTargetToParams,
   resolveActionDeliveryTargetAlias,
   type ActionDeliveryTargetAliasSpec,
 } from "./message-action-spec.js";
@@ -21,8 +25,15 @@ import { missingMessageActionTargetError } from "./target-errors.js";
 
 export function resolveImplicitMessageActionTarget(
   toolContext: ChannelThreadingToolContext | undefined,
+  action?: ChannelMessageActionName,
 ): string | undefined {
-  for (const value of [toolContext?.currentChannelId, toolContext?.currentMessagingTarget]) {
+  // Content replies follow the effective delivery route; message resources still
+  // belong to the native conversation that supplied the inbound message.
+  const candidates =
+    isMessageToolSendActionName(action) || action === "poll"
+      ? [toolContext?.currentMessagingTarget, toolContext?.currentChannelId]
+      : [toolContext?.currentChannelId, toolContext?.currentMessagingTarget];
+  for (const value of candidates) {
     const target = normalizeOptionalString(value);
     if (!target || isInternalNonDeliveryChannel(target)) {
       continue;
@@ -101,7 +112,7 @@ export function normalizeMessageActionInput(params: {
       !deliveryAliasTarget &&
       (hasResourceReference || !actionHasTarget(action, normalizedArgs, targetAliasOptions))
     ) {
-      const inferredTarget = resolveImplicitMessageActionTarget(toolContext);
+      const inferredTarget = resolveImplicitMessageActionTarget(toolContext, action);
       if (inferredTarget) {
         normalizedArgs.target = inferredTarget;
       }
@@ -112,7 +123,23 @@ export function normalizeMessageActionInput(params: {
     normalizedArgs.channel = inferredChannel;
   }
 
-  applyTargetToParams({ action, args: normalizedArgs });
+  const target = normalizeOptionalString(normalizedArgs.target) ?? "";
+  const hasLegacyTo = hasNonEmptyString(normalizedArgs.to);
+  const hasLegacyChannelId = hasNonEmptyString(normalizedArgs.channelId);
+  const mode = resolveChannelMessageActionFacts(action)?.targetMode ?? "none";
+
+  if (mode !== "none" && (hasLegacyTo || hasLegacyChannelId)) {
+    throw new Error("Use `target` instead of `to`/`channelId`.");
+  } else if (mode === "none" && hasLegacyTo) {
+    throw new Error("Use `target` for actions that accept a destination.");
+  }
+
+  if (target) {
+    if (mode === "none") {
+      throw new Error(`Action ${action} does not accept a target.`);
+    }
+    normalizedArgs[mode] = target;
+  }
   const hasCanonicalTarget = [
     normalizedArgs.target,
     normalizedArgs.to,
@@ -123,7 +150,11 @@ export function normalizeMessageActionInput(params: {
     (!actionHasTarget(action, normalizedArgs, targetAliasOptions) ||
       (hasResourceReference && !hasCanonicalTarget && !params.allowResourceOnly))
   ) {
-    throw missingMessageActionTargetError(action);
+    throw missingMessageActionTargetError(action, {
+      hasCurrentSourceConversation: Boolean(
+        resolveImplicitMessageActionTarget(toolContext, "send"),
+      ),
+    });
   }
 
   return normalizedArgs;

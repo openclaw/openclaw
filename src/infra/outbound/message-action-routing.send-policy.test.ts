@@ -5,7 +5,9 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAgentRestartRecoveryContext } from "../../gateway/agent-turn/agent-restart-recovery-context.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { mockFirstRecordArg } from "../../test-utils/mock-call-assertions.js";
 import { runMessageAction } from "./message-action-runner.js";
+import { registerSlackTextPlugin } from "./message-action-runner.test-support.js";
 
 const ttsMocks = vi.hoisted(() => ({
   maybeApplyTtsToPayload: vi.fn(async (params: { payload: unknown }) => params.payload),
@@ -15,21 +17,6 @@ vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: ttsMocks.maybeApplyTtsToPayload,
 }));
 
-function firstMockArg(
-  mock: { mock: { calls: readonly unknown[][] } },
-  label: string,
-): Record<string, unknown> {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  const [arg] = call;
-  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
-    throw new Error(`expected ${label} input to be an object`);
-  }
-  return arg as Record<string, unknown>;
-}
-
 const slackConfig = {
   channels: {
     slack: {
@@ -38,44 +25,26 @@ const slackConfig = {
   },
 } as OpenClawConfig;
 
-function registerSlackTextPlugin(accountIds: string[] = ["default"]) {
-  const sendText = vi.fn().mockResolvedValue({
-    channel: "slack",
-    messageId: "m1",
-    chatId: "C123",
-  });
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "slack",
-        source: "test",
-        plugin: {
-          ...createOutboundTestPlugin({
-            id: "slack",
-            outbound: {
-              deliveryMode: "direct",
-              sendText,
-            },
-          }),
-          config: {
-            listAccountIds: () => accountIds,
-            resolveAccount: () => ({ enabled: true }),
-            isConfigured: () => true,
-          },
-          threading: { threadAddressing: "message" },
-        },
-      },
-    ]),
-  );
-  return sendText;
-}
-
 describe("runMessageAction core send routing", () => {
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
     ttsMocks.maybeApplyTtsToPayload
       .mockReset()
       .mockImplementation(async (params: { payload: unknown }) => params.payload);
+  });
+
+  it("tells a routeless caller how to recover from a targetless send", async () => {
+    const sendText = registerSlackTextPlugin();
+    await expect(
+      runMessageAction({
+        cfg: slackConfig,
+        action: "send",
+        params: { message: "progress" },
+      }),
+    ).rejects.toThrow(
+      "This turn has no current conversation; pass an explicit target, or reply in normal text.",
+    );
+    expect(sendText).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -104,6 +73,7 @@ describe("runMessageAction core send routing", () => {
       canUseInternalRuntimeHandoff: true,
       expectedExistingSessionId: "session-1",
       resolvedSessionId: "session-1",
+      resolvedSessionKey: "agent:main:dashboard:recovery",
       runId: "recovery-run",
       sessionEntry: {
         sessionId: "session-1",
@@ -143,7 +113,7 @@ describe("runMessageAction core send routing", () => {
       to: "channel:C123",
     });
     expect(sendText).toHaveBeenCalledOnce();
-    expect(firstMockArg(sendText, "send text")).toMatchObject({
+    expect(mockFirstRecordArg(sendText, "send text")).toMatchObject({
       to: "channel:C123",
       text: "synthetic recovery policy probe",
     });
@@ -272,7 +242,7 @@ describe("runMessageAction core send routing", () => {
       channel: "slack",
       to: "channel:C123",
     });
-    expect(firstMockArg(sendText, "send text")).toMatchObject({
+    expect(mockFirstRecordArg(sendText, "send text")).toMatchObject({
       to: "channel:C123",
       text: "deliver to the actual conversation",
     });

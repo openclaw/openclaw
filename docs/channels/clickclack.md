@@ -29,7 +29,7 @@ openclaw channels add clickclack --code 'https://api.example.com/services/clickc
 The setup code is single-use and expires after 10 minutes. OpenClaw claims it,
 receives the newly minted bot token and workspace settings, saves the account,
 verifies the connection, and reports whether the running gateway picked it up.
-For versioned exact endpoints, OpenClaw validates and saves the canonical API
+For versioned exact endpoints, OpenClaw validates and saves the API
 base returned by ClickClack, including any path prefix. The setup code itself is
 not stored in OpenClaw config.
 
@@ -136,6 +136,11 @@ id (`wsp_...`), slug, or name; the gateway resolves it to the id at startup.
 | `mentionPatterns`            | `[]`                | Mention patterns for this account in group channels. See [Group mention gating](#group-mention-gating).               |
 | `groups`                     | `{}`                | Per-channel group policy overrides keyed by ClickClack channel ID. See [Group mention gating](#group-mention-gating). |
 
+The realtime WebSocket sends standard ping frames. When the server stops
+answering them, OpenClaw drops the connection, reconnects after `reconnectMs`,
+and reads the events it missed from the server backlog. A quiet channel alone
+never triggers a reconnect.
+
 ### Keep an auth-gated public hostname
 
 Use `apiBaseUrl` when ClickClack and the OpenClaw gateway run on the same host
@@ -230,7 +235,7 @@ setup token cannot create or synchronize channels.
 `discussions.workspace` accepts the same workspace id, slug, or display name
 as the account-level `workspace` and defaults to that value. `section` controls
 the ClickClack sidebar section and defaults to `Sessions`. When
-`controlUrlBase` is set, the managed channel links back to the canonical
+`controlUrlBase` is set, the managed channel links back to the
 [Control UI session path](/web/urls#session-and-dashboard-urls).
 
 Enable discussions on exactly one ClickClack account. The gateway provider has
@@ -246,7 +251,7 @@ channel. ClickClack owns channel archive and restore independently. The plugin
 reconciles bindings when discussion RPCs are used and approximately once per
 minute while any bindings exist.
 
-Inbound messages in a managed channel use a deterministic side session under
+Inbound messages in a managed channel use a side session with a stable key under
 the same agent id as the attached main session. The side agent is told which
 main session to observe and can use `sessions_history` and `session_status`
 (`changesSince` is useful for incremental checks). It uses `sessions_send` only
@@ -258,7 +263,7 @@ attachment and cannot reuse the old side transcript. The ClickClack channel id,
 URL, history, and ownership reference remain unchanged. Messages arriving
 through an inactive, disabled, or retargeted attachment are dropped instead of
 falling back to the account's normal channel routing. Released bindings leave a durable
-revoked-channel marker so delayed realtime events remain fail-closed. Remote
+revoked-channel marker so delayed realtime events are still rejected. Remote
 ownership is keyed by ClickClack server and channel id, so renaming the local
 account cannot turn a managed channel into an ordinary one.
 
@@ -376,8 +381,8 @@ registration first; other menu commands continue through normal message
 delivery.
 
 Use `agent` mode for cross-service correlation evidence. For an authoritative
-ClickClack message id in its canonical `msg_<ulid>` shape, the channel derives
-the deterministic OpenClaw run id `clickclack:<message-id>`. Each model call is
+ClickClack message id in the required `msg_<ulid>` format, the channel derives
+the matching OpenClaw run id `clickclack:<message-id>`. Each model call is
 then visible in diagnostics as `clickclack:<message-id>:model:<n>`; when that
 turn uses ClawRouter, the same model-call id is sent as `X-Request-ID`.
 `model` mode bypasses the normal agent run/session diagnostics and is therefore
@@ -404,7 +409,7 @@ This recovery contract requires a ClickClack server that supports:
   `X-ClickClack-Upload-Nonce: supported` on found and missing results.
 - `GET /api/messages/by-nonce` with
   `X-ClickClack-Message-Nonce: supported` on found and missing results.
-- Idempotent message creation and attachment association for the same
+- Message creation and attachment association that do not create duplicates when retried with the same
   owner-scoped nonce and upload.
 
 An older server's generic 404 is not treated as proof that a send is absent.

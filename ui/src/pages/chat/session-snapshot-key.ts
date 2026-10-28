@@ -28,15 +28,6 @@ type ChatSnapshotKeyTarget = {
 
 const unownedKeys = new WeakMap<object, number>();
 let nextUnownedKey = 0;
-function unownedKey(host: ChatSnapshotKeyHost): number {
-  const source = host.client ?? host;
-  let key = unownedKeys.get(source);
-  if (key === undefined) {
-    key = ++nextUnownedKey;
-    unownedKeys.set(source, key);
-  }
-  return key;
-}
 
 export function resolveChatSnapshotSessionKey(
   host: ChatSnapshotKeyHost,
@@ -74,9 +65,14 @@ export function resolveChatSnapshotKey(
   // Transcript identity is descriptive: recovery readiness gates sends, not the
   // same account’s already-owned cursor while hello finishes local migration.
   const account = readOfflineStorageScope({ client: host.client });
-  const owner =
-    gateway && account
-      ? JSON.stringify([gatewayCredentialScope(gateway), account])
-      : `unowned:${unownedKey(host)}`;
-  return `scope:${owner}\u0000${sessionKey}`;
+  if (gateway && account) {
+    return `scope:${JSON.stringify([gatewayCredentialScope(gateway), account])}\u0000${sessionKey}`;
+  }
+  const source = host.client ?? host;
+  let key = unownedKeys.get(source);
+  if (key === undefined) {
+    key = ++nextUnownedKey;
+    unownedKeys.set(source, key);
+  }
+  return `scope:unowned:${key}\u0000${sessionKey}`;
 }

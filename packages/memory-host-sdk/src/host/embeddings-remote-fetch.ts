@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveAzureApiVersionRequestTarget } from "./azure-api-version-request.js";
 import { readEmbeddingVectors } from "./embedding-vectors.js";
 import {
   addEmbeddingErrorContext,
@@ -8,6 +9,7 @@ import {
 import type { EmbeddingProviderCallOptions, EmbeddingUsage } from "./embeddings.types.js";
 import type { SsrFPolicy } from "./openclaw-runtime-network.js";
 import { postJson } from "./post-json.js";
+import type { RemoteEmbeddingRequestAuth } from "./remote-http.js";
 
 export function extractEmbeddingUsage(payload: unknown): EmbeddingUsage | undefined {
   const usage = asOptionalRecord(asOptionalRecord(payload)?.usage);
@@ -33,6 +35,7 @@ export async function fetchRemoteEmbeddingVectors(params: {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   fetchImpl?: typeof fetch;
+  resolveRequestHeaders?: RemoteEmbeddingRequestAuth;
   signal?: AbortSignal;
   onUsage?: EmbeddingProviderCallOptions["onUsage"];
   body: unknown;
@@ -44,8 +47,10 @@ export async function fetchRemoteEmbeddingVectors(params: {
   const errorPrefix = `${params.errorPrefix} (model: ${model}, batch size: ${inputCount ?? "unknown"})`;
   const context = { context: errorPrefix, inputCount };
   debugEmbeddingsLog("memory embeddings: remote request", context);
+  const target = resolveAzureApiVersionRequestTarget(params);
   return await postJson({
     ...params,
+    ...target,
     mapResponseError: (error) => addEmbeddingErrorContext(error, params.errorPrefix, errorPrefix),
     onResponse: (res) => {
       debugEmbeddingsLog("memory embeddings: remote response", {

@@ -10,10 +10,25 @@ title: "Setup CLI"
 
 # `openclaw setup`
 
+Interactive setup offers optional memory embedding provider/model setup with a
+synthetic readiness check. Skip it without changing existing memory settings, or
+configure it later with `openclaw configure --section memory`. This step does not
+download local models or rebuild indexes. Baseline and non-interactive setup do
+not prompt for embeddings. See [Configure](/cli/configure#memory-section).
+
 `openclaw setup` is the system-agent entry point. On a configured system, bare
 `openclaw setup` opens an interactive OpenClaw chat. On a fresh system, it
 falls through to guided onboarding. Use `-m`/`--message` for one request or
 `--baseline` to initialize config/workspace folders without the wizard.
+
+Baseline setup (`--baseline`) works with the local Gateway running or stopped.
+With the Gateway running, setup sends only its config change (for example
+`agents.defaults.workspace` or `agents.defaults.skipBootstrap`) to the Gateway,
+which saves the same config the offline command would; an unchanged config is
+not written. The Gateway seeds missing workspace files on the agent's first run.
+Creating the first config, or overriding a value inherited from an included
+config file, still needs the Gateway stopped: stop it through its service
+owner, wait for it to exit, then rerun the command.
 
 Routing order:
 
@@ -51,6 +66,8 @@ running auth-status commands or starting an app server. Readable Codex
 credentials are reported as stored evidence; the active login remains
 unverified during detection. Stored credentials do not
 receive verified-subscription priority over environment API keys.
+Codex execution or sign-in inspection errors are reported with a retry diagnostic;
+only a missing executable or login is treated as absent.
 
 In the Control UI, Model Setup can also select models from installed native
 agents through the shared model picker. **Use** saves that model and its runtime
@@ -123,6 +140,9 @@ mode. For remote token SecretRefs, set `OPENCLAW_GATEWAY_TOKEN` and use
 `--remote-token` with `--secret-input-mode ref`.
 
 ### Baseline mode
+
+Workspace and session-directory completion reports escape terminal control characters.
+The actual directory names and paths returned with `--json` retain their original values.
 
 `openclaw setup --baseline` preserves the older baseline-only behavior: it
 creates the config, workspace, and session directories, then exits without

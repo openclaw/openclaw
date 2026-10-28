@@ -4,13 +4,12 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
-import {
-  getSessionMcpRuntimeManagerForTesting,
-  setSessionMcpRuntimeScheduler,
-} from "../../agents/agent-bundle-mcp-manager-api.js";
+import { setSessionMcpRuntimeScheduler } from "../../agents/agent-bundle-mcp-manager-api.js";
+import { getSessionMcpRuntimeTestManager } from "../../agents/agent-bundle-mcp-manager.test-support.js";
 import { waitForSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
+import { createUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions.js";
 import {
@@ -23,6 +22,7 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
+import { createReplyParams } from "./test-helpers.js";
 import { createTypingController } from "./typing.js";
 
 // Real reply turns: preflight compaction, the native compaction delegate, and the
@@ -133,14 +133,7 @@ it("answers through a timed-out compaction summary and does not re-run it next t
             content: [{ type: "text", text: `Earlier answer ${turn}.` }],
             stopReason: "stop",
             errorMessage: undefined,
-            usage: {
-              input: 30_000,
-              output: 5,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 30_005,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createUsageFixture(30_000, 5, 30_005),
           }),
         );
       }
@@ -162,30 +155,21 @@ it("answers through a timed-out compaction summary and does not re-run it next t
         });
         followupRun.prompt = prompt;
         const entry = loadSessionEntry(scope)!;
-        return await runReplyAgent({
-          commandBody: prompt,
-          transcriptCommandBody: prompt,
-          followupRun,
-          queueKey: sessionKey,
-          resolvedQueue: { mode: "interrupt" },
-          shouldSteer: false,
-          shouldFollowup: false,
-          isActive: false,
-          opts: { runId },
-          typing: createTypingController({}),
-          sessionCtx: { Provider: "webchat", MessageSid: runId, SessionKey: sessionKey },
-          sessionEntry: entry,
-          sessionStore: { [sessionKey]: entry },
-          sessionKey,
-          storePath,
-          defaultModel: "test-model",
-          resolvedVerboseLevel: "off",
-          isNewSession: false,
-          blockStreamingEnabled: false,
-          resolvedBlockStreamingBreak: "message_end",
-          shouldInjectGroupIntro: false,
-          typingMode: "never",
-        });
+        return await runReplyAgent(
+          createReplyParams(followupRun, {
+            commandBody: prompt,
+            transcriptCommandBody: prompt,
+            queueKey: sessionKey,
+            opts: { runId },
+            typing: createTypingController({}),
+            sessionCtx: { Provider: "webchat", MessageSid: runId, SessionKey: sessionKey },
+            sessionEntry: entry,
+            sessionStore: { [sessionKey]: entry },
+            sessionKey,
+            storePath,
+            defaultModel: "test-model",
+          }),
+        );
       };
 
       expect(await turn("First question after the long history.", "turn-1")).toMatchObject({
@@ -205,7 +189,7 @@ it("answers through a timed-out compaction summary and does not re-run it next t
       expect(loadSessionEntry(scope)?.compactionCount).toBe(1);
     } finally {
       await waitForSessionMaintenance(sessionKey);
-      const mcpManager = getSessionMcpRuntimeManagerForTesting();
+      const mcpManager = getSessionMcpRuntimeTestManager();
       for (const runtimeSessionId of mcpManager.listSessionIds()) {
         await mcpManager.disposeSession(runtimeSessionId);
       }

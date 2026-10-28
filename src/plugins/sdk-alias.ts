@@ -1,5 +1,4 @@
 // Resolves plugin SDK aliases for public package imports.
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,7 +23,9 @@ import {
   readPluginCacheDirectory,
   readPluginCacheFile,
 } from "./plugin-cache-files.js";
+import type { PluginDirectoryEntry } from "./plugin-cache-files.types.js";
 import {
+  cachePluginSdkAliases,
   getPluginSdkAliasFacts,
   getPluginSdkHostFacts,
   type PluginRuntimeModuleResolution,
@@ -41,7 +42,8 @@ import {
   WORKSPACE_PACKAGE_ALIAS_ENTRIES,
   WORKSPACE_PACKAGE_EXPORT_DIRS,
   WORKSPACE_PACKAGE_ALIAS_NAMES,
-  ROOT_PACKAGED_WORKSPACE_PACKAGE_DIRS,
+  workspacePackageExportAliasEntries,
+  workspacePackageAliasCandidates,
 } from "./sdk-alias-workspace.js";
 
 type PluginSdkAliasCandidateKind = "dist" | "src";
@@ -443,33 +445,6 @@ const PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS: readonly PrivatePluginSdkSubpathOwner[]
   },
 ];
 const BUNDLED_PLUGIN_PUBLIC_SURFACE_SOURCE_PATTERN = /^(?:api|runtime-api|test-api|.+-api)$/u;
-const JS_STATIC_RELATIVE_DEPENDENCY_PATTERN =
-  /(?:\bfrom\s*["']|\bimport\s*\(\s*["']|\brequire\s*\(\s*["'])(\.{1,2}\/[^"']+)["']/g;
-
-function normalizePackageExportSubpath(exportKey: string): string | null {
-  if (exportKey === ".") {
-    return "";
-  }
-  if (!exportKey.startsWith("./")) {
-    return null;
-  }
-  const subpath = exportKey.slice(2);
-  return subpath && !subpath.includes("..") ? subpath : null;
-}
-
-function resolvePackageExportImportPath(value: unknown): string | null {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (!isRecord(value)) {
-    return null;
-  }
-  return typeof value.import === "string"
-    ? value.import
-    : typeof value.default === "string"
-      ? value.default
-      : null;
-}
 
 function listRootPackagedWorkspacePackageAliasEntries(params: {
   packageRoot: string;
@@ -525,67 +500,11 @@ export function listWorkspacePackageExportAliasEntries(params: {
   const packageJson = readPluginSdkPackageJson(
     path.join(params.packageRoot, "packages", params.packageDir),
   );
-  const entries: WorkspacePackageAliasEntry[] = [];
-  for (const [exportKey, value] of Object.entries(packageJson?.exports ?? {})) {
-    const subpath = normalizePackageExportSubpath(exportKey);
-    const importPath = resolvePackageExportImportPath(value);
-    if (subpath === null || !importPath?.startsWith("./dist/") || !importPath.endsWith(".mjs")) {
-      continue;
-    }
-    const distFile = importPath.slice("./dist/".length);
-    const srcFile = distFile.replace(/\.mjs$/u, ".ts");
-    entries.push({
-      packageName: params.packageName,
-      packageDir: params.packageDir,
-      subpath,
-      srcFile,
-      distFile,
-    });
-  }
+  const entries = workspacePackageExportAliasEntries({ ...params, exports: packageJson?.exports });
   const result =
-    entries.length > 0
-      ? entries.toSorted((a, b) => a.subpath.localeCompare(b.subpath))
-      : listRootPackagedWorkspacePackageAliasEntries(params);
+    entries.length > 0 ? entries : listRootPackagedWorkspacePackageAliasEntries(params);
   cache.set(key, result);
   return result;
-}
-
-function isUsableDistPluginSdkArtifact(candidate: string): boolean {
-  const cache = getPluginCache().sdk.usableDistArtifacts;
-  const cached = cache.get(candidate);
-  if (cached !== undefined) {
-    return cached;
-  }
-  const usable = checkDistPluginSdkArtifact(candidate);
-  cache.set(candidate, usable);
-  return usable;
-}
-
-function checkDistPluginSdkArtifact(candidate: string): boolean {
-  if (!pluginCacheExistsSync(candidate)) {
-    return false;
-  }
-  switch (normalizeLowercaseStringOrEmpty(path.extname(candidate))) {
-    case ".js":
-    case ".mjs":
-    case ".cjs":
-      break;
-    default:
-      return true;
-  }
-  try {
-    const source = fs.readFileSync(candidate, "utf-8");
-    for (const match of source.matchAll(JS_STATIC_RELATIVE_DEPENDENCY_PATTERN)) {
-      const specifier = match[1];
-      if (!specifier || pluginCacheExistsSync(path.resolve(path.dirname(candidate), specifier))) {
-        continue;
-      }
-      return false;
-    }
-  } catch {
-    return false;
-  }
-  return true;
 }
 
 function readPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
@@ -682,7 +601,7 @@ function resolveBundledPluginPackagePublicSurfaceAliasMap(
     return cached;
   }
   const extensionsRoot = path.join(packageRoot, "extensions");
-  let extensionDirs: fs.Dirent[];
+  let extensionDirs: PluginDirectoryEntry[];
   try {
     extensionDirs = readPluginCacheDirectory(extensionsRoot);
   } catch {
@@ -750,22 +669,9 @@ function resolveWorkspacePackageAliasMap(
   for (const entry of workspacePackageAliasEntries) {
     const alias = entry.subpath ? `${entry.packageName}/${entry.subpath}` : entry.packageName;
     for (const kind of orderedKinds) {
-      const candidates =
-        kind === "dist"
-          ? [
-              ...(ROOT_PACKAGED_WORKSPACE_PACKAGE_DIRS.has(entry.packageDir)
-                ? [
-                    path.join(
-                      packageRoot,
-                      "dist",
-                      entry.packageDir,
-                      entry.distFile.replace(/\.mjs$/u, ".js"),
-                    ),
-                  ]
-                : []),
-              path.join(packageRoot, "packages", entry.packageDir, "dist", entry.distFile),
-            ]
-          : [path.join(packageRoot, "packages", entry.packageDir, "src", entry.srcFile)];
+      const candidates = workspacePackageAliasCandidates(entry, kind).map((candidate) =>
+        path.join(packageRoot, candidate),
+      );
       const candidate = candidates.find((candidatePath) => pluginCacheExistsSync(candidatePath));
       if (candidate) {
         aliasMap[alias] = normalizeJitiAliasTargetPath(candidate);
@@ -911,7 +817,7 @@ function createPluginSdkScopedAliases(context: PluginLoaderAliasContext) {
       if (kind === "dist") {
         distArtifacts ??= listDistPluginSdkArtifactSubpaths(packageRoot);
         const candidate = path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`);
-        if (distArtifacts.has(subpath) && isUsableDistPluginSdkArtifact(candidate)) {
+        if (distArtifacts.has(subpath)) {
           targets.set(subpath, candidate);
           return candidate;
         }
@@ -1042,8 +948,7 @@ export function preparePluginLoaderAliases(
       });
     },
   };
-  cache.sdk.contexts.set(cacheKey, prepared);
-  return prepared;
+  return cachePluginSdkAliases(cache.sdk, prepared);
 }
 
 // SDK and workspace namespaces are canonical above. Bundled package names are
@@ -1082,14 +987,12 @@ export function buildPluginLoaderAliasMap(
 }
 
 export function resolvePluginRuntimeModulePathWithDiagnostics(
-  params: LoaderModuleResolveParams = {},
+  params: Omit<LoaderModuleResolveParams, "cwd" | "moduleUrl"> = {},
 ): PluginRuntimeModuleResolution {
   const cache = getPluginCache().sdk.runtimeModules;
   const key = JSON.stringify([
     params.modulePath,
     params.argv1 ?? process.argv[1],
-    params.cwd,
-    params.moduleUrl,
     resolveDevSourceRootParam(params),
     params.pluginSdkResolution,
     process.cwd(),

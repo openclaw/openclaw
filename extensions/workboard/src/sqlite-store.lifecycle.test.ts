@@ -1,205 +1,109 @@
-import { setImmediate } from "node:timers/promises";
 import { deserialize, serialize } from "node:v8";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { SqliteWorkerError } from "openclaw/plugin-sdk/sqlite-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorkboardSqliteOperations } from "./sqlite-store-contract.js";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   encodeWorkboardSqliteFailure,
   unwrapWorkboardSqliteResult,
   type WorkboardSqliteResult,
 } from "./sqlite-store-errors.js";
 
-const { openSqliteWorkerStore } = vi.hoisted(() => ({ openSqliteWorkerStore: vi.fn() }));
-vi.mock(import("openclaw/plugin-sdk/sqlite-runtime"), async (importOriginal) => ({
+const { openEngineWorkerStore } = vi.hoisted(() => ({ openEngineWorkerStore: vi.fn() }));
+vi.mock(import("openclaw/plugin-sdk/database-engine-runtime"), async (importOriginal) => ({
   ...(await importOriginal()),
-  openSqliteWorkerStore,
+  openEngineWorkerStore,
 }));
-
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
+import { WorkboardStore } from "./store.js";
 
 const workerModuleUrl = new URL("./sqlite-store.worker.ts", import.meta.url);
-
-type Request = {
-  [K in keyof WorkboardSqliteOperations]: { type: K; input: WorkboardSqliteOperations[K]["input"] };
-}[keyof WorkboardSqliteOperations];
+const storeOptions = { dbPath: "/unused-workboard-lifecycle.sqlite", workerModuleUrl };
+beforeEach(() => {
+  openEngineWorkerStore.mockReset();
+});
 
 function workerFixture() {
-  const execute = vi.fn<(request: Request) => Promise<WorkboardSqliteResult<unknown>>>();
-  const release = vi.fn(async () => {});
-  openSqliteWorkerStore.mockResolvedValue({ execute, close: release });
-  const stores = createWorkboardSqliteStores({
-    dbPath: "/unused-workboard-lifecycle.sqlite",
-    workerModuleUrl,
-  });
-  return { execute, release, stores };
+  const execute = vi.fn<() => Promise<WorkboardSqliteResult<unknown>>>();
+  const close = vi.fn(async () => {});
+  openEngineWorkerStore.mockResolvedValue({ execute, close });
+  const stores = createWorkboardSqliteStores(storeOptions);
+  return { execute, close, stores };
 }
 
-beforeEach(() => openSqliteWorkerStore.mockReset());
-
 describe("Workboard SQLite facade cleanup", () => {
-  it("retains its broker reference until the same connection closes successfully", async () => {
-    const lookupResult = createDeferred<WorkboardSqliteResult<unknown>>();
-    const firstClose = createDeferred<WorkboardSqliteResult<unknown>>();
-    const failure = new SqliteWorkerError("connection cleanup failed", "unavailable");
-    const { execute, release, stores } = workerFixture();
-    execute
-      .mockResolvedValueOnce({ ok: true, value: { connection: 7 } })
-      .mockImplementationOnce(() => lookupResult.promise)
-      .mockImplementationOnce(() => firstClose.promise)
-      .mockResolvedValueOnce({ ok: true, value: undefined });
-    await expect(stores.ready).resolves.toBeUndefined();
-    const lookup = stores.cards.lookup("missing");
-    const closing = stores.close();
-    const rejected = expect(closing).rejects.toBe(failure);
-    expect(stores.close()).toBe(closing);
-    await setImmediate();
-    expect(execute.mock.calls.map(([request]) => request)).toEqual([
-      { type: "connection.open", input: undefined },
-      { type: "cards.lookup", input: { connection: 7, args: ["missing"] } },
-    ]);
-    expect(release).not.toHaveBeenCalled();
-    lookupResult.resolve({ ok: true, value: undefined });
-    await expect(lookup).resolves.toBeUndefined();
-    firstClose.resolve({ ok: false, failure: { error: failure } });
-    await rejected;
-    expect(release).not.toHaveBeenCalled();
-    await expect(stores.cards.lookup("late")).rejects.toThrow("closed");
-
-    const retry = stores.close();
-    expect(stores.close()).toBe(retry);
-    await retry;
-    await stores.close();
-    expect(release).toHaveBeenCalledOnce();
-    expect(openSqliteWorkerStore).toHaveBeenCalledOnce();
-    expect(execute.mock.calls.map(([request]) => request)).toEqual([
-      { type: "connection.open", input: undefined },
-      { type: "cards.lookup", input: { connection: 7, args: ["missing"] } },
-      { type: "connection.close", input: { connection: 7 } },
-      { type: "connection.close", input: { connection: 7 } },
-    ]);
+  it("retains the selected worker when wider lazy options contain a worker URL", async () => {
+    const execute = vi.fn(async () => ({ ok: true, value: [] }));
+    const close = vi.fn(async () => {});
+    openEngineWorkerStore.mockResolvedValue({ execute, close });
+    const options = {
+      lazy: true,
+      workerModuleUrl: new URL("file:///unselected-workboard-worker.mjs"),
+    };
+    const store = WorkboardStore.openSqlite(workerModuleUrl, options);
+    try {
+      await store.ready();
+      expect(openEngineWorkerStore).not.toHaveBeenCalled();
+      await store.list();
+      expect(openEngineWorkerStore).toHaveBeenCalledWith(
+        expect.objectContaining({ moduleUrl: workerModuleUrl }),
+        undefined,
+      );
+    } finally {
+      await store.close();
+    }
+    expect(close).toHaveBeenCalledOnce();
   });
 
-  it("retries broker release without repeating a completed connection close", async () => {
+  it("drains accepted operations before releasing the broker and seals later calls", async () => {
+    const result = createDeferred<WorkboardSqliteResult<unknown>>();
+    const { execute, close, stores } = workerFixture();
+    execute.mockImplementation(() => result.promise);
+    await stores.ready;
+    const lookup = stores.cards.lookup("missing");
+    const closing = stores.close();
+    expect(stores.close()).toBe(closing);
+    await expect(stores.cards.lookup("late")).rejects.toThrow("closed");
+    expect(close).not.toHaveBeenCalled();
+    result.resolve({ ok: true, value: undefined });
+    await expect(lookup).resolves.toBeUndefined();
+    await closing;
+    await stores.close();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("retains failed broker cleanup for explicit close retry", async () => {
+    const { close, stores } = workerFixture();
     const failure = new Error("broker cleanup failed");
-    const { execute, release, stores } = workerFixture();
-    execute
-      .mockResolvedValueOnce({ ok: true, value: { connection: 7 } })
-      .mockResolvedValueOnce({ ok: true, value: undefined });
-    release.mockRejectedValueOnce(failure);
+    close.mockRejectedValueOnce(failure);
     await stores.ready;
     await expect(stores.close()).rejects.toBe(failure);
     await expect(stores.boards.entries()).rejects.toThrow("closed");
     await stores.close();
     await stores.close();
-    expect(release).toHaveBeenCalledTimes(2);
-    expect(openSqliteWorkerStore).toHaveBeenCalledOnce();
-    expect(execute.mock.calls.map(([request]) => request)).toEqual([
-      { type: "connection.open", input: undefined },
-      { type: "connection.close", input: { connection: 7 } },
-    ]);
+    expect(close).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["closed", "unavailable", "outcome-unknown"])(
-    "delegates terminal %s from a previous module graph without replay",
-    async (code) => {
-      const retired = createDeferred<void>();
-      const cleanupFailure = new Error("broker retirement incomplete");
-      class PreviousGraphSqliteWorkerError extends Error {
-        readonly code: string;
-        constructor(failureCode: string) {
-          super("transport stopped");
-          this.code = failureCode;
-        }
-      }
-      const failure = new PreviousGraphSqliteWorkerError(code);
-      expect(failure).not.toBeInstanceOf(SqliteWorkerError);
-      const { execute, release, stores } = workerFixture();
-      execute
-        .mockResolvedValueOnce({ ok: true, value: { connection: 7 } })
-        .mockRejectedValueOnce(failure);
-      release.mockRejectedValueOnce(cleanupFailure).mockImplementationOnce(() => retired.promise);
-      await stores.ready;
-      await expect(stores.close()).rejects.toBe(cleanupFailure);
-      let settled = false;
-      const retry = stores.close().then(() => {
-        settled = true;
-      });
-      await setImmediate();
-      expect(settled).toBe(false);
-      expect(execute).toHaveBeenCalledTimes(2);
-      retired.resolve();
-      await retry;
-      await stores.close();
-      expect(release).toHaveBeenCalledTimes(2);
-      expect(execute).toHaveBeenCalledTimes(2);
-      expect(openSqliteWorkerStore).toHaveBeenCalledOnce();
-    },
-  );
-
-  it.each(["overloaded", undefined])(
-    "retains nonterminal rejection %s for explicit retry",
-    async (code) => {
-      const failure = Object.assign(new Error("close refused"), { code });
-      const { execute, release, stores } = workerFixture();
-      execute
-        .mockResolvedValueOnce({ ok: true, value: { connection: 7 } })
-        .mockRejectedValueOnce(failure)
-        .mockResolvedValueOnce({ ok: true, value: undefined });
-      await stores.ready;
-      await expect(stores.close()).rejects.toBe(failure);
-      expect(release).not.toHaveBeenCalled();
-      await stores.close();
-      expect(execute.mock.calls.slice(1).map(([request]) => request)).toEqual([
-        { type: "connection.close", input: { connection: 7 } },
-        { type: "connection.close", input: { connection: 7 } },
-      ]);
-      expect(release).toHaveBeenCalledOnce();
-    },
-  );
-
-  it("reclaims a failed open while preserving its original initialization error", async () => {
-    const openingFailure = new Error("connection initialization failed");
-    const cleanupFailure = new Error("retained connection cleanup failed");
-    const { execute, release, stores } = workerFixture();
-    execute
-      .mockResolvedValueOnce({
-        ok: false,
-        failure: { error: openingFailure, cleanupConnection: 7 },
-      })
-      .mockResolvedValueOnce({ ok: false, failure: { error: cleanupFailure } })
-      .mockResolvedValueOnce({ ok: true, value: undefined });
-    await expect(stores.ready).rejects.toBe(openingFailure);
-    await expect(stores.cards.entries()).rejects.toBe(openingFailure);
-    expect(release).not.toHaveBeenCalled();
-    await expect(stores.close()).rejects.toBe(cleanupFailure);
-    expect(release).not.toHaveBeenCalled();
-    await expect(stores.ready).rejects.toBe(openingFailure);
-    await expect(stores.close()).resolves.toBeUndefined();
-    await expect(stores.close()).resolves.toBeUndefined();
-    await expect(stores.cards.entries()).rejects.toBe(openingFailure);
-    expect(release).toHaveBeenCalledOnce();
-    expect(openSqliteWorkerStore).toHaveBeenCalledOnce();
-    expect(execute.mock.calls.map(([request]) => request)).toEqual([
-      { type: "connection.open", input: undefined },
-      { type: "connection.close", input: { connection: 7 } },
-      { type: "connection.close", input: { connection: 7 } },
-    ]);
+  it("preserves initial admission failure without inventing a lease to release", async () => {
+    const failure = new Error("store initialization failed");
+    openEngineWorkerStore.mockRejectedValue(failure);
+    const stores = createWorkboardSqliteStores(storeOptions);
+    await expect(stores.ready).rejects.toBe(failure);
+    await expect(stores.cards.entries()).rejects.toBe(failure);
+    await stores.close();
+    expect(openEngineWorkerStore).toHaveBeenCalledOnce();
   });
 
   it("preserves aggregate error order, cause, and SQLite fields through V8 serialization", () => {
-    const sqlite = Object.assign(new Error("write failed"), {
+    const sqliteFields = {
       name: "StorageFixtureError",
       code: "SQLITE_CONSTRAINT",
       errcode: 19,
       errstr: "constraint failed",
-    });
+    };
+    const sqlite = Object.assign(new Error("write failed"), sqliteFields);
     const failure = new AggregateError(
       [sqlite, new TypeError("cleanup failed")],
       "write and cleanup failed",
-      {
-        cause: sqlite,
-      },
+      { cause: sqlite },
     );
     const encoded: WorkboardSqliteResult<never> = {
       ok: false,
@@ -212,18 +116,10 @@ describe("Workboard SQLite facade cleanup", () => {
     } catch (error) {
       decoded = error;
     }
-    if (!(decoded instanceof AggregateError)) {
-      throw new Error("Expected the transported aggregate failure");
-    }
+    assert(decoded instanceof AggregateError);
     expect(decoded.message).toBe("write and cleanup failed");
     expect(decoded.errors).toHaveLength(2);
-    expect(decoded.errors[0]).toMatchObject({
-      name: "StorageFixtureError",
-      message: "write failed",
-      code: "SQLITE_CONSTRAINT",
-      errcode: 19,
-      errstr: "constraint failed",
-    });
+    expect(decoded.errors[0]).toMatchObject({ ...sqliteFields, message: "write failed" });
     expect(decoded.errors[1]).toBeInstanceOf(TypeError);
     expect(decoded.errors[1].message).toBe("cleanup failed");
     expect(decoded.cause).toBe(decoded.errors[0]);

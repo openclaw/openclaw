@@ -15,6 +15,7 @@ import {
 
 const require = createRequire(import.meta.url);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+type PendingRequest = EventEmitter & { destroy: (error: Error) => void };
 
 describe.each(["linux", "win32"])("%s bootstrap install settlement", (platform) => {
   it.each(["download", "timeout", "cancel"])(
@@ -40,7 +41,7 @@ describe.each(["linux", "win32"])("%s bootstrap install settlement", (platform) 
       });
       const encoded = setup.command.match(/FromBase64String\('([A-Za-z0-9+/=]+)'\)/u)![1]!;
       const spawned = Promise.withResolvers<void>();
-      const workerRequested = Promise.withResolvers<void>();
+      const workerRequested = Promise.withResolvers<PendingRequest>();
       const child = Object.assign(new EventEmitter(), { pid: 12345 });
       const spawn = vi.fn(() => {
         spawned.resolve();
@@ -55,13 +56,11 @@ describe.each(["linux", "win32"])("%s bootstrap install settlement", (platform) 
         kill: vi.fn(),
         exitCode: 0,
       });
-      let workerRequest: EventEmitter & { destroy: (error: Error) => void };
       const request = (url: URL, options: { signal: AbortSignal }) => {
         const current = Object.assign(new EventEmitter(), {
           end: () => {
             if (url.pathname === "/worker") {
-              workerRequest = current;
-              workerRequested.resolve();
+              workerRequested.resolve(current);
               return;
             }
             const response = Object.assign(Readable.from([bytes]), {
@@ -109,9 +108,9 @@ describe.each(["linux", "win32"])("%s bootstrap install settlement", (platform) 
         },
       }) as Promise<void>;
       try {
-        await Promise.all([spawned.promise, workerRequested.promise]);
+        const [, workerRequest] = await Promise.all([spawned.promise, workerRequested.promise]);
         if (failure === "download") {
-          workerRequest!.destroy(new Error("synthetic worker download failure"));
+          workerRequest.destroy(new Error("synthetic worker download failure"));
           // The download catch aborts its peer after the response promise rejects.
           await vi.advanceTimersByTimeAsync(0);
         } else if (failure === "timeout") {

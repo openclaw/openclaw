@@ -1,9 +1,7 @@
-import { execFile } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { hostname } from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { probeTreeClone, readCloneFileMetadata } from "@openclaw/fs-safe/copy";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
@@ -22,15 +20,25 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { captureWorktreeMutationHeartbeat } from "./allocation.test-support.js";
-import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
+import {
+  createWorktreeCapacityStatfs,
+  useInProcessWorktreeCapacityTransport,
+} from "./capacity.test-support.js";
 import { addManagedWorktree } from "./checkout.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
 import type { WorktreeFilesystemBackend } from "./filesystem-backend.types.js";
+import { git } from "./git-fixture.test-support.js";
 import { readPendingWorktrees } from "./pending-slots.js";
+import * as preparationTiming from "./preparation-timing.js";
+import { updateRegistryWorktree } from "./registry.js";
 import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
-import { useManagedWorktreeTestRepository } from "./service.test-support.js";
+import {
+  ageManagedWorktreeTemplates,
+  useManagedWorktreeTestRepository,
+} from "./service.test-support.js";
 import {
   listTemplatesAsync,
   markTemplateReadyAsync,
@@ -42,11 +50,7 @@ vi.mock("./filesystem-backend.js", () => ({
   detectWorktreeFilesystemBackend: vi.fn(),
 }));
 
-const execFileAsync = promisify(execFile);
 const realRunCommand = commandExec.runCommandWithTimeout;
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  return (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
-}
 
 describe("ManagedWorktreeService filesystem acceleration", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
@@ -83,7 +87,6 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     vi.mocked(detectWorktreeFilesystemBackend).mockReset().mockResolvedValue(backend);
     service = new ManagedWorktreeService({
       env,
-      now: () => now,
       getConfig: () => ({ worktreeAcceleration: acceleration }),
     });
   });
@@ -122,13 +125,14 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
             db,
             k
               .updateTable("state_leases")
-              .set({
+              .set((eb) => ({
                 expires_at: row.expires_at === null ? null : 0,
-                payload_json: JSON.stringify({
-                  ...JSON.parse(row.payload_json ?? "{}"),
-                  owner: { pid: 2147483647, host: hostname(), startedAt: null },
-                }),
-              })
+                payload_json: eb.fn<string>("json_set", [
+                  eb.ref("payload_json"),
+                  eb.val("$.owner.pid"),
+                  eb.val(2_147_483_647),
+                ]),
+              }))
               .where("scope", "=", row.scope)
               .where("lease_key", "=", row.lease_key),
           );
@@ -248,16 +252,9 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       }
       const available = 4 * 1024 ** 3 + (mode === "small" ? 1 : 24) * 1024 ** 2;
       const stats = fsSync.statfsSync(repo);
-      vi.spyOn(fsSync, "statfsSync").mockReturnValue({
-        type: stats.type,
-        files: stats.files,
-        ffree: stats.ffree,
-        frsize: stats.frsize,
-        bsize: 4096,
-        blocks: 1024 ** 4 / 4096,
-        bavail: available / 4096,
-        bfree: available / 4096,
-      });
+      vi.spyOn(fsSync, "statfsSync").mockReturnValue(
+        createWorktreeCapacityStatfs(stats, available),
+      );
       const result = restoreId
         ? service.restore({ id: restoreId })
         : service.create({ repoRoot: repo, name: "limited", baseRef: "HEAD" });
@@ -305,16 +302,9 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     const before = await service.listRegistryRecords();
     const stats = fsSync.statfsSync(repo);
     let available = 4 * 1024 ** 3 + 24 * 1024 ** 2;
-    vi.spyOn(fsSync, "statfsSync").mockImplementation(() => ({
-      type: stats.type,
-      files: stats.files,
-      ffree: stats.ffree,
-      frsize: stats.frsize,
-      bsize: 4096,
-      blocks: 1024 ** 4 / 4096,
-      bavail: available / 4096,
-      bfree: available / 4096,
-    }));
+    vi.spyOn(fsSync, "statfsSync").mockImplementation(() =>
+      createWorktreeCapacityStatfs(stats, available),
+    );
     let advanced = false;
     vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
       if (
@@ -481,21 +471,125 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     });
   });
 
-  it.each(["ignored", "HEAD"] as const)(
+  it.each(["source", "sibling"])(
+    "matches native checkout when the %s worktree is sparse",
+    async (sparseOwner) => {
+      for (const directory of ["included", "excluded"]) {
+        await fs.mkdir(path.join(repo, directory));
+        await fs.writeFile(path.join(repo, directory, "file.txt"), `${directory}\n`);
+      }
+      await git(repo, "add", ".");
+      await git(repo, "commit", "-m", "sparse fixture");
+      const sparse = sparseOwner === "source" ? repo : path.join(path.dirname(repo), "sparse");
+      if (sparse !== repo) {
+        await git(repo, "worktree", "add", "--detach", sparse, "HEAD");
+      }
+      await git(sparse, "sparse-checkout", "set", "--cone", "--sparse-index", "included");
+      expect(await git(repo, "config", "extensions.worktreeConfig")).toBe("true");
+      const fresh = path.join(path.dirname(repo), "fresh");
+      await git(repo, "worktree", "add", "--detach", fresh, "HEAD");
+
+      for (const name of ["first-full", "second-full"]) {
+        const created = await service.create({ repoRoot: repo, name, baseRef: "HEAD" });
+        expect(await git(created.path, "ls-files", "-t")).toBe(await git(fresh, "ls-files", "-t"));
+        for (const file of ["README.md", "included/file.txt"]) {
+          expect(await fs.readFile(path.join(created.path, file))).toEqual(
+            await fs.readFile(path.join(fresh, file)),
+          );
+        }
+        if (sparseOwner === "source") {
+          // Git carries the source's sparse settings into newly registered worktrees.
+          for (const checkout of [fresh, created.path]) {
+            await expect(fs.access(path.join(checkout, "excluded/file.txt"))).rejects.toMatchObject(
+              {
+                code: "ENOENT",
+              },
+            );
+          }
+        } else {
+          expect(await fs.readFile(path.join(created.path, "excluded/file.txt"), "utf8")).toBe(
+            "excluded\n",
+          );
+        }
+        expect(await git(created.path, "status", "--porcelain")).toBe("");
+      }
+      expect(backend.createTemplate).toHaveBeenCalledTimes(sparseOwner === "source" ? 0 : 1);
+      expect(backend.cloneTemplate).toHaveBeenCalledTimes(sparseOwner === "source" ? 0 : 2);
+    },
+  );
+
+  it("falls back to Git when the target worktree has sparse configuration", async () => {
+    await fs.writeFile(path.join(repo, "included.txt"), "included\n");
+    await git(repo, "add", "included.txt");
+    await git(repo, "commit", "-m", "sparse target fixture");
+    await git(repo, "config", "extensions.worktreeConfig", "true");
+    const destination = path.join(path.dirname(repo), "sparse-target");
+    const diagnostics = vi.spyOn(preparationTiming, "setWorktreePreparationTemplate");
+    const result = await addManagedWorktree({
+      env,
+      now: () => now,
+      enabled: true,
+      repoRoot: repo,
+      commonDir: path.join(repo, ".git"),
+      worktreeRoot: path.dirname(destination),
+      destination,
+      base: await git(repo, "rev-parse", "HEAD"),
+      prepareCommit: async () => {
+        await git(destination, "config", "--worktree", "core.sparseCheckout", "true");
+        const patterns = await git(destination, "rev-parse", "--git-path", "info/sparse-checkout");
+        await fs.mkdir(path.dirname(patterns), { recursive: true });
+        await fs.writeFile(patterns, "/*\n!README.md\n");
+        return 1024;
+      },
+      requireSpace: async () => {},
+      commitGuard: () => {},
+    });
+    expect(result.code).toBe(0);
+    expect(backend.cloneTemplate).not.toHaveBeenCalled();
+    expect(diagnostics).toHaveBeenCalledWith("unavailable", { reason: "checkout-configuration" });
+    await expect(fs.access(path.join(destination, "README.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(await fs.readFile(path.join(destination, "included.txt"), "utf8")).toBe("included\n");
+    expect(await git(destination, "status", "--porcelain")).toBe("");
+  });
+
+  it.each(["ignored", "HEAD", "worktree-config", "sparse", "source-only-sparse"] as const)(
     "rebuilds a template with %s contamination before creating another checkout",
     async (change) => {
+      const sparse = change === "sparse" || change === "source-only-sparse";
+      const provisionIgnoredFiles = change !== "source-only-sparse";
       await fs.writeFile(path.join(repo, ".gitignore"), "ignored-*\n");
-      await git(repo, "add", ".gitignore");
+      if (sparse) {
+        await fs.mkdir(path.join(repo, "included"));
+        await fs.writeFile(path.join(repo, "included", "file.txt"), "included\n");
+      }
+      await git(repo, "add", ".");
       await git(repo, "commit", "-m", "ignore template fixture");
       // The older commit has identical files, so HEAD validation cannot be
       // replaced by comparing the tree or accepting a clean inventory alone.
       await git(repo, "commit", "--allow-empty", "-m", "new template base");
-      await service.create({ repoRoot: repo, name: "seed", baseRef: "HEAD" });
+      if (change === "worktree-config" || sparse) {
+        await git(repo, "config", "extensions.worktreeConfig", "true");
+      }
+      await service.create({
+        repoRoot: repo,
+        name: "seed",
+        baseRef: "HEAD",
+        provisionIgnoredFiles,
+      });
       const original = (await listTemplatesAsync(env))[0];
       assert(original);
       const unusualName = process.platform === "win32" ? "é space.txt" : "é space\nname.txt";
       if (change === "HEAD") {
         await git(original.path, "checkout", "--detach", "HEAD~1");
+      } else if (change === "worktree-config") {
+        await git(original.path, "config", "--worktree", "core.autocrlf", "true");
+      } else if (sparse) {
+        await git(original.path, "sparse-checkout", "set", "--cone", "missing-directory");
+        await expect(fs.access(path.join(original.path, "included"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
       } else {
         await fs.writeFile(
           path.join(original.path, `ignored-${unusualName}`),
@@ -507,6 +601,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         repoRoot: repo,
         name: "replacement",
         baseRef: "HEAD",
+        provisionIgnoredFiles,
       });
 
       const replacement = (await listTemplatesAsync(env))[0];
@@ -517,6 +612,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         ".git",
         ".gitignore",
         "README.md",
+        ...(sparse ? ["included"] : []),
       ]);
       expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
       expect(await git(created.path, "rev-parse", "HEAD")).toBe(original.sourceCommit);
@@ -639,7 +735,10 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
   it("retains expired snapshots and templates until allocation cleanup can run", async () => {
     const created = await service.create({ repoRoot: repo, name: "expired", baseRef: "HEAD" });
     const removed = await service.remove({ id: created.id, reason: "retention" });
-    now += SNAPSHOT_RETENTION_MS + 1;
+    await updateRegistryWorktree(env, created.id, {
+      removedAt: Date.now() - SNAPSHOT_RETENTION_MS - 1,
+    });
+    await ageManagedWorktreeTemplates(env, Date.now() - SNAPSHOT_RETENTION_MS - 1);
     const allocation = vi
       .spyOn(stateLease, "withOpenClawStateLeaseAsync")
       .mockRejectedValue(new Error("allocation lease unavailable"));
@@ -662,7 +761,8 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     await service.create({ repoRoot: repo, name: "retained", baseRef: "HEAD" });
     const template = (await listTemplatesAsync(env))[0];
     assert(template);
-    now += IDLE_GC_MS + 1;
+    await ageManagedWorktreeTemplates(env, Date.now() - IDLE_GC_MS - 1);
+    let refreshedAt: number | undefined;
     const held = createDeferredCore<stateLease.OpenClawStateLeaseContext>();
     const release = createDeferredCore();
     const templateKey = `template:${template.cacheKey}`;
@@ -711,7 +811,8 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         guard,
       );
       try {
-        expect(await markTemplateReadyAsync(env, template.id, now, guard)).toBe(true);
+        refreshedAt = Date.now();
+        expect(await markTemplateReadyAsync(env, template.id, refreshedAt, guard)).toBe(true);
       } finally {
         await releaseTemplateReaderAsync(env, reader, guard);
       }
@@ -724,7 +825,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       }
     }
     expect((await pending).removed).toEqual([]);
-    expect(await listTemplatesAsync(env)).toEqual([{ ...template, lastUsedAt: now }]);
+    expect(await listTemplatesAsync(env)).toEqual([{ ...template, lastUsedAt: refreshedAt }]);
     expect(await fs.readFile(path.join(template.path, "README.md"), "utf8")).toBe("base\n");
   });
 
@@ -753,14 +854,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
           queued.resolve();
           return enqueue(...args);
         });
-        return {
-          stdout: "",
-          stderr: "native checkout failed",
-          code: 1,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        return createCommandResult({ stderr: "native checkout failed", code: 1 });
       }
       return await realRunCommand(argv, options);
     });

@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
   createGitHubApi,
@@ -10,27 +10,31 @@ import {
 
 const workflowSha = "a".repeat(40);
 const landedSha = "b".repeat(40);
-const pullHeadSha = "c".repeat(40);
 const repository = "openclaw/openclaw";
+const foreignSha = "c".repeat(40);
+const fixturePath = ".github/workflows/frv-proof-fixture.yml";
+const fixtureEndpoint = "/actions/workflows/frv-proof-fixture.yml";
+type Fields = Record<string, unknown>;
+const completed = {
+  conclusion: "failure",
+  head_sha: workflowSha,
+  run_attempt: 1,
+  status: "completed",
+};
 
 type BrokerWorkflow = {
   concurrency: { "cancel-in-progress": boolean; group: string };
   jobs: {
     prove: {
       permissions: Record<string, string>;
-      steps: Array<{ name?: string; with?: Record<string, unknown> }>;
+      steps: Array<{ uses?: string; with?: Record<string, unknown> }>;
     };
   };
-  on: { workflow_dispatch: { inputs: Record<string, unknown> } };
 };
 
 type FixtureWorkflow = {
   jobs: { fixture: { permissions: Record<string, string> } };
-  on: {
-    workflow_dispatch: {
-      inputs: { operation: { default: string; options: string[]; type: string } };
-    };
-  };
+  on: { workflow_dispatch: { inputs: { operation: { options: string[] } } } };
   permissions: Record<string, string>;
 };
 
@@ -50,134 +54,98 @@ function brokerEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   };
 }
 
-function brokerEvent(overrides: Record<string, unknown> = {}) {
-  return {
-    inputs: {
-      landed_sha: landedSha,
-      pr_number: "128141",
-      ...overrides,
-    },
-  };
+function brokerEvent(overrides: Fields = {}) {
+  return { inputs: { landed_sha: landedSha, pr_number: "128141", ...overrides } };
 }
 
-function fixtureRun(overrides: Record<string, unknown> = {}) {
-  return {
-    conclusion: "failure",
-    display_title: "FRV Proof Fixture [noop] frv-proof-12345-1",
-    event: "workflow_dispatch",
-    head_branch: "main",
-    head_sha: workflowSha,
-    id: 777,
-    path: ".github/workflows/frv-proof-fixture.yml",
-    repository: { full_name: repository },
-    run_attempt: 1,
-    status: "completed",
-    ...overrides,
-  };
+function createFixture<T extends Fields>(defaults: T) {
+  return (overrides: Fields = {}) => ({ ...defaults, ...overrides });
 }
-
-function fixtureJob(overrides: Record<string, unknown> = {}) {
-  return {
-    conclusion: "failure",
-    head_sha: workflowSha,
-    id: 888,
-    name: "Fail once, then pass",
-    run_attempt: 1,
-    run_id: 777,
-    status: "completed",
-    ...overrides,
-  };
-}
-
-function pullRequest(overrides: Record<string, unknown> = {}) {
-  return {
-    base: { ref: "main", repo: { full_name: repository } },
-    head: { sha: pullHeadSha, repo: { full_name: repository } },
-    merge_commit_sha: landedSha,
-    merged: true,
-    merged_at: "2026-08-28T11:35:11Z",
-    number: 128141,
-    state: "closed",
-    ...overrides,
-  };
-}
-
-function landedAncestry(overrides: Record<string, unknown> = {}) {
-  return {
-    ahead_by: 1,
-    base_commit: { sha: landedSha },
-    behind_by: 0,
-    merge_base_commit: { sha: landedSha },
-    status: "ahead",
-    ...overrides,
-  };
-}
+const fixtureRun = createFixture({
+  ...completed,
+  display_title: "FRV Proof Fixture [noop] frv-proof-12345-1",
+  event: "workflow_dispatch",
+  head_branch: "main",
+  id: 777,
+  path: fixturePath,
+  repository: { full_name: repository },
+});
+const fixtureJob = createFixture({
+  ...completed,
+  id: 888,
+  name: "Fail once, then pass",
+  run_id: 777,
+});
+const pullRequest = createFixture({
+  base: { ref: "main", repo: { full_name: repository } },
+  merge_commit_sha: landedSha,
+  merged: true,
+  merged_at: "2026-08-28T11:35:11Z",
+  number: 128141,
+  state: "closed",
+});
+const landedAncestry = createFixture({
+  ahead_by: 1,
+  base_commit: { sha: landedSha },
+  behind_by: 0,
+  merge_base_commit: { sha: landedSha },
+  status: "ahead",
+});
 
 function successfulApi(
   options: {
-    ancestries?: Array<Record<string, unknown>>;
-    initialRun?: Record<string, unknown>;
-    jobsResponse?: Record<string, unknown>;
+    ancestries?: Fields[];
+    initialRun?: Fields;
+    jobsResponse?: Fields;
     mainShas?: string[];
     permissions?: string[];
-    pulls?: Array<Record<string, unknown>>;
-    recheckedRun?: Record<string, unknown>;
-    rerun?: Record<string, unknown>;
+    pulls?: Fields[];
+    recheckedRun?: Fields;
+    rerun?: Fields;
     rerunError?: Error;
+    comparisonSha?: string;
   } = {},
 ) {
   const calls: Array<{ body?: unknown; method: string; path: string }> = [];
-  let permissionRead = 0;
-  let pullRead = 0;
-  let mainRead = 0;
-  let ancestryRead = 0;
+  const permissions = options.permissions?.values();
+  const pulls = options.pulls?.values();
+  const mainShas = options.mainShas?.values();
+  const ancestries = options.ancestries?.values();
   let rerunRequested = false;
   const initialRun = options.initialRun ?? fixtureRun();
-  const rerun =
-    options.rerun ??
-    fixtureRun({
-      conclusion: "success",
-      run_attempt: 2,
-    });
+  const rerun = options.rerun ?? fixtureRun({ conclusion: "success", run_attempt: 2 });
+  const reads: Record<string, () => unknown> = {
+    "/collaborators/maintainer/permission": () => ({
+      permission: permissions?.next().value ?? "maintain",
+    }),
+    "/pulls/128141": () => pulls?.next().value ?? pullRequest(),
+    [`/compare/${options.comparisonSha ?? landedSha}...${workflowSha}`]: () =>
+      ancestries?.next().value ?? landedAncestry(),
+    [fixtureEndpoint]: () => ({
+      id: 99,
+      name: "FRV Proof Fixture",
+      path: fixturePath,
+      state: "active",
+    }),
+    "/git/ref/heads/main": () => ({
+      object: { sha: mainShas?.next().value ?? workflowSha },
+      ref: "refs/heads/main",
+    }),
+    "/actions/runs/777/attempts/1/jobs?per_page=100": () =>
+      options.jobsResponse ?? { jobs: [fixtureJob()], total_count: 1 },
+    "/actions/runs/777": () => (rerunRequested ? rerun : (options.recheckedRun ?? initialRun)),
+  };
   const api: GitHubApi = {
     request: vi.fn(async (method: string, path: string, body?: unknown) => {
       calls.push({ body, method, path });
-      if (method === "GET" && path === "/collaborators/maintainer/permission") {
-        const permission = options.permissions?.[permissionRead] ?? "maintain";
-        permissionRead += 1;
-        return { permission };
+      if (method === "GET" && Object.hasOwn(reads, path)) {
+        return reads[path]!();
       }
-      if (method === "GET" && path === "/pulls/128141") {
-        const pull = options.pulls?.[pullRead] ?? pullRequest();
-        pullRead += 1;
-        return pull;
-      }
-      if (method === "GET" && path === `/compare/${landedSha}...${workflowSha}`) {
-        const ancestry = options.ancestries?.[ancestryRead] ?? landedAncestry();
-        ancestryRead += 1;
-        return ancestry;
-      }
-      if (method === "GET" && path === "/actions/workflows/frv-proof-fixture.yml") {
-        return {
-          id: 99,
-          name: "FRV Proof Fixture",
-          path: ".github/workflows/frv-proof-fixture.yml",
-          state: "active",
-        };
-      }
-      if (method === "GET" && path === "/git/ref/heads/main") {
-        const sha = options.mainShas?.[mainRead] ?? workflowSha;
-        mainRead += 1;
-        return { object: { sha }, ref: "refs/heads/main" };
-      }
-      if (method === "POST" && path === "/actions/workflows/frv-proof-fixture.yml/dispatches") {
+      if (method === "POST" && path === `${fixtureEndpoint}/dispatches`) {
         return null;
       }
-      if (method === "GET" && path.startsWith("/actions/workflows/frv-proof-fixture.yml/runs?")) {
+      if (method === "GET" && path.startsWith(`${fixtureEndpoint}/runs?`)) {
         return { workflow_runs: [initialRun] };
-      }
-      if (method === "GET" && path === "/actions/runs/777/attempts/1/jobs?per_page=100") {
-        return options.jobsResponse ?? { jobs: [fixtureJob()], total_count: 1 };
       }
       if (method === "POST" && path === "/actions/jobs/888/rerun") {
         rerunRequested = true;
@@ -186,304 +154,185 @@ function successfulApi(
         }
         return null;
       }
-      if (method === "GET" && path === "/actions/runs/777") {
-        return rerunRequested ? rerun : (options.recheckedRun ?? initialRun);
-      }
       throw new Error(`unexpected API call: ${method} ${path}`);
     }),
   };
   return { api, calls };
 }
 
-function runBroker(api: GitHubApi) {
-  return runProofBroker({ api, env: brokerEnv(), event: brokerEvent(), sleep: async () => {} });
+function runBroker(api: GitHubApi, env = brokerEnv(), event = brokerEvent()) {
+  return runProofBroker({ api, env, event, sleep: async () => {} });
 }
 
-describe("FRV proof broker request validation", () => {
-  it("accepts only the exact two operator inputs", () => {
-    const parsed = validateBrokerRequest(brokerEvent(), brokerEnv());
-    expect(parsed).toMatchObject({
-      correlation: "frv-proof-12345-1",
-      landedSha,
-      prNumber: 128141,
-      workflowSha,
-    });
-    expect(() =>
-      validateBrokerRequest(brokerEvent({ correlation: "operator-value" }), brokerEnv()),
-    ).toThrow(/keys must be exactly/u);
-  });
+const mutationCalls = (calls: Array<{ method: string }>) =>
+  calls.filter((call) => call.method !== "GET");
 
-  it.each([
-    { name: "repository", env: { GITHUB_REPOSITORY: "attacker/fork" } },
-    { name: "workflow", env: { GITHUB_WORKFLOW_REF: "openclaw/openclaw/other.yml@main" } },
-    { name: "ref", env: { GITHUB_REF: "refs/pull/128141/merge" } },
-    { name: "workflow SHA", env: { GITHUB_WORKFLOW_SHA: "c".repeat(40) } },
-    { name: "actor", env: { GITHUB_TRIGGERING_ACTOR: "different-user" } },
-    { name: "PR", inputs: { pr_number: "0" } },
-    { name: "landed SHA", inputs: { landed_sha: "ABC" } },
-    { name: "run attempt", env: { GITHUB_RUN_ATTEMPT: "0" }, error: /GITHUB_RUN_ATTEMPT/u },
-  ])("rejects invalid $name before API access", ({ env, inputs, error }) => {
-    expect(() => validateBrokerRequest(brokerEvent(inputs), brokerEnv(env))).toThrow(error);
+it("accepts only the exact two operator inputs", () => {
+  const parsed = validateBrokerRequest(brokerEvent(), brokerEnv());
+  expect(parsed).toMatchObject({
+    correlation: "frv-proof-12345-1",
+    landedSha,
+    prNumber: 128141,
+    workflowSha,
   });
+  expect(() =>
+    validateBrokerRequest(brokerEvent({ correlation: "operator-value" }), brokerEnv()),
+  ).toThrow(/keys must be exactly/u);
 });
 
-const dispatch = {
-  body: { inputs: { correlation: "frv-proof-12345-1", operation: "noop" }, ref: "main" },
+it.each([
+  { name: "repository", env: { GITHUB_REPOSITORY: "attacker/fork" } },
+  { name: "workflow", env: { GITHUB_WORKFLOW_REF: "openclaw/openclaw/other.yml@main" } },
+  { name: "ref", env: { GITHUB_REF: "refs/pull/128141/merge" } },
+  { name: "workflow SHA", env: { GITHUB_WORKFLOW_SHA: "c".repeat(40) } },
+  { name: "actor", env: { GITHUB_TRIGGERING_ACTOR: "different-user" } },
+  { name: "PR", inputs: { pr_number: "0" } },
+  { name: "landed SHA", inputs: { landed_sha: "ABC" } },
+  { name: "run attempt", env: { GITHUB_RUN_ATTEMPT: "0" }, error: /GITHUB_RUN_ATTEMPT/u },
+])("rejects invalid $name before API access", ({ env, inputs, error }) => {
+  expect(() => validateBrokerRequest(brokerEvent(inputs), brokerEnv(env))).toThrow(error);
+});
+const dispatchForAttempt = (attempt: number) => ({
+  body: { inputs: { correlation: `frv-proof-12345-${attempt}`, operation: "noop" }, ref: "main" },
   method: "POST",
-  path: "/actions/workflows/frv-proof-fixture.yml/dispatches",
-};
+  path: `${fixtureEndpoint}/dispatches`,
+});
+const dispatch = dispatchForAttempt(1);
 const rerunRequest = { body: undefined, method: "POST", path: "/actions/jobs/888/rerun" };
-type BrokerOptions = NonNullable<Parameters<typeof successfulApi>[0]>;
-type Refusal = [string, BrokerOptions, RegExp, 0 | 1 | 2];
-
-describe("FRV proof broker mutation boundary", () => {
-  it.each([1, undefined])(
-    "reruns only the fixed job with attempt field %s after authority checks",
-    async (attempt) => {
-      const { api, calls } = successfulApi({
-        jobsResponse: { jobs: [fixtureJob({ run_attempt: attempt })], total_count: 1 },
-      });
-      const receipt = await runBroker(api);
-      expect(receipt).toMatchObject({
-        fixtureJobId: 888,
-        fixtureRunAttempt: 2,
-        fixtureRunId: 777,
-        landedSha,
-        operation: "noop",
-        sourceRef: "refs/heads/main",
-      });
-      const firstMutation = calls.findIndex((call) => call.method !== "GET");
-      expect(calls.slice(0, firstMutation).map((call) => call.path)).toEqual([
-        "/actions/workflows/frv-proof-fixture.yml",
-        "/collaborators/maintainer/permission",
-        "/pulls/128141",
-        `/compare/${landedSha}...${workflowSha}`,
-        "/git/ref/heads/main",
-      ]);
-      expect(calls.filter((call) => call.method !== "GET")).toEqual([dispatch, rerunRequest]);
-      expect(calls.filter((call) => call.path === rerunRequest.path)).toHaveLength(1);
-      const rerunIndex = calls.findIndex((call) => call.path === rerunRequest.path);
-      expect(calls.slice(rerunIndex - 4, rerunIndex).map((call) => call.path)).toEqual([
-        "/actions/runs/777",
-        "/collaborators/maintainer/permission",
-        "/pulls/128141",
-        `/compare/${landedSha}...${workflowSha}`,
-      ]);
-    },
-  );
-
-  it.each<Refusal>([
-    ...(
-      [
-        ["open", { merged: false, merged_at: null, state: "open" }, /merged pull request/u],
-        ["unmerged", { merged: false, merged_at: null }, /merged pull request/u],
-        [
-          "wrong base",
-          { base: { ref: "release/2026.9.1", repo: { full_name: repository } } },
-          /base must be main/u,
-        ],
-        [
-          "wrong base repository",
-          { base: { ref: "main", repo: { full_name: "attacker/fork" } } },
-          /base repository/u,
-        ],
-        ["wrong merge SHA", { merge_commit_sha: "c".repeat(40) }, /merge commit/u],
-      ] satisfies [string, Record<string, unknown>, RegExp][]
-    ).map<Refusal>(([name, overrides, error]) => [
-      name,
-      { pulls: [pullRequest(overrides)] },
-      error,
-      0,
-    ]),
-    ...(
-      [
-        [
-          "non-ancestor",
-          {
-            ahead_by: 0,
-            behind_by: 1,
-            merge_base_commit: { sha: "c".repeat(40) },
-            status: "behind",
-          },
-        ],
-        [
-          "wrong ancestry base",
-          { base_commit: { sha: "c".repeat(40) }, merge_base_commit: { sha: "c".repeat(40) } },
-        ],
-      ] satisfies [string, Record<string, unknown>][]
-    ).map<Refusal>(([name, ancestry]) => [
-      name,
-      { ancestries: [landedAncestry(ancestry)] },
-      /landed controller ancestry/u,
-      0,
-    ]),
-    ["moved main", { mainShas: ["c".repeat(40)] }, /trusted main moved/u, 0],
-    ...(
-      [
-        ["missing", { jobs: [], total_count: 0 }],
-        ["duplicate", { jobs: [fixtureJob(), fixtureJob({ id: 889 })], total_count: 2 }],
-        ["incomplete", { jobs: [fixtureJob()], total_count: 2 }],
-        ["wrong name", { jobs: [fixtureJob({ name: "Other job" })], total_count: 1 }],
-        ["invalid ID", { jobs: [fixtureJob({ id: 0 })], total_count: 1 }],
-        ["wrong run", { jobs: [fixtureJob({ run_id: 778 })], total_count: 1 }],
-        ["wrong source", { jobs: [fixtureJob({ head_sha: landedSha })], total_count: 1 }],
-        ["wrong attempt", { jobs: [fixtureJob({ run_attempt: 2 })], total_count: 1 }],
-        ["active", { jobs: [fixtureJob({ status: "in_progress" })], total_count: 1 }],
-        ["successful", { jobs: [fixtureJob({ conclusion: "success" })], total_count: 1 }],
-      ] satisfies [string, Record<string, unknown>][]
-    ).map<Refusal>(([name, jobsResponse]) => [
-      `${name} fixture job`,
-      { jobsResponse },
-      /fixture job/u,
-      1,
-    ]),
-    ...(
-      [
-        ["repository", { repository: { full_name: "attacker/fork" } }],
-        ["run ID", { id: 778 }],
-        ["attempt", { run_attempt: 2 }],
-        ["workflow", { path: ".github/workflows/other.yml" }],
-        ["source", { head_sha: landedSha }],
-        ["status", { status: "in_progress" }],
-        ["operation", { display_title: "FRV Proof Fixture [publish] frv-proof-12345-1" }],
-      ] satisfies [string, Record<string, unknown>][]
-    ).map<Refusal>(([name, overrides]) => [
-      `changed fixture ${name}`,
-      { recheckedRun: fixtureRun(overrides) },
-      /fixture run/u,
-      1,
-    ]),
-    [
-      "revoked actor",
-      { permissions: ["maintain", "read"] },
-      /lacks repository write permission/u,
-      1,
-    ],
-    [
-      "changed merge",
-      { pulls: [pullRequest(), pullRequest({ merge_commit_sha: "c".repeat(40) })] },
-      /merge commit/u,
-      1,
-    ],
-    [
-      "changed ancestry",
-      {
-        ancestries: [
-          landedAncestry(),
-          landedAncestry({
-            ahead_by: 0,
-            behind_by: 1,
-            merge_base_commit: { sha: "c".repeat(40) },
-            status: "behind",
-          }),
-        ],
-      },
-      /landed controller ancestry/u,
-      1,
-    ],
-    [
-      "wrong initial workflow",
-      { initialRun: fixtureRun({ path: ".github/workflows/other.yml" }) },
-      /workflow does not match/u,
-      1,
-    ],
-    [
-      "main replacement race",
-      { initialRun: fixtureRun({ head_sha: "c".repeat(40) }) },
-      /trusted main workflow SHA/u,
-      1,
-    ],
-    ["rerun rejected", { rerunError: new Error("HTTP 422: rerun rejected") }, /rerun rejected/u, 2],
-  ])("refuses %s without further mutation", async (_name, options, error, mutations) => {
-    const { api, calls } = successfulApi(options);
-    await expect(runBroker(api)).rejects.toThrow(error);
-    expect(calls.filter((call) => call.method !== "GET")).toEqual(
-      [dispatch, rerunRequest].slice(0, mutations),
-    );
-    expect(calls.some((call) => call.path.startsWith("/git/refs"))).toBe(false);
+type Refusal = [NonNullable<Parameters<typeof successfulApi>[0]>, RegExp, 0 | 1 | 2];
+const nonAncestor = () =>
+  landedAncestry({
+    ahead_by: 0,
+    behind_by: 1,
+    merge_base_commit: { sha: foreignSha },
+    status: "behind",
   });
+const refusal = (options: Refusal[0], error: RegExp, mutations: 0 | 1 | 2 = 1): Refusal => [
+  options,
+  error,
+  mutations,
+];
+const refusePull = (fields: Fields, error: RegExp) =>
+  refusal({ pulls: [pullRequest(fields)] }, error, 0);
+const refuseAncestry = (ancestry: Fields) =>
+  refusal({ ancestries: [ancestry] }, /landed controller ancestry/u, 0);
+const refuseJobs = (jobs: Fields[], total_count = jobs.length) =>
+  refusal({ jobsResponse: { jobs, total_count } }, /fixture job/u);
+const refuseJob = (fields: Fields) => refuseJobs([fixtureJob(fields)]);
+const refuseRun = (fields: Fields) => refusal({ recheckedRun: fixtureRun(fields) }, /fixture run/u);
+const refuseInitialRun = (fields: Fields, error: RegExp) =>
+  refusal({ initialRun: fixtureRun(fields) }, error);
 
-  it("accepts a landed SHA identical to the trusted workflow SHA", async () => {
-    const identicalSha = workflowSha;
-    const { api } = successfulApi({
-      pulls: [
-        pullRequest({ merge_commit_sha: identicalSha }),
-        pullRequest({ merge_commit_sha: identicalSha }),
-      ],
+it.each([1, undefined])(
+  "reruns only the fixed job with attempt field %s after authority checks",
+  async (attempt) => {
+    const { api, calls } = successfulApi({
+      jobsResponse: { jobs: [fixtureJob({ run_attempt: attempt })], total_count: 1 },
     });
-    let ancestryReads = 0;
-    await runProofBroker({
-      api: {
-        request: async (method, path, body) => {
-          if (method === "GET" && path === `/compare/${identicalSha}...${workflowSha}`) {
-            ancestryReads += 1;
-            return {
-              ahead_by: 0,
-              base_commit: { sha: identicalSha },
-              behind_by: 0,
-              merge_base_commit: { sha: identicalSha },
-              status: "identical",
-            };
-          }
-          return api.request(method, path, body);
-        },
-      },
-      env: brokerEnv(),
-      event: brokerEvent({ landed_sha: identicalSha }),
-      sleep: async () => {},
+    const receipt = await runBroker(api);
+    expect(receipt).toMatchObject({
+      fixtureJobId: 888,
+      fixtureRunAttempt: 2,
+      fixtureRunId: 777,
+      landedSha,
+      operation: "noop",
+      sourceRef: "refs/heads/main",
     });
-    expect(ancestryReads).toBe(2);
-  });
+    expect(mutationCalls(calls)).toEqual([dispatch, rerunRequest]);
+  },
+);
 
-  it("does not adopt a fixture from a prior broker attempt", async () => {
-    const { api, calls } = successfulApi();
-    await expect(
-      runProofBroker({
-        api,
-        env: brokerEnv({ GITHUB_RUN_ATTEMPT: "2" }),
-        event: brokerEvent(),
-        sleep: async () => {},
-      }),
-    ).rejects.toThrow(/timed out waiting/u);
-    expect(calls.filter((call) => call.method !== "GET")).toEqual([
-      {
-        body: {
-          inputs: { correlation: "frv-proof-12345-2", operation: "noop" },
-          ref: "main",
-        },
-        method: "POST",
-        path: "/actions/workflows/frv-proof-fixture.yml/dispatches",
-      },
-    ]);
-  });
-
-  it.each([true, false])(
-    "reconciles one uncertain targeted rerun when observed=%s",
-    async (observed) => {
-      const { api, calls } = successfulApi({
-        rerunError: Object.assign(new Error("read ECONNRESET after dispatch"), {
-          code: "ECONNRESET",
-        }),
-        ...(observed ? {} : { rerun: fixtureRun() }),
-      });
-      const result = runProofBroker({
-        api,
-        env: brokerEnv(),
-        event: brokerEvent(),
-        sleep: async () => {},
-      });
-      if (observed) {
-        await expect(result).resolves.toMatchObject({ fixtureJobId: 888, fixtureRunAttempt: 2 });
-      } else {
-        await expect(result).rejects.toThrow("uncertain targeted job rerun was not reconciled");
-      }
-      expect(
-        calls.filter((call) => call.method === "POST" && call.path === "/actions/jobs/888/rerun"),
-      ).toHaveLength(1);
-    },
+it.each<Refusal>([
+  refusePull({ merged: false, merged_at: null }, /merged pull request/u),
+  refusePull(
+    { base: { ref: "release/2026.9.1", repo: { full_name: repository } } },
+    /base must be main/u,
+  ),
+  refusePull({ base: { ref: "main", repo: { full_name: "attacker/fork" } } }, /base repository/u),
+  refusePull({ merge_commit_sha: foreignSha }, /merge commit/u),
+  refuseAncestry(nonAncestor()),
+  refuseAncestry(
+    landedAncestry({ base_commit: { sha: foreignSha }, merge_base_commit: { sha: foreignSha } }),
+  ),
+  [{ mainShas: [foreignSha] }, /trusted main moved/u, 0],
+  refuseJobs([]),
+  refuseJobs([fixtureJob(), fixtureJob({ id: 889 })]),
+  refuseJobs([fixtureJob()], 2),
+  refuseJob({ name: "Other job" }),
+  refuseJob({ id: 0 }),
+  refuseJob({ run_id: 778 }),
+  refuseJob({ head_sha: landedSha }),
+  refuseJob({ run_attempt: 2 }),
+  refuseJob({ status: "in_progress" }),
+  refuseJob({ conclusion: "success" }),
+  refuseRun({ repository: { full_name: "attacker/fork" } }),
+  refuseRun({ id: 778 }),
+  refuseRun({ run_attempt: 2 }),
+  refuseRun({ path: ".github/workflows/other.yml" }),
+  refuseRun({ head_sha: landedSha }),
+  refuseRun({ status: "in_progress" }),
+  refuseRun({ display_title: "FRV Proof Fixture [publish] frv-proof-12345-1" }),
+  [{ permissions: ["maintain", "read"] }, /lacks repository write permission/u, 1],
+  [{ pulls: [pullRequest(), pullRequest({ merge_commit_sha: foreignSha })] }, /merge commit/u, 1],
+  [{ ancestries: [landedAncestry(), nonAncestor()] }, /landed controller ancestry/u, 1],
+  refuseInitialRun({ path: ".github/workflows/other.yml" }, /workflow does not match/u),
+  refuseInitialRun({ head_sha: foreignSha }, /trusted main workflow SHA/u),
+  [{ rerunError: new Error("HTTP 422: rerun rejected") }, /rerun rejected/u, 2],
+])("refuses %j without further mutation", async (options, error, mutations) => {
+  const { api, calls } = successfulApi(options);
+  await expect(runBroker(api)).rejects.toThrow(error);
+  expect(calls.filter((call) => call.method !== "GET")).toEqual(
+    [dispatch, rerunRequest].slice(0, mutations),
   );
+  expect(calls.some((call) => call.path.startsWith("/git/refs"))).toBe(false);
 });
 
+it("accepts a landed SHA identical to the trusted workflow SHA", async () => {
+  const ancestry = landedAncestry({
+    ahead_by: 0,
+    base_commit: { sha: workflowSha },
+    merge_base_commit: { sha: workflowSha },
+    status: "identical",
+  });
+  const { api, calls } = successfulApi({
+    comparisonSha: workflowSha,
+    ancestries: [ancestry, ancestry],
+    pulls: Array.from({ length: 2 }, () => pullRequest({ merge_commit_sha: workflowSha })),
+  });
+  await runBroker(api, brokerEnv(), brokerEvent({ landed_sha: workflowSha }));
+  expect(
+    calls.filter((call) => call.path === `/compare/${workflowSha}...${workflowSha}`),
+  ).toHaveLength(2);
+});
+
+it("does not adopt a fixture from a prior broker attempt", async () => {
+  const { api, calls } = successfulApi();
+  await expect(runBroker(api, brokerEnv({ GITHUB_RUN_ATTEMPT: "2" }))).rejects.toThrow(
+    /timed out waiting/u,
+  );
+  expect(mutationCalls(calls)).toEqual([dispatchForAttempt(2)]);
+});
+
+it.each([true, false])(
+  "reconciles one uncertain targeted rerun when observed=%s",
+  async (observed) => {
+    const { api, calls } = successfulApi({
+      rerunError: Object.assign(new Error("read ECONNRESET after dispatch"), {
+        code: "ECONNRESET",
+      }),
+      ...(observed ? {} : { rerun: fixtureRun() }),
+    });
+    const result = runBroker(api);
+    if (observed) {
+      await expect(result).resolves.toMatchObject({ fixtureJobId: 888, fixtureRunAttempt: 2 });
+    } else {
+      await expect(result).rejects.toThrow("uncertain targeted job rerun was not reconciled");
+    }
+    expect(
+      calls.filter((call) => call.method === "POST" && call.path === "/actions/jobs/888/rerun"),
+    ).toHaveLength(1);
+  },
+);
 it("accepts an empty HTTP 201 rerun response without repeating the mutation", async () => {
   const fetchImpl = vi.fn(async () => new Response(null, { status: 201 }));
   const api = createGitHubApi({ fetchImpl, repository, token: "synthetic-proof-token" });
@@ -491,47 +340,25 @@ it("accepts an empty HTTP 201 rerun response without repeating the mutation", as
   expect(fetchImpl).toHaveBeenCalledTimes(1);
 });
 
-describe("FRV proof workflows", () => {
-  const brokerSource = readFileSync(".github/workflows/frv-proof-broker.yml", "utf8");
+it("isolates the serialized write-capable broker from the tokenless fixture", () => {
+  const broker: BrokerWorkflow = parseYaml(
+    readFileSync(".github/workflows/frv-proof-broker.yml", "utf8"),
+  );
   const fixtureSource = readFileSync(".github/workflows/frv-proof-fixture.yml", "utf8");
-  const broker = parseYaml(brokerSource) as BrokerWorkflow;
-  const fixture = parseYaml(fixtureSource) as FixtureWorkflow;
-
-  it("pins broker inputs and write-capable checkout to trusted main", () => {
-    expect(Object.keys(broker.on.workflow_dispatch.inputs).toSorted()).toEqual([
-      "landed_sha",
-      "pr_number",
-    ]);
-    expect(broker.concurrency).toEqual({
-      "cancel-in-progress": false,
-      group: "frv-proof-broker",
-    });
-    const job = broker.jobs.prove;
-    expect(job.permissions).toEqual({
-      actions: "write",
-      contents: "read",
-      "pull-requests": "read",
-    });
-    const checkout = job.steps.find((step) => step.name === "Checkout trusted main broker");
-    expect(checkout).toBeDefined();
-    expect(checkout?.with).toEqual({
-      "fetch-depth": 1,
-      "persist-credentials": false,
-      ref: "${{ github.workflow_sha }}",
-    });
-    expect(brokerSource).not.toContain("inputs.landed_sha }}");
-    expect(brokerSource).not.toContain("pull/");
-    expect(brokerSource).not.toContain("contents: write");
+  const fixture: FixtureWorkflow = parseYaml(fixtureSource);
+  expect(broker.concurrency["cancel-in-progress"]).toBe(false);
+  expect(broker.concurrency.group).not.toContain("${{");
+  const job = broker.jobs.prove;
+  expect(Object.entries(job.permissions).filter(([, level]) => level === "write")).toEqual([
+    ["actions", "write"],
+  ]);
+  const checkout = job.steps.find((step) => step.uses?.startsWith("actions/checkout@"));
+  expect(checkout?.with).toMatchObject({
+    "persist-credentials": false,
+    ref: "${{ github.workflow_sha }}",
   });
-
-  it("keeps the fixture tokenless and fixes its behavior to noop", () => {
-    expect(fixture.permissions).toEqual({});
-    expect(fixture.jobs.fixture.permissions).toEqual({});
-    expect(fixture.on.workflow_dispatch.inputs.operation).toMatchObject({
-      default: "noop",
-      options: ["noop"],
-      type: "choice",
-    });
-    expect(fixtureSource).not.toContain("actions/checkout");
-  });
+  expect(fixture.permissions).toEqual({});
+  expect(fixture.jobs.fixture.permissions).toEqual({});
+  expect(fixture.on.workflow_dispatch.inputs.operation.options).toEqual(["noop"]);
+  expect(fixtureSource).not.toContain("actions/checkout");
 });

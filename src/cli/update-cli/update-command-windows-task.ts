@@ -1,7 +1,8 @@
 import {
   resumeScheduledTaskAutoStartAfterUpdate,
   suspendScheduledTaskAutoStartForUpdate,
-} from "../../daemon/schtasks.js";
+} from "../../daemon/schtasks-control.js";
+import { sendUpdateResultTelemetry } from "../../infra/update-result-telemetry.js";
 import { finishUpdateRun } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -21,6 +22,24 @@ export class UpdateCommandAbort extends Error {
 
 export type WindowsTaskAutoStartRecovery = ReturnType<typeof createWindowsTaskAutoStartRecovery>;
 
+export async function abortWindowsTaskUpdateIfInterrupted(
+  recovery: WindowsTaskAutoStartRecovery,
+): Promise<void> {
+  if (!recovery.interrupted()) {
+    return;
+  }
+  await restoreAndCompleteWindowsTask(recovery);
+  throw new UpdateCommandAbort();
+}
+
+export async function restoreAndCompleteWindowsTask(recovery: WindowsTaskAutoStartRecovery) {
+  try {
+    await recovery.restore();
+  } finally {
+    await recovery.complete();
+  }
+}
+
 export function createWindowsTaskAutoStartRecovery(params: {
   serviceEnv: NodeJS.ProcessEnv;
   assertCurrentService?: () => Promise<void>;
@@ -31,6 +50,7 @@ export function createWindowsTaskAutoStartRecovery(params: {
   let guard = params.assertCurrentService;
   let restorePromise: Promise<void> | undefined;
   let settlement: Promise<void> | undefined;
+  let shutdown: Promise<void> | undefined;
   let restoreAllowed = !params.alreadySuspended;
   let restorationAttempted = false;
   let restorationFailed = false;
@@ -46,12 +66,17 @@ export function createWindowsTaskAutoStartRecovery(params: {
   const updateFinished = createDeferredCore();
   const unregisterSignalExitGate = registerSignalExitGate(updateFinished.promise);
   const onSignal = (exitCode: number) => {
+    if (shutdown) {
+      return;
+    }
     interrupted = true;
-    void waitForSignalExitBarriers()
+    shutdown = waitForSignalExitBarriers(exitCode === 143 ? "SIGTERM" : "SIGINT")
       .catch((error: unknown) => {
         defaultRuntime.error(`Failed to complete update shutdown cleanup: ${String(error)}`);
       })
-      .finally(() => process.exit(exitCode));
+      .finally(() => {
+        process.exitCode = exitCode;
+      });
   };
   const onSigint = () => onSignal(130);
   const onSigterm = () => onSignal(143);
@@ -149,7 +174,8 @@ export function createWindowsTaskAutoStartRecovery(params: {
                   ? "update-failed"
                   : "cancelled",
             },
-            { env: params.updateRun.env },
+            params.updateRun,
+            (payload) => void sendUpdateResultTelemetry(payload, { env: params.updateRun?.env }),
           );
         }
       } catch (cause) {
@@ -165,7 +191,13 @@ export function createWindowsTaskAutoStartRecovery(params: {
             )
           : settlementFailure;
       } finally {
-        removeSignalHandlers();
+        // Repeated signals remain with this accepted drain until the enclosing
+        // command and all sibling recovery owners have released their gates.
+        if (shutdown) {
+          void shutdown.then(removeSignalHandlers, removeSignalHandlers);
+        } else {
+          removeSignalHandlers();
+        }
         updateFinished.resolve();
         unregisterSignalExitGate();
       }
@@ -173,6 +205,8 @@ export function createWindowsTaskAutoStartRecovery(params: {
         throw failure;
       }
     })();
+    // complete may itself run inside a retained compensation. It releases this
+    // gate; joining the global signal drain here would wait on that same caller.
     return settlement;
   };
   process.on("SIGINT", onSigint);

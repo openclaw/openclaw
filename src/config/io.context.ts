@@ -1,8 +1,4 @@
-import {
-  readDeferredPluginMigrations,
-  readDeferredPluginMigrationsAsync,
-  type DeferredPluginMigration,
-} from "../infra/deferred-plugin-migrations.js";
+import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import {
   loadShellEnvFallback,
   resolveShellEnvFallbackTimeoutMs,
@@ -78,33 +74,6 @@ export function createConfigIoContext(
   // resolvers need the original OS-home fallback or relative overrides expand twice.
   const pathResolution = { env: deps.env, homedir: options.homedir };
 
-  function resolveDeferredPluginMigrations(): readonly DeferredPluginMigration[] {
-    // Core-only admission cannot inspect plugin state before database readiness is known.
-    return (
-      options.deferredPluginMigrations ??
-      (options.pluginValidation === "core-only"
-        ? []
-        : readDeferredPluginMigrations({
-            env: deps.env,
-            artifactPreservingReadOnly: !deps.observe,
-          }))
-    );
-  }
-
-  async function resolveDeferredPluginMigrationsAsync(): Promise<
-    readonly DeferredPluginMigration[]
-  > {
-    return (
-      options.deferredPluginMigrations ??
-      (options.pluginValidation === "core-only"
-        ? []
-        : readDeferredPluginMigrationsAsync({
-            env: deps.env,
-            artifactPreservingReadOnly: !deps.observe,
-          }))
-    );
-  }
-
   function observeLoadConfigSnapshot(snapshot: ConfigFileSnapshot): ConfigFileSnapshot {
     if (deps.observe) {
       observeConfigSnapshotSync(deps, snapshot);
@@ -160,7 +129,6 @@ export function createConfigIoContext(
     applyConfigEnvVars(cfg, deps.env);
     if (shouldLoadShellEnv(cfg, deps.env)) {
       loadShellEnvFallback({
-        enabled: true,
         env: deps.env,
         expectedKeys: resolveShellEnvExpectedKeys(deps.env, cfg),
         logger: deps.logger,
@@ -249,14 +217,15 @@ export function createConfigIoContext(
         originalEnv,
         deps.lowerPrecedenceEnv,
       );
-      const prepareValidation = (pending: readonly DeferredPluginMigration[]) => {
+      const prepareValidation = () => {
+        const pending = options.deferredPluginMigrations;
         const authoredCandidate = transformRecoveryCandidate
           ? transformRecoveryCandidate({
               candidate,
               configPath,
               includeProvenance,
               resolvedConfig: originalResolution.resolvedConfigRaw,
-              deferredPluginMigrations: pending,
+              deferredPluginMigrations: pending ?? [],
             })
           : candidate.parsed;
         const candidateEnv = cloneEnvWithPlatformSemantics(deps.env);
@@ -285,7 +254,7 @@ export function createConfigIoContext(
       const { authoredCandidate: preparedRawConfig, validated } = yield* resolveConfigIoEffect({
         sync: () =>
           withSynchronousArtifactPreservingStateSnapshot(() => {
-            const prepared = prepareValidation(resolveDeferredPluginMigrations());
+            const prepared = prepareValidation();
             return {
               authoredCandidate: prepared.authoredCandidate,
               validated: validateConfigObjectWithPlugins(prepared.effectiveConfigRaw, {
@@ -295,7 +264,7 @@ export function createConfigIoContext(
             };
           }),
         async: async () => {
-          const prepared = prepareValidation(await resolveDeferredPluginMigrationsAsync());
+          const prepared = prepareValidation();
           return {
             authoredCandidate: prepared.authoredCandidate,
             validated: await validateConfigObjectWithPluginsAsync(prepared.effectiveConfigRaw, {
@@ -342,8 +311,6 @@ export function createConfigIoContext(
     configPath,
     options,
     ...(transformRecoveryCandidate ? { transformRecoveryCandidate } : {}),
-    resolveDeferredPluginMigrations,
-    resolveDeferredPluginMigrationsAsync,
     observeLoadConfigSnapshot,
     observeLoadConfigSnapshotAsync,
     finalizeLoadedRuntimeConfig,

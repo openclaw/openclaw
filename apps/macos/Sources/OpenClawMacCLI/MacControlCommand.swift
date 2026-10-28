@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 import OpenClawIPC
 
-func runMacControl(_ context: MacCLIContext) {
+func runMacControl(_ context: MacCLIContext, directory: URL) {
     do {
         var options = try MacControlOptions.parse(context)
         if options.help {
@@ -23,7 +23,7 @@ func runMacControl(_ context: MacCLIContext) {
         if options.request.browser == true, options.request.token == nil, options.request.password == nil {
             fputs("Complete sign-in in your browser…\n", stderr)
         }
-        let response = try MacControlClient(options: options).send(options.request)
+        let response = try MacControlClient(options: options, directory: directory).send(options.request)
         let result = try macControlResult(response, primaryOnly: options.primaryOnly)
         if options.json {
             print(String(bytes: result, encoding: .utf8)!)
@@ -36,8 +36,7 @@ func runMacControl(_ context: MacCLIContext) {
 }
 
 func exitMacCLI(_ error: Error, json: Bool) -> Never {
-    let controlError = error as? MacControlError
-        ?? MacControlError(code: "operation_failed", message: "The app control operation failed.")
+    let controlError = macControlError(error)
     if json,
        let data = try? JSONEncoder().encode(MacControlResponse<String>(error: controlError))
     {
@@ -47,6 +46,12 @@ func exitMacCLI(_ error: Error, json: Bool) -> Never {
     }
     exit(controlError.code == "usage" || controlError
         .code == "invalid_profile" ? 1 : (controlError.code == "unreachable" ? 2 : 3))
+}
+
+func macControlError(_ error: Error) -> MacControlError {
+    if error is MacControlConnectionRefused { return MacControlClient.unreachable() }
+    return error as? MacControlError
+        ?? MacControlError(code: "operation_failed", message: "The app control operation failed.")
 }
 
 func macControlResult(_ response: Data, primaryOnly: Bool) throws -> Data {

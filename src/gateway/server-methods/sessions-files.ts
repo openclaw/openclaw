@@ -1,19 +1,16 @@
 import { resolve as resolvePath } from "node:path";
-import { setImmediate as nextTurn } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
-import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
   isCloudWorkerPlacementState,
-  type SessionFileEntry,
   type SessionsFilesGetParams,
   type SessionsFilesListParams,
   type SessionsFilesAssetsParams,
   validateSessionsFilesAssetsParams,
   validateSessionsFilesRevealParams,
   validateSessionsFilesGetParams,
+  validateSessionsFilesDownloadParams,
   validateSessionsFilesListParams,
   validateSessionsFilesSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -21,26 +18,23 @@ import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { loadAgentIdentityFromWorkspaceAsync } from "../../agents/identity-file.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../../agents/workspace-bootstrap-policy.js";
-import { getRuntimeConfig } from "../../config/io.js";
 import type { SessionEntryReadScope } from "../../config/sessions/session-accessor.types.js";
-import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
-import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
-import { withSessionTranscriptDeltaReader } from "../../config/sessions/session-transcript-delta-read.js";
+import { captureSessionActorStorageOwner } from "../../config/sessions/session-actor-storage-binding.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { LruCache } from "../../infra/lru-cache.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { prepareSessionFileWorkspace } from "../session-file-workspace.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { sqliteMessageEventWithSeq } from "../session-transcript-entry-message.js";
+import { hasSessionReadAccessChanged } from "../session-sharing-policy.js";
 import {
   resolveTranscriptReadTarget,
   toTranscriptReadScope,
 } from "../session-transcript-read-target.js";
 import type { SessionTranscriptReadScope } from "../session-transcript-readers.js";
-import { withGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
-import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
+import { retainGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
+import type { GatewaySessionEntryRead } from "../session-utils-store.js";
+import { readSessionWorkerPlacementAsync } from "../worker-environments/session-placement-lifecycle.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import {
   execOpenPath,
@@ -49,7 +43,16 @@ import {
   resolveOpenPathCommand,
   sanitizePathForLog,
 } from "./open-path.js";
-import { createSessionFileReadAuthority } from "./session-file-read-authority.js";
+import {
+  createSessionFileReadAuthority,
+  sessionFileWorkspaceMatches,
+} from "./session-file-read-authority.js";
+import {
+  rejectDeviceFolderFiles,
+  respondSessionFileNotFound,
+  respondSessionFileTooLarge,
+  sessionFilesError,
+} from "./session-files-errors.js";
 import {
   getRepositoryArtifact,
   listRepositoryArtifacts,
@@ -57,7 +60,9 @@ import {
 } from "./session-repository-artifacts.js";
 import { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace-access.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
+import { loadSessionTouchedFiles } from "./session-touched-files.js";
 import { getSessionWorkspaceAssets } from "./sessions-file-assets.js";
+import { respondSessionFileDownload } from "./sessions-file-download.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -71,205 +76,40 @@ import {
   setSessionWorkspaceFile,
   resolveFileRoot,
   type LoadedSessionFiles,
-  type TouchedFile,
 } from "./workspace-files.js";
 
-type TouchedFilesCacheEntry = {
-  cursor: string;
-  files: Map<string, TouchedFile>;
-};
-
-// Control UI requests fan out per visible session; keep enough folds to avoid
-// eviction and full-transcript reparsing across realistic concurrent viewers.
-const TOUCHED_FILES_CACHE_LIMIT = 256;
-const TOUCHED_FILES_DELTA_MAX_MESSAGES = 1_000;
-const TOUCHED_FILES_DELTA_MAX_BYTES = 1_000_000;
-// Request latency must not scale with transcript size: delta resets rebuild the
-// fold, while this process-local LRU cap bounds retained session state.
-const touchedFilesCache = new LruCache<TouchedFilesCacheEntry>(TOUCHED_FILES_CACHE_LIMIT);
-// Page yields let other requests interleave, so singleflight keeps one cache-mutating fold per key.
-const touchedFilesFolds = new Map<string, Promise<Map<string, TouchedFile>>>();
-
-function sessionFilesError(type: string, message: string, details?: Record<string, unknown>) {
-  return errorShape(ErrorCodes.INVALID_REQUEST, message, {
-    details: {
-      type,
-      ...details,
-    },
-  });
-}
-
-function readPathArg(args: Record<string, unknown>): string | undefined {
-  return (
-    normalizeOptionalString(args.path) ??
-    normalizeOptionalString(args.file_path) ??
-    normalizeOptionalString(args.filePath) ??
-    normalizeOptionalString(args.file)
-  );
-}
-
-function addTouchedFile(
-  files: Map<string, TouchedFile>,
-  filePath: string | undefined,
-  kind: TouchedFile["kind"],
-) {
-  if (!filePath) {
-    return;
-  }
-  const existing = files.get(filePath);
-  if (existing?.kind === "modified" || (existing && kind === "read")) {
-    return;
-  }
-  files.set(filePath, { path: filePath, kind });
-}
-
-function addRawPatchFiles(files: Map<string, TouchedFile>, input: unknown) {
-  if (typeof input !== "string") {
-    return;
-  }
-  const fileLinePattern = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm;
-  for (const match of input.matchAll(fileLinePattern)) {
-    addTouchedFile(files, match[1]?.trim(), "modified");
-  }
-  const moveLinePattern = /^\*\*\* Move to: (.+)$/gm;
-  for (const match of input.matchAll(moveLinePattern)) {
-    addTouchedFile(files, match[1]?.trim(), "modified");
-  }
-}
-
-function addStructuredPatchFiles(files: Map<string, TouchedFile>, changes: unknown) {
-  if (!Array.isArray(changes)) {
-    return;
-  }
-  for (const changeValue of changes) {
-    const change = asOptionalObjectRecord(changeValue);
-    addTouchedFile(files, normalizeOptionalString(change?.path), "modified");
-    const kind = asOptionalObjectRecord(change?.kind);
-    addTouchedFile(
-      files,
-      normalizeOptionalString(kind?.move_path) ?? normalizeOptionalString(kind?.movePath),
-      "modified",
-    );
-  }
-}
-
-function collectTouchedFilesFromMessage(message: unknown, files: Map<string, TouchedFile>) {
-  const record = asOptionalObjectRecord(message);
-  if (record?.role !== "assistant" || !Array.isArray(record.content)) {
-    return;
-  }
-  for (const blockValue of record.content) {
-    const block = asOptionalObjectRecord(blockValue);
-    if (!block || typeof block.type !== "string") {
-      continue;
-    }
-    const type = block.type.toLowerCase().replace(/[_-]/g, "");
-    if (type !== "toolcall" && type !== "tooluse") {
-      continue;
-    }
-    const toolName = normalizeOptionalString(block.name)?.toLowerCase();
-    const args =
-      asOptionalObjectRecord(block.arguments) ??
-      asOptionalObjectRecord(block.input) ??
-      asOptionalObjectRecord(block.args);
-    if (!toolName || !args) {
-      continue;
-    }
-    if (toolName === "read") {
-      addTouchedFile(files, readPathArg(args), "read");
-    } else if (toolName === "write" || toolName === "edit") {
-      addTouchedFile(files, readPathArg(args), "modified");
-    } else if (toolName === "apply_patch") {
-      addRawPatchFiles(files, args.input);
-      addStructuredPatchFiles(files, args.changes);
-    }
-  }
-}
-
-async function foldSqliteTouchedFiles(
-  scope: SessionTranscriptReadScope,
-  cacheKey: string,
-): Promise<Map<string, TouchedFile>> {
-  return withSessionTranscriptDeltaReader(scope, async (reader) => {
-    const cached = touchedFilesCache.get(cacheKey);
-    let cursor = cached?.cursor;
-    let files = cached?.files ?? new Map<string, TouchedFile>();
-    let maxBytes = TOUCHED_FILES_DELTA_MAX_BYTES;
-
-    while (true) {
-      const delta = await reader.visible({
-        ...(cursor ? { cursor } : {}),
-        maxBytes,
-        maxMessages: TOUCHED_FILES_DELTA_MAX_MESSAGES,
-      });
-      if (delta.kind === "missing") {
-        touchedFilesCache.delete(cacheKey);
-        return new Map();
-      }
-      if (delta.kind === "reset") {
-        cursor = delta.cursor;
-        files = new Map();
-        touchedFilesCache.set(cacheKey, { cursor, files });
-        continue;
-      }
-      for (const event of delta.events) {
-        const message = sqliteMessageEventWithSeq(event);
-        if (message !== undefined) {
-          collectTouchedFilesFromMessage(message, files);
-        }
-      }
-      cursor = delta.cursor;
-      touchedFilesCache.set(cacheKey, { cursor, files });
-      if (!delta.hasMore) {
-        return files;
-      }
-      if (delta.requiredBytes !== undefined) {
-        maxBytes = delta.requiredBytes;
-      }
-      await nextTurn();
-    }
-  });
-}
-
-async function loadSqliteTouchedFiles(
-  scope: SessionTranscriptReadScope,
-  cacheKey: string,
-): Promise<Map<string, TouchedFile>> {
-  const inFlight = touchedFilesFolds.get(cacheKey);
-  if (inFlight) {
-    return inFlight;
-  }
-  const fold = foldSqliteTouchedFiles(scope, cacheKey);
-  touchedFilesFolds.set(cacheKey, fold);
-  try {
-    return await fold;
-  } finally {
-    touchedFilesFolds.delete(cacheKey);
-  }
-}
-
-function loadSessionFileRoot(loaded: ReturnType<typeof loadGatewaySessionEntryReadOnly>) {
-  if (!loaded.entry?.sessionId) {
-    return {
-      ...loaded,
-      agentId: undefined,
+async function loadSessionFileRoot(loaded: GatewaySessionEntryRead, messageEntryId?: string) {
+  if (!loaded.entry?.sessionId || loaded.entry.repositoryWorkspaceId) {
+    const unavailable = {
+      source: undefined,
       root: undefined,
       fileRoot: undefined,
       diffCwd: undefined,
+      fileWorkspace: undefined,
     };
+    return loaded.entry?.sessionId
+      ? { ...loaded, ...unavailable }
+      : { ...loaded, ...unavailable, agentId: undefined };
   }
-  if (loaded.entry.repositoryWorkspaceId) {
-    return { ...loaded, root: undefined, fileRoot: undefined, diffCwd: undefined };
-  }
-  const { spawnedCwd, root, diffCwd } = resolveSessionWorkspaceRoots(
+  const fileWorkspace = await prepareSessionFileWorkspace(
     loaded.cfg,
     loaded.agentId,
+    loaded.canonicalKey,
     loaded.entry,
+    messageEntryId ? { entryId: messageEntryId, storePath: loaded.storePath } : undefined,
   );
+  const { spawnedCwd, root, diffCwd } = fileWorkspace;
+  const fileRoot = resolveFileRoot({ root, spawnedCwd });
+  const source =
+    !fileWorkspace.historical && loaded.entry.worktree?.id
+      ? { workspaceId: loaded.entry.worktree.id, root: root ?? null, fileRoot: fileRoot ?? null }
+      : undefined;
   return {
     ...loaded,
+    fileWorkspace,
     root,
-    fileRoot: resolveFileRoot({ root, spawnedCwd }),
+    fileRoot,
+    source,
     diffCwd,
   };
 }
@@ -278,135 +118,98 @@ function loadSessionFileRoot(loaded: ReturnType<typeof loadGatewaySessionEntryRe
  * Reuse file-route workspace precedence, excluding remote-owned roots.
  * Exec-node sessions can otherwise fall back to a local agent directory.
  */
-export function resolveLocalSessionWorkspaceRoot(params: {
+export async function prepareLocalSessionWorkspaceRoot(params: {
   sessionKey: string;
   agentId?: string;
-  source?: { entry: Partial<InternalSessionEntry> | undefined; cfg: OpenClawConfig };
-}): string | undefined {
-  const metadata = params.source ? undefined : captureSessionEntryMetadataRead(params);
-  const entry = params.source ? params.source.entry : metadata?.readCurrent();
-  const loaded =
-    params.source || metadata
-      ? {
-          entry,
-          root:
-            entry?.sessionId && !entry.repositoryWorkspaceId
-              ? resolveSessionWorkspaceRoots(
-                  params.source?.cfg ?? getRuntimeConfig(),
-                  params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
-                  entry,
-                ).root
-              : undefined,
-        }
-      : loadSessionFileRoot(
-          loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId }),
-        );
-  return loaded.entry?.execNode || (loaded.root && getAgentWorkspaceAccess(loaded.root))
-    ? undefined
-    : loaded.root;
+  source: { entry: Partial<InternalSessionEntry> | undefined; cfg: OpenClawConfig };
+}) {
+  const { entry, cfg } = params.source;
+  if (!entry?.sessionId || entry.repositoryWorkspaceId || entry.execNode) {
+    return undefined;
+  }
+  const workspace = await prepareSessionFileWorkspace(
+    cfg,
+    params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
+    params.sessionKey,
+    entry,
+  );
+  return workspace.root && !getAgentWorkspaceAccess(workspace.root) ? workspace : undefined;
 }
 
-/** Keep actor metadata and its full planning row under one source lifetime. */
-export function withSessionFileRoot<T>(
+/** Retain workspace authority independently of the evictable planning-row cache. */
+export async function withSessionFileRoot<T>(
   params: {
     sessionKey: string;
     agentId?: string;
     projection?: SessionEntryReadScope["projection"];
+    getRuntimeConfig?: () => OpenClawConfig;
+    messageEntryId?: string;
+    retained?: Awaited<ReturnType<typeof retainGatewaySessionEntryReadOnly>>;
   },
   cfg: OpenClawConfig,
   consume: (
-    loaded: ReturnType<typeof loadSessionFileRoot>,
+    loaded: Awaited<ReturnType<typeof loadSessionFileRoot>>,
     assertCurrent: () => void,
+    readEntry: () => InternalSessionEntry | undefined,
   ) => Promise<T>,
 ): Promise<T> {
-  const metadata = captureSessionEntryMetadataRead(params);
-  if (!metadata) {
-    return consume(
-      loadSessionFileRoot(
-        loadGatewaySessionEntryReadOnly(params.sessionKey, {
-          agentId: params.agentId,
-          projection: params.projection,
-        }),
-      ),
-      () => {},
-    );
+  const session =
+    params.retained ??
+    (await retainGatewaySessionEntryReadOnly(
+      params.sessionKey,
+      params.agentId,
+      sessionFileWorkspaceMatches,
+      cfg,
+      {
+        projection:
+          params.projection && params.projection !== "full"
+            ? [...(params.projection === "list" ? [] : params.projection), "skillsSnapshot"]
+            : "full",
+      },
+    ));
+  try {
+    const loaded = await loadSessionFileRoot(session, params.messageEntryId);
+    const assertCurrent = () => {
+      if (!session.isCurrentAtResponse()) {
+        throw new SessionMutationAuthorizationChangedError(
+          errorShape(ErrorCodes.FORBIDDEN, "Session workspace changed during file access"),
+        );
+      }
+      const current = session.readRetainedEntry();
+      if (current) {
+        loaded.fileWorkspace?.assertCurrent(params.getRuntimeConfig?.() ?? cfg, current);
+      }
+    };
+    assertCurrent();
+    const result = await consume(loaded, assertCurrent, session.readRetainedEntry);
+    assertCurrent();
+    return result;
+  } finally {
+    if (!params.retained) {
+      session.release();
+    }
   }
-  return withGatewaySessionEntryReadOnly(
-    { cfg, key: params.sessionKey, agentId: params.agentId },
-    async (session, assertSourceCurrent) => {
-      const loaded = loadSessionFileRoot(session);
-      const assertCurrent = () => {
-        assertSourceCurrent();
-        const current = metadata.readCurrent();
-        const fields = [
-          "sessionId",
-          "lifecycleRevision",
-          "archivedAt",
-          "repositoryWorkspaceId",
-          "sessionRoot",
-          "spawnedCwd",
-          "spawnedWorkspaceDir",
-          "pendingWorktree",
-          "pendingProjectGitUrl",
-          "execNode",
-          "permissionMode",
-          "sandbox",
-        ] as const;
-        if (
-          fields.some((field) => !isDeepStrictEqual(current?.[field], session.entry?.[field])) ||
-          current?.worktree?.id !== session.entry?.worktree?.id
-        ) {
-          throw new Error("Session workspace changed during file access");
-        }
-      };
-      assertCurrent();
-      const result = await consume(loaded, assertCurrent);
-      assertCurrent();
-      return result;
-    },
-  );
 }
 
 async function loadSessionFiles(
-  loaded: ReturnType<typeof loadSessionFileRoot>,
+  loaded: Awaited<ReturnType<typeof loadSessionFileRoot>>,
   context: GatewayRequestContext,
   assertSourceCurrent: () => void,
 ): Promise<
   LoadedSessionFiles & { repository?: Awaited<ReturnType<typeof resolveRepositoryWorkspaceAccess>> }
 > {
   const { storePath, entry, canonicalKey, agentId } = loaded;
-  const metadata = captureSessionEntryMetadataRead({
-    storePath,
-    sessionKey: canonicalKey,
-    agentId,
-  });
   if (!entry?.sessionId || !storePath || !agentId) {
     return { files: [] };
   }
-  if (entry.worktree?.id && loaded.root) {
-    const { withSettledLocalWorkspacePath } =
+  if (entry.worktree?.id && loaded.root && !loaded.fileWorkspace?.historical) {
+    const { checkpointLocalWorkspacePath } =
       await import("../worker-environments/local-workspace-projection.js");
-    await withSettledLocalWorkspacePath(
-      {
-        cwd: loaded.root,
-        assertCurrent: () => {
-          assertSourceCurrent();
-          const current = metadata
-            ? metadata.readCurrent()
-            : loadGatewaySessionEntryReadOnly(canonicalKey, { agentId }).entry;
-          if (
-            current?.sessionId !== entry.sessionId ||
-            current.lifecycleRevision !== entry.lifecycleRevision ||
-            current.worktree?.id !== entry.worktree?.id
-          ) {
-            throw new Error("Session workspace changed during file read");
-          }
-        },
-      },
-      async () => {},
-    );
+    await checkpointLocalWorkspacePath({
+      cwd: loaded.root,
+      assertCurrent: assertSourceCurrent,
+    });
   }
-  const repository = await resolveRepositoryWorkspaceAccess(loaded, context);
   const scope = {
     agentId,
     sessionEntry: entry,
@@ -417,46 +220,29 @@ async function loadSessionFiles(
   const target = await resolveTranscriptReadTarget(scope);
   // Entry-scoped reads without an explicit sessionFile always resolve to a canonical SQLite marker.
   // Legacy transcript files are doctor-owned migration debt, not a runtime read path.
-  const actor = captureIncognitoSessionBinding(scope)?.actor;
-  const files = await loadSqliteTouchedFiles(
+  const memory = captureSessionActorStorageOwner(scope, {
+    assertCurrent: assertSourceCurrent,
+    authorize() {},
+  });
+  const sourceIdentity = memory?.owner?.identity.incarnation;
+  const files = await loadSessionTouchedFiles(
     toTranscriptReadScope(target),
-    `${agentId}\0${entry.sessionId}\0${target.storePath ?? ""}${actor ? `\0${actor.identity.incarnation}` : ""}`,
+    `${agentId}\0${entry.sessionId}\0${target.storePath ?? ""}${sourceIdentity ? `\0${sourceIdentity}` : ""}`,
   );
+  const repository = await resolveRepositoryWorkspaceAccess(loaded, context, assertSourceCurrent);
   return {
     repository,
     root: loaded.root,
     fileRoot: loaded.fileRoot,
     diffCwd: loaded.diffCwd,
-    files: [...files.values()].toSorted((a, b) => {
+    // oxlint-disable-next-line unicorn/no-array-sort -- The spread creates a fresh, private array.
+    files: [...files.values()].sort((a, b) => {
       if (a.kind !== b.kind) {
         return a.kind === "modified" ? -1 : 1;
       }
       return a.path.localeCompare(b.path);
     }),
   };
-}
-
-function respondSessionFileNotFound(respond: RespondFn, filePath: string, reason?: string) {
-  respond(
-    false,
-    undefined,
-    sessionFilesError("session_file_not_found", "session file not found", {
-      path: filePath,
-      ...(reason ? { reason } : {}),
-    }),
-  );
-}
-
-function respondSessionFileTooLarge(respond: RespondFn, file: SessionFileEntry, filePath: string) {
-  respond(
-    false,
-    undefined,
-    sessionFilesError("session_file_too_large", "session file is too large to preview", {
-      maxPreviewBytes: WORKSPACE_PREVIEW_MAX_BYTES,
-      path: file.path || filePath,
-      size: file.size,
-    }),
-  );
 }
 
 function requireSessionFilesAgentId(params: {
@@ -482,6 +268,7 @@ async function handleSessionFilesRead(
   request:
     | { kind: "list"; params: SessionsFilesListParams }
     | { kind: "get"; params: SessionsFilesGetParams }
+    | { kind: "download"; params: SessionsFilesGetParams }
     | { kind: "assets"; params: SessionsFilesAssetsParams },
 ): Promise<void> {
   const { respond, context } = options;
@@ -495,27 +282,74 @@ async function handleSessionFilesRead(
   if (!agentId) {
     return;
   }
-  const read = retainSessionScopedRead(options, params.sessionKey, agentId, {
+  const read = await retainSessionScopedRead(options, params.sessionKey, agentId, {
     requireMaterialized: true,
+    retain: request.kind === "download",
+    projection: ["skillsSnapshot"],
+    entryMatches: (previous, current) =>
+      !hasSessionReadAccessChanged(previous, current) &&
+      sessionFileWorkspaceMatches(previous, current),
   });
+  let downloadOwnsRead = false;
+  let readAuthority: ReturnType<typeof createSessionFileReadAuthority> | undefined;
   return withSessionFileRoot(
-    { ...params, agentId },
+    { ...params, agentId, getRuntimeConfig: context.getRuntimeConfig },
     context.getRuntimeConfig(),
-    async (source, assertSourceCurrent) => {
+    async (source, assertSourceCurrent, readEntry) => {
+      if (rejectDeviceFolderFiles(source.entry, respond)) {
+        return;
+      }
+      // HTTP delivery borrows the download grant's retained row, not this shorter callback.
+      const hostRead = createSessionFileReadAuthority(options, {
+        ...source,
+        agentId,
+        readEntry: read?.prepared.readRetainedEntry ?? readEntry,
+        assertSourceCurrent: read?.assertCurrent ?? assertSourceCurrent,
+      });
+      readAuthority = hostRead;
       const assertCurrent = () => {
         assertSourceCurrent();
         read?.assertCurrent();
+        hostRead.assertCurrent();
       };
-      const hostRead = createSessionFileReadAuthority(options, { ...source, agentId });
+      let retainedRepository: Awaited<ReturnType<typeof resolveRepositoryWorkspaceAccess>>;
       try {
-        const loaded = await loadSessionFiles(source, context, assertSourceCurrent);
+        assertCurrent();
+        // A download grant outlives this request's planning-row borrow, including
+        // memory-backed repositories. Its retained read owns all later assertions.
+        const loaded = await loadSessionFiles(
+          source,
+          context,
+          request.kind === "download" ? () => read?.assertCurrent() : assertSourceCurrent,
+        );
+        const repository = loaded.repository;
+        retainedRepository = repository;
         assertCurrent();
         if (
           request.kind !== "list" &&
-          loaded.repository?.kind === "stored" &&
+          repository?.kind === "stored" &&
           resolveRepositoryArtifactPath(request.params.path) === undefined
         ) {
           respondSessionFileNotFound(respond, request.params.path, "outside_session_boundary");
+          return;
+        }
+        if (request.kind === "download") {
+          await respondSessionFileDownload({
+            options,
+            path: request.params.path,
+            loaded,
+            repository,
+            hostRead,
+            assertSessionCurrent: () => read?.assertCurrent(),
+            release: () => {
+              repository?.[Symbol.dispose]();
+              hostRead.release();
+              read?.release();
+            },
+            onGrantCreated: () => {
+              downloadOwnsRead = true;
+            },
+          });
           return;
         }
         let result:
@@ -530,10 +364,10 @@ async function handleSessionFilesRead(
             search: request.params.search,
           };
           result =
-            loaded.repository?.kind === "stored"
-              ? await listRepositoryArtifacts(loaded.repository, query)
-              : loaded.repository
-                ? await loaded.repository.inspect("list", query)
+            repository?.kind === "stored"
+              ? await listRepositoryArtifacts(repository, query)
+              : repository
+                ? await repository.inspect("list", query)
                 : await listSessionWorkspaceFiles({
                     ...loaded,
                     ...query,
@@ -542,7 +376,6 @@ async function handleSessionFilesRead(
                   });
           assertCurrent();
         } else if (request.kind === "assets") {
-          const repository = loaded.repository;
           result = await getSessionWorkspaceAssets({
             ...loaded,
             path: request.params.path,
@@ -565,10 +398,10 @@ async function handleSessionFilesRead(
         } else {
           const query = { files: loaded.files, path: request.params.path };
           const fileResult =
-            loaded.repository?.kind === "stored"
-              ? await getRepositoryArtifact(loaded.repository, request.params.path)
-              : loaded.repository
-                ? await loaded.repository.inspect("get", query)
+            repository?.kind === "stored"
+              ? await getRepositoryArtifact(repository, request.params.path)
+              : repository
+                ? await repository.inspect("get", query)
                 : await getSessionWorkspaceFile({
                     ...loaded,
                     ...query,
@@ -577,6 +410,9 @@ async function handleSessionFilesRead(
                   });
           assertCurrent();
           const { file } = fileResult;
+          if (file && source.fileWorkspace?.historical) {
+            delete file.hash;
+          }
           if (!file || file.missing) {
             failure = () =>
               respondSessionFileNotFound(
@@ -603,7 +439,8 @@ async function handleSessionFilesRead(
                 : {
                     sessionKey: params.sessionKey,
                     ...result,
-                    ...(loaded.repository ? { root: undefined } : {}),
+                    ...(request.kind === "get" && source.source ? { source: source.source } : {}),
+                    ...(repository ? { root: undefined } : {}),
                   },
             );
           }
@@ -613,26 +450,41 @@ async function handleSessionFilesRead(
         } else {
           publish();
         }
-      } catch (error) {
-        if (
-          !hostRead.hasHostRead() ||
-          !(error instanceof SessionMutationAuthorizationChangedError)
-        ) {
-          throw error;
-        }
-        respondSessionFileNotFound(
-          respond,
-          "path" in params ? (params.path ?? "") : "",
-          "outside_session_boundary",
-        );
       } finally {
-        hostRead.release();
+        if (!downloadOwnsRead) {
+          retainedRepository?.[Symbol.dispose]();
+          hostRead.release();
+        }
       }
     },
-  ).finally(() => read?.release());
+  )
+    .finally(() => {
+      if (!downloadOwnsRead) {
+        read?.release();
+      }
+    })
+    .catch((error: unknown) => {
+      if (!(error instanceof SessionMutationAuthorizationChangedError)) {
+        throw error;
+      }
+      if (!readAuthority?.hasHostRead()) {
+        respond(false, undefined, error.error);
+        return;
+      }
+      respondSessionFileNotFound(
+        respond,
+        "path" in params ? (params.path ?? "") : "",
+        "outside_session_boundary",
+      );
+    });
 }
 
 export const sessionsFilesHandlers: GatewayRequestHandlers = {
+  "sessions.files.download": defineValidatedGatewayHandler(
+    "sessions.files.download",
+    validateSessionsFilesDownloadParams,
+    (options) => handleSessionFilesRead(options, { kind: "download", params: options.params }),
+  ),
   "sessions.files.assets": defineValidatedGatewayHandler(
     "sessions.files.assets",
     validateSessionsFilesAssetsParams,
@@ -663,21 +515,40 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       return;
     }
     return withSessionFileRoot(
-      { ...params, agentId },
+      { ...params, agentId, getRuntimeConfig: context.getRuntimeConfig },
       context.getRuntimeConfig(),
       async (loaded, assertSourceCurrent) => {
+        if (rejectDeviceFolderFiles(loaded.entry, respond)) {
+          return;
+        }
         if (!loaded.agentId || !loaded.entry?.sessionId) {
           respondSessionFileNotFound(respond, params.path);
           return;
         }
-        const repository = await resolveRepositoryWorkspaceAccess(loaded, context);
-        if (repository?.kind === "stored") {
-          throw new Error("Start this cloud session before editing its repository files.");
-        }
+        const source = loaded.source;
         const authorize = () => {
           assertSourceCurrent();
           sessionMutationAuthorization?.assertCurrent();
+          if (
+            (params.expectedSource !== undefined ||
+              (source !== undefined &&
+                loaded.entry?.priorWorkspace?.worktreeId === source.workspaceId)) &&
+            !isDeepStrictEqual(params.expectedSource, source)
+          ) {
+            throw new SessionMutationAuthorizationChangedError(
+              sessionFilesError(
+                "session_file_source_changed",
+                "The file's workspace changed. Reopen the file before saving; your draft was preserved.",
+                { path: params.path },
+              ),
+            );
+          }
         };
+        authorize();
+        using repository = await resolveRepositoryWorkspaceAccess(loaded, context, authorize);
+        if (repository?.kind === "stored") {
+          throw new Error("Start this cloud session before editing its repository files.");
+        }
         const update = repository
           ? await repository.inspect(
               "set",
@@ -730,6 +601,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
         }
         respond(true, {
           sessionKey: params.sessionKey,
+          ...(source ? { source } : {}),
           ...(repository ? {} : { root: update.root }),
           file: update.file,
         });
@@ -750,9 +622,12 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
         return;
       }
       return withSessionFileRoot(
-        { sessionKey: params.key, agentId },
+        { sessionKey: params.key, agentId, getRuntimeConfig: context.getRuntimeConfig },
         context.getRuntimeConfig(),
         async (loaded, assertCurrent) => {
+          if (rejectDeviceFolderFiles(loaded.entry, respond)) {
+            return;
+          }
           if (loaded.entry?.repositoryWorkspaceId) {
             respond(true, {
               ok: false,
@@ -779,11 +654,10 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
             });
             return;
           }
-          const placement = loaded.entry?.sessionId
-            ? context.workerSessionPlacementService
-                ?.getMany([loaded.entry.sessionId])
-                .get(loaded.entry.sessionId)
-            : undefined;
+          const placement = await readSessionWorkerPlacementAsync({
+            context,
+            sessionId: loaded.entry?.sessionId,
+          });
           if (isCloudWorkerPlacementState(placement?.state)) {
             respond(true, {
               ok: false,

@@ -1,4 +1,3 @@
-// Gateway Protocol schema module defines protocol validation shapes.
 import { Type } from "typebox";
 import {
   ErrorCodes,
@@ -9,6 +8,7 @@ import {
 import { closedObject } from "./closed-object.js";
 import type { ErrorShape } from "./frames.js";
 import { NonEmptyString } from "./primitives.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 export {
   ErrorCodes,
@@ -28,6 +28,10 @@ export {
   type GitHubPublicationSelectionRejectedErrorDetails,
   type SessionWorkspaceRecoveryRequiredErrorDetails,
   type TaskWorktreeSourceRequiredErrorDetails,
+  type ClawHubRiskAcknowledgementRequiredErrorDetails,
+  type ClawReviewRequiredErrorDetails,
+  readClawHubRiskAcknowledgementRequiredError,
+  readClawReviewRequiredError,
   readGitHubPublicationSelectionRejectedError,
   readCronJobNotFoundError,
   isMcpAppViewExpiredError,
@@ -104,6 +108,21 @@ export const TaskWorktreeSourceRequiredErrorDetailsSchema = closedObject({
   cwd: NonEmptyString,
 });
 
+export const ClawHubRiskAcknowledgementRequiredErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED),
+  warning: NonEmptyString,
+});
+
+export const ClawReviewRequiredErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.CLAW_REVIEW_REQUIRED),
+  kind: stringLiteralUnion(["plugin", "skill"]),
+});
+
+export const PendingInputNotRetiredErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.PENDING_INPUT_NOT_RETIRED),
+  inputIds: Type.Array(NonEmptyString, { minItems: 1, maxItems: 100 }),
+});
+
 /** Structured details emitted by method-level failures. */
 export const GatewayErrorDetailsSchema = Type.Union([
   CronJobNotFoundErrorDetailsSchema,
@@ -118,7 +137,11 @@ export const GatewayErrorDetailsSchema = Type.Union([
   GitHubPublicationSelectionRejectedErrorDetailsSchema,
   SessionWorkspaceRecoveryRequiredErrorDetailsSchema,
   TaskWorktreeSourceRequiredErrorDetailsSchema,
+  ClawHubRiskAcknowledgementRequiredErrorDetailsSchema,
+  ClawReviewRequiredErrorDetailsSchema,
+  PendingInputNotRetiredErrorDetailsSchema,
   closedObject({ code: Type.Literal(GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY) }),
+  closedObject({ code: Type.Literal(GatewayErrorDetailCodes.OPENCLAW_CONFIG_READONLY) }),
 ]);
 
 /** Builds the canonical gateway error payload while preserving optional retry metadata. */

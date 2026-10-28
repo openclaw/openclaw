@@ -11,7 +11,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveAgentDir, resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+export { resolveAgentDir, resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -36,10 +36,10 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
+export { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "../harness.js";
-import {
+export {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
 } from "./app-server/auth-start-options.js";
@@ -47,7 +47,7 @@ import {
   resolveCodexAppServerUserHomeDir,
   resolveCodexSupervisionAppServerRuntimeOptions,
 } from "./app-server/config.js";
-import { buildCodexAppServerConnectionFingerprint } from "./app-server/plugin-app-cache-key.js";
+export { buildCodexAppServerConnectionFingerprint } from "./app-server/plugin-app-cache-key.js";
 import type { CodexThread, CodexThreadItem } from "./app-server/protocol.js";
 import { sessionBindingIdentity } from "./app-server/session-binding.js";
 import {
@@ -66,8 +66,8 @@ import {
   runCatalogListInline,
 } from "./session-catalog-list-operation.js";
 import { readCodexSessionTranscript as readCodexSessionTranscriptRuntime } from "./session-catalog-listing.js";
-import { catalogError, CODEX_LOCAL_SESSION_HOST_ID } from "./session-catalog-parsing.js";
-import {
+export { CODEX_LOCAL_SESSION_HOST_ID } from "./session-catalog-parsing.js";
+export {
   CODEX_TERMINAL_RESUME_COMMAND,
   CODEX_TERMINAL_START_COMMAND,
 } from "./session-catalog-terminal.js";
@@ -75,12 +75,7 @@ import type {
   CodexSessionCatalogControl,
   CodexSessionCatalogControlFactory,
 } from "./session-catalog-types.js";
-import {
-  registerCodexSessionCatalog as registerCodexSessionCatalogRuntime,
-  createCodexSessionCatalogControl as createCodexSessionCatalogControlRuntime,
-  createCodexSessionCatalogNodeHostCommands as createCodexSessionCatalogNodeHostCommandsRuntime,
-  createCodexSessionCatalogNodeInvokePolicies,
-} from "./session-catalog.js";
+import * as catalog from "./session-catalog.js";
 
 export const CODEX_APP_SERVER_THREADS_LIST_COMMAND = "codex.appServer.threads.list.v1";
 export const CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND = "codex.appServer.thread.turns.list.v1";
@@ -93,7 +88,7 @@ export const CODEX_NODE_CONTINUE_COMMANDS = [
 ] as const;
 const originalPath = process.env.PATH;
 export const tempDirs: string[] = [];
-const catalogFactories = new Set<ReturnType<typeof createCodexSessionCatalogControlRuntime>>();
+const catalogFactories = new Set<ReturnType<typeof catalog.createCodexSessionCatalogControl>>();
 
 beforeEach(() => {
   const stateDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "codex-catalog-owner-"));
@@ -103,15 +98,12 @@ beforeEach(() => {
   nodeHostMocks.runNodePtyCommand.mockClear();
   nodeHostMocks.userShellPaths.clear();
   commandRpcMocks.codexControlRequest.mockReset();
-  pinnedConnectionMocks.getClient.mockReset();
-  pinnedConnectionMocks.getClient.mockResolvedValue(pinnedConnectionMocks.client);
+  pinnedConnectionMocks.getClient.mockReset().mockResolvedValue(pinnedConnectionMocks.client);
   pinnedConnectionMocks.releaseClient.mockReset();
   pinnedConnectionMocks.request.mockReset();
-  transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockReset();
-  transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockResolvedValue({
-    importedMessages: 0,
-    omittedMessages: 0,
-  });
+  transcriptMirrorMocks.importCodexThreadHistoryToTranscript
+    .mockReset()
+    .mockResolvedValue(undefined);
 });
 
 afterEach(async () => {
@@ -127,13 +119,15 @@ afterEach(async () => {
   process.env.PATH = originalPath;
 });
 
-function createCodexSessionCatalogControlFactory(
-  params: Omit<
-    Parameters<typeof createCodexSessionCatalogControlRuntime>[0],
-    "resolveRuntimeOptions"
-  >,
-) {
-  const factory = createCodexSessionCatalogControlRuntime({
+type ControlFactoryParams = Omit<
+  Parameters<typeof catalog.createCodexSessionCatalogControl>[0],
+  "resolveRuntimeOptions"
+>;
+
+function createControlFactory(params: Partial<ControlFactoryParams> = {}) {
+  const factory = catalog.createCodexSessionCatalogControl({
+    getPluginConfig: () => ({ supervision: { enabled: true } }),
+    getRuntimeConfig: () => config,
     ...params,
     resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
   });
@@ -153,23 +147,19 @@ function createCodexCatalogHomeResolver(
   });
 }
 
-export function createCodexSessionCatalogControl(
-  params: Parameters<typeof createCodexSessionCatalogControlFactory>[0],
-): CodexSessionCatalogControl {
-  const config = params.getRuntimeConfig() ?? {};
-  return createCodexSessionCatalogControlFactory(params).forRequest(
-    resolveSessionAgentIdsStrict({ config }).sessionAgentId,
+export function createCodexSessionCatalogControl(params: Partial<ControlFactoryParams> = {}) {
+  const runtimeConfig = params.getRuntimeConfig?.() ?? config;
+  return createControlFactory(params).forRequest(
+    resolveSessionAgentIdsStrict({ config: runtimeConfig }).sessionAgentId,
   );
 }
 
-type CodexSessionCatalogControlFactoryStub = Pick<CodexSessionCatalogControlFactory, "forRequest">;
+type CatalogControlInput =
+  | CodexSessionCatalogControl
+  | CodexSessionCatalogControlFactory
+  | Pick<CodexSessionCatalogControlFactory, "forRequest">;
 
-function asControlFactory(
-  control:
-    | CodexSessionCatalogControl
-    | CodexSessionCatalogControlFactory
-    | CodexSessionCatalogControlFactoryStub,
-): CodexSessionCatalogControlFactory {
+function asControlFactory(control: CatalogControlInput): CodexSessionCatalogControlFactory {
   if ("homesForAgent" in control) {
     return control;
   }
@@ -197,10 +187,7 @@ export async function listCodexSessionCatalog(
   > & {
     includeLocal?: boolean;
     localHomes?: CodexCatalogHome[];
-    control:
-      | CodexSessionCatalogControl
-      | CodexSessionCatalogControlFactory
-      | CodexSessionCatalogControlFactoryStub;
+    control: CatalogControlInput;
   },
 ) {
   return {
@@ -220,9 +207,7 @@ const catalogOwners = new WeakMap<
 >();
 
 export function continueLocalCodexSession(
-  params: Omit<Parameters<typeof continueLocalCodexSessionRuntime>[0], "agentId"> & {
-    agentId?: string;
-  },
+  params: OptionalCatalogAgent<Parameters<typeof continueLocalCodexSessionRuntime>[0]>,
 ) {
   let registry = catalogOwners.get(params.bindingStore);
   if (!registry) {
@@ -249,42 +234,31 @@ export function continueLocalCodexSession(
 }
 
 export function readCodexSessionTranscript(
-  params: Omit<Parameters<typeof readCodexSessionTranscriptRuntime>[0], "agentId"> & {
-    agentId?: string;
-  },
+  params: OptionalCatalogAgent<Parameters<typeof readCodexSessionTranscriptRuntime>[0]>,
 ) {
   return readCodexSessionTranscriptRuntime({ ...params, agentId: params.agentId ?? "main" });
 }
 
 export function registerCodexSessionCatalog(
   params: Omit<
-    Parameters<typeof registerCodexSessionCatalogRuntime>[0],
+    Parameters<typeof catalog.registerCodexSessionCatalog>[0],
     "control" | "getPluginConfig" | "resolveRuntimeOptions"
   > & {
-    control:
-      | CodexSessionCatalogControl
-      | CodexSessionCatalogControlFactory
-      | CodexSessionCatalogControlFactoryStub;
+    control: CatalogControlInput;
     getPluginConfig?: () => unknown;
   },
 ) {
   const getPluginConfig = params.getPluginConfig ?? (() => undefined);
-  const baseControl = asControlFactory(params.control);
-  const control =
-    "homesForAgent" in params.control
-      ? baseControl
-      : (() => {
-          const resolver = createCodexCatalogHomeResolver({
-            config: params.getRuntimeConfig() ?? (params.api.config as OpenClawConfig),
-            getRuntimeConfig: params.getRuntimeConfig,
-            getPluginConfig,
-          });
-          return {
-            ...baseControl,
-            homesForAgent: (agentId: string) => resolver.forAgent(agentId),
-          } satisfies CodexSessionCatalogControlFactory;
-        })();
-  return registerCodexSessionCatalogRuntime({
+  let control = asControlFactory(params.control);
+  if (!("homesForAgent" in params.control)) {
+    const resolver = createCodexCatalogHomeResolver({
+      config: params.getRuntimeConfig() ?? (params.api.config as OpenClawConfig),
+      getRuntimeConfig: params.getRuntimeConfig,
+      getPluginConfig,
+    });
+    control = { ...control, homesForAgent: (agentId) => resolver.forAgent(agentId) };
+  }
+  return catalog.registerCodexSessionCatalog({
     ...params,
     resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
     control,
@@ -293,75 +267,35 @@ export function registerCodexSessionCatalog(
 }
 
 export function createCodexSessionCatalogNodeHostCommands(
-  control:
-    | CodexSessionCatalogControl
-    | CodexSessionCatalogControlFactory
-    | CodexSessionCatalogControlFactoryStub,
+  control: CatalogControlInput,
   bindingStore?: CodexAppServerBindingStore,
 ) {
-  return createCodexSessionCatalogNodeHostCommandsRuntime(asControlFactory(control), bindingStore);
+  return catalog.createCodexSessionCatalogNodeHostCommands(asControlFactory(control), bindingStore);
 }
 
-type CreateSessionEntryParams = Parameters<
-  PluginRuntime["agent"]["session"]["createSessionEntry"]
->[0];
-type CreateSessionEntryResult = Awaited<
-  ReturnType<PluginRuntime["agent"]["session"]["createSessionEntry"]>
->;
-type PatchSessionEntryParams = Parameters<
-  PluginRuntime["agent"]["session"]["patchSessionEntry"]
->[0];
-type SessionEntrySummary = ReturnType<
-  PluginRuntime["agent"]["session"]["listSessionEntries"]
->[number];
+type SessionRuntime = PluginRuntime["agent"]["session"];
+type CreateSessionEntryParams = Parameters<SessionRuntime["createSessionEntry"]>[0];
+type CreateSessionEntryResult = Awaited<ReturnType<SessionRuntime["createSessionEntry"]>>;
+type PatchSessionEntryParams = Parameters<SessionRuntime["prepareSessionEntryPatch"]>[0];
+type SessionEntrySummary = ReturnType<SessionRuntime["listSessionEntries"]>[number];
 
 type OptionalCatalogAgent<T extends { agentId?: string }> = Omit<T, "agentId"> & {
   agentId?: string;
 };
-type SessionCatalogProvider = Omit<
-  RegisteredSessionCatalogProvider,
-  "list" | "read" | "continueSession" | "archive" | "openTerminal"
-> & {
-  list: (
-    params: OptionalCatalogAgent<Parameters<RegisteredSessionCatalogProvider["list"]>[0]>,
-  ) => ReturnType<RegisteredSessionCatalogProvider["list"]>;
-  read: (
-    params: OptionalCatalogAgent<Parameters<RegisteredSessionCatalogProvider["read"]>[0]>,
-  ) => ReturnType<RegisteredSessionCatalogProvider["read"]>;
-  continueSession?: (
-    params: OptionalCatalogAgent<
-      Parameters<NonNullable<RegisteredSessionCatalogProvider["continueSession"]>>[0]
-    >,
-  ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider["continueSession"]>>;
-  archive?: (
-    params: OptionalCatalogAgent<
-      Parameters<NonNullable<RegisteredSessionCatalogProvider["archive"]>>[0]
-    >,
-  ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider["archive"]>>;
-  openTerminal?: (
-    params: OptionalCatalogAgent<
-      Parameters<NonNullable<RegisteredSessionCatalogProvider["openTerminal"]>>[0]
-    >,
-  ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider["openTerminal"]>>;
-};
+type SessionCatalogProvider = RegisteredSessionCatalogProvider;
 
 function bindTestCatalogOwner(provider: RegisteredSessionCatalogProvider): SessionCatalogProvider {
+  const forAgent = <P extends { agentId?: string }>(params: P) => ({ agentId: "main", ...params });
   return {
     ...provider,
-    list: (params) => provider.list({ agentId: "main", ...params }),
-    read: (params) => provider.read({ agentId: "main", ...params }),
+    list: (params) => provider.list(forAgent(params)),
+    read: (params) => provider.read(forAgent(params)),
     ...(provider.continueSession
-      ? {
-          continueSession: (params) => provider.continueSession!({ agentId: "main", ...params }),
-        }
+      ? { continueSession: (params) => provider.continueSession!(forAgent(params)) }
       : {}),
-    ...(provider.archive
-      ? { archive: (params) => provider.archive!({ agentId: "main", ...params }) }
-      : {}),
+    ...(provider.archive ? { archive: (params) => provider.archive!(forAgent(params)) } : {}),
     ...(provider.openTerminal
-      ? {
-          openTerminal: (params) => provider.openTerminal!({ agentId: "main", ...params }),
-        }
+      ? { openTerminal: (params) => provider.openTerminal!(forAgent(params)) }
       : {}),
   } as SessionCatalogProvider;
 }
@@ -460,13 +394,24 @@ export function createEligibleControl(overrides: Partial<CodexSessionCatalogCont
   });
 }
 
-export function adoptedEntry(params: {
-  sourceThreadId: string;
-  sourceHomeId?: string;
-  sessionId?: string;
-}) {
+export function adoptedEntry(
+  params: {
+    sourceThreadId: string;
+    sourceHomeId?: string;
+    sessionId?: string;
+  },
+  initializing = false,
+) {
+  const sessionId = params.sessionId ?? "openclaw-session-existing";
   return {
-    sessionId: params.sessionId ?? "openclaw-session-existing",
+    sessionId,
+    ...(initializing
+      ? {
+          sessionFile: `/tmp/${sessionId}.jsonl`,
+          initializationPending: true,
+          spawnedCwd: "/workspace/project",
+        }
+      : {}),
     updatedAt: 1,
     agentHarnessId: "codex",
     modelSelectionLocked: true,
@@ -476,6 +421,7 @@ export function adoptedEntry(params: {
           sourceThreadId: params.sourceThreadId,
           ...(params.sourceHomeId ? { sourceHomeId: params.sourceHomeId } : {}),
           modelLocked: true,
+          ...(initializing ? { initializing: true } : {}),
         },
       },
     },
@@ -493,6 +439,31 @@ export function supervisionSessionKey(threadId: string, sourceHomeId?: string): 
   return `agent:main:${supervisionSessionInputKey(threadId, sourceHomeId)}`;
 }
 
+export function supervisionBinding(
+  sourceThreadId: string,
+  pending = false,
+  patch: Partial<CodexAppServerThreadBinding> = {},
+): CodexAppServerThreadBinding {
+  return {
+    threadId: pending ? sourceThreadId : `${sourceThreadId}-branch`,
+    connectionScope: "supervision",
+    supervisionSourceThreadId: sourceThreadId,
+    cwd: "/workspace/project",
+    conversationSourceTransferComplete: true,
+    preserveNativeModel: true,
+    historyCoveredThrough: new Date().toISOString(),
+    ...(pending
+      ? {
+          pendingSupervisionBranch: {
+            sourceThreadId,
+            connectionFingerprint: "catalog-connection",
+          },
+        }
+      : { model: "gpt-5.4", modelProvider: "openai" }),
+    ...patch,
+  };
+}
+
 export async function seedSupervisionBinding(params: {
   bindingStore: CodexAppServerBindingStore;
   sessionId: string;
@@ -500,23 +471,7 @@ export async function seedSupervisionBinding(params: {
   sourceThreadId: string;
   pending?: boolean;
 }): Promise<void> {
-  const binding: CodexAppServerThreadBinding = {
-    threadId: params.pending ? params.sourceThreadId : `${params.sourceThreadId}-branch`,
-    connectionScope: "supervision",
-    supervisionSourceThreadId: params.sourceThreadId,
-    cwd: "/workspace/project",
-    conversationSourceTransferComplete: true,
-    preserveNativeModel: true,
-    historyCoveredThrough: new Date().toISOString(),
-    ...(params.pending
-      ? {
-          pendingSupervisionBranch: {
-            sourceThreadId: params.sourceThreadId,
-            connectionFingerprint: "catalog-connection",
-          },
-        }
-      : { model: "gpt-5.4", modelProvider: "openai" }),
-  };
+  const binding = supervisionBinding(params.sourceThreadId, params.pending);
   const stored = await params.bindingStore.mutate(
     sessionBindingIdentity({
       sessionId: params.sessionId,
@@ -531,24 +486,7 @@ export async function seedSupervisionBinding(params: {
 }
 
 export function interruptedAdoptionEntry(params: { sourceThreadId: string; sessionId: string }) {
-  return {
-    sessionId: params.sessionId,
-    sessionFile: `/tmp/${params.sessionId}.jsonl`,
-    updatedAt: 1,
-    initializationPending: true,
-    spawnedCwd: "/workspace/project",
-    agentHarnessId: "codex",
-    modelSelectionLocked: true,
-    pluginExtensions: {
-      codex: {
-        supervision: {
-          sourceThreadId: params.sourceThreadId,
-          initializing: true,
-          modelLocked: true,
-        },
-      },
-    },
-  } as CreateSessionEntryResult["entry"];
+  return adoptedEntry(params, true);
 }
 
 export function createRuntime(
@@ -556,7 +494,6 @@ export function createRuntime(
     entries?: SessionEntrySummary[];
     nodes?: Array<Record<string, unknown>>;
     invoke?: PluginRuntime["nodes"]["invoke"];
-    failAfterCreate?: () => boolean;
   } = {},
 ) {
   const entries = params.entries ?? [];
@@ -597,9 +534,6 @@ export function createRuntime(
         afterCreate: async (created) => {
           refresh();
           const patch = await createParams.afterCreate?.(created);
-          if (params.failAfterCreate?.()) {
-            throw new Error("session finalization failed after binding commit");
-          }
           if (!patch) {
             throw new Error("catalog fixture requires its initializer's final patch");
           }
@@ -616,7 +550,7 @@ export function createRuntime(
       return null;
     }
     const current = structuredClone(summary.entry);
-    const patch = await patchParams.update(current, { existingEntry: structuredClone(current) });
+    const patch = await patchParams.prepare(current, { existingEntry: structuredClone(current) });
     if (!patch) {
       return summary.entry;
     }
@@ -629,6 +563,8 @@ export function createRuntime(
     summary.entry = next;
     return next;
   });
+  const filterEntries = (prefix?: string) =>
+    entries.filter(({ sessionKey }) => !prefix || sessionKey.startsWith(prefix));
   const runtime = {
     modelConfig: capturedRuntime.modelConfig,
     nodes: {
@@ -638,14 +574,13 @@ export function createRuntime(
     agent: {
       session: {
         getSessionEntry: session.getSessionEntry,
+        getSessionEntryAsync: session.getSessionEntryAsync,
         createSessionEntry,
-        listSessionEntries: vi.fn((listParams) => {
-          const agentPrefix = listParams?.agentId ? `agent:${listParams.agentId}:` : undefined;
-          return entries.filter(
-            ({ sessionKey }) => !agentPrefix || sessionKey.startsWith(agentPrefix),
-          );
-        }),
-        patchSessionEntry,
+        listSessionEntries: vi.fn((query) =>
+          filterEntries(query?.agentId ? `agent:${query.agentId}:` : undefined),
+        ),
+        listSessionEntriesAsync: vi.fn(async (query) => filterEntries(`agent:${query.agentId}:`)),
+        prepareSessionEntryPatch: patchSessionEntry,
       },
     },
   } as unknown as PluginRuntime;
@@ -685,6 +620,22 @@ export function createGatewayApi(runtime: PluginRuntime, apiConfig: OpenClawConf
   return { api, getProvider: () => provider, registerSessionCatalog };
 }
 
+export function createCatalogTestProvider({
+  runtime = createRuntime().runtime,
+  startupConfig = {},
+  bindingStore = createCodexTestBindingStore(),
+  control = createControl(),
+  getRuntimeConfig = () => config,
+  ...options
+}: Partial<Omit<Parameters<typeof registerCodexSessionCatalog>[0], "api">> & {
+  runtime?: PluginRuntime;
+  startupConfig?: OpenClawConfig;
+} = {}) {
+  const { api, getProvider } = createGatewayApi(runtime, startupConfig);
+  registerCodexSessionCatalog({ api, bindingStore, control, getRuntimeConfig, ...options });
+  return getProvider()!;
+}
+
 export {
   commandRpcMocks,
   pinnedConnectionMocks,
@@ -694,25 +645,14 @@ export {
   fsSync,
   os,
   path,
-  resolveAgentDir,
   resolveSessionAgentIdsStrict,
-  resolveCodexAppServerHomeDir,
-  resolveCodexAppServerLocalHomeDir,
   resolveCodexAppServerUserHomeDir,
-  resolveDefaultAgentDir,
-  resolveStorePath,
   sessionBindingIdentity,
-  withEnvAsync,
   createCodexCatalogHomeResolver,
   createCodexTestBindingStore,
-  buildCodexAppServerConnectionFingerprint,
-  catalogError,
-  CODEX_TERMINAL_RESUME_COMMAND,
-  CODEX_TERMINAL_START_COMMAND,
-  CODEX_LOCAL_SESSION_HOST_ID,
-  createCodexSessionCatalogControlFactory,
-  createCodexSessionCatalogNodeInvokePolicies,
+  createControlFactory as createCodexSessionCatalogControlFactory,
 };
+export { createCodexSessionCatalogNodeInvokePolicies } from "./session-catalog.js";
 export type {
   CodexAppServerBindingStore,
   CodexAppServerThreadBinding,

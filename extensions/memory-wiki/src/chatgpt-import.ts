@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -6,7 +7,7 @@ import {
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
-import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { readRegularFile, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
   asNullableRecord,
   isRecord,
@@ -32,7 +33,11 @@ import {
 } from "./import-runs-state.js";
 import { appendMemoryWikiLog } from "./log.js";
 import {
+  decodeWikiPageUtf8,
+  HUMAN_START_MARKER,
+  HUMAN_END_MARKER,
   parseWikiMarkdown,
+  preserveHumanNotesBlock,
   renderWikiMarkdown,
   WIKI_RELATED_END_MARKER,
   WIKI_RELATED_START_MARKER,
@@ -44,8 +49,6 @@ import { initializeMemoryWikiVault } from "./vault.js";
 
 const CHATGPT_PREFERENCE_SIGNAL_RE =
   /\b(prefer|prefers|preference|want|wants|need|needs|avoid|avoids|hate|hates|love|loves|default to|should default to|always use|don't want|does not want|likes|dislikes)\b/i;
-const HUMAN_START_MARKER = "<!-- openclaw:human:start -->";
-const HUMAN_END_MARKER = "<!-- openclaw:human:end -->";
 const MAX_ROLLBACK_RECREATE_ATTEMPTS = 32;
 
 const CHATGPT_RISK_RULES: Array<{ label: string; pattern: RegExp }> = [
@@ -111,8 +114,13 @@ async function loadConversations(exportInputPath: string): Promise<{
   const conversationsPath = exportPath.endsWith(".json")
     ? exportPath
     : path.join(exportPath, "conversations.json");
-  const raw = await fs.readFile(conversationsPath, "utf8");
-  const parsed = JSON.parse(raw) as unknown;
+  const { buffer: raw } = await readRegularFile({ filePath: await fs.realpath(conversationsPath) });
+  if (!isUtf8(raw)) {
+    throw new Error(
+      `ChatGPT conversations export must be valid UTF-8: ${conversationsPath}. Download a fresh ChatGPT export and retry the import.`,
+    );
+  }
+  const parsed = JSON.parse(raw.toString("utf8")) as unknown;
   const conversations = Array.isArray(parsed)
     ? parsed
     : Object.values(asNullableRecord(parsed) ?? {}).find(Array.isArray);
@@ -135,25 +143,19 @@ function isoFromUnix(raw: unknown): string | undefined {
 
 function cleanMessageText(value: string): string {
   const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (
-    (trimmed.includes("asset_pointer") ||
-      trimmed.includes("image_asset_pointer") ||
-      trimmed.includes("dalle") ||
-      trimmed.includes("file_service")) &&
-    trimmed.length > 40
-  ) {
-    return "";
-  }
-  if (
-    trimmed.startsWith("{") &&
-    trimmed.length > 80 &&
-    (trimmed.includes(":") || trimmed.includes("content_type"))
-  ) {
-    const textMatch = trimmed.match(/["']text["']\s*:\s*(["'])(.+?)\1/s);
-    return textMatch?.[2] ? normalizeWhitespace(textMatch[2]) : "";
+  if (trimmed.startsWith("{")) {
+    let part: Record<string, unknown> | null;
+    try {
+      part = asNullableRecord(JSON.parse(trimmed));
+    } catch {
+      return trimmed;
+    }
+    if (part?.content_type === "text" && typeof part.text === "string") {
+      return normalizeWhitespace(part.text);
+    }
+    if (part?.content_type === "image_asset_pointer") {
+      return "";
+    }
   }
   return trimmed;
 }
@@ -457,7 +459,6 @@ function renderConversationPage(record: ChatGptConversationRecord): string {
   });
 }
 
-const HUMAN_BLOCK_PATTERN = new RegExp(`${HUMAN_START_MARKER}[\\s\\S]*?${HUMAN_END_MARKER}`);
 const RELATED_BLOCK_BODY_PATTERN = new RegExp(
   `${WIKI_RELATED_START_MARKER}\\n?([\\s\\S]*?)\\n?${WIKI_RELATED_END_MARKER}`,
 );
@@ -468,12 +469,7 @@ function preserveExistingPageBlocks(rendered: string, existing: string): string 
   }
   const parsedExisting = parseWikiMarkdown(existing);
   const parsedRendered = parseWikiMarkdown(rendered);
-  let nextBody = parsedRendered.body;
-
-  const humanBlock = parsedExisting.body.match(HUMAN_BLOCK_PATTERN)?.[0];
-  if (humanBlock) {
-    nextBody = nextBody.replace(HUMAN_BLOCK_PATTERN, () => humanBlock);
-  }
+  let nextBody = preserveHumanNotesBlock(parsedRendered.body, parsedExisting.body);
 
   const relatedBody = parsedExisting.body.match(RELATED_BLOCK_BODY_PATTERN)?.[1]?.trim();
   if (relatedBody) {
@@ -566,10 +562,10 @@ export async function importChatGptConversations(params: {
   nowMs?: number;
 }) {
   return await withMemoryWikiVaultMutation(params.config.vault.path, async () => {
-    await initializeMemoryWikiVault(params.config, { nowMs: params.nowMs });
     const { exportPath, conversationsPath, conversations } = await loadConversations(
       params.exportPath,
     );
+    await initializeMemoryWikiVault(params.config, { nowMs: params.nowMs });
     const records = conversations
       .map((conversation) => toConversationRecord(conversation, conversationsPath))
       .filter((entry): entry is ChatGptConversationRecord => entry !== null)
@@ -589,7 +585,11 @@ export async function importChatGptConversations(params: {
       const rendered = renderConversationPage(record);
       const absolutePath = path.join(params.config.vault.path, record.pagePath);
       const existing = await readExistingWikiPage(
-        () => fs.readFile(absolutePath, "utf8"),
+        async () =>
+          decodeWikiPageUtf8(
+            (await readRegularFile({ filePath: await fs.realpath(absolutePath) })).buffer,
+            absolutePath,
+          ),
         (error) => asNullableRecord(error)?.code === "ENOENT",
       );
       const stabilized = preserveExistingPageBlocks(rendered, existing);

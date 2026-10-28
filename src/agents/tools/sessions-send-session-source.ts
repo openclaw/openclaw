@@ -1,5 +1,7 @@
-import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import type { GatewaySessionStoreTargetWithStore } from "../../gateway/session-utils-store.types.js";
@@ -22,7 +24,7 @@ export function withSessionsSendRequesterSource<T>(
     : consume();
 }
 
-/** Target lookup stays native; an explicitly selected requester uses its retained actor. */
+/** Incognito requesters read the selected memory owner; durable targets use the worker. */
 export function createSessionsSendSessionReaders(cfg: OpenClawConfig) {
   const readTarget = (key: string, agentId: string) =>
     resolveGatewaySessionStoreTargetInWorker({
@@ -37,11 +39,14 @@ export function createSessionsSendSessionReaders(cfg: OpenClawConfig) {
       sessionKey: string,
       agentId: string,
     ): Promise<GatewaySessionStoreTargetWithStore | undefined> => {
-      const source = captureIncognitoSessionSource({ agentId, sessionKey });
+      const source = captureSessionActorStorageOwner(
+        { agentId, sessionKey },
+        { assertCurrent() {}, authorize() {} },
+      );
       if (!source) {
         return readTarget(sessionKey, agentId);
       }
-      const entry = await readSessionEntryReadOnlyInWorker({ agentId, sessionKey });
+      const entry = readCapturedSessionActorEntry(source, sessionKey);
       if (!entry) {
         return undefined;
       }
@@ -49,7 +54,7 @@ export function createSessionsSendSessionReaders(cfg: OpenClawConfig) {
         agentId,
         canonicalKey: sessionKey,
         storeKeys: [sessionKey],
-        storePath: "kind" in source ? source.path : source.actor.path,
+        storePath: source.path,
         store: { [sessionKey]: entry },
       };
     },

@@ -2,6 +2,7 @@ import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import { publishSqliteDatabaseAdmission } from "../../infra/sqlite-database-admission.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
@@ -15,9 +16,13 @@ import { readCanonicalSessionMainKey } from "./session-canonical-key.js";
 const key = "agent:main:probe";
 
 export function measureSessionSchemaProbes(
-  database: { agentId: string; db: DatabaseSync },
+  database: { agentId: string; db: EngineConnection },
   label?: string,
 ) {
+  const native = database.db;
+  if (isPostgresSqlConnection(native)) {
+    throw new Error("SQLite schema probe measurement requires a native SQLite handle");
+  }
   const reads = {
     cache: () => {
       const entry = readSessionEntryCache(database, {
@@ -33,10 +38,7 @@ export function measureSessionSchemaProbes(
     owner: () => hasSqliteSessionOwnerColumns(database.db),
   };
   return Object.fromEntries(
-    Object.entries(reads).map(([name, read]) => [
-      name,
-      measureSqliteSchemaProbes(database.db, read),
-    ]),
+    Object.entries(reads).map(([name, read]) => [name, measureSqliteSchemaProbes(native, read)]),
   );
 }
 
@@ -48,6 +50,11 @@ export function measureSqliteSchemaProbes(database: DatabaseSync, read: () => bo
     throw new Error("Schema probe measurement requires an admitted handle without an authorizer");
   }
   const counts = { schemaVersion: 0, userVersion: 0, dataVersion: 0 };
+  const pragmas = [
+    ["schema_version", "schemaVersion", /\b(?:pragma_schema_version|schema_version)\b/i],
+    ["user_version", "userVersion", /\buser_version\b/i],
+    ["data_version", "dataVersion", /\bdata_version\b/i],
+  ] as const;
   const native = requireNodeSqlite();
   const prototype = native.StatementSync.prototype;
   const restores: Array<() => void> = [];
@@ -56,12 +63,10 @@ export function measureSqliteSchemaProbes(database: DatabaseSync, read: () => bo
   // wrappers: using them for this passive observer would disable admitted caches.
   native.DatabaseSync.prototype.setAuthorizer.call(database, (action, name) => {
     if (observingTablePragmas && action === native.constants.SQLITE_PRAGMA) {
-      if (name === "schema_version") {
-        counts.schemaVersion++;
-      } else if (name === "user_version") {
-        counts.userVersion++;
-      } else if (name === "data_version") {
-        counts.dataVersion++;
+      for (const [pragma, counter] of pragmas) {
+        if (name === pragma) {
+          counts[counter]++;
+        }
       }
     }
     return native.constants.SQLITE_OK;
@@ -74,14 +79,10 @@ export function measureSqliteSchemaProbes(database: DatabaseSync, read: () => bo
     if (tablePragmas(sql)) {
       return;
     }
-    if (/\b(?:pragma_schema_version|schema_version)\b/i.test(sql)) {
-      counts.schemaVersion++;
-    }
-    if (/\buser_version\b/i.test(sql)) {
-      counts.userVersion++;
-    }
-    if (/\bdata_version\b/i.test(sql)) {
-      counts.dataVersion++;
+    for (const [, counter, pattern] of pragmas) {
+      if (pattern.test(sql)) {
+        counts[counter]++;
+      }
     }
   };
   const observeStep = <T>(sql: string, step: () => T): T => {

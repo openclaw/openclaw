@@ -557,14 +557,30 @@ struct GatewayCertificateRenewalTests {
             initialComputerControlEnabled: false,
             initialComputerControlProvider: .peekaboo)
         let attempt = Task {
-            try await coordinator.connectForTesting(
+            let generations = coordinator.generationsForTesting()
+            return try await coordinator.connectWithTLSRepair(ConnectionAttempt(
+                endpointGeneration: generations.endpointAttempt,
+                routeAuthorityGeneration: generations.routeAuthority,
+                workerUnavailable: nil,
                 endpoint: endpoint,
-                sessionBox: fixture.sessionBox(route: tls))
+                options: GatewayConnectOptions(
+                    role: "node",
+                    scopes: [],
+                    caps: [],
+                    commands: [],
+                    permissions: [:],
+                    clientId: "openclaw-macos",
+                    clientMode: "node",
+                    clientDisplayName: "Renewal Test",
+                    includeDeviceIdentity: false),
+                sessionBox: fixture.sessionBox(route: tls),
+                fallbackMainSessionKey: "main"))
         }
         await entered.wait()
         switch scenario {
-        case "revoked": coordinator.enqueueRouteInvalidationForTesting()
-        case "refreshed": coordinator.refreshForTesting(isPaused: false, computerControlEnabled: false)
+        case "revoked": coordinator.enqueueRouteInvalidation(mode: .ordinaryDisconnect)
+        case "refreshed":
+            coordinator.refresh(isPaused: false, computerControlEnabled: false, computerControlProvider: .peekaboo)
         case "credentials": fixture.token.withValue { $0 = "superseding-node-token" }
         default: break
         }
@@ -578,7 +594,7 @@ struct GatewayCertificateRenewalTests {
                     RenewalCertificates.fingerprint(RenewalCertificates.renewed), stableID: fixture.storeKey)
             case "other-pin-after-failure":
                 GatewayTLSStore.saveFingerprint("newer-node-pin", stableID: fixture.storeKey)
-            default: coordinator.enqueueRouteInvalidationForTesting()
+            default: coordinator.enqueueRouteInvalidation(mode: .ordinaryDisconnect)
             }
             endpointRelease.open()
         }

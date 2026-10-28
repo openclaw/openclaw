@@ -1,6 +1,6 @@
 import {
   getPreparedRuntimeAuthMaterializations,
-  registerRuntimeAuthMaterializationMutationListener,
+  runtimeAuthMaterializationChanges,
 } from "./auth-profiles/runtime-materializations.js";
 import { bindPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
 import {
@@ -22,11 +22,11 @@ export function configuredOwnersAreRequestVisible(
   return true;
 }
 
-export function registerPreparedRuntimeAuthMaterializationPublisher(
+export function bindPreparedRuntimeAuthMaterializationPublisher(
   owners: ReadonlyMap<string, PreparedModelRuntimeOwner>,
   notify: (event: { phase: "invalidated" | "published"; modelFactsChanged: false }) => void,
-): () => void {
-  return registerRuntimeAuthMaterializationMutationListener((event) => {
+): void {
+  runtimeAuthMaterializationChanges.onChange = (event) => {
     const agentDir = normalizeOptionalDir(event.agentDir);
     const affectedOwners = [...owners.values()].flatMap((owner) => {
       const affected =
@@ -57,5 +57,5 @@ export function registerPreparedRuntimeAuthMaterializationPublisher(
     }
     notify({ phase: "invalidated", modelFactsChanged: false });
     notify({ phase: "published", modelFactsChanged: false });
-  });
+  };
 }

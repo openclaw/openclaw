@@ -26,12 +26,7 @@ const CODEX_HISTORY_ZERO_USAGE: Usage = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-export type CodexThreadHistoryImportResult = {
-  importedMessages: number;
-  omittedMessages: number;
-};
-
-type BoundedCodexThreadHistoryProjection = CodexThreadHistoryImportResult & {
+type BoundedCodexThreadHistoryProjection = {
   responseItems: JsonValue[];
   transcriptMessages: AgentMessage[];
 };
@@ -291,8 +286,6 @@ export function projectBoundedCodexThreadHistory(params: {
   });
   const selected = selectBoundedCodexHistoryTail(projected);
   return {
-    importedMessages: selected.length,
-    omittedMessages: projected.length - selected.length,
     // Failed assistant fragments remain visible in operator transcripts, but
     // injecting them would permanently replay incomplete model output.
     responseItems: selected

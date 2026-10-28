@@ -7,14 +7,22 @@ import {
   mountPalette,
   registerCommandPaletteTestHooks,
 } from "./command-palette.test-support.ts";
-import "./command-palette.ts";
+import "./command-palette.tsx";
 
 describe("CommandPalette platform shortcuts", () => {
   registerCommandPaletteTestHooks();
 
-  it.each(["MacIntel", "Linux x86_64"])(
-    "uses the platform palette shortcut on %s without consuming text editing",
-    async (platform) => {
+  it.each(
+    ["MacIntel", "Linux x86_64"].flatMap((platform) =>
+      [
+        { key: "л", code: "KeyK", shiftKey: false },
+        { key: "з", code: "KeyP", shiftKey: false },
+        { key: "З", code: "KeyP", shiftKey: true },
+      ].map(({ key, code, shiftKey }) => ({ platform, key, code, shiftKey })),
+    ),
+  )(
+    "uses $code (shift=$shiftKey) on $platform without consuming text editing",
+    async ({ platform, key, code, shiftKey }) => {
       vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
       const { gateway } = createGateway(true);
       const { palette } = await mountPalette(
@@ -29,8 +37,9 @@ describe("CommandPalette platform shortcuts", () => {
       const other = platform === "MacIntel" ? { ctrlKey: true } : { metaKey: true };
       const chord = (modifiers: KeyboardEventInit) =>
         new KeyboardEvent("keydown", {
-          key: "л",
-          code: "KeyK",
+          key,
+          code,
+          shiftKey,
           bubbles: true,
           cancelable: true,
           ...modifiers,
@@ -41,6 +50,19 @@ describe("CommandPalette platform shortcuts", () => {
       expect(nativeEdit.defaultPrevented).toBe(false);
       expect(palette.isOpen).toBe(false);
       expect(document.activeElement).toBe(editor);
+
+      for (const override of [
+        { isComposing: true },
+        { keyCode: 229 },
+        { key: "Dead" },
+        { altKey: true },
+        { metaKey: true, ctrlKey: true },
+      ]) {
+        const ignored = chord({ ...primary, ...override });
+        editor.dispatchEvent(ignored);
+        expect(ignored.defaultPrevented).toBe(false);
+        expect(palette.isOpen).toBe(false);
+      }
 
       const open = chord(primary);
       editor.dispatchEvent(open);
@@ -62,6 +84,13 @@ describe("CommandPalette platform shortcuts", () => {
       input.dispatchEvent(editQuery);
       expect(editQuery.defaultPrevented).toBe(false);
       expect(palette.isOpen).toBe(true);
+
+      const repeated = chord({ ...primary, repeat: true });
+      input.dispatchEvent(repeated);
+      await palette.updateComplete;
+      expect(repeated.defaultPrevented).toBe(true);
+      expect(palette.isOpen).toBe(true);
+      expect(palette.querySelector(".cmd-palette__input")).toBe(input);
 
       const close = chord(primary);
       input.dispatchEvent(close);

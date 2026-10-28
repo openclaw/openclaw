@@ -138,7 +138,7 @@ catalog if the API is unreachable. The `/models` endpoint is public (no auth nee
 listing), but inference requires a valid API key.
 
 Venice may continue accepting retired model IDs as provider-owned aliases. The
-OpenClaw catalog advertises only the canonical model IDs returned by `/models`.
+OpenClaw catalog advertises only the model IDs returned by `/models`.
 
 ## DeepSeek V4 replay behavior
 

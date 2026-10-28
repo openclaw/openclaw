@@ -1,4 +1,5 @@
 import type { Block } from "@slack/web-api";
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import {
   normalizeMessagePresentation,
   renderMessagePresentationChartFallbackText,
@@ -45,10 +46,8 @@ export function hasSlackDataVisualizationBlock(blocks?: readonly unknown[]): boo
   return blocks?.some((block) => asOptionalRecord(block)?.type === "data_visualization") ?? false;
 }
 
-function isStringWithin(value: unknown, maxLength: number): value is string {
-  return (
-    typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= maxLength
-  );
+function isStringWithin(value: string, maxLength: number): boolean {
+  return value.trim().length > 0 && Array.from(value).length <= maxLength;
 }
 
 function hasUniqueStrings(values: readonly string[]): boolean {
@@ -79,7 +78,7 @@ export function buildSlackDataVisualizationBlock(
       title: block.title,
       chart: {
         type: "pie",
-        segments: block.segments.map((segment) => ({ ...segment })),
+        segments: block.segments,
       },
     };
   }
@@ -115,7 +114,7 @@ export function buildSlackDataVisualizationBlock(
         })),
       })),
       axis_config: {
-        categories: [...block.categories],
+        categories: block.categories,
         ...(block.xLabel ? { x_label: block.xLabel } : {}),
         ...(block.yLabel ? { y_label: block.yLabel } : {}),
       },
@@ -153,7 +152,7 @@ function parseSlackDataVisualizationBlock(block: Record<string, unknown>) {
   }
   const axisConfig = asOptionalRecord(chart.axis_config);
   const categories = axisConfig?.categories;
-  if (!Array.isArray(categories) || !categories.every((category) => typeof category === "string")) {
+  if (!isStringArray(categories)) {
     return undefined;
   }
   if (!Array.isArray(chart.series)) {

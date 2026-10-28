@@ -1,45 +1,44 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
-import {
-  prepareSystemAgentRunAdmission,
-  type AdmittedRunContext,
-} from "../../admitted-run-context.js";
-import {
-  buildEmbeddedRunnerAssistant,
-  makeEmbeddedRunnerAttempt,
-} from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { makeEmbeddedRunnerAttempt } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
+import { useFinalizationAdmission } from "./settled-finalization-harness.test-support.js";
 import { prepareTerminalWithSettledTurnFinalization } from "./settled-turn-finalization.js";
 import { createSettledFinalizationTestInput } from "./settled-turn-finalization.test-support.js";
+import { finalizationReply, toolAssistant } from "./settled-turn-fixtures.test-support.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-const backendMocks = vi.hoisted(() => ({
-  runSettledFinalization: vi.fn(),
-}));
-const transcriptMocks = vi.hoisted(() => ({
-  appendAssistantMirrorMessageByIdentity: vi.fn(),
-}));
+const mocks = vi.hoisted(() => ({ finalize: vi.fn(), append: vi.fn() }));
+const denial = Object.freeze({
+  toolName: "exec",
+  error: "SYSTEM_RUN_DENIED: approval required",
+  errorCode: "SYSTEM_RUN_DENIED",
+});
 
 vi.mock("./backend.js", () => ({
   resolveRuntimeModelAttempt: vi.fn(),
 }));
+// mock-isolation: finalization fixtures must not load or invoke the live agent harness.
 vi.mock("../../harness/selection.js", () => ({
-  runAgentHarnessSettledTurnFinalization: backendMocks.runSettledFinalization,
+  runAgentHarnessSettledTurnFinalization: mocks.finalize,
 }));
+// mock-isolation: record synthetic mirror writes without loading transcript persistence.
 vi.mock("../../../plugin-sdk/session-transcript-runtime.js", () => ({
-  appendAssistantMirrorMessageByIdentity: transcriptMocks.appendAssistantMirrorMessageByIdentity,
+  appendAssistantMirrorMessageByIdentity: mocks.append,
 }));
 // This suite stubs persistence; resolve its synthetic paths without opening a
 // host database. The runner boundary suite uses the real resolver and SQLite.
+// mock-isolation: synthetic session targets must not open the host session database.
 vi.mock("../../run-session-target.js", () => ({
   resolveAgentRunSessionTarget: vi.fn(
-    async (params: {
-      agentId?: string;
-      sessionId: string;
-      sessionKey?: string;
-      sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
-    }) => ({
+    async (
+      params: Pick<
+        EmbeddedRunAttemptParams,
+        "agentId" | "sessionId" | "sessionKey" | "sessionTarget"
+      >,
+    ) => ({
       agentId: params.sessionTarget?.agentId ?? params.agentId ?? "main",
       sessionId: params.sessionTarget?.sessionId ?? params.sessionId,
       sessionKey: params.sessionTarget?.sessionKey ?? params.sessionKey ?? "agent:main:settled",
@@ -49,35 +48,26 @@ vi.mock("../../run-session-target.js", () => ({
 }));
 
 function settledSuccessfulAttemptAfterStaleError(
-  retainProgress = true,
+  retainProgress: boolean,
 ): EmbeddedRunAttemptWithReceiptEvidence {
   const progress = "I’ll inspect the file before answering.";
-  const failedAssistant = buildEmbeddedRunnerAssistant({
-    stopReason: "toolUse",
-    content: [{ type: "toolCall", id: "tool-failed", name: "exec", arguments: {} }],
-  });
-  const terminalAssistant = buildEmbeddedRunnerAssistant({
-    stopReason: "toolUse",
-    content: [
-      {
-        type: "text",
-        text: progress,
-        ...(!retainProgress
-          ? { textSignature: JSON.stringify({ v: 1, id: "progress", phase: "commentary" }) }
-          : {}),
-      },
-      { type: "toolCall", id: "tool-succeeded", name: "read", arguments: {} },
-    ],
+  const failedAssistant = toolAssistant(["tool-failed", "exec"]);
+  const terminalAssistant = toolAssistant(["tool-succeeded", "read"]);
+  terminalAssistant.content.unshift({
+    type: "text",
+    text: progress,
+    ...(!retainProgress
+      ? { textSignature: JSON.stringify({ v: 1, id: "progress", phase: "commentary" }) }
+      : {}),
   });
   return makeEmbeddedRunnerAttempt({
-    terminal: { kind: "ok" },
     sessionIdUsed: "session-settled",
     assistantTexts: retainProgress ? [progress] : [],
     lastAssistantTextMessageIndex: retainProgress ? 3 : undefined,
     messagesSnapshot: [
       { role: "user", content: "Inspect the file.", timestamp: 0 },
       failedAssistant,
-      makeTextToolResult("tool-failed", "exec", "Command exited with code 1", true, 1),
+      makeTextToolResult("tool-failed", "exec", denial.error, true, 1),
       terminalAssistant,
       makeTextToolResult("tool-succeeded", "read", "The requested value", false, 2),
     ],
@@ -87,35 +77,23 @@ function settledSuccessfulAttemptAfterStaleError(
     ],
     itemLifecycle: { startedCount: 2, completedCount: 2, activeCount: 0 },
     lastAssistant: terminalAssistant,
-    currentAttemptAssistant: terminalAssistant,
     currentAttemptCompletedAssistant: terminalAssistant,
-    lastToolError: { toolName: "exec", error: "Command exited with code 1" },
+    lastToolError: denial,
     replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
     currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
   });
 }
 
-let admittedRunContext: AdmittedRunContext;
+const getContext = useFinalizationAdmission([mocks.finalize, mocks.append]);
 
 function finalizationInput(attempt: EmbeddedRunAttemptWithReceiptEvidence) {
-  const input = createSettledFinalizationTestInput(attempt, admittedRunContext);
+  const input = createSettledFinalizationTestInput(attempt, getContext());
   input.terminalBase.model = "gpt-4.1";
   input.terminalBase.activeErrorContext.model = "gpt-4.1";
   return input;
 }
 
 describe("settled-turn finalization after an earlier tool failure", () => {
-  let admission: ReturnType<typeof prepareSystemAgentRunAdmission>;
-  beforeEach(async () => {
-    backendMocks.runSettledFinalization.mockReset();
-    transcriptMocks.appendAssistantMirrorMessageByIdentity.mockReset();
-    admission = prepareSystemAgentRunAdmission({}, "run-settled", "main", "finalization-test");
-    admittedRunContext = await admission.admit("embedded");
-  });
-  afterEach(() => {
-    admission.close();
-  });
-
   it.each([
     { outcome: "answered", retainProgress: true },
     { outcome: "failed", retainProgress: false },
@@ -123,70 +101,47 @@ describe("settled-turn finalization after an earlier tool failure", () => {
     "preserves a cron exec denial after a successful read (finalizer: $outcome, visible progress: $retainProgress) (#132762)",
     async ({ outcome, retainProgress }) => {
       const attempt = settledSuccessfulAttemptAfterStaleError(retainProgress);
-      const denial = {
-        toolName: "exec",
-        error: "SYSTEM_RUN_DENIED: approval required",
-        errorCode: "SYSTEM_RUN_DENIED",
-      };
-      attempt.lastToolError = denial;
-      attempt.messagesSnapshot[2] = makeTextToolResult(
-        "tool-failed",
-        "exec",
-        denial.error,
-        true,
-        1,
-      );
       const input = finalizationInput(attempt);
       input.terminalBase.runParams.sourceReplyDeliveryMode = "automatic";
       const finalText = "The command was denied. The file contains the requested value.";
       if (outcome === "failed") {
-        backendMocks.runSettledFinalization.mockRejectedValueOnce(
-          new Error("finalizer unavailable"),
-        );
+        mocks.finalize.mockRejectedValueOnce(new Error("finalizer unavailable"));
       } else {
-        backendMocks.runSettledFinalization.mockResolvedValue({
-          outcome,
-          result: {
-            assistant: buildEmbeddedRunnerAssistant({
-              content: [{ type: "text", text: finalText }],
-            }),
-          },
-        });
+        mocks.finalize.mockResolvedValue(finalizationReply(outcome, finalText));
       }
 
       const result = await prepareTerminalWithSettledTurnFinalization(input);
 
       expect(attempt.lastToolError).toBe(denial);
-      expect(result.prepared.attemptToolSummary).toMatchObject({
-        unresolvedError: { toolName: "exec" },
+      expect(result.prepared).toMatchObject({
+        attemptToolSummary: { unresolvedError: { toolName: "exec" } },
+        failureSignal: {
+          kind: "execution_denied",
+          source: "tool",
+          toolName: "exec",
+          code: "SYSTEM_RUN_DENIED",
+          message: denial.error,
+          fatalForCron: true,
+        },
       });
-      expect(result.prepared.failureSignal).toEqual({
-        kind: "execution_denied",
-        source: "tool",
-        toolName: "exec",
-        code: "SYSTEM_RUN_DENIED",
-        message: denial.error,
-        fatalForCron: true,
+      expect(mocks.finalize).toHaveBeenCalledOnce();
+      const [preparedAttempt, settledAttempt] = mocks.finalize.mock.calls[0]!;
+      expect(preparedAttempt).toMatchObject({
+        disableTools: true,
+        skipPreparedUserTurnMessage: true,
+        suppressNextUserMessagePersistence: true,
       });
-      expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
-      for (const [preparedAttempt, settledAttempt] of backendMocks.runSettledFinalization.mock
-        .calls) {
-        expect(preparedAttempt).toMatchObject({
-          disableTools: true,
-          skipPreparedUserTurnMessage: true,
-          suppressNextUserMessagePersistence: true,
-        });
-        expect(settledAttempt).toBe(attempt);
-      }
-      expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).not.toHaveBeenCalled();
+      // #178300: the unrecovered earlier failure must reach the summary's instruction.
+      expect(preparedAttempt.prompt).toContain(TOOL_FAILURE_INSTRUCTION);
+      expect(settledAttempt).toBe(attempt);
+      expect(result.finalizationOutcome).toBe(outcome);
+      expect(mocks.append).not.toHaveBeenCalled();
       if (outcome === "answered") {
-        expect(result.finalizationOutcome).toBe("answered");
         expect(result.prepared.payloadsWithToolMedia).toEqual([
           expect.objectContaining({ text: finalText }),
         ]);
         expect(result.attempt.messagesSnapshot.slice(0, -1)).toEqual(attempt.messagesSnapshot);
       } else {
-        expect(result.finalizationOutcome).toBe("failed");
         expect(result.attempt).toBe(attempt);
         const warning = result.prepared.payloadsWithToolMedia?.find((payload) => payload.isError);
         expect(warning).toMatchObject({ text: expect.stringContaining("failed"), isError: true });

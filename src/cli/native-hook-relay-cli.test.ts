@@ -1,6 +1,6 @@
-import { PassThrough, Readable, Writable } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { NativeHookRelayProcessResponse } from "../agents/harness/native-hook-relay-types.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import {
@@ -8,27 +8,32 @@ import {
   runNativeHookRelayCliFromArgvForTest,
 } from "./native-hook-relay-cli.test-support.js";
 
-const relayOptions = {
-  provider: "codex",
-  relayId: "relay-1",
-  generation: "generation-1",
-};
-
-function createReadableTextStream(text: string): NodeJS.ReadableStream {
-  return Readable.from([text]);
-}
+const relayOptions = { provider: "codex", relayId: "relay-1", generation: "generation-1" };
 
 function createWritableTextBuffer(): NodeJS.WritableStream & { text: () => string } {
-  const chunks: Buffer[] = [];
-  const stream = new Writable({
-    write(chunk, _encoding, callback) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
-      callback();
-    },
+  let text = "";
+  const stream = new PassThrough().setEncoding("utf8");
+  stream.on("data", (chunk: string) => {
+    text += chunk;
   });
-  return Object.assign(stream, {
-    text: () => Buffer.concat(chunks).toString("utf8"),
-  });
+  return Object.assign(stream, { text: () => text });
+}
+
+function relayFixture() {
+  const stdout = createWritableTextBuffer();
+  const stderr = createWritableTextBuffer();
+  return {
+    stdout,
+    stderr,
+    run: (
+      options: Parameters<typeof runNativeHookRelayCliForTest>[0],
+      deps: Parameters<typeof runNativeHookRelayCliForTest>[1],
+    ) =>
+      runNativeHookRelayCliForTest(
+        { ...relayOptions, ...options },
+        { stdin: Readable.from(["{}"]), stdout, stderr, ...deps },
+      ),
+  };
 }
 
 async function rejectMissingBridge(): Promise<never> {
@@ -41,29 +46,10 @@ describe("native hook relay CLI", () => {
 
     await expect(
       runNativeHookRelayCliFromArgvForTest(
-        [
-          "node",
-          "openclaw.mjs",
-          "hooks",
-          "relay",
-          "--provider=codex",
-          "--relay-id",
-          "relay-1",
-          "--state-db",
-          "/tmp/profile/state/openclaw.sqlite",
-          "--generation",
-          "generation-1",
-          "--event",
-          "pre_tool_use",
-          "--pre-tool-use-unavailable",
-          "noop",
-          "--timeout",
-          "1234",
-        ],
-        {
-          stdin: createReadableTextStream("{}"),
-          invokeBridge: invokeBridge as never,
-        },
+        "node openclaw.mjs hooks relay --provider=codex --relay-id relay-1 --state-db /tmp/profile/state/openclaw.sqlite --generation generation-1 --event pre_tool_use --pre-tool-use-unavailable noop --timeout 1234".split(
+          " ",
+        ),
+        { stdin: Readable.from(["{}"]), invokeBridge: invokeBridge as never },
       ),
     ).resolves.toBe(0);
 
@@ -80,38 +66,32 @@ describe("native hook relay CLI", () => {
   });
 
   it("reads Codex hook JSON from stdin and forwards it to the gateway relay", async () => {
+    const rawPayload = {
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "pnpm test" },
+    };
     const callGateway = vi.fn(async (_opts: unknown) => ({
       stdout: "out",
       stderr: "err",
       exitCode: 2,
     }));
-    const stdout = createWritableTextBuffer();
-    const stderr = createWritableTextBuffer();
+    const { stdout, stderr, run } = relayFixture();
 
-    const exitCode = await runNativeHookRelayCliForTest(
+    const exitCode = await run(
+      { event: "pre_tool_use", timeout: "1234" },
       {
-        ...relayOptions,
-        event: "pre_tool_use",
-        timeout: "1234",
-      },
-      {
-        stdin: createReadableTextStream(
-          JSON.stringify({
-            hook_event_name: "PreToolUse",
-            tool_name: "Bash",
-            tool_input: { command: "pnpm test" },
-          }),
-        ),
-        stdout,
-        stderr,
+        stdin: Readable.from([JSON.stringify(rawPayload)]),
         invokeBridge: rejectMissingBridge,
         callGateway: callGateway as never,
       },
     );
 
-    expect(exitCode).toBe(2);
-    expect(stdout.text()).toBe("out");
-    expect(stderr.text()).toBe("err");
+    expect({ exitCode, stdout: stdout.text(), stderr: stderr.text() }).toEqual({
+      exitCode: 2,
+      stdout: "out",
+      stderr: "err",
+    });
     expect(callGateway).toHaveBeenCalledWith({
       method: "nativeHook.invoke",
       params: {
@@ -119,11 +99,7 @@ describe("native hook relay CLI", () => {
         relayId: "relay-1",
         generation: "generation-1",
         event: "pre_tool_use",
-        rawPayload: {
-          hook_event_name: "PreToolUse",
-          tool_name: "Bash",
-          tool_input: { command: "pnpm test" },
-        },
+        rawPayload,
       },
       timeoutMs: expect.any(Number),
       signal: expect.any(AbortSignal),
@@ -135,64 +111,22 @@ describe("native hook relay CLI", () => {
     expect(call?.timeoutMs).toBeLessThanOrEqual(1234);
   });
 
-  it.each([""])("rejects blank timeout %j before reading relay input", async (timeout) => {
-    const invokeBridge = vi.fn();
-    const callGateway = vi.fn();
-    const stdout = createWritableTextBuffer();
-    const stderr = createWritableTextBuffer();
-
-    const exitCode = await runNativeHookRelayCliForTest(
-      {
-        provider: "codex",
-        relayId: "relay-1",
-        generation: "generation-1",
-        event: "pre_tool_use",
-        timeout,
-      },
-      {
-        stdin: createReadableTextStream("{}"),
-        stdout,
-        stderr,
-        invokeBridge: invokeBridge as never,
-        callGateway: callGateway as never,
-      },
-    );
-
-    expect(exitCode).toBe(1);
-    expect(stdout.text()).toBe("");
-    expect(stderr.text()).toContain("invalid native hook timeout");
-    expect(invokeBridge).not.toHaveBeenCalled();
-    expect(callGateway).not.toHaveBeenCalled();
-  });
-
-  it("rejects malformed timeouts before reading relay input", async () => {
-    const invokeBridge = vi.fn();
-    const callGateway = vi.fn();
-    const stdout = createWritableTextBuffer();
-    const stderr = createWritableTextBuffer();
-
-    const exitCode = await runNativeHookRelayCliForTest(
-      {
-        ...relayOptions,
-        event: "pre_tool_use",
-        timeout: "5000ms",
-      },
-      {
-        stdin: createReadableTextStream("{}"),
-        stdout,
-        stderr,
-        invokeBridge: invokeBridge as never,
-        callGateway: callGateway as never,
-      },
-    );
-
-    expect(exitCode).toBe(1);
-    expect(stdout.text()).toBe("");
-    expect(stderr.text()).toContain("invalid native hook timeout");
-    expect(stderr.text()).toContain('Received: "5000ms"');
-    expect(invokeBridge).not.toHaveBeenCalled();
-    expect(callGateway).not.toHaveBeenCalled();
-  });
+  it.each(["", "5000ms"])(
+    "rejects invalid timeout %j before reading relay input",
+    async (timeout) => {
+      const invokeBridge = vi.fn();
+      const callGateway = vi.fn();
+      const { stdout, stderr, run } = relayFixture();
+      expect(await run({ event: "pre_tool_use", timeout }, { invokeBridge, callGateway })).toBe(1);
+      expect(stdout.text()).toBe("");
+      expect(stderr.text()).toContain("invalid native hook timeout");
+      if (timeout) {
+        expect(stderr.text()).toContain('Received: "5000ms"');
+      }
+      expect(invokeBridge).not.toHaveBeenCalled();
+      expect(callGateway).not.toHaveBeenCalled();
+    },
+  );
 
   it("renders unavailable output for legacy relay commands without a generation", async () => {
     const invokeBridge = vi.fn(async () => {
@@ -207,7 +141,7 @@ describe("native hook relay CLI", () => {
     const exitCode = await runNativeHookRelayCliForTest(
       { provider: "codex", relayId: "relay-1", event: "pre_tool_use" },
       {
-        stdin: createReadableTextStream("{}"),
+        stdin: Readable.from(["{}"]),
         stdout,
         stderr,
         invokeBridge: invokeBridge as never,
@@ -238,21 +172,11 @@ describe("native hook relay CLI", () => {
       throw new Error("native hook relay bridge stale registration");
     });
     const callGateway = vi.fn(async () => ({ stdout: "unexpected", stderr: "", exitCode: 0 }));
-    const stdout = createWritableTextBuffer();
-    const stderr = createWritableTextBuffer();
+    const { stdout, stderr, run } = relayFixture();
 
-    const exitCode = await runNativeHookRelayCliForTest(
-      {
-        ...relayOptions,
-        event: "pre_tool_use",
-      },
-      {
-        stdin: createReadableTextStream("{}"),
-        stdout,
-        stderr,
-        invokeBridge: invokeBridge as never,
-        callGateway: callGateway as never,
-      },
+    const exitCode = await run(
+      { event: "pre_tool_use" },
+      { invokeBridge: invokeBridge as never, callGateway: callGateway as never },
     );
 
     expect(exitCode).toBe(0);
@@ -271,24 +195,13 @@ describe("native hook relay CLI", () => {
   it("bounds valid hook input that never reaches EOF", async () => {
     const invokeBridge = vi.fn();
     const callGateway = vi.fn();
-    const stdin = createHeldOpenTextStream("{}");
-    const stdout = createWritableTextBuffer();
-    const stderr = createWritableTextBuffer();
+    const stdin = new PassThrough();
+    stdin.write("{}");
+    const { stdout, stderr, run } = relayFixture();
 
-    const exitCode = await runNativeHookRelayCliForTest(
-      {
-        ...relayOptions,
-        event: "pre_tool_use",
-        preToolUseUnavailable: "noop",
-        timeout: "25",
-      },
-      {
-        stdin,
-        stdout,
-        stderr,
-        invokeBridge: invokeBridge as never,
-        callGateway: callGateway as never,
-      },
+    const exitCode = await run(
+      { event: "pre_tool_use", preToolUseUnavailable: "noop", timeout: "25" },
+      { stdin, invokeBridge: invokeBridge as never, callGateway: callGateway as never },
     );
 
     expect(exitCode).toBe(0);
@@ -299,80 +212,65 @@ describe("native hook relay CLI", () => {
     expect(callGateway).not.toHaveBeenCalled();
   }, 1_000);
 
-  it("applies the relay deadline to gateway fallback", async () => {
-    const invokeBridge = vi.fn(async () => {
-      throw new Error("bridge unavailable");
-    });
-    const gatewayEntered = createDeferred<CallGatewayOptions>();
-    const gatewayResponse = createDeferred<NativeHookRelayProcessResponse>();
-    const callGateway = vi.fn((options: CallGatewayOptions) => {
-      gatewayEntered.resolve(options);
-      return gatewayResponse.promise;
-    });
-    const stdout = createWritableTextBuffer();
-    const stderr = createWritableTextBuffer();
-
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    const pending = runNativeHookRelayCliForTest(
-      {
-        ...relayOptions,
-        event: "post_tool_use",
-        timeout: "25",
-      },
-      {
-        stdin: createReadableTextStream("{}"),
-        stdout,
-        stderr,
-        invokeBridge: invokeBridge as never,
-        callGateway: callGateway as never,
-      },
-    );
-
-    try {
-      const request = await Promise.race([
-        gatewayEntered.promise,
-        pending.then(() => {
-          throw new Error("Relay finished before gateway fallback");
-        }),
-      ]);
-      expect(callGateway).toHaveBeenCalledOnce();
-      expect(request).toMatchObject({
-        method: "nativeHook.invoke",
-        timeoutMs: 25,
-        signal: expect.any(AbortSignal),
-      });
-      await vi.advanceTimersByTimeAsync(24);
-      expect(request.signal?.aborted).toBe(false);
-      expect(stderr.text()).toBe("");
-
-      await vi.advanceTimersByTimeAsync(1);
-      expect(await pending).toBe(0);
-      expect(request.signal?.aborted).toBe(true);
-      expect(stdout.text()).toBe("");
-      expect(stderr.text()).toContain("native hook relay timed out");
-    } finally {
-      gatewayResponse.resolve({ stdout: "", stderr: "", exitCode: 0 });
+  it.each(["bridge", "gateway"] as const)(
+    "cancels %s and joins settlement before returning timeout output",
+    async (route) => {
+      const entered = createDeferred<AbortSignal>();
+      const response = createDeferred<NativeHookRelayProcessResponse>();
+      const transport = (signal?: AbortSignal) => {
+        if (!signal) {
+          throw new Error("Relay transport requires its cancellation signal");
+        }
+        entered.resolve(signal);
+        return response.promise;
+      };
+      const callGateway = vi.fn((options: CallGatewayOptions) => transport(options.signal));
+      const { stdout, stderr, run } = relayFixture();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      const pending = run(
+        { ...relayOptions, event: "post_tool_use", timeout: "25" },
+        {
+          invokeBridge:
+            route === "bridge" ? (options) => transport(options.signal) : rejectMissingBridge,
+          callGateway: callGateway as never,
+        },
+      );
       try {
-        await vi.runAllTimersAsync();
-        await pending;
+        const signal = await awaitGateBeforeSettlement(
+          entered.promise,
+          pending,
+          "Relay finished before transport admission",
+        );
+        await vi.advanceTimersByTimeAsync(24);
+        expect(signal.aborted).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(signal.aborted).toBe(true);
+        // Cancellation is not settlement: no terminal output until cleanup joins.
+        expect(stderr.text()).toBe("");
+        response.resolve({ stdout: "late-response", stderr: "", exitCode: 0 });
+        expect(await pending).toBe(0);
+        expect(stdout.text()).toBe("");
+        expect(stderr.text()).toContain("native hook relay timed out");
+        expect(callGateway).toHaveBeenCalledTimes(route === "gateway" ? 1 : 0);
+        expect(vi.getTimerCount()).toBe(0);
       } finally {
+        response.resolve({ stdout: "", stderr: "", exitCode: 0 });
+        await pending;
         vi.useRealTimers();
       }
-    }
-  }, 1_000);
+    },
+  );
 
   it.each([60_000])("keeps a timely response after wall-clock shift %s", async (shift) => {
     let wallNow = 0;
     const wallClock = vi.spyOn(Date, "now").mockImplementation(() => wallNow);
     const monotonicClock = vi.spyOn(performance, "now").mockReturnValue(0);
-    const stdout = createWritableTextBuffer();
+    const { stdout, run } = relayFixture();
     const callGateway = vi.fn();
     try {
-      const exitCode = await runNativeHookRelayCliForTest(
-        { provider: "codex", relayId: "relay-1", event: "pre_tool_use", timeout: "25" },
+      const exitCode = await run(
+        { generation: undefined, event: "pre_tool_use", timeout: "25" },
         {
-          stdin: createReadableTextStream("{}"),
-          stdout,
           invokeBridge: async () => {
             wallNow += shift;
             return { stdout: "timely-response", stderr: "", exitCode: 0 };
@@ -402,26 +300,13 @@ describe("native hook relay CLI", () => {
             resolve({ stdout: "late-allow", stderr: "", exitCode: 0 });
           });
         });
-      const invokeBridge = vi.fn(
-        route === "bridge"
-          ? lateSuccess
-          : async () => {
-              throw new Error("native hook relay bridge not found");
-            },
-      );
+      const invokeBridge = vi.fn(route === "bridge" ? lateSuccess : rejectMissingBridge);
       const callGateway = vi.fn(lateSuccess);
-      const stdout = createWritableTextBuffer();
-      const stderr = createWritableTextBuffer();
+      const { stdout, stderr, run } = relayFixture();
       try {
-        await runNativeHookRelayCliForTest(
-          { provider: "codex", relayId: "relay-1", event: "pre_tool_use", timeout: "25" },
-          {
-            stdin: createReadableTextStream("{}"),
-            stdout,
-            stderr,
-            invokeBridge,
-            callGateway: callGateway as never,
-          },
+        await run(
+          { generation: undefined, event: "pre_tool_use", timeout: "25" },
+          { invokeBridge, callGateway: callGateway as never },
         );
         expect(stdout.text()).not.toContain("late-allow");
         expect(JSON.parse(stdout.text()).hookSpecificOutput.permissionDecision).toBe("deny");
@@ -436,56 +321,40 @@ describe("native hook relay CLI", () => {
 
   it("handles bridge rejection when the deadline expires during bridge startup", async () => {
     let now = 0;
-    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => now);
+    using _ = vi.spyOn(performance, "now").mockImplementation(() => now);
     const invokeBridge = vi.fn(() => {
       now = 26;
       return Promise.reject(new Error("native hook relay bridge not found"));
     });
     const callGateway = vi.fn();
-    const stdout = createWritableTextBuffer();
-    const stderr = createWritableTextBuffer();
+    const { stdout, stderr, run } = relayFixture();
 
-    try {
-      const exitCode = await runNativeHookRelayCliForTest(
-        {
-          ...relayOptions,
-          event: "pre_tool_use",
-          timeout: "25",
-        },
-        {
-          stdin: createReadableTextStream("{}"),
-          stdout,
-          stderr,
-          invokeBridge: invokeBridge as never,
-          callGateway: callGateway as never,
-        },
-      );
+    const exitCode = await run(
+      { event: "pre_tool_use", timeout: "25" },
+      { invokeBridge, callGateway },
+    );
 
-      expect(exitCode).toBe(0);
-      expect(JSON.parse(stdout.text())).toMatchObject({
-        hookSpecificOutput: {
-          hookEventName: "PreToolUse",
-          permissionDecision: "deny",
-          permissionDecisionReason: "Native hook relay timed out",
-        },
-      });
-      expect(stderr.text()).toContain("native hook relay timed out");
-      expect(invokeBridge).toHaveBeenCalledOnce();
-      expect(callGateway).not.toHaveBeenCalled();
-    } finally {
-      nowSpy.mockRestore();
-    }
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout.text())).toMatchObject({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "Native hook relay timed out",
+      },
+    });
+    expect(stderr.text()).toContain("native hook relay timed out");
+    expect(invokeBridge).toHaveBeenCalledOnce();
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("rejects oversized hook input without touching the gateway", async () => {
     const callGateway = vi.fn();
-    const stderr = createWritableTextBuffer();
+    const { stderr, run } = relayFixture();
 
-    const exitCode = await runNativeHookRelayCliForTest(
-      { ...relayOptions, event: "post_tool_use" },
+    const exitCode = await run(
+      { event: "post_tool_use" },
       {
-        stdin: createReadableTextStream("x".repeat(1024 * 1024 + 1)),
-        stderr,
+        stdin: Readable.from(["x".repeat(1024 * 1024 + 1)]),
         callGateway: callGateway as never,
       },
     );
@@ -499,65 +368,32 @@ describe("native hook relay CLI", () => {
     const callGateway = vi.fn(async () => {
       throw new Error("gateway closed");
     });
-    const stdout = createWritableTextBuffer();
-    const stderr = createWritableTextBuffer();
+    const { stdout, run } = relayFixture();
 
-    const exitCode = await runNativeHookRelayCliForTest(
-      {
-        ...relayOptions,
-        event: "permission_request",
-      },
-      {
-        stdin: createReadableTextStream("{}"),
-        stdout,
-        stderr,
-        invokeBridge: rejectMissingBridge,
-        callGateway: callGateway as never,
-      },
+    const exitCode = await run(
+      { event: "permission_request" },
+      { invokeBridge: rejectMissingBridge, callGateway: callGateway as never },
     );
 
     expect(exitCode).toBe(0);
     expect(JSON.parse(stdout.text())).toEqual({
       hookSpecificOutput: {
         hookEventName: "PermissionRequest",
-        decision: {
-          behavior: "deny",
-          message: "Native hook relay unavailable",
-        },
+        decision: { behavior: "deny", message: "Native hook relay unavailable" },
       },
     });
   });
 });
 
-function createHeldOpenTextStream(text: string): PassThrough {
-  const stream = new PassThrough();
-  stream.write(text);
-  return stream;
-}
-
 it("fails closed in dedicated mode without reading local state or using operator RPC", async () => {
   const invokeBridge = vi.fn();
   const callGateway = vi.fn();
-  const stdout = createWritableTextBuffer();
-  const stderr = createWritableTextBuffer();
+  const { stdout, stderr } = relayFixture();
   await runNativeHookRelayCliFromArgvForTest(
-    [
-      "node",
-      "openclaw",
-      "hooks",
-      "relay",
-      "--provider",
-      "codex",
-      "--relay-id",
-      "remote-relay",
-      "--generation",
-      "generation",
-      "--event",
-      "pre_tool_use",
-      "--remote-credential",
-      "/missing-native-hook-credential.json",
-    ],
-    { stdin: createReadableTextStream("{}"), stdout, stderr, invokeBridge, callGateway },
+    "node openclaw hooks relay --provider codex --relay-id remote-relay --generation generation --event pre_tool_use --remote-credential /missing-native-hook-credential.json".split(
+      " ",
+    ),
+    { stdin: Readable.from(["{}"]), stdout, stderr, invokeBridge, callGateway },
   );
   expect(invokeBridge).not.toHaveBeenCalled();
   expect(callGateway).not.toHaveBeenCalled();

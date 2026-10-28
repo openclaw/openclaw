@@ -13,6 +13,7 @@ import {
   updateSwarmCollectorCompletion,
 } from "../swarm/swarm-collector.js";
 import { holdQueuedSwarmRun, isSwarmRunActive } from "../swarm/swarm-scheduler.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { matchesSubagentKillIntent } from "./subagent-control-kill-intent.js";
 import {
   persistSubagentAbortedLastRun,
@@ -44,14 +45,16 @@ const log = createSubsystemLogger("agents/subagent-registry");
 class SubagentRunManager extends SubagentLaunchManager {
   readonly releaseSubagentRun = async (runId: string): Promise<void> => {
     const selected = this.options.runs.get(runId);
-    if (!selected) {
+    if (!selected || resolveSubagentChildAuthority(selected).status === "mismatch") {
       return;
     }
     const entry = await mutateSubagentRuns(
       [runId],
       (rows) => {
         const current = rows.get(runId);
-        return current && isSameSubagentRunOwner(current, selected)
+        return current &&
+          resolveSubagentChildAuthority(current).status !== "mismatch" &&
+          isSameSubagentRunOwner(current, selected)
           ? { value: current, postimages: new Map([[runId, null]]) }
           : { value: undefined };
       },
@@ -66,6 +69,7 @@ class SubagentRunManager extends SubagentLaunchManager {
       void safeRemoveAttachmentsDir(entry);
     }
     const releasedSessionStillUnowned = () =>
+      resolveSubagentChildAuthority(entry).status === "verified" &&
       !Array.from(
         this.options.getRunsForChildSession(entry.childSessionKey, entry.childAgentId),
       ).some((candidate) => !isSameSubagentRunOwner(candidate, entry));
@@ -115,6 +119,7 @@ class SubagentRunManager extends SubagentLaunchManager {
         if (
           !runId ||
           !entry ||
+          resolveSubagentChildAuthority(entry).status === "mismatch" ||
           !isSameSubagentRunOwner(entry, claimParams.expected) ||
           entry.killReconciliation ||
           entry.killIntent ||
@@ -149,6 +154,7 @@ class SubagentRunManager extends SubagentLaunchManager {
         if (
           !runId ||
           !entry ||
+          resolveSubagentChildAuthority(entry).status === "mismatch" ||
           !isSameSubagentRunOwner(entry, releaseParams.expected) ||
           !claim ||
           !matchesSubagentKillIntent(claim, releaseParams.claim)
@@ -171,6 +177,8 @@ class SubagentRunManager extends SubagentLaunchManager {
     childAgentId?: string;
     reason?: string;
     suppressTaskDelivery?: boolean;
+    /** A withdrawn queued input never owned the session's active execution metadata. */
+    suppressSessionEffects?: boolean;
     session?: SubagentKillSession;
     withdrawQueuedReservation?: () => void;
     assertCurrent?: () => void;
@@ -201,7 +209,9 @@ class SubagentRunManager extends SubagentLaunchManager {
     const selected = new Map(
       [...runIds].flatMap((id) => {
         const entry = this.options.runs.get(id);
-        return entry ? [[id, entry] as const] : [];
+        return entry && resolveSubagentChildAuthority(entry).status !== "mismatch"
+          ? [[id, entry] as const]
+          : [];
       }),
     );
     let published = false;
@@ -257,13 +267,18 @@ class SubagentRunManager extends SubagentLaunchManager {
       for (const entry of selected.values()) {
         if (markParams.runId === entry.runId && markParams.session) {
           sessions.set(entry.runId, markParams.session);
-        } else if (entry.collect && entry.execution.status === "queued") {
+        } else if (
+          entry.collect &&
+          entry.execution.status === "queued" &&
+          resolveSubagentChildAuthority(entry).status === "verified"
+        ) {
           const session = await prepareSubagentKillSession(
             this.options.getRuntimeConfig(),
             entry.childSessionKey,
             assertCurrent,
             entry.execution.transcriptTarget,
             entry.childAgentId,
+            entry.childSessionIdentity,
           );
           sessions.set(entry.runId, session);
         }
@@ -277,14 +292,13 @@ class SubagentRunManager extends SubagentLaunchManager {
         mutateSubagentRuns(
           [...runIds],
           (rows) => {
-            assertSelectedCurrent();
             updated = 0;
             entriesByChildSessionKey.clear();
             queuedCollectorRunIds.length = 0;
             const postimages = new Map<string, SubagentRunRecord | null>();
             for (const runId of runIds) {
               const current = rows.get(runId);
-              if (!current) {
+              if (!current || resolveSubagentChildAuthority(current).status === "mismatch") {
                 continue;
               }
               const entry = structuredClone(current);
@@ -306,7 +320,6 @@ class SubagentRunManager extends SubagentLaunchManager {
                 // it receives the same reconciliation tombstone as a direct kill.
                 continue;
               }
-              assertCurrent();
               const wasYielded = entry.pauseReason === "sessions_yield";
               const wasQueuedCollector = entry.collect && entry.execution.status === "queued";
               const collectorLaunchInFlight =
@@ -330,9 +343,12 @@ class SubagentRunManager extends SubagentLaunchManager {
                     : entry.execution.lifecycleGeneration,
                 restartRecovery: undefined,
                 suppressSessionEffects:
-                  existingKillIntent && currentKillLifecycle
-                    ? undefined
-                    : entry.execution.suppressSessionEffects,
+                  markParams.suppressSessionEffects ||
+                  resolveSubagentChildAuthority(entry).status === "legacy-unverified"
+                    ? true
+                    : existingKillIntent && currentKillLifecycle
+                      ? undefined
+                      : entry.execution.suppressSessionEffects,
                 outcome: withSubagentOutcomeTiming(
                   { status: "error", error: reason },
                   {
@@ -469,7 +485,9 @@ class SubagentRunManager extends SubagentLaunchManager {
           stateContext: context,
           isCurrent: () => {
             assertCurrent();
-            return this.currentRunOwnsSession(entry);
+            return resolveSubagentChildAuthority(entry).status === "legacy-unverified"
+              ? isSameSubagentRunOwner(this.options.runs.get(entry.runId), entry)
+              : this.currentRunOwnsSession(entry);
           },
         });
         const session = markParams.runId === entry.runId ? markParams.session : undefined;

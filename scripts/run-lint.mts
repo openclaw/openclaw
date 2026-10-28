@@ -2,7 +2,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { main as runLitRatchet } from "./check-control-ui-lit-ratchet.mts";
+import { main as runControllerGuard } from "./check-control-ui-controllers.mts";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
@@ -22,41 +22,48 @@ await runWithFailedTrailer("lint", async () => {
       },
     },
   );
-  const base = args.base || (!args.staged && process.env.CHECKOUT_BASE_SHA);
-  process.exitCode = runLitRatchet(process.cwd(), [
-    ...(args.staged ? ["--staged"] : []),
-    ...(base ? ["--base", base] : []),
-  ]);
-  if (process.exitCode !== 0) {
+  let failure = 0;
+  const collect = (status: number) => {
+    // Timeouts and cancellation deliberately stop admitting new work.
+    const stopped = status === 124 || status >= 128;
+    failure = stopped ? status : failure || status;
+    process.exitCode = failure;
+    return stopped;
+  };
+  const controllerArgs = args.staged ? ["--staged"] : [];
+  if (args.base) {
+    controllerArgs.push("--base", args.base);
+  } else if (!args.staged && process.env.CHECKOUT_BASE_SHA) {
+    controllerArgs.push("--base", process.env.CHECKOUT_BASE_SHA, "--no-merge-base");
+  }
+  if (collect(runControllerGuard(process.cwd(), controllerArgs))) {
     return;
   }
   const tsxPath = resolveRepoToolBinPath("tsx");
   const tsxImportSpecifier = pathToFileURL(createRequire(tsxPath).resolve("tsx")).href;
 
   // Invoke directly: pnpm through a linked node_modules can reconcile its owner's install.
-  process.exitCode = await runManagedCommand({
-    bin: process.execPath,
-    args: [
-      "--import",
-      tsxImportSpecifier,
-      path.resolve("scripts", "control-ui-i18n-verify.ts"),
-      "verify",
-    ],
-    env: process.env,
-    requireProcessTreeExit: process.platform !== "win32",
-  });
-  if (process.exitCode !== 0) {
+  if (
+    collect(
+      await runManagedCommand({
+        bin: process.execPath,
+        args: [
+          "--import",
+          tsxImportSpecifier,
+          path.resolve("scripts", "control-ui-i18n-verify.ts"),
+          "verify",
+        ],
+        env: process.env,
+        requireProcessTreeExit: process.platform !== "win32",
+      }),
+    )
+  ) {
     return;
   }
   // Compose the batch so cancellation and final reporting remain with this process.
-  process.exitCode = await runOxlintShards(args.oxlint);
-  if (process.exitCode !== 0) {
+  if (collect(await runOxlintShards(args.oxlint))) {
     return;
   }
-  // Oxlint cannot see plain stylesheets or css`` templates in Lit components.
-  process.exitCode = await runStylelint([
-    "ui/src/**/*.css",
-    "ui/src/**/*.{ts,tsx}",
-    "ui/public/themes/*.css",
-  ]);
+  // Oxlint does not check stylesheets.
+  collect(await runStylelint(["ui/src/**/*.css", "ui/public/themes/*.css"]));
 });

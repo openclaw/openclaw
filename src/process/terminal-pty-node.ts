@@ -7,7 +7,7 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runt
 import { createDeferredCore } from "../shared/deferred.js";
 import { killProcessTree, signalPtySessionTree } from "./kill-tree.js";
 import type { SpawnInitiation } from "./spawn-initiation.js";
-import { decodeTerminalPtyEvent, type TerminalPtyControl } from "./terminal-pty-protocol.js";
+import type { TerminalPtyControl, TerminalPtyEvent } from "./terminal-pty-protocol.js";
 import type { TerminalPtyHandle, TerminalPtySpawnParams } from "./terminal-pty.js";
 
 const STARTUP_TIMEOUT_MS = 10_000;
@@ -120,12 +120,8 @@ export async function spawnNodeTerminalPty(
     ipcClosed = true;
     finish();
   });
-  child.on("message", (raw: unknown) => {
-    const message = decodeTerminalPtyEvent(raw);
-    if (!message) {
-      fail(new Error("Invalid terminal worker message"));
-      return;
-    }
+  // The version-matched PTY helper is the sole writer on this private IPC channel.
+  child.on("message", (message: TerminalPtyEvent) => {
     if (message.type === "boot" || message.type === "prepared") {
       try {
         beforeSpawn?.();

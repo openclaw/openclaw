@@ -6,6 +6,7 @@ import {
   prepareHeadersForSimpleCompletion,
   prepareModelForSimpleCompletion,
 } from "@openclaw/ai/transports";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveProviderThinkingLevel, type ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasInternalDiagnosticEventListeners } from "../infra/diagnostic-event-listener-presence.js";
@@ -22,9 +23,32 @@ import {
 } from "../llm/model-runtime-binding.js";
 import { completeSimple } from "../llm/stream.js";
 import type { AssistantMessage, Model, SimpleStreamOptions } from "../llm/types.js";
+import {
+  assertProviderAuthAuthority,
+  attachProviderAuthAuthority,
+  getProviderAuthAuthority,
+} from "../plugins/provider-auth-authority.js";
 import { createModelLifecycle } from "./embedded-agent-runner/run/attempt.model-diagnostic-lifecycle.js";
 import { createModelObserver } from "./embedded-agent-runner/run/attempt.model-diagnostic-observation.js";
 import type { ResolvedProviderAuth } from "./model-auth.js";
+
+/** Keep explicit one-shot off ahead of configured local-server thinking switches.
+ * Native transports still own scalar effort mappings and mandatory reasoning floors.
+ */
+function disableConfiguredThinking(payload: unknown): void {
+  if (!isRecord(payload)) {
+    return;
+  }
+  if ("think" in payload) {
+    payload.think = false;
+  }
+  if ("enable_thinking" in payload) {
+    payload.enable_thinking = false;
+  }
+  if (isRecord(payload.chat_template_kwargs) && "enable_thinking" in payload.chat_template_kwargs) {
+    payload.chat_template_kwargs = { ...payload.chat_template_kwargs, enable_thinking: false };
+  }
+}
 
 type SimpleCompletionModelOptions = {
   headers?: Record<string, string>;
@@ -68,6 +92,7 @@ async function completePreparedModel(params: PreparedCompletionParams): Promise<
   // Direct SDK calls prepare transport hooks before entering the stream facade.
   await import("./ai-transport-runtime-host.js");
   params.assertCurrent?.();
+  assertProviderAuthAuthority(params.auth);
   params.options?.signal?.throwIfAborted();
   const runtime = getModelLlmRuntime(params.model);
   let completionModel =
@@ -80,6 +105,10 @@ async function completePreparedModel(params: PreparedCompletionParams): Promise<
       cfg: params.cfg,
       auth: { mode: params.auth.mode, authFlow: params.auth.authFlow },
     });
+  completionModel = attachProviderAuthAuthority(
+    completionModel,
+    getProviderAuthAuthority(params.auth),
+  );
   if (runtime) {
     completionModel = bindModelLlmRuntime(completionModel, runtime);
   }
@@ -96,6 +125,7 @@ async function completePreparedModel(params: PreparedCompletionParams): Promise<
   const completionOptions: SimpleStreamOptions = {
     ...options,
     ...(reasoning ? { reasoning } : {}),
+    ...(rawReasoning === "off" ? { onPayload: disableConfiguredThinking } : {}),
     apiKey: params.auth.apiKey,
     ...(headers ? { headers } : {}),
   };
@@ -126,11 +156,11 @@ async function completePreparedModel(params: PreparedCompletionParams): Promise<
       suppressPluginHooks: true,
     },
     options: completionOptions,
-    createObserver: (capturePromptStats) =>
+    createObserver: (capturePromptStats, captureByteStats) =>
       createModelObserver({
-        config: params.cfg,
         streamContext: params.context,
         capturePromptStats,
+        captureByteStats,
         suppressPluginHooks: true,
       }),
   });

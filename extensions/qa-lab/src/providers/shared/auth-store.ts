@@ -1,9 +1,9 @@
 import path from "node:path";
 import {
-  loadAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreForRuntimeAsync,
+  updateAuthProfileStoreWithLock,
   type AuthProfileCredential,
-} from "openclaw/plugin-sdk/agent-runtime";
-import { updateAuthProfileStoreWithLock } from "openclaw/plugin-sdk/provider-auth";
+} from "openclaw/plugin-sdk/provider-auth";
 
 export async function writeQaAuthProfiles(params: {
   agentId: string;
@@ -14,7 +14,7 @@ export async function writeQaAuthProfiles(params: {
   const agentDir = path.join(params.stateDir, "agents", params.agentId, "agent");
   // Surface pending legacy-source errors before the locked updater, whose
   // public failure contract is intentionally nullable.
-  loadAuthProfileStoreWithoutExternalProfiles(agentDir, { inheritedAuthDir: agentDir });
+  await readQaAuthProfiles(agentDir);
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,
     stateDir: params.stateDir,
@@ -40,13 +40,15 @@ export async function writeQaAuthProfiles(params: {
   }
 }
 
-export function readQaAuthProfiles(agentDir: string): {
+export async function readQaAuthProfiles(agentDir: string): Promise<{
   version: number;
   profiles: Record<string, AuthProfileCredential>;
-} {
-  const store = loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
-    inheritedAuthDir: agentDir,
-  });
+}> {
+  const store = await loadAuthProfileStoreForRuntimeAsync(
+    agentDir,
+    { inheritedAuthDir: agentDir, readOnly: true, externalCli: { mode: "none" } },
+    { ...process.env, OPENCLAW_STATE_DIR: path.resolve(agentDir, "../../..") },
+  );
   return {
     version: store.version,
     profiles: store.profiles,

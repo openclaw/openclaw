@@ -79,7 +79,7 @@ flow:
               (() => {
                 if (!acceptedRequest) { return null; }
                 const receipt = JSON.parse(acceptedRequest.toolOutput);
-                if (spawnRequest.plannedWireToolName !== 'tool_call') { return receipt; }
+                if (spawnRequest.plannedWireToolName !== 'dispatch_action') { return receipt; }
                 return receipt?.tool?.name === spawnRequest.plannedToolName
                   ? extractQaToolPayload(receipt.result)
                   : null;

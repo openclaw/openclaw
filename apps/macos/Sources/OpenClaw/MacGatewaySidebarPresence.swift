@@ -111,7 +111,7 @@ final class MacGatewaySidebarPresence {
         let now = Date.now
         self.people.refreshActivity(at: now)
         guard let deadline = self.people.nextActivityDeadline(after: now) else { return }
-        // ui/src/lit/presence-activity-controller.ts:8: expiry is a local presentation refresh, not network polling.
+        // ui/src/lib/presence-activity-lifecycle.ts:8: expiry is a local presentation refresh, not network polling.
         self.activityTask = Task {
             do {
                 try await Task.sleep(for: .seconds(max(0, deadline.timeIntervalSinceNow)))

@@ -110,14 +110,12 @@ export function ciAutomationJobSpec(target: CiAutomationTarget, option: CiAutoma
   } satisfies CronAddParams;
 }
 
-type BoundCronJob = Pick<
-  CronJob,
-  "declarationKey" | "agentId" | "sessionKey" | "owner" | "sessionTarget" | "payload"
->;
-
 /** Enabled state and editable prose never determine which checkbox owns a job. */
 export function ciAutomationJobMatches(
-  job: BoundCronJob,
+  job: Pick<
+    CronJob,
+    "declarationKey" | "agentId" | "sessionKey" | "owner" | "sessionTarget" | "payload"
+  >,
   target: CiAutomationTarget,
   option: CiAutomationOption,
 ): boolean {

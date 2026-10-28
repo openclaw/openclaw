@@ -44,12 +44,9 @@ function createQaBusMatcher(
 
 export function createQaBusWaiterStore(getSnapshot: () => QaBusStateSnapshot) {
   const waiters = new Set<Waiter>();
-  const cursorWaiters = new Set<Waiter>();
-  const pendingSets = [waiters, cursorWaiters];
   let readSnapshot = getSnapshot;
 
   const waitForMatch = async <T>(
-    pending: Set<Waiter>,
     matcher: (snapshot: QaBusStateSnapshot) => T | null,
     timeoutMs: number | undefined,
   ): Promise<T> => {
@@ -70,41 +67,37 @@ export function createQaBusWaiterStore(getSnapshot: () => QaBusStateSnapshot) {
         },
         reject,
         timer: setTimeout(() => {
-          pending.delete(waiter);
+          waiters.delete(waiter);
           reject(new Error(`qa-bus wait timeout after ${resolvedTimeoutMs}ms`));
         }, resolvedTimeoutMs),
       };
-      pending.add(waiter);
+      waiters.add(waiter);
     });
   };
 
   return {
     reset(reason = "qa-bus reset", terminal = false) {
       readSnapshot = terminal ? throwQaBusClosed : readSnapshot;
-      for (const pending of pendingSets) {
-        for (const waiter of pending) {
-          clearTimeout(waiter.timer);
-          waiter.reject(new Error(reason));
-        }
-        pending.clear();
+      for (const waiter of waiters) {
+        clearTimeout(waiter.timer);
+        waiter.reject(new Error(reason));
       }
+      waiters.clear();
     },
     settle() {
-      if (waiters.size === 0 && cursorWaiters.size === 0) {
+      if (waiters.size === 0) {
         return;
       }
       const snapshot = readSnapshot();
-      for (const pending of pendingSets) {
-        for (const waiter of Array.from(pending)) {
-          if (waiter.settle(snapshot)) {
-            clearTimeout(waiter.timer);
-            pending.delete(waiter);
-          }
+      for (const waiter of Array.from(waiters)) {
+        if (waiter.settle(snapshot)) {
+          clearTimeout(waiter.timer);
+          waiters.delete(waiter);
         }
       }
     },
     waitFor(input: QaBusWaitForInput) {
-      return waitForMatch(waiters, createQaBusMatcher(input), input.timeoutMs);
+      return waitForMatch(createQaBusMatcher(input), input.timeoutMs);
     },
     async waitForCursorAdvance(
       afterCursor: number,
@@ -112,7 +105,6 @@ export function createQaBusWaiterStore(getSnapshot: () => QaBusStateSnapshot) {
       shouldResolve?: (snapshot: QaBusStateSnapshot) => boolean,
     ) {
       await waitForMatch(
-        cursorWaiters,
         (snapshot) =>
           snapshot.cursor > afterCursor && (!shouldResolve || shouldResolve(snapshot))
             ? true

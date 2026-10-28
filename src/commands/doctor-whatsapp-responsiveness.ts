@@ -1,6 +1,5 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
@@ -88,6 +87,8 @@ export function collectWhatsappResponsivenessHealthFindings(params: {
     {
       checkId: WHATSAPP_RESPONSIVENESS_CHECK_ID,
       severity: "warning",
+      category: "recommended",
+      docsUrl: "https://docs.openclaw.ai/gateway/diagnostics",
       message:
         "Gateway reports pressure, and local TUI clients were detected. This snapshot does not identify the source of the pressure.",
       path: "channels.whatsapp",
@@ -98,21 +99,4 @@ export function collectWhatsappResponsivenessHealthFindings(params: {
       )} before deciding whether to close clients.`,
     },
   ];
-}
-
-/** Renders the same advisory observations as the opt-in health check. */
-export function noteWhatsappResponsivenessHealth(
-  params: Parameters<typeof collectWhatsappResponsivenessHealthFindings>[0],
-): void {
-  const findings = collectWhatsappResponsivenessHealthFindings(params);
-  if (findings.length > 0) {
-    note(
-      findings
-        .map((finding) =>
-          [finding.message, `Local TUI pids: ${finding.target}`, finding.fixHint].join("\n"),
-        )
-        .join("\n\n"),
-      "WhatsApp responsiveness",
-    );
-  }
 }

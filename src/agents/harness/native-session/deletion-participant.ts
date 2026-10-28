@@ -6,7 +6,12 @@ import type { AgentHarnessSessionDeletionMutation } from "../types.js";
 export type NativeSessionDeletionParticipant = {
   binding?: PluginStateNativeBindingPlan;
   source?: DatabasePathIdentity;
-  assertCurrent(): void;
+  /** Awaited inside the memory owner's FIFO, including compensating writes. */
+  memoryMutation?: {
+    commit(assertCurrent: () => void): Promise<void>;
+    rollback(assertCurrent: () => void): Promise<void>;
+  };
+  assertCurrent(this: void): void;
   renewalPending(): boolean;
   joinRenewal(): Promise<void>;
   quiesce(): void;
@@ -37,24 +42,44 @@ export function wrapNativeSessionDeletionMutation(
   mutation: AgentHarnessSessionDeletionMutation,
   hooks: { assertCurrent(): void; committed(): void; rolledBack(): void },
 ): AgentHarnessSessionDeletionMutation {
-  const wrapped: AgentHarnessSessionDeletionMutation = {
+  const wrap = (
+    original: AgentHarnessSessionDeletionMutation,
+  ): AgentHarnessSessionDeletionMutation => ({
     commit() {
       hooks.assertCurrent();
-      mutation.commit();
+      original.commit();
       hooks.committed();
     },
     rollback() {
       hooks.assertCurrent();
-      mutation.rollback();
+      original.rollback();
       hooks.rolledBack();
     },
-  };
+  });
+  const wrapped = wrap(mutation);
   const participant = participants.get(mutation);
   if (participant) {
+    const memoryMutation = participant.memoryMutation;
     // An unresolved binding must keep the outer exact-client cleanup owner reachable.
     participant.retain(hooks);
     participants.set(wrapped, {
       ...participant,
+      ...(memoryMutation
+        ? {
+            memoryMutation: {
+              async commit(assertCurrent) {
+                await memoryMutation.commit(assertCurrent);
+                hooks.committed();
+              },
+              async rollback(assertCurrent) {
+                await memoryMutation.rollback(assertCurrent);
+                if (!participant.unknown) {
+                  hooks.rolledBack();
+                }
+              },
+            },
+          }
+        : {}),
       assertCurrent() {
         participant.assertCurrent();
         hooks.assertCurrent();

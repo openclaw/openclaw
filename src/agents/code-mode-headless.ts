@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { raceWithTimeout } from "@openclaw/retry";
+import { asPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { racePromiseWithAbortSignal } from "@openclaw/retry";
+import { codeModeGcAttribution } from "../logging/code-mode-diagnostic.js";
 import { clampNumber } from "../utils.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { CodeModeHeadlessAbortError, CodeModeHeadlessTimeoutError } from "./code-mode-errors.js";
@@ -23,8 +25,7 @@ import {
   codeModeFailureCode,
   codeModeFailureMessage,
   createCodeModeApiFilesForRun,
-  readPositiveInteger,
-  resolveCodeModeHeadlessConfig,
+  resolveCodeModeConfig,
   toToolSearchConfig,
   type CodeModeFailureCode,
   type CodeModeHeadlessResult,
@@ -74,19 +75,7 @@ export function createHeadlessDeadlineScope(
       if (controller.signal.aborted) {
         throw headlessAbortError(controller.signal);
       }
-      return await raceWithTimeout(
-        promise,
-        remainingMs,
-        () => {
-          throw timeoutError();
-        },
-        {
-          signal: controller.signal,
-          onAbort: (abortedSignal) => {
-            throw headlessAbortError(abortedSignal);
-          },
-        },
-      );
+      return await racePromiseWithAbortSignal(promise, controller.signal, headlessAbortError);
     },
     cleanup: () => {
       controller.abort(new CodeModeHeadlessAbortError());
@@ -174,20 +163,22 @@ function headlessNamespaceFreezePrelude(descriptors: CodeModeNamespaceDescriptor
 export async function runCodeModeScriptHeadless(params: {
   ctx: ToolSearchToolContext;
   code: string;
-  overrides?: Parameters<typeof resolveCodeModeHeadlessConfig>[1];
   wallClockMs?: number;
   maxToolCalls?: number;
   extraNamespaces?: CodeModeNamespaceDescriptor[];
   signal?: AbortSignal;
 }): Promise<CodeModeHeadlessResult> {
-  const config = resolveCodeModeHeadlessConfig(params.ctx, params.overrides);
+  const config = resolveCodeModeConfig(
+    params.ctx.runtimeConfig ?? params.ctx.config,
+    params.ctx.agentId,
+  );
   const wallClockMs = clampNumber(
-    readPositiveInteger(params.wallClockMs, DEFAULT_HEADLESS_WALL_CLOCK_MS),
+    asPositiveInteger(params.wallClockMs) ?? DEFAULT_HEADLESS_WALL_CLOCK_MS,
     1,
     MAX_HEADLESS_WALL_CLOCK_MS,
   );
   const maxToolCalls = clampNumber(
-    readPositiveInteger(params.maxToolCalls, DEFAULT_HEADLESS_TOOL_CALLS),
+    asPositiveInteger(params.maxToolCalls) ?? DEFAULT_HEADLESS_TOOL_CALLS,
     1,
     MAX_HEADLESS_TOOL_CALLS,
   );
@@ -247,7 +238,6 @@ export async function runCodeModeScriptHeadless(params: {
       releaseReservation ??= reserveActiveRunSlot();
       pending.push(
         ...createPendingBridgeStates(newRequests, {
-          config,
           inbox: owner.inbox,
           results: owner.results,
           runtime,
@@ -264,6 +254,7 @@ export async function runCodeModeScriptHeadless(params: {
     };
     let boundaryFailure: Error | undefined;
     const inlineHost: CodeModeExecutorInlineHost = {
+      gcAttribution: codeModeGcAttribution(codeModeRunId, params.ctx.sessionKey),
       onNetworkContent: () => runtime.observeNetworkContent(parentToolCallId),
       onBoundary: async (boundary, context) => {
         output.append(boundary.output);
@@ -281,23 +272,16 @@ export async function runCodeModeScriptHeadless(params: {
         if (context.yieldSignal.aborted) {
           return { kind: "checkpoint" };
         }
-        let onPressure: (() => void) | undefined;
         const settlement = new AbortController();
         try {
-          const ready = await abortScope.wait(
-            Promise.race([
-              waitForPendingBridgeSettlement(
-                pending,
-                boundary.settlementMode,
-                settlement.signal,
-              ).then(() => true),
-              new Promise<false>((resolve) => {
-                onPressure = () => resolve(false);
-                context.yieldSignal.addEventListener("abort", onPressure, { once: true });
-              }),
-            ]),
+          await abortScope.wait(
+            waitForPendingBridgeSettlement(
+              pending,
+              boundary.settlementMode,
+              AbortSignal.any([context.yieldSignal, settlement.signal]),
+            ),
           );
-          if (!ready || context.yieldSignal.aborted) {
+          if (context.yieldSignal.aborted) {
             return { kind: "checkpoint" };
           }
           // Admission already charged worker queue/initialization time. Respect that
@@ -318,9 +302,6 @@ export async function runCodeModeScriptHeadless(params: {
           };
         } finally {
           settlement.abort();
-          if (onPressure) {
-            context.yieldSignal.removeEventListener("abort", onPressure);
-          }
         }
       },
     };

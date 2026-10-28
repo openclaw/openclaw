@@ -1,6 +1,3 @@
-/**
- * Public SDK subpath for browser plugin configuration, CDP URL, and auth helpers.
- */
 export {
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
   DEFAULT_OPENCLAW_BROWSER_ENABLED,

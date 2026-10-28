@@ -143,10 +143,6 @@ function collectSlackErrorDetails(error: unknown, seen: Set<Error>): string[] {
   }
   if (isRecord(error)) {
     addRecordDetails(details, error);
-    const fallback = safeStringify(error);
-    if (details.length === 0 && fallback && fallback !== "{}") {
-      details.push(fallback);
-    }
   }
   return details;
 }

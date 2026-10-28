@@ -1,7 +1,16 @@
+import { isNativeError } from "node:util/types";
+import {
+  AgentHarnessPreflightError,
+  embeddedAgentLog,
+} from "openclaw/plugin-sdk/agent-harness-registration";
+import { areDiagnosticsEnabledForProcess } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { CodexCatalogPreviewCache } from "../session-catalog-native-projection.js";
+import { isCodexAppServerStartupError, resolveCodexStartupTimeoutMs } from "./attempt-timeouts.js";
 import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-profile.js";
 import type { CodexAppServerClient } from "./client.js";
+import { resolveCodexAppServerRequestTimeoutMs } from "./config-options.js";
 import type {
   CodexAppServerRequestMethod,
   CodexAppServerRequestParams,
@@ -9,7 +18,6 @@ import type {
   CodexGetAccountResponse,
   JsonValue,
 } from "./protocol.js";
-import { createCodexRequestTimeoutDiagnostics } from "./request-diagnostics.js";
 import type {
   CodexControlRequestFailureCategory,
   CodexControlRequestObservation,
@@ -21,6 +29,10 @@ import { withAbortableTimeout, withTimeout } from "./timeout.js";
 
 export { CodexAppServerScopedRequestRejectedError } from "./rpc-error.js";
 
+const loadSandboxGuard = createLazyRuntimeModule(() => import("./sandbox-guard.js"));
+const loadSharedClient = createLazyRuntimeModule(() => import("./shared-client.js"));
+const loadSharedClientUsage = createLazyRuntimeModule(() => import("./shared-client-usage.js"));
+
 type CodexAppServerClientRequestParams = {
   client: CodexAppServerClient;
   method: string;
@@ -28,6 +40,7 @@ type CodexAppServerClientRequestParams = {
   timeoutMs?: number;
   signal?: AbortSignal;
   assertCurrent?: () => void;
+  assertCurrentAsync?: () => Promise<void>;
   withCurrent?: (write: () => void) => Promise<void>;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   sessionKey?: string;
@@ -73,33 +86,44 @@ export async function requestCodexAppServerClientJson<T = JsonValue | undefined>
   let phase: CodexControlRequestPhase = "prepare";
   observeControl(params.controlObservation, phase);
   try {
-    const { prepareCodexAppServerDirectSandboxBypassBlock } = await import("./sandbox-guard.js");
+    const { prepareCodexAppServerDirectSandboxBypassBlock } = await loadSandboxGuard();
     const sandboxGuard = await prepareCodexAppServerDirectSandboxBypassBlock(params);
-    if (sandboxGuard.block) {
-      throw new Error(sandboxGuard.block);
+    try {
+      if (sandboxGuard.block) {
+        throw new Error(sandboxGuard.block);
+      }
+      const timeoutMs = params.timeoutMs ?? 60_000;
+      const method = params.method;
+      const requestParams = params.requestParams;
+      const attemptWaiterFinished =
+        method === "thread/list" ? params.controlObservation?.attemptWaiterFinished : undefined;
+      const options = {
+        timeoutMs,
+        signal: params.signal,
+        withCurrent: async (write: () => void) => {
+          await params.assertCurrentAsync?.();
+          await sandboxGuard.assertCurrent();
+          if (params.withCurrent) {
+            await params.withCurrent(write);
+          } else {
+            write();
+          }
+        },
+        assertCurrent: () => {
+          params.assertCurrent?.();
+        },
+        ...(attemptWaiterFinished ? { attemptWaiterFinished } : {}),
+      };
+      phase = "client-request";
+      observeControl(params.controlObservation, phase);
+      return await withTimeout(
+        params.client.request<T>(method, requestParams, options),
+        timeoutMs,
+        `codex app-server ${params.method} timed out`,
+      );
+    } finally {
+      sandboxGuard.release();
     }
-    const timeoutMs = params.timeoutMs ?? 60_000;
-    const method = params.method;
-    const requestParams = params.requestParams;
-    const attemptWaiterFinished =
-      method === "thread/list" ? params.controlObservation?.attemptWaiterFinished : undefined;
-    const options = {
-      timeoutMs,
-      signal: params.signal,
-      withCurrent: params.withCurrent,
-      assertCurrent: () => {
-        params.assertCurrent?.();
-        sandboxGuard.assertCurrent();
-      },
-      ...(attemptWaiterFinished ? { attemptWaiterFinished } : {}),
-    };
-    phase = "client-request";
-    observeControl(params.controlObservation, phase);
-    return await withTimeout(
-      params.client.request<T>(method, requestParams, options),
-      timeoutMs,
-      `codex app-server ${params.method} timed out`,
-    );
   } catch (error) {
     observeControl(params.controlObservation, phase, { error });
     throw error;
@@ -126,6 +150,9 @@ type CodexAppServerJsonClientOptions = Pick<
   isolated?: boolean;
   signal?: AbortSignal;
   assertCurrent?: () => void;
+  assertCurrentAsync?: () => Promise<void>;
+  /** Fresh effect check at each physical request, after client acquisition. */
+  assertDispatchCurrentAsync?: () => Promise<void>;
   catalogPreview?: true;
   catalogPreviewCache?: CodexCatalogPreviewCache;
   catalogRows?: number;
@@ -146,23 +173,23 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(
 ): Promise<T> {
   // Fail closed before spawning or leasing a client for a guard-blocked method.
   observeControl(params.controlObservation, "prepare");
-  const { prepareCodexAppServerDirectSandboxBypassBlock } = await import("./sandbox-guard.js");
+  const { prepareCodexAppServerDirectSandboxBypassBlock } = await loadSandboxGuard();
   const sandboxGuard = await prepareCodexAppServerDirectSandboxBypassBlock(params);
-  if (sandboxGuard.block) {
-    throw new Error(sandboxGuard.block);
-  }
-  return await withCodexAppServerJsonClient(
-    {
-      ...params,
-      assertCurrent: () => {
-        params.assertCurrent?.();
-        sandboxGuard.assertCurrent();
+  try {
+    if (sandboxGuard.block) {
+      throw new Error(sandboxGuard.block);
+    }
+    return await withCodexAppServerJsonClient(
+      {
+        ...params,
+        timeoutMessage: `codex app-server ${params.method} timed out`,
       },
-      timeoutMessage: `codex app-server ${params.method} timed out`,
-    },
-    async (request) =>
-      await request<T>({ method: params.method, requestParams: params.requestParams }),
-  );
+      async (request) =>
+        await request<T>({ method: params.method, requestParams: params.requestParams }),
+    );
+  } finally {
+    sandboxGuard.release();
+  }
 }
 
 export type CodexAppServerScopedRequest = <T = JsonValue | undefined>(request: {
@@ -170,6 +197,7 @@ export type CodexAppServerScopedRequest = <T = JsonValue | undefined>(request: {
   requestParams?: unknown;
   /** Rechecks caller-owned authority immediately before each physical write. */
   assertCurrent?: () => void;
+  assertCurrentAsync?: () => Promise<void>;
 }) => Promise<T>;
 
 function createScopeCleanupError(message: string): CodexAppServerScopedRequestRejectedError {
@@ -204,7 +232,7 @@ const CODEX_USAGE_DEADLINE_RESERVE_MS =
   CODEX_USAGE_ISOLATED_SHUTDOWN.exitTimeoutMs +
   CODEX_ACCOUNT_READ_DEADLINE_MARGIN_MS;
 
-/** Reads rate limits and best-effort account identity from one isolated app-server session. */
+/** Reuses live quota notifications, falling back to an isolated read-only app-server session. */
 export async function readCodexAppServerUsage(
   options: Pick<
     CodexAppServerJsonClientOptions,
@@ -218,9 +246,32 @@ export async function readCodexAppServerUsage(
   > & { timeoutMs: number; authProfileId?: string },
 ): Promise<{ rateLimits: JsonValue; accountEmail?: string }> {
   const deadline = performance.now() + options.timeoutMs;
+  options.signal?.throwIfAborted();
+  options.assertCurrent?.();
+  const { readSharedCodexAppServerUsage } = await loadSharedClientUsage();
+  const cached = await withAbortableTimeout({
+    timeoutMs: options.timeoutMs,
+    signal: options.signal,
+    timeoutMessage: "codex app-server usage read timed out",
+    promise: readSharedCodexAppServerUsage(
+      { ...options, abandonSignal: options.signal },
+      options.config?.models?.usage?.cacheTtlMs ?? 60_000,
+    ),
+  });
+  options.signal?.throwIfAborted();
+  options.assertCurrent?.();
+  if (cached) {
+    // The Gateway report starts its own TTL on reuse: idle data can be up to
+    // two TTLs old, while ongoing turns supply newer authoritative notifications.
+    return cached;
+  }
+  const remainingMs = deadline - performance.now();
+  if (remainingMs <= 0) {
+    throw new Error("codex app-server usage read timed out");
+  }
   return await withCodexAppServerJsonClient(
     {
-      timeoutMs: options.timeoutMs,
+      timeoutMs: remainingMs,
       signal: options.signal,
       timeoutMessage: "codex app-server usage read timed out",
       agentDir: options.agentDir,
@@ -262,8 +313,8 @@ async function readCodexAccountEmailBestEffort(
 
 /**
  * Runs several guarded requests over one acquired client (shared lease or
- * isolated child) so related reads see the same app-server session. The whole
- * callback re-runs once when the client's start selection changed underneath it.
+ * isolated child) so related reads see the same app-server session. Shared
+ * startup has its own budget; the callback shares the caller's request budget.
  */
 export async function withCodexAppServerJsonClient<T>(
   params: CodexAppServerJsonClientOptions & {
@@ -280,12 +331,18 @@ export async function withCodexAppServerJsonClient<T>(
   ) => Promise<T>,
 ): Promise<T> {
   const timeoutMs = params.timeoutMs ?? 60_000;
+  const acquireTimeoutMs = params.isolated
+    ? timeoutMs
+    : resolveCodexStartupTimeoutMs({
+        requestTimeoutMs: resolveCodexAppServerRequestTimeoutMs(params.pluginConfig),
+      });
   const timeoutMessage = params.timeoutMessage ?? "codex app-server request timed out";
-  const timeoutDiagnostics = createCodexRequestTimeoutDiagnostics(timeoutMs);
-  let activePhase: CodexControlRequestPhase = "prepare";
+  const startedAt = performance.now();
+  const scopePhase: { current: CodexControlRequestPhase } = { current: "prepare" };
   let errorPhase: CodexControlRequestPhase | undefined;
+  let deadlinePhase: CodexControlRequestPhase | undefined;
   const setPhase = (phase: CodexControlRequestPhase) => {
-    activePhase = phase;
+    scopePhase.current = phase;
     observeControl(params.controlObservation, phase);
   };
   setPhase("prepare");
@@ -295,8 +352,10 @@ export async function withCodexAppServerJsonClient<T>(
   if (params.signal?.aborted) {
     abort();
   }
-  const deadline =
-    Number.isFinite(timeoutMs) && timeoutMs > 0 ? performance.now() + timeoutMs : undefined;
+  let deadline =
+    Number.isFinite(acquireTimeoutMs) && acquireTimeoutMs > 0
+      ? performance.now() + acquireTimeoutMs
+      : undefined;
   const isPastDeadline = () => deadline !== undefined && performance.now() >= deadline;
   const throwIfAbandoned = () => {
     if (timeoutController.signal.aborted && timeoutController.signal.reason instanceof Error) {
@@ -315,74 +374,74 @@ export async function withCodexAppServerJsonClient<T>(
     throwIfAbandoned();
     return await withAbortableTimeout({
       signal: timeoutController.signal,
-      timeoutMs,
+      timeoutMs: params.isolated ? timeoutMs : acquireTimeoutMs + timeoutMs,
       timeoutMessage,
       promise: (async () => {
-        const { prepareCodexAppServerDirectSandboxBypassBlock } =
-          await import("./sandbox-guard.js");
+        const { prepareCodexAppServerDirectSandboxBypassBlock } = await loadSandboxGuard();
         const {
           createIsolatedCodexAppServerClient,
           getLeasedSharedCodexAppServerClient,
-          isCodexAppServerStartSelectionChangedError,
           releaseLeasedSharedCodexAppServerClient,
-          retireSharedCodexAppServerClientIfCurrent,
-        } = await import("./shared-client.js");
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-          errorPhase = undefined;
-          setPhase("prepare");
+        } = await loadSharedClient();
+        errorPhase = undefined;
+        setPhase("prepare");
+        throwIfAbandoned();
+        const acquireClient = params.isolated
+          ? createIsolatedCodexAppServerClient
+          : getLeasedSharedCodexAppServerClient;
+        const acquireOptions = {
+          startOptions: params.startOptions,
+          pluginConfig: params.pluginConfig,
+          timeoutMs: remainingTimeoutMs(),
+          authProfileId: params.authProfileId,
+          authProfileStore: params.authProfileStore,
+          authBindingFingerprint: params.authBindingFingerprint,
+          preparedAuth: params.preparedAuth,
+          authRequirement: params.authRequirement,
+          agentDir: params.agentDir,
+          config: params.config,
+          abandonSignal: timeoutController.signal,
+          assertCurrent: params.assertCurrent,
+          assertCurrentAsync: params.assertCurrentAsync,
+        };
+        setPhase("acquire-client");
+        const client = await acquireClient(acquireOptions);
+        let scopeActive = true;
+        const assertCurrent = () => {
           throwIfAbandoned();
-          const acquireClient = params.isolated
-            ? createIsolatedCodexAppServerClient
-            : getLeasedSharedCodexAppServerClient;
-          const acquireObservation = timeoutDiagnostics?.beginAttempt(attempt + 1);
-          const acquireOptions = {
-            startOptions: params.startOptions,
-            pluginConfig: params.pluginConfig,
-            timeoutMs: remainingTimeoutMs(),
-            authProfileId: params.authProfileId,
-            authProfileStore: params.authProfileStore,
-            authBindingFingerprint: params.authBindingFingerprint,
-            preparedAuth: params.preparedAuth,
-            authRequirement: params.authRequirement,
-            agentDir: params.agentDir,
-            config: params.config,
-            abandonSignal: timeoutController.signal,
-            assertCurrent: params.assertCurrent,
-            ...acquireObservation,
-          };
-          setPhase("acquire-client");
-          const client = await acquireClient(acquireOptions);
-          timeoutDiagnostics?.acquired(client);
-          let scopeActive = true;
-          const assertCurrent = () => {
-            throwIfAbandoned();
-            if (!scopeActive) {
-              throw new CodexAppServerScopedRequestRejectedError(
-                "Codex app-server request scope is closed",
-              );
-            }
-            assertRequestOwnerCurrent(params.assertCurrent);
-          };
-          try {
+          if (!scopeActive) {
+            throw new CodexAppServerScopedRequestRejectedError(
+              "Codex app-server request scope is closed",
+            );
+          }
+          assertRequestOwnerCurrent(params.assertCurrent);
+        };
+        try {
+          throwIfAbandoned();
+          if (!params.isolated) {
+            deadline =
+              Number.isFinite(timeoutMs) && timeoutMs > 0
+                ? performance.now() + timeoutMs
+                : undefined;
+          }
+          setPhase("prepare");
+          const scopedRequest: CodexAppServerScopedRequest = async <R>(
+            request: Parameters<CodexAppServerScopedRequest>[0],
+          ) => {
             setPhase("prepare");
-            assertCurrent();
-            const scopedRequest: CodexAppServerScopedRequest = async <R>(
-              request: Parameters<CodexAppServerScopedRequest>[0],
-            ) => {
-              setPhase("prepare");
-              const sandboxGuard = await prepareCodexAppServerDirectSandboxBypassBlock({
-                method: request.method,
-                requestParams: request.requestParams,
-                config: params.config,
-                sessionKey: params.sessionKey,
-                sessionId: params.sessionId,
-                agentId: params.agentId,
-                storePath: params.storePath,
-              });
+            const sandboxGuard = await prepareCodexAppServerDirectSandboxBypassBlock({
+              method: request.method,
+              requestParams: request.requestParams,
+              config: params.config,
+              sessionKey: params.sessionKey,
+              sessionId: params.sessionId,
+              agentId: params.agentId,
+              storePath: params.storePath,
+            });
+            try {
               if (sandboxGuard.block) {
                 throw new CodexAppServerScopedRequestRejectedError(sandboxGuard.block);
               }
-              assertCurrent();
               const method = request.method;
               const requestParams = request.requestParams;
               const attemptWaiterFinished =
@@ -403,79 +462,101 @@ export async function withCodexAppServerJsonClient<T>(
                 assertCurrent: () => {
                   assertCurrent();
                   request.assertCurrent?.();
-                  sandboxGuard.assertCurrent();
+                },
+                withCurrent: async (write: () => void) => {
+                  await params.assertCurrentAsync?.();
+                  await request.assertCurrentAsync?.();
+                  await sandboxGuard.assertCurrent();
+                  await params.assertDispatchCurrentAsync?.();
+                  write();
                 },
               };
               setPhase("client-request");
-              const settled = timeoutDiagnostics?.request(method);
-              try {
-                return await client.request<R>(method, requestParams, requestOptions);
-              } finally {
-                settled?.();
-              }
-            };
-            return await run(scopedRequest, client, {
+              return await client.request<R>(method, requestParams, requestOptions);
+            } finally {
+              sandboxGuard.release();
+            }
+          };
+          return await withAbortableTimeout({
+            timeoutMs: remainingTimeoutMs(),
+            timeoutMessage,
+            signal: timeoutController.signal,
+            promise: run(scopedRequest, client, {
               assertCurrent,
               abort: (reason) => {
-                // An old attempt must not cancel its replacement's operation.
                 if (scopeActive) {
                   timeoutController.abort(reason);
                 }
               },
-            });
-          } catch (error) {
-            errorPhase = activePhase;
-            if (!isCodexAppServerStartSelectionChangedError(error) || attempt > 0) {
-              throw error;
-            }
-            // A handled retry is not the terminal error; retirement/abandonment can still fail.
-            errorPhase = undefined;
-            try {
-              if (!params.isolated) {
-                setPhase("release-client");
-                retireSharedCodexAppServerClientIfCurrent(client);
-              }
-              setPhase("prepare");
-              throwIfAbandoned();
-            } catch (retryError) {
-              errorPhase = activePhase;
-              throw retryError;
-            }
-          } finally {
-            scopeActive = false;
-            setPhase("release-client");
-            timeoutDiagnostics?.release();
-            const requestErrorPhase = errorPhase;
-            errorPhase = activePhase;
-            if (params.isolated) {
-              // Wait for the child to actually exit (with a SIGKILL fallback) so
-              // the parent process doesn't hang on an orphaned codex app-server.
-              // The stdio bin shim does not always propagate stdin EOF to the
-              // underlying codex binary, so the unref'd close() path can leave
-              // the child running and keep the parent's event loop alive.
-              await client.closeAndWait({
-                exitTimeoutMs: params.isolatedShutdown?.exitTimeoutMs ?? 2_000,
-                forceKillDelayMs: params.isolatedShutdown?.forceKillDelayMs ?? 250,
-              });
-            } else {
-              releaseLeasedSharedCodexAppServerClient(client);
-            }
-            // A thrown cleanup error owns its phase; only successful cleanup restores it.
-            errorPhase = requestErrorPhase;
+            }),
+          });
+        } catch (error) {
+          errorPhase = scopePhase.current;
+          if (isPastDeadline()) {
+            deadlinePhase = errorPhase;
           }
+          throw error;
+        } finally {
+          scopeActive = false;
+          setPhase("release-client");
+          const requestErrorPhase = errorPhase;
+          const requestDeadlinePhase = deadlinePhase;
+          errorPhase = scopePhase.current;
+          deadlinePhase = undefined;
+          if (params.isolated) {
+            // Wait for the child to actually exit (with a SIGKILL fallback) so
+            // the parent process doesn't hang on an orphaned codex app-server.
+            // The stdio bin shim does not always propagate stdin EOF to the
+            // underlying codex binary, so the unref'd close() path can leave
+            // the child running and keep the parent's event loop alive.
+            await client.closeAndWait({
+              exitTimeoutMs: params.isolatedShutdown?.exitTimeoutMs ?? 2_000,
+              forceKillDelayMs: params.isolatedShutdown?.forceKillDelayMs ?? 250,
+            });
+          } else {
+            releaseLeasedSharedCodexAppServerClient(client);
+          }
+          // A thrown cleanup error owns its phase; only successful cleanup restores it.
+          errorPhase = requestErrorPhase;
+          deadlinePhase = requestDeadlinePhase;
         }
-        throw new Error("Codex app-server selection retry loop exited unexpectedly");
       })(),
     });
   } catch (error) {
     const deadlineObserved = isPastDeadline();
     observeControl(
       params.controlObservation,
-      deadlineObserved ? activePhase : (errorPhase ?? activePhase),
+      deadlinePhase ?? (deadlineObserved ? scopePhase.current : (errorPhase ?? scopePhase.current)),
       { error, deadlineObserved },
     );
     if (deadlineObserved) {
-      timeoutDiagnostics?.timeout();
+      try {
+        if (areDiagnosticsEnabledForProcess() && embeddedAgentLog.isEnabled("warn")) {
+          const phase = deadlinePhase ?? errorPhase ?? scopePhase.current;
+          embeddedAgentLog.warn("codex app-server scope timed out", {
+            phase,
+            timeoutMs: phase === "acquire-client" ? acquireTimeoutMs : timeoutMs,
+            elapsedMs: Math.round(performance.now() - startedAt),
+          });
+        }
+      } catch {
+        // Diagnostic sinks must not replace the timeout or prevent scope cleanup.
+      }
+    }
+    if (
+      (errorPhase ?? scopePhase.current) === "acquire-client" &&
+      (deadlineObserved ||
+        (isNativeError(error) && isCodexAppServerStartupError(error, "timed_out")))
+    ) {
+      const message =
+        "Codex app-server startup exceeded its wait budget. Retry this request; if it persists, check the Gateway logs.";
+      throw new AgentHarnessPreflightError(message, {
+        cause: error,
+        userMessage: message,
+        scope: "harness",
+      });
+    }
+    if (deadlineObserved) {
       throw new Error(timeoutMessage, { cause: error });
     }
     throw error;

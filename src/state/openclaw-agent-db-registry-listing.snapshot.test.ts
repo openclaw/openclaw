@@ -1,27 +1,34 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
-import { beforeEach, expect, it, vi } from "vitest";
+import { setImmediate } from "node:timers/promises";
+import { queryObjects } from "node:v8";
+import { assert, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import type { OpenClawAgentDatabaseRegistryReadResult } from "./openclaw-agent-db-contract.js";
 
 const mocks = vi.hoisted(() => ({
   assertCurrent: vi.fn<() => void>(),
-  capture: vi.fn<(options: { path?: string; env?: NodeJS.ProcessEnv }) => unknown>(),
-  read: vi.fn<() => Promise<OpenClawAgentDatabaseRegistryReadResult | undefined>>(),
+  capture: vi.fn<(pathname: string) => unknown>(),
+  read: vi.fn<
+    (options: {
+      path?: string;
+      env?: NodeJS.ProcessEnv;
+    }) => Promise<OpenClawAgentDatabaseRegistryReadResult | undefined>
+  >(),
 }));
+// mock-isolation: Exercise snapshot admission with controlled receipts, not a live worker context.
 vi.mock("./openclaw-state-worker-context.js", () => ({
-  captureOpenClawStateWorkerContext: (options: { path?: string; env?: NodeJS.ProcessEnv }) => {
-    mocks.capture(options);
-    return {
-      admission: { assertCurrent: mocks.assertCurrent },
-    };
+  captureOpenClawStateReadContext: (pathname: string) => {
+    mocks.capture(pathname);
+    return { admission: { assertCurrent: mocks.assertCurrent } };
   },
 }));
 vi.mock("./openclaw-state-db-readonly.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./openclaw-state-db-readonly.js")>()),
-  executeExistingOpenClawStateRead: async () => {
-    const result = await mocks.read();
+  executeExistingOpenClawStateRead: async (options: { path?: string; env?: NodeJS.ProcessEnv }) => {
+    const result = await mocks.read(options);
     return result === undefined
       ? undefined
       : { ok: true, type: "agentDatabaseRegistry.read", result };
@@ -30,10 +37,10 @@ vi.mock("./openclaw-state-db-readonly.js", async (importOriginal) => ({
 
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
-  invalidateRegisteredAgentDatabasesMemo,
-  listOpenClawRegisteredAgentDatabases,
-  prepareOpenClawAgentDatabaseRegistrySnapshotRead,
-  readOpenClawAgentDatabaseRegistryToken,
+  invalidateRegisteredAgentDatabasesMemo as invalidateMemo,
+  listOpenClawRegisteredAgentDatabases as listDatabases,
+  prepareOpenClawAgentDatabaseRegistrySnapshotRead as prepareRead,
+  readOpenClawAgentDatabaseRegistryToken as readToken,
 } from "./openclaw-agent-db-registry-listing.js";
 
 const options = {
@@ -53,43 +60,39 @@ beforeEach(() => {
   mocks.assertCurrent.mockReset();
   mocks.capture.mockReset();
   mocks.read.mockReset().mockResolvedValue({ status: "available", entries });
-  invalidateRegisteredAgentDatabasesMemo(options);
+  invalidateMemo(options);
 });
 
 it("lazily reads in its captured scope and publishes complete rows to the canonical memo", async () => {
   const other = { path: "/fixture/other/state.sqlite" };
-  const token = readOpenClawAgentDatabaseRegistryToken(other);
+  const token = readToken(other);
   const env = { ...options.env };
   const scope = new AsyncLocalStorage<string>();
-  const prepared = scope.run("captured", () =>
-    prepareOpenClawAgentDatabaseRegistrySnapshotRead({ ...options, env }),
-  );
+  const prepared = scope.run("captured", () => prepareRead({ ...options, env }));
   env.OPENCLAW_STATE_DIR = "/fixture/changed";
-  expect(mocks.capture).toHaveBeenCalledWith(
-    expect.objectContaining({
-      env: expect.objectContaining({ OPENCLAW_STATE_DIR: "/fixture/registry" }),
-    }),
-  );
-  expect(readOpenClawAgentDatabaseRegistryToken(other)).toBe(token);
+  expect(mocks.capture.mock.calls[0]?.[0]).toBe(options.path);
+  expect(readToken(other)).toBe(token);
   expect(mocks.read).not.toHaveBeenCalled();
   const incompatible = {
     ...entry,
     agentId: "future",
     schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
   };
-  mocks.read.mockImplementationOnce(async () => {
+  mocks.read.mockImplementationOnce(async (source) => {
+    expect(source).toMatchObject({ path: options.path, env: options.env });
     expect(scope.getStore()).toBe("captured");
     return { status: "available", entries: [...entries, incompatible] };
   });
   const snapshot = await scope.run("replacement", () => prepared.read());
   expect(snapshot.result).toEqual({ status: "available", entries });
-  expect(
-    listOpenClawRegisteredAgentDatabases({ ...options, includeIncompatibleSchemaVersions: true }),
-  ).toEqual([...entries, incompatible]);
+  expect(listDatabases({ ...options, includeIncompatibleSchemaVersions: true })).toEqual([
+    ...entries,
+    incompatible,
+  ]);
   expect(mocks.read).toHaveBeenCalledOnce();
 });
 
-it.each(["capture", "reader"] as const)(
+it.each(["capture", "reader", "authority"] as const)(
   "propagates %s failure when the registry is demanded",
   async (stage) => {
     const failure = new Error(`${stage} refused`);
@@ -97,20 +100,39 @@ it.each(["capture", "reader"] as const)(
       mocks.capture.mockImplementation(() => {
         throw failure;
       });
-    } else {
+    } else if (stage === "reader") {
       mocks.read.mockRejectedValueOnce(failure);
+    } else {
+      mocks.read.mockImplementationOnce(async () => {
+        mocks.assertCurrent.mockImplementation(() => {
+          throw failure;
+        });
+        return { status: "unavailable" };
+      });
     }
-    const prepared = prepareOpenClawAgentDatabaseRegistrySnapshotRead(options);
+    const prepared = prepareRead(options);
     expect(mocks.read).not.toHaveBeenCalled();
     await expect(prepared.read()).rejects.toBe(failure);
   },
 );
 
+it("inspects fresh registry rows without replacing the publication memo or its witnesses", async () => {
+  const retained = prepareRead(options, () => false);
+  await retained.read();
+  const foreign = { ...entry, agentId: "foreign", path: "/fixture/foreign.sqlite" };
+  mocks.read.mockResolvedValue({ status: "available", entries: [foreign] });
+  const inspected = await prepareRead({ ...options, fresh: true }).read();
+  expect(inspected.result).toEqual({ status: "available", entries: [foreign] });
+  expect(() => inspected.assertCurrent()).not.toThrow();
+  expect(() => retained.assertCurrent()).not.toThrow();
+  expect((await retained.read()).result).toEqual({ status: "available", entries });
+});
+
 it("retains scoped revocation before native registry rows are needed", async () => {
-  const prepared = prepareOpenClawAgentDatabaseRegistrySnapshotRead(options, () => true);
+  const prepared = prepareRead(options, () => true);
   expect(() => prepared.assertCurrent()).not.toThrow();
   expect(mocks.read).not.toHaveBeenCalled();
-  invalidateRegisteredAgentDatabasesMemo(options);
+  invalidateMemo(options);
   expect(() => prepared.assertCurrent()).toThrow("registry changed");
   await expect(prepared.read()).rejects.toThrow("registry changed");
   expect(() => prepared.assertCurrent()).toThrow("registry changed");
@@ -120,22 +142,15 @@ it("retains scoped revocation before native registry rows are needed", async () 
 it.each([false, true])(
   "follows only contiguous owned registry invalidations (scoped=%s)",
   async (scoped) => {
-    const snapshot = await prepareOpenClawAgentDatabaseRegistrySnapshotRead(
-      options,
-      scoped ? () => true : undefined,
-    ).read();
-    const owned = invalidateRegisteredAgentDatabasesMemo(options);
-    if (!owned) {
-      throw new Error("Expected an active registry generation");
-    }
+    const snapshot = await prepareRead(options, scoped ? () => true : undefined).read();
+    const owned = invalidateMemo(options);
+    assert(owned, "Expected an active registry generation");
     snapshot.followRegistration(owned);
     expect(() => snapshot.assertCurrent()).not.toThrow();
 
-    invalidateRegisteredAgentDatabasesMemo(options);
-    const later = invalidateRegisteredAgentDatabasesMemo(options);
-    if (!later) {
-      throw new Error("Expected another registry invalidation");
-    }
+    invalidateMemo(options);
+    const later = invalidateMemo(options);
+    assert(later, "Expected another registry invalidation");
     expect(() => snapshot.followRegistration(later)).toThrow(/invalidated registry/);
     expect(() => snapshot.followRegistration(owned)).toThrow(/invalidated registry/);
     expect(() => snapshot.assertCurrent()).toThrow(/registry changed/);
@@ -157,7 +172,7 @@ it.each(["unavailable", "appeared"] as const)(
         fs.writeFileSync(local.path, "synthetic newly created registry");
         return undefined;
       });
-      const prepared = prepareOpenClawAgentDatabaseRegistrySnapshotRead(local);
+      const prepared = prepareRead(local);
       expect((await prepared.read()).result).toEqual({ status: "unavailable" });
       expect((await prepared.read()).result).toEqual({ status: "available", entries });
       expect(mocks.read).toHaveBeenCalledTimes(2);
@@ -165,19 +180,58 @@ it.each(["unavailable", "appeared"] as const)(
   },
 );
 
-it.each(["authority", "memo"])("rejects unavailable facts after %s changes", async (kind) => {
-  const failure = new Error("authority revoked");
-  mocks.read.mockImplementationOnce(async () => {
-    if (kind === "authority") {
-      mocks.assertCurrent.mockImplementation(() => {
-        throw failure;
-      });
-    } else {
-      invalidateRegisteredAgentDatabasesMemo(options);
-    }
-    return { status: "unavailable" };
-  });
-  await expect(prepareOpenClawAgentDatabaseRegistrySnapshotRead(options).read()).rejects.toThrow(
-    kind === "authority" ? failure : "registry changed",
-  );
+it("reads separate registries without retrying against another database's memo", async () => {
+  const firstReply = createDeferred<OpenClawAgentDatabaseRegistryReadResult>();
+  const secondReply = createDeferred<OpenClawAgentDatabaseRegistryReadResult>();
+  mocks.read
+    .mockImplementationOnce(() => firstReply.promise)
+    .mockImplementationOnce(() => secondReply.promise)
+    .mockRejectedValue(new Error("Unexpected retry without a registry publication"));
+  const first = prepareRead(options).read();
+  const second = prepareRead({ path: "/fixture/other/state.sqlite" }).read();
+  try {
+    firstReply.resolve({ status: "available", entries });
+    const snapshot = await first;
+    expect(snapshot.result).toEqual({ status: "available", entries });
+    expect(snapshot.assertCurrent).toThrow("registry changed");
+    secondReply.resolve({ status: "available", entries: [] });
+    await expect(second).resolves.toMatchObject({ result: { status: "available", entries: [] } });
+    expect(mocks.read).toHaveBeenCalledTimes(2);
+  } finally {
+    firstReply.resolve({ status: "available", entries });
+    secondReply.resolve({ status: "available", entries: [] });
+    await Promise.allSettled([first, second]);
+  }
+});
+
+it("retains registration authority without retaining the discovery async context", async () => {
+  const scope = new AsyncLocalStorage<object>();
+  function capture() {
+    const payload = { sessions: [{ sessionId: "synthetic-completed-run" }] };
+    const prepared = scope.run(payload, () => prepareRead(options, () => true));
+    return {
+      followRegistration: prepared.followRegistration,
+      assertCurrent: prepared.assertCurrent,
+      payload: new WeakRef(payload),
+      control: new WeakRef({}),
+    };
+  }
+  const retained = capture();
+  try {
+    await setImmediate();
+    queryObjects(WeakRef);
+    expect(retained.control.deref()).toBeUndefined();
+    expect(retained.payload.deref()).toBeUndefined();
+    const owned = invalidateMemo(options);
+    assert(owned);
+    retained.followRegistration(owned);
+    retained.assertCurrent();
+    mocks.assertCurrent.mockImplementation(() => {
+      throw new Error("admission revoked");
+    });
+    expect(() => retained.followRegistration(owned)).toThrow("admission revoked");
+    expect(retained.assertCurrent).toThrow("admission revoked");
+  } finally {
+    scope.disable();
+  }
 });

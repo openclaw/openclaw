@@ -15,6 +15,14 @@ const DEFAULT_FAST_LOCAL_CHECK_MIN_MEMORY_BYTES = 48 * GIB;
 const DEFAULT_FAST_LOCAL_CHECK_MIN_CPUS = 12;
 const CI_PARALLEL_MIN_CPUS = 8;
 const DECLARATION_PATH_CACHE_LIMIT = 16_384;
+// Native compilers ship their platform binary behind the package's own getExePath.
+// tsgo retains declaration emit and Go profiling; tsrs is the default type checker.
+export const NATIVE_COMPILER_PACKAGES = new Map([
+  ["tsgo", "typescript"],
+  ["tsrs", "tsrs"],
+]);
+// tsrs publishes no Windows or Intel macOS binary yet; those hosts keep type checking with tsgo.
+const TSRS_PLATFORMS = new Set(["darwin-arm64", "linux-arm64", "linux-x64"]);
 export const CI_PARALLEL_MIN_MEMORY_BYTES = 24 * GIB;
 
 const EXCLUSIVE_CI_TEST_CONFIGS = new Set([
@@ -162,6 +170,39 @@ export function createDeclarationInputBoundary(cwd: string) {
   };
 }
 
+/**
+ * Select tsrs by default, retaining tsgo for unsupported platforms and Go profiling.
+ * OPENCLAW_TYPECHECKER=tsgo forces the tsgo fallback (full release validation
+ * uses it to re-check the release with tsgo).
+ */
+export function resolveTypeCheckTool(
+  platform = process.platform,
+  arch = process.arch,
+  env: NodeJS.ProcessEnv = process.env,
+  args: readonly string[] = [],
+) {
+  const requested = env.OPENCLAW_TYPECHECKER?.trim() || undefined;
+  const supportsTsrs = TSRS_PLATFORMS.has(`${platform}-${arch}`);
+  const goProfiling = hasFlag(args, "--pprofDir");
+  if (requested !== undefined && requested !== "tsrs" && requested !== "tsgo") {
+    throw new Error(`OPENCLAW_TYPECHECKER must be tsrs or tsgo; got ${JSON.stringify(requested)}.`);
+  }
+  if (requested === "tsgo" || (requested === undefined && (!supportsTsrs || goProfiling))) {
+    return "tsgo";
+  }
+  if (!supportsTsrs) {
+    throw new Error(
+      `tsrs has no binary for ${platform}-${arch}; unset OPENCLAW_TYPECHECKER to use tsgo.`,
+    );
+  }
+  if (goProfiling) {
+    throw new Error(
+      "tsrs does not support --pprofDir; set OPENCLAW_TYPECHECKER=tsgo or unset it for Go profiling.",
+    );
+  }
+  return "tsrs";
+}
+
 /** Resolve a repo tool from this worktree or the primary checkout's installed toolchain. */
 export function resolveRepoToolBinPath(
   toolName: string,
@@ -171,12 +212,15 @@ export function resolveRepoToolBinPath(
     resolveCommonDir = resolveGitCommonDir,
   }: RepoToolOptions = {},
 ) {
-  if (toolName === "tsgo") {
-    // Resolve this checkout's native compiler independently of the ambient tsc bin link.
+  const nativePackage = NATIVE_COMPILER_PACKAGES.get(toolName);
+  if (nativePackage) {
+    // Resolve this checkout's native compiler independently of the ambient bin links.
     const require = createRequire(import.meta.url);
     const inputs = createDeclarationInputBoundary(cwd);
     const fromCheckout = createRequire(path.join(inputs.root, "package.json"));
-    const nativeRoot = path.dirname(inputs.assert(fromCheckout.resolve("typescript/package.json")));
+    const nativeRoot = path.dirname(
+      inputs.assert(fromCheckout.resolve(`${nativePackage}/package.json`)),
+    );
     const getExePath: { default: () => string } = require(
       inputs.assert(path.join(nativeRoot, "lib/getExePath.js")),
     );
@@ -231,7 +275,7 @@ export function ensureRepoNodeModulesLink(
   return localNodeModules;
 }
 
-function hasFlag(args: string[], name: string) {
+function hasFlag(args: readonly string[], name: string) {
   return args.some((arg) => arg === name || arg.startsWith(`${name}=`));
 }
 

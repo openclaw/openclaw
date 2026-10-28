@@ -259,7 +259,6 @@ final class QuickChatModel {
     @ObservationIgnored private var dictationTextSession: QuickChatDictationTextSession?
     private var modelControlsTask: Task<Void, Never>?
     @ObservationIgnored private var modelCatalogEventsTask: Task<Void, Never>?
-    @ObservationIgnored private var modelControlsRequestID = UUID()
     private var controlPatchSettlementsByTarget: [OpenClawChatSessionTarget: ControlPatchSettlement] = [:]
     @ObservationIgnored private var appliedModelSelections: [OpenClawChatSessionTarget: String] = [:]
 
@@ -1075,8 +1074,12 @@ extension QuickChatModel {
         guard self.isCurrentPresentation(presentationID), let target = self.routingTarget else { return }
         switch push {
         case let .event(event):
-            guard event.event == "config.changed" || event.event == "chat.metadata.changed" else { return }
-            if case .modelSelectionChanged = OpenClawChatGatewayPayloadCodec.event(from: event) {
+            guard event.event == "config.changed" || event.event == "chat.metadata.changed",
+                  let metadata = OpenClawChatGatewayPayloadCodec.event(from: event),
+                  metadata.refreshesModelCatalog(
+                      forAgentID: target.agentID ?? OpenClawChatSessionKey.agentID(from: target.sessionKey))
+            else { return }
+            if case .modelSelectionChanged = metadata {
                 self.invalidateModelChoices()
             }
         case .snapshot, .seqGap:
@@ -1096,20 +1099,17 @@ extension QuickChatModel {
 
     private func refreshModelControls(for target: OpenClawChatSessionTarget, afterSettingsChange: Bool = false) {
         guard self.isPresentationActive else { return }
-        let requestID = UUID()
-        self.modelControlsRequestID = requestID
         self.modelControlsTask?.cancel()
         self.modelControlsTask = Task { [weak self] in
             guard let self else { return }
             defer {
-                if self.modelControlsRequestID == requestID {
+                if !Task.isCancelled {
                     self.modelControlsTask = nil
                 }
             }
             do {
                 let snapshot = try await self.modelControlsProvider(target)
-                guard !Task.isCancelled, self.modelControlsRequestID == requestID,
-                      self.routingTarget == target else { return }
+                guard !Task.isCancelled, self.routingTarget == target else { return }
                 self.modelChoices = snapshot.models
                 self.modelSelectionPolicy = snapshot.modelSelectionPolicy
                 if self.modelCatalogInvalidated { self.modelCatalogInvalidated = false }
@@ -1127,7 +1127,7 @@ extension QuickChatModel {
             } catch is CancellationError {
                 return
             } catch {
-                guard self.modelControlsRequestID == requestID, self.routingTarget == target else { return }
+                guard !Task.isCancelled, self.routingTarget == target else { return }
                 self.modelControlStatusMessage = String(localized: "Couldn't load model settings.")
                 return
             }
@@ -1237,7 +1237,6 @@ extension QuickChatModel {
     }
 
     private func cancelModelControlRefresh() {
-        self.modelControlsRequestID = UUID()
         SimpleTaskSupport.stop(task: &self.modelControlsTask)
     }
 

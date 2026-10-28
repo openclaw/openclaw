@@ -20,13 +20,14 @@ import { isMissingPathError } from "../../infra/errors.js";
 import { root, FsSafeError } from "../../infra/fs-safe.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import {
-  hasMultipleSessionSharingIdentities,
+  hasMultipleResidentSessionSharingIdentities,
   readResidentUserProfileId,
-  readUserProfileIdentity,
+  readResidentUserProfileIdentity,
 } from "../../state/user-profile-list.js";
 import { resolveOperatorRolePolicyForAssignment } from "../operator-role-policy.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
 import { isIneligiblePersonalGatewayCaller } from "./gateway-personal-caller.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
 import { enqueueWorkspaceFileUpdate } from "./workspace-fs.js";
@@ -57,7 +58,7 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
       );
     }
     options.sessionMutationCommitGuard?.();
-    if (!hasMultipleSessionSharingIdentities()) {
+    if (!hasMultipleResidentSessionSharingIdentities()) {
       throw new PersonalFileAccessError(
         "Personal instructions are only available on multi-user Gateways. Use the agent workspace USER.md on a single-user Gateway.",
       );
@@ -116,7 +117,7 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
       );
     }
     const cfg = context.getRuntimeConfig();
-    const profile = readUserProfileIdentity(canonicalId);
+    const profile = readResidentUserProfileIdentity(canonicalId);
     const policy = resolveOperatorRolePolicyForAssignment(
       canonicalId,
       profile?.role ?? null,
@@ -129,11 +130,15 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
         ...(operatorAuthority ? [operatorAuthority.scopes] : []),
         ...(policy ? [policy.scopes] : []),
       ].every((allowedScopes) =>
-        roleScopesAllow({ role: "operator", requestedScopes: ["operator.read"], allowedScopes }),
+        roleScopesAllow({
+          role: "operator",
+          requestedScopes: ["operator.sessions.read"],
+          allowedScopes,
+        }),
       )
     ) {
       throw new PersonalFileAccessError(
-        "Personal instructions require current operator.read permission.",
+        "Personal instructions require current operator.sessions.read permission.",
       );
     }
     if (policy && policy.agents !== "*" && !policy.agents.includes(agentId)) {
@@ -214,13 +219,10 @@ async function runPersonalFile(
     }
     // JS UTF-16 length matches the bootstrap cap, including astral characters.
     if (write.content.length > 4_000) {
-      options.respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Keep personal instructions within 4,000 characters.",
-        ),
+      respondError(
+        options.respond,
+        ErrorCodes.INVALID_REQUEST,
+        "Keep personal instructions within 4,000 characters.",
       );
       return;
     }

@@ -4,7 +4,7 @@ import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import { DevicePlacementUnavailableError } from "./device-placement-eligibility.js";
 import {
   FORCED_WORKER_ABANDONMENT_ERROR,
-  placementTurnOwner,
+  projectPlacementTurnClaim,
   type WorkerPlacementExecutionMode,
 } from "./placement-record.js";
 import type {
@@ -34,11 +34,6 @@ export type WorkerProvisioningDispatchPlacement = Extract<
   { state: "provisioning" }
 >;
 type WorkerDrainingDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "draining" }>;
-type WorkerReconcilingDispatchPlacement = Extract<
-  WorkerDispatchPlacement,
-  { state: "reconciling" }
->;
-
 export type WorkerDispatchPlacementStore = Pick<
   ReturnType<typeof createWorkerSessionPlacementStore>,
   | "adoptActive"
@@ -50,13 +45,11 @@ export type WorkerDispatchPlacementStore = Pick<
   | "completePlacementMoveSourceToLocal"
   | "completeAbandonedPlacementMoveSourceToLocal"
   | "completePlacementMoveToWorker"
-  | "getPlacementMove"
   | "recordPlacementMoveError"
   | "fail"
   | "get"
   | "getAsync"
   | "getWithMoveAsync"
-  | "readCurrentMoveAuthority"
   | "getPlacementMoveAsync"
   | "readProjection"
   | "readRecoveryCandidates"
@@ -65,7 +58,6 @@ export type WorkerDispatchPlacementStore = Pick<
   | "beginWorkspaceReconciliation"
   | "abortWorkspaceReconciliation"
   | "listWorkspaceReconciliationOwners"
-  | "list"
   | "listPendingWorkspaceResultsAsync"
   | "markWorkspaceResultPending"
   | "handoffWorkspaceResultRecovery"
@@ -103,6 +95,7 @@ export type WorkerDispatchEnvironmentService = Pick<
   | "schedulePreparedRefill"
   | "createWithRequest"
   | "destroy"
+  | "reclaim"
   | "get"
   | "fenceWorkerTurnForRecovery"
   | "reconcileEnvironment"
@@ -110,7 +103,8 @@ export type WorkerDispatchEnvironmentService = Pick<
   | "startTunnel"
   | "stopTunnel"
   | "supportsProviderExecutionMode"
->;
+> &
+  Partial<Pick<WorkerEnvironmentService, "runProjectLifecycleCommand">>;
 
 export type WorkerActivationBarrier = (params: {
   sessionId: string;
@@ -241,7 +235,15 @@ export function createPlacementFailureActions(deps: {
           ownerEpoch: params.ownerEpoch,
         })
       : [];
-    return updateFailure(params.placement, params.primaryError, teardownErrors);
+    try {
+      return await updateFailure(params.placement, params.primaryError, teardownErrors);
+    } catch (recordError) {
+      throw new AggregateError(
+        [params.primaryError, recordError],
+        `Worker dispatch failed: ${boundedError(params.primaryError)}; failure recording: ${boundedError(recordError)}`,
+        { cause: recordError },
+      );
+    }
   };
 
   const cancelProvisioning = (
@@ -320,7 +322,7 @@ export function createPlacementFailureActions(deps: {
 
   const startReconcile = async (
     placement: WorkerDrainingDispatchPlacement,
-  ): Promise<WorkerReconcilingDispatchPlacement> => {
+  ): Promise<Extract<WorkerDispatchPlacement, { state: "reconciling" }>> => {
     const reconciling = await placements.startReconcile({
       sessionId: placement.sessionId,
       environmentId: placement.environmentId,
@@ -347,14 +349,9 @@ export function createPlacementFailureActions(deps: {
     if (current?.state !== "draining") {
       return;
     }
-    if (current.turnClaim) {
-      await placements.closeWorkerTurnToolState({
-        sessionId: current.sessionId,
-        claimId: current.turnClaim.claimId,
-        runId: current.turnClaim.runId,
-        placementGeneration: current.turnClaim.generation,
-        owner: placementTurnOwner(current),
-      });
+    const claim = projectPlacementTurnClaim(current);
+    if (claim) {
+      await placements.closeWorkerTurnToolState(claim);
     }
     const reconciling = await startReconcile(current);
     const teardownErrors = await cleanupEnvironment({

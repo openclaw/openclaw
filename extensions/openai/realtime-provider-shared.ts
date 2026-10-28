@@ -1,8 +1,8 @@
 import { resolveExpiresAtMsFromEpochSeconds } from "openclaw/plugin-sdk/number-runtime";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asOptionalRecord,
-  asOptionalObjectRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
@@ -30,13 +30,9 @@ export function readRealtimeErrorDetail(error: unknown): string {
 
 export function resolveOpenAIProviderConfigRecord(
   config: Record<string, unknown>,
-): Record<string, unknown> | undefined {
+): Record<string, unknown> {
   const providers = asOptionalRecord(config.providers);
-  return (
-    asOptionalRecord(providers?.openai) ??
-    asOptionalRecord(config.openai) ??
-    asOptionalRecord(config)
-  );
+  return asOptionalRecord(providers?.openai) ?? asOptionalRecord(config.openai) ?? config;
 }
 
 type OpenAIRealtimeClientSecretRequest = {
@@ -53,13 +49,15 @@ export function resolveOpenAIRealtimeRequestHeaders(
   transport: "http" | "websocket" = "http",
 ): Record<string, string> {
   return (
-    resolveProviderRequestHeaders({
-      provider: "openai",
-      baseUrl,
-      capability: "audio",
-      transport,
-      defaultHeaders,
-    }) ?? defaultHeaders
+    omitNullRequestHeaders(
+      resolveProviderRequestHeaders({
+        provider: "openai",
+        baseUrl,
+        capability: "audio",
+        transport,
+        defaultHeaders,
+      }),
+    ) ?? defaultHeaders
   );
 }
 
@@ -100,10 +98,10 @@ export async function createOpenAIRealtimeClientSecret(
   } finally {
     await release();
   }
-  const record = asOptionalObjectRecord(payload);
+  const record = asOptionalRecord(payload);
   const nestedSecret = record?.client_secret;
   const clientSecret =
-    normalizeOptionalString(asOptionalRecord(payload)?.value) ??
+    normalizeOptionalString(record?.value) ??
     normalizeOptionalString(asOptionalRecord(nestedSecret)?.value);
   if (!clientSecret) {
     throw new Error(`${label} client secret response did not include a value`);

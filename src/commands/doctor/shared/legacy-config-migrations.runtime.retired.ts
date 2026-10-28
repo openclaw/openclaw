@@ -512,7 +512,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
   },
   probedMigration(
     "runtime.config-tranche",
-    "Presentation-only preferences and duplicate tuning options moved to canonical defaults.",
+    "Presentation-only preferences and duplicate tuning options moved to current defaults.",
     migrateConfigTranche,
   ),
   {
@@ -585,9 +585,18 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
         ["agents", "defaults", "compaction", "truncateAfterCompaction"],
         "agents.defaults.compaction.truncateAfterCompaction is retired; byte-triggered compaction now opts in via maxActiveTranscriptBytes alone.",
       ),
+      rule(
+        ["agents", "defaults", "compaction", "memoryFlush", "model"],
+        "agents.defaults.compaction.memoryFlush.model is retired; memory flushes now use the active session model and its fallback chain.",
+      ),
     ],
     apply: (raw, changes) => {
       migrateTruncateAfterCompaction(raw, changes);
+      if (deleteRetiredPath(raw, ["agents", "defaults", "compaction", "memoryFlush", "model"])) {
+        changes.push(
+          "Removed agents.defaults.compaction.memoryFlush.model; memory flushes now use the active session model and its fallback chain.",
+        );
+      }
       if (deleteRetiredPath(raw, ["tui"])) {
         changes.push("Removed retired tui config; the footer uses the default compact display.");
       }

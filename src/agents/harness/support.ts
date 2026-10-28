@@ -99,7 +99,6 @@ export function projectPreparedModelProvider(params: {
   };
 }
 
-/** Builds the provider/model facts passed to registered harness support probes. */
 export function buildAgentHarnessSupportContext(
   params: {
     provider: string;
@@ -107,6 +106,7 @@ export function buildAgentHarnessSupportContext(
     /** Prepared provider facts take precedence over config rediscovery. */
     modelProvider?: AgentHarnessSupportContext["modelProvider"];
     requestedRuntime: AgentHarnessSupportContext["requestedRuntime"];
+    contextManagement?: AgentHarness["contextManagement"];
     config?: OpenClawConfig;
     /** Finalized route/auth selection; missing runtimePolicy stays undeclared. */
     preparedModelProvider?: boolean;
@@ -141,12 +141,10 @@ export function buildAgentHarnessSupportContext(
       ? "present"
       : "none");
   const agentId = resolveAgentRuntimePolicyAgentId(params);
-  const hasConfiguredProviderRequestParams = hasAuthoredProviderRequestParams({
-    config: params.config,
-    provider: params.provider,
-    modelId: params.modelId,
-    agentId,
-  });
+  const hasConfiguredProviderRequestParams = hasAuthoredProviderRequestParams(
+    { config: params.config, provider: params.provider, modelId: params.modelId, agentId },
+    { nativeContextManagement: params.contextManagement === "native" },
+  );
   const configuredModelProvider = providerConfig
     ? {
         api: modelConfig?.api ?? providerConfig.api ?? "openai-responses",
@@ -246,7 +244,6 @@ function resolveHarnessRouteRuntimePolicy(
   };
 }
 
-/** Resolves the registered plugin harness that auto selection would choose. */
 export function resolveAutoAgentHarnessId(
   params: {
     provider: string;

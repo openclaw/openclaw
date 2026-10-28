@@ -3,6 +3,7 @@
 import {
   closeCredentialReader,
   nativeCredentialReaderStart,
+  credentialReaderRequest,
   credentialStorage,
   createCodexFixture,
   createConfigRuntime,
@@ -24,7 +25,7 @@ import {
 import type { MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   updateAuthProfileStoreWithLock,
-  upsertAuthProfile,
+  upsertAuthProfileAsync,
   type OAuthCredential,
 } from "openclaw/plugin-sdk/provider-auth";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -316,6 +317,65 @@ describe("Codex migration credential inspection and persistence", () => {
     },
   );
 
+  it("imports OAuth after a startup account update invalidates the first read", async () => {
+    const access = nativeToken();
+    await writeOAuth(access);
+    credentialReaderRequest.mockImplementationOnce(() => {
+      credentialStorage.revision++;
+    });
+    const ctx = authContext();
+
+    const plan = await provider.plan(ctx);
+    expect(findItem(plan.items, "auth:openai").status).toBe("planned");
+    const result = await provider.apply(ctx, plan);
+
+    expect(findItem(result.items, "auth:openai").status).toBe("migrated");
+    expect(loadTargetAuthStore(fixture).profiles["openai:account-native-account"]).toMatchObject({
+      access,
+      refresh: "native-refresh",
+    });
+  });
+
+  it("discards credentials when account updates invalidate both reads", async () => {
+    await writeOAuth();
+    credentialReaderRequest.mockImplementation((method) => {
+      if (method === "config/read") {
+        credentialStorage.revision++;
+      }
+    });
+
+    const credentials = await readCodexCliCredentialsAsync({
+      codexHome: fixture.codexHome,
+      allowKeychainPrompt: true,
+    });
+
+    expect(credentials).toBeUndefined();
+    expect(
+      credentialReaderRequest.mock.calls.filter(([method]) => method === "config/read"),
+    ).toHaveLength(2);
+    expect(closeCredentialReader).toHaveBeenCalledOnce();
+  });
+
+  it("rereads credentials instead of accepting a displaced same-route snapshot", async () => {
+    await writeAuth({ auth_mode: "apikey", OPENAI_API_KEY: "fixture-old-key" });
+    credentialReaderRequest.mockImplementation(async (method) => {
+      if (method === "account/read" && credentialStorage.revision === 0) {
+        await writeAuth({ auth_mode: "apikey", OPENAI_API_KEY: "fixture-current-key" });
+        credentialStorage.revision++;
+      }
+    });
+
+    const credentials = await readCodexCliCredentialsAsync({
+      codexHome: fixture.codexHome,
+      credentialKind: "api_key",
+      allowKeychainPrompt: true,
+    });
+
+    expect(credentials).toEqual({
+      apiKey: { type: "api_key", provider: "openai", key: "fixture-current-key" },
+    });
+  });
+
   it("imports auth into the selected agent directory under the effective OpenClaw home", async () => {
     const effectiveHome = path.join(fixture.root, "openclaw-home");
     vi.stubEnv("OPENCLAW_HOME", effectiveHome);
@@ -432,7 +492,7 @@ describe("Codex migration credential inspection and persistence", () => {
   it("does not collapse Codex OAuth accounts that share an email", async () => {
     const sharedEmail = "shared@example.com";
     const { accessToken, ctx } = await createOAuthImport("acct_new", sharedEmail);
-    upsertAuthProfile({
+    await upsertAuthProfileAsync({
       agentDir: targetAgentDir(fixture),
       profileId: "openai:account-acct_old",
       credential: {
@@ -494,7 +554,7 @@ describe("Codex migration auth identity and inherited profiles", () => {
       ...oauthProfile(jwt("previous-user"), "previous-refresh", 2_000_000_000_000),
       accountId: "shared-workspace",
     };
-    upsertAuthProfile({
+    await upsertAuthProfileAsync({
       profileId: "openai:account-shared-workspace",
       credential: existing,
       agentDir: targetAgentDir(fixture),
@@ -645,7 +705,7 @@ describe("Codex migration auth identity and inherited profiles", () => {
       details: { profileId: "openai:default" },
     });
     const managed = oauthProfile("managed-access", "managed-refresh");
-    upsertAuthProfile({
+    await upsertAuthProfileAsync({
       profileId: "openai:managed",
       credential: managed,
       agentDir: targetAgentDir(fixture),
@@ -688,7 +748,7 @@ describe("Codex migration auth identity and inherited profiles", () => {
         details: { profileId: "openai:default" },
       });
       const inherited = oauthProfile(nativeToken(accountId, userId), "shared-refresh", expires);
-      upsertAuthProfile({ profileId: "openai:default", credential: inherited });
+      await upsertAuthProfileAsync({ profileId: "openai:default", credential: inherited });
 
       const result = await provider.apply(ctx, plan);
 

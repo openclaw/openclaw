@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import {
@@ -19,6 +20,8 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import { GATEWAY_ADMISSION_RETRY_DELAY_MS } from "./subagent-registry-helpers.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
 import {
@@ -36,8 +39,6 @@ import {
   resolveSubagentRunOrphanReason,
   type SubagentRunOrphanReason,
 } from "./subagent-session-reconciliation.js";
-
-const GATEWAY_ADMISSION_RETRY_DELAY_MS = 1_000;
 
 /** Admit terminal evidence before transport-specific grace or deadline reconciliation. */
 export async function prepareSubagentTerminalObservation(params: {
@@ -133,10 +134,8 @@ export function createSubagentRegistryCompletionRuntime(config: {
   completeSubagentRun: (params: SubagentCompletionRequest) => Promise<void>;
   scheduleSweep: (params?: { delayMs?: number }) => void;
   resumeRun: (runId: string) => void;
-  warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
-  const { runs, resumed, retryTimers, completeSubagentRun, scheduleSweep, resumeRun, warn } =
-    config;
+  const { runs, resumed, retryTimers, completeSubagentRun, scheduleSweep, resumeRun } = config;
 
   const currentEntry = (params: Pick<SubagentCompletionRequest, "runId" | "expectedEntry">) =>
     params.expectedEntry
@@ -163,7 +162,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
           throw error;
         }
         const current = currentEntry(params);
-        warn(message, {
+        subagentRegistryLog.warn(message, {
           source,
           runId: params.runId,
           childSessionKey: current?.childSessionKey,
@@ -250,7 +249,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
         "failed to retry subagent completion after gateway restart",
       );
     }, GATEWAY_ADMISSION_RETRY_DELAY_MS);
-    timer.unref?.();
+    timer.unref();
     retryTimers.add(timer);
   }
 
@@ -264,28 +263,47 @@ export function createSubagentRegistryCompletionRuntime(config: {
     }
     const generation = entry.generation;
     const stateContext = captureOpenClawStateWorkerContext();
+    let settledYielded: SubagentRunRecord | undefined;
     const isHostCurrent = () => {
       try {
         assertSubagentRegistryWriteSourceCurrent(stateContext);
       } catch {
         return false;
       }
+      const current = getCurrentSubagentRunOwner(runs, entry);
       return (
-        Boolean(getCurrentSubagentRunOwner(runs, entry)) &&
+        current !== undefined &&
         entry.generation === generation &&
-        params.recoveryCurrent?.isHostCurrent() !== false
+        params.recoveryCurrent?.isHostCurrent() !== false &&
+        // Once our settle commits, retries may drain effects only for that terminal.
+        (!settledYielded ||
+          (current.execution.status === "terminal" &&
+            current.pauseReason === undefined &&
+            !current.killIntent &&
+            !current.killReconciliation &&
+            current.endedReason === settledYielded.endedReason &&
+            current.execution.startedAt === settledYielded.execution.startedAt &&
+            current.execution.endedAt === settledYielded.execution.endedAt &&
+            isDeepStrictEqual(current.execution.outcome, settledYielded.execution.outcome)))
       );
     };
     const isCurrent = async () =>
       isHostCurrent() && (await params.recoveryCurrent?.prepare()) !== false && isHostCurrent();
-    const ownedParams = {
+    const ownedParams: SubagentCompletionRequest = {
       ...params,
       expectedEntry: entry,
       recoveryCurrent: {
         prepare: isCurrent,
         isHostCurrent,
-        onPublished: (published: SubagentRunRecord) =>
-          params.recoveryCurrent?.onPublished?.(published),
+        onPublished: (published: SubagentRunRecord) => {
+          if (ownedParams.settleYielded) {
+            settledYielded = published;
+            // The pause is gone after our commit. Retry normal idempotent effects,
+            // not the yield transition; isHostCurrent still rejects any replacement.
+            ownedParams.settleYielded = undefined;
+          }
+          params.recoveryCurrent?.onPublished?.(published);
+        },
       },
     };
     // Each controller attempt owns its terminal transition, while this outer
@@ -304,11 +322,11 @@ export function createSubagentRegistryCompletionRuntime(config: {
       if (!isGatewayRestartDraining()) {
         throw error;
       }
-      warn("subagent completion deferred during gateway restart", {
+      subagentRegistryLog.warn("subagent completion deferred during gateway restart", {
         source,
         runId: params.runId,
       });
-      scheduleSubagentCompletionRetryAfterRestart(params, source, entry);
+      scheduleSubagentCompletionRetryAfterRestart(ownedParams, source, entry);
     }
   }
 
@@ -319,7 +337,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
     warning = "failed to complete subagent run in background",
   ) {
     void completeSubagentRunWithRecovery(params, source).catch((error: unknown) => {
-      warn(warning, { source, runId: params.runId, error });
+      subagentRegistryLog.warn(warning, { source, runId: params.runId, error });
     });
   }
 
@@ -345,6 +363,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
     recoveryCurrent?: SubagentCompletionRequest["recoveryCurrent"];
     sessionEffects?: SubagentCompletionRequest["sessionEffects"];
     error: string;
+    terminalStatus?: "failed";
     endedAt?: number;
     suppressSessionEffects?: boolean;
   }): Promise<number> {
@@ -366,10 +385,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
       return 0;
     }
     pendingLifecycle.clear(runId);
-    if (
-      typeof entry.cleanupCompletedAt === "number" &&
-      entry.terminalOwner !== "interrupted-recovery"
-    ) {
+    if (typeof entry.cleanupCompletedAt === "number") {
       return hasCompleteSubagentTerminalState(entry) ? 1 : 0;
     }
     let publishedEntry = entry;
@@ -385,7 +401,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
       sendFarewell: true,
       accountId: entry.requesterOrigin?.accountId,
       triggerCleanup: true,
-      recoverInterrupted: true,
+      recoverInterrupted: params.terminalStatus ?? true,
       recoveryCurrent: {
         prepare: async () => (await params.recoveryCurrent?.prepare()) !== false,
         isHostCurrent: () => params.recoveryCurrent?.isHostCurrent() !== false,
@@ -414,7 +430,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
         throw error;
       }
       if (isGatewayRestartDraining() && Boolean(getCurrentSubagentRunOwner(runs, entry))) {
-        warn("subagent completion deferred during gateway restart", {
+        subagentRegistryLog.warn("subagent completion deferred during gateway restart", {
           source: "explicit-failed-mark",
           runId,
         });
@@ -425,7 +441,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
         );
         return 1;
       }
-      warn("failed to durably finalize interrupted subagent run", {
+      subagentRegistryLog.warn("failed to durably finalize interrupted subagent run", {
         runId,
         childSessionKey: entry.childSessionKey,
         error,
@@ -443,6 +459,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
 
 export function createSubagentResumeReader(params: {
   resumedRuns: Set<object>;
+  runBackgroundWork<T>(entry: SubagentRunRecord, run: () => Promise<T>): Promise<T>;
   getGatewayContextResolver: () => GatewayContextResolver | undefined;
   resume: (
     runId: string,
@@ -456,7 +473,6 @@ export function createSubagentResumeReader(params: {
     entry: SubagentRunRecord,
     context: OpenClawStateWorkerContext,
   ) => void;
-  warn: (message: string, meta: Record<string, unknown>) => void;
 }) {
   const pendingResumeChecks = new Map<object, object>();
   function read(
@@ -517,12 +533,12 @@ export function createSubagentResumeReader(params: {
         if (pendingResumeChecks.get(resumeKey) !== token) {
           return;
         }
-        params.warn("subagent session read deferred before resume", { runId, error });
+        subagentRegistryLog.warn("subagent session read deferred before resume", { runId, error });
         if (pendingResumeChecks.get(resumeKey) === token && isHostCurrent()) {
           params.retryAfterDrain(runId, entry, stateContext);
         }
       };
-      void runWithGatewayDetachedWorkContinuation(async () => {
+      const readCurrent = async () => {
         try {
           let observed = entry;
           let check: ReturnType<typeof resolveSubagentRunOrphanReason> = orphanCheck;
@@ -561,7 +577,11 @@ export function createSubagentResumeReader(params: {
         } finally {
           release();
         }
-      }, "subagents:resume-session-read").catch((error: unknown) => {
+      };
+      void runWithGatewayDetachedWorkContinuation(
+        () => params.runBackgroundWork(entry, readCurrent),
+        "subagents:resume-session-read",
+      ).catch((error: unknown) => {
         try {
           failed(error);
         } finally {
@@ -570,7 +590,7 @@ export function createSubagentResumeReader(params: {
       });
     } catch (error) {
       release();
-      params.warn("subagent session read deferred before resume", { runId, error });
+      subagentRegistryLog.warn("subagent session read deferred before resume", { runId, error });
     }
   }
   return {
@@ -579,6 +599,5 @@ export function createSubagentResumeReader(params: {
       pendingResumeChecks.has(getSubagentRunRuntimeKey(entry)),
     retirePending: (entry: SubagentRunRecord) =>
       pendingResumeChecks.delete(getSubagentRunRuntimeKey(entry)),
-    reset: () => pendingResumeChecks.clear(),
   };
 }

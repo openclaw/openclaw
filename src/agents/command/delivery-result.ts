@@ -60,9 +60,7 @@ export function buildDeliveryResult(params: {
 }): AgentCommandDeliveryResult {
   const successfulCronAdds = params.result.successfulCronAdds;
   const hasSuccessfulCronAdds =
-    typeof successfulCronAdds === "number" &&
-    Number.isFinite(successfulCronAdds) &&
-    successfulCronAdds > 0;
+    Number.isFinite(successfulCronAdds) && (successfulCronAdds ?? 0) > 0;
   return {
     payloads: params.payloads,
     meta: params.meta,

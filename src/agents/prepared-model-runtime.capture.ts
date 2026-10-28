@@ -1,7 +1,7 @@
 import type { Model } from "../llm/types.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { copyPreparedModelRuntimeAuthBindings } from "./prepared-model-runtime-auth.js";
-import { mergePreparedNativeCatalog } from "./prepared-model-runtime.full-catalog.js";
+import { mergePreparedNativeCatalog } from "./prepared-model-runtime.catalog-publication.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 
 const catalogCaptures = new WeakMap<
@@ -87,10 +87,7 @@ export function capturePreparedModelRuntimeCatalog(
     ...capturedNative,
     readPublishedModels: () => models,
     routeModelResolutionMemo: cached.memo,
-    createStores: () => {
-      const { authStorage, modelRegistry } = snapshot.createStores();
-      return { authStorage, modelRegistry: modelRegistry.fork(authStorage, models) };
-    },
+    createStores: (publishedModels = models) => snapshot.createStores(publishedModels),
   });
   copyPreparedModelRuntimeAuthBindings(snapshot, captured);
   admittedCatalogs.set(captured, cached.admittedCatalog);

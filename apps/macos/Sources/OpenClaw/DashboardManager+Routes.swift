@@ -162,6 +162,12 @@ extension DashboardManager {
         controller.navigateBack()
     }
 
+    func reloadDashboard() {
+        guard let controller = frontmostDashboard()?.controller,
+              controller.window?.isKeyWindow == true else { return }
+        controller.reloadDashboard()
+    }
+
     func navigateForward() {
         guard let controller = frontmostDashboard()?.controller,
               controller.window?.isKeyWindow == true else { return }

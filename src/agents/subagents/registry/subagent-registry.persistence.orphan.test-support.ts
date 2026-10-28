@@ -9,10 +9,7 @@ export function registerSubagentOrphanTaskCases({
   restartRegistry,
   waitForRegistryWork,
 }: {
-  writePersistedRegistry: (
-    persisted: Record<string, unknown>,
-    opts?: { seedChildSessions?: boolean },
-  ) => Promise<void>;
+  writePersistedRegistry: (persisted: Record<string, unknown>) => Promise<void>;
   restartRegistry: () => Promise<void>;
   waitForRegistryWork: (predicate: () => boolean | Promise<boolean>) => Promise<void>;
 }) {
@@ -26,6 +23,7 @@ export function registerSubagentOrphanTaskCases({
         [runId]: {
           runId,
           childSessionKey,
+          childSessionIdentity: { sessionId: `sess-${runId}` },
           requesterSessionKey: "agent:main:main",
           requesterDisplayKey: "main",
           task: "stale unended restored work",

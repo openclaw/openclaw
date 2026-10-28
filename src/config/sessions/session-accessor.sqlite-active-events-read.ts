@@ -3,21 +3,66 @@ import { resolveIntegerOption } from "@openclaw/normalization-core/number-coerci
 import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
-  getActiveTranscriptKysely,
+  selectActiveTranscriptEventRows,
   parseActiveTranscriptMessageRow,
   readSnapshotEventRows,
   type CurrentTranscriptProjection,
+  type SessionTranscriptMessageEventPage,
   type SessionTranscriptBoundedMessageTailOptions,
   type SessionTranscriptBoundedMessageTailPage,
 } from "./session-accessor.sqlite-projection-read.js";
 import {
   hasOversizedVisibleMessages,
   iterateVisibleMessageMetadata,
+  readVisibleMessageRange,
   resolveVisibleMessagePositions,
   resolveTranscriptBoundaryWindow,
 } from "./session-accessor.sqlite-reset-window.js";
 import { MAX_VISIBLE_MESSAGE_MAX_MESSAGES } from "./session-accessor.sqlite-visible-cursor.js";
-import { transcriptEventJsonSql } from "./transcript-payload.js";
+import { readTranscriptPayload } from "./transcript-payload.js";
+
+/** Reads a bounded active-path tail while preserving transcript line and byte caps. */
+export function readRecentSessionTranscriptMessageEventsFromProjection(
+  projection: CurrentTranscriptProjection,
+  options: { maxBytes: number; maxLines: number; maxMessages: number },
+): SessionTranscriptMessageEventPage {
+  const visible = resolveVisibleMessagePositions(projection);
+  const maxMessages = resolveIntegerOption(options.maxMessages, 0, {
+    min: 0,
+    max: MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
+  });
+  const maxLines = resolveIntegerOption(options.maxLines, 0, { min: 0 });
+  if (maxMessages === 0 || maxLines === 0) {
+    return {
+      activeLeafEntryId: projection.state.leafEventId,
+      events: [],
+      totalMessages: visible.total,
+    };
+  }
+  const maxBytes = resolveIntegerOption(options.maxBytes, 8 * 1024 * 1024, { min: 1024 });
+  const candidates = iterateVisibleMessageMetadata(
+    projection,
+    Math.max(0, visible.total - Math.min(maxLines, maxMessages)),
+    visible.total,
+    "desc",
+  );
+  let selectedStart = visible.total;
+  let bytes = 0;
+  for (const row of candidates) {
+    // Keep the newest event even when oversized, then a contiguous suffix. Size stored JSONL
+    // before loading payloads so a small usage budget cannot materialize the entire line window.
+    if (selectedStart < visible.total && bytes + row.serialized_bytes > maxBytes) {
+      break;
+    }
+    selectedStart = row.logicalPosition;
+    bytes += row.serialized_bytes;
+  }
+  return {
+    activeLeafEntryId: projection.state.leafEventId,
+    events: readVisibleMessageRange(projection, selectedStart, visible.total),
+    totalMessages: visible.total,
+  };
+}
 
 /** Runs repeatable newest-first visits synchronously inside one context-tail snapshot. */
 export function withRecentSessionTranscriptActiveEventsInSnapshot<T>(
@@ -26,15 +71,8 @@ export function withRecentSessionTranscriptActiveEventsInSnapshot<T>(
   read: (visit: (visitor: (event: TranscriptEvent) => void) => void) => T,
 ): T {
   const limit = resolveIntegerOption(maxEvents, 0, { min: 0 });
-  const db = getActiveTranscriptKysely(projection.database);
-  const query = db
-    .selectFrom("session_transcript_active_events as active")
-    .innerJoin("transcript_events as event", (join) =>
-      join
-        .onRef("event.session_id", "=", "active.session_id")
-        .onRef("event.seq", "=", "active.event_seq"),
-    )
-    .select(transcriptEventJsonSql(projection.database.db, "event").as("event_json"))
+  const query = selectActiveTranscriptEventRows(projection.database)
+    .select(["event.event_json", "event.event_zstd", "event.event_utf8_bytes"])
     .where("active.session_id", "=", projection.resolved.sessionId)
     .where("active.context_eligible", "=", 1)
     .orderBy("active.active_position", "desc")
@@ -49,13 +87,14 @@ export function withRecentSessionTranscriptActiveEventsInSnapshot<T>(
         return;
       }
       let parseError: Error | undefined;
-      // Finish stepping before reporting JSON errors: SQL failures take precedence,
+      // Finish stepping before reporting JSON errors: SQL and payload failures take precedence,
       // followed by the oldest malformed row in the selected tail.
       for (const row of iterateSqliteQuerySync(projection.database.db, query)) {
+        const eventJson = readTranscriptPayload(row);
         let event: TranscriptEvent;
         try {
           // SAFETY: Transcript writers persist TranscriptEvent objects; parse failures are handled here.
-          event = JSON.parse(row.event_json) as TranscriptEvent;
+          event = JSON.parse(eventJson) as TranscriptEvent;
         } catch (error) {
           parseError = toErrorObject(error, "Transcript event JSON parsing failed");
           continue;
@@ -91,16 +130,25 @@ export function readSessionTranscriptBoundedMessageTailPageFromProjection(
   const endExclusive = Math.max(0, totalMessages - offset);
   const start = Math.max(0, endExclusive - maxMessages);
   const scannedMessages = endExclusive - start;
+  const metadata =
+    scannedMessages > 0 && maxBytes > 0
+      ? Array.from(iterateVisibleMessageMetadata(projection, start, endExclusive))
+      : [];
   const oversized = options.oversizedMessageCheck;
   const checked = oversized
     ? {
-        hasOversizedMessages: hasOversizedVisibleMessages(
-          projection,
-          oversized.includeEarlier ? 0 : start,
-          endExclusive,
-          maxBytes,
-          oversized.roles,
-        ),
+        hasOversizedMessages:
+          // Page metadata includes the JSONL newline; the probe compares raw payload bytes.
+          (oversized.includeEarlier ||
+            maxBytes === 0 ||
+            metadata.some((row) => row.serialized_bytes > maxBytes)) &&
+          hasOversizedVisibleMessages(
+            projection,
+            oversized.includeEarlier ? 0 : start,
+            endExclusive,
+            maxBytes,
+            oversized.roles,
+          ),
       }
     : {};
   if (scannedMessages === 0 || maxBytes === 0) {
@@ -115,7 +163,6 @@ export function readSessionTranscriptBoundedMessageTailPageFromProjection(
       totalMessages,
     };
   }
-  const metadata = Array.from(iterateVisibleMessageMetadata(projection, start, endExclusive));
   if (metadata.length !== scannedMessages) {
     throw new Error("Active transcript bounded message page is incomplete");
   }
@@ -140,7 +187,8 @@ export function readSessionTranscriptBoundedMessageTailPageFromProjection(
         ).map((row) => [row.seq, row]),
   );
   const events = selected
-    .toSorted((left, right) => left.message_position - right.message_position)
+    // oxlint-disable-next-line unicorn/no-array-sort -- This selection is private to the page read.
+    .sort((left, right) => left.message_position - right.message_position)
     .flatMap((row) => {
       const payload = payloads.get(row.event_seq);
       return payload === undefined ? [] : [parseActiveTranscriptMessageRow({ ...row, ...payload })];

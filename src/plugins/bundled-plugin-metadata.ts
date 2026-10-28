@@ -64,7 +64,7 @@ export function listBundledPluginMetadata(params?: {
   const includeSyntheticChannelConfigs =
     params?.includeSyntheticChannelConfigs ?? includeChannelConfigs;
   if (!resolvedScanDir || !fs.existsSync(resolvedScanDir)) {
-    return Object.freeze([]);
+    return [];
   }
 
   const entries: BundledPluginMetadata[] = [];
@@ -83,12 +83,12 @@ export function listBundledPluginMetadata(params?: {
       tryReadJsonSync<PackageManifest>(path.join(pluginDir, "package.json")) ?? undefined;
     const packageManifest = getPackageManifestMetadata(packageJson);
     const extensions = normalizeBundledPluginStringList(packageManifest?.extensions);
-    if (extensions.length === 0) {
+    const sourceEntry = extensions[0];
+    if (sourceEntry === undefined) {
       continue;
     }
-    const sourceEntry = extensions[0];
     const builtEntry = rewriteBundledPluginEntryToBuiltPath(sourceEntry);
-    if (!sourceEntry || !builtEntry) {
+    if (!builtEntry) {
       continue;
     }
 
@@ -143,7 +143,7 @@ export function listBundledPluginMetadata(params?: {
     });
   }
 
-  return Object.freeze(entries);
+  return entries;
 }
 
 /** Finds bundled plugin metadata by manifest id. */

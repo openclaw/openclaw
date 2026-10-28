@@ -36,21 +36,16 @@ export function isQaSuiteInfraRetryableError(error: unknown) {
   return hasQaSuiteRetryableNetworkCode(error);
 }
 
-export async function runQaSuiteWithInfraRetry<Result>(
-  run: (attempt: number) => Promise<Result>,
-  maxRetries = QA_SUITE_INFRA_RETRY_LIMIT,
-) {
-  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-    try {
-      return await run(attempt);
-    } catch (error) {
-      if (!isQaSuiteInfraRetryableError(error) || attempt >= maxRetries) {
-        throw error;
-      }
-      process.stderr.write(
-        `[qa-suite] infra retry ${attempt + 1}/${maxRetries}: ${formatErrorMessage(error)}\n`,
-      );
+export async function runQaSuiteWithInfraRetry<Result>(run: (attempt: number) => Promise<Result>) {
+  try {
+    return await run(0);
+  } catch (error) {
+    if (!isQaSuiteInfraRetryableError(error)) {
+      throw error;
     }
+    process.stderr.write(
+      `[qa-suite] infra retry 1/${QA_SUITE_INFRA_RETRY_LIMIT}: ${formatErrorMessage(error)}\n`,
+    );
   }
-  throw new Error("unreachable qa suite retry state");
+  return await run(QA_SUITE_INFRA_RETRY_LIMIT);
 }

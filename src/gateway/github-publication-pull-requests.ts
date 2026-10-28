@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGitHubHost } from "../agents/github-host-runtime.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
+import type { SessionGitHubPullRequestBinding } from "../config/sessions/types.js";
 import { GitHubPublicationKnownFailure } from "./github-publication-failure.js";
 import {
   githubPublicationApiArgs,
@@ -9,6 +10,7 @@ import {
 } from "./github-publication-git-transport.js";
 
 type GitHubPublicationPullRequestLookup = {
+  pullRequest?: SessionGitHubPullRequestBinding;
   repository: string;
   pushOwner: string;
   branch: string;
@@ -41,6 +43,31 @@ async function readGitHubPublicationApi(
 }
 
 async function loadGitHubPublicationPullRequests(params: GitHubPublicationPullRequestLookup) {
+  if (params.pullRequest) {
+    const pr = params.pullRequest;
+    const { identity, raw } = await readGitHubPublicationApi(
+      params,
+      `repos/${pr.base.repository}/pulls/${pr.number}`,
+      [
+        "--jq",
+        '{url: .html_url, userId: .user.id, state: .state, body: "", headSha: .head.sha, headRef: .head.ref, baseRef: .base.ref, headRepository: .head.repo.full_name, headRepositoryId: .head.repo.id, baseRepository: .base.repo.full_name, baseRepositoryId: .base.repo.id}',
+      ],
+    );
+    const value: unknown = JSON.parse(raw);
+    if (
+      !isRecord(value) ||
+      value.url !== pr.url ||
+      value.headRepository !== pr.head.repository ||
+      value.headRepositoryId !== pr.head.repositoryId ||
+      value.baseRepository !== pr.base.repository ||
+      value.baseRepositoryId !== pr.base.repositoryId ||
+      value.headRef !== pr.head.branch ||
+      value.baseRef !== pr.base.branch
+    ) {
+      throw new Error("The original GitHub pull request target changed.");
+    }
+    return { identity, candidates: parseGitHubPublicationPullRequests(JSON.stringify([value])) };
+  }
   const marker = JSON.stringify(params.marker);
   const { identity, raw } = await readGitHubPublicationApi(
     params,
@@ -106,13 +133,13 @@ function parseGitHubPublicationPullRequests(raw: string) {
 export async function findGitHubPublicationPullRequest(
   params: GitHubPublicationPullRequestLookup & {
     headCommit: string;
-    recordObserved?: (url: string) => void;
+    recordObserved?: (url: string) => void | Promise<void>;
   },
 ): Promise<string | undefined> {
   const { identity, candidates } = await loadGitHubPublicationPullRequests(params);
   const exact = candidates.filter(
     (candidate) =>
-      candidate.userId === identity.account.accountId &&
+      (params.pullRequest || candidate.userId === identity.account.accountId) &&
       candidate.headSha === params.headCommit &&
       candidate.headRef === params.branch &&
       candidate.baseRef === params.baseBranch,
@@ -123,7 +150,7 @@ export async function findGitHubPublicationPullRequest(
       (candidate) => candidate.state === "closed" && candidate.body.includes(params.marker),
     );
   if (found) {
-    params.recordObserved?.(found.url);
+    await params.recordObserved?.(found.url);
     if (found.state === "closed") {
       params.assertCurrent();
       throw new GitHubPublicationKnownFailure(
@@ -142,7 +169,7 @@ export async function findGitHubPublicationPullRequest(
       candidate.headRef === params.branch &&
       candidate.baseRef === params.baseBranch,
   );
-  if (occupied && occupied.userId !== identity.account.accountId) {
+  if (!params.pullRequest && occupied && occupied.userId !== identity.account.accountId) {
     throw new GitHubPublicationKnownFailure("GitHub pull request is owned by another account.", {
       code: "github_rejected",
       nextAction: "Check pull-request permission for the effective account, then retry.",
@@ -165,7 +192,7 @@ export async function reconcileGitHubPublicationPullRequest(
     parentCommit: string;
     pushOnly?: "observed" | "dispatched";
     knownPullRequestUrls: readonly string[];
-    recordPushObserved?: (headCommit: string) => void;
+    recordPushObserved?: (headCommit: string) => void | Promise<void>;
   },
 ): Promise<string | undefined> {
   const { raw } = await readGitHubPublicationApi(
@@ -226,17 +253,18 @@ export async function reconcileGitHubPublicationPullRequest(
   let unrelated = false;
   for (const candidate of candidates) {
     if (
-      candidate.userId !== lookupIdentity.account.accountId ||
+      (!params.pullRequest && candidate.userId !== lookupIdentity.account.accountId) ||
       candidate.headRef !== params.branch ||
       candidate.baseRef !== params.baseBranch ||
-      (!candidate.body.includes(params.marker) &&
+      (!params.pullRequest &&
+        !candidate.body.includes(params.marker) &&
         !params.knownPullRequestUrls.includes(candidate.url) &&
         !(params.pushOnly && candidate.state === "open"))
     ) {
       continue;
     }
     if (await includesCommit(candidate.headSha)) {
-      params.recordObserved?.(candidate.url);
+      await params.recordObserved?.(candidate.url);
       return candidate.url;
     }
     unrelated = true;
@@ -264,6 +292,6 @@ export async function reconcileGitHubPublicationPullRequest(
   ) {
     throw new Error("The original GitHub push has not been confirmed.");
   }
-  params.recordPushObserved?.(params.headCommit);
+  await params.recordPushObserved?.(params.headCommit);
   return undefined;
 }

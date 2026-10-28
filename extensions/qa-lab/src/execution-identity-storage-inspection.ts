@@ -1,5 +1,8 @@
 import path from "node:path";
-import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
+import {
+  createPluginRuntimeProcessEntrypoint,
+  resolveRuntimeWorkerUrl,
+} from "openclaw/plugin-sdk/process-runtime";
 import { openSqliteWorkerStore } from "openclaw/plugin-sdk/sqlite-runtime";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
@@ -56,15 +59,9 @@ async function openQaInspectionStore(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
     throw new Error("QA Gateway did not expose its isolated state directory");
   }
   return await openSqliteWorkerStore<QaExecutionIdentityStorageOperations>({
-    moduleUrl: resolveRuntimeWorkerUrl({
-      currentModuleUrl: import.meta.url,
-      sourceWorkerName: "execution-identity-storage-inspection.worker",
-      distWorkerPath: "extensions/qa-lab/src/execution-identity-storage-inspection.worker.js",
-      package: {
-        name: "@openclaw/qa-lab",
-        distWorkerPath: "src/execution-identity-storage-inspection.worker.js",
-      },
-    }),
+    moduleUrl: resolveRuntimeWorkerUrl(
+      createPluginRuntimeProcessEntrypoint("qaExecutionIdentityInspection", import.meta.url),
+    ),
     databasePath: path.join(stateDir, "state", "openclaw.sqlite"),
     input: undefined,
   });

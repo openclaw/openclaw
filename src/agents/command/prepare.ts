@@ -14,12 +14,13 @@ import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-even
 import { resolveAgentExplicitRecipientSession } from "../../infra/outbound/agent-delivery.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { labelRuntimeContextText } from "../../llm/types.js";
-import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   classifySessionKeyShape,
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
+  scopeLegacySessionKeyToAgent,
 } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
@@ -32,6 +33,7 @@ import {
   hasAgentDatabaseAdmissions,
   recordAgentDatabaseAdmissions,
 } from "../../state/agent-database-admission.js";
+import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
 import { resolveUserPath } from "../../utils.js";
 import { isDeliverableMessageChannel, resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "../agent-runtime-config.js";
@@ -40,6 +42,7 @@ import {
   listAgentIds,
   resolveAgentDir,
   resolveSessionAgentId,
+  resolveSessionAgentIds,
   resolveAgentWorkspaceDir,
 } from "../agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
@@ -55,7 +58,6 @@ import { resolveEffectiveAgentRuntime } from "../thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
 import { ensureAgentWorkspace } from "../workspace.js";
 import { acquireWorktreeRunLease, resolveWorktreeForPath } from "../worktrees/run-lease.js";
-import { resolveExplicitAgentCommandSessionKey } from "./explicit-session-key.js";
 import { loadAcpManagerRuntime } from "./runtime-loaders.js";
 import { resolveSession } from "./session.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -63,6 +65,8 @@ import type { AgentCommandOpts } from "./types.js";
 export type PreparedAgentCommandRuntimeContext = Readonly<{
   config: OpenClawConfig;
   pluginGeneration: PreparedModelRuntimePluginGeneration;
+  /** One-shot creation fact from the isolated child's in-process launch owner. */
+  freshChild?: boolean;
 }>;
 
 export async function prepareAgentCommandExecution(
@@ -129,14 +133,24 @@ export async function prepareAgentCommandExecution(
     classifySessionKeyShape(rawExplicitSessionKey) === "legacy_or_alias" &&
     !isUnscopedSessionKeySentinel(rawExplicitSessionKey),
   );
-  const explicitSessionKey =
-    toSessionKey ??
-    resolveExplicitAgentCommandSessionKey({
-      rawExplicitSessionKey,
-      agentIdOverride,
-      shouldScopeDefaultAgentKey,
-      cfg,
+  // Storage sentinels keep their logical key; resolveSession validates the separate owner.
+  let explicitSessionKey = toSessionKey ?? rawExplicitSessionKey;
+  if (toSessionKey === undefined && !isUnscopedSessionKeySentinel(rawExplicitSessionKey)) {
+    const unscopedOwnerAgentId =
+      classifySessionKeyShape(rawExplicitSessionKey) === "legacy_or_alias" &&
+      (agentIdOverride || shouldScopeDefaultAgentKey)
+        ? resolveSessionAgentIds({
+            config: cfg,
+            agentId: agentIdOverride,
+            sessionKey: rawExplicitSessionKey,
+          }).sessionAgentId
+        : undefined;
+    explicitSessionKey = scopeLegacySessionKeyToAgent({
+      agentId: unscopedOwnerAgentId ?? agentIdOverride,
+      sessionKey: rawExplicitSessionKey,
+      mainKey: cfg.session?.mainKey,
     });
+  }
   if (explicitSessionKey && classifySessionKeyShape(explicitSessionKey) === "malformed_agent") {
     throw new Error(
       `Invalid --session-key "${explicitSessionKey}". Agent-prefixed session keys must use agent:<agent-id>:<session-key>.`,
@@ -158,9 +172,10 @@ export async function prepareAgentCommandExecution(
     if (!hasAgentDatabaseAdmissions()) {
       recordAgentDatabaseAdmissions(await evaluateAgentDatabaseAdmissions(cfg));
     }
-    assertAgentDatabaseAdmitted(
-      agentIdOverride ?? resolveSessionAgentId({ sessionKey: explicitSessionKey, config: cfg }),
-    );
+    const admissionAgentId =
+      agentIdOverride ?? resolveSessionAgentId({ sessionKey: explicitSessionKey, config: cfg });
+    await waitForAgentDatabaseWriteAdmission(admissionAgentId, { signal: abortSignal });
+    assertAgentDatabaseAdmitted(admissionAgentId);
   }
   const agentCfg = cfg.agents?.defaults;
 
@@ -236,6 +251,7 @@ export async function prepareAgentCommandExecution(
     storePath,
     isNewSession,
     previousSessionId,
+    automaticReset,
     persistedThinking,
     persistedVerbose,
   } = sessionResolution;
@@ -250,6 +266,8 @@ export async function prepareAgentCommandExecution(
   }
   const sessionStore: Record<string, InternalSessionEntry> =
     sessionKey && sessionEntryRaw ? { [sessionKey]: sessionEntryRaw } : {};
+  await waitForAgentDatabaseWriteAdmission(sessionAgentId, { signal: abortSignal });
+  assertPreparationCurrent();
   assertAgentDatabaseAdmitted(sessionAgentId);
   const outboundSession = buildOutboundSessionContext({
     cfg,
@@ -287,7 +305,7 @@ export async function prepareAgentCommandExecution(
   const preparedMetadataSnapshot = runtimeContext?.pluginGeneration.pluginMetadataSnapshot;
   const manifestMetadataSnapshot = pluginsEnabled
     ? (preparedMetadataSnapshot ??
-      resolvePluginMetadataSnapshot({ config: cfg, env: process.env, workspaceDir }))
+      (await resolvePluginMetadataSnapshotAsync({ config: cfg, env: process.env, workspaceDir })))
     : undefined;
   const modelManifestContext = {
     manifestPlugins: manifestMetadataSnapshot ?? [],
@@ -313,8 +331,9 @@ export async function prepareAgentCommandExecution(
     sessionKey,
     sessionEntry: sessionEntryRaw,
   });
-  const sessionStableReplyMode = resolveSessionStableReplyMode({
+  const sessionStableReplyMode = await resolveSessionStableReplyMode({
     cfg,
+    metadataSnapshot: manifestMetadataSnapshot,
     ctx: { CommandAuthorized: false },
     sessionEntry: sessionEntryRaw,
     sessionAgentId,
@@ -329,7 +348,6 @@ export async function prepareAgentCommandExecution(
     ...(sessionEntryRaw &&
     isSyntheticSourceReplyTurn({
       inputProvenance: commandOpts.inputProvenance,
-      isHeartbeat: commandOpts.bootstrapContextRunKind === "heartbeat",
     })
       ? {
           // Direct Gateway wakes have no inbound dispatcher to apply effective reply policy.
@@ -457,6 +475,7 @@ export async function prepareAgentCommandExecution(
       storePath,
       isNewSession,
       previousSessionId,
+      ...(automaticReset ? { automaticReset } : {}),
       persistedThinking,
       persistedVerbose,
       sessionAgentId,

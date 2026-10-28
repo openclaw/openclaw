@@ -47,27 +47,23 @@ export type ProviderUsageModelBreakdown = Omit<ProviderUsageCostDaily, "date" | 
   name: string;
 };
 
-type ProviderUsageCostBreakdown = {
-  name: string;
-  amount: number;
-};
-
-/** Provider-reported cost history and attribution for one bounded UTC window. */
-type ProviderUsageCostHistory = {
-  unit: string;
-  periodDays: number;
-  scope?: string;
-  daily: ProviderUsageCostDaily[];
-  models: ProviderUsageModelBreakdown[];
-  categories: ProviderUsageCostBreakdown[];
-};
-
 export type ProviderUsageSnapshot = {
   provider: UsageProviderId;
   displayName: string;
   windows: UsageWindow[];
   billing?: ProviderUsageBilling[];
-  costHistory?: ProviderUsageCostHistory;
+  /** Provider-reported cost history and attribution for one bounded UTC window. */
+  costHistory?: {
+    unit: string;
+    periodDays: number;
+    scope?: string;
+    daily: ProviderUsageCostDaily[];
+    models: ProviderUsageModelBreakdown[];
+    categories: {
+      name: string;
+      amount: number;
+    }[];
+  };
   summary?: string;
   plan?: string;
   /** Account identity (email) the usage was fetched under, when known. */

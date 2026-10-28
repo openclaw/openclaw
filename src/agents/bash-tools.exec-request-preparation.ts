@@ -25,6 +25,7 @@ import {
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { stripMalformedXmlArgValueSuffixFromKeys } from "./agent-tools.params.js";
@@ -74,6 +75,11 @@ const XML_ARG_VALUE_EXEC_PARAM_KEYS = ["command", "workdir", "host", "ask", "nod
 export function assertSupportedExecParams(args: unknown): void {
   if (!isRecord(args)) {
     return;
+  }
+  if (typeof args.command === "string" && args.command.includes("\0")) {
+    throw new ToolInputError(
+      "Execution command must not contain NUL bytes. Remove them and retry.",
+    );
   }
   if (args.awaitResults !== undefined && typeof args.awaitResults !== "boolean") {
     throw new ToolInputError("exec awaitResults must be a boolean");
@@ -176,9 +182,6 @@ export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
     notifySessionKey,
     resolveSubagentSession,
     notifyDeliveryContext,
-    // Preserve conversation provenance for passive subagent completion notices.
-    notifyFromConversationTurn:
-      defaults?.trigger === "user" || defaults?.continuesConversation === true,
   };
 }
 
@@ -187,7 +190,8 @@ export function resolveExecPreparedRunEnvironment(defaults?: ExecToolDefaults) {
     ...(defaults?.preparedRunEnvironment ??
       prepareGitHubToolEnvironment({
         config: defaults?.config ?? {},
-        agentId: defaults?.agentId ?? "main",
+        sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig,
+        agentId: defaults?.executionAgentId ?? defaults?.agentId ?? "main",
       })),
     localProcessEnv: installationTargetEnv(getInstallationTarget()),
   };

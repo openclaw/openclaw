@@ -1,146 +1,209 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createSessionActivityNoteState } from "../agents/session-activity-notes.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
+import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createSessionObserverCompletion } from "./session-observer-completion.js";
-import type { SessionObserverDeps, SessionObserverState } from "./session-observer-model.js";
+import type { defaultCompleteModel } from "./session-observer-model.js";
+import { observerState } from "./session-observer-state.test-support.js";
 import {
-  createHarness,
-  flushObserver,
+  advanceAndFlush as advance,
+  expectBroadcast,
+  useObserverSuite,
+} from "./session-observer-suite.test-support.js";
+import {
+  event,
   modelMessage,
-  resetSessionObserverEventSequence,
+  preparedModel,
   startAndAddToolNotes,
 } from "./session-observer.test-utils.js";
 
+const { createHarness } = useObserverSuite();
+
 beforeEach(() => {
-  vi.useFakeTimers();
+  setGatewayPluginMetadataSnapshot(
+    createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "openai",
+          modelIdNormalization: {
+            providers: { openai: { aliases: { "private-manifest-alias": "gpt-test" } } },
+          },
+        },
+      ],
+    }),
+  );
 });
 
 afterEach(() => {
-  vi.useRealTimers();
-  resetSessionObserverEventSequence();
+  resetSecretRedactionRegistryForTest();
+  setCurrentPluginMetadataSnapshot(undefined);
 });
 
-describe("session observer completion", () => {
-  it("reports a redacted, collapsed, bounded prefix of the last of two rejected replies", async () => {
-    const password = `synthetic-${"x".repeat(200)}-credential`;
-    const result = {
-      text: "first rejected output",
-      provider: "openai",
-      model: "gpt-test",
-      owner: { kind: "harness" as const, id: "openclaw" },
-    };
-    const completeModel = vi
-      .fn<NonNullable<SessionObserverDeps["completeModel"]>>()
-      .mockResolvedValueOnce(result)
-      .mockResolvedValueOnce({
-        ...result,
-        text: ` \n last\t rejected\noutput password=${password}\n${"x".repeat(180)} `,
-      });
-    const request = createSessionObserverCompletion({
-      getConfig: () => ({}),
-      prepareModel: vi.fn(async () => ({
-        config: {},
-        provider: "openai",
-        model: "gpt-test",
-        authProfileId: undefined,
-        outputTextPolicy: "strict-visible" as const,
-        agentId: "main",
-        agentDir: "/tmp/agent",
-      })),
-      completeModel,
-      setTimeoutFn: setTimeout,
-      clearTimeoutFn: clearTimeout,
-      isCurrent: () => true,
+it.each(["exact tool cap", "invalid schema", "manifest alias"])(
+  "warns once when %s failures disable observation, and retries on the next run",
+  async (failure) => {
+    const notices: AgentEventPayload[] = [];
+    const unsubscribe = onAgentEvent((evt) => {
+      if (evt.stream === "notice") {
+        notices.push(evt);
+      }
     });
-    const state: SessionObserverState = {
-      ...createSessionActivityNoteState(),
-      sessionKey: "agent:main:session-1",
-      runId: "run-1",
-      agentId: "main",
-      utilityModelRef: "openai/gpt-test",
-      startedAt: 0,
-      lastActivityAt: 0,
-      lastRunAt: 0,
-      revision: 0,
-      digestCount: 0,
-      consecutiveFailures: 0,
-      lastDigestNoteSequence: 0,
-      inFlight: false,
-      finalPending: false,
-    };
-    const prefix = "last rejected output password=synthe…tial ";
-
-    await expect(request(state, [])).rejects.toThrow(
-      new Error(
-        `session observer returned invalid JSON twice; last rejected output: ${prefix}${"x".repeat(160 - prefix.length)}`,
-      ),
+    const prepareModel = vi.fn(async () => {
+      if (failure === "exact tool cap") {
+        throw new Error('CLI backend "test-cli" cannot enforce this run\'s tool cap.');
+      }
+      return preparedModel();
+    });
+    const completeModel = vi.fn(async () =>
+      modelMessage({ headline: "Working", health: "on-track", planProgress: null }),
     );
-    expect(completeModel).toHaveBeenCalledTimes(2);
-  });
+    const harness = createHarness({
+      prepareModel,
+      completeModel,
+      config: {
+        gateway: { controlUi: { sessionObserver: true } },
+        agents: {
+          defaults: {
+            utilityModel:
+              failure === "manifest alias"
+                ? "openai/private-manifest-alias@private-profile"
+                : failure === "exact tool cap"
+                  ? "openai/gpt-test@private-profile"
+                  : "private-utility-alias@private-profile",
+            models: { "openai/gpt-test": { alias: "private-utility-alias" } },
+          },
+        },
+      },
+    });
+    const owner = claimAgentRunContext(
+      "run-1",
+      { sessionKey: "agent:main:session-1", agentId: "main" },
+      { exclusive: true },
+    );
+    try {
+      await startAndAddToolNotes(harness.observer);
+      await advance(24_000);
+      expect(notices).toMatchObject([
+        {
+          runId: "run-1",
+          sessionKey: "agent:main:session-1",
+          data: {
+            phase: "warning",
+            message: expect.stringMatching(
+              /openai\/gpt-test.*choose a capable utility model.*utilityModel\.fallbacks/u,
+            ),
+          },
+        },
+      ]);
+      expect(notices[0]?.data.message).not.toMatch(
+        /private-profile|private-utility-alias|private-manifest-alias/u,
+      );
+      const callsAtDisable = prepareModel.mock.calls.length + completeModel.mock.calls.length;
+      await harness.observer.handleEventAsync(
+        event({ stream: "tool", data: { phase: "start", name: "read", args: { path: "more" } } }),
+      );
+      await advance(60_000);
+      expect(prepareModel.mock.calls.length + completeModel.mock.calls.length).toBe(callsAtDisable);
+      expect(notices).toHaveLength(1);
 
-  it("publishes a digest from a utility model that answers after 15s", async () => {
-    vi.setSystemTime(0);
-    // CLI-backed utility models (for example claude-cli Haiku) take 9-16s per call.
-    const completeModel = vi.fn(
-      (params: { timeoutMs?: number; abortSignal?: AbortSignal }) =>
-        new Promise((resolve, reject) => {
-          params.abortSignal?.addEventListener("abort", () => reject(new Error("aborted")), {
-            once: true,
-          });
+      prepareModel.mockImplementation(async () => preparedModel());
+      completeModel.mockImplementation(async () =>
+        modelMessage({ headline: "Working", health: "on-track" }),
+      );
+      await startAndAddToolNotes(harness.observer, { runId: "run-2" });
+      await advance(12_000);
+      expectBroadcast(harness, { runId: "run-2", headline: "Working" });
+      expect(notices).toHaveLength(1);
+    } finally {
+      unsubscribe();
+      await harness.observer.disposeAsync();
+      releaseAgentRunContext("run-1", owner);
+    }
+  },
+);
+
+function completionAfter(delay?: number) {
+  return vi.fn(
+    (params: { abortSignal?: AbortSignal }) =>
+      new Promise<ReturnType<typeof modelMessage>>((resolve, reject) => {
+        params.abortSignal!.addEventListener("abort", () => reject(new Error("aborted")), {
+          once: true,
+        });
+        if (delay !== undefined) {
           setTimeout(
-            () =>
-              resolve(
-                modelMessage({
-                  headline: "Reviewing the implementation",
-                  assessment: "The work is progressing steadily.",
-                  health: "on-track",
-                }),
-              ),
-            15_000,
+            () => resolve(modelMessage({ headline: "Working", health: "on-track" })),
+            delay,
           );
-        }),
-    );
-    const harness = createHarness({ completeModel });
-    startAndAddToolNotes(harness.observer);
+        }
+      }),
+  );
+}
 
-    await vi.advanceTimersByTimeAsync(12_000);
-    expect(completeModel).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(15_000);
-    await flushObserver();
-
-    expect(completeModel.mock.calls[0]?.[0].abortSignal?.aborted).toBe(false);
-    expect(harness.broadcastToConnIds).toHaveBeenCalledWith(
-      "session.observer",
-      expect.objectContaining({ headline: "Reviewing the implementation", health: "on-track" }),
-      expect.any(Set),
-      expect.anything(),
-    );
-    harness.observer.dispose();
+it("reports a redacted, collapsed, bounded prefix of the last of two rejected replies", async () => {
+  const password = `synthetic-${"x".repeat(200)}-credential`;
+  const registered = `registered-${"q".repeat(200)}-fixture`;
+  registerSecretValueForRedaction(registered);
+  const result = { ...modelMessage({}), text: "first rejected output" };
+  const completeModel = vi
+    .fn<typeof defaultCompleteModel>()
+    .mockResolvedValueOnce(result)
+    .mockResolvedValueOnce({
+      ...result,
+      text: ` \n last\t rejected\noutput ${registered} password=${password}\n${"x".repeat(180)} `,
+    });
+  const request = createSessionObserverCompletion({
+    getConfig: () => ({}),
+    prepareModel: vi.fn(async () => ({ ...preparedModel(), config: {} })),
+    completeModel,
+    isCurrent: () => true,
   });
+  const error = await request(observerState(), []).catch((caught: unknown) => caught);
+  expect(error).toBeInstanceOf(Error);
+  const message = (error as Error).message;
+  const heading = "session observer returned invalid JSON twice; last rejected output: ";
+  expect(message).toContain(heading);
+  const prefix = message.slice(heading.length);
+  expect(prefix).toHaveLength(160);
+  expect(prefix).toContain("last rejected output ");
+  expect(prefix).not.toMatch(/[\n\r\t]/u);
+  expect(prefix).not.toContain(registered.slice(0, 64));
+  expect(prefix).not.toContain(password.slice(0, 64));
+  expect(prefix).toContain("password=");
+  expect(prefix).toMatch(/x{20}$/u);
+  expect(completeModel).toHaveBeenCalledTimes(2);
+});
 
-  it("aborts stuck completions at the cap and disables the run after two failures", async () => {
-    vi.setSystemTime(0);
-    const signals: AbortSignal[] = [];
-    const completeModel = vi.fn(
-      (params: { abortSignal?: AbortSignal }) =>
-        new Promise<never>((_resolve, reject) => {
-          const signal = params.abortSignal!;
-          signals.push(signal);
-          signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
-        }),
-    );
-    const harness = createHarness({ completeModel });
-    startAndAddToolNotes(harness.observer);
-    await vi.advanceTimersByTimeAsync(12_000);
-    await vi.advanceTimersByTimeAsync(29_999);
-    expect(signals[0]?.aborted).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(signals[0]?.aborted).toBe(true);
-    expect(completeModel).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(signals[1]?.aborted).toBe(true);
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(completeModel).toHaveBeenCalledTimes(2);
-    expect(harness.broadcastToConnIds).not.toHaveBeenCalled();
-    harness.observer.dispose();
-  });
+it("publishes a digest from a utility model that answers after 15s", async () => {
+  const completeModel = completionAfter(15_000);
+  const harness = createHarness({ completeModel });
+  await startAndAddToolNotes(harness.observer);
+
+  await advance(12_000);
+  expect(completeModel).toHaveBeenCalledOnce();
+  await advance(15_000);
+
+  expect(completeModel.mock.calls[0]?.[0].abortSignal?.aborted).toBe(false);
+  expectBroadcast(harness, { headline: "Working", health: "on-track" });
+});
+
+it("aborts stuck completions at the cap and disables the run after two failures", async () => {
+  const completeModel = completionAfter();
+  const signal = (index: number) => completeModel.mock.calls[index]?.[0].abortSignal;
+  const harness = createHarness({ completeModel });
+  await startAndAddToolNotes(harness.observer);
+  await advance(12_000);
+  await advance(29_999);
+  expect(signal(0)?.aborted).toBe(false);
+  await advance(1);
+  expect(signal(0)?.aborted).toBe(true);
+  expect(completeModel).toHaveBeenCalledTimes(2);
+  await advance(30_000);
+  expect(signal(1)?.aborted).toBe(true);
+  await advance(60_000);
+  expect(completeModel).toHaveBeenCalledTimes(2);
+  expect(harness.broadcastToConnIds).not.toHaveBeenCalled();
 });

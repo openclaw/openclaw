@@ -364,12 +364,3 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
       : prepared.reply,
   );
 };
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.commandsLoginTestApi")] = {
-    clearActiveFlows() {
-      activeProviderLoginFlows.logins.clear();
-      activeProviderLoginFlows.modelAccess.clear();
-    },
-  };
-}

@@ -1,8 +1,10 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
+import { promisify } from "node:util";
 import { expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
+import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -11,13 +13,11 @@ import {
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const PAGE_URL = "https://startup.example/page";
-const READY = JSON.stringify({
-  type: "ready",
-  targetId: "raw-startup",
-  title: "Startup page",
-  url: PAGE_URL,
-});
+const resource = { targetId: "raw-startup", url: "https://startup.example/page" };
+const pageInfo = { ...resource, title: "Startup page" };
+const fallbackPng = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 0 });
+type Viewport = { cssWidth: number; cssHeight: number };
+const READY = JSON.stringify({ type: "ready", ...pageInfo });
 const suite = createControlUiE2eSuite({
   name: "Control UI browser stream startup",
   startServerBeforeBrowser: true,
@@ -56,24 +56,18 @@ async function startStreamFixture(holdUpgrade: boolean, sendReady: boolean) {
     sockets,
     upgrades,
     async close() {
-      for (const stream of sockets) {
-        stream.terminate();
-      }
-      for (const socket of connections) {
-        socket.destroy();
-      }
+      sockets.forEach((stream) => stream.terminate());
+      connections.forEach((socket) => socket.destroy());
       await new Promise<void>((resolve) => {
         streams.close(() => resolve());
       });
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await promisify(server.close.bind(server))();
     },
   };
 }
 
-function frame(jpeg: string, viewport: { cssWidth: number; cssHeight: number }): Buffer {
-  const header = Buffer.from(JSON.stringify({ url: PAGE_URL, ...viewport }));
+function frame(jpeg: string, viewport: Viewport): Buffer {
+  const header = Buffer.from(JSON.stringify({ url: resource.url, ...viewport }));
   const length = Buffer.alloc(4);
   length.writeUInt32BE(header.length);
   return Buffer.concat([length, header, Buffer.from(jpeg, "base64")]);
@@ -83,59 +77,22 @@ suite.define(() => {
   it.each(["mint", "upgrade", "ready", "frame", "timeout"] as const)(
     "owns slow %s startup through the actual auxiliary WebSocket",
     async (phase) => {
-      const fixture = await startStreamFixture(
-        phase === "upgrade",
-        phase === "frame" || phase === "timeout",
-      );
+      const timeout = phase === "timeout";
+      const ready = phase === "frame" || timeout;
+      const fixture = await startStreamFixture(phase === "upgrade", ready);
       try {
         await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
           await page.route("**/__openclaw__/assistant-media**", (route) =>
-            route.fulfill({
-              contentType: "image/png",
-              body: Buffer.from(
-                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
-                "base64",
-              ),
-            }),
+            route.fulfill({ contentType: "image/png", body: fallbackPng }),
           );
-          const minted = {
-            token: "synthetic-startup",
-            wsPath: fixture.url,
-            targetId: "raw-startup",
-            url: PAGE_URL,
-          };
-          const browserResponses = (viewport: { cssWidth: number; cssHeight: number }) => ({
-            cases: [
-              {
-                match: { path: "/tabs" },
-                response: {
-                  running: true,
-                  tabs: [
-                    {
-                      tabId: "tab-startup",
-                      targetId: "raw-startup",
-                      title: "Startup page",
-                      url: PAGE_URL,
-                    },
-                  ],
-                },
-              },
-              { match: { path: "/screencast" }, response: minted },
-              {
-                match: { path: "/screenshot" },
-                response: {
-                  path: "/synthetic-fallback.png",
-                  targetId: "raw-startup",
-                  url: PAGE_URL,
-                },
-              },
-              {
-                match: { path: "/act" },
-                response: {
-                  result: { ...viewport, title: "Startup page", url: PAGE_URL },
-                },
-              },
-            ],
+          const minted = { token: "synthetic-startup", wsPath: fixture.url, ...resource };
+          const browserResponses = (viewport: Viewport) => ({
+            cases: Object.entries({
+              "/tabs": { running: true, tabs: [{ tabId: "tab-startup", ...pageInfo }] },
+              "/screencast": minted,
+              "/screenshot": { path: "/synthetic-fallback.png", ...resource },
+              "/act": { result: { ...viewport, title: pageInfo.title, url: resource.url } },
+            }).map(([path, response]) => ({ match: { path }, response })),
           });
           const gateway = await installMockGateway(page, {
             featureMethods: [...defaultControlUiFeatureMethods, "browser.request"],
@@ -146,6 +103,8 @@ suite.define(() => {
               "browser.request": browserResponses({ cssWidth: 80, cssHeight: 60 }),
             },
           });
+          const requestCount = async (path: string) =>
+            (await gateway.getRequests("browser.request", { path })).length;
           await page.clock.install();
           await page.goto(`${suite.server.baseUrl}chat`);
           await page.getByText("Open the browser.", { exact: true }).waitFor();
@@ -153,12 +112,6 @@ suite.define(() => {
             const canvas = document.createElement("canvas");
             canvas.width = 80;
             canvas.height = 60;
-            const context = canvas.getContext("2d");
-            if (!context) {
-              throw new Error("Canvas context unavailable");
-            }
-            context.fillStyle = "#2070b0";
-            context.fillRect(0, 0, 80, 60);
             return canvas.toDataURL("image/jpeg").split(",")[1]!;
           });
           if (phase === "mint") {
@@ -179,24 +132,17 @@ suite.define(() => {
             await expect.poll(() => fixture.sockets.length).toBe(1);
           }
           await page.clock.runFor(2000);
-          expect(
-            await gateway.getRequests("browser.request", { path: "/screenshot" }),
-          ).toHaveLength(0);
-          expect(
-            await gateway.getRequests("browser.request", { path: "/screencast" }),
-          ).toHaveLength(1);
+          expect(await requestCount("/screenshot")).toBe(0);
+          expect(await requestCount("/screencast")).toBe(1);
           const image = page.locator("section.bp .bp-shot");
-          if (phase === "timeout") {
+          if (timeout) {
             await page.clock.runFor(30_000);
             await expect.poll(() => fixture.sockets[0]?.readyState).toBe(WebSocket.CLOSED);
             await image.waitFor();
             expect(await image.getAttribute("src")).toMatch(/^data:/);
-            expect(
-              await gateway.getRequests("browser.request", { path: "/screenshot" }),
-            ).toHaveLength(1);
+            expect(await requestCount("/screenshot")).toBe(1);
             await page.clock.runFor(10_000);
             await expect.poll(() => fixture.sockets.length).toBe(2);
-            fixture.sockets[1]!.send(frame(jpeg, viewport));
           } else {
             if (phase === "mint") {
               await gateway.resolveDeferred("browser.request", minted);
@@ -208,29 +154,22 @@ suite.define(() => {
             if (phase !== "frame") {
               fixture.sockets[0]!.send(READY);
             }
-            fixture.sockets[0]!.send(frame(jpeg, viewport));
           }
+          fixture.sockets[timeout ? 1 : 0]!.send(frame(jpeg, viewport));
           await expect
             .poll(() =>
-              image.evaluate((element) => {
-                const rendered = element as HTMLImageElement;
-                return (
-                  rendered.src.startsWith("blob:") &&
-                  rendered.complete &&
-                  rendered.naturalWidth === 80
-                );
-              }),
+              image.evaluate((element: HTMLImageElement) => ({
+                blob: element.src.startsWith("blob:"),
+                complete: element.complete,
+                width: element.naturalWidth,
+              })),
             )
-            .toBe(true);
+            .toEqual({ blob: true, complete: true, width: 80 });
           const src = await image.getAttribute("src");
           await page.clock.runFor(120_000);
           expect(await image.getAttribute("src")).toBe(src);
-          expect(
-            await gateway.getRequests("browser.request", { path: "/screenshot" }),
-          ).toHaveLength(phase === "timeout" ? 1 : 0);
-          expect(
-            await gateway.getRequests("browser.request", { path: "/screencast" }),
-          ).toHaveLength(phase === "timeout" ? 2 : 1);
+          expect(await requestCount("/screenshot")).toBe(timeout ? 1 : 0);
+          expect(await requestCount("/screencast")).toBe(timeout ? 2 : 1);
           expect(await gateway.getRequests("connect")).toHaveLength(1);
         });
       } finally {

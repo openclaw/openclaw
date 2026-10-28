@@ -1,8 +1,12 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
+import * as displayText from "../../lib/strip-thinking-tags.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
+import * as duplicatePreparation from "./chat-thread-duplicates.ts";
+import { createProps } from "./chat-thread.test-support.ts";
+import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
 
 function deepFreeze(value: unknown): void {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
@@ -167,7 +171,13 @@ describe("incremental history build equivalence", () => {
 
     const groups = warmPrepended.filter((item) => item.kind === "group");
     const entries = groups.flatMap((group) => group.messages);
-    expect(entries.some((entry) => entry.duplicateCount === 2)).toBe(true);
+    expect(
+      entries.filter((entry) =>
+        normalizeMessage(entry.message).content.some(
+          (block) => block.type === "text" && block.text === "Needle repeated update",
+        ),
+      ),
+    ).toHaveLength(2);
     expect(
       entries.some((entry) =>
         normalizeMessage(entry.message).content.some((block) => block.type === "canvas"),
@@ -190,4 +200,133 @@ describe("incremental history build equivalence", () => {
       );
     }
   });
+});
+
+it("does not re-strip retained display payloads when older history is prepended", () => {
+  resetChatThreadState();
+  const strip = vi.spyOn(displayText, "stripThinkingTags");
+  const preparation = vi.spyOn(duplicatePreparation, "prepareMessagesForGrouping");
+  try {
+    const props = createProps({
+      paneId: "prepend-work",
+      sessionKey: "prepend-work",
+      messages: [
+        message("recent-user", "user", 10, "Recent request"),
+        message("recent-answer", "assistant", 11, "Recent answer"),
+      ],
+    });
+    buildCachedChatItems(props);
+    strip.mockClear();
+    preparation.mockClear();
+    const items = buildCachedChatItems({
+      ...props,
+      messages: [
+        message("older-user", "user", 1, "Earlier request"),
+        message("older-answer", "assistant", 2, "Earlier answer"),
+        ...props.messages,
+      ],
+    });
+    expect(items.filter((item) => item.kind === "group")).toHaveLength(4);
+    expect(strip.mock.calls.some(([text]) => text === "Earlier answer")).toBe(true);
+    expect(strip.mock.calls.filter(([text]) => text === "Recent answer")).toHaveLength(0);
+    expect(
+      preparation.mock.calls
+        .flatMap(([source]) => source)
+        .filter((item) => item.kind === "message" && props.messages.includes(item.message)),
+    ).toHaveLength(0);
+  } finally {
+    strip.mockRestore();
+    preparation.mockRestore();
+    resetChatThreadState();
+  }
+});
+
+it("recomputes shared reply attribution without annotating retained grouping segments", () => {
+  resetChatThreadState();
+  try {
+    const alice = message("alice", "user", 10, "Alice request", {
+      __openclaw: { id: "alice", seq: 10, senderId: "alice", senderName: "Alice" },
+    });
+    const props = createProps({
+      paneId: "prepend-people",
+      sessionKey: "prepend-people",
+      messages: [alice, message("answer", "assistant", 11, "Alice answer")],
+    });
+    const answer = (items: ReturnType<typeof buildCachedChatItems>) =>
+      items.findLast((item) => item.kind === "group" && item.role === "assistant");
+    const initial = answer(buildCachedChatItems(props));
+    expect(initial?.kind === "group" && initial.replyShared).toBeUndefined();
+    const shared = answer(
+      buildCachedChatItems({
+        ...props,
+        messages: [
+          message("bob", "user", 1, "Bob request", {
+            __openclaw: { id: "bob", seq: 1, senderId: "bob", senderName: "Bob" },
+          }),
+          message("bob-answer", "assistant", 2, "Bob answer"),
+          ...props.messages,
+        ],
+      }),
+    );
+    expect(shared?.kind === "group" && shared.replyShared).toBe(true);
+    expect(shared?.kind === "group" && shared.replyToMessage?.message).toBe(alice);
+    expect(initial?.kind === "group" && initial.replyShared).toBeUndefined();
+    const reset = answer(buildCachedChatItems(props));
+    expect(reset?.kind === "group" && reset.replyShared).toBeUndefined();
+    expect(reset?.kind === "group" && reset.replyToMessage).toBeUndefined();
+    expect(shared?.kind === "group" && shared.replyShared).toBe(true);
+  } finally {
+    resetChatThreadState();
+  }
+});
+
+it("groups consecutive forwarded turns with linear source work", () => {
+  const preparation = vi.spyOn(duplicatePreparation, "prepareMessagesForGrouping");
+  try {
+    const messages = Array.from({ length: 24 }, (_, index) =>
+      message(`forwarded-${index}`, "assistant", index + 1, `Forwarded update ${index}`, {
+        provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      }),
+    );
+    const items = buildChatItems(
+      createProps({ paneId: "forwarded-work", sessionKey: "forwarded-work", messages }),
+    );
+    expect(items.filter((item) => item.kind === "group")).toHaveLength(messages.length);
+    expect(preparation.mock.calls.reduce((count, [source]) => count + source.length, 0)).toBe(
+      messages.length,
+    );
+  } finally {
+    preparation.mockRestore();
+  }
+});
+
+it("retires superseded grouping snapshots when prepends extend a forwarded segment", () => {
+  const preparation = vi.spyOn(duplicatePreparation, "prepareMessagesForGrouping");
+  try {
+    const messages = Array.from({ length: 24 }, (_, index) =>
+      message(`retained-${index}`, "assistant", index + 1, `Forwarded update ${index}`, {
+        provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      }),
+    );
+    const build = (count: number) =>
+      buildChatItems(
+        createProps({
+          paneId: "forwarded-retention",
+          sessionKey: "forwarded-retention",
+          messages: messages.slice(-count),
+        }),
+      );
+    for (const count of [6, 12, 18, 24]) {
+      expect(build(count).filter((item) => item.kind === "group")).toHaveLength(count);
+    }
+    preparation.mockClear();
+    build(6);
+    // The old suffix must be rebuilt: its overlapping cached snapshot was retired.
+    expect(preparation.mock.calls.reduce((count, [source]) => count + source.length, 0)).toBe(6);
+    preparation.mockClear();
+    build(24);
+    expect(preparation.mock.calls.reduce((count, [source]) => count + source.length, 0)).toBe(24);
+  } finally {
+    preparation.mockRestore();
+  }
 });

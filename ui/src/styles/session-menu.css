@@ -1,19 +1,49 @@
-wa-dropdown.session-menu::part(menu) {
-  padding: var(--menu-padding);
+.session-menu > .oc-menu {
   border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
+  min-width: 224px;
+  max-width: 264px;
+}
+
+.session-menu__panel {
+  --oc-overlay-distance: 0px;
+
+  min-width: 224px;
+  max-width: min(264px, calc(100dvw - 16px));
+}
+
+@media (min-width: 769px) {
+  @media not all and (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+    :is(.chat-header-session-menu__panel, .session-menu__panel) .session-menu__separator {
+      border-top-color: var(--details-separator);
+    }
+  }
+}
+
+.session-menu__panel .oc-menu-item__icon {
+  margin-inline-end: 0;
+}
+
+.session-menu__panel .oc-menu-item--submenu > .oc-menu-item__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.session-menu__panel > .session-menu__item {
+  padding: 0 8px;
 }
 
 /* Contributed dropdown rows share the menu typography without renderer-specific classes. */
-:is(.session-menu wa-dropdown-item, .session-menu__item, .sidebar-session-sort-menu__item) {
+:is(.session-menu .oc-menu-item, .session-menu__item, .sidebar-session-sort-menu__item) {
   font: inherit;
   font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .session-menu__item,
 .sidebar-session-sort-menu__item {
+  --oc-menu-item-padding-inline: 8px;
+
   box-sizing: border-box;
   display: flex;
   align-items: center;
@@ -46,30 +76,6 @@ wa-dropdown.session-menu::part(menu) {
   white-space: normal;
 }
 
-/* Web Awesome's shadow row adds `margin-inline-end: 0.75em !important` to the
-   slotted icon, which the light DOM cannot outrank. Dropping the gap leaves
-   that margin as the icon column instead of stacking into a ~17px gutter. */
-wa-dropdown-item.session-menu__item {
-  --wa-color-neutral-fill-normal: var(--bg-hover);
-
-  gap: 0;
-}
-
-/* The icon slot wrapper is a block-level flex item, so its inline child sits on
-   the row's text baseline ~2px above the label's optical centre. */
-wa-dropdown-item.session-menu__item::part(icon) {
-  display: flex;
-  align-items: center;
-}
-
-/* Web Awesome insets the submenu chevron 1em at its own font size, landing it
-   inside the shortcut column and heavier than the hints. Share their rail. */
-wa-dropdown-item.session-menu__item::part(submenu-icon) {
-  inset-inline-end: 8px;
-  color: var(--muted);
-  font-size: 10px;
-}
-
 .session-menu__item:hover:not(:disabled):not([aria-disabled="true"]),
 .session-menu__item[aria-expanded="true"],
 .session-menu__item:focus-visible,
@@ -87,12 +93,6 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 .session-menu__item--destructive,
 .session-menu__item--destructive .session-menu__icon {
   color: var(--danger);
-}
-
-/* Web Awesome renders checkbox marks before the label. Selection state in this
-   menu uses the trailing details rail, so keep the native semantics but hide its visual. */
-.sidebar-session-sort-menu__item::part(checkmark) {
-  display: none;
 }
 
 .session-menu__icon,
@@ -122,8 +122,13 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   font-size: 10px;
 }
 
+/* Icon templates only carry paths; without an explicit stroke rule the SVGs
+   render as solid black fills (invisible-blob chips in dark mode). */
 .session-menu__icon svg,
-.session-menu__check svg {
+.session-menu__check svg,
+.new-session-page__trigger-chevron svg,
+.new-session-page__target-icon svg,
+.new-session-page__browser-nav svg {
   width: 14px;
   height: 14px;
   stroke: currentColor;
@@ -133,108 +138,22 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   stroke-linejoin: round;
 }
 
-wa-dropdown-item.session-menu__item:not([disabled]):not([aria-disabled="true"]) {
-  cursor: var(--cursor-action);
-}
-
-wa-dropdown-item.session-menu__item[data-new-tab-action]:not([disabled], [aria-disabled="true"]) {
+.session-menu__item[data-new-tab-action]:not(:disabled, [aria-disabled="true"]) {
   cursor: pointer;
 }
 
 @supports (corner-shape: superellipse(1.5)) {
-  wa-dropdown.session-menu {
+  .session-menu {
     --menu-radius: calc(10px * var(--openclaw-corner-radius-scale));
     --menu-item-radius: calc(var(--menu-radius) - var(--menu-padding));
   }
 
-  wa-dropdown.session-menu::part(menu) {
+  .session-menu > .oc-menu {
     corner-shape: superellipse(1.5);
   }
 }
 
-/* Keep search available while scrolling the complete directory. */
-.people-menu__search {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  padding: 6px 8px;
-  background: var(--bg-elevated);
-}
-
-.people-menu__search input {
-  box-sizing: border-box;
-  width: 100%;
-  min-width: 0;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--menu-item-radius);
-  background: var(--bg);
-  color: var(--text);
-  font: inherit;
-}
-
-.people-menu__status {
-  padding: 6px 8px;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-/* A :has() subject here invalidates unrelated shadow parts on transcript mutations. */
-wa-dropdown-item.people-menu__submenu::part(submenu) {
-  width: min(320px, calc(100vw - 24px));
-  max-height: min(420px, 60vh);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-wa-dropdown-item.session-menu__settings::part(submenu) {
-  width: min(340px, calc(100vw - 24px));
-}
-
-.session-menu__communication {
-  padding: 2px 8px;
-}
-
-.session-menu__communication-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 36px;
-  font-size: calc(13px * var(--control-ui-text-scale));
-}
-
-.session-menu__communication-picker {
-  display: flex;
-  flex: 0 0 auto;
-  padding: 2px;
-  border: 1px solid var(--border);
-  border-radius: var(--menu-item-radius);
-  background: var(--bg);
-}
-
-.session-menu__communication-choice {
-  padding: 3px 7px;
-  border: 0;
-  border-radius: var(--menu-item-radius);
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: calc(12px * var(--control-ui-text-scale));
-  cursor: var(--cursor-action);
-}
-
-.session-menu__communication-choice[aria-pressed="true"] {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.session-menu__communication-choice:focus-visible {
+.chat-controls__speed-option:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
-}
-
-.session-menu__communication-choice:disabled {
-  opacity: 0.42;
-  cursor: not-allowed;
 }

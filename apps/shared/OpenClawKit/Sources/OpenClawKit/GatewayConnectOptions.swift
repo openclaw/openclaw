@@ -8,7 +8,7 @@ public enum OpenClawGatewayClientCapability {
     public static let usageRefreshing = "usage-refreshing"
 }
 
-public struct GatewayConnectOptions: Sendable {
+public struct GatewayConnectOptions: Sendable, Equatable {
     public var role: String
     public var scopes: [String]
     public var scopesAreExplicit: Bool
@@ -80,6 +80,12 @@ public struct GatewayNodeSessionCredentials: Sendable, Equatable {
         self.token = token
         self.bootstrapToken = bootstrapToken
         self.password = password
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.token.map { Array($0.utf8) } == rhs.token.map { Array($0.utf8) } &&
+            lhs.bootstrapToken.map { Array($0.utf8) } == rhs.bootstrapToken.map { Array($0.utf8) } &&
+            lhs.password.map { Array($0.utf8) } == rhs.password.map { Array($0.utf8) }
     }
 }
 

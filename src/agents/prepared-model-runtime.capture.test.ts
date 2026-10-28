@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { Model } from "../llm/types.js";
-import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { createEmptyPreparedModelRuntimeFixture } from "./embedded-agent-runner/model.fixture.test-support.js";
+import { resolveModelAsync } from "./embedded-agent-runner/model.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   bindPreparedModelRuntimeAuth,
   getPreparedModelRuntimeAuthStore,
@@ -14,7 +16,7 @@ import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.type
 import { AuthStorage } from "./sessions/auth-storage.js";
 import { ModelRegistry } from "./sessions/model-registry.js";
 
-function fixture() {
+function fixture(inference?: ModelCatalogEntry["inference"]) {
   const config = {};
   const metadataSnapshot = createPluginMetadataSnapshot({
     config,
@@ -33,32 +35,28 @@ function fixture() {
     cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
   };
   let models = new Map<string, readonly Model[]>([[model.provider, [model]]]);
-  let catalog: ModelCatalogSnapshot = { entries: [model], routeVariants: [] };
+  let catalog: ModelCatalogSnapshot = {
+    entries: [inference ? { ...model, inference } : model],
+    routeVariants: [],
+  };
   const template = ModelRegistry.create(AuthStorage.inMemory(), "unused:models.json", {
     config,
     modelsJsonContents: null,
     includePluginCatalogs: false,
     pluginMetadataSnapshot: metadataSnapshot,
   });
-  const createStores = vi.fn(() => {
+  const createStores = vi.fn((publishedModels?: ReadonlyMap<string, readonly Model[]>) => {
     const authStorage = AuthStorage.inMemory();
-    return { authStorage, modelRegistry: template.fork(authStorage) };
+    return { authStorage, modelRegistry: template.fork(authStorage, publishedModels) };
   });
   const source: PreparedModelRuntimeSnapshot = {
-    agentDir: "unused:agent",
-    activeProjectKeys: [],
-    catalogOwner: undefined,
-    config,
-    observationConfig: config,
-    isCurrent: () => true,
-    authModes: {},
-    metadataSnapshot,
-    allowGatewaySubagentBinding: false,
+    ...createEmptyPreparedModelRuntimeFixture({
+      agentDir: "unused:agent",
+      config,
+      metadataSnapshot,
+      createStores,
+    }),
     modelCatalog: catalog,
-    configuredRuntimeModels: [],
-    findConfiguredRuntimeModel: () => undefined,
-    inlineProviderModels: [],
-    createStores,
     readPublishedModels: () => models,
     readFullModelCatalog: () => catalog,
   };
@@ -77,6 +75,60 @@ function fixture() {
 }
 
 describe("captured model catalog generations", () => {
+  it("resolves newly granted API chat from the admitted catalog without changing older admissions", async () => {
+    const f = fixture({ chat: false });
+    const denied = f.capture();
+    f.replaceCatalog({
+      entries: [{ ...f.model, inference: { chat: true } }],
+      routeVariants: [],
+    });
+    const granted = f.capture();
+    const resolve = (snapshot: PreparedModelRuntimeSnapshot) =>
+      resolveModelAsync("synthetic", "first", snapshot.agentDir, snapshot.config, {
+        ...snapshot.createStores(),
+        preparedModelRuntime: snapshot,
+        skipAgentDiscovery: true,
+      });
+
+    expect(await resolve(denied)).toMatchObject({
+      error: "Model synthetic/first does not support chat inference",
+    });
+    expect(await resolve(granted)).toMatchObject({
+      model: { provider: "synthetic", id: "first", api: "openai-responses" },
+    });
+    expect(await resolve(denied)).toMatchObject({
+      error: "Model synthetic/first does not support chat inference",
+    });
+  });
+
+  it.each([
+    {
+      name: "another endpoint",
+      route: { baseUrl: "https://other.invalid", inference: { chat: true } },
+    },
+    { name: "another API", route: { api: "openai-completions", inference: { chat: true } } },
+    { name: "missing inference metadata", route: {} },
+  ] satisfies { name: string; route: Partial<ModelCatalogEntry> }[])(
+    "does not replace typed-only support with $name",
+    async ({ route }) => {
+      const f = fixture({ chat: false });
+      f.replaceCatalog({ entries: [{ ...f.model, ...route }], routeVariants: [] });
+      const snapshot = f.capture();
+      const result = await resolveModelAsync(
+        "synthetic",
+        "first",
+        snapshot.agentDir,
+        snapshot.config,
+        {
+          ...snapshot.createStores(),
+          preparedModelRuntime: snapshot,
+          skipAgentDiscovery: true,
+        },
+      );
+      expect(result.error).toBe("Model synthetic/first does not support chat inference");
+    },
+  );
+
   it("materializes only requested runtime stores while isolating each run", () => {
     const f = fixture();
     const first = f.capture();

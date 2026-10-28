@@ -81,6 +81,7 @@ const REGISTRY_ENV_KEYS =
   );
 
 type SchedulerLimits = ReturnType<typeof parseSchedulerOptions>;
+type PreparedDockerLane = DockerE2eLane & { bundledPluginSweepIds?: string };
 type DockerCandidatePlan = ReturnType<typeof resolveDockerE2ePlan>["plan"];
 
 type SchedulerActiveState = {
@@ -479,29 +480,16 @@ export function githubWorkflowRerunCommand(
   if (allowUnreleasedChangelog) {
     fields.push("-f", "allow_unreleased_changelog=true");
   }
-  if (env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC) {
-    fields.push(
-      "-f",
-      `published_upgrade_survivor_baseline=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC)}`,
-    );
-  }
-  if (env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS) {
-    fields.push(
-      "-f",
-      `published_upgrade_survivor_baselines=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS)}`,
-    );
-  }
-  if (env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS) {
-    fields.push(
-      "-f",
-      `published_upgrade_survivor_scenarios=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS)}`,
-    );
-  }
-  if (bareImage) {
-    fields.push("-f", `docker_e2e_bare_image=${shellQuote(bareImage)}`);
-  }
-  if (functionalImage) {
-    fields.push("-f", `docker_e2e_functional_image=${shellQuote(functionalImage)}`);
+  for (const [name, value] of [
+    ["published_upgrade_survivor_baseline", env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC],
+    ["published_upgrade_survivor_baselines", env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS],
+    ["published_upgrade_survivor_scenarios", env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS],
+    ["docker_e2e_bare_image", bareImage],
+    ["docker_e2e_functional_image", functionalImage],
+  ]) {
+    if (value) {
+      fields.push("-f", `${name}=${shellQuote(value)}`);
+    }
   }
   if (bareImage || functionalImage) {
     fields.push("-f", "shared_image_policy=existing-only");
@@ -655,70 +643,24 @@ export async function writeRunSummary(
   console.log(`==> Docker run summary: ${file}`);
 }
 
-async function commitJoinedSummary(
-  logDir: string,
-  summary: () => RunSummary,
-  env: NodeJS.ProcessEnv,
-) {
+function commitJoinedSummary(logDir: string, summary: RunSummary, env: NodeJS.ProcessEnv) {
   const temporary = path.join(logDir, `.summary-${randomUUID()}.tmp`);
-  const payload = { ...runSummaryPayload(summary(), env), cleanup: { joined: true } };
-  let owned = false;
-  let failure: { error: unknown } | undefined;
+  const payload = { ...runSummaryPayload(summary, env), cleanup: { joined: true } };
+  const descriptor = fs.openSync(temporary, "wx");
   try {
-    const handle = await open(temporary, "wx");
-    owned = true;
-    const errors: unknown[] = [];
-    await handle.writeFile(`${JSON.stringify(payload, null, 2)}\n`).catch((error: unknown) => {
-      errors.push(error);
-    });
-    await handle.close().catch((error: unknown) => {
-      errors.push(error);
-    });
-    if (errors.length > 0) {
-      throw errors.length === 1
-        ? errors[0]
-        : new AggregateError(errors, "Docker summary staging failed", { cause: errors[0] });
-    }
-    await activeChildrenShutdownPromise;
-    if (!requiredPublicationFailed && cleanupFailures.length === 0 && activeChildren.size === 0) {
-      // Include every handled signal before promotion without yielding between the
-      // final verdict and rename. Later signals affect exit, not the committed report.
-      const latest = runSummaryPayload(summary(), env);
-      fs.writeFileSync(
-        path.join(logDir, "failures.json"),
-        `${JSON.stringify(failureIndexPayload(latest, env), null, 2)}\n`,
-      );
-      if (latest.status !== payload.status) {
-        fs.writeFileSync(
-          temporary,
-          `${JSON.stringify({ ...latest, cleanup: { joined: true } }, null, 2)}\n`,
-        );
-      }
-      fs.renameSync(temporary, path.join(logDir, "summary.json"));
-      owned = false;
-    }
-  } catch (error) {
-    requiredPublicationFailed = true;
-    failure = { error };
-  }
-  if (owned) {
     try {
-      await fs.promises.rm(temporary, { force: true });
-    } catch (cleanupError) {
-      requiredPublicationFailed = true;
-      failure = {
-        error: failure
-          ? new AggregateError(
-              [failure.error, cleanupError],
-              "Docker summary staging cleanup failed",
-              { cause: failure.error },
-            )
-          : cleanupError,
-      };
+      fs.writeFileSync(descriptor, `${JSON.stringify(payload, null, 2)}\n`);
+    } finally {
+      fs.closeSync(descriptor);
     }
-  }
-  if (failure) {
-    throw failure.error;
+    fs.writeFileSync(
+      path.join(logDir, "failures.json"),
+      `${JSON.stringify(failureIndexPayload(payload, env), null, 2)}\n`,
+    );
+    fs.renameSync(temporary, path.join(logDir, "summary.json"));
+  } catch (error) {
+    fs.rmSync(temporary, { force: true });
+    throw error;
   }
 }
 
@@ -1460,8 +1402,53 @@ type DockerLaneEnv = {
   OPENCLAW_DOCKER_CLI_TOOLS_DIR: string;
 };
 
+async function prepareBundledPluginSweepInventory(
+  lanes: PreparedDockerLane[],
+  baseEnv: NodeJS.ProcessEnv,
+) {
+  const configured = baseEnv.OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS?.trim();
+  delete baseEnv.OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS;
+  const sweepLanes = lanes.filter(({ name }) =>
+    name.startsWith("bundled-plugin-install-uninstall-"),
+  );
+  if (sweepLanes.length === 0) {
+    return;
+  }
+  let sweepIds =
+    configured
+      ?.split(/[,\s]+/u)
+      .filter(Boolean)
+      .join(",") || undefined;
+  if (sweepIds === undefined) {
+    // Use the trusted inventory owner with frozen-target data, not target code or
+    // the installed package: missing packaged plugins must remain observable.
+    const { listBundledPluginPackArtifacts } =
+      await import("./lib/bundled-plugin-build-entries.mjs");
+    const artifacts = listBundledPluginPackArtifacts({
+      cwd: ROOT_DIR,
+      env: {
+        ...baseEnv,
+        OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: undefined,
+        OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS: undefined,
+      },
+    });
+    const expectedIds = artifacts.flatMap((artifact) => {
+      const match = /^dist\/extensions\/([^/]+)\/openclaw\.plugin\.json$/u.exec(artifact);
+      return match?.[1] ? [match[1]] : [];
+    });
+    if (expectedIds.length === 0) {
+      throw new Error("frozen target has no packaged bundled plugin manifests to verify");
+    }
+    sweepIds = expectedIds.join(",");
+  }
+  // Every shard receives the same ordered inventory; the probe owns partitioning.
+  for (const lane of sweepLanes) {
+    lane.bundledPluginSweepIds = sweepIds;
+  }
+}
+
 function laneEnv(
-  poolLane: DockerE2eLane,
+  poolLane: PreparedDockerLane,
   baseEnv: NodeJS.ProcessEnv,
   logDir: string,
 ): DockerLaneEnv {
@@ -1477,6 +1464,9 @@ function laneEnv(
     ),
   };
   env.OPENCLAW_DOCKER_ALL_LANE_NAME = name;
+  if (poolLane.bundledPluginSweepIds !== undefined) {
+    env.OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS = poolLane.bundledPluginSweepIds;
+  }
   const image = e2eImageForLane(poolLane, baseEnv);
   if (image) {
     env.OPENCLAW_DOCKER_E2E_IMAGE = image;
@@ -2200,8 +2190,10 @@ async function main() {
         await mkdir(logDir, { recursive: true }).catch(recordPublicationFailure);
         await writeSummary(summary());
       }
+      await activeChildrenShutdownPromise;
       if (!requiredPublicationFailed && cleanupFailures.length === 0 && activeChildren.size === 0) {
-        await commitJoinedSummary(logDir, summary, baseEnv);
+        // Publish one final snapshot without yielding. Later signals affect exit, not this report.
+        commitJoinedSummary(logDir, summary(), baseEnv);
       }
     };
   }
@@ -2280,6 +2272,8 @@ async function main() {
     );
     return;
   }
+
+  await prepareBundledPluginSweepInventory(scheduledLanes, baseEnv);
 
   await runPhase(
     phases,

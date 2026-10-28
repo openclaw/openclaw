@@ -1,6 +1,7 @@
 import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { LMSTUDIO_DEFAULT_API_KEY_ENV_VAR, LMSTUDIO_PROVIDER_ID } from "./src/defaults.js";
+import { getUnlistedLmstudioConfiguredModelIds } from "./src/models.js";
 import {
   hasLmstudioAuthorizationHeader,
   resolveLmstudioProviderAuthMode,
@@ -14,8 +15,9 @@ export default {
   auth: [],
   catalog: {
     order: "late",
+    getUnlistedConfiguredModelIds: getUnlistedLmstudioConfiguredModelIds,
     run: async (ctx) => {
-      const { discoverLmstudioProvider } = await import("./src/setup.js");
+      const { discoverLmstudioProvider } = await import("./src/catalog.js");
       return await discoverLmstudioProvider(ctx, { discoveryMode: "strict" });
     },
   },

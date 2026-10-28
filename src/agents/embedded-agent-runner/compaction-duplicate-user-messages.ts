@@ -53,7 +53,17 @@ export function dedupeDuplicateUserMessagesForCompaction<T extends MessageLike>(
 ): T[] {
   const lastSeenAtByKey = new Map<string, number>();
   const result: T[] = [];
-  for (const message of messages) {
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index]!;
+    if (
+      message.role === "user" &&
+      lastSeenAtByKey.size === 0 &&
+      (index + 1 === messages.length || messages[index + 1]?.role === "assistant")
+    ) {
+      // No earlier retry to compare, and no later user can consume this signature.
+      result.push(message);
+      continue;
+    }
     const signature = duplicateSignature(message);
     if (!signature) {
       // A reply ends the retry batch; identical later asks are real user turns.

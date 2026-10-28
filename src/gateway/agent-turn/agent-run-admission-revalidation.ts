@@ -1,4 +1,6 @@
 import { ErrorCodes, type ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { registerChatAbortController } from "../chat-abort.js";
 import { errorShapeFromError } from "../error-shape.js";
@@ -21,7 +23,13 @@ export function resolveAgentRunAdmissionError(
 ): ErrorShape {
   return error instanceof SessionMutationAuthorizationChangedError
     ? error.error
-    : errorShapeFromError(code, error);
+    : error instanceof PreparedModelRuntimePublicationSupersededError
+      ? errorShapeFromError(ErrorCodes.UNAVAILABLE, error, {
+          message: "Model runtime changed before this turn started. Retry the request.",
+          retryable: true,
+          retryAfterMs: 0,
+        })
+      : errorShapeFromError(code, error);
 }
 
 /** Join rejected input and preaccept cleanup without losing either failure. */
@@ -50,7 +58,7 @@ export function createAgentRunAdmissionRevalidator(options: {
     getOwnedAgentDedupeKeys: () => readonly string[];
     admissionAgentId: () => string | undefined;
     runId: string;
-    assertGatewayWorkAdmissionAllowed: () => void;
+    assertGatewayWorkAdmissionAllowed: () => SessionEntry | undefined;
     client: AgentTurnPrincipal | null;
     cfg: OpenClawConfig;
     resolvedSessionKey?: string;
@@ -77,14 +85,14 @@ export function createAgentRunAdmissionRevalidator(options: {
         keys: params.getOwnedAgentDedupeKeys(),
         agentId: params.admissionAgentId(),
         runId: params.runId,
-        stopReason: activeRunAbort.entry?.abortStopReason ?? "rpc",
+        stopReason: activeRunAbort.entry?.adapter.abortStopReason ?? "rpc",
       });
     }
   };
   return (userTurn?: PreparedAgentRunUserTurn): true | Promise<undefined> => {
     const disposition = parentResume ? "cancelled" : "interrupted";
     try {
-      params.assertGatewayWorkAdmissionAllowed();
+      const sessionEntry = params.assertGatewayWorkAdmissionAllowed();
       if (parentResume) {
         if (params.client?.internal?.syntheticClient !== true) {
           throw new Error("Task resume requires trusted in-process admission.");
@@ -94,6 +102,7 @@ export function createAgentRunAdmissionRevalidator(options: {
           resume: parentResume,
           sessionKey: params.resolvedSessionKey,
           sessionId: params.getAdmittedSessionId(),
+          sessionLifecycleRevision: sessionEntry?.lifecycleRevision,
         });
       }
     } catch (err) {

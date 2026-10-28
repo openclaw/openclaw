@@ -134,7 +134,7 @@ export function createBoundedReadTextPage(params: {
   // Convert the fitted prefix back to a byte allowance for the existing line/cursor owner.
   // The cursor advances only over text that survives both model limits and its real footer.
   const contentBudgetBytes = Buffer.byteLength(prefix, "utf8");
-  const truncation = truncateHead(params.content, { maxBytes: contentBudgetBytes });
+  const truncation = truncateHead(params.content, contentBudgetBytes);
   const truncatedBy = truncation.truncatedBy;
   if (!truncation.truncated || truncatedBy === null) {
     return completeSelectedPage(truncation.content);

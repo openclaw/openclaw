@@ -1,48 +1,98 @@
-// Session utility performance tests protect resolver cache scaling for large
-// session lists with repeated provider/model tuples.
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { describe, test, expect, vi } from "vitest";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
 import * as modelCatalogLookup from "../agents/model-catalog-lookup.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
-import * as entryCache from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import type { GatewayClient } from "./server-methods/types.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
+import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import * as projectionWork from "./session-projection-work.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
-import * as titleReader from "./session-transcript-title-reader.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import { projectSessionPatchResult } from "./session-utils-model.js";
 import * as rowProjection from "./session-utils-row.js";
 import { writeResidentEntries } from "./session-utils.perf.test-support.js";
 
-/**
- * Regression smoke for the per-list rowContext resolver cache. The bug we are
- * guarding against is O(rows) scaling of deterministic resolvers whose results
- * only depend on `(provider, model[, agentId])`: with N sessions sharing K
- * unique model tuples, the cached path must perform at most O(K) underlying
- * resolver calls -- not O(N).
- *
- * We assert call counts directly instead of a wall-time bound because shared
- * CI runners cannot give a stable wall-time signal, and call-count regressions
- * are the actual scaling failure mode we care about.
- */
+function prepareRuntime(cfg: OpenClawConfig) {
+  resetPluginRuntimeStateForTest();
+  const registry = createEmptyPluginRegistry();
+  setActivePluginRegistry(registry);
+  resetConfigRuntimeState();
+  setRuntimeConfigSnapshot(cfg);
+  return registry;
+}
+
+function makeStore(
+  count: number,
+  prefix: string,
+  fields: (index: number) => Partial<SessionEntry> = () => ({}),
+  key: (sessionId: string, index: number) => string = (id) => `agent:main:${id}`,
+) {
+  return Object.fromEntries(
+    Array.from({ length: count }, (_, index) => {
+      const sessionId = `${prefix}-${index}`;
+      return [
+        key(sessionId, index),
+        { sessionId, updatedAt: index + 1, ...fields(index) },
+      ] as const;
+    }),
+  );
+}
+
+function atImmediate(callback: () => void) {
+  return new Promise<void>((resolve) => {
+    setImmediate(() => {
+      callback();
+      resolve();
+    });
+  });
+}
+
+function ownedProjection<T extends { dispose(): void }>(projection: T) {
+  return Object.assign(projection, { [Symbol.dispose]: () => projection.dispose() });
+}
+
+function measureRows(onRow: (count: number) => void = () => {}, chargeBeforeRead = false) {
+  const work = { milliseconds: 0, count: 0 };
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => work.milliseconds);
+  const read = rowProjection.readSessionRowInputs;
+  const rows = vi.spyOn(rowProjection, "readSessionRowInputs").mockImplementation((params) => {
+    if (chargeBeforeRead) {
+      work.milliseconds += 20;
+    }
+    const result = read(params);
+    if (!chargeBeforeRead) {
+      work.milliseconds += 20;
+    }
+    onRow(++work.count);
+    return result;
+  });
+  return {
+    work,
+    rows,
+    restore() {
+      rows.mockRestore();
+      clock.mockRestore();
+    },
+  };
+}
+
+// Resolver call counts protect O(unique model tuples), without CI wall-clock noise.
 describe("session list resolver cache", () => {
   test("bounds dirty-refresh roster work across config publication", async () => {
     const rosterSize = 32;
     await withStateDirEnv("openclaw-roster-chunks-", async () => {
-      resetPluginRuntimeStateForTest();
-      setActivePluginRegistry(createEmptyPluginRegistry());
       const rowCount = 80;
       const ownerId = `agent-${rosterSize - 1}`;
       const entries = Object.fromEntries(
@@ -53,46 +103,46 @@ describe("session list resolver cache", () => {
       );
       let insideRow = false;
       let rowReads = 0;
+      const observedEntries: typeof entries = {};
+      // Getters preserve property-read accounting while keeping config snapshots cloneable.
+      for (const id of Object.keys(entries)) {
+        Object.defineProperty(observedEntries, id, {
+          enumerable: true,
+          get() {
+            if (insideRow) {
+              rowReads++;
+            }
+            return entries[id];
+          },
+        });
+      }
       const cfg: OpenClawConfig = {
         agents: {
-          entries: new Proxy(entries, {
-            get(target, key, receiver) {
-              if (insideRow && typeof key === "string" && Object.hasOwn(target, key)) {
-                rowReads++;
-              }
-              return Reflect.get(target, key, receiver);
-            },
-          }),
+          entries: observedEntries,
           defaults: { model: { primary: "example/roster-model" }, thinkingDefault: "off" },
         },
       };
-      resetConfigRuntimeState();
-      setRuntimeConfigSnapshot(cfg);
-      const store = Object.fromEntries(
-        Array.from({ length: rowCount }, (_, index) => [
-          `agent:${ownerId}:dashboard:${index}`,
-          {
-            sessionId: `row-chunk-${index}`,
-            updatedAt: index + 1,
-            createdActor: { type: "agent" as const, id: ownerId },
-          },
-        ]),
+      prepareRuntime(cfg);
+      const store = makeStore(
+        rowCount,
+        "row-chunk",
+        () => ({ createdActor: { type: "agent", id: ownerId } }),
+        (_id, index) => `agent:${ownerId}:dashboard:${index}`,
       );
       writeResidentEntries(store);
       let projection: SessionRowProjection | undefined;
       let refreshBatch = 0;
       const createDrain = projectionWork.createSessionProjectionDrain;
-      const drains = vi
-        .spyOn(projectionWork, "createSessionProjectionDrain")
-        .mockImplementation((params) =>
-          createDrain({
-            ...params,
-            refresh() {
-              refreshBatch++;
-              return params.refresh();
-            },
-          }),
-        );
+      const drains = vi.spyOn(projectionWork, "createSessionProjectionDrain");
+      drains.mockImplementation((params) =>
+        createDrain({
+          ...params,
+          refresh() {
+            refreshBatch++;
+            return params.refresh();
+          },
+        }),
+      );
       try {
         projection = await createSessionRowProjection({ cfg });
         let projectedRows = 0;
@@ -112,17 +162,14 @@ describe("session list resolver cache", () => {
               insideRow = false;
               projectedRows++;
               if (projectedRows === 1) {
-                control = new Promise<void>((resolve) => {
-                  setImmediate(() => {
-                    rowsBeforePause = projectedRows;
-                    entries[ownerId] = {
-                      identity: { name: "Refreshed owner" },
-                      fastModeDefault: true,
-                    };
-                    sessionChanges.emit({ all: true, scope: "config" });
-                    identityDuringPause = resolveAgentIdentity(cfg, ownerId)?.name;
-                    resolve();
-                  });
+                control = atImmediate(() => {
+                  rowsBeforePause = projectedRows;
+                  entries[ownerId] = {
+                    identity: { name: "Refreshed owner" },
+                    fastModeDefault: true,
+                  };
+                  setRuntimeConfigSnapshot(cfg);
+                  identityDuringPause = resolveAgentIdentity(cfg, ownerId)?.name;
                 });
               }
             }
@@ -131,8 +178,7 @@ describe("session list resolver cache", () => {
           writeResidentEntries(store, 1);
           await projection.ensureMaterialized();
           const result = await listProjectedSessions({ projection, opts: { limit: rowCount } });
-          expect(result.count).toBe(rowCount);
-          expect(result.totalCount).toBe(rowCount);
+          expect(result).toMatchObject({ count: rowCount, totalCount: rowCount });
           expect(result.sessions.map((row) => row.key)).toEqual(Object.keys(store).toReversed());
           expect(rowsBeforePause).toBeGreaterThan(0);
           expect(rowsBeforePause).toBeLessThan(rowCount);
@@ -157,88 +203,50 @@ describe("session list resolver cache", () => {
     });
   });
 
-  test.each([
-    { phase: "startup", cost: "acquisition" },
-    { phase: "dirty refresh", cost: "materialization" },
-  ])(
-    "yields during expensive $phase $cost without reacquiring unchanged rows",
-    async ({ phase, cost }) => {
+  test.each(["first page", "dirty refresh"])(
+    "yields during expensive %s materialization without reprojecting unchanged rows",
+    async (phase) => {
       await withStateDirEnv("openclaw-row-work-budget-", async () => {
-        resetPluginRuntimeStateForTest();
-        setActivePluginRegistry(createEmptyPluginRegistry());
         const cfg: OpenClawConfig = {
           agents: { entries: { main: {} }, defaults: { thinkingDefault: "off" } },
         };
-        resetConfigRuntimeState();
-        setRuntimeConfigSnapshot(cfg);
+        prepareRuntime(cfg);
         const rowCount = 96;
-        const store = Object.fromEntries(
-          Array.from({ length: rowCount }, (_, index) => [
-            `agent:main:budget-${index}`,
-            { sessionId: `budget-${index}`, updatedAt: index + 1 },
-          ]),
-        );
+        const store = makeStore(rowCount, "budget");
         writeResidentEntries(store);
         let projection: SessionRowProjection | undefined;
         if (phase === "dirty refresh") {
           projection = await createSessionRowProjection({ cfg });
+          await listProjectedSessions({ projection, opts: { limit: rowCount } });
         }
-        let workMs = 0;
-        let projectedRows = 0;
-        let acquiredRows = 0;
         let rowsAtControl = 0;
         let control: Promise<void> | undefined;
-        const clock = vi.spyOn(performance, "now").mockImplementation(() => workMs);
-        const readEntryCache = entryCache.readCommittedSessionEntryCache;
-        const acquisitions = vi
-          .spyOn(entryCache, "readCommittedSessionEntryCache")
-          .mockImplementation((...args) => {
-            acquiredRows++;
-            if (cost === "acquisition") {
-              workMs += 20;
-            }
-            return readEntryCache(...args);
-          });
-        const readInputs = rowProjection.readSessionRowInputs;
-        const rows = vi
-          .spyOn(rowProjection, "readSessionRowInputs")
-          .mockImplementation((params) => {
-            const result = readInputs(params);
-            if (cost === "materialization") {
-              workMs += 20;
-            }
-            projectedRows++;
-            if (projectedRows === 1) {
-              control = new Promise<void>((resolve) => {
-                setImmediate(() => {
-                  rowsAtControl = projectedRows;
-                  resolve();
-                });
-              });
-            }
-            return result;
-          });
+        const measured = measureRows((count) => {
+          if (count === 1) {
+            control = atImmediate(() => {
+              rowsAtControl = measured.work.count;
+            });
+          }
+        });
         try {
           if (projection) {
             writeResidentEntries(store, 1);
             await projection.ensureMaterialized();
           } else {
             projection = await createSessionRowProjection({ cfg });
+            await listProjectedSessions({ projection, opts: { limit: rowCount } });
           }
           await control;
           await projection.ensureMaterialized();
           expect(rowsAtControl).toBeGreaterThan(0);
           expect(rowsAtControl).toBeLessThan(rowCount);
-          expect(projectedRows).toBe(rowCount);
-          expect(acquiredRows).toBeLessThanOrEqual(rowCount * 2);
-          rows.mockClear();
+          expect(measured.work.count).toBe(rowCount);
+          measured.rows.mockClear();
           const result = await listProjectedSessions({ projection, opts: { limit: rowCount } });
           expect(result.sessions.map((row) => row.key)).toEqual(Object.keys(store).toReversed());
-          expect(rows).not.toHaveBeenCalled();
+          expect(measured.rows).not.toHaveBeenCalled();
         } finally {
-          rows.mockRestore();
-          acquisitions.mockRestore();
-          clock.mockRestore();
+          measured.restore();
           await control;
           projection?.dispose();
         }
@@ -248,54 +256,43 @@ describe("session list resolver cache", () => {
 
   test("bounds catalog acquisition per publication and reuses each agent's model metadata", async () => {
     await withStateDirEnv("openclaw-perf-catalog-", async ({ stateDir }) => {
-      resetPluginRuntimeStateForTest();
-      const pluginRegistry = createEmptyPluginRegistry();
-      setActivePluginRegistry(pluginRegistry);
       const cfg: OpenClawConfig = {
         agents: {
           entries: { main: {}, research: {} },
           defaults: { model: { primary: "example/model-hit" } },
         },
       };
-      resetConfigRuntimeState();
-      setRuntimeConfigSnapshot(cfg);
+      const pluginRegistry = prepareRuntime(cfg);
       const modelCatalog = new Map(
-        ["main", "research"].map((agentId, index) => [
+        ["main", "research"].map((agentId) => [
           agentId,
           {
-            entries: ["model-hit", "Model-Hit"].map((id, modelIndex) => {
-              const contextTokens = (index + 1) * (modelIndex + 1) * 10_000;
-              return {
-                provider: "example",
-                id,
-                name: "Example model",
-                contextTokens,
-                contextWindows: [{ id: "full", label: "Full", contextWindow: contextTokens }],
-                contextWindowDefault: "full",
-              };
-            }),
+            entries: ["model-hit", "Model-Hit"].map((id): ModelCatalogEntry => ({
+              provider: "example",
+              id,
+              name: "Example model",
+              contextWindowDefault: "full",
+            })),
             pluginRegistry,
           },
         ]),
       );
-      const store = Object.fromEntries(
-        Array.from({ length: 80 }, (_, index) => {
-          const agentId = index % 2 ? "research" : "main";
-          return [
-            `agent:${agentId}:dashboard:catalog-${index}`,
-            {
-              sessionId: `catalog-${index}`,
-              updatedAt: index,
-              providerOverride: "example",
-              modelOverride:
-                index % 8 < 2 ? "model-hit" : index % 8 < 4 ? "Model-Hit" : "model-missing",
-            } satisfies SessionEntry,
-          ];
+      const store = makeStore(
+        80,
+        "catalog",
+        (index) => ({
+          updatedAt: index,
+          providerOverride: "example",
+          modelOverride:
+            index % 8 < 2 ? "model-hit" : index % 8 < 4 ? "Model-Hit" : "model-missing",
         }),
+        (id, index) => `agent:${index % 2 ? "research" : "main"}:dashboard:${id}`,
       );
       writeResidentEntries(store);
+      const acpSessionKeys = new Set<string>();
       for (const [index, [sessionKey, entry]] of Object.entries(store).entries()) {
         if (index % 8 < 2) {
+          acpSessionKeys.add(sessionKey);
           seedCanonicalAcpSessionMeta({
             sessionKey,
             sessionId: entry.sessionId,
@@ -310,7 +307,7 @@ describe("session list resolver cache", () => {
           });
         }
       }
-      const catalogSpy = vi.spyOn(modelCatalogLookup, "findModelCatalogEntry");
+      using catalogSpy = vi.spyOn(modelCatalogLookup, "findModelCatalogEntry");
       let projection: SessionRowProjection | undefined;
       try {
         for (const revision of [1, 2]) {
@@ -343,21 +340,36 @@ describe("session list resolver cache", () => {
           expect(catalogRows).toHaveLength(40);
           for (const row of catalogRows) {
             expect(row.contextTokens).toBe(
-              revision *
-                (row.model === "Model-Hit" ? 2 : 1) *
-                (row.agentId === "main" ? 10_000 : 20_000),
+              acpSessionKeys.has(row.key)
+                ? undefined
+                : revision *
+                    (row.model === "Model-Hit" ? 2 : 1) *
+                    (row.agentId === "main" ? 10_000 : 20_000),
             );
             expect(row).not.toHaveProperty("catalogEntry");
           }
           // Acquisition shares both hits and misses; defaults retain their separate lookup.
           expect(catalogSpy.mock.calls.length).toBeLessThanOrEqual(10);
-          const inputs = vi.spyOn(rowProjection, "readSessionRowInputs");
-          try {
+          catalogSpy.mockClear();
+          let warmCatalogReads: number;
+          {
+            using inputs = vi.spyOn(rowProjection, "readSessionRowInputs");
             await listProjectedSessions({ projection, opts: { limit: 80 } });
             expect(inputs).not.toHaveBeenCalled();
-          } finally {
-            inputs.mockRestore();
+            warmCatalogReads = catalogSpy.mock.calls.length;
           }
+          catalogSpy.mockClear();
+          const updatedKey = "agent:main:dashboard:catalog-2";
+          for (let update = 0; update < 4; update++) {
+            store[updatedKey] = { ...store[updatedKey]!, label: `Metadata update ${update}` };
+            writeResidentEntries({ [updatedKey]: store[updatedKey]! }, 1);
+            const updated = await listProjectedSessions({ projection, opts: { limit: 80 } });
+            expect(updated.sessions.find((row) => row.key === updatedKey)).toMatchObject({
+              label: `Metadata update ${update}`,
+              contextTokens: revision * 20_000,
+            });
+          }
+          expect(catalogSpy.mock.calls.length).toBeLessThanOrEqual(warmCatalogReads * 4);
           catalogSpy.mockClear();
           const key = "agent:main:dashboard:catalog-0";
           const patch = projectSessionPatchResult({
@@ -378,7 +390,6 @@ describe("session list resolver cache", () => {
         }
       } finally {
         projection?.dispose();
-        catalogSpy.mockRestore();
       }
     });
   });
@@ -391,18 +402,10 @@ describe("session list resolver cache", () => {
     "reuses resident input facts for $name without a request-time yield",
     async ({ limit, search }) => {
       await withStateDirEnv("openclaw-list-work-budget-", async ({ stateDir }) => {
-        resetPluginRuntimeStateForTest();
-        setActivePluginRegistry(createEmptyPluginRegistry());
         const cfg: OpenClawConfig = {};
-        resetConfigRuntimeState();
-        setRuntimeConfigSnapshot(cfg);
+        prepareRuntime(cfg);
         const entryCount = limit === 300 ? 2051 : 32;
-        const store = Object.fromEntries(
-          Array.from({ length: entryCount }, (_, index) => [
-            `agent:main:budget-${index}`,
-            { sessionId: `budget-${index}`, updatedAt: index + 1 },
-          ]),
-        );
+        const store = makeStore(entryCount, "budget");
         const projection = createSessionRowProjectionFixture({
           cfg,
           store,
@@ -410,43 +413,27 @@ describe("session list resolver cache", () => {
         });
         // Measure resident row work independently of asynchronous identity-file admission.
         const identityRuntime = await import("../agents/identity-file-runtime.js");
-        const identityReads = vi
-          .spyOn(identityRuntime, "prepareIdentityFile")
-          .mockResolvedValue({ kind: "missing" });
-        let workMs = 0;
-        const clock = vi.spyOn(performance, "now").mockImplementation(() => workMs);
-        const readInputs = rowProjection.readSessionRowInputs;
-        const rows = vi
-          .spyOn(rowProjection, "readSessionRowInputs")
-          .mockImplementation((params) => {
-            // The former acquisition charges must never be incurred by a clean request.
-            workMs += 20;
-            return readInputs(params);
-          });
+        const identityReads = vi.spyOn(identityRuntime, "prepareIdentityFile");
+        identityReads.mockResolvedValue({ kind: "missing" });
+        // Charge former acquisition work before each read, even if it throws.
+        const measured = measureRows(undefined, true);
         let controlRan = false;
-        const control = new Promise<void>((resolve) => {
-          setImmediate(() => {
-            controlRan = true;
-            resolve();
-          });
+        const control = atImmediate(() => {
+          controlRan = true;
         });
         try {
           for (let request = 0; request < 2; request++) {
-            const result = await listProjectedSessions({
-              projection,
-              opts: { limit, search },
-            });
+            const result = await listProjectedSessions({ projection, opts: { limit, search } });
             expect(result.sessions.map((row) => row.key)).toEqual(
               !search ? Object.keys(store).toReversed().slice(0, limit) : [],
             );
             expect(controlRan).toBe(false);
-            expect(rows).not.toHaveBeenCalled();
-            expect(workMs).toBe(0);
+            expect(measured.rows).not.toHaveBeenCalled();
+            expect(measured.work.milliseconds).toBe(0);
           }
         } finally {
           identityReads.mockRestore();
-          rows.mockRestore();
-          clock.mockRestore();
+          measured.restore();
           projection.dispose();
           await control;
         }
@@ -455,126 +442,75 @@ describe("session list resolver cache", () => {
   );
 
   test("bounds owner-first transcript fields without starving shared rows", async () => {
-    const scenario = {
-      count: 480,
-      owned: 240,
-      limit: 240,
-      rows: 300,
-      enriched: 160,
-      sharedTail: 99,
-    };
     await withStateDirEnv("openclaw-perf-title-batch-", async ({ stateDir }) => {
-      resetPluginRuntimeStateForTest();
-      setActivePluginRegistry(createEmptyPluginRegistry());
-      const cfg = {
+      const cfg: OpenClawConfig = {
         agents: { defaults: { model: { primary: "openai/gpt-5" }, thinkingDefault: "off" } },
-      } as OpenClawConfig;
-      resetConfigRuntimeState();
-      setRuntimeConfigSnapshot(cfg);
+      };
+      prepareRuntime(cfg);
       const storePath = path.join(stateDir, "sessions.json");
-      const store: Record<string, SessionEntry> = {};
-      const ownerId = scenario.owned ? ensureProfileForEmail("owner@example.com").id : undefined;
-      for (let index = 0; index < scenario.count; index += 1) {
-        const sessionId = `title-batch-${index}`;
-        const sessionKey = `agent:main:${sessionId}`;
-        const entry: SessionEntry = {
-          sessionId,
-          updatedAt: 1_000 - index,
-          ...(ownerId && index >= scenario.count - scenario.owned
-            ? {
-                createdVia: "operator",
-                createdActor: { type: "human", source: "profile", id: ownerId },
-              }
-            : {}),
-        };
-        store[sessionKey] = entry;
+      const ownerId = ensureProfileForEmail("owner@example.com").id;
+      using _ = {
+        [Symbol.dispose]: (await prepareUserProfileCatalog()).release,
+      };
+      // Half the roster belongs to this owner, behind newer shared sessions.
+      const store = makeStore(480, "title-batch", (index) => ({
+        updatedAt: 1_000 - index,
+        ...(index >= 240
+          ? {
+              createdVia: "operator",
+              createdActor: { type: "human", source: "profile", id: ownerId },
+            }
+          : {}),
+      }));
+
+      const titleFieldsBySessionKey = new Map(
+        Object.keys(store).map(
+          (key, index) =>
+            [
+              key,
+              { firstUserMessage: `title ${index}`, lastMessagePreview: `last ${index}` },
+            ] as const,
+        ),
+      );
+      const client = createOperatorClient({ profileId: ownerId, scopes: ["operator.admin"] });
+      prepareGatewayRecipientProfile(client);
+      using projection = ownedProjection(
+        createSessionRowProjectionFixture({
+          cfg,
+          storePath,
+          store,
+          titleFieldsBySessionKey,
+        }),
+      );
+      const list = (include: boolean) =>
+        listProjectedSessions({
+          projection,
+          client,
+          opts: {
+            ownerFirst: true,
+            includeDerivedTitles: include,
+            includeLastMessage: include,
+            limit: 240,
+          },
+        });
+      const result = await list(true);
+
+      expect(result.sessions).toHaveLength(300);
+      for (const field of ["derivedTitle", "lastMessagePreview"] as const) {
+        expect(result.sessions.filter((row) => row[field] !== undefined)).toHaveLength(160);
+      }
+      const sessionsByKey = new Map(result.sessions.map((session) => [session.key, session]));
+      for (const index of [0, 99]) {
+        expect(sessionsByKey.get(`agent:main:title-batch-${index}`)).toMatchObject({
+          derivedTitle: `Title ${index}`,
+          lastMessagePreview: `last ${index}`,
+        });
       }
 
-      const titleSpy = vi
-        .spyOn(titleReader, "readSessionTitleFieldsFromTranscript")
-        .mockImplementation((scope) => ({
-          firstUserMessage: `title ${scope.sessionId.slice("title-batch-".length)}`,
-          lastMessagePreview: `last ${scope.sessionId.slice("title-batch-".length)}`,
-        }));
-      let projection: ReturnType<typeof createSessionRowProjectionFixture> | undefined;
-      const client: GatewayClient | undefined = ownerId
-        ? {
-            connect: {
-              minProtocol: 1,
-              maxProtocol: 1,
-              client: {
-                id: "openclaw-control-ui",
-                version: "test",
-                platform: "test",
-                mode: "webchat",
-              },
-              role: "operator",
-              scopes: ["operator.admin"],
-            },
-            authenticatedUserProfile: {
-              profileId: ownerId,
-              displayName: ownerId,
-              hasAvatar: false,
-              updatedAt: 1,
-            },
-            preparedSessionProfile: {
-              profileId: ownerId,
-              aliases: new Set([ownerId]),
-              role: null,
-            },
-          }
-        : undefined;
-      try {
-        projection = createSessionRowProjectionFixture({ cfg, storePath, store });
-        titleSpy.mockClear();
-        const result = await listProjectedSessions({
-          projection,
-          client,
-          opts: {
-            ownerFirst: Boolean(ownerId),
-            includeDerivedTitles: true,
-            includeLastMessage: true,
-            limit: scenario.limit,
-          },
-        });
-
-        expect(result.sessions).toHaveLength(scenario.rows);
-        expect(titleSpy).not.toHaveBeenCalled();
-        expect(result.sessions.filter((row) => row.derivedTitle !== undefined)).toHaveLength(
-          scenario.enriched,
-        );
-        expect(result.sessions.filter((row) => row.lastMessagePreview !== undefined)).toHaveLength(
-          scenario.enriched,
-        );
-        const sessionsByKey = new Map(result.sessions.map((session) => [session.key, session]));
-        expect(sessionsByKey.get("agent:main:title-batch-0")).toMatchObject({
-          derivedTitle: "Title 0",
-          lastMessagePreview: "last 0",
-        });
-        expect(sessionsByKey.get(`agent:main:title-batch-${scenario.sharedTail}`)).toMatchObject({
-          derivedTitle: `Title ${scenario.sharedTail}`,
-          lastMessagePreview: `last ${scenario.sharedTail}`,
-        });
-
-        const withoutTranscriptFields = await listProjectedSessions({
-          projection,
-          client,
-          opts: {
-            ownerFirst: Boolean(ownerId),
-            includeDerivedTitles: false,
-            includeLastMessage: false,
-            limit: scenario.limit,
-          },
-        });
-        expect(titleSpy).not.toHaveBeenCalled();
-        expect(withoutTranscriptFields.sessions).toHaveLength(scenario.rows);
-        for (const row of withoutTranscriptFields.sessions) {
-          expect(row.derivedTitle).toBeUndefined();
-          expect(row.lastMessagePreview).toBeUndefined();
-        }
-      } finally {
-        projection?.dispose();
-        titleSpy.mockRestore();
+      const withoutTranscriptFields = await list(false);
+      expect(withoutTranscriptFields.sessions).toHaveLength(300);
+      for (const row of withoutTranscriptFields.sessions) {
+        expect([row.derivedTitle, row.lastMessagePreview]).toEqual([undefined, undefined]);
       }
     });
   });

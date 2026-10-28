@@ -1,10 +1,6 @@
-import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
-import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
-import { acquireFileLockSyncWithRetry } from "../../infra/file-lock-sync.js";
-import { resolveJsonSaveTarget } from "../../infra/json-file.js";
+import { readFileSync } from "node:fs";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ThinkingBudgets, Transport } from "../../llm/types.js";
-import { CONFIG_DIR_NAME } from "../package-metadata.js";
 
 interface CompactionSettings {
   enabled?: boolean; // default: true
@@ -48,7 +44,7 @@ interface MarkdownSettings {
   codeBlockIndent?: string; // default: "  "
 }
 
-export interface WarningSettings {
+interface WarningSettings {
   anthropicExtraUsage?: boolean; // default: true
 }
 
@@ -59,7 +55,7 @@ export type TransportSetting = Transport;
  * - String form: load all resources from the package
  * - Object form: filter which resources to load
  */
-export type PackageSource =
+type PackageSource =
   | string
   | {
       source: string;
@@ -111,89 +107,13 @@ export interface Settings {
 
 export type SettingsScope = "global" | "project";
 
-export const SETTINGS_SCOPES: SettingsScope[] = ["global", "project"];
-
-export interface SettingsStorage {
-  /** Pure scope reads; existing custom backends may serve reads through withLock. */
-  readSettingsScope?(scope: SettingsScope): string | undefined;
-  withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void;
-}
-
-export interface SettingsError {
-  scope: SettingsScope;
-  error: Error;
-}
-
-export class FileSettingsStorage implements SettingsStorage {
-  private paths: Record<SettingsScope, string>;
-
-  constructor(cwd: string, agentDir: string) {
-    this.paths = {
-      global: join(agentDir, "settings.json"),
-      project: join(cwd, CONFIG_DIR_NAME, "settings.json"),
-    };
-  }
-
-  readSettingsScope(scope: SettingsScope): string | undefined {
-    const path = this.paths[scope];
-    // Observe ownership before absence: a first writer may commit between probes.
-    // Existing lock names and reclaim guards still go through the canonical lock checks.
-    if (
-      !lstatSync(`${path}.lock`, { throwIfNoEntry: false }) &&
-      !lstatSync(`${path}.lock.reclaim`, { throwIfNoEntry: false }) &&
-      !existsSync(path)
-    ) {
-      return undefined;
-    }
-    let content: string | undefined;
-    this.withLock(scope, (current) => {
-      content = current;
-      return undefined;
-    });
-    return content;
-  }
-
-  withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
-    const path = this.paths[scope];
-    // The canonical lock creates its parent before acquisition. First writers must
-    // read and derive their updates only after that shared ownership is established.
-    const release = acquireFileLockSyncWithRetry(path);
-    try {
-      const current = existsSync(path) ? readFileSync(path, "utf-8") : undefined;
-      const next = fn(current);
-      if (next !== undefined) {
-        const savePath = resolveJsonSaveTarget(path);
-        const saveDir = realpathSync(dirname(savePath));
-        const canonicalSavePath = join(saveDir, basename(savePath));
-
-        // The atomic helper enforces explicit modes. Carry the existing parent mode
-        // and Node's writeFile creation mode forward so replacement changes no permissions.
-        // Keep rename failures fail-closed: copy fallback can expose a partial destination.
-        replaceFileAtomicSync({
-          filePath: canonicalSavePath,
-          content: next,
-          dirMode: statSync(saveDir).mode & 0o7777,
-          mode: 0o666 & ~process.umask(),
-          preserveExistingMode: true,
-          tempPrefix: basename(canonicalSavePath),
-        });
-      }
-    } finally {
-      release();
-    }
-  }
-}
-
-export class InMemorySettingsStorage implements SettingsStorage {
-  private values: Record<SettingsScope, string | undefined> = {
-    global: undefined,
-    project: undefined,
-  };
-
-  withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
-    const next = fn(this.values[scope]);
-    if (next !== undefined) {
-      this.values[scope] = next;
-    }
+/** Read one settings file without applying runtime-specific validation or defaults. */
+export function readSettingsScope(path: string): Settings {
+  try {
+    const content = readFileSync(path, "utf-8");
+    const settings: unknown = content ? JSON.parse(content) : {};
+    return isRecord(settings) ? settings : {};
+  } catch {
+    return {};
   }
 }

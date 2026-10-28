@@ -3,11 +3,13 @@ import type { ControlUiAction } from "../../../../src/plugin-sdk/control-ui.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { publishSidebarSessionList } from "../../components/session-data-controller-events.ts";
+import "../../lib/toast-host.tsx";
+import { publishSidebarSessionList } from "../../components/session-data-events.ts";
 import {
   pauseSessionPlacementRecovery,
   readSessionPlacementRecovery,
 } from "../../lib/sessions/session-placement-recovery.ts";
+import { openRowSessionMenu as openSessionMenu } from "../app-sidebar-menu.ts";
 import {
   createGatewayHarness,
   createSessionState,
@@ -19,12 +21,13 @@ import {
 } from "../app-sidebar.ts";
 import { registerSessionPluginAction } from "../control-ui-plugin-action.ts";
 import { gatewayHelloForMethods } from "../gateway-methods.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import {
   answerConfirmDialog,
   installDialogPolyfill,
   waitForConfirmDialogActions,
 } from "../modal-dialog.ts";
-import { menuItem, menuItemLabels } from "../session-menu.ts";
+import { menuItemLabels, openSubmenu, selectMenuValue } from "../session-menu.ts";
 import { sessionOwnerProfiles } from "../session-owner-menu.ts";
 import { waitForFast } from "../wait-for.ts";
 
@@ -82,21 +85,6 @@ describe("AppSidebar session mutation feedback", () => {
     return { gateway, harness, sidebar, context };
   }
 
-  async function openSessionMenu(sidebar: SidebarLifecycleState, key: string) {
-    const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${key}"]`);
-    if (!row) {
-      throw new Error(`expected session row for ${key}`);
-    }
-    row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
-    await sidebar.updateComplete;
-    const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
-    if (!menu) {
-      throw new Error("expected session menu");
-    }
-    await menu.updateComplete;
-    return menu;
-  }
-
   function selectSession(sidebar: SidebarLifecycleState, key: string) {
     const link = sidebar.querySelector<HTMLAnchorElement>(
       `[data-session-key="${key}"] .sidebar-recent-session__link`,
@@ -133,7 +121,7 @@ describe("AppSidebar session mutation feedback", () => {
       }),
       run,
     });
-    sidebar.requestUpdate();
+    sidebar.invalidate();
     await sidebar.updateComplete;
     const publish = (rows: GatewaySessionRow[]) => {
       publishSidebarSessionList(sidebar.sessionData, {
@@ -163,7 +151,7 @@ describe("AppSidebar session mutation feedback", () => {
 
     // The filtered roster changes before rendering; the primary roster keeps its old row.
     publish([current]);
-    menu.querySelector<HTMLElement>(actionSelector)!.click();
+    await selectMenuValue(menu, menu.querySelector<HTMLButtonElement>(actionSelector)!.value);
     expect(run.mock.calls.length).toBe(1);
     expect(run.mock.calls[0]![0].sessionKey).toBe(row.key);
     expect(run.mock.calls[0]![0].session).toEqual(current);
@@ -171,7 +159,7 @@ describe("AppSidebar session mutation feedback", () => {
 
     menu = await openMenu();
     publish([{ ...current, hasActiveRun: true }]);
-    menu.querySelector<HTMLElement>(actionSelector)!.click();
+    await selectMenuValue(menu, menu.querySelector<HTMLButtonElement>(actionSelector)!.value);
     expect(run.mock.calls.length).toBe(1);
     await waitForFast(() => expect(toast.textContent).toContain("Reopen the session menu."));
   });
@@ -186,7 +174,7 @@ describe("AppSidebar session mutation feedback", () => {
       const toast = await mountToastHost();
       const menu = await openMenu();
       publish(rows);
-      menu.querySelector<HTMLElement>(actionSelector)!.click();
+      await selectMenuValue(menu, menu.querySelector<HTMLButtonElement>(actionSelector)!.value);
       expect(run.mock.calls.length).toBe(0);
       await waitForFast(() => expect(toast.textContent).toContain("Reopen the session menu."));
       toast.remove();
@@ -196,12 +184,12 @@ describe("AppSidebar session mutation feedback", () => {
     await sidebar.updateComplete;
     const menu = await openMenu();
     publish([replacement]);
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     await menu.updateComplete;
     expect(menu.querySelector(actionSelector)).toBeNull();
   });
 
-  it("offers undo after inline archiving and restores a pinned active session without navigating", async () => {
+  it("offers archive undo without altering the active session's personal pin or navigation", async () => {
     const { gateway, harness, sidebar } = await mountMutationHarness();
     const setSessionKey = vi.fn();
     (gateway.gateway as { setSessionKey: (key: string) => void }).setSessionKey = setSessionKey;
@@ -211,7 +199,7 @@ describe("AppSidebar session mutation feedback", () => {
     if (!archivedRow) {
       throw new Error("expected archive row");
     }
-    archivedRow.pinned = true;
+    sidebar.sidebarEntries = [`session:${archivedKey}`];
     harness.publishList({ result: state.result, agentId: state.agentId });
     gateway.publish({ sessionKey: archivedRow.key });
     sidebar.sessionKey = archivedRow.key;
@@ -257,7 +245,7 @@ describe("AppSidebar session mutation feedback", () => {
     expect(harness.patch).toHaveBeenNthCalledWith(
       2,
       archivedRow.key,
-      { archived: false, pinned: true },
+      { archived: false },
       {
         agentId: "main",
         expectedSessionId: `session:${archivedRow.key}`,
@@ -265,6 +253,7 @@ describe("AppSidebar session mutation feedback", () => {
       },
     );
     expect(harness.patchMany).not.toHaveBeenCalled();
+    expect(sidebar.sidebarEntries).toEqual([`session:${archivedKey}`]);
     expect(navigate).not.toHaveBeenCalled();
   });
 
@@ -293,6 +282,7 @@ describe("AppSidebar session mutation feedback", () => {
       selfUser: { id: "profile-ada", name: "Ada" },
       hello: gatewayHelloForMethods(["sessions.assignOwner"], ["operator.write"]),
     });
+    sidebar.setSessionOwnerFilter(null);
     const result = harness.sessions.state.result;
     const row = result?.sessions.find((session) => session.key === "agent:main:a");
     if (!result || !row) {
@@ -309,23 +299,16 @@ describe("AppSidebar session mutation feedback", () => {
 
     const menu = await openSessionMenu(sidebar, row.key);
     await waitForFast(() => expect(menu.textContent).toContain("Bob"));
-    expect(menuItemLabels(menu)).not.toContain("Assign to…");
-    const settings = menuItem(menu, "Session settings");
-    expect(menuItemLabels(settings).filter((label) => label.startsWith("Assign to"))).toEqual([
-      "Assign to…",
-    ]);
-    const assignmentMenu = menuItem(settings, "Assign to…");
-    expect(
-      Array.from(
-        assignmentMenu?.querySelectorAll<HTMLElement>('wa-dropdown-item[slot="submenu"]') ?? [],
-      ).map((item) => item.querySelector(".session-menu__text")?.textContent?.trim()),
-    ).toEqual(["Me", "Bob"]);
-    menu.querySelector("wa-dropdown")?.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        detail: { item: { value: "assign-owner:human:profile-bob" } },
-      }),
+    expect(menuItemLabels(menu)).toContain("Assign to…");
+    const assignmentMenu = await openSubmenu(menu, "Assign to…");
+    await waitForFast(() =>
+      expect(
+        Array.from(assignmentMenu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')).map(
+          (item) => item.querySelector(".session-menu__text")?.textContent?.trim(),
+        ),
+      ).toEqual(["Me", "Bob"]),
     );
+    await selectMenuValue(menu, "assign-owner:human:profile-bob");
 
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     expect(request).toHaveBeenCalledWith("sessions.assignOwner", {
@@ -342,15 +325,9 @@ describe("AppSidebar session mutation feedback", () => {
     });
 
     const selfMenu = await openSessionMenu(sidebar, row.key);
-    const selfItem = selfMenu.querySelector<HTMLElement>(
-      ':scope > wa-dropdown > wa-dropdown-item wa-dropdown-item[slot="submenu"][value="assign-owner:human:profile-ada"]',
-    );
-    selfMenu.querySelector("wa-dropdown")?.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        detail: { item: { value: selfItem?.getAttribute("value") } },
-      }),
-    );
+    await waitForFast(() => expect(menuItemLabels(selfMenu)).toContain("Assign to…"));
+    await openSubmenu(selfMenu, "Assign to…");
+    await selectMenuValue(selfMenu, "assign-owner:human:profile-ada");
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     expect(request).toHaveBeenNthCalledWith(2, "sessions.assignOwner", {
@@ -491,7 +468,7 @@ describe("AppSidebar session mutation feedback", () => {
     expect(error?.closest(".sidebar-recent-sessions")).toBeNull();
 
     error?.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')?.click();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(sidebar.querySelector("[data-sidebar-session-error]")).toBeNull();
   });
 
@@ -562,7 +539,7 @@ describe("AppSidebar session mutation feedback", () => {
     const pending = deferred<ReturnType<typeof successfulSessionPatch>>();
     harness.patch.mockImplementationOnce(() => pending.promise);
     const menu = await openSessionMenu(sidebar, "agent:main:a");
-    menu.querySelector<HTMLButtonElement>('[data-shortcut="p"]')?.click();
+    menu.querySelector<HTMLButtonElement>('[data-shortcut="u"]')?.click();
     await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
 
     gateway.publish({ phase: "reconnecting" });
@@ -677,7 +654,8 @@ describe("AppSidebar session mutation feedback", () => {
       },
     });
     const menu = await openSessionMenu(sidebar, "agent:main:a");
-    menu.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();
+    await openSubmenu(menu, "Advanced");
+    await selectMenuValue(menu, "delete");
     answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
     await waitForFast(() => expect(harness.deleteSession).toHaveBeenCalledOnce());
 

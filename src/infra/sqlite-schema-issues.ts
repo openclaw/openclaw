@@ -13,6 +13,7 @@ export type SqliteSchemaIssueCode =
   | "missing-column"
   | "missing-or-drifted-index"
   | "missing-or-drifted-trigger"
+  | "missing-or-drifted-view"
   | "missing-table"
   | "table-constraint-drift"
   | "table-definition-drift"
@@ -79,6 +80,7 @@ const ISSUE_DESCRIPTIONS = {
   "missing-or-drifted-index": "missing or drifted index",
   "unexpected-unique-index": "unexpected unique index",
   "missing-or-drifted-trigger": "missing or drifted trigger",
+  "missing-or-drifted-view": "missing or drifted view",
   "unexpected-trigger": "unexpected trigger",
   "virtual-table-definition-drift": "virtual table definition differs for",
   "table-options-drift": "table options differ for",
@@ -91,9 +93,6 @@ function isColumnIssue(code: SqliteSchemaIssueCode): boolean {
 }
 
 function defaultIssueMessage(code: SqliteSchemaIssueCode, objectName: string): string {
-  if (!Object.hasOwn(ISSUE_DESCRIPTIONS, code)) {
-    throw new Error("Unsupported SQLite schema issue code", { cause: code });
-  }
   const target = isColumnIssue(code) ? objectName.split(".", 1)[0] : objectName;
   return `${ISSUE_DESCRIPTIONS[code]} ${target}`;
 }

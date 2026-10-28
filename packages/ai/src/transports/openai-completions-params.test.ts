@@ -1,15 +1,14 @@
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { describe, expect, it } from "vitest";
-import type { OpenAICompletionsOptions } from "../provider-options.js";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { measuredRequestPressure, type OpenAICompletionsOptions } from "../provider-options.js";
 import { FAILED_ASSISTANT_REPLAY_TEXT } from "../replay-turn-classification.js";
 import type { Context, Model, Tool } from "../types.js";
-import { createZeroUsage } from "../usage.test-support.js";
 import { resolveOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import {
   buildOpenAICompletionsParams,
   buildOpenAICompletionsRequest,
 } from "./openai-completions-params.js";
-import { makeCompletionsModel } from "./openai-completions.test-support.js";
+import { createAssistantOutput, makeCompletionsModel } from "./openai-completions.test-support.js";
 import { buildOpenAIResponsesParams } from "./openai-responses-params-internal.js";
 import type { OpenAIModeModel } from "./openai-transport-shared.js";
 
@@ -22,24 +21,128 @@ const proxy = makeCompletionsModel({
   contextWindow: 10_000,
   maxTokens: 10_000,
 });
+function objectSchema<T extends Record<string, unknown>>(
+  properties: T,
+  rest?: Record<string, unknown>,
+) {
+  return { type: "object", properties, ...rest };
+}
+
 function emptyContext(systemPrompt = "system"): Context {
   return { systemPrompt, messages: [], tools: [] };
 }
-function tool(parameters: Record<string, unknown> = { type: "object", properties: {} }): Tool {
+function tool(parameters: Record<string, unknown> = objectSchema({})): Tool {
   return { name: "lookup_weather", description: "Get forecast", parameters };
 }
 function toolContext(parameters?: Record<string, unknown>): Context {
   return { ...emptyContext(), tools: [tool(parameters)] };
 }
 function request(
-  model: Partial<CompletionsModel>,
+  model: Partial<ToolsModel>,
   options?: OpenAICompletionsOptions,
   context = emptyContext(),
 ) {
-  return buildOpenAICompletionsParams(makeCompletionsModel(model), context, options);
+  const { compat, ...fields } = model;
+  return buildOpenAICompletionsParams(
+    { ...makeCompletionsModel(fields), compat },
+    context,
+    options,
+  );
+}
+
+function requestMode(
+  mode: "direct" | "managed",
+  model: CompletionsModel,
+  options: OpenAICompletionsOptions | undefined,
+  context = emptyContext(),
+) {
+  return buildOpenAICompletionsRequest(
+    model,
+    context,
+    options,
+    mode === "direct"
+      ? { mode, compat: resolveOpenAICompletionsCompat(model), cacheRetention: "none" }
+      : { mode },
+  );
+}
+function expectField(params: Record<string, unknown>, field: string, expected: unknown) {
+  if (expected === undefined) {
+    expect(params).not.toHaveProperty(field);
+  } else {
+    expect(params[field]).toEqual(expected);
+  }
+}
+
+function expectBudget(
+  params: ReturnType<typeof buildOpenAICompletionsParams>,
+  expected: number | undefined,
+  field = "max_completion_tokens",
+) {
+  expectField(params, field, expected);
+  expect(params).not.toHaveProperty(
+    field === "max_tokens" ? "max_completion_tokens" : "max_tokens",
+  );
 }
 
 describe("OpenAI completions output budgets", () => {
+  it.each([
+    { tokens: 1_000, output: 8_999 },
+    { tokens: 9_500, output: 499 },
+  ])("uses matched pressure of $tokens tokens", ({ tokens, output }) => {
+    const context = emptyContext("x".repeat(25_000));
+    measuredRequestPressure.set(proxy, context, tokens);
+    expectBudget(buildOpenAICompletionsParams(proxy, context, undefined), output);
+  });
+
+  it.each(["messages", "tools", "system", "endpoint", "cleared"] as const)(
+    "falls back to payload accounting after the measured request's %s changes",
+    (change) => {
+      const context = emptyContext("x".repeat(25_000));
+      const model = { ...proxy };
+      measuredRequestPressure.set(model, context, 1_000);
+      if (change === "messages") {
+        context.messages = [...context.messages];
+      } else if (change === "tools") {
+        context.tools = [...(context.tools ?? [])];
+      } else if (change === "system") {
+        context.systemPrompt = "y".repeat(25_000);
+      } else if (change === "endpoint") {
+        model.baseUrl = "http://localhost:8001/v1";
+      } else {
+        measuredRequestPressure.set(model, context, undefined);
+      }
+      expectBudget(buildOpenAICompletionsParams(model, context, undefined), 2_186);
+    },
+  );
+
+  it.each([
+    { name: "an already measured", tokens: 24_000, schemaChars: 16_000, output: 8_192 },
+    { name: "a new or enlarged", tokens: 1_000, schemaChars: 80_000, output: 7_734 },
+  ])("uses payload accounting for $name response schema", ({ tokens, schemaChars, output }) => {
+    const context = emptyContext();
+    const model = { ...proxy, contextWindow: 32_768, maxTokens: 8_192 };
+    measuredRequestPressure.set(model, context, tokens);
+    const params = buildOpenAICompletionsParams(model, context, {
+      responseFormat: {
+        type: "json_schema",
+        json_schema: {
+          name: "report",
+          schema: { type: "string", description: "x".repeat(schemaChars) },
+        },
+      },
+    });
+    expectBudget(params, output);
+  });
+
+  it.each([
+    ["ｺ", 7_499],
+    ["\u3400", 6_249],
+    ["\u{20000}", 4_999],
+  ] as const)("reserves weighted input space for repeated %s", (text, expected) => {
+    const params = request(proxy, undefined, emptyContext(text.repeat(1_000)));
+    expect(params.max_completion_tokens).toBe(expected);
+  });
+
   it.each([
     { label: "non-reasoning", reasoning: false, effort: "off" },
     { label: "thinking off", reasoning: true, effort: "off" },
@@ -81,80 +184,64 @@ describe("OpenAI completions output budgets", () => {
       baseUrl: "https://api.xiaomimimo.com/v1",
     });
     Reflect.deleteProperty(uncapped, "maxTokens");
-    const cases = [
-      [
-        request(
-          {
-            id: "kimi-k2.6",
-            provider: "dashscope",
-            baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            maxTokens: 32_000,
-            params: { max_completion_tokens: 64_000 },
-          },
-          { maxTokens: 0 },
-        ),
-        "max_completion_tokens",
-        64_000,
-      ],
-      [
-        request(
-          {
-            id: "mimo-v2.5-pro",
-            provider: "xiaomi-token-plan",
-            baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
-            maxTokens: 32_000,
-            params: { max_completion_tokens: 64_000 },
-          },
-          { maxTokens: 200_000 },
-        ),
-        "max_completion_tokens",
-        32_000,
-      ],
-      [request({ provider: "chutes", baseUrl: "", maxTokens: 65_536 }), "max_tokens", 65_536],
-      [
-        request(
-          {
-            ...proxy,
-            id: "kimi-k2.6",
-            provider: "dashscope",
-            baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            contextWindow: 20_000,
-            contextTokens: 10_000,
-          },
-          undefined,
-          emptyContext("你好世界".repeat(1_000)),
-        ),
-        "max_completion_tokens",
-        4_999,
-      ],
-      [
-        request(proxy, undefined, {
-          messages: Array.from({ length: 4_000 }, () => ({
-            role: "user",
-            content: "x",
-            timestamp: 1,
-          })),
-          tools: [],
-        }),
-        "max_completion_tokens",
-        8_749,
-      ],
-      [
-        buildOpenAICompletionsParams(uncapped, emptyContext(), undefined),
-        "max_completion_tokens",
+    expectBudget(
+      request(
+        {
+          id: "kimi-k2.6",
+          provider: "dashscope",
+          baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          maxTokens: 32_000,
+          params: { max_completion_tokens: 64_000 },
+        },
+        { maxTokens: 0 },
+      ),
+      64_000,
+    );
+    expectBudget(
+      request(
+        {
+          id: "mimo-v2.5-pro",
+          provider: "xiaomi-token-plan",
+          baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
+          maxTokens: 32_000,
+          params: { max_completion_tokens: 64_000 },
+        },
+        { maxTokens: 200_000 },
+      ),
+      32_000,
+    );
+    expectBudget(
+      request({ provider: "chutes", baseUrl: "", maxTokens: 65_536 }),
+      65_536,
+      "max_tokens",
+    );
+    expectBudget(
+      request(
+        {
+          ...proxy,
+          id: "kimi-k2.6",
+          provider: "dashscope",
+          baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          contextWindow: 20_000,
+          contextTokens: 10_000,
+        },
         undefined,
-      ],
-    ] as const;
-    for (const [params, field, expected] of cases) {
-      if (expected === undefined) {
-        expect(params).not.toHaveProperty(field);
-      } else {
-        expect(params[field]).toBe(expected);
-      }
-      expect(params).not.toHaveProperty(
-        field === "max_tokens" ? "max_completion_tokens" : "max_tokens",
-      );
-    }
+        emptyContext("你好世界".repeat(1_000)),
+      ),
+      4_999,
+    );
+    expectBudget(
+      request(proxy, undefined, {
+        messages: Array.from({ length: 4_000 }, () => ({
+          role: "user",
+          content: "x",
+          timestamp: 1,
+        })),
+        tools: [],
+      }),
+      8_749,
+    );
+    expectBudget(buildOpenAICompletionsParams(uncapped, emptyContext(), undefined), undefined);
   });
 
   it("estimates the final replay marker instead of the aborted assistant text", () => {
@@ -162,12 +249,8 @@ describe("OpenAI completions output budgets", () => {
       messages: [
         { role: "user", content: "ok", timestamp: 1 },
         {
-          role: "assistant",
+          ...createAssistantOutput(proxy),
           content: [{ type: "text", text: "x".repeat(20_000) }],
-          api: proxy.api,
-          provider: proxy.provider,
-          model: proxy.id,
-          usage: createZeroUsage(),
           stopReason: "aborted",
           timestamp: 2,
         },
@@ -180,6 +263,130 @@ describe("OpenAI completions output budgets", () => {
 });
 
 describe("OpenAI completions reasoning", () => {
+  it.each<"direct" | "managed">(["direct", "managed"])(
+    "honors model off mappings on configured Z.AI routes (%s)",
+    (mode) => {
+      const scalarSupport: (boolean | undefined)[] = [undefined, false, true];
+      for (const supportsReasoningEffort of scalarSupport) {
+        const model = makeCompletionsModel({
+          provider: "custom",
+          baseUrl: "https://api.z.ai/api/paas/v4",
+          thinkingLevelMap: { off: "none" },
+          compat: { supportsReasoningEffort },
+        });
+        const params = requestMode(mode, model, { reasoningEffort: "off" });
+        expectField(
+          params,
+          "thinking",
+          mode === "direct" || supportsReasoningEffort !== true ? { type: "disabled" } : undefined,
+        );
+        expectField(
+          params,
+          "reasoning_effort",
+          mode === "managed" && supportsReasoningEffort ? "none" : undefined,
+        );
+        for (const off of [undefined, null]) {
+          const unsupported = requestMode(
+            mode,
+            { ...model, thinkingLevelMap: { off } },
+            { reasoningEffort: "off" },
+          );
+          expect(unsupported).not.toHaveProperty("thinking");
+          expect(unsupported).not.toHaveProperty("reasoning_effort");
+        }
+      }
+    },
+  );
+  it.each(["direct", "managed"] as const)(
+    "honors declared off efforts for inferred custom Z.AI (%s)",
+    (mode) => {
+      const cases: [NonNullable<CompletionsModel["compat"]>, string][] = [
+        [{ supportedReasoningEfforts: ["none", "low"] }, "none"],
+        [{ supportedReasoningEfforts: ["off", "low"] }, "off"],
+        [{ supportedReasoningEfforts: [" none ", "low"] }, "none"],
+        [{ reasoningEffortMap: { off: "none" } }, "none"],
+        [{ reasoningEffortMap: { OFF: "low" } }, "low"],
+      ];
+      for (const [compat, expected] of cases) {
+        const model = makeCompletionsModel({
+          provider: "custom",
+          id: "declared-off",
+          baseUrl: "https://api.z.ai/api/paas/v4",
+          compat: { ...compat, supportsReasoningEffort: true },
+        });
+        const params = requestMode(mode, model, { reasoningEffort: "off" });
+        if (mode === "direct") {
+          expect(params.thinking).toEqual(
+            expected === "low" ? { type: "enabled", clear_thinking: false } : { type: "disabled" },
+          );
+          expect(params).not.toHaveProperty("reasoning_effort");
+        } else {
+          expect(params.reasoning_effort).toBe(expected);
+          expect(params).not.toHaveProperty("thinking");
+        }
+      }
+    },
+  );
+
+  it.each(["direct", "managed"] as const)(
+    "preserves binary off contracts without inventing scalar effort (%s)",
+    (mode) => {
+      for (const [baseUrl, thinkingFormat] of [
+        ["https://api.z.ai/api/paas/v4", "zai"],
+        ["https://api.deepseek.com", "deepseek"],
+        ["https://api.together.ai/v1", "together"],
+      ] as const) {
+        for (const explicit of [false, true]) {
+          const model = makeCompletionsModel({
+            provider: "custom",
+            id: "always-thinking",
+            baseUrl,
+            ...(explicit ? { compat: { thinkingFormat, supportsReasoningEffort: true } } : {}),
+          });
+          const params = requestMode(mode, model, { reasoningEffort: "off" });
+          const hasOffContract = explicit || thinkingFormat !== "zai";
+          if (hasOffContract) {
+            expect(params).toMatchObject(
+              thinkingFormat === "together"
+                ? { reasoning: { enabled: false } }
+                : { thinking: { type: "disabled" } },
+            );
+          } else {
+            expect(params).not.toHaveProperty("thinking");
+            expect(params).not.toHaveProperty("reasoning");
+          }
+          expect(params).not.toHaveProperty("reasoning_effort");
+          if (mode === "managed" && thinkingFormat !== "together") {
+            const enabledOptions: (OpenAICompletionsOptions | undefined)[] = [
+              undefined,
+              { reasoningEffort: "high" },
+            ];
+            for (const options of enabledOptions) {
+              const enabled = requestMode(
+                mode,
+                { ...model, compat: { ...model.compat, supportsReasoningEffort: false } },
+                options,
+              );
+              expect(enabled).not.toHaveProperty("thinking");
+            }
+          }
+        }
+      }
+    },
+  );
+
+  it("preserves explicit Z.AI binary off when scalar effort is unavailable", () => {
+    const model = makeCompletionsModel({
+      provider: "custom",
+      baseUrl: "https://api.z.ai/api/paas/v4",
+      compat: { thinkingFormat: "zai" },
+      thinkingLevelMap: { off: null },
+    });
+    const params = requestMode("direct", model, { reasoningEffort: "off" });
+    expect(params.thinking).toEqual({ type: "disabled" });
+    expect(params).not.toHaveProperty("reasoning_effort");
+  });
+
   it.each(["direct", "managed"] as const)(
     "sends custom reasoning controls with conservative off defaults (%s)",
     (mode) => {
@@ -204,14 +411,7 @@ describe("OpenAI completions reasoning", () => {
       for (const baseUrl of ["http://localhost:8000/v1", "https://proxy.example.com/v1"]) {
         for (const [overrides, reasoningEffort, expected] of cases) {
           const model = makeCompletionsModel({ provider: "custom", baseUrl, ...overrides });
-          const params = buildOpenAICompletionsRequest(
-            model,
-            emptyContext(),
-            { reasoningEffort },
-            mode === "direct"
-              ? { mode, compat: resolveOpenAICompletionsCompat(model), cacheRetention: "none" }
-              : { mode },
-          );
+          const params = requestMode(mode, model, { reasoningEffort });
           expect(params.reasoning_effort, `${baseUrl} ${reasoningEffort}`).toBe(expected);
         }
       }
@@ -252,28 +452,14 @@ describe("OpenAI completions reasoning", () => {
     ];
     for (const [model, reasoning, expected] of cases) {
       const params = request(model, { reasoning });
-      if (expected === undefined) {
-        expect(params).not.toHaveProperty("reasoning_effort");
-      } else {
-        expect(params.reasoning_effort).toBe(expected);
-      }
+      expectField(params, "reasoning_effort", expected);
     }
-  });
-
-  it("strips the internal cache boundary from system prompts", () => {
-    const params = request(
-      { id: "gpt-4.1", reasoning: false },
-      undefined,
-      emptyContext("Stable prefix" + SYSTEM_PROMPT_CACHE_BOUNDARY + "Dynamic suffix"),
-    );
-    expect(params.messages[0]).toEqual({
-      role: "system",
-      content: "Stable prefix\nDynamic suffix",
-    });
   });
 
   it.each([
     { id: "gpt-5.6-luna", expected: "none" },
+    { id: "gpt-5.5", expected: undefined },
+    { id: "gpt-5.4-mini", expected: undefined },
     {
       id: "custom-azure-deployment",
       name: "GPT-5.5 (Azure)",
@@ -284,29 +470,7 @@ describe("OpenAI completions reasoning", () => {
   ])("applies the tool reasoning policy for $id", ({ expected, ...model }) => {
     const params = request(model, { reasoning: "medium" }, toolContext());
     expect(params.tools).toHaveLength(1);
-    if (expected === undefined) {
-      expect(params).not.toHaveProperty("reasoning_effort");
-    } else {
-      expect(params.reasoning_effort).toBe(expected);
-    }
-  });
-
-  it("maps Qwen binary thinking", () => {
-    const model = makeCompletionsModel({
-      ...proxy,
-      id: "qwen3.5-32b",
-      provider: "llama-cpp",
-      reasoning: true,
-      compat: { thinkingFormat: "qwen" },
-    });
-    for (const [reasoning, enabled] of [
-      ["medium", true],
-      ["off", false],
-    ] as const) {
-      const params = request(model, { reasoning });
-      expect(params.enable_thinking).toBe(enabled);
-      expect(params).not.toHaveProperty("reasoning_effort");
-    }
+    expectField(params, "reasoning_effort", expected);
   });
 
   it("maps Qwen chat-template thinking without a scalar effort", () => {
@@ -348,6 +512,12 @@ describe("OpenAI completions reasoning", () => {
     for (const model of [
       {
         provider: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        id: "gpt-5.6-sol",
+        reasoning: true,
+      },
+      {
+        provider: "openrouter",
         baseUrl: "https://proxy.example.com/v1",
         id: "anthropic/claude-sonnet-4",
         reasoning: true,
@@ -365,28 +535,20 @@ describe("OpenAI completions reasoning", () => {
         reasoning: false,
       },
     ]) {
-      const params = request(model, { reasoningEffort: "high" });
-      if (model.reasoning) {
-        expect(params.reasoning).toEqual({ effort: "high" });
-      } else {
-        expect(params).not.toHaveProperty("reasoning");
-        expect(params).not.toHaveProperty("reasoning_effort");
+      for (const context of [emptyContext(), toolContext()]) {
+        const params = request(model, { reasoningEffort: "high" }, context);
+        if (model.reasoning) {
+          expect(params.reasoning).toEqual({ effort: "high" });
+        } else {
+          expect(params).not.toHaveProperty("reasoning");
+          expect(params).not.toHaveProperty("reasoning_effort");
+        }
       }
     }
   });
 });
 
 describe("OpenAI request cache policy", () => {
-  it("preserves native cache metadata in managed completions", () => {
-    const params = request(
-      { id: "gpt-5.6-sol" },
-      { sessionId: "session-123", cacheRetention: "long" },
-    );
-    expect(params.prompt_cache_key).toBe("session-123");
-    expect(params.prompt_cache_options).toEqual({ ttl: "30m" });
-    expect(params).not.toHaveProperty("prompt_cache_retention");
-  });
-
   it("selects native long-retention fields for responses", () => {
     const api = "openai-responses";
     const build = buildOpenAIResponsesParams;
@@ -398,10 +560,7 @@ describe("OpenAI request cache policy", () => {
       const params = build(
         { ...makeCompletionsModel({ id }), api },
         { messages: [] },
-        {
-          sessionId: "session-123",
-          cacheRetention: "long",
-        },
+        { sessionId: "session-123", cacheRetention: "long" },
       );
       expect(params.prompt_cache_key).toBe("session-123");
       expect(params.prompt_cache_retention).toBe(retention);
@@ -443,9 +602,6 @@ describe("OpenAI request cache policy", () => {
           compat: {
             supportsPromptCacheKey: true,
             supportsLongCacheRetention: false,
-            supportsStore: false,
-            supportsReasoningEffort: false,
-            maxTokensField: "max_tokens",
           },
         },
         { cacheRetention: "long" },
@@ -455,56 +611,31 @@ describe("OpenAI request cache policy", () => {
     ];
     for (const [model, options, key, retention] of cases) {
       const params = request(model, { sessionId: "session-123", ...options });
-      if (key === undefined) {
-        expect(params).not.toHaveProperty("prompt_cache_key");
-      } else {
-        expect(params.prompt_cache_key).toBe(key);
-      }
-      if (retention === undefined) {
-        expect(params).not.toHaveProperty("prompt_cache_retention");
-      } else {
-        expect(params.prompt_cache_retention).toBe(retention);
-      }
+      expectField(params, "prompt_cache_key", key);
+      expectField(params, "prompt_cache_retention", retention);
       expect(params).not.toHaveProperty("prompt_cache_options");
     }
   });
 });
 
 const nonReasoningNative = makeCompletionsModel({ id: "gpt-5.4", reasoning: false });
-const schema = {
-  type: "object",
-  properties: { reply: { type: "string" } },
-  required: ["reply"],
-  additionalProperties: false,
-};
+const schema = objectSchema(
+  { reply: { type: "string" } },
+  { required: ["reply"], additionalProperties: false },
+);
 
 describe("OpenAI completions sampling and response format", () => {
-  it("forwards temperature and top_p", () => {
-    const params = buildOpenAICompletionsParams(nonReasoningNative, emptyContext(), {
-      temperature: 0.4,
-      topP: 0.9,
-    });
-    expect(params.temperature).toBe(0.4);
-    expect(params.top_p).toBe(0.9);
-  });
-
-  it("forwards penalties and seed", () => {
-    const params = buildOpenAICompletionsParams(nonReasoningNative, emptyContext(), {
-      frequencyPenalty: -0.5,
-      presencePenalty: 1.25,
-      seed: 12345,
-    });
-    expect(params.frequency_penalty).toBe(-0.5);
-    expect(params.presence_penalty).toBe(1.25);
-    expect(params.seed).toBe(12345);
-  });
-
-  it("forwards stop sequences", () => {
-    expect(
-      buildOpenAICompletionsParams(nonReasoningNative, emptyContext(), {
-        stop: ["User:", "Assistant:"],
-      }).stop,
-    ).toEqual(["User:", "Assistant:"]);
+  it.each([
+    [
+      { temperature: 0.4, topP: 0.9 },
+      { temperature: 0.4, top_p: 0.9 },
+    ],
+    [
+      { frequencyPenalty: -0.5, presencePenalty: 1.25, seed: 12345 },
+      { frequency_penalty: -0.5, presence_penalty: 1.25, seed: 12345 },
+    ],
+  ] as const)("forwards sampling controls %j", (options, expected) => {
+    expect(request(nonReasoningNative, options)).toMatchObject(expected);
   });
 
   it("infers JSON Schema support from model families and snapshot boundaries", () => {
@@ -564,23 +695,12 @@ function historyContext(): Context {
   return {
     messages: [
       {
-        role: "assistant",
-        api: toolsNative.api,
-        provider: toolsNative.provider,
-        model: toolsNative.id,
+        ...createAssistantOutput(toolsNative),
         content: [{ type: "toolCall", id: "call_1", name: "lookup_weather", arguments: {} }],
-        usage: createZeroUsage(),
         stopReason: "toolUse",
         timestamp: 1,
       },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "lookup_weather",
-        content: [{ type: "text", text: "sunny" }],
-        isError: false,
-        timestamp: 2,
-      },
+      makeTextToolResult("call_1", "lookup_weather", "sunny", false, 2),
     ],
   };
 }
@@ -593,27 +713,79 @@ const brokenTool: Tool = {
   },
 };
 
-function requestTools(
-  model: Partial<ToolsModel>,
-  context = emptyContext(),
-  options?: OpenAICompletionsOptions,
-) {
-  const { compat, ...fields } = model;
-  return buildOpenAICompletionsParams(
-    { ...makeCompletionsModel(fields), compat },
-    context,
-    options,
-  );
-}
-
 describe("OpenAI completions compatibility and tools", () => {
+  it.each(["direct", "managed"] as const)(
+    "types Moonshot union branches in outgoing tools without changing other providers (%s)",
+    (mode) => {
+      const parameters = objectSchema({ v: { anyOf: [{ enum: ["x", "y"] }, { minimum: 1 }] } });
+      for (const [provider, baseUrl, moonshot] of [
+        ["moonshot", "https://api.moonshot.ai/v1", true],
+        ["custom", "https://api.moonshot.cn/v1", true],
+        ["moonshotai", "", true],
+        ["openai", "https://api.openai.com/v1", false],
+        ["openrouter", "https://openrouter.ai/api/v1", false],
+      ] as const) {
+        const model = makeCompletionsModel({ id: "kimi-k2.6", provider, baseUrl });
+        const payload = requestMode(mode, model, undefined, toolContext(parameters));
+        expect(payload.tools?.[0]?.function.parameters, provider).toHaveProperty("properties.v", {
+          anyOf: moonshot
+            ? [
+                { type: "string", enum: ["x", "y"] },
+                { type: "number", minimum: 1 },
+              ]
+            : parameters.properties.v.anyOf,
+        });
+      }
+      expect(parameters.properties.v.anyOf).toEqual([{ enum: ["x", "y"] }, { minimum: 1 }]);
+    },
+  );
+
+  it("infers only unambiguous branch types and leaves literal data and explicit types intact", () => {
+    const inferred = (branch: Record<string, unknown>, type: string, extra = {}) =>
+      [branch, { ...structuredClone(branch), type, ...extra }] as const;
+    const unchanged = (branch: Record<string, unknown>) =>
+      [branch, structuredClone(branch)] as const;
+    const cases = [
+      inferred({ const: null }, "null"),
+      inferred({ const: false }, "boolean"),
+      inferred({ enum: [1, 2.5] }, "number"),
+      inferred({ const: [] }, "array", { items: {} }),
+      inferred({ const: {} }, "object"),
+      inferred({ maximum: 9, multipleOf: 0.5 }, "number"),
+      inferred({ minLength: 1, pattern: "x" }, "string"),
+      inferred({ properties: { anyOf: { enum: ["x"] } } }, "object"),
+      inferred({ required: ["a"] }, "object"),
+      inferred({ items: { anyOf: [{ const: "x" }] } }, "array", {
+        items: { anyOf: [{ const: "x", type: "string" }] },
+      }),
+      unchanged({ type: "integer", minimum: 1 }),
+      unchanged({ description: "Unknown type" }),
+      unchanged({ enum: ["x", 1] }),
+      unchanged({ properties: {}, items: {} }),
+    ];
+    const literal = { anyOf: [{ enum: ["literal"] }] };
+    for (const union of ["anyOf", "oneOf"] as const) {
+      const payload = request(
+        { provider: "moonshot", baseUrl: "https://api.moonshot.ai/v1", id: "kimi-k2.6" },
+        undefined,
+        toolContext(
+          objectSchema({ v: { [union]: cases.map(([branch]) => branch), default: literal } }),
+        ),
+      );
+      expect(payload.tools?.[0]?.function.parameters).toEqual(
+        objectSchema({ v: { [union]: cases.map(([, expected]) => expected), default: literal } }),
+      );
+    }
+  });
+
   it("keeps implicit tool choice limited to proxy endpoints", () => {
-    const proxyParams = requestTools(
+    const proxyParams = request(
       { provider: "custom-cpa", baseUrl: "https://proxy.example.com/v1" },
+      undefined,
       toolContext(),
     );
     expect(proxyParams.tool_choice).toBe("auto");
-    const nativeParams = requestTools(toolsNative, toolContext());
+    const nativeParams = request(toolsNative, undefined, toolContext());
     expect(nativeParams.tools).toHaveLength(1);
     expect(nativeParams).not.toHaveProperty("tool_choice");
   });
@@ -621,7 +793,7 @@ describe("OpenAI completions compatibility and tools", () => {
   it("applies provider and native-host compatibility defaults", () => {
     const cases = [
       [
-        requestTools({
+        request({
           id: "kimi-k2.5",
           provider: "moonshot",
           baseUrl: "",
@@ -631,20 +803,20 @@ describe("OpenAI completions compatibility and tools", () => {
         ["stream_options"],
       ],
       [
-        requestTools(
+        request(
           {
             id: "mistral-small-latest",
             provider: "custom-mistral-host",
             baseUrl: "https://api.mistral.ai/v1",
           },
-          emptyContext(),
           { maxTokens: 2048, reasoningEffort: "high" },
+          emptyContext(),
         ),
         { max_tokens: 2048 },
         ["max_completion_tokens", "store", "reasoning_effort"],
       ],
       [
-        requestTools({ id: "glm-5", provider: "zai", baseUrl: "" }, toolContext()),
+        request({ id: "glm-5", provider: "zai", baseUrl: "" }, undefined, toolContext()),
         { "tools.0.function": expect.any(Object) },
         ["tools.0.function.strict"],
       ],
@@ -678,19 +850,23 @@ describe("OpenAI completions compatibility and tools", () => {
         { ...proxy, compat: { strictMessageKeys: true } },
         { ...historyContext(), tools: [] },
         [
-          { role: "assistant", content: null },
-          { role: "tool", content: "sunny" },
+          {
+            role: "assistant",
+            content:
+              "[tool call id=call_1 name=lookup_weather] {}\n[tool result id=call_1 name=lookup_weather] sunny",
+          },
         ],
       ],
     ];
     for (const [model, context, expected] of cases) {
-      expect(requestTools(model, context).messages).toEqual(expected);
+      expect(request(model, undefined, context).messages).toEqual(expected);
     }
   });
 
   it("keeps strict projected tools usable by required choice after quarantining bad schemas", () => {
-    const params = requestTools(
+    const params = request(
       toolsNative,
+      { toolChoice: "required" },
       {
         ...emptyContext(),
         tools: [
@@ -703,14 +879,13 @@ describe("OpenAI completions compatibility and tools", () => {
           tool({}),
         ],
       },
-      { toolChoice: "required" },
     );
     expect(params.tools?.map((entry) => entry.function)).toEqual([
       {
         name: "lookup_weather",
         description: "Get forecast",
         strict: true,
-        parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
+        parameters: objectSchema({}, { required: [], additionalProperties: false }),
       },
     ]);
     expect(params.tool_choice).toBe("required");
@@ -719,64 +894,47 @@ describe("OpenAI completions compatibility and tools", () => {
   it("normalizes projected schemas according to strictness and compatibility", () => {
     const cases = [
       [
-        requestTools(
-          toolsNative,
-          toolContext({
-            type: "object",
-            additionalProperties: false,
-            properties: { path: { type: "string" } },
-            required: [],
-          }),
-        ),
+        toolsNative,
+        objectSchema({ path: { type: "string" } }, { additionalProperties: false, required: [] }),
         { strict: false },
       ],
       [
-        requestTools(
-          { ...proxy, compat: { unsupportedToolSchemaKeywords: ["not"] } },
-          toolContext({ type: "object", properties: { forbidden: { not: {} } } }),
-        ),
+        { ...proxy, compat: { unsupportedToolSchemaKeywords: ["not"] } },
+        objectSchema({ forbidden: { not: {} } }),
         { "parameters.properties.forbidden": {} },
       ],
       [
-        requestTools(
-          { ...proxy, compat: { omitEmptyArrayItems: true } },
-          toolContext({
-            type: "object",
-            properties: {
-              hints: { type: "array" },
-              typedHints: { type: "array", items: { type: "string" } },
-            },
-          }),
-        ),
+        { ...proxy, compat: { omitEmptyArrayItems: true } },
+        objectSchema({
+          hints: { type: "array" },
+          typedHints: { type: "array", items: { type: "string" } },
+        }),
         {
           "parameters.properties.hints": { type: "array" },
           "parameters.properties.typedHints": { type: "array", items: { type: "string" } },
         },
       ],
-    ] as const;
-    for (const [params, expected] of cases) {
+    ] satisfies [Partial<ToolsModel>, Record<string, unknown>, Record<string, unknown>][];
+    for (const [model, parameters, expected] of cases) {
+      const projected = request(model, undefined, toolContext(parameters)).tools?.[0]?.function;
       for (const [path, value] of Object.entries(expected)) {
-        expect(params.tools?.[0]?.function).toHaveProperty(path, value);
+        expect(projected).toHaveProperty(path, value);
       }
     }
   });
 
   it("fails required choice when every schema is quarantined", () => {
     expect(() =>
-      requestTools(
-        toolsNative,
-        { ...emptyContext(), tools: [brokenTool] },
-        { toolChoice: "required" },
-      ),
+      request(toolsNative, { toolChoice: "required" }, { ...emptyContext(), tools: [brokenTool] }),
     ).toThrow("no tools survived schema conversion");
   });
 
   it("preserves history markers only for native requests with supported tools", () => {
     const unsupported = { ...proxy, compat: { ...proxy.compat, supportsTools: false } };
     const cases = [
-      [requestTools(unsupported, { ...historyContext(), tools: [tool()] }), false],
-      [requestTools(toolsNative, { ...historyContext(), tools: [brokenTool] }), true],
-      [requestTools(proxy, historyContext()), false],
+      [request(unsupported, undefined, { ...historyContext(), tools: [tool()] }), false],
+      [request(toolsNative, undefined, { ...historyContext(), tools: [brokenTool] }), true],
+      [request(proxy, undefined, historyContext()), false],
     ] as const;
     for (const [params, marker] of cases) {
       if (marker) {

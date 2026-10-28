@@ -17,6 +17,7 @@ import { extractBtwQuestion } from "./btw-command.js";
 import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
+import { resolveInboundConversationToolPolicy } from "./reply-tool-authority-inbound.js";
 
 const BTW_USAGE = "Usage: /btw [side question]";
 
@@ -42,7 +43,15 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
     const rejectQuestion = (text: string) =>
       commandReply({ text, btw: { question }, isError: true });
 
-    if (toolPolicyRestrictsTools(params.ctx.ConversationToolPolicy)) {
+    if (
+      toolPolicyRestrictsTools(
+        resolveInboundConversationToolPolicy({
+          ctx: params.ctx,
+          config: params.cfg,
+          sessionKey: params.sessionKey,
+        }),
+      )
+    ) {
       return rejectQuestion(
         "⚠️ /btw cannot enforce this conversation's tool policy. Ask in the main conversation or switch this session to the embedded runtime.",
       );

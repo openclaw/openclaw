@@ -56,23 +56,23 @@ export async function waitForAcceptedChatSendRetry(
   await waitForSessionTranscriptProjection({ ...scope, sessionId: error.sessionId }, abortSignal);
 }
 
-/** Retry only typed, pre-execution accepted-send failures while Gateway custody remains active. */
-export async function runAcceptedChatSendDispatch<T>(params: {
-  operation: () => Promise<T>;
+/** One Gateway budget covers setup and retries inside the already-admitted resolver. */
+export function createAcceptedChatSendRetry(params: {
   waitForRetry: (error: unknown) => Promise<void>;
   classify: (error: unknown) => AcceptedChatSendFailureDisposition;
-}): Promise<T> {
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      return await params.operation();
-    } catch (error) {
-      if (
-        attempt >= ACCEPTED_CHAT_SEND_MAX_DISPATCH_ATTEMPTS ||
-        params.classify(error) !== "retry"
-      ) {
-        throw error;
+}): <T>(operation: () => Promise<T>) => Promise<T> {
+  let retriesRemaining = ACCEPTED_CHAT_SEND_MAX_DISPATCH_ATTEMPTS - 1;
+  return async <T>(operation: () => Promise<T>): Promise<T> => {
+    while (true) {
+      try {
+        return await operation();
+      } catch (error) {
+        if (retriesRemaining === 0 || params.classify(error) !== "retry") {
+          throw error;
+        }
+        retriesRemaining -= 1;
+        await params.waitForRetry(error);
       }
-      await params.waitForRetry(error);
     }
-  }
+  };
 }

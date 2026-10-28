@@ -1,318 +1,259 @@
-import fs from "node:fs";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createFixtureSkillEntry } from "../../skills/test-support/test-helpers.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import {
-  loadSessionEntry,
-  onSessionIdentityMutation,
-  patchSessionEntryCore,
-  upsertSessionEntryCore,
+  loadSessionEntry as readEntry,
+  onSessionIdentityMutation as observeIdentity,
+  patchSessionEntryCore as patchEntry,
+  upsertSessionEntryCore as upsertEntry,
 } from "./session-accessor.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { readSessionMaintenanceAgeQueries } from "./session-accessor.sqlite-maintenance-age-queries.js";
+import { readReferencedSessionIds } from "./session-accessor.sqlite-references.js";
 import {
   projectPublicSessionEntry,
   projectPublicSessionEntryPatch,
 } from "./session-entry-projection.js";
 import type { InternalSessionEntry } from "./types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-function createScope(name: string) {
+const subscriptions: (() => void)[] = [];
+function onIdentity(run: Parameters<typeof observeIdentity>[0]) {
+  subscriptions.push(observeIdentity(run));
+}
+let scope: { agentId: string; env: NodeJS.ProcessEnv; sessionKey: string };
+
+function creationStamp(createdAt: number) {
   return {
-    agentId: "main",
-    env: { ...process.env, OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make(`session-${name}-`)) },
-    sessionKey: `agent:main:${name}`,
+    createdVia: "operator" as const,
+    createdAt,
+    sandbox: "required" as const,
+    createdActor: { type: "human" as const, source: "profile" as const, id: "profile-creator" },
   };
 }
 
-afterEach(async () => {
-  await closeOpenClawAgentDatabasesAsync();
-  closeOpenClawAgentDatabasesForTest();
-  await closeStateDatabaseForTest();
+function readRow() {
+  return openOpenClawAgentDatabase(scope)
+    .db.prepare(
+      "SELECT created_actor_type, created_actor_id, created_via, created_at, entry_json FROM session_nodes WHERE session_key = ?",
+    )
+    .get(scope.sessionKey);
+}
+
+async function seed(entry: Partial<InternalSessionEntry>) {
+  await upsertEntry(scope, { sessionId: "original", updatedAt: 10, ...entry });
+}
+
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+  scope = {
+    agentId: "main",
+    env: { ...process.env, OPENCLAW_STATE_DIR: sessionDirs.make() },
+    sessionKey: "agent:main:row",
+  };
 });
 
-describe("SQLite session row persistence", () => {
-  it("bounds saved-prompt decoding while publishing identity changes", async () => {
-    const env = {
-      ...process.env,
-      OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("session-identity-decode-")),
-    };
-    const sessionKey = "agent:main:identity-decode";
-    const scope = { agentId: "main", env, sessionKey };
-    const skillsSnapshot = {
-      prompt: "identity-decode-payload:" + "x".repeat(16_384),
-      skills: [],
-    };
-    await upsertSessionEntryCore(scope, { sessionId: "initial", updatedAt: 1, skillsSnapshot });
-    const identities: string[] = [];
-    const unsubscribe = onSessionIdentityMutation((mutation) => {
-      if (
-        mutation.kind !== "delete" &&
-        mutation.current.sessionKeys.includes(sessionKey) &&
-        mutation.current.sessionId
-      ) {
-        identities.push(mutation.current.sessionId);
-      }
-    });
-    const parse = vi.spyOn(JSON, "parse");
-    const iterations = 10;
-    try {
-      for (let index = 0; index < iterations; index++) {
-        const sessionId = `generation-${Math.floor(index / 2)}`;
-        const update = () => ({ sessionId, updatedAt: index + 2 });
-        const result = await patchSessionEntryCore(scope, update, { skipMaintenance: true });
-        expect(result).toMatchObject({ sessionId, skillsSnapshot });
-      }
-      const decodes = parse.mock.calls.filter(([text]) =>
-        text.includes("identity-decode-payload:"),
-      ).length;
-      // One decode per patch: preparation owns the only hydration of the row; the commit
-      // revalidates the persisted row without decoding and the writer reuses that row.
-      expect(decodes).toBeLessThanOrEqual(iterations);
-    } finally {
-      parse.mockRestore();
-      unsubscribe();
-    }
-    expect(identities).toEqual(Array.from({ length: 5 }, (_, index) => `generation-${index}`));
-    expect(loadSessionEntry(scope)).toMatchObject({ sessionId: "generation-4", skillsSnapshot });
-  });
+afterEach(() => {
+  subscriptions.splice(0).forEach((unsubscribe) => unsubscribe());
+  vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
+});
+const sessionDirs = useSessionStoreTempDirs(afterEach, "session-row-");
 
-  it("records committed owner facts before cancellation observers", async () => {
-    const scope = createScope("commit-fact");
-    const skillsSnapshot = {
-      prompt: "Prepared session skills.",
-      skills: [{ name: "existing", requiredEnv: ["EXISTING_ENV"] }],
-    };
-    await upsertSessionEntryCore(scope, {
-      sessionId: "predecessor",
-      updatedAt: 10,
-      skillsSnapshot,
-    });
-    const controller = new AbortController();
-    const cancelled = new Error("cancelled after identity publication");
-    const facts: InternalSessionEntry[] = [];
-    const observed: Array<{ acceptedId?: string; persistedId?: string }> = [];
-    const unsubscribe = onSessionIdentityMutation((mutation) => {
-      if (mutation.previous.sessionId !== "predecessor") {
-        return;
-      }
-      observed.push({
-        acceptedId: facts.at(-1)?.sessionId,
-        persistedId: loadSessionEntry(scope)?.sessionId,
-      });
-      controller.abort(cancelled);
-    });
-    const clone = vi.spyOn(globalThis, "structuredClone");
-    try {
-      const result = await patchSessionEntryCore(scope, () => ({ sessionId: "successor" }), {
-        onCommitted: (entry) => {
-          facts.push(entry);
-        },
-      });
-      expect(facts).toHaveLength(1);
-      expect(observed).toEqual([{ acceptedId: "successor", persistedId: "successor" }]);
-      expect(controller.signal.reason).toBe(cancelled);
-      expect(
-        clone.mock.calls.filter(
-          ([entry]) =>
-            isRecord(entry) &&
-            (entry.sessionId === "predecessor" || entry.sessionId === "successor"),
-        ).length,
-      ).toBeLessThanOrEqual(3);
-      const retainedSkills = facts[0]?.skillsSnapshot?.skills;
-      expect(retainedSkills).toEqual(skillsSnapshot.skills);
-      retainedSkills?.push({ name: "observer-only" });
-      expect(result?.skillsSnapshot).toEqual(skillsSnapshot);
-      expect(loadSessionEntry(scope)?.skillsSnapshot).toEqual(skillsSnapshot);
-    } finally {
-      clone.mockRestore();
-      unsubscribe();
+it("updates maintenance and retained-reference predicates with the canonical entry", async () => {
+  await seed({ sessionId: "current", sessionStartedAt: 5, previousSessionId: "previous" });
+  const database = openOpenClawAgentDatabase(scope);
+  const startedAt = () =>
+    [...readSessionMaintenanceAgeQueries(database.db).activity(undefined)].find(
+      (row) => row.session_key === scope.sessionKey,
+    )?.session_started_at;
+  const references = () => readReferencedSessionIds(database, new Set(), ["previous"]);
+  expect(startedAt()).toBe(5);
+  expect(references().has("previous")).toBe(true);
+
+  await patchEntry(scope, () => ({ sessionStartedAt: 8, previousSessionId: undefined }), {
+    skipMaintenance: true,
+  });
+  expect(startedAt()).toBe(8);
+  expect(references().has("previous")).toBe(false);
+});
+
+it("bounds saved-prompt decoding while publishing identity changes", async () => {
+  const prompt = "identity-decode-payload:" + "x".repeat(16_384);
+  const skillsSnapshot = { prompt, skills: [] };
+  await seed({ sessionId: "initial", updatedAt: 1, skillsSnapshot });
+  const identities: string[] = [];
+  onIdentity((mutation) => {
+    if (
+      mutation.kind !== "delete" &&
+      mutation.current.sessionKeys.includes(scope.sessionKey) &&
+      mutation.current.sessionId
+    ) {
+      identities.push(mutation.current.sessionId);
     }
   });
+  const parse = vi.spyOn(JSON, "parse");
+  const iterations = 10;
+  for (let index = 0; index < iterations; index++) {
+    const sessionId = `generation-${Math.floor(index / 2)}`;
+    const update = () => ({ sessionId, updatedAt: index + 2 });
+    const result = await patchEntry(scope, update, { skipMaintenance: true });
+    expect(result).toMatchObject({ sessionId, skillsSnapshot });
+  }
+  const decodes = parse.mock.calls.filter(([text]) =>
+    text.includes("identity-decode-payload:"),
+  ).length;
+  expect(decodes).toBeLessThanOrEqual(iterations);
+  expect(identities).toEqual(Array.from({ length: 5 }, (_, index) => `generation-${index}`));
+  expect(readEntry(scope)).toMatchObject({ sessionId: "generation-4", skillsSnapshot });
+});
 
-  it.each(["during", "after"] as const)(
-    "isolates the existing-entry context when first read %s the update",
-    async (readTiming) => {
-      const env = {
-        ...process.env,
-        OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("session-context-copy-")),
-      };
-      const scope = { agentId: "main", env, sessionKey: "agent:main:context-copy" };
-      const skillsSnapshot = { prompt: "Saved prompt", skills: [] };
-      replaceSessionEntrySync(scope, { sessionId: "existing", updatedAt: 1, skillsSnapshot });
-      let readContext: () => InternalSessionEntry | undefined = () => undefined;
-      const result = await patchSessionEntryCore(
-        scope,
-        (entry, context) => {
-          readContext = () => context.existingEntry;
-          entry.skillsSnapshot!.prompt = "Callback mutation";
-          if (readTiming === "during") {
-            expect(readContext()?.skillsSnapshot).toEqual(skillsSnapshot);
-          }
-          return null;
-        },
-        { skipMaintenance: true },
-      );
-      result!.skillsSnapshot!.prompt = "Result mutation";
-      const contextEntry = readContext()!;
-      expect(contextEntry.skillsSnapshot).toEqual(skillsSnapshot);
-      contextEntry.skillsSnapshot!.prompt = "Context mutation";
-      expect(readContext()).toBe(contextEntry);
-      expect(result?.skillsSnapshot?.prompt).toBe("Result mutation");
-      expect(loadSessionEntry(scope)?.skillsSnapshot).toEqual(skillsSnapshot);
-    },
-  );
-
-  it.each([undefined, "plugin-dock"] as const)(
-    "protects required profile provenance and surface %s during replacement",
-    async (createdSurface) => {
-      const scope = createScope("stamp");
-      const stamp = {
-        createdVia: "operator" as const,
-        ...(createdSurface ? { createdSurface } : {}),
-        createdActor: { type: "human" as const, source: "profile" as const, id: "profile-creator" },
-        createdAt: 10,
-        sandbox: "required" as const,
-      };
-      await upsertSessionEntryCore(scope, { sessionId: "original", updatedAt: 10, ...stamp });
-      const replacement: InternalSessionEntry = {
-        sessionId: "replacement",
-        updatedAt: 20,
-        createdVia: "plugin",
-        createdSurface: createdSurface ? undefined : "plugin-dock",
-        createdActor: { type: "agent", id: "replacement-agent" },
-        createdAt: 20,
-      };
-      expect(
-        await patchSessionEntryCore(scope, () => replacement, { replaceEntry: true }),
-      ).toMatchObject(stamp);
-      expect(loadSessionEntry(scope)).toMatchObject({ sessionId: "replacement", ...stamp });
-      expect(loadSessionEntry(scope)?.createdSurface).toBe(createdSurface);
-      const row = openOpenClawAgentDatabase(scope)
-        .db.prepare(
-          "SELECT created_actor_type, created_actor_id, created_via, created_at, entry_json FROM session_nodes WHERE session_key = ?",
-        )
-        .get(scope.sessionKey);
-      expect(row).toMatchObject({
-        created_actor_type: "human",
-        created_actor_id: "profile-creator",
-        created_via: "operator",
-        created_at: 10,
-      });
-      expect(JSON.parse(String(row?.entry_json))).toMatchObject(stamp);
-      expect(JSON.parse(String(row?.entry_json)).createdSurface).toBe(createdSurface);
-    },
-  );
-
-  it("keeps new required provenance with a fallback", async () => {
-    const env = {
-      ...process.env,
-      OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("session-stamp-fallback-")),
-    };
-    const scope = { agentId: "main", env, sessionKey: "agent:main:fallback" };
-    const stamp = {
-      createdVia: "operator" as const,
-      createdActor: { type: "human" as const, source: "profile" as const, id: "profile-creator" },
-      createdAt: 20,
-      sandbox: "required" as const,
-    };
-    const result = await patchSessionEntryCore(scope, () => stamp, {
-      fallbackEntry: { sessionId: "fallback", updatedAt: 10 },
-      preserveActivity: true,
+it("records committed owner facts before cancellation observers", async () => {
+  const skillsSnapshot = { prompt: "saved", skills: [{ name: "old", requiredEnv: ["KEY"] }] };
+  await seed({ sessionId: "predecessor", skillsSnapshot });
+  const controller = new AbortController();
+  const cancelled = new Error("cancelled after identity publication");
+  const facts: InternalSessionEntry[] = [];
+  const observed: Array<{ acceptedId?: string; persistedId?: string }> = [];
+  onIdentity((mutation) => {
+    if (mutation.previous.sessionId !== "predecessor") {
+      return;
+    }
+    observed.push({
+      acceptedId: facts.at(-1)?.sessionId,
+      persistedId: readEntry(scope)?.sessionId,
     });
-    expect(result).toMatchObject({ sessionId: "fallback", ...stamp });
-    expect(loadSessionEntry(scope)).toMatchObject({ sessionId: "fallback", ...stamp });
+    controller.abort(cancelled);
   });
+  const result = await patchEntry(scope, () => ({ sessionId: "successor" }), {
+    onCommitted: (entry) => facts.push(entry),
+  });
+  expect(facts.map((entry) => entry.skillsSnapshot)).toEqual([skillsSnapshot]);
+  expect(observed).toEqual([{ acceptedId: "successor", persistedId: "successor" }]);
+  expect(result?.skillsSnapshot).toEqual(skillsSnapshot);
+  // Internal results share the frozen publication's nested facts (#186051).
+  expect(() => result!.skillsSnapshot!.skills.push({ name: "caller-only" })).toThrow(TypeError);
+  expect(readEntry(scope)?.skillsSnapshot).toEqual(skillsSnapshot);
+});
 
-  it("does not mint creator authority when replacing an unstamped node", async () => {
-    const env = {
-      ...process.env,
-      OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("session-unstamped-")),
-    };
-    const scope = { agentId: "main", env, sessionKey: "agent:main:unstamped" };
-    await upsertSessionEntryCore(scope, {
-      sessionId: "original",
-      updatedAt: 10,
+it("isolates the existing-entry context when first read during the update", async () => {
+  const skillsSnapshot = { prompt: "Saved prompt", skills: [] };
+  replaceSessionEntrySync(scope, { sessionId: "existing", updatedAt: 1, skillsSnapshot });
+  let readContext: () => InternalSessionEntry | undefined = () => undefined;
+  const result = await patchEntry(
+    scope,
+    (entry, context) => {
+      readContext = () => context.existingEntry;
+      entry.skillsSnapshot!.prompt = "Callback mutation";
+      expect(readContext()?.skillsSnapshot).toEqual(skillsSnapshot);
+      return null;
+    },
+    { skipMaintenance: true },
+  );
+  result!.skillsSnapshot!.prompt = "Result mutation";
+  const contextEntry = readContext()!;
+  expect(contextEntry.skillsSnapshot).toEqual(skillsSnapshot);
+  contextEntry.skillsSnapshot!.prompt = "Context mutation";
+  expect(readContext()).toBe(contextEntry);
+  expect(result?.skillsSnapshot?.prompt).toBe("Result mutation");
+  expect(readEntry(scope)?.skillsSnapshot).toEqual(skillsSnapshot);
+});
+
+it("protects required profile provenance and an absent surface during replacement", async () => {
+  const stamp = creationStamp(10);
+  await seed(stamp);
+  const replacement: InternalSessionEntry = {
+    sessionId: "replacement",
+    updatedAt: 20,
+    createdVia: "plugin",
+    createdSurface: "plugin-dock",
+    createdAt: 20,
+    createdActor: { type: "agent", id: "replacement-agent" },
+  };
+  expect(await patchEntry(scope, () => replacement, { replaceEntry: true })).toMatchObject(stamp);
+  expect(readEntry(scope)).toMatchObject({ sessionId: "replacement", ...stamp });
+  expect(readEntry(scope)?.createdSurface).toBeUndefined();
+  const row = readRow();
+  expect(row).toMatchObject({
+    created_actor_type: "human",
+    created_actor_id: "profile-creator",
+    created_via: "operator",
+    created_at: 10,
+  });
+  const persisted = JSON.parse(String(row?.entry_json));
+  expect(persisted).toMatchObject(stamp);
+  expect(persisted.createdSurface).toBeUndefined();
+});
+
+it("keeps new required provenance with a fallback", async () => {
+  const stamp = creationStamp(20);
+  const result = await patchEntry(scope, () => stamp, {
+    fallbackEntry: { sessionId: "fallback", updatedAt: 10 },
+    preserveActivity: true,
+  });
+  expect(result).toMatchObject({ sessionId: "fallback", ...stamp });
+  expect(readEntry(scope)).toMatchObject({ sessionId: "fallback", ...stamp });
+});
+
+it("does not mint creator authority when replacing an unstamped node", async () => {
+  await seed({ createdVia: "operator", label: "removed" });
+  await patchEntry(
+    scope,
+    () => ({
+      sessionId: "replacement",
+      updatedAt: 20,
       createdVia: "operator",
-      label: "removed",
-    });
-    await patchSessionEntryCore(
-      scope,
-      () => ({
-        sessionId: "replacement",
-        updatedAt: 20,
-        createdVia: "operator",
-        createdActor: { type: "human", source: "profile", id: "new-profile" },
-        createdSurface: "plugin-dock",
-      }),
-      { replaceEntry: true },
-    );
-    const persisted = loadSessionEntry(scope);
-    expect(persisted).toMatchObject({ sessionId: "replacement", createdVia: "operator" });
-    expect(persisted?.createdActor).toBeUndefined();
-    expect(persisted?.createdSurface).toBeUndefined();
-    expect(persisted).not.toHaveProperty("sandbox");
-    expect(persisted).not.toHaveProperty("label");
-  });
+      createdActor: { type: "human", source: "profile", id: "new-profile" },
+      createdSurface: "plugin-dock",
+    }),
+    { replaceEntry: true },
+  );
+  const persisted = readEntry(scope);
+  expect(persisted).toMatchObject({ sessionId: "replacement", createdVia: "operator" });
+  expect(persisted?.createdActor).toBeUndefined();
+  expect(persisted?.createdSurface).toBeUndefined();
+  expect(persisted).not.toHaveProperty("sandbox");
+  expect(persisted).not.toHaveProperty("label");
+});
 
-  it("persists private workspace intent but excludes runtime-only resolved skills from SQLite JSON", async () => {
-    const stateDir = fs.realpathSync(tempDirs.make("openclaw-sqlite-session-skills-"));
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const sessionKey = "agent:main:runtime-skills";
-    const resolvedSkills = [
-      createCanonicalFixtureSkill({
-        name: "demo",
-        description: "runtime-only skill",
-        filePath: "/skills/demo/SKILL.md",
-        baseDir: "/skills/demo",
-        source: "# Demo\n\n" + "runtime skill content ".repeat(100),
-      }),
-    ];
-    const entry: InternalSessionEntry = {
+it("persists private source and workspace facts but excludes runtime-only resolved skills from SQLite JSON", async () => {
+  const resolvedSkills = [createFixtureSkillEntry("demo").skill];
+  const savedSkills = {
+    prompt: "saved",
+    skills: [{ name: "demo" }],
+    skillFilter: ["demo"],
+    version: 7,
+  };
+  const entry: InternalSessionEntry = {
+    sessionId: "runtime-skills-session",
+    updatedAt: 42,
+    pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
+    pendingWorktree: { name: "session-startup", titleSource: "Start work" },
+    restartRecoveryRequesterSource: {
+      agentId: "main",
+      sessionKey: scope.sessionKey,
       sessionId: "runtime-skills-session",
-      updatedAt: 42,
-      pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
-      pendingWorktree: {
-        name: "session-startup",
-        titleSource: "Start work",
-      },
-      skillsSnapshot: {
-        prompt: "compact skill prompt",
-        skills: [{ name: "demo" }],
-        skillFilter: ["demo"],
-        resolvedSkills,
-        discoverySkills: resolvedSkills,
-        version: 7,
-      },
-    };
+      sourceRunId: "original-run",
+      requesterOrigin: { sessionKey: scope.sessionKey, operatorProfileId: "original-requester" },
+    },
+    skillsSnapshot: { ...savedSkills, resolvedSkills, discoverySkills: resolvedSkills },
+  };
 
-    await upsertSessionEntryCore({ agentId: "main", env, sessionKey }, entry);
-
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    const row = database.db
-      .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
-      .get(sessionKey) as { entry_json: string };
-    const persisted = JSON.parse(row.entry_json) as InternalSessionEntry;
-    for (const key of ["pendingProjectGitUrl", "pendingWorktree"] as const) {
-      expect(persisted[key]).toEqual(entry[key]);
-      expect(loadSessionEntry({ agentId: "main", env, sessionKey })?.[key]).toEqual(entry[key]);
-      expect(projectPublicSessionEntry(entry)).not.toHaveProperty(key);
-      expect(projectPublicSessionEntryPatch(entry)).not.toHaveProperty(key);
-    }
-    expect(persisted.skillsSnapshot).toBeUndefined();
-    expect(loadSessionEntry({ agentId: "main", env, sessionKey })?.skillsSnapshot).toEqual({
-      prompt: "compact skill prompt",
-      skills: [{ name: "demo" }],
-      skillFilter: ["demo"],
-      version: 7,
-    });
-    expect(entry.skillsSnapshot?.resolvedSkills).toBe(resolvedSkills);
-    expect(entry.skillsSnapshot?.discoverySkills).toBe(resolvedSkills);
-  });
+  await upsertEntry(scope, entry);
+  const persisted = JSON.parse(String(readRow()?.entry_json)) as InternalSessionEntry;
+  for (const key of [
+    "pendingProjectGitUrl",
+    "pendingWorktree",
+    "restartRecoveryRequesterSource",
+  ] as const) {
+    expect(persisted[key]).toEqual(entry[key]);
+    expect(readEntry(scope)?.[key]).toEqual(entry[key]);
+    expect(projectPublicSessionEntry(entry)).not.toHaveProperty(key);
+    expect(projectPublicSessionEntryPatch(entry)).not.toHaveProperty(key);
+  }
+  expect(persisted.skillsSnapshot).toBeUndefined();
+  expect(readEntry(scope)?.skillsSnapshot).toEqual(savedSkills);
+  expect(entry.skillsSnapshot?.resolvedSkills).toBe(resolvedSkills);
+  expect(entry.skillsSnapshot?.discoverySkills).toBe(resolvedSkills);
 });

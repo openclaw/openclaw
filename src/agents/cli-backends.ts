@@ -6,9 +6,12 @@ import {
   resolvePluginSetupCliBackend,
   resolvePluginSetupRegistry,
 } from "../plugins/setup-registry.js";
-import { resolveRuntimeTextTransforms } from "../plugins/text-transforms.runtime.js";
 import type { CliBackendNormalizeConfigContext, CliBackendPlugin } from "../plugins/types.js";
 import { mergePluginTextTransforms } from "./plugin-text-transforms.js";
+import {
+  resolveProviderIdForAuth,
+  type ProviderAuthAliasLookupParams,
+} from "./provider-auth-aliases.js";
 
 export type ResolvedCliBackend = Pick<
   CliBackendPlugin,
@@ -28,9 +31,11 @@ export type ResolvedCliBackend = Pick<
   | "resolveExecutionArgs"
   | "resolveModelId"
   | "parseJsonlEvent"
+  | "classifyErrorCode"
   | "parseJsonlLifecycleEvent"
   | "toolAvailabilityEnforcement"
   | "projectNativeToolAuthority"
+  | "resolveManagedNativeTools"
   | "nativeToolMode"
   | "hostOwnedTools"
   | "sideQuestionToolMode"
@@ -52,6 +57,48 @@ type CliRuntimeModelBackendBinding = {
   provider: string;
   runtime: string;
 };
+
+/** Match a profile's declared provider to a CLI binding without reading credential stores. */
+export function resolveCliRuntimeProfileAlias(params: {
+  cfg?: OpenClawConfig;
+  metadataSnapshot?: ProviderAuthAliasLookupParams["metadataSnapshot"];
+  provider: string;
+  profileProvider: string | undefined;
+}): string | undefined {
+  const provider = normalizeProviderId(params.provider);
+  const profileProvider = normalizeProviderId(params.profileProvider ?? "");
+  if (!provider || !profileProvider || profileProvider === provider) {
+    return undefined;
+  }
+  const authParams = { config: params.cfg, metadataSnapshot: params.metadataSnapshot };
+  if (
+    resolveProviderIdForAuth(provider, authParams) !==
+    resolveProviderIdForAuth(profileProvider, { ...authParams, storedCredential: true })
+  ) {
+    return undefined;
+  }
+  return resolveCliRuntimeModelBackendBinding({
+    config: params.cfg,
+    provider,
+    runtime: profileProvider,
+  })?.runtime;
+}
+
+/** Exact caps require both a selectable tool surface and its declared execution adapter. */
+export function cliBackendSupportsExactToolAvailability(
+  backend: Pick<
+    CliBackendPlugin,
+    "nativeToolMode" | "toolAvailabilityEnforcement" | "resolveExecutionArgs" | "prepareExecution"
+  >,
+): boolean {
+  return (
+    backend.nativeToolMode === "selectable" &&
+    ((backend.toolAvailabilityEnforcement === "execution-args" &&
+      backend.resolveExecutionArgs !== undefined) ||
+      (backend.toolAvailabilityEnforcement === "prepare-execution" &&
+        backend.prepareExecution !== undefined))
+  );
+}
 
 function resolveCliBackendModelProvider(
   backend: Pick<CliBackendPlugin, "modelProvider">,
@@ -219,7 +266,6 @@ export function resolveCliBackendConfig(
     ...(options.agentId ? { agentId: options.agentId } : {}),
     ...(cfg ? { config: cfg } : {}),
   };
-  const runtimeTextTransforms = resolveRuntimeTextTransforms();
   const registered = resolveRuntimeCliBackends().find(
     (entry) => normalizeProviderId(entry.id) === normalized,
   );
@@ -245,7 +291,7 @@ export function resolveCliBackendConfig(
     bundleMcpMode: bundleMcp ? (backend.bundleMcpMode ?? "claude-config-file") : undefined,
     ...(registered ? { pluginId: registered.pluginId } : {}),
     transformSystemPrompt: backend.transformSystemPrompt,
-    textTransforms: mergePluginTextTransforms(runtimeTextTransforms, backend.textTransforms),
+    textTransforms: mergePluginTextTransforms(backend.textTransforms),
     defaultAuthProfileId: backend.defaultAuthProfileId,
     authEpochMode: backend.authEpochMode,
     autoSelectAuthProfile: backend.autoSelectAuthProfile,
@@ -256,9 +302,11 @@ export function resolveCliBackendConfig(
     resolveExecutionArgs: backend.resolveExecutionArgs,
     resolveModelId: backend.resolveModelId,
     parseJsonlEvent: backend.parseJsonlEvent,
+    classifyErrorCode: backend.classifyErrorCode,
     parseJsonlLifecycleEvent: backend.parseJsonlLifecycleEvent,
     toolAvailabilityEnforcement: backend.toolAvailabilityEnforcement,
     projectNativeToolAuthority: backend.projectNativeToolAuthority,
+    resolveManagedNativeTools: backend.resolveManagedNativeTools,
     nativeToolMode: backend.nativeToolMode,
     hostOwnedTools: backend.hostOwnedTools,
     sideQuestionToolMode: backend.sideQuestionToolMode,

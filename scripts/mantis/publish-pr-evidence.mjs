@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readBoundedResponseText } from "../lib/bounded-response.mjs";
+import { parseMantisCliArgs } from "./cli-args.mjs";
 
 /** @typedef {Record<string, unknown> & { detail?: string, digest?: string, expectationMet: boolean, expected?: string, fixed?: boolean, ref?: string, sha?: string, status?: string }} EvidenceLane */
 /**
@@ -82,23 +83,6 @@ export function sanitizeCommentText(value, maxLength) {
   return graphemes.length > maxLength ? `${graphemes.slice(0, maxLength - 1).join("")}…` : escaped;
 }
 
-function parseArgs(argv) {
-  const args = {};
-  for (let index = 0; index < argv.length; index += 1) {
-    const key = argv[index];
-    if (!key?.startsWith("--")) {
-      throw new Error(`Unexpected argument: ${key}`);
-    }
-    const name = key.slice(2).replaceAll("-", "_");
-    const value = argv[index + 1];
-    if (!value || value.startsWith("--")) {
-      throw new Error(`Missing value for ${key}`);
-    }
-    args[name] = value;
-    index += 1;
-  }
-  return args;
-}
 function requireArg(args, name) {
   const value = args[name];
   if (!value) {
@@ -675,7 +659,7 @@ function upsertPrComment({ body, createMissing, marker, prNumber, repo }) {
 }
 /** @param {string[]} [rawArgs] */
 export async function publishEvidence(rawArgs = process.argv.slice(2)) {
-  const args = parseArgs(rawArgs);
+  const args = parseMantisCliArgs(rawArgs);
   const manifestPath = requireArg(args, "manifest");
   if (args.validate_only === "true") {
     validateEvidenceManifestFile(manifestPath);

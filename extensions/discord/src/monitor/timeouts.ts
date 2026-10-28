@@ -100,7 +100,7 @@ export async function withAbortTimeout<T>(params: {
       reject(params.createTimeoutError());
       controller.abort();
     }, timeoutMs);
-    timeoutTimer.unref?.();
+    timeoutTimer.unref();
   });
   try {
     return await Promise.race([params.run(controller.signal), timeoutPromise]);

@@ -55,7 +55,7 @@ openclaw automations create "0 18 * * 1-5" \
   --webhook "https://example.invalid/openclaw/cron"
 ```
 
-Use `--command` for deterministic shell-style jobs that run inside the OpenClaw scheduler without starting an isolated agent/model run:
+Use `--command` for script-based shell-style jobs that run inside the OpenClaw scheduler without starting an isolated agent/model run:
 
 ```bash
 openclaw automations create "*/15 * * * *" \
@@ -77,6 +77,11 @@ the stable name in list and detail views. The set and clear options cannot be
 combined.
 
 ## Schedule types
+
+For positional interval schedules, use `every <duration>`, such as `"every 10m"`.
+Natural-language schedules such as `"every day at 9am sharp"` are not supported;
+use `"0 9 * * *"` instead. Invalid cron expressions are rejected by the CLI with
+the supplied expression and examples of valid syntax.
 
 As an alternative to positional creation syntax, `automations add|create`
 accepts one of these schedule flags. `automations edit` uses the same flags
@@ -111,6 +116,34 @@ the default working directory. An explicitly empty or whitespace-only path is
 an error. When editing a stream job, `--stream-cwd ""` still clears its configured
 working directory.
 
+### Monitoring policies
+
+Use these flags with `automations add|create` or `automations edit` for ordinary
+monitoring jobs:
+
+- `--active-hours-start <HH:MM>` and `--active-hours-end <HH:MM>` define an
+  execution window. Start is inclusive; end is exclusive and also accepts
+  `24:00`. Overnight windows work; equal endpoints define an empty window.
+- `--active-hours-timezone <zone>` chooses an IANA timezone, `user` (the default,
+  using the configured user timezone), or `local` (Gateway host). This is
+  independent of the schedule's `--tz`.
+- `--idle-only` gives foreground work priority. `--no-idle-only` turns that
+  policy off.
+- `--skip-if-scratch-empty` skips an agent turn with explicitly empty scratch.
+  Missing scratch still runs. `--no-skip-if-scratch-empty` turns this off.
+- `--include-reasoning` includes reasoning returned by an agent alongside a meaningful result;
+  `--no-include-reasoning` keeps it out. This does not set the thinking level.
+
+A new window requires both endpoints. An edit can update just one field of an
+existing window. `automations edit --clear-active-hours` removes the window;
+`--clear-idle-only` removes the stored idle policy. Do not combine a clear flag
+with its corresponding set flag. The scratch and reasoning flags require an
+agent-turn payload (`--message` on creation).
+
+Manual force-runs bypass cadence but still respect the execution window and
+the job's authority and delivery policies. See
+[Monitoring policies](/automation/cron-jobs/schedules#monitoring-policies).
+
 ## Sessions
 
 `--session` accepts `main`, `isolated`, `current`, or `session:<id>`.
@@ -132,13 +165,31 @@ An isolated agent-turn job created from a conversation also captures that conver
   </Accordion>
 </AccordionGroup>
 
-When an operator removes an automation with an active run, OpenClaw requests cancellation of that run. An admitted automation can remove its own job without cancelling the active run. The JSON removal response includes `activeRunCancellationRequested: true` when cancellation was requested. For an isolated automation, reusable-session cleanup then waits for the active run to stop and reports `sessionCleanup: "pending"` while cleanup is deferred. Run history is retained.
+### Binding older jobs to their conversation
+
+Jobs created before OpenClaw recorded the creating conversation's incarnation name
+their conversation only by session key. They keep their existing behavior, with
+the run session's board, memory, and workspace, until someone binds them. To bind
+one, ask the agent in that conversation to bind it (the automations tool's `bind`
+action) from an authenticated owner turn: a Control UI administrator or the
+configured channel owner. The binding records the
+conversation's current incarnation, and later runs use that conversation's
+resources as a linked child run. Bind refuses a job whose recorded conversation is
+another one, a job that is already bound or is not linked by key alone, and turns
+without owner authority. Run from a shell, `openclaw automations bind` has no
+conversation and is refused with that instruction.
+
+A bind from an authenticated Control UI turn also stores that turn's operator
+source, as creation from that turn would, so each occurrence rechecks the device
+and access grant. Other owner turns keep the job's recorded requester.
+
+When an operator removes an automation with an active run, OpenClaw requests cancellation of that run. An admitted automation can remove its own job without cancelling the active run. If the caller cannot be confirmed as the job's exact live run, self-removal fails without deleting the job or cancelling the active run. The JSON removal response includes `activeRunCancellationRequested: true` when cancellation was requested. For an isolated automation, reusable-session cleanup then waits for the active run to stop and reports `sessionCleanup: "pending"` while cleanup is deferred. Run history is retained.
 
 If session cleanup fails, the error is logged. A removal with no active run also returns the cleanup error to the caller. Use `openclaw sessions list --json` to find the remaining session, then `openclaw sessions delete <key> --yes` to retry cleanup after the Gateway or worker recovers.
 
 ## Delivery
 
-`openclaw automations add`, `openclaw automations list`, and `openclaw automations show <job-id>` preview the resolved delivery route. For `channel: "last"`, the preview shows a conversation commit, the resolved channel route, or why delivery will fail closed.
+`openclaw automations add`, `openclaw automations list`, and `openclaw automations show <job-id>` preview the resolved delivery route. For `channel: "last"`, the preview shows a conversation commit, the resolved channel route, or why delivery will be blocked.
 
 If an existing session metadata store cannot be read or its schema is not ready, the preview keeps the requested destination and reports why it is unavailable without blocking job creation or listing. An absent database has no session routing history and uses the normal delivery fallback.
 
@@ -153,19 +204,33 @@ Isolated `automations add` jobs default to `--announce` delivery. Use `--no-deli
 Isolated automation chat delivery is shared between the agent and the runner:
 
 - The agent can send directly using the `message` tool when a chat route is available.
-- `announce` fallback-delivers the final reply only when the agent did not send directly to the resolved target.
+- `announce` sends the final result unless a verified matching send already did so, then adds confirmed delivery to the destination chat's transcript.
 - `webhook` posts the finished payload to a URL.
-- `none` disables runner fallback delivery.
+- `none` disables automatic conversation results and external notifications.
 
-For an isolated agent-turn job bound at creation to a routeless conversation, `announce` commits the final visible result there instead. WebChat shows it live and after reload, and retrying the commit does not duplicate it. A deleted or reset creating conversation records a delivery failure. Explicit channel, recipient, account, and thread settings keep normal channel resolution; `webhook` and `none` are unchanged. See [Automation delivery](/automation/cron-jobs/delivery).
+Agent, command, and script results belong to the chat or topic that receives them. An explicit different destination gets the result instead of the creating conversation, including for CLI and older jobs without a creating session. With no external route, the creating conversation receives it; WebChat shows the same message live and after reload. Retries do not duplicate results. Resetting an explicitly configured external destination does not stop delivery: the result enters its current session. Implicit agent-turn announcements and routeless WebChat results fail if the creating conversation was deleted or reset; recreate the job or set explicit external delivery coordinates. Command and script announcements retain an already resolved route without a source-generation check, as before. A confirmed external send remains delivered, with a warning if the conversation write fails. See [Automation delivery](/automation/cron-jobs/delivery).
 
 Use `automations add|create --webhook <url>` or `automations edit <job-id> --webhook <url>` to set webhook delivery. Do not combine `--webhook` with chat delivery flags such as `--announce`, `--no-deliver`, `--channel`, `--to`, `--thread-id`, or `--account`.
 
-`automations edit <job-id>` can unset individual delivery routing fields with `--clear-channel`, `--clear-to`, `--clear-thread-id`, and `--clear-account` (each is rejected when combined with its matching set flag). Unlike `--no-deliver`, which only disables runner fallback delivery, these remove the stored field so the job resolves that part of its route from defaults again.
+`automations edit <job-id>` can unset individual delivery routing fields with `--clear-channel`, `--clear-to`, `--clear-thread-id`, and `--clear-account` (each is rejected when combined with its matching set flag). Unlike `--no-deliver`, which disables automatic results and notifications, these remove the stored field so the job resolves that part of its route from defaults again.
 
-`--announce` is runner fallback delivery for the final reply. `--no-deliver` disables that fallback but does not remove the agent's `message` tool when a chat route is available.
+`--announce` enables the conversation result and notification flow. `--no-deliver` disables that automatic flow but does not remove the agent's `message` tool when a chat route is available.
 
-Reminders created from an active chat preserve the live chat delivery target for fallback announce delivery. Internal session keys may be lowercase. Do not use them as a source of truth for case-sensitive provider IDs such as Matrix room IDs.
+Reminders created from an active chat preserve the live chat delivery target for announce delivery. Internal session keys may be lowercase. Do not use them as a source of truth for case-sensitive provider IDs such as Matrix room IDs.
+
+### Owner targets and direct-message policy
+
+`--delivery-target owner` resolves a positively identified owner DM dynamically
+instead of following the last group conversation. It cannot be combined with
+`--to`, `--thread-id`, or `--webhook`. On edit, it clears a previous explicit
+recipient and thread; setting an explicit recipient replaces owner targeting.
+Use `--clear-delivery-target` to remove it.
+
+`--direct-policy allow|block` controls direct/DM delivery for the job. The
+default is `allow`; `block` prohibits DMs. Use `--clear-direct-policy` to remove
+the stored policy. These policies support agent-turn jobs in any supported session,
+including `main`, and non-main command or script jobs with chat delivery.
+They cannot be set and cleared in the same command.
 
 ### Failure delivery
 
@@ -175,12 +240,16 @@ Failure notifications resolve in this order:
 2. `delivery.failureDestination` on the job, layered over the global destination fields on `cron.failureAlert` (`mode`, `channel`, `to`, `accountId`). The `cron.failureDestination` block, retired in 2026.8.1, is merged into them by `openclaw doctor --fix`.
 3. The job's primary announce target (when neither of the above resolves to a concrete destination).
 
-Jobs with one of those routes default to an execution-failure alert after 2 consecutive failures and a 1-hour cooldown. A per-job or global `failureAlert` object explicitly activates/tunes the policy even without an existing route. `failureAlert: false` disables execution and required-delivery failure alerts for the job, but not the auto-disable safety notification. Global `enabled: false` disables inheritance unless the job has its own `failureAlert` object. `delivery.bestEffort: true` suppresses inherited/default execution alerts, but not an explicit per-job policy.
+Jobs with one of those routes default to an execution-failure alert after 2 consecutive failures and a 1-hour cooldown. A per-job or global `failureAlert` object explicitly activates/tunes the policy even without an existing route. `failureAlert: false` disables execution and required-delivery failure alerts for the job, but not the auto-disable safety notification. Global `enabled: false` disables inheritance unless the job has its own `failureAlert` object. `delivery.bestEffort: true` suppresses inherited/default execution alerts, but not an explicit per-job policy. Terminal one-shot failures bypass `after`: eligible owned jobs receive a repair turn in their owner conversation, other jobs use an enabled failure-alert route, and jobs without one receive the auto-disable safety notice. Operator cancellations and runs retired by a Gateway restart stay quiet.
 
 Repeated failures with the same cause stay grouped into one incident across Gateway restarts. A changed cause or destination can notify after the cooldown. Successful completion clears the incident silently; the recovery stays in automation history. Skipped runs and unknown delivery outcomes do not count as recovery. If script setup cannot refresh tools after a plugin reload, the alert explains that automatic recovery failed before the script ran.
 
+After an in-place plugin replacement, the next script invocation refreshes its retained tool runtime before executing. It uses the current plugin hooks without restarting the Gateway or replaying a completed tool effect.
+
+For transient failures, a scheduler-authored repair may intentionally return `NO_REPLY` and finish silently without a WebChat error. Public messages do not gain that waiver by claiming cron provenance.
+
 <Note>
-Main-session jobs may only use `delivery.failureDestination` when primary delivery mode is `webhook`. Isolated jobs accept it in all modes.
+Main-session system-event and script jobs may only use `delivery.failureDestination` when primary delivery mode is `webhook`. Agent-turn and isolated jobs accept it in all modes.
 </Note>
 
 Chat failure notifications include the run start time in the agent's configured user timezone. Webhook message text stays stable and exposes the instant as `runAtMs`.
@@ -208,6 +277,8 @@ daylight-saving transition are reported separately as `--at` errors.
 <Note>
 One-shot jobs delete only after `completionStatus: "succeeded"`. Required-delivery failure or unknown completion keeps the job disabled, with no next run, so restarts do not replay payload side effects. Intentional silence and successful executions with explicit `delivery.bestEffort: true` complete and delete normally. Use `--keep-after-run` to preserve successful jobs too.
 </Note>
+
+An `at` job records a terminal execution failure after a permanent error or exhausted retries. An `on-exit` job fired by its watcher is terminal on any execution error, including a transient one, because retrying would rerun the watched command. These failures record `state.autoDisabled`, which `openclaw doctor` reports. Manually force-running a paused `on-exit` job preserves its pause without recording an auto-disable.
 
 ### Recurring jobs
 
@@ -264,6 +335,8 @@ The automation `--model` is a **job primary**, not a chat-session `/model` overr
 - When a job has `--model` but no fallback list is configured, OpenClaw passes an explicit empty fallback override. The agent primary is therefore not appended as a hidden retry target.
 - Local-provider preflight checks walk configured fallbacks before marking a run `skipped`.
 
+When every local provider is unreachable, `automations runs` and `automations show` retain the skipped status and preflight reason. Start the provider or correct its configured endpoint. Repeated preflight skips use the existing failure-alert route and threshold without requiring `failureAlert.includeSkipped`, while explicit alert opt-outs still apply. Recurring jobs stay enabled and resume on a later scheduled run once reachability is checked again; endpoint results are cached for up to five minutes.
+
 `openclaw doctor` reports jobs that already have `payload.model` set, including provider namespace counts and mismatches against `agents.defaults.model`. Use that check when auth, provider, or billing behavior looks different between live chat and scheduled jobs.
 
 ### Isolated automation model precedence
@@ -287,21 +360,19 @@ If an isolated run throws `LiveSessionModelSwitchError`, the scheduler persists 
 
 ### Stale acknowledgement suppression
 
-Isolated automation turns suppress stale acknowledgement-only replies. If the first result is only an interim status update, the scheduler re-prompts once for the real result before delivery. It does not re-prompt when a descendant subagent run is responsible for the eventual answer.
+Isolated automation turns require a final deliverable rather than an interim status update. Recorded pending-descendant work retains ownership of the eventual answer; the scheduler does not infer completion or pending work from acknowledgment prose.
 
 ### Silent token suppression
 
-For text-only isolated automation announcements, a reply that contains only the silent token (`NO_REPLY` or `no_reply`), or ends with a trailing silent token, suppresses direct outbound delivery and the fallback queued summary path. The preceding text is not delivered.
+For text-only isolated automation announcements, only a completed final whose entire text trims to uppercase `NO_REPLY` suppresses direct outbound delivery and the fallback queued summary path. The terminal producer records this decision; delivery does not reparse the reply.
 
 For example, this final reply sends no chat message:
 
 ```text
-Nothing actionable found today.
-
 NO_REPLY
 ```
 
-Do not append `NO_REPLY` to a report that should reach the user. Mentioning the token within a sentence, such as `Use NO_REPLY when nothing actionable changed.`, does not trigger this rule. For media payloads, a silent caption can be removed while the media is still delivered.
+A literal leading `NO_REPLY\n` strips that one control line and delivers the rest unchanged. Lowercase `no_reply`, `NO_REPLY.`, quoted or JSON forms, and a trailing `NO_REPLY` after a report are visible text. For media payloads, silent model text can be removed while tool-owned media is still delivered.
 
 Human-readable `automations list` and `automations show` label successful intentional suppression as `ok (suppressed)`, not a delivery warning. `automations show` includes `last delivery suppression` with the recorded reason (`empty`, `silent`, `heartbeat`, or `channel_transform`). JSON keeps `deliveryStatus: "not-delivered"` and the separate `deliverySuppressionReason`. Genuine delivery failures without an intentional reason still show `ok (not delivered)` when execution succeeded.
 
@@ -323,6 +394,18 @@ Retention behavior:
 - Terminal run history is retained for 7 days, and `lost` rows for 24 hours. An additional ceiling keeps only the newest 2000 rows per job and history class.
 
 ## Migrating older jobs
+
+Run `openclaw doctor --fix` to convert supported July 2026 and later heartbeat
+configuration and monitor jobs to ordinary editable agent-turn automations.
+After migration, edit or disable the job itself. Config reloads, restarts, and
+later Doctor runs do not overwrite edits or recreate a deleted migrated job.
+Use `automations show`, `runs`, `enable`, and `disable` to manage the jobs.
+Legacy `system heartbeat` controls apply only to converted/default jobs. See [Heartbeat migration](/gateway/heartbeat).
+
+The `cron.*` Gateway methods remain compatible. The deprecated
+`--wake now|next-heartbeat` field remains accepted, but scheduled jobs execute
+their payload through ordinary session execution when the job is due. It does
+not add another wake or deferral step. Use the job's schedule to control timing.
 
 <Note>
 If you have automation jobs from before the current delivery and store format, run `openclaw doctor --fix`. Doctor normalizes legacy job fields: `jobId`, `schedule.cron`, top-level delivery fields including legacy `threadId`, and payload `provider` delivery aliases. It also migrates `notify: true` webhook fallback jobs from the retired raw `cron.webhook` value to explicit webhook delivery. It removes that config key afterwards. Jobs that already announce to a chat keep that delivery and get a completion webhook destination. Without a legacy webhook, Doctor removes the inert top-level `notify` marker for jobs with no migration target. The existing delivery is preserved unchanged. `doctor --fix` therefore stops re-warning about them.
@@ -441,6 +524,10 @@ An unresolved owner does not stop the scheduler: that job is skipped with an exp
 
 `list` and `show` use human-readable output by default and switch to JSON with `--json`. `scratch` reads raw scratch content by default. With `--json` it prints the scratch plus revision metadata. Scratch writes return the revision result as JSON by default, and accept `--json` as the explicit machine-output spelling.
 
+If a returned job has no runtime state, human-readable `show` still displays the
+available job details, using `-` for unavailable run fields and `idle` for an
+enabled job with no recorded status.
+
 `automations show` also accepts an exact job name, matched without regard to case.
 Job IDs take precedence. When multiple jobs match the name, including disabled
 jobs, the command reports ambiguity and includes the matching jobs' full IDs,
@@ -450,11 +537,11 @@ with the intended job ID instead of the name.
 With `--json`, the failure envelope includes these summaries in `error.matches`.
 Event schedules appear as `on-exit` or `stream` without their command text.
 
-`automations list --json` and `automations show <job-id> --json` include a top-level `status` field on each job, computed from `enabled`, `state.runningAtMs`, and `state.lastRunStatus`. Values: `disabled`, `running`, `ok`, `error`, `skipped`, or `idle`. JSON status stays canonical and undecorated, so external tooling can read job state without re-deriving it. Human output may decorate repeated `error` statuses with a failure count.
+`automations list --json` and `automations show <job-id> --json` include a top-level `status` field on each job, computed from `enabled`, `state.runningAtMs`, and `state.lastRunStatus`. Values: `disabled`, `running`, `ok`, `error`, `skipped`, or `idle`. JSON status uses the plain values above without decoration, so external tooling can read job state without re-deriving it. Human output may decorate repeated `error` statuses with a failure count.
 
 `automations runs` entries include delivery diagnostics with the intended automation target, the resolved target, message-tool sends, fallback use, and delivered state.
 
-Private per-job scratch (heartbeat checklists and similar monitor context):
+Private per-job scratch for checklists and other run context:
 
 ```bash
 openclaw automations scratch <job-id>                  # print current scratch content
@@ -464,7 +551,12 @@ openclaw automations scratch <job-id> --file notes.md  # replace scratch from a 
 openclaw automations scratch <job-id> --unset          # remove the scratch row
 ```
 
-Scratch is stored in the shared state database, capped at 256 KiB, and never included in `automations list`/`automations get`/`automations runs` output. Writes are compare-and-swap guarded against the revision read at command start. Pass `--expected-revision <n>` to pin an explicit revision instead. See [Heartbeat](/gateway/heartbeat#monitor-scratch-optional) for how heartbeat monitors use scratch.
+Scratch is stored in the shared state database, capped at 256 KiB, and never included in `automations list`/`automations get`/`automations runs` output. Writes are compare-and-swap guarded against the revision read at command start. Pass `--expected-revision <n>` to pin an explicit revision instead. Present scratch becomes bounded model prompt context, so do not store secrets in it. See [Job scratch and quiet results](/automation/cron-jobs/payloads#job-scratch-and-quiet-results) for self-scoped scratch and result actions.
+
+For a job with `--skip-if-scratch-empty`, blank text, comments, headings, fence
+markers, and empty checklist stubs skip the run. `--unset` removes scratch;
+missing scratch still runs. Use `automations disable <job-id>` to stop the job
+regardless of scratch content.
 
 Agent and session retargeting:
 

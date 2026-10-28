@@ -17,7 +17,6 @@ export const defaultWaitingPhrases = [
   "conjuring",
 ];
 
-/** Applies a moving highlight window to status text. */
 function shimmerText(theme: MinimalTheme, text: string, tick: number) {
   const width = 6;
   const hi = (ch: string) => theme.bold(theme.accentSoft(ch));

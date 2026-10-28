@@ -1,5 +1,7 @@
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import type { Command } from "commander";
+import { readRegularFile } from "openclaw/plugin-sdk/file-access-runtime";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -35,12 +37,8 @@ import {
 } from "./obsidian.js";
 import { formatOkfImportSummary, importMemoryWikiOkfBundle } from "./okf.js";
 import { renderWikiMutationSummary, renderWikiSearchResults } from "./presentation.js";
-import {
-  getMemoryWikiPage,
-  searchMemoryWiki,
-  WIKI_SEARCH_MODES,
-  type WikiSearchMode,
-} from "./query.js";
+import { WIKI_SEARCH_MODES, type WikiSearchMode } from "./query-scoring.js";
+import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import type { MemoryWikiImportedSourceSyncResult } from "./source-sync.js";
 import {
@@ -154,7 +152,7 @@ function isBoundedGatewayString(
   return typeof value === "string" && value.length <= maxChars;
 }
 
-function isStringArray(
+function isBoundedGatewayStringArray(
   value: unknown,
   maxChars = GATEWAY_RESPONSE_MAX_STRING_CHARS,
 ): value is string[] {
@@ -240,9 +238,9 @@ function isMemoryWikiImportResult(value: unknown): value is MemoryWikiImportedSo
       "artifactCount",
       "workspaces",
     ]) &&
-    isStringArray(value.pagePaths) &&
+    isBoundedGatewayStringArray(value.pagePaths) &&
     typeof value.indexesRefreshed === "boolean" &&
-    isStringArray(value.indexUpdatedFiles) &&
+    isBoundedGatewayStringArray(value.indexUpdatedFiles) &&
     isBoundedGatewayString(value.indexRefreshReason, GATEWAY_RESPONSE_MAX_CODE_CHARS)
   );
 }
@@ -306,7 +304,7 @@ function parseWikiSearchEnumOption<T extends string>(
   if ((allowed as readonly string[]).includes(value)) {
     return value as T;
   }
-  throw new Error(`Invalid ${label}: ${value}. Expected one of: ${allowed.join(", ")}`);
+  throw invalidCliArgument(`Invalid ${label}: ${value}. Expected one of: ${allowed.join(", ")}`);
 }
 
 async function resolveWikiApplyBody(params: { body?: string; bodyFile?: string }): Promise<string> {
@@ -314,7 +312,34 @@ async function resolveWikiApplyBody(params: { body?: string; bodyFile?: string }
     return params.body;
   }
   if (params.bodyFile?.trim()) {
-    return await fs.readFile(params.bodyFile, "utf8");
+    // Keep symlinked body files working while the SDK refuses special files.
+    const { buffer: bytes } = await readRegularFile({
+      filePath: await fs.realpath(params.bodyFile),
+    }).catch((error: unknown) => {
+      // SDK admission errors are unclassified; structured I/O errors retain
+      // their original identity and code for callers.
+      if (!(error instanceof Error) || "code" in error) {
+        throw error;
+      }
+      throw new Error(
+        `wiki apply synthesis --body-file could not be read: ${params.bodyFile}. ${error.message}. Supply a regular UTF-8 file (or use --body), then retry.`,
+        { cause: error },
+      );
+    });
+    // Reject before mutation: blank files would wipe an existing synthesis, and
+    // replacement decoding would turn Latin-1 bytes into U+FFFD in the vault.
+    if (!isUtf8(bytes)) {
+      throw new Error(
+        `wiki apply synthesis --body-file must be valid UTF-8: ${params.bodyFile}. Save the file as UTF-8, then retry.`,
+      );
+    }
+    const text = bytes.toString("utf8");
+    if (!text.trim()) {
+      throw new Error(
+        `wiki apply synthesis --body-file is empty: ${params.bodyFile}. Supply nonempty UTF-8 text (or use --body), then retry.`,
+      );
+    }
+    return text;
   }
   throw new Error("wiki apply synthesis requires --body or --body-file.");
 }
@@ -552,7 +577,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     .option("--json", "Print JSON")
     .action(async (opts: WikiJsonOptions) => {
       const { appConfig, config } = requireCommandContext();
-      await syncMemoryWikiImportedSources({ config, appConfig });
+      await syncMemoryWikiImportedSources({ config, appConfig, deferIndexRefresh: true });
       printWikiResult(
         await compileMemoryWikiVault(config),
         opts.json,
@@ -565,7 +590,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     .option("--json", "Print JSON")
     .action(async (opts: WikiJsonOptions) => {
       const { appConfig, config } = requireCommandContext();
-      await syncMemoryWikiImportedSources({ config, appConfig });
+      await syncMemoryWikiImportedSources({ config, appConfig, deferIndexRefresh: true });
       printWikiResult(
         await lintMemoryWikiVault(config),
         opts.json,

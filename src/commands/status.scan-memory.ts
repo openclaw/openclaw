@@ -1,4 +1,3 @@
-// Memory status collection for status scans.
 // Runtime memory dependencies stay lazy so status paths without memory avoid loading the search manager.
 
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
@@ -19,18 +18,17 @@ export function resolveDefaultMemoryDatabasePath(agentId: string): string {
 /** Resolves memory index/cache status for the current status scan. */
 export async function resolveStatusMemoryStatusSnapshot(params: {
   cfg: OpenClawConfig;
-  agentStatus: AgentLocalStatusesResult;
+  agentStatus: Pick<AgentLocalStatusesResult, "defaultId">;
   memoryPlugin: MemoryPluginStatus;
   requireDefaultDatabasePath?: (agentId: string) => string;
 }): Promise<MemoryStatusSnapshot | null> {
-  const { getMemoryProvider, getMemorySearchManager, isMemoryProviderNative } =
+  const { getMemoryProvider, isMemoryProviderNative } =
     await import("./status.scan.deps.runtime.js");
   return await resolveSharedMemoryStatusSnapshot({
     cfg: params.cfg,
     agentStatus: params.agentStatus,
     memoryPlugin: params.memoryPlugin,
     resolveMemoryConfig: resolveMemorySearchConfig,
-    getMemorySearchManager,
     getMemoryProvider,
     isMemoryProviderNative,
     requireDefaultDatabasePath: params.requireDefaultDatabasePath,

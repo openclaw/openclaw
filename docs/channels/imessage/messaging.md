@@ -33,6 +33,8 @@ iMessage recovers messages missed while the gateway was down, and at the same ti
 
 Recovery works over both local and remote `cliPath` setups, because `since_rowid` replay runs over the same `imsg` RPC connection. The difference is the window: when the gateway can read `chat.db` (local), it anchors the startup rowid boundary, caps the replay span, and delivers missed messages up to a couple of hours old. Over a remote SSH `cliPath` it cannot read the database, so the replay is uncapped and every row uses the live age fence — it still recovers recently-missed messages and still suppresses old backlog, just with the narrower live window. Run the gateway on the Messages Mac for the wider recovery window.
 
+If the saved recovery cursor cannot be read, account startup fails instead of treating it as a first start and skipping missed messages. Resolve the reported state-store error, then restart the account to resume from its saved cursor. When compatibility catchup is enabled, its own cursor controls replay and the unused recovery cursor is not read.
+
 ### Operator-visible signal
 
 Suppressed backlog is logged at the default level, never silently dropped (the `recovery` flag shows which window applied):

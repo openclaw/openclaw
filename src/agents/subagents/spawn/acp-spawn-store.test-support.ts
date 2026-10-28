@@ -62,6 +62,21 @@ export function createAcpSpawnStoreMocks(mocks: {
     },
     readRuntime: {
       withSessionEntryReadOnlyInWorker,
+      withSessionEntriesFromStoreInWorker: async <T>(
+        scope: StoreScope & { sessionKeys?: readonly string[] },
+        consume: (read: {
+          result: { entries: Array<{ sessionKey: string; entry: SessionEntry }> };
+          assertCurrent: () => void;
+        }) => Promise<T>,
+      ): Promise<T> => {
+        const entries = scope.sessionKeys
+          ? scope.sessionKeys.flatMap((sessionKey) => {
+              const entry = loadEntry({ ...scope, sessionKey });
+              return entry ? [{ sessionKey, entry }] : [];
+            })
+          : listEntries(scope);
+        return consume({ result: { entries }, assertCurrent() {} });
+      },
       readSessionEntryReadOnlyInWorker: (scope: SessionEntryReadScope, assertCurrent: () => void) =>
         withSessionEntryReadOnlyInWorker(scope, assertCurrent, async (read) => read.value),
     },

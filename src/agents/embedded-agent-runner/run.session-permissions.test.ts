@@ -1,3 +1,5 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { settleReplyDispatcher } from "../../auto-reply/dispatch-dispatcher.js";
 import type { ReplyDispatchRuntimeInfo } from "../../auto-reply/reply/reply-dispatcher.types.js";
@@ -7,17 +9,19 @@ import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-f
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./result-fallback-classifier.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
-  loadRunOverflowCompactionHarness,
   mockedBuildEmbeddedRunPayloads,
   mockedRunEmbeddedAttempt,
   createOverflowRunParams,
-  resetSharedRunIntegrationHarnessMocks,
   type TestRunEmbeddedAgent,
   useOpenAIPlatformAuthFixture,
-  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
+import {
+  createFreshRunIntegrationState,
+  loadSharedRunIntegrationHarness,
+} from "./run.shared-integration-harness.test-support.js";
 import { withAuthorizedPermissionChange } from "./run/permission-change.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./run/terminal-outcome.js";
+import { makeTerminalInput } from "./run/terminal-resolution.test-support.js";
 import { resolveEmbeddedRunTerminalTimeout } from "./run/terminal-timeout.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
@@ -48,22 +52,18 @@ describe("embedded run permissions and timeout delivery", () => {
   let runEmbeddedAgent: TestRunEmbeddedAgent;
   let buildEmbeddedRunPayloads: typeof import("./run/payloads.js").buildEmbeddedRunPayloads;
   let createReplyDispatcher: typeof import("../../auto-reply/reply/reply-dispatcher.js").createReplyDispatcher;
+  const run = (overrides: Partial<Parameters<TestRunEmbeddedAgent>[0]> = {}) =>
+    runEmbeddedAgent({ ...createPluginHarnessRunParams(state), ...overrides });
 
   beforeAll(async () => {
-    ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
-    const { withOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
-    await withOpenClawTestState({ label: "session-permissions-warmup" }, async (warmupState) => {
-      await warmRunOverflowCompactionHarness(runEmbeddedAgent, warmupState);
-    });
+    runEmbeddedAgent = await loadSharedRunIntegrationHarness();
     ({ buildEmbeddedRunPayloads } =
       await vi.importActual<typeof import("./run/payloads.js")>("./run/payloads.js"));
     ({ createReplyDispatcher } = await import("../../auto-reply/reply/reply-dispatcher.js"));
   });
 
   beforeEach(async () => {
-    resetSharedRunIntegrationHarnessMocks();
-    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
-    state = await createOpenClawTestState({ label: "run.session-permissions" });
+    state = await createFreshRunIntegrationState("run.session-permissions");
     useOpenAIPlatformAuthFixture();
   });
 
@@ -71,13 +71,68 @@ describe("embedded run permissions and timeout delivery", () => {
     await state?.cleanup();
   });
 
+  it("releases settled attempt snapshots while harness callbacks remain reachable", async () => {
+    const retainedCallbacks: NonNullable<EmbeddedRunAttemptParams["onSettledTurn"]>[] = [];
+    const snapshots: WeakRef<object>[] = [];
+    mockedBuildEmbeddedRunPayloads.mockImplementation(buildEmbeddedRunPayloads);
+    mockedRunEmbeddedAttempt.mockImplementation(async (params) => {
+      if (!params.onSettledTurn) {
+        throw new Error("The harness must receive the host's settled-turn callback");
+      }
+      retainedCallbacks.push(params.onSettledTurn);
+      const assistant = makeAssistantMessageFixture({
+        content: [{ type: "text", text: "Completed synthetic turn." }],
+        stopReason: "stop",
+      });
+      const attempt = makeAttemptResult({
+        sessionIdUsed: params.sessionId,
+        assistantTexts: ["Completed synthetic turn."],
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        currentAttemptCompletedAssistant: assistant,
+        messagesSnapshot: [
+          {
+            role: "user",
+            content: `Synthetic history for ${params.runId}: ${"history ".repeat(4096)}`,
+            timestamp: 1,
+          },
+          assistant,
+        ],
+      });
+      snapshots.push(new WeakRef(attempt.messagesSnapshot));
+      await params.onSettledTurn(attempt, async () => {
+        throw new Error("A completed answer must not require finalization context");
+      });
+      return attempt;
+    });
+    for (let index = 0; index < 12; index++) {
+      const result = await run({ runId: `settled-retention-${index}` });
+      expect(result.payloads).toEqual([
+        expect.objectContaining({ text: "Completed synthetic turn." }),
+      ]);
+      expect(result.meta.error).toBeUndefined();
+    }
+    // Mock call/result histories must not become an artificial transcript owner.
+    vi.clearAllMocks();
+    const control = new WeakRef({ unowned: true });
+    await nextTurn();
+    queryObjects(WeakRef);
+    expect(control.deref()).toBeUndefined();
+    const whileCallbacksRetained = snapshots.filter((reference) => reference.deref()).length;
+    expect(retainedCallbacks.length).toBe(12);
+    retainedCallbacks.length = 0;
+    await nextTurn();
+    queryObjects(WeakRef);
+    const afterCallbacksReleased = snapshots.filter((reference) => reference.deref()).length;
+    expect({ whileCallbacksRetained, afterCallbacksReleased }).toEqual({
+      whileCallbacksRetained: 0,
+      afterCallbacksReleased: 0,
+    });
+  });
+
   it("preserves the host's requireWorkspaceOnly requirement at attempt dispatch", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["OK"] }));
-    await runEmbeddedAgent({
-      ...createPluginHarnessRunParams(state),
-      requireWorkspaceOnly: true,
-      runId: "run-workspace-requirement",
-    });
+    await run({ requireWorkspaceOnly: true });
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
       expect.objectContaining({ requireWorkspaceOnly: true }),
     );
@@ -93,12 +148,7 @@ describe("embedded run permissions and timeout delivery", () => {
       return makeAttemptResult({ assistantTexts: ["OK"] });
     });
 
-    await runEmbeddedAgent({
-      ...createPluginHarnessRunParams(state),
-      permissionMode: "full",
-      execOverrides,
-      runId: "run-plugin-clamped-session-permissions",
-    });
+    await run({ permissionMode: "full", execOverrides });
 
     expect(execOverrides).toEqual({ mode: "auto" });
   });
@@ -122,24 +172,21 @@ describe("embedded run permissions and timeout delivery", () => {
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attempt) => {
       expect(acknowledged).not.toHaveBeenCalled();
       expect(attempt.permissionChange?.owner).toBe(owner);
+      expect(attempt).toMatchObject({
+        execOverrides: { mode: "ask" },
+        sessionId: pluginHarnessRunParams.sessionId,
+        suppressNextUserMessagePersistence: true,
+        skipPreparedUserTurnMessage: true,
+      });
       expect(attempt.permissionMode).toBeUndefined();
-      expect(attempt.execOverrides?.mode).toBe("ask");
-      expect(attempt.sessionId).toBe(pluginHarnessRunParams.sessionId);
       expect(attempt.prompt).toContain("Continue the current task from the existing transcript");
       expect(attempt.prompt).not.toBe(pluginHarnessRunParams.prompt);
-      expect(attempt.suppressNextUserMessagePersistence).toBe(true);
-      expect(attempt.skipPreparedUserTurnMessage).toBe(true);
       expect(attempt.permissionChange?.notice).toContain("Permission change");
       expect(attempt.permissionChange?.applied()).toBe(true);
       return makeAttemptResult({ assistantTexts: ["Continued"] });
     });
 
-    await runEmbeddedAgent({
-      ...pluginHarnessRunParams,
-      permissionMode: "full",
-      execOverrides: { mode: "ask" },
-      runId: "run-live-permissions-full-default",
-    });
+    await run({ permissionMode: "full", execOverrides: { mode: "ask" } });
 
     await expect(applied).resolves.toBe(true);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
@@ -155,17 +202,15 @@ describe("embedded run permissions and timeout delivery", () => {
       return makeAttemptResult({ aborted: true });
     });
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attempt) => {
-      expect(attempt.permissionMode).toBe("read-only");
-      expect(attempt.execOverrides?.mode).toBe("deny");
+      expect(attempt).toMatchObject({
+        permissionMode: "read-only",
+        execOverrides: { mode: "deny" },
+      });
       expect(attempt.permissionChange!.applied()).toBe(true);
       return makeAttemptResult({ assistantTexts: ["Continued read-only"] });
     });
 
-    await runEmbeddedAgent({
-      ...createPluginHarnessRunParams(state),
-      permissionMode: "workspace",
-      runId: "run-coalesced-permissions",
-    });
+    await run({ permissionMode: "workspace" });
 
     await expect(superseded).resolves.toBe(false);
     await expect(latest).resolves.toBe(true);
@@ -180,13 +225,9 @@ describe("embedded run permissions and timeout delivery", () => {
     });
     mockedRunEmbeddedAttempt.mockRejectedValueOnce(new Error("native startup unavailable"));
 
-    await expect(
-      runEmbeddedAgent({
-        ...createPluginHarnessRunParams(state),
-        permissionMode: "workspace",
-        runId: "run-failed-permission-restart",
-      }),
-    ).rejects.toThrow("native startup unavailable");
+    await expect(run({ permissionMode: "workspace" })).rejects.toThrow(
+      "native startup unavailable",
+    );
     await expect(applied).resolves.toBe(false);
   });
 
@@ -206,17 +247,15 @@ describe("embedded run permissions and timeout delivery", () => {
           return retained!.request("full");
         }),
       ).rejects.toThrow("not authorized");
-      expect(attempt.permissionMode).toBe("workspace");
-      expect(attempt.sessionRoot).toBe(state.sessionsDir());
-      expect(attempt.execOverrides?.mode).toBe("auto");
+      expect(attempt).toMatchObject({
+        permissionMode: "workspace",
+        sessionRoot: state.sessionsDir(),
+        execOverrides: { mode: "auto" },
+      });
       return makeAttemptResult({ assistantTexts: ["Still restricted"] });
     });
 
-    await runEmbeddedAgent({
-      ...createPluginHarnessRunParams(state),
-      permissionMode: "workspace",
-      runId: "run-unauthorized-permission-change",
-    });
+    await run({ permissionMode: "workspace" });
 
     expect(() => requestPermissionChange(retained!, "full")).toThrow("no longer active");
     expect(() => retained!.recordApplied("full")).toThrow("not authorized");
@@ -268,7 +307,11 @@ describe("embedded run permissions and timeout delivery", () => {
       timeoutPhase: "provider",
       providerStarted: true,
       modelFallbackStopReason: "agent_run_terminal_timeout",
+      terminalReply: { disposition: "empty" },
+      finalAssistantVisibleText: "",
+      finalAssistantMessageRawText: "",
     });
+    expect(result.meta.finalAssistantRawText).toBeUndefined();
     expect(
       classifyEmbeddedAgentRunResultForModelFallback({
         provider: "openai",
@@ -287,20 +330,12 @@ describe("embedded run permissions and timeout delivery", () => {
       expect(dispatcher.sendFinalReply(payload)).toBe(true);
     }
     await settleReplyDispatcher({ dispatcher });
-    expect(physicalSends).toEqual([
-      {
-        payload: expect.objectContaining(independentError),
-        info: expect.objectContaining({ kind: "final" }),
-      },
-      {
-        payload: expect.objectContaining({ mediaUrl: toolMediaUrl, mediaUrls: [toolMediaUrl] }),
-        info: expect.objectContaining({ kind: "final" }),
-      },
-      {
-        payload: { text: authoritativeTimeout, isError: true },
-        info: expect.objectContaining({ kind: "final" }),
-      },
+    expect(physicalSends.map(({ payload }) => payload)).toEqual([
+      expect.objectContaining(independentError),
+      expect.objectContaining({ mediaUrl: toolMediaUrl, mediaUrls: [toolMediaUrl] }),
+      { text: authoritativeTimeout, isError: true },
     ]);
+    expect(physicalSends.map(({ info }) => info.kind)).toEqual(["final", "final", "final"]);
     expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
   });
 });
@@ -309,34 +344,19 @@ it("does not replace a successfully recovered final assistant after a prompt-tim
   const attempt = makeAttemptResult({
     terminal: { kind: "timeout", phase: "prompt", source: "runtime", aborted: true },
   });
-  const payloads = [{ text: "Completed answer after the timeout race." }];
-  const setTerminalLifecycleMeta = vi.fn();
+  const input = makeTerminalInput({ attempt });
   const result = resolveEmbeddedRunTerminalTimeout({
+    ...input,
     terminalPrepared: {
+      ...input.prepared,
       timedOutDuringPrompt: true,
       hasSuccessfulFinalAssistantAfterPromptTimeout: true,
-      hasPartialAssistantTextAfterPromptTimeout: false,
-      replyDeliveryState: "missing",
-      reportedModelRef: { provider: "openai", model: "gpt-5.4" },
-      finalAssistantVisibleText: undefined,
-      finalAssistantRawText: undefined,
-      recoveredFinalAssistantPayloadsAfterPromptTimeout: undefined,
-      payloads,
-      payloadsWithToolMedia: payloads,
-      agentMeta: { sessionId: "session-1", provider: "openai", model: "gpt-5.4" },
-      attemptToolSummary: undefined,
-      failureSignal: undefined,
-      terminalToolFailure: undefined,
     },
-    attempt,
     terminalState: resolveEmbeddedRunAttemptTerminalState({
       attempt,
       assistant: attempt.lastAssistant,
     }),
-    resolveReplayInvalid: () => false,
-    setTerminalLifecycleMeta,
-    startedAtMs: Date.now(),
   });
   expect(result).toBeUndefined();
-  expect(setTerminalLifecycleMeta).not.toHaveBeenCalled();
+  expect(input.setTerminalLifecycleMeta).not.toHaveBeenCalled();
 });

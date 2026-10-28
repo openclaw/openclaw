@@ -1,7 +1,14 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { expectDefined, normalizeOptionalString } from "@openclaw/normalization-core";
+import {
+  extractErrorCode,
+  formatErrorMessage,
+  readErrorName,
+} from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../config/paths.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { pathMayExistSync } from "./path-existence.js";
 import {
@@ -30,6 +37,8 @@ type WebPushSendResult = {
   statusCode?: number;
   error?: string;
 };
+
+const log = createSubsystemLogger("gateway/web-push");
 
 const LEGACY_WEB_PUSH_PATHS = ["push/web-push-subscriptions.json", "push/vapid-keys.json"] as const;
 
@@ -169,114 +178,113 @@ type WebPushPayload = {
   renotify?: boolean;
   tag?: string;
   url?: string;
+  icon?: string;
 };
 
-async function sendPreparedWebPushNotification(
-  webPush: WebPushRuntime,
-  subscription: WebPushSubscription,
-  payload: WebPushPayload,
-  deliveryOptions?: WebPushDeliveryOptions,
-): Promise<WebPushSendResult> {
-  const pushSubscription = {
-    endpoint: subscription.endpoint,
-    keys: {
-      p256dh: subscription.keys.p256dh,
-      auth: subscription.keys.auth,
-    },
-  };
-
-  try {
-    const result = await webPush.sendNotification(
-      pushSubscription,
-      JSON.stringify(payload),
-      deliveryOptions,
-    );
-    return {
-      ok: true,
-      subscriptionId: subscription.subscriptionId,
-      statusCode: result.statusCode,
-    };
-  } catch (err: unknown) {
-    const statusCode =
-      typeof err === "object" && err !== null && "statusCode" in err
-        ? (err as { statusCode: number }).statusCode
-        : undefined;
-    const message =
-      typeof err === "object" && err !== null && "message" in err
-        ? (err as { message: string }).message
-        : "unknown error";
-    return {
-      ok: false,
-      subscriptionId: subscription.subscriptionId,
-      statusCode,
-      error: message,
-    };
-  }
-}
-
-async function sendPreparedWebPushNotifications(params: {
-  webPush: WebPushRuntime;
+type PreparedWebPushNotificationParams = {
   subscriptions: readonly WebPushSubscription[];
   payload: WebPushPayload;
   deliveryOptions?: WebPushDeliveryOptions;
-  baseDir?: string;
-}): Promise<WebPushSendResult[]> {
-  const { subscriptions, webPush } = params;
-  if (subscriptions.length === 0) {
-    return [];
-  }
-
-  const mapped: WebPushSendResult[] = await Promise.all(
-    subscriptions.map((subscription) =>
-      sendPreparedWebPushNotification(
-        webPush,
-        subscription,
-        params.payload,
-        params.deliveryOptions,
-      ).catch((reason: unknown) => ({
-        ok: false,
-        subscriptionId: subscription.subscriptionId,
-        error: reason instanceof Error ? reason.message : "unknown error",
-      })),
-    ),
-  );
-
-  // Clean up expired subscriptions (HTTP 410 Gone or 404 Not Found) per Web Push spec.
-  const expiredSubscriptions = mapped.flatMap((result, i) =>
-    !result.ok && (result.statusCode === 410 || result.statusCode === 404)
-      ? [expectDefined(subscriptions[i], "push web sub")]
-      : [],
-  );
-
-  for (const subscription of expiredSubscriptions) {
-    try {
-      assertLegacyWebPushMigrationComplete(params.baseDir);
-      await deleteWebPushSubscriptionIfCurrent({
-        endpointHash: hashWebPushEndpoint(subscription.endpoint),
-        subscription,
-        stateDir: params.baseDir,
-      });
-    } catch {
-      // Delivery already completed. Cleanup stays best-effort so callers do not retry valid sends.
-    }
-  }
-
-  return mapped;
-}
+};
 
 /** Prepares transport state so callers can perform final authorization immediately before send. */
 export async function prepareWebPushNotificationSender(
   baseDir?: string,
-): Promise<
-  (
-    params: Omit<Parameters<typeof sendPreparedWebPushNotifications>[0], "webPush" | "baseDir">,
-  ) => Promise<WebPushSendResult[]>
-> {
+): Promise<(params: PreparedWebPushNotificationParams) => Promise<WebPushSendResult[]>> {
   assertLegacyWebPushMigrationComplete(baseDir);
   const vapidKeys = await resolveVapidKeys(baseDir);
   const webPush = await loadWebPushRuntime();
   webPush.setVapidDetails(vapidKeys.subject, vapidKeys.publicKey, vapidKeys.privateKey);
-  return (params) => sendPreparedWebPushNotifications({ ...params, webPush, baseDir });
+  return async (params) => {
+    const { subscriptions, payload, deliveryOptions } = params;
+    if (subscriptions.length === 0) {
+      return [];
+    }
+
+    const mapped: WebPushSendResult[] = await Promise.all(
+      subscriptions.map(async (subscription): Promise<WebPushSendResult> => {
+        const pushSubscription = {
+          endpoint: subscription.endpoint,
+          keys: {
+            p256dh: subscription.keys.p256dh,
+            auth: subscription.keys.auth,
+          },
+        };
+
+        try {
+          let encodedPayload = JSON.stringify(payload);
+          // RFC 8291 leaves 3993 plaintext bytes within the mandatory 4096-byte push limit.
+          // Preserve the notification itself when an optional image would exceed that budget.
+          if (payload.icon && Buffer.byteLength(encodedPayload) > 3_993) {
+            const { icon: _icon, ...withoutIcon } = payload;
+            encodedPayload = JSON.stringify(withoutIcon);
+          }
+          const result = await webPush.sendNotification(
+            pushSubscription,
+            encodedPayload,
+            deliveryOptions,
+          );
+          return {
+            ok: true,
+            subscriptionId: subscription.subscriptionId,
+            statusCode: result.statusCode,
+          };
+        } catch (err: unknown) {
+          const failure = isRecord(err) ? err : undefined;
+          const statusCode =
+            typeof failure?.statusCode === "number" ? failure.statusCode : undefined;
+          const message = formatErrorMessage(err);
+          log.warn("Web Push delivery failed", {
+            subscriptionId: subscription.subscriptionId,
+            endpointHost: new URL(subscription.endpoint).host,
+            statusCode,
+            error: message,
+            errorName: readErrorName(err),
+            errorCode: extractErrorCode(err),
+            responseBody: typeof failure?.body === "string" ? failure.body : undefined,
+            retry: false,
+            subscriptionAction: statusCode === 404 || statusCode === 410 ? "prune" : "retain",
+          });
+          return {
+            ok: false,
+            subscriptionId: subscription.subscriptionId,
+            statusCode,
+            error: message,
+          };
+        }
+      }),
+    );
+
+    // Clean up expired subscriptions (HTTP 410 Gone or 404 Not Found) per Web Push spec.
+    const expiredSubscriptions = mapped.flatMap((result, i) =>
+      !result.ok && (result.statusCode === 410 || result.statusCode === 404)
+        ? [expectDefined(subscriptions[i], "push web sub")]
+        : [],
+    );
+
+    for (const subscription of expiredSubscriptions) {
+      try {
+        assertLegacyWebPushMigrationComplete(baseDir);
+        await deleteWebPushSubscriptionIfCurrent({
+          endpointHash: hashWebPushEndpoint(subscription.endpoint),
+          subscription,
+          stateDir: baseDir,
+        });
+      } catch (error) {
+        // Keep completed results: retrying this batch would duplicate successful sends.
+        log.warn("Web Push expired subscription cleanup failed", {
+          subscriptionId: subscription.subscriptionId,
+          endpointHost: new URL(subscription.endpoint).host,
+          error: formatErrorMessage(error),
+          errorName: readErrorName(error),
+          errorCode: extractErrorCode(error),
+          retry: false,
+        });
+      }
+    }
+
+    return mapped;
+  };
 }
 
 export async function broadcastWebPush(

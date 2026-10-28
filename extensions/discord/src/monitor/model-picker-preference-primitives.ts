@@ -21,26 +21,6 @@ export function normalizeModelRef(raw?: string): string | null {
   return parsed && provider ? `${provider}/${parsed.model}` : null;
 }
 
-export function sanitizeRecentModels(models: unknown, limit: number): string[] {
-  const deduped: string[] = [];
-  const seen = new Set<string>();
-  if (!Array.isArray(models)) {
-    return deduped;
-  }
-  for (const item of models) {
-    const normalized = normalizeModelRef(typeof item === "string" ? item : undefined);
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    deduped.push(normalized);
-    if (deduped.length >= limit) {
-      break;
-    }
-  }
-  return deduped;
-}
-
 function hashSegment(value: string, length: number): string {
   return createHash("sha256").update(value, "utf8").digest("hex").slice(0, length);
 }

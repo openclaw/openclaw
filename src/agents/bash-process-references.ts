@@ -10,7 +10,6 @@ import { deriveSessionName } from "./bash-tools.shared.js";
 const DEFAULT_ACTIVE_PROCESS_LIMIT = 8;
 const MAX_COMMAND_LABEL_CHARS = 140;
 
-/** Agent-facing summary of a reconnectable background process session. */
 export type ActiveProcessSessionReference = {
   sessionId: string;
   status: "running";
@@ -27,22 +26,16 @@ export type ActiveProcessSessionReference = {
 /** List active background process sessions for one scope key, newest first. */
 export function listActiveProcessSessionReferences(params: {
   scopeKey?: string;
-  now?: number;
-  limit?: number;
 }): ActiveProcessSessionReference[] {
   const scopeKey = params.scopeKey?.trim();
   if (!scopeKey) {
     return [];
   }
-  const now = params.now ?? Date.now();
-  const limit =
-    typeof params.limit === "number" && Number.isFinite(params.limit) && params.limit > 0
-      ? Math.floor(params.limit)
-      : DEFAULT_ACTIVE_PROCESS_LIMIT;
+  const now = Date.now();
   return listRunningSessions()
     .filter((session) => session.scopeKey === scopeKey)
     .toSorted(compareProcessSessionStartOrder)
-    .slice(0, limit)
+    .slice(0, DEFAULT_ACTIVE_PROCESS_LIMIT)
     .map((session) => ({
       sessionId: session.id,
       status: "running" as const,

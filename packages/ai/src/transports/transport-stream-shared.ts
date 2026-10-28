@@ -1,6 +1,7 @@
 import type {
   AssistantMessage,
   Model,
+  ModelRequestHeaders,
   ProviderResponse,
   StreamOptions,
   Usage,
@@ -17,18 +18,133 @@ import { createAssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
 import { headersToRecord } from "../utils/headers.js";
 import { repairJson } from "../utils/json-parse.js";
-import { projectProviderError, type ProviderErrorProjection } from "../utils/provider-error.js";
+import {
+  projectProviderError,
+  readTransportDiagnosticLabel,
+  type ProviderErrorProjection,
+} from "../utils/provider-error.js";
 import { isTransientNetworkError } from "../utils/retryable-network-errors.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
-import { createZeroUsage } from "../utils/usage.js";
+import { createZeroUsage, isUnbilledFailedTurn } from "../utils/usage.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 
-type TransportUsage = Pick<
-  Usage,
-  "input" | "output" | "cacheRead" | "cacheWrite" | "contextUsage" | "totalTokens"
-> & {
-  cost: Pick<Usage["cost"], "input" | "output" | "cacheRead" | "cacheWrite" | "total">;
-};
+/** A single synchronous scanner per stream; undefined requests the next reader result. */
+export function* decodeSseFrames(limit?: {
+  max: number;
+  unit: "characters" | "bytes";
+  message: string;
+}): Generator<
+  { frame: string; terminated: boolean } | undefined,
+  void,
+  ReadableStreamReadResult<Uint8Array>
+> {
+  const decoder = new TextDecoder();
+  const streaming = { stream: true };
+  const parts: string[] = [];
+  let partsLength = 0;
+  let tail = "";
+  const lengthOf =
+    limit?.unit === "bytes"
+      ? (text: string) => Buffer.byteLength(text, "utf8")
+      : (text: string) => text.length;
+  const assertWithinLimit = (length: number) => {
+    if (limit && length > limit.max) {
+      throw new Error(limit.message);
+    }
+  };
+  for (;;) {
+    const { done, value } = yield undefined;
+    const buffer = tail + decoder.decode(value, done ? undefined : streaming);
+    let start = 0;
+    let cr = buffer.indexOf("\r");
+    let lf = buffer.indexOf("\n");
+    for (;;) {
+      let frameEnd = buffer.length;
+      let boundaryEnd = -1;
+      let previousStart = -1;
+      let previousEnd = -1;
+      while (cr >= 0 || lf >= 0) {
+        const next = cr < 0 ? lf : lf < 0 ? cr : Math.min(cr, lf);
+        // Consume CRLF together, including its LF in the cached search cursor.
+        const end = next + (buffer[next] === "\r" && buffer[next + 1] === "\n" ? 2 : 1);
+        if (cr >= 0 && cr < end) {
+          cr = buffer.indexOf("\r", end);
+        }
+        if (lf >= 0 && lf < end) {
+          lf = buffer.indexOf("\n", end);
+        }
+        if (previousEnd === next) {
+          frameEnd = previousStart;
+          boundaryEnd = end;
+          break;
+        }
+        previousStart = next;
+        previousEnd = end;
+      }
+      if (boundaryEnd < 0 && (!done || (!parts.length && start === buffer.length))) {
+        break;
+      }
+      let frame = buffer.slice(start, frameEnd);
+      if (limit) {
+        assertWithinLimit(partsLength + lengthOf(frame));
+      }
+      if (parts.length) {
+        parts.push(frame);
+        frame = parts.join("");
+        parts.length = 0;
+        partsLength = 0;
+      }
+      start = boundaryEnd < 0 ? buffer.length : boundaryEnd;
+      yield { frame, terminated: boundaryEnd >= 0 };
+      if (boundaryEnd < 0) {
+        break;
+      }
+    }
+    const pending = buffer.slice(start);
+    // Scan only new text plus the maximum delimiter overlap; scanning an ever-growing
+    // concatenated string would flatten/copy the entire pending frame on every read.
+    // Keep only trailing newline characters, so UTF-8 length accounting never
+    // splits a surrogate pair between a retained fragment and the overlap.
+    let split = pending.length;
+    while (split > 0 && pending.length - split < 3) {
+      const last = pending.charCodeAt(split - 1);
+      if (last !== 10 && last !== 13) {
+        break;
+      }
+      split--;
+    }
+    if (split > 0) {
+      const part = pending.slice(0, split);
+      parts.push(part);
+      if (limit) {
+        partsLength += lengthOf(part);
+      }
+    }
+    tail = pending.slice(split);
+    if (limit) {
+      assertWithinLimit(partsLength + lengthOf(tail));
+    }
+    if (done) {
+      return;
+    }
+  }
+}
+
+/** Decodes frame boundaries; callers retain reader lifetime and protocol admission. */
+export async function* iterateSseFrames(
+  read: () => Promise<ReadableStreamReadResult<Uint8Array>>,
+  limit?: Parameters<typeof decodeSseFrames>[0],
+): AsyncGenerator<{ frame: string; terminated: boolean }> {
+  const decoder = decodeSseFrames(limit);
+  for (let next = decoder.next(); !next.done;) {
+    if (next.value === undefined) {
+      next = decoder.next(await read());
+    } else {
+      yield next.value;
+      next = decoder.next();
+    }
+  }
+}
 
 export type WritableTransportStream = Pick<
   ReturnType<typeof createAssistantMessageEventStream>,
@@ -77,38 +193,6 @@ export class IncompleteToolCallError extends Error {
 const MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE = "malformed_tool_call_arguments";
 
 /**
- * Bounded, content-free diagnostics for a rejected terminal argument buffer. Carried as the
- * error `cause` and mirrored onto the error's `errorCode` / `errorBody` fields so
- * `projectProviderError` surfaces them on the terminal assistant message.
- */
-type MalformedToolCallArgumentsDiagnostics = {
-  code: typeof MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE;
-  argumentChars: number;
-  argumentHash: string;
-  repairAttempted: boolean;
-};
-
-function createMalformedToolCallArgumentsError(
-  value: unknown,
-  errorMessage: string,
-  repairAttempted: boolean,
-): Error {
-  const text = typeof value === "string" ? value : undefined;
-  const diagnostics: MalformedToolCallArgumentsDiagnostics = {
-    code: MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE,
-    argumentChars: text?.length ?? 0,
-    argumentHash: text === undefined ? "" : shortHash(text),
-    repairAttempted,
-  };
-  const error = new Error(errorMessage, { cause: diagnostics });
-  Object.assign(error, {
-    errorCode: MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE,
-    errorBody: JSON.stringify(diagnostics),
-  });
-  return error;
-}
-
-/**
  * Repair a complete-but-invalid terminal argument buffer. Anthropic fine-grained tool
  * streaming skips server-side JSON validation, so a finished tool_use block can carry raw
  * control characters or invalid escapes inside string values. Only string-literal repairs
@@ -144,7 +228,29 @@ export function parseTerminalToolCallArguments(
       return repaired;
     }
   }
-  throw createMalformedToolCallArgumentsError(value, errorMessage, repairStringLiterals);
+  const text = typeof value === "string" ? value : undefined;
+  /**
+   * Bounded, content-free diagnostics for a rejected terminal argument buffer. Carried as the
+   * error `cause` and mirrored onto the error's `errorCode` / `errorBody` fields so
+   * `projectProviderError` surfaces them on the terminal assistant message.
+   */
+  const diagnostics: {
+    code: typeof MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE;
+    argumentChars: number;
+    argumentHash: string;
+    repairAttempted: boolean;
+  } = {
+    code: MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE,
+    argumentChars: text?.length ?? 0,
+    argumentHash: text === undefined ? "" : shortHash(text),
+    repairAttempted: repairStringLiterals,
+  };
+  const error = new Error(errorMessage, { cause: diagnostics });
+  Object.assign(error, {
+    errorCode: MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE,
+    errorBody: JSON.stringify(diagnostics),
+  });
+  throw error;
 }
 
 /** Validate a complete sibling set before mutating any call into executable state. */
@@ -164,9 +270,9 @@ export function finalizeTerminalToolCallArguments<T extends { arguments: Record<
 }
 
 export function mergeTransportHeaders(
-  ...headerSources: Array<Record<string, string> | undefined>
-): Record<string, string> | undefined {
-  const merged: Record<string, string> = {};
+  ...headerSources: Array<ModelRequestHeaders | undefined>
+): ModelRequestHeaders | undefined {
+  const merged: ModelRequestHeaders = {};
   const namesByLowercase = new Map<string, string>();
   for (const headers of headerSources) {
     for (const [name, value] of Object.entries(headers ?? {})) {
@@ -184,7 +290,12 @@ export function mergeTransportHeaders(
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-export function createEmptyTransportUsage(): TransportUsage {
+export function createEmptyTransportUsage(): Pick<
+  Usage,
+  "input" | "output" | "cacheRead" | "cacheWrite" | "contextUsage" | "totalTokens"
+> & {
+  cost: Pick<Usage["cost"], "input" | "output" | "cacheRead" | "cacheWrite" | "total">;
+} {
   return createZeroUsage();
 }
 
@@ -213,12 +324,13 @@ export function transportAbortError(signal?: AbortSignal): Error {
     : new Error("Request was aborted");
 }
 
-const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
-const MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
-
-type ModelStreamCooperativeScheduler = {
-  afterEvent: () => Promise<void>;
-};
+const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 6;
+const MODEL_STREAM_COOPERATIVE_YIELD_BUDGET = 64;
+// Readiness fans out lifecycle state; body events can share a larger batch.
+const MODEL_STREAM_START_WORK = 8;
+let streamWorkThisTurn = 0;
+let streamTurnStartedAt = 0;
+let nextStreamTurn: Promise<void> | undefined;
 
 export function throwIfModelStreamAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
@@ -226,31 +338,29 @@ export function throwIfModelStreamAborted(signal?: AbortSignal): void {
   }
 }
 
-export function createModelStreamCooperativeScheduler(
-  signal?: AbortSignal,
-): ModelStreamCooperativeScheduler {
-  let lastYieldedAt = Date.now();
-  let eventsSinceYield = 0;
-  return {
-    async afterEvent() {
-      throwIfModelStreamAborted(signal);
-      eventsSinceYield += 1;
-      const now = Date.now();
-      if (
-        eventsSinceYield < MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS &&
-        now - lastYieldedAt < MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS
-      ) {
-        return;
-      }
-      eventsSinceYield = 0;
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
-      throwIfModelStreamAborted(signal);
-      // Time waiting for the yield does not consume the next work budget.
-      lastYieldedAt = Date.now();
-    },
-  };
+function waitForModelStreamTurn(signal?: AbortSignal, work = 1): Promise<void> | undefined {
+  throwIfModelStreamAborted(signal);
+  // Callers recheck admission after this shared wakeup so a swarm cannot
+  // spend a fresh per-stream budget in the same microtask burst.
+  if (
+    nextStreamTurn &&
+    (streamWorkThisTurn + work > MODEL_STREAM_COOPERATIVE_YIELD_BUDGET ||
+      Date.now() - streamTurnStartedAt >= MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS)
+  ) {
+    return nextStreamTurn;
+  }
+  if (!nextStreamTurn) {
+    streamTurnStartedAt = Date.now();
+    nextStreamTurn = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        streamWorkThisTurn = 0;
+        nextStreamTurn = undefined;
+        resolve();
+      }, 0);
+    });
+  }
+  streamWorkThisTurn += work;
+  return undefined;
 }
 
 /** Keep ready provider events from monopolizing the main loop, including ignored events. */
@@ -258,11 +368,12 @@ export async function* iterateModelStream<T>(
   events: AsyncIterable<T> | Iterable<T>,
   signal?: AbortSignal,
 ): AsyncGenerator<T> {
-  const scheduler = createModelStreamCooperativeScheduler(signal);
   for await (const event of events) {
-    throwIfModelStreamAborted(signal);
+    for (let wait; (wait = waitForModelStreamTurn(signal));) {
+      await wait;
+    }
     yield event;
-    await scheduler.afterEvent();
+    throwIfModelStreamAborted(signal);
   }
 }
 
@@ -462,6 +573,10 @@ export function withProviderResponseHook<T = never>(params: {
     async *[Symbol.asyncIterator]() {
       try {
         await awaitProviderLifecycleCallback(params.hook, params.signal);
+        // Hooks may finish together after waiting through earlier work budgets.
+        for (let wait; (wait = waitForModelStreamTurn(params.signal, MODEL_STREAM_START_WORK));) {
+          await wait;
+        }
       } catch (error) {
         params.abort(error instanceof Error ? error : new Error(String(error)));
         throw error;
@@ -493,19 +608,77 @@ export function finalizeTransportStream(params: {
   stream.end();
 }
 
+type TransportFailureDiagnostic = {
+  abortReason?: string;
+  incompleteReason?: string;
+};
+
 /** Assign terminal fields and record silent transport failures before partial-call cleanup. */
 export function assignTransportErrorDetails(
   output: AssistantMessage,
   error: unknown,
   signal?: AbortSignal,
+  diagnostic?: TransportFailureDiagnostic,
 ): ProviderErrorProjection {
+  try {
+    const host = getAiTransportHost();
+    if (!signal?.aborted && host.isLogEnabled?.("provider-error", "warn") !== false) {
+      // Provider prose and response bodies can echo prompts and tool results.
+      const record = asOptionalRecord(error);
+      const response = asOptionalRecord(record?.response);
+      const cause = asOptionalRecord(record?.cause);
+      const detail =
+        asOptionalRecord(record?.error) ??
+        asOptionalRecord(response?.error) ??
+        asOptionalRecord(asOptionalRecord(record?.payload)?.error);
+      const metadata: Record<string, string | number | undefined> = {
+        provider: output.provider,
+        model: output.model,
+        name: readTransportDiagnosticLabel(record?.name),
+        ...diagnostic,
+        status: readTransportDiagnosticLabel(
+          record?.status ?? record?.statusCode ?? response?.status,
+        ),
+        code: readTransportDiagnosticLabel(record?.errorCode ?? record?.code ?? detail?.code),
+        type: readTransportDiagnosticLabel(record?.errorType ?? detail?.type ?? record?.type),
+        causeName: readTransportDiagnosticLabel(cause?.name),
+        causeCode: readTransportDiagnosticLabel(cause?.code),
+        requestId: readTransportDiagnosticLabel(record?.request_id ?? record?.requestId),
+        responseId: readTransportDiagnosticLabel(
+          record?.responseId ?? response?.id ?? output.responseId,
+        ),
+      };
+      for (const key in metadata) {
+        if (metadata[key] === undefined) {
+          delete metadata[key];
+        }
+      }
+      host.logWarn("provider-error", "Model request failed", metadata);
+    }
+  } catch {
+    // Diagnostic accessors and log sinks cannot replace the original failure.
+  }
   const projection = projectProviderError(error, signal);
   Object.assign(output, projection);
+  // A failure after terminal accounting cannot erase it. Earlier cumulative
+  // snapshots and initial zeros never establish a complete response total.
+  if (output.usage.usageReport?.state !== "available") {
+    output.usage.usageReport = { state: "unavailable" };
+    output.usage.contextUsage = { state: "unavailable" };
+  }
+  if (isUnbilledFailedTurn(output)) {
+    // The provider did no billable work; record its usage as a complete zero.
+    output.usage = {
+      ...createZeroUsage(),
+      usageReport: { state: "available" },
+      contextUsage: output.usage.contextUsage,
+    };
+  }
   if (
     projection.stopReason === "error" &&
     output.content.length === 0 &&
     isTransientNetworkError(projectDiagnosticValue(error)) &&
-    !output.diagnostics?.some((diagnostic) => diagnostic.type === "provider_transport_failure")
+    !output.diagnostics?.some((entry) => entry.type === "provider_transport_failure")
   ) {
     // Recovery consumes this fact, not error-text guesses. Reuse the bounded,
     // redacted terminal message so diagnostics cannot expose the original throw.
@@ -525,10 +698,11 @@ export function failTransportStream(params: {
   output: AssistantMessage;
   signal?: AbortSignal;
   error: unknown;
+  diagnostic?: TransportFailureDiagnostic;
   cleanup?: () => void;
 }): void {
   const { stream, output, signal, error, cleanup } = params;
-  const projection = assignTransportErrorDetails(output, error, signal);
+  const projection = assignTransportErrorDetails(output, error, signal, params.diagnostic);
   cleanup?.();
   stream.push({ type: "error", reason: projection.stopReason, error: output });
   stream.end();

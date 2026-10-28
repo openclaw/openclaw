@@ -1,4 +1,3 @@
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   assertMatrixQaCliE2eeStatus,
   assertMatrixQaCliEncryptionSetupResult,
@@ -105,16 +104,6 @@ async function runMatrixQaCliRecoveryKeyScenario(
       });
 
       return {
-        artifacts: {
-          accountId,
-          backupVersion: setup.status.backupVersion ?? ready.verification.backupVersion ?? null,
-          cliDeviceId: setup.status.deviceId ?? cliDevice.deviceId,
-          encryptionChanged: setup.encryptionChanged,
-          recoveryKeyId: ready.recoveryKey?.keyId ?? null,
-          recoveryKeyStored: true,
-          setupSuccess: setup.success,
-          verificationBootstrapSuccess: setup.bootstrap.success,
-        },
         details: [
           "Matrix CLI encryption setup accepted a recovery key on a second device",
           `recovery setup stdout: ${setupArtifacts.stdoutPath}`,
@@ -168,16 +157,6 @@ async function runMatrixQaCliRecoveryKeyScenario(
     }
 
     return {
-      artifacts: {
-        accountId,
-        bootstrapErrorPreview: truncateUtf16Safe(failure, 240),
-        bootstrapSuccess: false,
-        cliDeviceId: cliDevice.deviceId,
-        encryptionChanged: payload.encryptionChanged,
-        recoveryKeyAccepted: false,
-        recoveryKeyRejected: true,
-        setupSuccess: false,
-      },
       details: [
         "Matrix CLI encryption setup rejected an invalid recovery key without leaking it",
         `failure stdout: ${artifacts.stdoutPath}`,

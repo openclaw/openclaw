@@ -218,7 +218,7 @@ public struct OpenClawChatWindowShell: View {
                 Text("New Thread")
                     .font(OpenClawChatTypography.body)
             }
-            .keyboardShortcut("n", modifiers: [.command, .shift])
+            .keyboardShortcut("n", modifiers: .command)
             .focusable(false)
 
             if !self.viewModel.usesWebConversation {
@@ -366,7 +366,7 @@ public struct OpenClawChatWindowShell: View {
             } label: {
                 chatWindowActionLabel("New Thread", systemImage: "square.and.pencil")
             }
-            .keyboardShortcut("n", modifiers: [.command, .shift])
+            .keyboardShortcut("n", modifiers: .command)
 
             Button {
                 self.isPresentingNewSessionOptions = true

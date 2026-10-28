@@ -1,5 +1,6 @@
 import type { SessionParticipantIdentity } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import type { UserProfile } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { groupPresenceUsers, presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { PresenceEntry } from "../api/types.ts";
 import {
@@ -8,6 +9,7 @@ import {
   type AuthenticatedUser,
 } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
+import { profileAvatarUrl } from "./profile-directory.ts";
 
 export type PresenceViewer = NonNullable<PresenceEntry["user"]> & {
   watchedSessions: readonly string[];
@@ -15,6 +17,17 @@ export type PresenceViewer = NonNullable<PresenceEntry["user"]> & {
 };
 
 export const PRESENCE_ACTIVE_WINDOW_MS = 120_000;
+export function profilePresenceViewer(profile: UserProfile): PresenceViewer {
+  return {
+    id: profile.id,
+    identity: { type: "profile", id: profile.id },
+    name: profile.displayName ?? undefined,
+    avatarUrl: profileAvatarUrl(profile),
+    watchedSessions: [],
+    entries: [],
+  };
+}
+
 export type PresenceActivity = "active" | "idle" | "unknown";
 
 function compareText(a: string, b: string): number {
@@ -38,9 +51,12 @@ export function presenceUserLabel(
   fallbackName = user.id,
 ) {
   const isSharedOwner = user.id === GATEWAY_OWNER_PROFILE_ID;
+  const ownerName = isSharedOwner ? user.name?.trim() : undefined;
   return {
     name: isSharedOwner
-      ? t("presence.sharedOwner.name")
+      ? ownerName
+        ? t("presence.sharedOwner.named", { name: ownerName })
+        : t("presence.sharedOwner.name")
       : (user.name ?? user.email ?? fallbackName),
     isSharedOwner,
   };

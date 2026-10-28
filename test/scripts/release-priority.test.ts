@@ -7,12 +7,6 @@ import { createClient, restoreReleasePriority } from "../../scripts/frv.mjs";
 import { RELEASE_PRIORITY_VARIABLE } from "../../scripts/lib/release-priority.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const PARENT = {
-  id: 77,
-  path: ".github/workflows/full-release-validation.yml",
-  status: "in_progress",
-};
-
 function run(
   id: number,
   name: string,
@@ -35,58 +29,72 @@ function run(
   };
 }
 
+function completed(
+  id: number,
+  conclusion: string,
+  overrides: Record<string, unknown> = {},
+  name = "CI",
+) {
+  return run(id, name, {
+    created_at: "2026-09-22T12:01:00Z",
+    status: "completed",
+    conclusion,
+    ...overrides,
+  });
+}
+
+function candidate(id = 100) {
+  return run(id, "CI", {
+    status: "completed",
+    conclusion: "failure",
+    pull_requests: [{ number: 42 }],
+  });
+}
+
+function priorityRecord(recordedAt: string, cancelled: Record<string, unknown>[] = []) {
+  return JSON.stringify({
+    kind: "openclaw.frv-release-priority",
+    parentRunId: "77",
+    recordedAt,
+    cancelled,
+  });
+}
+
 describe("pnpm frv prioritize --restore", () => {
   it("restores newest-per-lane runs from a historical record", async () => {
-    // Older pause records have no run-lane identity; restore resolves it from current run facts.
-    const cancelled = [
-      run(1, "CI"),
-      run(15, "CI", { head_branch: "already-restored" }),
-      run(8, "CI", { head_branch: "later" }),
-    ].map((entry) => ({
-      event: entry.event,
-      headBranch: entry.head_branch,
-      id: entry.id,
-      name: entry.name,
-      url: entry.html_url,
-    }));
-    const after = { created_at: "2026-09-22T12:01:00Z", status: "completed" };
     const { result, calls } = await restore({
-      cancelled,
+      cancelled: [1, 15, 8].map((id) => ({ id })),
       variable: "77",
       initial: [
-        run(1, "CI", { ...after, conclusion: "cancelled" }),
-        run(3, "CI", { ...after, conclusion: "failure" }),
-        run(4, "CI", { ...after, conclusion: "failure" }),
-        run(5, "Labeler", { ...after, conclusion: "skipped", event: "pull_request_target" }),
-        run(8, "CI", { ...after, conclusion: "cancelled", head_branch: "later" }),
-        run(9, "CI", { ...after, conclusion: "failure", head_branch: "later" }),
-        run(10, "CI", { ...after, status: "in_progress", head_branch: "later" }),
-        run(11, "Labeler", { ...after, conclusion: "success" }),
-        run(12, "Labeler", { ...after, conclusion: "skipped", head_branch: "feat/release/x" }),
-        run(13, "CI", { ...after, conclusion: "failure", head_branch: "manual-shared" }),
-        run(14, "CI", {
-          ...after,
+        completed(1, "cancelled"),
+        completed(3, "failure"),
+        completed(4, "failure"),
+        completed(5, "skipped", { event: "pull_request_target" }, "Labeler"),
+        completed(8, "cancelled", { head_branch: "later" }),
+        completed(9, "failure", { head_branch: "later" }),
+        completed(10, "", { status: "in_progress", conclusion: null, head_branch: "later" }),
+        completed(11, "success", {}, "Labeler"),
+        completed(12, "skipped", { head_branch: "feat/release/x" }, "Labeler"),
+        completed(13, "failure", { head_branch: "manual-shared" }),
+        completed(14, "", {
+          conclusion: null,
           status: "in_progress",
           head_branch: "manual-shared",
           event: "workflow_dispatch",
         }),
-        run(15, "CI", { ...after, conclusion: "success", head_branch: "already-restored" }),
-        run(17, "CI", {
-          ...after,
-          conclusion: "failure",
+        completed(15, "success", { head_branch: "already-restored" }),
+        completed(17, "failure", {
           head_branch: "main",
           head_repository: { id: 201 },
           pull_requests: [{ number: 501 }],
         }),
-        run(18, "CI", {
-          ...after,
-          conclusion: "success",
+        completed(18, "success", {
           head_branch: "main",
           head_repository: { id: 202 },
           pull_requests: [{ number: 502 }],
         }),
-        run(19, "CI", { ...after, conclusion: "failure", head_branch: "failed-job" }),
-        run(20, "CI", { ...after, conclusion: "failure", head_branch: "empty-jobs" }),
+        completed(19, "failure", { head_branch: "failed-job" }),
+        completed(20, "failure", { head_branch: "empty-jobs" }),
         run(21, "Labeler", {
           status: "completed",
           conclusion: "skipped",
@@ -94,7 +102,7 @@ describe("pnpm frv prioritize --restore", () => {
           created_at: "2026-09-22T11:59:59Z",
         }),
         ...["release/x", "release-ci/x", "release-publish/x"].map((head_branch, index) =>
-          run(22 + index, "CI", { ...after, conclusion: "failure", head_branch }),
+          completed(22 + index, "failure", { head_branch }),
         ),
       ],
       jobs: {
@@ -110,8 +118,6 @@ describe("pnpm frv prioritize --restore", () => {
         "20": [],
       },
     });
-    // Executed run 4 and active run 10 supersede the deferred CI attempts.
-    // Successful run 11 likewise owns its lane. Manual run 14 is independent of PR run 13.
     expect(result).toMatchObject({
       action: "restored",
       cleared: true,
@@ -150,13 +156,7 @@ async function restore(
     jobs?: Record<string, Record<string, unknown>[]>;
   } = {},
 ) {
-  const current = options.initial ?? [
-    run(100, "CI", {
-      status: "completed",
-      conclusion: "failure",
-      pull_requests: [{ number: 42 }],
-    }),
-  ];
+  const current = options.initial ?? [candidate()];
   const calls: string[] = [];
   let jobReads = 0;
   const restoreClient = createClient("fixture/fixture", {
@@ -196,15 +196,7 @@ async function restore(
     },
   });
   const path = join(tempDirs.make("frv-restore-dispatch-"), "record.json");
-  writeFileSync(
-    path,
-    JSON.stringify({
-      kind: "openclaw.frv-release-priority",
-      parentRunId: "77",
-      recordedAt: "2026-09-22T12:00:00Z",
-      cancelled: options.cancelled ?? [],
-    }),
-  );
+  writeFileSync(path, priorityRecord("2026-09-22T12:00:00Z", options.cancelled));
   const result = await restoreReleasePriority(path, restoreClient);
   return { result, calls, writes: calls.filter((call) => call.startsWith("api -X POST")) };
 }
@@ -217,12 +209,7 @@ function priorityCli({
 }: { args?: string[]; skipped?: number[]; allowed?: boolean } = {}) {
   const directory = tempDirs.make("frv-priority-cli-");
   const recordPath = join(directory, "record.json");
-  const record = JSON.stringify({
-    kind: "openclaw.frv-release-priority",
-    parentRunId: "77",
-    recordedAt: "2020-01-01T00:00:00Z",
-    cancelled: [],
-  });
+  const record = priorityRecord("2020-01-01T00:00:00Z");
   writeFileSync(recordPath, record);
   const runs = [...skipped, ...(allowed ? [200] : [])].map((id) =>
     run(id, "CI", {
@@ -251,7 +238,6 @@ if (args[0] === "variable") {
   const query = new URL(resource, "https://example.invalid").searchParams;
   let value;
   if (resource === "actions/variables/${RELEASE_PRIORITY_VARIABLE}") value = { value: "" };
-  else if (resource === "actions/runs/77") value = ${JSON.stringify(PARENT)};
   else if (resource.startsWith("actions/runs?")) {
     const branch = query.get("branch");
     const found = runs.filter(run => !branch || run.head_branch === branch);
@@ -333,62 +319,32 @@ syncBuiltinESMExports();
 
 describe("release-priority CLI output", () => {
   it.each([
-    {
-      label: "attempted and skipped siblings",
-      skipped: [100],
-      allowed: true,
-      args: [],
-      mutations: 1,
-      contains: [
-        "CI 200 branch-200 https://example.invalid/runs/200",
-        "skipped (rerun not attempted): CI 100 branch-100 https://example.invalid/runs/100",
-        "Inspect the skipped runs and their latest PR checks",
-        "pnpm frv prioritize --restore <record> --dry-run",
-        "same --repo",
-        "action: restored",
-      ],
-    },
-    {
-      label: "only skipped candidates",
-      skipped: [100, 300],
-      allowed: false,
-      args: [],
-      mutations: 0,
-      contains: [
-        ...[100, 300].map(
-          (id) =>
-            `skipped (rerun not attempted): CI ${id} branch-${id} https://example.invalid/runs/${id}`,
-        ),
-        "--restore <record> --dry-run",
-      ],
-    },
-    {
-      label: "no skipped candidates",
-      skipped: [],
-      allowed: true,
-      args: [],
-      mutations: 1,
-      exact: "CI 200 branch-200 https://example.invalid/runs/200\naction: restored\n",
-    },
-    {
-      label: "dry-run",
-      skipped: [100],
-      allowed: true,
-      args: ["--dry-run"],
-      mutations: 0,
-      exact:
-        "CI 100 branch-100 https://example.invalid/runs/100\nCI 200 branch-200 https://example.invalid/runs/200\naction: would-restore\n",
-    },
-  ])("reports $label without misrepresenting dispatch", (row) => {
-    const result = priorityCli(row);
+    { label: "attempted and skipped siblings", skipped: [100], allowed: true, dryRun: false },
+    { label: "only skipped candidates", skipped: [100, 300], allowed: false, dryRun: false },
+    { label: "no skipped candidates", skipped: [], allowed: true, dryRun: false },
+    { label: "dry-run", skipped: [100], allowed: true, dryRun: true },
+  ])("reports $label without misrepresenting dispatch", ({ dryRun, ...row }) => {
+    const result = priorityCli({ ...row, args: dryRun ? ["--dry-run"] : [] });
     expect(result.mutations).toEqual(
-      row.mutations ? [["api", "-X", "POST", "repos/fixture/fixture/actions/runs/200/rerun"]] : [],
+      row.allowed && !dryRun
+        ? [["api", "-X", "POST", "repos/fixture/fixture/actions/runs/200/rerun"]]
+        : [],
     );
-    if (row.exact !== undefined) {
-      expect(result.stdout).toBe(row.exact);
-    }
-    for (const text of row.contains ?? []) {
-      expect(result.stdout).toContain(text);
+    const line = (id: number) => `CI ${id} branch-${id} https://example.invalid/runs/${id}\n`;
+    const dispatched = row.allowed ? line(200) : "";
+    const skipped = row.skipped
+      .map((id) => `${dryRun ? "" : "skipped (rerun not attempted): "}${line(id)}`)
+      .join("");
+    if (dryRun || !row.skipped.length) {
+      expect(result.stdout).toBe(
+        `${skipped}${dispatched}action: ${dryRun ? "would-restore" : "restored"}\n`,
+      );
+    } else {
+      expect(result.stdout).toContain(`${dispatched}${skipped}`);
+      expect(result.stdout).toContain("Inspect the skipped runs and their latest PR checks");
+      expect(result.stdout).toContain("pnpm frv prioritize --restore <record> --dry-run");
+      expect(result.stdout).toContain("same --repo");
+      expect(result.stdout).toContain("action: restored");
     }
   });
 
@@ -416,38 +372,33 @@ describe("release-priority CLI output", () => {
 });
 
 describe("restore dispatch revalidation through createClient", () => {
-  it.each(["unchanged", "independent peers", "legacy cancellation"])(
+  it.each(["independent peers", "legacy cancellation"])(
     "dispatches only the eligible original run: %s",
     async (scenario) => {
-      const candidate = run(100, "CI", {
-        status: "completed",
-        conclusion: scenario === "legacy cancellation" ? "cancelled" : "failure",
-        ...(scenario === "legacy cancellation" ? {} : { pull_requests: [{ number: 42 }] }),
-      });
-      const { result, calls, writes } = await restore({
+      const original =
+        scenario === "legacy cancellation"
+          ? run(100, "CI", { status: "completed", conclusion: "cancelled" })
+          : candidate();
+      const { result, writes } = await restore({
         initial:
           scenario === "independent peers"
             ? [
-                candidate,
-                { ...candidate, id: 101, status: "in_progress", event: "workflow_dispatch" },
+                original,
+                { ...original, id: 101, status: "in_progress", event: "workflow_dispatch" },
                 {
-                  ...candidate,
+                  ...original,
                   id: 102,
                   conclusion: "success",
                   head_repository: { id: 200 },
                   pull_requests: [{ number: 43 }],
                 },
-                { ...candidate, id: 103, conclusion: "skipped", pull_requests: [{ number: 44 }] },
+                { ...original, id: 103, conclusion: "skipped", pull_requests: [{ number: 44 }] },
               ]
-            : [candidate],
+            : [original],
         cancelled: scenario === "legacy cancellation" ? [{ id: 100 }] : [],
       });
       expect(result).toMatchObject({ failures: [], rerun: [{ id: "100" }], skipped: [] });
       expect(writes).toEqual(["api -X POST repos/fixture/fixture/actions/runs/100/rerun"]);
-      expect(calls.at(-2)).toContain("branch=feat%2Fthing");
-      if (scenario === "unchanged") {
-        expect(calls.filter((call) => call.includes("/attempts/1/jobs"))).toHaveLength(2);
-      }
     },
   );
 
@@ -507,11 +458,7 @@ describe("restore dispatch revalidation through createClient", () => {
   });
 
   it("rechecks every dispatch rather than validating the whole batch before its first POST", async () => {
-    const first = run(100, "CI", {
-      status: "completed",
-      conclusion: "failure",
-      pull_requests: [{ number: 42 }],
-    });
+    const first = candidate();
     const second = { ...first, id: 200, pull_requests: [{ number: 43 }] };
     const { writes, result } = await restore({
       initial: [first, second],

@@ -1,6 +1,9 @@
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
-import { assertSessionWriterDeliveryAuthorized } from "../../auto-reply/reply/session-writer-delivery-authority.js";
+import {
+  assertSessionWriterDeliveryAuthorized,
+  prepareSessionWriterDeliveryAuthority,
+} from "../../auto-reply/reply/session-writer-delivery-authority.js";
 import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import type { DeliveryQueueStateContext } from "../../infra/delivery-queue-state-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -17,6 +20,7 @@ import {
   type OutboundDeliveryIntent,
 } from "../../infra/outbound/deliver.js";
 import type { ConversationDeliveryTarget } from "../../infra/outbound/delivery-completion.js";
+import type { DeliveryMirror } from "../../infra/outbound/mirror.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { normalizeOutboundReplyFacts } from "../../infra/outbound/reply-policy.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -44,6 +48,8 @@ export type DurableMessageBatchSendParams = Omit<
   /** @deprecated Use `signal`. */
   abortSignal?: AbortSignal;
   previousReceipt?: MessageReceipt;
+  /** @deprecated Destination history is automatic; removed in the next Plugin SDK major. */
+  mirror?: DeliveryMirror;
 };
 
 type DurableMessageSuppressionReason =
@@ -111,15 +117,7 @@ export function durableMessageBatchMayHaveReachedRecipient(
 
 export type SerializedDurableMessagePayloadOutcome =
   | { index: number; status: "sent"; resultCount: number }
-  | {
-      index: number;
-      status: "suppressed";
-      reason: DurableMessageSuppressionReason;
-      hookEffect?: {
-        cancelReason?: string;
-        metadata?: Record<string, unknown>;
-      };
-    }
+  | Extract<DurableMessagePayloadDeliveryOutcome, { status: "suppressed" }>
   | {
       index: number;
       status: "failed";
@@ -190,15 +188,8 @@ export type DurableMessageSendContext = MessageSendContext<
 export async function withDurableMessageSendContextCore<T>(
   params: DurableMessageSendContextParams,
   run: (ctx: DurableMessageSendContext) => Promise<T>,
-  conversationDeliveryTarget?: ConversationDeliveryTarget,
-  queueContext?: DeliveryQueueStateContext,
 ): Promise<T> {
-  return await withMessageSendContext(
-    params,
-    run,
-    (delivery) => deliverOutboundPayloadsInternal(delivery, queueContext),
-    conversationDeliveryTarget,
-  );
+  return await withMessageSendContext(params, run, deliverOutboundPayloadsInternal);
 }
 
 async function withMessageSendContext<T>(
@@ -376,10 +367,16 @@ export async function sendDurableMessageBatchCore(
   conversationDeliveryTarget?: ConversationDeliveryTarget,
   queueContext?: DeliveryQueueStateContext,
   sessionGeneration?: SessionDeliveryGeneration,
+  admittedReasoning?: true,
 ): Promise<DurableMessageBatchSendResult> {
   return await sendMessageBatch(
     params,
-    (delivery) => deliverOutboundPayloadsInternal({ ...delivery, sessionGeneration }, queueContext),
+    (delivery) =>
+      deliverOutboundPayloadsInternal(
+        { ...delivery, sessionGeneration },
+        queueContext,
+        admittedReasoning,
+      ),
     conversationDeliveryTarget,
   );
 }
@@ -388,14 +385,13 @@ export async function sendStructuredDurableMessageBatchCore(
   input: Omit<DurableMessageSendContextParams, "payloads"> & {
     plan: readonly OutboundPayloadPlan[];
   },
-  conversationDeliveryTarget?: ConversationDeliveryTarget,
+  sessionGeneration?: SessionDeliveryGeneration,
 ): Promise<DurableMessageBatchSendResult> {
   const { plan, ...params } = input;
   return await sendMessageBatch(
     { ...params, payloads: plan.map((entry) => entry.payload) },
     ({ payloads: _payloads, ...delivery }) =>
-      deliverStructuredOutboundPayloadsInternal({ ...delivery, plan }),
-    conversationDeliveryTarget,
+      deliverStructuredOutboundPayloadsInternal({ ...delivery, plan, sessionGeneration }),
   );
 }
 
@@ -420,42 +416,52 @@ async function sendMessageBatch(
         const authority = getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority;
         return authority ? [authority] : [];
       });
-  const onPlatformSendDispatch =
-    ephemeralWriterAuthorities.length > 0
-      ? async () => {
-          for (const authority of ephemeralWriterAuthorities) {
-            assertSessionWriterDeliveryAuthorized(authority);
+  const prepared: Awaited<ReturnType<typeof prepareSessionWriterDeliveryAuthority>>[] = [];
+  try {
+    for (const authority of new Set(ephemeralWriterAuthorities)) {
+      prepared.push(await prepareSessionWriterDeliveryAuthority(authority));
+    }
+    const onPlatformSendDispatch =
+      ephemeralWriterAuthorities.length > 0
+        ? async () => {
+            for (const { authority } of prepared) {
+              assertSessionWriterDeliveryAuthorized(authority);
+            }
+            await params.onPlatformSendDispatch?.();
           }
-          await params.onPlatformSendDispatch?.();
-        }
-      : params.onPlatformSendDispatch;
-  const assertDirectAdapterHandoff =
-    ephemeralWriterAuthorities.length > 0
-      ? () => {
-          params.assertDirectAdapterHandoff?.();
-          for (const authority of ephemeralWriterAuthorities) {
-            assertSessionWriterDeliveryAuthorized(authority);
+        : params.onPlatformSendDispatch;
+    const assertDirectAdapterHandoff =
+      ephemeralWriterAuthorities.length > 0
+        ? () => {
+            params.assertDirectAdapterHandoff?.();
+            for (const { authority } of prepared) {
+              assertSessionWriterDeliveryAuthorized(authority);
+            }
           }
+        : params.assertDirectAdapterHandoff;
+    return await withMessageSendContext(
+      {
+        ...params,
+        ...pendingFinalDelivery,
+        onPlatformSendDispatch,
+        assertDirectAdapterHandoff,
+      },
+      async (ctx) => {
+        const rendered = await ctx.render();
+        const result = await ctx.send(rendered);
+        if (result.status === "sent" || result.status === "suppressed") {
+          await ctx.commit(result.receipt);
+        } else {
+          await ctx.fail(result.error);
         }
-      : params.assertDirectAdapterHandoff;
-  return await withMessageSendContext(
-    {
-      ...params,
-      ...pendingFinalDelivery,
-      onPlatformSendDispatch,
-      assertDirectAdapterHandoff,
-    },
-    async (ctx) => {
-      const rendered = await ctx.render();
-      const result = await ctx.send(rendered);
-      if (result.status === "sent" || result.status === "suppressed") {
-        await ctx.commit(result.receipt);
-      } else {
-        await ctx.fail(result.error);
-      }
-      return result;
-    },
-    deliver,
-    conversationDeliveryTarget,
-  );
+        return result;
+      },
+      deliver,
+      conversationDeliveryTarget,
+    );
+  } finally {
+    for (const current of prepared) {
+      current.release();
+    }
+  }
 }

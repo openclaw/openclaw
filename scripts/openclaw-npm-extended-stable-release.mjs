@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
-import { execFileSync, spawnSync } from "node:child_process";
-import { appendFileSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
+import { decodePluginSdkApiArtifact } from "./plugin-sdk-api-release-evidence.mjs";
 
 const SUPPORTED_DIST_TAGS = new Set(["beta", "latest", "extended-stable"]);
 
@@ -95,7 +96,8 @@ export function validateNpmPreflightDistTag({ manifest, npmDistTag }) {
   }
   // Only the qualified package format proves both regular-release predecessors.
   // Historical receipts and prerelease/extended-stable packages retain exact channels.
-  const selectors = manifest?.pluginSdkApi?.selectors;
+  const pluginSdkApi = decodePluginSdkApiArtifact(manifest?.pluginSdkApi);
+  const selectors = pluginSdkApi?.selectors;
   if (
     manifest?.version === 3 &&
     typeof manifest.packageVersion === "string" &&
@@ -104,7 +106,7 @@ export function validateNpmPreflightDistTag({ manifest, npmDistTag }) {
     [
       "openclaw.plugin-sdk-api-release-evidence-set/v1",
       "openclaw.plugin-sdk-api-release-evidence-set/v2",
-    ].includes(manifest.pluginSdkApi?.schema) &&
+    ].includes(pluginSdkApi?.schema) &&
     selectors &&
     Object.keys(selectors).length === 2 &&
     ["beta", "latest"].every(
@@ -358,73 +360,6 @@ export function validateFullReleaseValidationManifest({
   return manifest;
 }
 
-export function parsePriorExtendedStableSelector(stdout) {
-  let tags;
-  try {
-    tags = JSON.parse(stdout);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`npm dist-tags query returned invalid JSON: ${message}`, {
-      cause: error,
-    });
-  }
-  if (tags === null || typeof tags !== "object" || Array.isArray(tags)) {
-    throw new Error("npm dist-tags query did not return a JSON object.");
-  }
-  if (!Object.hasOwn(tags, "extended-stable")) {
-    return "absent";
-  }
-  if (typeof tags["extended-stable"] !== "string" || tags["extended-stable"].trim() === "") {
-    throw new Error("npm extended-stable dist-tag was not a non-empty version string.");
-  }
-  return tags["extended-stable"];
-}
-
-export function capturePriorExtendedStableSelector({ query }) {
-  const result = query();
-  if (result.status !== 0) {
-    throw new Error(`npm dist-tags query failed with exit code ${result.status ?? "unknown"}.`);
-  }
-  return parsePriorExtendedStableSelector(result.stdout);
-}
-
-export async function verifyExtendedStableRegistryReadback({
-  expectedVersion,
-  query,
-  sleep,
-  // Initial read plus thirty minutes of replication waits.
-  attempts = 181,
-  delayMs = 10_000,
-}) {
-  let exactVersion = "missing";
-  let extendedStableSelector = "missing";
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const exactResult = await query(`openclaw@${expectedVersion}`);
-    const extendedStableResult = await query("openclaw@extended-stable");
-    exactVersion = exactResult.status === 0 ? exactResult.stdout.trim() : "missing";
-    extendedStableSelector =
-      extendedStableResult.status === 0 ? extendedStableResult.stdout.trim() : "missing";
-    if (exactVersion === expectedVersion && extendedStableSelector === expectedVersion) {
-      return { exactVersion, extendedStableSelector, attemptsUsed: attempt };
-    }
-    if (attempt < attempts) {
-      await sleep(delayMs);
-    }
-  }
-  throw new Error(
-    `npm registry did not converge to openclaw@${expectedVersion} and openclaw@extended-stable=${expectedVersion} after ${attempts} attempts (exact=${exactVersion}, extended-stable=${extendedStableSelector}).`,
-  );
-}
-
-export function extendedStableSelectorRepairCommand(expectedVersion) {
-  const normalizedVersion = (expectedVersion ?? "").replace(/^v/u, "");
-  const parsed = parseReleaseVersion(normalizedVersion);
-  if (parsed === null || parsed.channel !== "stable" || parsed.correctionNumber !== undefined) {
-    throw new Error("Extended-stable selector repair requires an exact final YYYY.M.P version.");
-  }
-  return `npm dist-tag add openclaw@${parsed.version} extended-stable`;
-}
-
 function git(args) {
   return execFileSync("git", args, { encoding: "utf8" }).trim();
 }
@@ -531,20 +466,7 @@ function validateRequestFromRepository() {
   });
 }
 
-function appendOutput(values) {
-  const output = process.env.GITHUB_OUTPUT;
-  if (!output) {
-    throw new Error("GITHUB_OUTPUT is required.");
-  }
-  appendFileSync(
-    output,
-    Object.entries(values)
-      .map(([key, value]) => `${key}=${value}\n`)
-      .join(""),
-  );
-}
-
-async function main() {
+function main() {
   const command = process.argv[2];
   if (command === "validate-active-line") {
     const repository = process.env.GITHUB_REPOSITORY ?? "";
@@ -620,40 +542,12 @@ async function main() {
     });
     return;
   }
-  if (command === "capture-selector") {
-    const previous = capturePriorExtendedStableSelector({
-      query: () =>
-        spawnSync("npm", ["view", "openclaw", "dist-tags", "--json"], { encoding: "utf8" }),
-    });
-    appendOutput({ previous });
-    return;
-  }
-  if (command === "verify-readback") {
-    const expectedVersion = (process.env.EXPECTED_VERSION ?? "").replace(/^v/u, "");
-    const result = await verifyExtendedStableRegistryReadback({
-      expectedVersion,
-      query: (target) => spawnSync("npm", ["view", target, "version"], { encoding: "utf8" }),
-      sleep: (delayMs) =>
-        new Promise((resolve) => {
-          setTimeout(resolve, delayMs);
-        }),
-    });
-    appendOutput({
-      exact_version: result.exactVersion,
-      extended_stable_selector: result.extendedStableSelector,
-    });
-    return;
-  }
-  if (command === "repair-command") {
-    console.log(extendedStableSelectorRepairCommand(process.env.EXPECTED_VERSION));
-    return;
-  }
   throw new Error(`Unknown extended-stable npm release command: ${command ?? "<missing>"}.`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
-    await main();
+    main();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`openclaw-npm-extended-stable-release: ${message}`);

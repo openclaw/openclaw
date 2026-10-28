@@ -17,7 +17,9 @@ export function captureSessionControlAuthority(prepared?: AdmittedRunOperatorAut
   const invocation = readOperatorToolGatewayAuthority();
   const caller = getGatewayToolCallerIdentity()?.operatorAuthority;
   const scope = getPluginRuntimeGatewayRequestScope();
-  const retained = scope?.client?.internal?.operatorRunAuthority;
+  // The admitted caller owns continuation authority; the ambient client may still
+  // belong to the completed recovery request that launched this child.
+  const retained = caller ? undefined : scope?.client?.internal?.operatorRunAuthority;
   const authority = prepared ?? caller ?? invocation?.operatorRunAuthority ?? retained;
   if (!authority) {
     return undefined;
@@ -65,32 +67,34 @@ export function hasSessionControlAuthority(prepared?: AdmittedRunOperatorAuthori
   return captureSessionControlAuthority(prepared)?.allows("operator.write") ?? false;
 }
 
-/** Rename uses the existing creator-scoped session mutation, not general session controls. */
-export function hasSessionRenameAuthority(prepared?: AdmittedRunOperatorAuthority): boolean {
+/** Create and rename use the existing creator-scoped session write grant, not general controls. */
+export function hasSessionWriteAuthority(prepared?: AdmittedRunOperatorAuthority): boolean {
   return captureSessionControlAuthority(prepared)?.allows("operator.sessions.write") ?? false;
 }
 
-/** Default sandbox exposure is paired with a label-only implementation, never full management. */
-export function prepareSandboxSessionRename(params: {
+/** Default guest exposure adds independent creation and label-only management, never full controls. */
+export function prepareSandboxSessionTools(params: {
   policy?: SandboxToolPolicy;
   senderIsOwner?: boolean;
   authority?: AdmittedRunOperatorAuthority;
 }): { policy?: SandboxToolPolicy; renameOnly: boolean } {
   const policy = params.policy;
+  const defaultAllow = policy?.[SANDBOX_DEFAULT_TOOL_ALLOW];
   if (
     params.senderIsOwner !== false ||
-    !policy?.[SANDBOX_DEFAULT_TOOL_ALLOW] ||
-    policy[SANDBOX_DEFAULT_TOOL_ALLOW] !== policy.allow ||
-    !hasSessionRenameAuthority(params.authority)
+    !policy ||
+    !defaultAllow ||
+    defaultAllow !== policy.allow ||
+    !hasSessionWriteAuthority(params.authority)
   ) {
     return { policy, renameOnly: false };
   }
-  const blocked = classifyToolAgainstSandboxToolPolicy("sessions", policy);
-  if (!blocked.blockedByAllow || blocked.blockedByDeny) {
-    return { policy, renameOnly: false };
-  }
+  const added = ["sessions", "sessions_create"].filter((name) => {
+    const blocked = classifyToolAgainstSandboxToolPolicy(name, policy);
+    return blocked.blockedByAllow && !blocked.blockedByDeny;
+  });
   return {
-    policy: { ...policy, allow: [...policy[SANDBOX_DEFAULT_TOOL_ALLOW], "sessions"] },
-    renameOnly: true,
+    policy: added.length ? { ...policy, allow: [...defaultAllow, ...added] } : policy,
+    renameOnly: added.includes("sessions"),
   };
 }

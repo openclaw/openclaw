@@ -7,11 +7,26 @@ import {
 } from "./service-constants.js";
 
 const DEFAULT_METRIC_NAME_PREFIX = "openclaw.";
+type SessionRowSelectionBaseline = {
+  selections: Map<string, { calls: number; rows: number }>;
+  resets: number;
+};
+const sessionRowSelectionBaselines = new WeakMap<Meter, Map<string, SessionRowSelectionBaseline>>();
 
 export function createDiagnosticsMetrics(
   meter: Meter,
   metricNamePrefix = DEFAULT_METRIC_NAME_PREFIX,
 ) {
+  // A preloaded SDK retains its meter and instruments across plugin service reloads.
+  let meterBaselines = sessionRowSelectionBaselines.get(meter);
+  if (!meterBaselines) {
+    sessionRowSelectionBaselines.set(meter, (meterBaselines = new Map()));
+  }
+  let sessionRowSelectionBaseline = meterBaselines.get(metricNamePrefix);
+  if (!sessionRowSelectionBaseline) {
+    sessionRowSelectionBaseline = { selections: new Map(), resets: 0 };
+    meterBaselines.set(metricNamePrefix, sessionRowSelectionBaseline);
+  }
   const createCounter = (name: string, description: string, unit = "1") =>
     meter.createCounter(`${metricNamePrefix}${name}`, { unit, description });
   const createHistogram = (
@@ -25,19 +40,26 @@ export function createDiagnosticsMetrics(
       description,
       ...(explicitBucketBoundaries ? { advice: { explicitBucketBoundaries } } : {}),
     });
+  const createDurationHistogram = (name: string, description: string) =>
+    createHistogram(name, description, "ms", AGENT_DURATION_MS_BUCKETS);
 
   return {
-    gcDurationHistogram: createHistogram(
+    sessionRowSelectionBaseline,
+    sessionsListBaselineRetirementsCounter: createCounter(
+      "sessions.list.baseline_retirements",
+      "Session list baseline retirement events by cause, not rows or views retired",
+    ),
+    sessionsListBaseMissesCounter: createCounter(
+      "sessions.list.base_misses",
+      "Successful full sidebar responses with a supplied base, by miss reason",
+    ),
+    gcDurationHistogram: createDurationHistogram(
       "gc.duration_ms",
       "Elapsed garbage collection duration for the hosting JavaScript isolate",
-      "ms",
-      AGENT_DURATION_MS_BUCKETS,
     ),
-    gatewayEventLoopDelayMaxHistogram: createHistogram(
+    gatewayEventLoopDelayMaxHistogram: createDurationHistogram(
       "gateway.event_loop.delay_max_ms",
       "Maximum event-loop delay per completed Gateway observation window",
-      "ms",
-      AGENT_DURATION_MS_BUCKETS,
     ),
     gatewayEventLoopObservedCounter: createCounter(
       "gateway.event_loop.observed_ms",
@@ -48,33 +70,95 @@ export function createDiagnosticsMetrics(
       "gateway.rpc.requests",
       "Authenticated Gateway WebSocket requests received",
     ),
+    gatewayWsSessionEventFramesCounter: createCounter(
+      "gateway.ws.session_event_frames",
+      "Outbound session event frames by reason and exact message subscription per socket",
+    ),
+    gatewayWsSessionEventBytesCounter: createCounter(
+      "gateway.ws.session_event_bytes",
+      "Encoded outbound session event bytes by reason and exact message subscription per socket",
+      "By",
+    ),
+    gatewayWsPresenceFramesCounter: createCounter(
+      "gateway.ws.presence_frames",
+      "Outbound presence frames accepted by the sender per socket, by delivery mode",
+    ),
+    gatewayWsPresenceBytesCounter: createCounter(
+      "gateway.ws.presence_bytes",
+      "Encoded outbound presence bytes before framing or compression per socket, by delivery mode",
+      "By",
+    ),
+    gatewayWsEventsCounter: createCounter(
+      "gateway.ws.events",
+      "Outbound Gateway WebSocket event frames accepted by the sender per socket",
+    ),
+    gatewayWsEventBytesCounter: createCounter(
+      "gateway.ws.event_bytes",
+      "Encoded outbound Gateway WebSocket event bytes before framing or compression per socket",
+      "By",
+    ),
+    gatewayWsEventWireBytesCounter: createCounter(
+      "gateway.ws.event_wire_bytes",
+      "Outbound Gateway WebSocket payload bytes after compression per socket, excluding framing",
+      "By",
+    ),
+    gatewayWsEventFrameBytesCounter: createCounter(
+      "gateway.ws.event_frame_bytes",
+      "Cumulative counts of accepted raw Gateway event frames by byte-size upper bound",
+    ),
+    gatewayWsOperatorConnectionsGauge: meter.createGauge(
+      `${metricNamePrefix}gateway.ws.operator_connections`,
+      { unit: "1", description: "Connected authenticated Gateway operator WebSockets" },
+    ),
+    sessionsListRetainedViewsGauge: meter.createGauge(
+      `${metricNamePrefix}sessions.list.retained_views`,
+      { unit: "1", description: "Retained session-list views across all publications" },
+    ),
+    sessionsListRetainedRefsGauge: meter.createGauge(
+      `${metricNamePrefix}sessions.list.retained_refs`,
+      {
+        unit: "1",
+        description: "Row references and selection entries retained by session-list views",
+      },
+    ),
+    sessionsListRetainedBytesGauge: meter.createGauge(
+      `${metricNamePrefix}sessions.list.retained_bytes`,
+      { unit: "By", description: "Estimated memory retained by session-list views" },
+    ),
+    sessionEventRowsRetainedEntriesGauge: meter.createGauge(
+      `${metricNamePrefix}session_event_rows_retained_entries`,
+      {
+        unit: "1",
+        description: "Session-event field-hash vectors retained across all connections",
+      },
+    ),
+    sessionEventRowsResetCounter: createCounter(
+      "session_event_rows_reset",
+      "Retained session-event wire baselines retired by cause",
+    ),
+    sessionEventRowsRetainedBytesGauge: meter.createGauge(
+      `${metricNamePrefix}session_event_rows_retained_bytes`,
+      { unit: "By", description: "Estimated memory retained by session-event field-hash vectors" },
+    ),
     gatewayRpcOutcomesCounter: createCounter(
       "gateway.rpc.outcomes",
       "Gateway RPC observations by phase and outcome",
     ),
-    gatewayRpcFirstResponseHistogram: createHistogram(
+    gatewayRpcFirstResponseHistogram: createDurationHistogram(
       "gateway.rpc.first_response_ms",
       "Elapsed time until the first Gateway RPC response is sent",
-      "ms",
-      AGENT_DURATION_MS_BUCKETS,
     ),
-    gatewayRpcHandlerHistogram: createHistogram(
+    gatewayRpcHandlerHistogram: createDurationHistogram(
       "gateway.rpc.handler_ms",
       "Gateway RPC handler duration until return or throw",
-      "ms",
-      AGENT_DURATION_MS_BUCKETS,
     ),
-    gatewayRpcAdmissionHistogram: createHistogram(
+    gatewayRpcAdmissionHistogram: createDurationHistogram(
       "gateway.rpc.admission_ms",
       "Elapsed time from Gateway RPC receipt until handler invocation",
-      "ms",
-      AGENT_DURATION_MS_BUCKETS,
     ),
-    gatewayRpcQueueWaitHistogram: createHistogram(
+    gatewayRpcQueueWaitHistogram: createDurationHistogram(
       "gateway.rpc.queue_wait_ms",
       "Gateway operator start queue or worker frame queue wait",
-      "ms",
-      AGENT_DURATION_MS_BUCKETS,
     ),
     tokensCounter: createCounter("tokens", "Token usage by type"),
     genAiTokenUsageHistogram: meter.createHistogram("gen_ai.client.token.usage", {
@@ -92,17 +176,10 @@ export function createDiagnosticsMetrics(
       },
     }),
     costCounter: createCounter("cost.usd", "Estimated model cost (USD)"),
-    durationHistogram: createHistogram(
-      "run.duration_ms",
-      "Agent run duration",
-      "ms",
-      AGENT_DURATION_MS_BUCKETS,
-    ),
-    harnessDurationHistogram: createHistogram(
+    durationHistogram: createDurationHistogram("run.duration_ms", "Agent run duration"),
+    harnessDurationHistogram: createDurationHistogram(
       "harness.duration_ms",
       "Agent harness lifecycle duration",
-      "ms",
-      AGENT_DURATION_MS_BUCKETS,
     ),
     contextHistogram: createHistogram(
       "context.tokens",
@@ -128,7 +205,10 @@ export function createDiagnosticsMetrics(
       "Inbound message dispatch duration",
     ),
     messageProcessedCounter: createCounter("message.processed", "Messages processed by outcome"),
-    messageDurationHistogram: createHistogram("message.duration_ms", "Message processing duration"),
+    messageDurationHistogram: createDurationHistogram(
+      "message.duration_ms",
+      "Message processing duration",
+    ),
     messageDeliveryStartedCounter: createCounter(
       "message.delivery.started",
       "Outbound message delivery attempts started",
@@ -224,6 +304,18 @@ export function createDiagnosticsMetrics(
       "By",
     ),
     memoryPressureCounter: createCounter("memory.pressure", "Diagnostic memory pressure events"),
+    sessionRowSelectionsCounter: createCounter(
+      "session.row.selections",
+      "Successful resident session-row selections by query shape and enclosing task",
+    ),
+    sessionRowSelectionRowsCounter: createCounter(
+      "session.row.selection.rows",
+      "Resident session rows selected before federation and visibility filtering",
+    ),
+    sessionRowSelectionResetsCounter: createCounter(
+      "session.row.selection.resets",
+      "Broad session-row selection invalidations, including topology replacement and disposal",
+    ),
     asyncQueueDroppedCounter: createCounter(
       "diagnostic.async_queue.dropped",
       "Async diagnostic queue drops by dropped event class",

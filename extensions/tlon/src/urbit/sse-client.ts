@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
+import { createArmableStallWatchdog } from "openclaw/plugin-sdk/channel-outbound";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
-import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   ensureUrbitChannelOpen,
   pokeUrbitChannel,
@@ -22,14 +23,14 @@ type UrbitSseLogger = {
 type UrbitSseOptions = {
   ship?: string;
   ssrfPolicy?: SsrFPolicy;
-  lookupFn?: LookupFn;
-  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   onReconnect?: (client: UrbitSSEClient) => Promise<void> | void;
   logger?: UrbitSseLogger;
 };
 
 const MAX_SSE_PAYLOAD_BYTES = 16 * 1024 * 1024;
 const MAX_RECONNECT_ATTEMPTS = 10;
+// Eyre sends a heartbeat every 20 s; treat three missed heartbeats as a stalled stream.
+const SSE_STALL_TIMEOUT_MS = 60_000;
 
 function parseUrbitSsePayload(data: string): { id?: number; json?: unknown; response?: string } {
   if (Buffer.byteLength(data, "utf8") > MAX_SSE_PAYLOAD_BYTES) {
@@ -74,8 +75,6 @@ export class UrbitSSEClient {
   isConnected = false;
   logger: UrbitSseLogger;
   ssrfPolicy?: SsrFPolicy;
-  lookupFn?: LookupFn;
-  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   streamRelease: (() => Promise<void>) | null = null;
 
   // Event ack tracking keeps each HTTP channel's delivered window bounded.
@@ -95,8 +94,6 @@ export class UrbitSSEClient {
     this.onReconnect = options.onReconnect ?? null;
     this.logger = options.logger ?? {};
     this.ssrfPolicy = options.ssrfPolicy;
-    this.lookupFn = options.lookupFn;
-    this.fetchImpl = options.fetchImpl;
   }
 
   private channelRequestContext() {
@@ -106,8 +103,6 @@ export class UrbitSSEClient {
       ship: this.ship,
       channelId: this.channelId,
       ssrfPolicy: this.ssrfPolicy,
-      lookupFn: this.lookupFn,
-      fetchImpl: this.fetchImpl,
     };
   }
 
@@ -121,6 +116,7 @@ export class UrbitSSEClient {
     await ensureUrbitChannelOpen(this.channelRequestContext(), {
       createBody: this.subscriptions,
       createAuditContext: "tlon-urbit-channel-create",
+      beforeRequest: () => this.reconnectAbortController.signal.throwIfAborted(),
     });
   }
 
@@ -185,8 +181,6 @@ export class UrbitSSEClient {
   }
 
   async openStream() {
-    // Use AbortController with manual timeout so we only abort during initial connection,
-    // not after the SSE stream is established and actively streaming.
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 60_000);
 
@@ -205,9 +199,8 @@ export class UrbitSSEClient {
           },
         },
         ssrfPolicy: this.ssrfPolicy,
-        lookupFn: this.lookupFn,
-        fetchImpl: this.fetchImpl,
-        signal: controller.signal,
+        signal: AbortSignal.any([controller.signal, this.reconnectAbortController.signal]),
+        beforeRequest: () => this.reconnectAbortController.signal.throwIfAborted(),
         auditContext: "tlon-urbit-sse-stream",
       });
     } finally {
@@ -217,12 +210,19 @@ export class UrbitSSEClient {
     }
 
     const { response, release } = stream;
+    if (this.reconnectAbortController.signal.aborted) {
+      await release();
+      this.reconnectAbortController.signal.throwIfAborted();
+    }
     this.streamRelease = release;
 
-    if (!response.ok) {
+    if (!response.ok || !response.body) {
       this.streamRelease = null;
       await release();
-      throw new UrbitHttpError({ operation: "Stream connection", status: response.status });
+      if (!response.ok) {
+        throw new UrbitHttpError({ operation: "Stream connection", status: response.status });
+      }
+      return;
     }
 
     this.processStream(response.body).catch((error: unknown) => {
@@ -244,10 +244,27 @@ export class UrbitSSEClient {
       body instanceof ReadableStream
         ? Readable.fromWeb(body as never)
         : (body as NodeJS.ReadableStream);
+    const streamController = this.streamController;
+    // End a stalled stream so the reconnect below reopens the same channel.
+    const watchdog = createArmableStallWatchdog({
+      label: "tlon-sse",
+      timeoutMs: SSE_STALL_TIMEOUT_MS,
+      onTimeout: ({ idleMs }) => {
+        const error = new Error(
+          `Tlon Urbit SSE stream stalled: no data for ${Math.round(idleMs / 1000)}s`,
+        );
+        streamController?.abort(error);
+        if (stream instanceof Readable) {
+          stream.destroy(error);
+        }
+      },
+    });
+    watchdog.arm();
     const decoder = new TextDecoder();
     let buffer = "";
     let bufferBytes = 0;
     let pendingDelimiterNewline = false;
+    let pendingCarriageReturn = false;
 
     const appendPending = (text: string) => {
       const previousCodeUnit = buffer.charCodeAt(buffer.length - 1);
@@ -267,7 +284,14 @@ export class UrbitSSEClient {
       buffer += text;
       bufferBytes = nextBytes;
     };
-    const consumeText = async (text: string) => {
+    const consumeText = async (rawText: string) => {
+      if (rawText.length === 0) {
+        return;
+      }
+      // Normalize SSE line endings without treating a split CRLF as two lines.
+      const startsWithPendingLineFeed = pendingCarriageReturn && rawText.startsWith("\n");
+      pendingCarriageReturn = rawText.endsWith("\r");
+      const text = (startsWithPendingLineFeed ? rawText.slice(1) : rawText).replace(/\r\n?/g, "\n");
       let offset = 0;
       if (pendingDelimiterNewline && text.length > 0) {
         pendingDelimiterNewline = false;
@@ -303,15 +327,19 @@ export class UrbitSSEClient {
         if (this.aborted) {
           break;
         }
+        // Only waiting on the network counts; slow event handling is not a stall.
+        watchdog.disarm();
         if (typeof chunk === "string") {
           await consumeText(decoder.decode());
           await consumeText(chunk);
         } else {
           await consumeText(decoder.decode(chunk as Uint8Array, { stream: true }));
         }
+        watchdog.arm();
       }
       await consumeText(decoder.decode());
     } finally {
+      watchdog.stop();
       if (this.streamRelease) {
         const release = this.streamRelease;
         this.streamRelease = null;
@@ -327,8 +355,8 @@ export class UrbitSSEClient {
   }
 
   async processEvent(eventData: string): Promise<void> {
-    const lines = eventData.split("\n");
-    let data: string | null = null;
+    const lines = eventData.split(/\r\n|\r|\n/);
+    const dataLines: string[] = [];
     let eventId: number | null = null;
 
     for (const line of lines) {
@@ -337,10 +365,12 @@ export class UrbitSSEClient {
         eventId = parseUrbitSseEventId(line.slice("id:".length).trim());
       }
       if (line.startsWith("data:")) {
-        data = line.slice("data:".length).trim();
+        const value = line.slice("data:".length);
+        dataLines.push(value.startsWith(" ") ? value.slice(1) : value);
       }
     }
 
+    const data = dataLines.join("\n");
     if (!data) {
       return;
     }
@@ -387,9 +417,6 @@ export class UrbitSSEClient {
     if (this.lastHeardEventId - this.lastAcknowledgedEventId <= this.ackThreshold) {
       return;
     }
-    this.logger.log?.(
-      `[SSE] Acking event ${this.lastHeardEventId} (last acked: ${this.lastAcknowledgedEventId})`,
-    );
     // The acknowledged watermark advances only after PUT succeeds. A replay
     // therefore retries a failed ack instead of leaving the subscription clogged.
     await this.ack(this.lastHeardEventId);
@@ -399,6 +426,7 @@ export class UrbitSSEClient {
     return await pokeUrbitChannel(this.channelRequestContext(), {
       ...params,
       auditContext: "tlon-urbit-poke",
+      timeoutMs: 30_000,
     });
   }
 
@@ -487,6 +515,9 @@ export class UrbitSSEClient {
       this.reconnectAttempts = 0;
       this.logger.log?.("[SSE] Reconnection successful!");
     } catch (error) {
+      if (this.aborted) {
+        return;
+      }
       this.logger.error?.(`[SSE] Reconnection failed: ${String(error)}`);
       await this.attemptReconnect();
     }
@@ -503,37 +534,16 @@ export class UrbitSSEClient {
     this.stopReceiving();
 
     try {
-      const unsubscribes = this.subscriptions.map((sub) => ({
-        id: sub.id,
-        action: "unsubscribe",
-        subscription: sub.id,
-      }));
-
-      {
-        const { release } = await putUrbitChannel(this.channelRequestContext(), {
-          body: unsubscribes,
-          timeoutMs: 30_000,
-          auditContext: "tlon-urbit-unsubscribe",
-        });
-        await release();
-      }
-
-      {
-        const { release } = await urbitFetch({
-          baseUrl: this.url,
-          path: `/~/channel/${this.channelId}`,
-          init: {
-            method: "DELETE",
-            headers: {
-              Cookie: this.cookie,
-            },
-          },
-          ssrfPolicy: this.ssrfPolicy,
-          lookupFn: this.lookupFn,
-          fetchImpl: this.fetchImpl,
-          timeoutMs: 30_000,
-          auditContext: "tlon-urbit-channel-close",
-        });
+      const { response, release } = await putUrbitChannel(this.channelRequestContext(), {
+        body: [{ action: "delete" }],
+        timeoutMs: 30_000,
+        auditContext: "tlon-urbit-channel-close",
+      });
+      try {
+        if (!response.ok) {
+          throw new UrbitHttpError({ operation: "Channel close", status: response.status });
+        }
+      } finally {
         await release();
       }
     } catch (error) {

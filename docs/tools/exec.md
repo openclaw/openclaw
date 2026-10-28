@@ -8,11 +8,19 @@ title: "Exec tool"
 
 Run shell commands in the workspace. `exec` is a mutating shell surface: commands can create, edit, or delete files wherever the selected host or sandbox filesystem permits. Disabling OpenClaw filesystem tools such as `write`, `edit`, or `apply_patch` does not make `exec` read-only.
 
-Supports foreground and background execution via `process`. If `process` is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`. Background sessions are scoped per agent. `process` only sees sessions from the same agent.
+Gateway, sandbox, and worker-local execution support foreground and background execution via `process`. Remote `host=node` execution uses synchronous `system.run` and never creates a `process` session, even when `process` is enabled. If `process` is disallowed, local `exec` also runs synchronously and ignores `yieldMs`/`background`. Background sessions are scoped to their originating session. Child sessions can also manage ancestor processes within the same agent; unrelated session trees and other agents cannot access them.
 
 Completed calls return command output directly. Use `process` only when `exec` reports that a command is still running and provides a `sessionId`; an identifier printed by the command is ordinary output, not a process handle.
 
 Headless node-host commands terminated by an operating-system signal include the signal name in the result, even when no numeric exit code is available. Output printed before termination does not mean the command succeeded.
+
+## Host memory protection
+
+On Linux, Gateway-hosted exec commands have a default memory bound across the command's process tree, including foreground, PTY, and background execution. The bound is the smaller of one quarter of host memory (or the process's cgroup memory constraint) and half the memory remaining after the Gateway's own resident usage. There is no fixed ceiling, so the bound scales with available host capacity. No configuration is required.
+
+OpenClaw samples resident memory plus swapped private pages and kills the owned process tree when it exceeds the bound. Sampling starts after one second. Trees below half their bound are sampled every five seconds; usage at or above half the bound, or a newly discovered descendant, restores the one-second interval. A fast runaway from a previously quiet tree can therefore take about six seconds to be detected and killed, including sampling overhead. The tool reports `memory-limit`, the observed usage, and the applied limit in MiB; background `process` polling and logs retain the diagnostic. Reduce concurrency or input size, split the work, or move it to a separately resource-limited worker.
+
+This is a sampled safeguard, not a kernel-enforced ceiling: rapid allocations can overshoot it, shared resident pages may count more than once across processes, and concurrent commands do not share an aggregate budget. Virtual address reservations are not counted. Ordinary child execution retains a tree owner for reparented descendants. PTY monitoring follows the live command's descendants only; daemonized children that reparent outside that tree are not covered. Use `background: true` without PTY for supervised long-running work instead of shell daemonization. Sandbox backends retain their own limits. This watchdog does not apply to remote `host=node`, Codex-native shell commands, or non-Linux hosts.
 
 ## Parameters
 
@@ -51,10 +59,11 @@ See [Codex timeouts](/plugins/codex-harness-reference/timeouts).
 
 <ParamField path="pty" type="boolean" default="false">
 Run in a pseudo-terminal when available. Use for TTY-only CLIs, coding agents, and terminal UIs.
+Sandbox execution does not support PTYs. An explicit request runs without a PTY and returns a warning; use a noninteractive command in the sandbox.
 </ParamField>
 
 <ParamField path="host" type="'auto' | 'sandbox' | 'gateway' | 'node'" default="auto">
-Where to execute. Omit `host` or use `auto` to inherit the configured exec host, including agent and session overrides. When that configured host is also `auto`, it resolves to `sandbox` when a sandbox runtime is active and `gateway` otherwise. A session that requires a sandbox stays sandboxed regardless of the configured host.
+Where to execute. With no `node` argument, omit `host` or use `auto` to inherit the configured exec host, including agent and session overrides. When that configured host is also `auto`, it resolves to `sandbox` when a sandbox runtime is active and `gateway` otherwise. A session that requires a sandbox stays sandboxed regardless of the configured host.
 
 The model-facing schema and code-mode signature list only hosts permitted by the session's host policy, and omit `sandbox` when no sandbox runtime is active. These choices are captured when the tool is created. Node connectivity is checked at execution time.
 </ParamField>
@@ -64,7 +73,7 @@ The baseline ask mode is derived from `tools.exec.mode` and host approvals. For 
 </ParamField>
 
 <ParamField path="node" type="string">
-Node id/name when `host=node`.
+Node id/name. With `host` omitted, `node` implies `host=node` and follows the same host policy and approvals. An explicit host other than `node` (including `auto`) conflicts and is rejected before execution; omit `host` or set it to `node`.
 </ParamField>
 
 <ParamField path="elevated" type="boolean" default="false">
@@ -79,10 +88,11 @@ Notes:
 - `elevated` escapes the sandbox onto the configured host path: `gateway` by default, or `node` when `tools.exec.host=node` (or the session default is `host=node`). It is only available when elevated access is enabled for the current session/provider.
 - `gateway`/`node` approvals are controlled by the host approvals file.
 - `node` requires a paired, connected node that supports `system.run` (companion app or headless node host). With no target set, exec selects the sole eligible node. If multiple eligible nodes are connected, set `exec.node`, `tools.exec.node`, or `/exec node=...` to select one. It never uses the active Canvas target. An explicit or bound target must itself be connected and executable. Completed results identify the selected node alongside command output.
-- `exec host=node` is the only shell-execution path for nodes. The legacy `nodes.run` wrapper was removed in 2026.3.31.
+- Remote `host=node` calls ignore `background`/`yieldMs` and return output when `system.run` finishes. Explicit `background: true` or `yieldMs` requests produce a warning with the execution result, not while approval is pending. No process `sessionId` is returned. For background work on a paired device, use an [OpenClaw worker session](/nodes/session-hosting) with worker-local `exec` and `process`; see [Worker environments](/gateway/background-process#worker-environments).
+- `exec host=node` is the remote shell-execution path for nodes. The legacy `nodes.run` wrapper was removed in 2026.3.31.
 - On non-Windows hosts, exec uses `SHELL` when set. If `SHELL` is `fish`, it prefers `bash` (or `sh`) from `PATH` to avoid fish-incompatible bashisms, then falls back to `SHELL` if neither exists.
 - On Windows hosts, exec prefers PowerShell 7 (`pwsh`) discovery: Program Files, ProgramW6432, then PATH. It falls back to Windows PowerShell 5.1.
-- On non-Windows gateway hosts, bash and zsh exec commands use a startup snapshot. OpenClaw captures sourceable aliases/functions and a small safe environment set from shell startup files into `$OPENCLAW_STATE_DIR/cache/shell-snapshots/`, then sources that snapshot before each exec command. Secret-looking variables are excluded. The in-memory cache keeps up to 128 recently used snapshot keys; evicted keys can reuse fresh snapshots on disk. Sandbox and node exec do not use this snapshot. Set `OPENCLAW_EXEC_SHELL_SNAPSHOT=0` in the Gateway process environment to disable this snapshot path.
+- On non-Windows gateway hosts, bash and zsh exec commands use a startup snapshot. OpenClaw captures sourceable aliases/functions and a small safe environment set from shell startup files into `$OPENCLAW_STATE_DIR/cache/shell-snapshots/`, then sources that snapshot before each exec command. Secret-looking variables are excluded. The in-memory cache keeps up to 128 recently used snapshot keys; evicted keys can reuse fresh snapshots on disk without launching another validation shell. New captures are validated before atomic publication. Sandbox and node exec do not use this snapshot. Set `OPENCLAW_EXEC_SHELL_SNAPSHOT=0` in the Gateway process environment to disable this snapshot path.
 - Host execution (`gateway`/`node`) rejects `env.PATH` and loader overrides (`LD_*`/`DYLD_*`) to prevent binary hijacking or injected code.
 - Exact `"cat"` or empty `GIT_PAGER` and `PAGER` overrides are normalized to empty values, including on node shell-wrapper execution. This disables Git paging without passing an executable pager name through `PATH`. Other programs may interpret an empty `PAGER` differently. Use their noninteractive flags when needed. Other pager commands, paths, whitespace variants, and `MANPAGER` overrides remain blocked.
 - OpenClaw sets `OPENCLAW_SHELL=exec` in the spawned command environment (including PTY and sandbox execution) so shell/profile rules can detect exec-tool context.
@@ -94,10 +104,12 @@ Notes:
 - For channel-origin runs, OpenClaw also exposes a narrow sender/chat identity JSON payload in `OPENCLAW_CHANNEL_CONTEXT` when the channel provided those ids.
 - Capable nodes receive channel/subagent routing context separately from custom environment overrides and inject the fixed markers themselves. See [node execution context](/nodes/node-exec#channel-and-subagent-context) for capability negotiation and mixed-version behavior.
 - `exec` cannot run `openclaw channels login` or `/approve` shell commands: `openclaw channels login` is an interactive channel-auth flow, and `/approve` needs to go through the approval command handler, not a shell. Run channel login in a terminal on the gateway host, or use a channel-specific login agent tool when one exists (for example `whatsapp_login`).
-- Important: sandboxing is **off by default**. If sandboxing is off, implicit `host=auto` resolves to `gateway`. Explicit `host=sandbox` still fails closed instead of silently running on the gateway host. Enable sandboxing or use `host=gateway` with approvals.
+- Important: sandboxing is **off by default**. If sandboxing is off, implicit `host=auto` resolves to `gateway`. Explicit `host=sandbox` requests are still rejected instead of silently running on the gateway host. Enable sandboxing or use `host=gateway` with approvals.
 - Python script preflight checks for common shell-syntax mistakes only inspect files inside the effective `workdir` boundary. If a script path resolves outside `workdir`, the file check is skipped. JavaScript source is left to Node, which returns its normal diagnostics and exit code; statements before a runtime error may already have executed. Separate restrictions on ambiguous Python/Node interpreter commands still apply. Preflight skips entirely when `host=gateway` and the effective policy is `security=full` with `ask=off`.
-- For long-running work that starts now, start it once and rely on automatic completion wake when it is enabled and the command emits output or fails. Use `process` for logs, status, input, or intervention. Do not emulate scheduling with sleep loops, timeout loops, or repeated polling.
+- For long-running work that starts now, start it once. When enabled, automatic completion wake can happen after the command exits. New output while the command is still running does not start another turn. Use `process` for logs, status, input, or intervention. Do not emulate scheduling with sleep loops, timeout loops, or repeated polling.
+
 - When `tools.exec.notifyOnExit=false`, a running result explicitly says that automatic completion wake is disabled, in both its text and structured `followUp`. Later `process poll`, `log`, and `list` results preserve that guidance while the command is running, using the policy captured when it started. If the task needs the result, collect it with `process poll` and a timeout before ending the turn, unless another continuation is already arranged. A running process or active session goal does not arrange that continuation.
+- A background command continuation keeps the original requester's still-current authority, including permitted reviewer models. Another participant's permissions do not replace it, and revoked authority prevents further execution.
 - When an approved async command completes, its continuation uses the normal agent run timeout from `agents.defaults.timeoutSeconds`. The follow-up observer can finish waiting while the accepted agent run continues.
 - Subagent sessions do not receive automatic background-exec wakes. Collect the result with `process poll` before yielding without another completion source.
 - The process owner tracks agent-started background commands. Use the returned process session ID to inspect output, poll, or stop a command; its completion can wake the agent.
@@ -109,7 +121,7 @@ Notes:
 | ------------------------------------ | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `tools.exec.timeoutSeconds`          | `1800`                   | Default per-command exec timeout in seconds. Per-call `timeoutSeconds` overrides it; per-call `timeoutSeconds: 0` disables the exec process timeout.               |
 | `tools.exec.host`                    | `auto`                   | Resolves to `sandbox` when a sandbox runtime is active, `gateway` otherwise.                                                                                       |
-| `tools.exec.mode`                    | host-derived             | Canonical policy knob. See [Modes](#modes) below.                                                                                                                  |
+| `tools.exec.mode`                    | host-derived             | Saved execution mode. See [Modes](#modes) below.                                                                                                                   |
 | `tools.exec.reviewer.model`          | configured agent primary | Optional provider/model override for `mode=auto` review.                                                                                                           |
 | `tools.exec.reviewer.timeoutMs`      | `30000`                  | Per-stage timeout for reviewer model preparation and completion before human fallback.                                                                             |
 | `tools.exec.node`                    | unset                    | Selects which paired node runs `host=node` commands, by id, name, or IP. Only needed when more than one eligible node is connected; see [Parameters](#parameters). |
@@ -138,7 +150,7 @@ Example:
 
 ### Modes
 
-`tools.exec.mode` is the canonical persisted policy knob. Runtime security and approval behavior are derived from it.
+`tools.exec.mode` is the saved execution mode. Runtime security and approval behavior are derived from it.
 
 | Mode        | security    | ask       | Behavior                                                                                                                        |
 | ----------- | ----------- | --------- | ------------------------------------------------------------------------------------------------------------------------------- |
@@ -156,13 +168,15 @@ Set `tools.exec.reviewer.thinking` to `minimal`, `low`, `medium`, `high`, `xhigh
 
 Set `tools.exec.reviewer.fastMode` to `true` to request Fast processing on supported OpenAI Responses and ChatGPT/OAuth routes, or `false` for standard processing. For example, `reviewer: { model: "openai/gpt-5.6-terra", thinking: "low", fastMode: true }` requests both low reasoning effort and priority processing. Omit `fastMode` to preserve provider defaults. This setting is independent of the main agent's Fast mode and is also available per agent. Priority processing may cost more and remains subject to provider/model availability; other providers may ignore the setting.
 
+Reviewers marked as reasoning models automatically receive a bounded thinking allowance on top of the 1,024-token verdict budget, based on `thinking` (medium when omitted). The request stays within the model's advertised output limit. Non-reasoning reviewers keep the 1,024-token budget. No separate completion-budget setting is needed; an exhausted budget still falls back to human approval.
+
 Model preparation and completion each receive the configured `tools.exec.reviewer.timeoutMs` budget. A timeout returns to human approval immediately. Pending preparation and provider cleanup remain owned until they settle. Preparation that finishes after its timeout does not start a review.
 
-For embedded agent runs, the reviewer receives a bounded, redacted excerpt of the current conversation: user requests, assistant text, tool calls, and tool results, labeled by origin. It uses this context to judge whether a command serves the user's request. The excerpt is untrusted evidence, not instructions. Conversation context is unavailable for direct node `system.run` calls and widgets.
+For embedded agent runs, the reviewer receives a bounded excerpt of the current conversation without secret masking: user requests, assistant text, tool calls, and tool results, labeled by origin. It uses this context to judge whether a command serves the user's request. The excerpt is untrusted evidence, not instructions. Conversation context is unavailable for direct node `system.run` calls and widgets.
 
 On the gateway, commands must still pass the existing mutable-file binding checks before review. Those checks continue to reject heredocs, unresolved executables, and missing script operands. The whole ordinary external dispatch chain—each original wrapper executable and the final command-segment executable—is bound at review time and re-checked before launch: protected executables use resolved real-path identity only, while writable executables also use a content hash. A changed executable resolution, including a new executable earlier on `PATH`, denies the approved run. The committed host approval policy is also revalidated at the final process-spawn boundary, including after asynchronous startup work and before a PTY fallback. Policy revocation blocks a pending launch; it does not stop a process that already started. Identity-only binding does not make an otherwise eligible human approval single-use.
 
-Reviewer-approved unpinned execution requires the complete dispatch chain to be identity-bound: the authorization plan must be complete, use direct transports, and have a recorded executable operand for every wrapper and final executable. Eligible globs and chains preserve their argument expansion while each wrapper and executable is pinned to its bound absolute invocation path. Executable symlinks retain their invocation semantics, including Python virtual environments, while their canonical target and mutable contents remain bound and revalidated. Commands rebuilt from an authorization plan use the prepared runtime environment without loading shell startup snapshots, so aliases, functions, and startup PATH changes cannot replace the approved dispatch. Ordinary full-mode commands retain shell startup customization. Node-host auto-review accepts a prepared pinned direct command, including the node's own canonical POSIX shell transport around one direct absolute executable with static arguments. Bare executable names, unquoted globs, and user-supplied wrappers still require human approval when the gateway cannot inspect the node's in-memory binding. Node executable-identity revalidation covers local policy evaluation through dispatch. Node-host launches also revalidate the committed approval policy after asynchronous preparation. It does not preserve every inner shell executable's identity across a remote human approval wait. See [Interpreter/runtime commands](/tools/exec-approvals-advanced#interpreter%2Fruntime-commands) for that boundary.
+Reviewer-approved unpinned execution requires the complete dispatch chain to be identity-bound: the authorization plan must be complete, use direct transports, and have a recorded executable operand for every wrapper and final executable. Eligible globs and chains preserve their argument expansion while each wrapper and executable is pinned to its bound absolute invocation path. Executable symlinks retain their invocation semantics, including Python virtual environments, while their resolved target and mutable contents remain bound and revalidated. Commands rebuilt from an authorization plan use the prepared runtime environment without loading shell startup snapshots, so aliases, functions, and startup PATH changes cannot replace the approved dispatch. Ordinary full-mode commands retain shell startup customization. Node-host auto-review accepts a prepared pinned direct command, including the node's own built-in POSIX shell transport around one direct absolute executable with static arguments. Bare executable names, unquoted globs, and user-supplied wrappers still require human approval when the gateway cannot inspect the node's in-memory binding. Node executable-identity revalidation covers local policy evaluation through dispatch. Node-host launches also revalidate the committed approval policy after asynchronous preparation. It does not preserve every inner shell executable's identity across a remote human approval wait. See [Interpreter/runtime commands](/tools/exec-approvals-advanced#interpreter%2Fruntime-commands) for that boundary.
 
 Shell `-c` wrappers, `env` with assignments, `xcrun`, BusyBox/Toybox applets, shell `builtin`/`command`/`exec` dispatch, and any other incomplete dispatch chain skip the reviewer with `Exec auto-review skipped: dispatch chain cannot be bound`. In auto mode, these forms take the one-shot human approval path when existing binding checks succeed. Existing binding rejections still apply. Plain commands and transparent `env` without assignments remain eligible when their complete chains are bound. There are no persisted data model changes: binding stays in memory for the approval lifetime.
 
@@ -199,7 +213,7 @@ that was already prepared. A fresh `openclaw` invocation follows the updated lin
   - To prevent user shell configuration (like `~/.zshenv` or `/etc/zshenv`) from overriding priority paths during startup, `tools.exec.pathPrepend` entries are securely prepended to the final `PATH` inside the shell command right before execution.
 - `host=sandbox`: runs `sh -lc` (login shell) inside the container, so `/etc/profile` may reset `PATH`. OpenClaw prepends `env.PATH` after profile sourcing via an internal env var (no shell interpolation). `tools.exec.pathPrepend` applies here too.
 - Native Codex on an owned local stdio process receives a nonempty configured prefix and Gateway CLI shim ahead of an explicitly configured native shell `PATH`, or the Gateway process `PATH` when no native value is set. Request-level native PATH overrides take precedence over native config files; an explicit empty PATH keeps only the prefix. Per-agent `tools.exec.pathPrepend` overrides the global list, including an empty list. OpenClaw applies this environment to new and resumed native threads without changing native login-shell policy. Codex reapplies the environment after loading a shell snapshot, but shell startup files can still replace `PATH` when snapshots are unavailable or bypassed, or when the command shell starts. Codex's existing `allow_login_shell = false` setting opts out of login-profile startup; it does not suppress every shell startup file. Host PATH entries are not forwarded to sandbox, remote-workspace, or socket-backed Codex execution.
-- `host=node`: only non-blocked env overrides you pass are sent to the node. `env.PATH` overrides are rejected for host execution and ignored by node hosts. If you need additional PATH entries on a node, configure the node host service environment (systemd/launchd) or install tools in standard locations.
+- `host=node`: only non-blocked env overrides you pass are sent to the node. `env.PATH` overrides are rejected for host execution and ignored by node hosts. If you need additional PATH entries on a node, configure the node host service environment (systemd/launchd) or install tools in standard locations. For Linux login-shell commands, the node re-applies its service PATH after profile startup, ahead of profile-provided entries.
 
 Per-agent node binding (use the keyed agent ID in config):
 
@@ -237,7 +251,7 @@ Example:
 
 A standalone `/exec security=deny` acknowledges the run-only setting but starts no agent run and does not affect the next message. Use [session permission modes](/gateway/permission-modes) to keep a policy across messages.
 
-The `execSecurity` and `execAsk` fields in `sessions.patch` and `sessions.patchMany` were retired in 2026.8.1. They remain in the protocol v4 wire schema, but requests containing either field (including `null`) are rejected with `INVALID_REQUEST` and replacement guidance. Set `permissionMode` (`read-only`, `guarded`, `workspace`, or `full`) for session-wide policy, or use `/exec` with a message for a single run.
+The `execSecurity` and `execAsk` fields in `sessions.patch` and `sessions.patchMany` were retired in 2026.8.1. They remain in the wire schema, but requests containing either field (including `null`) are rejected with `INVALID_REQUEST` and replacement guidance. Set `permissionMode` (`read-only`, `guarded`, `workspace`, or `full`) for session-wide policy, or use `/exec` with a message for a single run.
 
 When a session has a permission mode, per-turn `/exec` overrides can only tighten its security and approval policy. For example, `/exec security=deny` blocks exec for that turn even in a full-access session. An override requesting looser security or fewer approvals leaves the session mode's limits unchanged. Full-access sessions bypass host approval-file floors only while effective security remains `full`. Tightening `ask` alone still applies the requested approval level without restoring those floors.
 
@@ -287,7 +301,7 @@ Ordinary work that yields a handle, then poll:
 {"tool":"process","action":"poll","sessionId":"<id>","timeout":30000}
 ```
 
-Use `process poll` for on-demand status and bounded waits when no automatic completion wake is available. Avoid rapid status loops; pass a timeout while waiting for a result the current task needs. If automatic completion wake is enabled, the command can wake the session when it emits output or fails.
+Use `process poll` for on-demand status and bounded waits when no automatic completion wake is available. Avoid rapid status loops; pass a timeout while waiting for a result the current task needs. If automatic completion wake is enabled, the command can wake the session after it exits. New output while it is still running does not wake the session.
 
 Send keys (tmux-style):
 
@@ -342,7 +356,7 @@ Notes:
 - `deny: ["write"]` does not deny `apply_patch`. Deny `apply_patch` explicitly or use `deny: ["group:fs"]` when patch writes should also be blocked.
 - Config lives under `tools.exec.applyPatch`.
 - `tools.exec.applyPatch.enabled` defaults to `true`. Set it to `false` to disable the tool.
-- `tools.exec.applyPatch.workspaceOnly` defaults to `true` (workspace-contained). Set it to `false` only if you intentionally want `apply_patch` to write/delete outside the workspace directory.
+- `tools.exec.applyPatch.workspaceOnly` defaults to `false` in the personal preset and `true` in corporate. An explicit `true` keeps workspace containment independently of exec mode; required roots still apply. See [security presets](/gateway/security/presets).
 - `tools.exec.applyPatch.allowModels` is an optional allowlist of model ids (raw, like `gpt-5.4`, or full, like `openai/gpt-5.4`). When set, only matching models get the tool. When unset, all models get it.
 
 ## Related

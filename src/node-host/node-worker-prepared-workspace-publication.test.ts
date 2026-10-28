@@ -7,7 +7,7 @@ it("publishes every prepared-workspace transition before the awaited owner retur
   await withOpenClawTestState({ layout: "state-only" }, async (state) => {
     const store = new NodeWorkerPreparedWorkspaceStore({ env: state.env });
     const states: string[] = [];
-    const unsubscribe = nodePreparedWorkspacePublication.subscribe((change) => {
+    const unsubscribe = nodePreparedWorkspacePublication.subscribeFacts((change) => {
       if (change.kind === "committed") {
         for (const fact of change.receipt.facts.values()) {
           if (fact.kind === "postimage") {
@@ -29,6 +29,7 @@ it("publishes every prepared-workspace transition before the awaited owner retur
         preparedManifestRef: `sha256:${"d".repeat(64)}`,
       });
       expect(states).toEqual(["available"]);
+      expect(await store.find(row.environment_id)).toEqual(row);
       const bound = await store.bind({
         action: "bind",
         preparationKey: row.preparation_key,

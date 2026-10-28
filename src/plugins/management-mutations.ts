@@ -11,10 +11,9 @@ import {
 } from "../config/config.js";
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 import { composeConfigWriteAssertions } from "../config/write-authority.js";
-import { isDefaultClawHubBaseUrl } from "../infra/clawhub-client.js";
+import { isDefaultClawHubBaseUrl, resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
 import { reportClawHubPluginInstallTelemetry } from "../infra/clawhub-packages.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { markClawPackageIndependentlyOwned } from "../state/claw-package-adoption.js";
 import { withClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
 import { shortenHomePath } from "../utils.js";
 import {
@@ -28,6 +27,7 @@ import { resolvePluginControlPlaneWorkspace } from "./control-plane-workspace.js
 import { getProcessGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { enableExplicitlySelectedPluginInConfig } from "./enable.js";
 import {
+  assertRecordsOnlyUpdateConfigFresh,
   selectInstallMutationWriteOptions,
   type ConfigSnapshotForInstallPersist,
 } from "./install-config-mutation.js";
@@ -39,7 +39,7 @@ import {
 import { resolveManagedPluginInstallRequest } from "./install-source-plan.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "./install-types.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "./installed-plugin-index-records.js";
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import {
   capturePluginRuntimeApplications,
@@ -60,7 +60,7 @@ import {
   listManagedPlugins,
 } from "./management-service.js";
 import { isBundledManifestOwner } from "./manifest-owner-policy.js";
-import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
 import { setPluginEnabledInConfig } from "./toggle-config.js";
@@ -70,22 +70,28 @@ type ManagedPluginMutationOptions = {
   signal?: AbortSignal;
   applyRuntime?: PluginLifecycleRuntimeApply;
   beforePersistentApply?: () => void;
+  beforePersistentEffect?: () => void | Promise<void>;
 };
 
 function withManagedPluginMutation<T>(
   params: ManagedPluginMutationOptions,
-  run: (beforePersistentApply: () => void) => Promise<T>,
+  run: (beforePersistentApply: () => void, prepareEffect: () => Promise<void>) => Promise<T>,
 ): Promise<T> {
-  return withPluginLifecycleLease(
+  return withPluginLifecycleLeaseAsync(
     { env: params.env ?? process.env, signal: params.signal },
-    (lease) => {
+    async (lease) => {
       const beforePersistentApply = composeConfigWriteAssertions(
         () => params.signal?.throwIfAborted(),
-        lease.assertOwned,
+        lease.assertCurrent,
         params.beforePersistentApply,
       );
       beforePersistentApply();
-      return run(beforePersistentApply);
+      const prepareEffect = async () => {
+        await params.beforePersistentEffect?.();
+        await lease.assertOwned();
+        beforePersistentApply();
+      };
+      return run(beforePersistentApply, prepareEffect);
     },
   );
 }
@@ -127,30 +133,36 @@ export async function installManagedPlugin(
   } catch (error) {
     throw new ManagedPluginLifecycleError(formatErrorMessage(error), { cause: error });
   }
-  const { installManagedPluginSource } = await import("./management-install.js");
   const env = params.env ?? process.env;
-  return await withManagedPluginMutation(params, async (beforePersistentApply) => {
+  const clawhubUrl = resolveClawHubBaseUrl(undefined, env);
+  const { installManagedPluginSource } = await import("./management-install.js");
+  return await withManagedPluginMutation(params, async (beforePersistentApply, prepareEffect) => {
     const performInstall = async () => {
-      const configuredClawHubUrl = env.OPENCLAW_CLAWHUB_URL ?? env.CLAWHUB_URL;
       const useHostedCatalog =
         params.request.source === "official" ||
-        (params.request.source === "clawhub" &&
-          (!configuredClawHubUrl || isDefaultClawHubBaseUrl(configuredClawHubUrl)));
+        (params.request.source === "clawhub" && isDefaultClawHubBaseUrl(clawhubUrl));
       const officialCatalog = useHostedCatalog ? await loadOfficialCatalog() : { entries: [] };
       const warnings: string[] = [];
-      const request = resolveManagedPluginInstallRequest(params.request, officialCatalog.entries);
+      const request = resolveManagedPluginInstallRequest(
+        params.request,
+        officialCatalog.entries,
+        clawhubUrl,
+      );
+      // Official installs retain catalog-owned recovery after resolving their package source.
       const planned = resolvePluginInstallRequestContext({
         source: request.source,
         rawSpec:
-          request.source === "local"
-            ? request.path
-            : request.source === "npm-pack"
-              ? `npm-pack:${request.archivePath}`
-              : request.source === "bundled"
-                ? request.bundledSource.localPath
-                : request.source === "marketplace"
-                  ? request.plugin
-                  : request.spec,
+          request.source === "official"
+            ? (request.expectedPluginId ?? request.spec)
+            : request.source === "local"
+              ? request.path
+              : request.source === "npm-pack"
+                ? `npm-pack:${request.archivePath}`
+                : request.source === "bundled"
+                  ? request.bundledSource.localPath
+                  : request.source === "marketplace"
+                    ? request.plugin
+                    : request.spec,
         ...(request.source === "marketplace" ? { marketplace: request.marketplace } : {}),
         installKind: "plugin",
       });
@@ -198,7 +210,10 @@ export async function installManagedPlugin(
           },
         },
         onCapabilityConsent: params.onCapabilityConsent,
-        beforePersistentEffect: params.beforePersistentEffect,
+        requireCapabilityConsent: params.clawManaged === true,
+        requireClawHubTrust: params.clawManaged === true,
+        onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+        beforePersistentEffect: prepareEffect,
         ...(params.request.acknowledgeCapabilities
           ? { acknowledgeCapabilities: params.request.acknowledgeCapabilities }
           : {}),
@@ -220,14 +235,6 @@ export async function installManagedPlugin(
       try {
         warnings.push(...(installed.warnings ?? []));
         if (params.request.source === "clawhub" && installed.clawhub) {
-          if (!params.clawManaged && installed.clawhub.version) {
-            markClawPackageIndependentlyOwned({
-              kind: "plugin",
-              source: "clawhub",
-              ref: installed.clawhub.clawhubPackage,
-              version: installed.clawhub.version,
-            });
-          }
           await reportClawHubPluginInstallTelemetry({
             baseUrl: installed.clawhub.clawhubUrl,
             packageName: installed.clawhub.clawhubPackage,
@@ -312,7 +319,7 @@ export async function mutateManagedPluginEnabled(
   const env = params.env ?? process.env;
   const cli = params.caller === "cli";
   const preserveAllowlist = cli || params.allowlistPolicy === "preserve";
-  return await withManagedPluginMutation(params, async (beforePersistentApply) => {
+  return await withManagedPluginMutation(params, async (beforePersistentApply, prepareEffect) => {
     if (cli) {
       assertConfigWriteAllowedInCurrentMode({ env });
     }
@@ -348,6 +355,7 @@ export async function mutateManagedPluginEnabled(
           acknowledge: params.acknowledgeCapabilities,
           onCapabilityConsent: params.onCapabilityConsent,
           beforePersistentApply: params.beforePersistentApply,
+          beforePersistentEffect: prepareEffect,
           metadata,
         });
       }
@@ -384,27 +392,43 @@ export async function mutateManagedPluginEnabled(
     }
     const changedPaths = new Set<string>();
     collectChangedPaths(snapshot.config, next, "", changedPaths);
-    const write = await replaceConfigFile({
-      sourceConfig: next,
-      baseHash: snapshot.baseHash,
-      // CLI alias writes preserve merged canonical settings during source projection.
-      writeOptions: {
-        ...snapshot.writeOptions,
-        assertConfigPathForWrite: () => {
-          snapshot.writeOptions.assertConfigPathForWrite?.();
-          beforePersistentApply();
-        },
-        ...(cli || params.applyRuntime
-          ? { explicitSetPaths: [["plugins", "entries", policyPluginId]] }
-          : {}),
-        ...(params.applyRuntime
-          ? { afterWrite: { mode: "none" as const, reason: "plugin lifecycle applies runtime" } }
-          : {}),
-      },
-    });
+    const write =
+      changedPaths.size > 0
+        ? await replaceConfigFile({
+            sourceConfig: next,
+            baseHash: snapshot.baseHash,
+            // CLI alias writes preserve merged canonical settings during source projection.
+            writeOptions: {
+              ...snapshot.writeOptions,
+              beforeCommit: prepareEffect,
+              assertConfigPathForWrite: () => {
+                snapshot.writeOptions.assertConfigPathForWrite?.();
+                beforePersistentApply();
+              },
+              ...(cli || params.applyRuntime
+                ? { explicitSetPaths: [["plugins", "entries", policyPluginId]] }
+                : {}),
+              ...(params.applyRuntime
+                ? {
+                    afterWrite: {
+                      mode: "none" as const,
+                      reason: "plugin lifecycle applies runtime",
+                    },
+                  }
+                : {}),
+            },
+          })
+        : undefined;
+    if (!write) {
+      await assertRecordsOnlyUpdateConfigFresh(snapshot);
+      beforePersistentApply();
+    }
     const registryWarnings: string[] = [];
     await refreshPluginRegistryAfterConfigMutation({
-      configPath: write.path,
+      configPath:
+        write?.path ??
+        snapshot.writeOptions.ownedConfigPathForWrite ??
+        snapshot.writeOptions.expectedConfigPath,
       env,
       reason: "policy-changed",
       invalidateRuntimeCache: false,
@@ -431,7 +455,7 @@ export async function setManagedPluginEnabled(params: ManagedPluginEnableRequest
   application?: PluginRuntimeApplication;
 }> {
   const env = params.env ?? process.env;
-  return await withManagedPluginMutation(params, async (beforePersistentApply) => {
+  return await withManagedPluginMutation(params, async (beforePersistentApply, prepareEffect) => {
     const result = await mutateManagedPluginEnabled({ ...params, caller: "management" });
     if (result.status !== "committed") {
       throw new ManagedPluginLifecycleError(
@@ -445,6 +469,7 @@ export async function setManagedPluginEnabled(params: ManagedPluginEnableRequest
       env,
       assertCurrent: beforePersistentApply,
     });
+    await prepareEffect();
     const application = await params.applyRuntime?.({
       config: result.config,
       write: result.write,
@@ -476,18 +501,18 @@ export async function reloadManagedPlugin(
     },
 ) {
   const env = params.env ?? process.env;
-  return await withManagedPluginMutation(params, async (beforePersistentApply) => {
+  return await withManagedPluginMutation(params, async (beforePersistentApply, prepareEffect) => {
     const config = await readPluginRuntimeConfig();
     const metadata = await loadFreshManagedPluginMetadata(config, env);
     const targets = params.plugins;
     const hasInstallPreconditions = targets.some((target) => target.installHash !== undefined);
-    const resolveTargets = () => {
-      beforePersistentApply();
+    const resolveTargets = async () => {
       // Consent can rewrite accepted-surface facts under this lease. Its writer
       // invalidates the ledger cache; captured metadata cannot validate a later hash.
       const records = hasInstallPreconditions
-        ? readPersistedInstalledPluginIndexInstallRecords({ env })
+        ? await readPersistedInstalledPluginIndexInstallRecordsAsync({ env })
         : undefined;
+      beforePersistentApply();
       const resolver = createInstalledPluginOwnershipResolver(metadata.index, env);
       return targets.map((target) => {
         const pluginId = metadata.normalizePluginId(target.pluginId.trim());
@@ -498,7 +523,6 @@ export async function reloadManagedPlugin(
           );
         }
         const ownedPluginIds = ownership.value.pluginIds;
-        let install: { id: string; hash: string } | undefined;
         if (target.installHash !== undefined) {
           const owner = ownership.value.installOwner;
           if (
@@ -510,7 +534,6 @@ export async function reloadManagedPlugin(
               `Plugin ${pluginId} changed after the installation batch. Inspect it before reloading.`,
             );
           }
-          install = { id: owner, hash: target.installHash };
         }
         const sourceDigests = target.sourceDigests ?? {};
         if (Object.keys(sourceDigests).some((id) => !ownedPluginIds.includes(id))) {
@@ -522,11 +545,12 @@ export async function reloadManagedPlugin(
           pluginId,
           pluginIds: ownedPluginIds,
           sourceDigests,
-          install,
         };
       });
     };
-    for (const pluginId of new Set(resolveTargets().flatMap((target) => target.pluginIds))) {
+    for (const pluginId of new Set(
+      (await resolveTargets()).flatMap((target) => target.pluginIds),
+    )) {
       await resolvePluginCapabilityConsent({
         config,
         env,
@@ -534,9 +558,10 @@ export async function reloadManagedPlugin(
         metadata,
         acknowledge: params.acknowledgeCapabilities,
         beforePersistentApply: params.beforePersistentApply,
+        beforePersistentEffect: prepareEffect,
       });
     }
-    const resolved = resolveTargets();
+    const resolved = await resolveTargets();
     const pluginIds = [...new Set(resolved.flatMap((target) => target.pluginIds))].toSorted();
     const expected = new Map<string, string>();
     for (const target of resolved) {
@@ -547,6 +572,7 @@ export async function reloadManagedPlugin(
         expected.set(id, digest);
       }
     }
+    await prepareEffect();
     return {
       pluginIds: resolved.map((target) => target.pluginId),
       application: await params.applyRuntime({
@@ -555,13 +581,6 @@ export async function reloadManagedPlugin(
         reason: "reload",
         ...(params.waitForDrain ? { waitForDrain: true, drainSignal: params.signal } : {}),
         ...(expected.size ? { expectedSourceDigests: Object.fromEntries(expected) } : {}),
-        ...(resolved.every((target) => target.install !== undefined)
-          ? {
-              expectedInstallHashes: Object.fromEntries(
-                resolved.flatMap(({ install }) => (install ? [[install.id, install.hash]] : [])),
-              ),
-            }
-          : {}),
         assertInvokerOwned: beforePersistentApply,
       }),
     };
@@ -575,10 +594,11 @@ export async function refreshManagedPlugins(
   },
 ): Promise<{ application: PluginRuntimeApplication }> {
   const env = params.env ?? process.env;
-  return await withManagedPluginMutation(params, async (beforePersistentApply) => {
+  return await withManagedPluginMutation(params, async (beforePersistentApply, prepareEffect) => {
     const config = await readPluginRuntimeConfig();
     beforePersistentApply();
     await refreshManagedPluginMetadata({ config, env, assertCurrent: beforePersistentApply });
+    await prepareEffect();
     return {
       application: await params.applyRuntime({
         config,

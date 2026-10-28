@@ -4,6 +4,8 @@ export type MemorySessionTarget = {
   agentId: string;
   sessionId: string;
   sessionKey?: string;
+  /** Recorded owner of a plugin-managed transcript. */
+  pluginOwnerId?: string;
   resolution: "live" | "archived" | "unresolved";
   hookExternalContentSource: string | null;
   channel: string | null;

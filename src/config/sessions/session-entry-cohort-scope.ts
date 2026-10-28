@@ -4,6 +4,7 @@ import { resolveStateDir } from "../state-dir.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import type { SessionAccessScope } from "./session-accessor.types.js";
 import type { SessionEntryCohortReader } from "./session-entry-read-runtime.types.js";
+import { sameSessionTranscriptStorePath } from "./transcript-store-identity.js";
 
 export function matchSessionEntryCohortScope(
   reader: SessionEntryCohortReader,
@@ -11,10 +12,14 @@ export function matchSessionEntryCohortScope(
 ) {
   reader.assertCurrent();
   const key = resolveSqliteSessionKey(input.sessionKey, reader.logicalAgentId);
+  const storePath = input.storePath ? path.resolve(input.storePath) : undefined;
   if (
     key !== reader.sessionKey ||
     (input.agentId && normalizeAgentId(input.agentId) !== reader.logicalAgentId) ||
-    (input.storePath && !reader.storePaths.includes(path.resolve(input.storePath))) ||
+    (storePath &&
+      !reader.storePaths.some((candidate) =>
+        sameSessionTranscriptStorePath(candidate, storePath),
+      )) ||
     (input.env && resolveStateDir(input.env) !== resolveStateDir(reader.database.env))
   ) {
     return undefined;

@@ -18,7 +18,7 @@ export async function readWarmChatStartup(
     payload?: {
       metadata?: {
         commands?: Array<{ name?: string; textAliases?: string[] }>;
-        models?: Array<{ id?: string; provider?: string }>;
+        revision?: string;
       };
       messages?: unknown[];
       sessionInfo?: { key?: string; sessionId?: string };

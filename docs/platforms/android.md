@@ -19,7 +19,7 @@ The official Android app is available on [Google Play](https://play.google.com/s
 - Install: [Google Play](https://play.google.com/store/apps/details?id=ai.openclaw.app&hl=en_IN) or `OpenClaw-Android.apk` from a [GitHub Release](https://github.com/openclaw/openclaw/releases) that lists both required assets (see [Install outside Google Play](/platforms/android#install-outside-google-play)), [Getting Started](/start/getting-started) for the Gateway, then [Pairing](/channels/pairing).
 - Gateway: [Runbook](/gateway) + [Configuration](/gateway/configuration).
   - Protocols: [Gateway protocol](/gateway/protocol) (nodes + control plane).
-- Select an agent in the sidebar to view its credential status in **Settings → Providers & Models**. The page updates when the Gateway publishes model, credential, or config changes. Use **Refresh** to recheck model availability.
+- Select an agent in the sidebar to view its credential status in **Settings → Providers & Models**. The page updates when the Gateway publishes model, credential, or config changes. Use **Refresh** to recheck model availability. Available model choices remain visible during background refreshes. A successful recovery clears the refresh warning automatically.
 - The sidebar marks sessions waiting for an answer or approval, including inactive sessions and collapsed groups. Tap the attention icon, hover over it, or focus it with a keyboard to read the oldest pending request and the count of additional requests of the same kind. The indicator clears when requests resolve, are canceled, or expire. Question previews never include answer drafts.
 - The sidebar and recent Threads view keep cron sessions and system-created checks out of ordinary chat lists, without changing saved pins. The selected conversation stays reachable; named work and human-created background conversations remain visible. Open **Threads → Automations** to find and reopen automation and system conversations, including previously pinned chats. This is a view filter, not a saved setting. **Sidebar → Pages pencil → Automations** shows scheduled jobs and their recent run summaries. Other sessions without creation metadata remain visible rather than being classified from their titles.
 - Long-press an eligible thread and choose **Snooze**: **In 1 hour**, **In 3 hours**, **This evening** (18:00 local, when more than one hour away), **Tomorrow** (09:00 local), or **Next week** (next Monday at 09:00 local, omitted on Sundays). Snoozed sessions hide from Recent, Current, and sidebar recents. The **Snoozed** pill shows their wake times; **Wake session** brings one back early. Time expiry, a real inbound message, or a completed run wakes the session; pinning or archiving clears snooze too. Snooze syncs through the Gateway and never stops runs, messages, or automations. Archived, child, and protected sessions cannot be snoozed.
@@ -47,6 +47,12 @@ personalized orders and pinned work pages are preserved; **Pages pencil → Edit
 Reset pinned items** restores these defaults. The **Settings** gear beside the
 Gateway selector opens all settings, including while offline. Settings stays in
 the footer rather than the Pages menu or pin editor.
+
+Expanded session catalogs refresh every two minutes while the sidebar is visible
+and the app is in the foreground. Active catalogs refresh immediately when you
+return to the sidebar or reconnect. Polling pauses when all catalogs are collapsed
+after initial discovery; expanding the first catalog resumes it immediately.
+Failed requests and source errors retry every 30 seconds while polling is active.
 
 Use the **pencil beside Pages** to open Agents, Automations, Usage, Skills,
 Skill Workshop, Dreaming, Terminal, or Desktop (when available). Pin the pages
@@ -453,6 +459,10 @@ Permissions. The Permissions row shows the current access mode. Open the top-rig
 open context usage, latest-run tokens, and the cost breakdown. Viewing usage does not require
 permission to change session settings. A reported model-call total remains visible
 when no cost breakdown is available. Missing usage is shown as unknown.
+
+Choose **Chat actions** (⋮) → **Dashboard** to open the current session's
+[dashboard](/web/dashboards) in an embedded Control UI WebView. It requires a
+connected Gateway and uses the same operator identity as the app.
 Tap the model name to open a compact menu above the composer, search by model name,
 ID, or provider, and expand provider groups. Search accepts multiple terms and small
 typos in words of at least four letters, including swapped adjacent letters. Every
@@ -476,7 +486,7 @@ the trailing edge to abort that run.
 
 Open **Home** from the sidebar's **Pages** menu to chat, or select an existing session from the sidebar:
 
-- History: `chat.history` (display-normalized — inline directive tags, plain-text tool-call XML payloads (`<tool_call>`, `<function_call>`, `<tool_calls>`, `<function_calls>`, and truncated variants), and leaked ASCII/full-width model control tokens are stripped; silent-token assistant rows such as exact `NO_REPLY` / `no_reply` are omitted; oversized rows can be replaced with placeholders)
+- History: `chat.history` is display-normalized by the Gateway. Inline directive tags, plain-text tool-call XML payloads (`<tool_call>`, `<function_call>`, `<tool_calls>`, `<function_calls>`, and truncated variants), and leaked ASCII/full-width model control tokens are stripped. Stored assistant visibility honors display, phase, and final-source facts first, then omits raw assistant text that trims to uppercase `NO_REPLY`; lowercase and wrapped forms remain visible. User text is never classified as silence. Oversized rows can be replaced with placeholders.
 - Long replies: tap **View all** on a capped assistant reply to load the full formatted text inline. Attachments stay in the conversation, and message actions use the expanded text. Tap **Show less** or press Back to restore the preview; reopening reuses the loaded reply. Loading, retryable failures, unavailable messages, and required reconnects or Gateway updates appear in the message rather than an alert. Synthetic message-tool and commentary previews retain their existing display and actions but do not offer **View all**, because their copied transcript ID cannot retrieve that synthesized text. This also recognizes the older capped-preview format from released Gateways such as v2026.7.1-2. Android requests up to 1,000,000 characters per text field, matching the Gateway's default retrieval limit; oversized or still-capped results show **The full message is too large to display.** instead of an incomplete reply.
 - Large code blocks scroll within a bounded viewport, with **Start of code**, **End of code**, and **Copy code** controls. Start and End also reveal that end of the block in the conversation. Selection stays within the displayed text segment; **Copy code** copies the entire block. The separate message **Select text** action opens a plain-text selection reader; long answers use bounded pages, and selection applies to the displayed page.
 - Reading: scrolling up or using **View all**, **Start of code**, or **End of code** pauses automatic following. Incoming content and window-size changes preserve your reading position, moving text or images into view when space shrinks. Resizing an idle conversation so that all content fits resumes following. **Jump to latest** in the chat header resumes following; it appears only while newer content is below the visible history and never covers messages.
@@ -489,7 +499,7 @@ Open **Home** from the sidebar's **Pages** menu to chat, or select an existing s
 - **Refresh chat** in chat actions reloads history and rechecks Gateway health without clearing pending messages. Chat readiness is separate from the Gateway connection: an empty connected thread shows **Chat not ready** while health is unconfirmed or a check has failed. Use **Refresh chat** to check again; **Gateway offline** indicates a disconnected Gateway. History failures do not stop subsequent health checks. Once Android observes a recovered run finish, a delayed history response does not bring back that run's Stop button or partial reply.
 - Send: `chat.send`. Outside an active Talk session, you can send text or staged attachments while the agent is working. A new draft brings back **Send**; clearing it restores **Stop**. The Gateway applies the existing [queue mode](/concepts/queue), so steering does not require stopping the current run. Sending remains disabled while another submission, attachment staging, or microphone capture owns the draft.
 - Queued message controls: **Delete** removes the local queued copy, including when a reconnect refresh is still finishing. It does not undo a message already accepted by the Gateway; use **Stop** to cancel an active turn.
-- Durable sending: every send (text, picked images, and voice notes) is journaled to a per-gateway on-device outbox before any network attempt, so app termination cannot lose submitted input. Sends queued while offline deliver in order on reconnect with stable idempotency keys, and a send is retired only after the turn is visible in canonical `chat.history` — an acknowledgement alone is not treated as proof of delivery. Acknowledged reconnect sends show the same streaming progress as online sends; requests that never reach the socket queue remain queued for the next connection. Ambiguous outcomes (lost acknowledgement, app killed mid-send, Gateway restart before the transcript write) surface as visible rows with explicit **Retry**/**Delete** instead of auto-resending. If refreshed history changes branches, earlier queued input keeps its text and attachments but requires explicit retry; input admitted after that history is displayed can send normally when reconnecting to the same branch. Slash commands never auto-replay across a reconnect; they park for explicit retry. The queue is bounded (50 messages and 48 MB of attachment bytes per Gateway) and unsent rows expire after 48 hours. Composer drafts that were never submitted are not process-durable.
+- Durable sending: every send (text, picked images, and voice notes) is journaled to a per-gateway on-device outbox before any network attempt, so app termination cannot lose submitted input. Sends queued while offline deliver in order on reconnect with stable request keys that prevent duplicate sends, and a send is retired only after the turn is visible in saved `chat.history` — an acknowledgement alone is not treated as proof of delivery. Acknowledged reconnect sends show the same streaming progress as online sends; requests that never reach the socket queue remain queued for the next connection. Ambiguous outcomes (lost acknowledgement, app killed mid-send, Gateway restart before the transcript write) surface as visible rows with explicit **Retry**/**Delete** instead of auto-resending. If refreshed history changes branches, earlier queued input keeps its text and attachments but requires explicit retry; input admitted after that history is displayed can send normally when reconnecting to the same branch. Slash commands never auto-replay across a reconnect; they park for explicit retry. The queue is bounded (50 messages and 48 MB of attachment bytes per Gateway) and unsent rows expire after 48 hours. Composer drafts that were never submitted are not process-durable.
 - Completed answers show up to eight compact source cards for cited pages found in that run’s successful web searches and fetches. Tap a card to read its recorded search snippet or page excerpt and open the source. The cards do not fetch page content; favicons come through the Gateway and honor `gateway.controlUi.automaticallyFetchFavicons`, with a globe when disabled or unavailable.
 - Image input works through the picker and Android Sharesheet. Sent photos sit above your text bubble; adjacent photos wrap into compact rows. Assistant photos stay beside their associated text in message order. Tap a photo for the full-screen preview. Messages display at most four image previews at once; **Next images** and **Previous images** reach the rest without keeping every decoded image in memory. Assistant-generated images resolve through the paired Gateway connection and retain only their small artifact references in the offline transcript cache. Downloads are capped at 12 MiB and decoded to bounded display bitmaps.
 - Push updates (best-effort): `chat.subscribe` -> `event:"chat"`
@@ -559,12 +569,16 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
   Dictation, voice-note recording, and Talk are mutually exclusive microphone paths.
 - Your selected agent stays bound to Talk and the main chat when the same Gateway
   reconnects, including while its agent list refreshes. Removing that agent falls
-  back to the Gateway default. Switching Gateways or restarting the app clears
-  this in-memory choice.
+  back to the Gateway default if your role allows it, or the first available agent.
+  Switching Gateways or restarting the app clears this in-memory choice and waits
+  for the allowed agent list before starting Chat. An empty list shows **No agents
+  available for this role**. If discovery fails, retry the Gateway connection to
+  initialize Chat.
 - Talk Mode promotes the existing foreground service from `connectedDevice` to `connectedDevice|microphone` before capture starts, then demotes it when Talk Mode stops. The node service declares `FOREGROUND_SERVICE_CONNECTED_DEVICE` with `CHANGE_NETWORK_STATE`; Android 14+ also requires the `FOREGROUND_SERVICE_MICROPHONE` declaration, the `RECORD_AUDIO` runtime grant, and the microphone service type at runtime.
 - By default, Android Talk uses native speech recognition, Gateway chat, and `talk.speak` through the configured Gateway Talk provider. It inherits the session's thinking setting. Local system TTS is used only when `talk.speak` is unavailable.
 - Gateway config changes refresh Android's cached Talk settings on the next use, without reconnecting or interrupting an active capture.
 - Android Talk uses realtime Gateway relay only when `talk.realtime.mode` is `realtime` and `talk.realtime.transport` is `gateway-relay`.
+- Phone relay Talk preserves accepted agent work when Talk fails, the app leaves the foreground, or the voice mode changes. The answer still appears in chat; explicit Stop cancels it. This requires a Gateway advertising `talk-session-close-disposition`; older Gateways and Wear Talk retain the aborting close behavior.
 - Enable **Settings → Voice → Listen for wake words** for foreground on-device
   Voice Wake. Android advertises `voiceWake` only when enabled, on-device
   recognition and microphone permission are available, and wake words are
@@ -596,7 +610,7 @@ security warning and the exact decisions offered by that request, and submits
 the approval ID and owner kind back to the Gateway.
 
 Approval state is shared with the Control UI and supported chat surfaces. The
-first committed answer wins; Android displays that canonical result even when
+first committed answer wins; Android displays that saved result even when
 another surface answered first. If a resolve response is lost or the Gateway
 disconnects, the app keeps the action locked and reads the approval again
 before offering another decision.

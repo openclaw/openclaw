@@ -26,13 +26,15 @@ function buildClients(params: MattermostDirectoryParams): MattermostClient[] {
     if (!account.enabled || !account.botToken || !account.baseUrl) {
       continue;
     }
+    const allowPrivateNetwork = account.config.network?.dangerouslyAllowPrivateNetwork === true;
     const client = createMattermostClient({
       baseUrl: account.baseUrl,
       botToken: account.botToken,
-      allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
+      allowPrivateNetwork,
     });
-    if (!seen.has(client.token)) {
-      seen.add(client.token);
+    const key = JSON.stringify([client.baseUrl, client.token, allowPrivateNetwork]);
+    if (!seen.has(key)) {
+      seen.add(key);
       clients.push(client);
     }
   }

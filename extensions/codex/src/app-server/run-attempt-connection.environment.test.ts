@@ -18,6 +18,7 @@ import {
   createLeasedCodexLifecycleHarness,
   startOrResumeThread,
 } from "./thread-lifecycle.test-fixtures.js";
+import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 setupRunAttemptTestHooks();
 
@@ -156,6 +157,7 @@ describe("Codex local tool environment placement", () => {
           },
         },
       });
+      using _ = { [Symbol.dispose]: connection.releaseBindingAuthority };
       try {
         const expected = placement === "local" ? localToolEnv : undefined;
         expect(connection.shellEnvironment).toEqual(expected);
@@ -165,14 +167,18 @@ describe("Codex local tool environment placement", () => {
         expect(connection.shellGitConfigParameters).toBe(ownedLocal ? parameters : undefined);
         expect(connection.appServer.start.env?.PATH).toBe(expected?.PATH);
         const expectedParameters = ownedLocal ? `'user.name=Ambient' ${parameters}` : undefined;
-        expect(connection.appServer.start.env?.GIT_CONFIG_PARAMETERS).toBe(expectedParameters);
+        expect(
+          resolveCodexAppServerSpawnEnv(connection.appServer.start, {}).GIT_CONFIG_PARAMETERS,
+        ).toBe(expectedParameters);
         expect(connection.disableLoginShell).toBe(false);
         const refreshed = await connection.resolveRuntimeOptionsForCurrentBinding({
           modelProvider: "openai",
           model: params.modelId,
         });
         expect(refreshed.start.env?.PATH).toBe(expected?.PATH);
-        expect(refreshed.start.env?.GIT_CONFIG_PARAMETERS).toBe(expectedParameters);
+        expect(resolveCodexAppServerSpawnEnv(refreshed.start, {}).GIT_CONFIG_PARAMETERS).toBe(
+          expectedParameters,
+        );
         if (expected) {
           expect(codexAppServerStartOptionsKey(refreshed.start)).not.toBe(
             codexAppServerStartOptionsKey({

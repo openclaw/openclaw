@@ -1,6 +1,6 @@
 import {
   projectOffset,
-  type MarkdownIRWithBlockMetadata,
+  type MarkdownIRWithMetadata,
   type StructuralStyle,
   type TextEdit,
 } from "./text-styles-shared.js";
@@ -8,7 +8,7 @@ import type { MarkdownSource } from "./text-styles-source-spans.js";
 import { TextStyle, type Style } from "./zca-constants.js";
 
 export function collectStructuralStyles(
-  ir: MarkdownIRWithBlockMetadata,
+  ir: MarkdownIRWithMetadata,
   offsets: number[],
   projectedText: string,
 ): StructuralStyle[] {

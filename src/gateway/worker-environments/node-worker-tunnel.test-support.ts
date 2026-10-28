@@ -2,18 +2,19 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { vi } from "vitest";
 import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
-import { WORKER_PROTOCOL_FEATURES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+  WORKER_PROTOCOL_FEATURES,
+  WORKER_RPC_SET_VERSION,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { SpawnResult } from "../../process/exec.js";
+import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { NODE_WORKSPACE_DRAIN_COMMAND } from "../../worker/node-workspace-protocol.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
+import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 // Keep this static: the tunnel graph reaches compiled-subprocess declarations, whose one-time
 // invocation-wide preparation must happen at collection, not inside a test deadline.
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
+import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import type { NodeWorkspaceTransferSnapshot } from "./node-workspace-transfer-snapshot.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
@@ -27,12 +28,42 @@ export const BUILD = {
   openclawVersion: "2026.8.13",
   protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
 };
+const environmentIdentity = { environmentId: "environment-1", ownerEpoch: 2 };
+const identity = { ...environmentIdentity, sessionId: "session-1" };
+
+export function tunnelLaunchPlan(workspaceDir = "/node/workspace") {
+  return parseWorkerLaunchPlan({
+    version: 4,
+    admission: {
+      ...identity,
+      credential: "worker-credential-fixture",
+      rpcSetVersion: WORKER_RPC_SET_VERSION,
+      handshake: BUILD,
+    },
+    assignment: {
+      agentId: "main",
+      operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
+      agentRuntimeIdentityToken: "runtime-token",
+      runId: "run-1",
+      turnId: "turn-1",
+      prompt: "inspect",
+      suppressPromptTranscript: true,
+      workspaceDir,
+      modelRef: { provider: "openai", model: "gpt-5.6-luna" },
+      inferenceOptions: {},
+      initialMessages: [],
+      transcript: { baseLeafId: null, nextSeq: 1 },
+      liveEvents: { ackedSeq: 0, nextSeq: 1 },
+      toolAuthority: { allowedToolNames: [] },
+    },
+  });
+}
 
 export function environment(): WorkerEnvironmentRecord {
   return {
+    ...environmentIdentity,
     preparation: null,
     lastActivatedAtMs: null,
-    environmentId: "environment-1",
     providerId: "device",
     profileId: "device:node-1",
     profileSnapshot: { settings: { device: "node-1" } },
@@ -42,7 +73,6 @@ export function environment(): WorkerEnvironmentRecord {
     sharedHost: true,
     desktop: null,
     bootstrapReceipt: { ...BUILD, installKind: "bundle" },
-    ownerEpoch: 2,
     teardownTerminalState: null,
     attachedSessionIds: ["session-1"],
     lastError: null,
@@ -64,22 +94,13 @@ export function transport(): NodeWorkerSupervisorTransport {
     },
     hasCurrentRunner: () => true,
     listCurrentNodes: async () => [
-      {
-        nodeId: "node-1",
-        connId: "conn-1",
-        pairingIdentity: "pairing-1",
-        pairingGeneration: "generation-1",
-        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-        clientMode: GATEWAY_CLIENT_MODES.NODE,
-        protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+      createNodeWorkerBundleTestNode({
         workerHost: {
-          enabled: true,
-          capacity: { total: 2, available: 2 },
           environmentSession: 1,
           workspaceQuiescence: 1,
         },
         commands: ["system.run"],
-      },
+      }),
     ],
     isCurrent: () => true,
     invoke: withWorkspaceDrain(async ({ command }) =>
@@ -96,10 +117,7 @@ export function withWorkspaceDrain(
   return async (request) => {
     const input = request.params as { argv?: string[] } | undefined;
     return input?.argv?.[0] === NODE_WORKSPACE_DRAIN_COMMAND
-      ? {
-          ok: true,
-          payloadJSON: workspaceCommandPayload("/node/workspace", { stdout: "drained\n" }),
-        }
+      ? workspaceReply("/node/workspace", { stdout: "drained\n" })
       : await invoke(request);
   };
 }
@@ -107,10 +125,8 @@ export function withWorkspaceDrain(
 export function startRequest() {
   return {
     executionMode: "worker-turn" as const,
-    environmentId: "environment-1",
-    ownerEpoch: 2,
+    ...identity,
     deviceId: "node-1",
-    sessionId: "session-1",
     expectedBuild: BUILD,
   };
 }
@@ -127,6 +143,25 @@ export function createManager(
     launchNodeWorker: vi.fn(),
     validateWorkerTurn: () => true,
     workspaceTransfer: workspaceTransfer(),
+    ...overrides,
+  });
+}
+
+export function workspaceReply(workspaceDir: string, result: Partial<SpawnResult> = {}) {
+  return { ok: true, payloadJSON: workspaceCommandPayload(workspaceDir, result) };
+}
+
+type WorkspaceActionsOptions = Parameters<typeof createNodeWorkerWorkspaceActions>[0];
+export function workspaceActions(
+  overrides: Pick<WorkspaceActionsOptions, "workspaceTransfer" | "runWorkspaceCommand"> &
+    Partial<WorkspaceActionsOptions>,
+) {
+  return createNodeWorkerWorkspaceActions({
+    environmentId: "environment-1",
+    ownerEpoch: 1,
+    sessionId: "session-1",
+    ownerSignal: new AbortController().signal,
+    isOwnerCurrent: () => true,
     ...overrides,
   });
 }
@@ -188,16 +223,20 @@ export function unchangedWorkspaceUpload(
 }
 
 export function workspaceCommandPayload(workspaceDir: string, result: Partial<SpawnResult> = {}) {
-  return JSON.stringify({
+  return JSON.stringify(workspaceCommandResult(workspaceDir, result));
+}
+
+export function workspaceCommandResult(workspaceDir: string, result: Partial<SpawnResult> = {}) {
+  return {
     workspaceDir,
     stdout: "",
     stderr: "",
     code: 0,
     signal: null,
     killed: false,
-    termination: "exit",
+    termination: "exit" as const,
     ...result,
-  });
+  };
 }
 
 export function manifestCaptureOutput(manifestRef: string): string {
@@ -207,10 +246,8 @@ export function manifestCaptureOutput(manifestRef: string): string {
     memo: [],
     metrics: {
       contentHashCount: 0,
-      contentHashDurationMs: 0,
       memoHitCount: 0,
       memoTruncatedCount: 0,
-      totalDurationMs: 0,
     },
   });
 }
@@ -230,20 +267,12 @@ export function seedNodeWorkspaceRepositories(
     }).trim();
   git(["init", "--quiet", localPath]);
   git(["-C", localPath, "add", "."]);
-  git([
-    "-C",
-    localPath,
-    "-c",
+  const commitOptions = [
     "user.name=Memo Test",
-    "-c",
     "user.email=memo@example.invalid",
-    "-c",
     "commit.gpgSign=false",
-    "commit",
-    "--quiet",
-    "-m",
-    "base",
-  ]);
+  ].flatMap((option) => ["-c", option]);
+  git(["-C", localPath, ...commitOptions, "commit", "--quiet", "-m", "base"]);
   const baseCommit = git(["-C", localPath, "rev-parse", "HEAD"]);
   git(["clone", "--quiet", localPath, remoteWorkspaceDir]);
   return baseCommit;

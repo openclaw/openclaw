@@ -1,30 +1,77 @@
-// Runtime channel tests cover channel plugin runtime send, reply, and capability behavior.
 import { getEventListeners } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { PluginInstance } from "../plugin-instance.js";
+import { createEmptyPluginRegistry } from "../registry-empty.js";
+import { createPluginRecord } from "../status.test-helpers.js";
+import { withPluginRuntimePluginScope } from "./gateway-request-scope.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
 
-const dispatchRoutedChannelTurn = vi.hoisted(() => vi.fn(async () => ({ status: "handled" })));
+const dispatchRoutedChannelTurn = vi.hoisted(() =>
+  vi.fn(
+    async (
+      _turn: Parameters<
+        typeof import("../../channels/turn/lifecycle.js").dispatchRoutedChannelTurn
+      >[0],
+    ) => ({ status: "handled" }),
+  ),
+);
 
 vi.mock("../../channels/turn/lifecycle.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../channels/turn/lifecycle.js")>()),
   dispatchRoutedChannelTurn,
 }));
 
-function requireWatcherEvent(mock: ReturnType<typeof vi.fn>, index: number) {
-  const event = mock.mock.calls[index]?.[0] as { type?: string } | undefined;
-  if (!event) {
-    throw new Error(`Expected watcher event ${index}`);
-  }
-  return event;
+function expectWatcherEvents(mock: ReturnType<typeof vi.fn>, ...types: string[]) {
+  expect(mock.mock.calls.map(([event]) => event.type)).toEqual(types);
 }
 
-describe("inbound dispatch", () => {
-  it("keeps the complete deprecated turn object identical to inbound", () => {
+it("warns about synchronous runtime timestamps while preserving the shipped result", async () => {
+  await withOpenClawTestState({ label: "runtime-channel-legacy-timestamp" }, async (state) => {
+    const scope = {
+      storePath: state.statePath("timestamp", "openclaw-agent.sqlite"),
+      sessionKey: "agent:main:legacy-timestamp",
+    };
+    replaceSessionEntrySync(scope, { sessionId: "legacy-timestamp", updatedAt: 60_000 });
+    using warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
     const channel = createRuntimeChannel();
-    expect(channel.turn).toBe(channel.inbound);
-    expect(channel.turn.dispatch).toBe(channel.inbound.dispatch);
+    withPluginRuntimePluginScope({ pluginId: "legacy-runtime-timestamp-test" }, () => {
+      expect(channel.session.readSessionUpdatedAt(scope)).toBe(60_000);
+    });
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("readSessionUpdatedAtAsync"),
+      { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+    );
   });
+});
+
+describe("inbound dispatch", () => {
+  function createOwnedInboundFixture() {
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "owned-channel" });
+    registry.plugins.push(record);
+    const owner = new PluginInstance("owned-channel", { record, registry });
+    const channel = createRuntimeChannel();
+    const delivered = vi.fn();
+    return {
+      owner,
+      delivered,
+      dispatch: () =>
+        owner.run(() =>
+          channel.inbound.dispatch({
+            cfg: {},
+            channel: "owned-channel",
+            route: { agentId: "main", sessionKey: "agent:main:owned-channel:direct:test" },
+            ctxPayload: { Body: "test", CommandAuthorized: false },
+            delivery: { deliver: delivered },
+            replyOptions: { onQueuedFollowupReplyBatch: delivered },
+          }),
+        ),
+    };
+  }
+
   it("removes event custody before invoking the host-bound reply dispatcher", async () => {
     const callback = vi.fn();
     const dispatch = vi.fn(async () => ({
@@ -33,7 +80,7 @@ describe("inbound dispatch", () => {
     }));
     const channel = createRuntimeChannel({ dispatchReplyFromConfig: dispatch });
     const replyOptions = {
-      isHeartbeat: true,
+      disableTools: true,
       internalEventExecution: { assertCurrent: callback, onStarted: callback },
       onReplyOperationOwned: callback,
     };
@@ -44,296 +91,163 @@ describe("inbound dispatch", () => {
       replyOptions,
     });
     expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({ replyOptions: { isHeartbeat: true } }),
+      expect.objectContaining({ replyOptions: { disableTools: true } }),
     );
     expect(replyOptions.onReplyOperationOwned).toBe(callback);
   });
 
-  it.each([
-    { surface: "inbound", bound: true },
-    { surface: "turn", bound: true },
-    { surface: "inbound", bound: false },
-    { surface: "turn", bound: false },
-  ] as const)(
-    "$surface preserves dispatch precedence (bound=$bound)",
-    async ({ surface, bound }) => {
-      const boundReplyDispatch = bound ? vi.fn() : undefined;
-      const callerDispatch = vi.fn();
-      const channel = createRuntimeChannel({ dispatchReplyFromConfig: boundReplyDispatch });
-      const replyOptions = {
-        isHeartbeat: true,
-        internalEventExecution: { onStarted: vi.fn() },
-        onReplyOperationOwned: vi.fn(),
+  it("keeps immediate delivery live after source settlement until dispatch returns", async () => {
+    const { owner, delivered, dispatch } = createOwnedInboundFixture();
+    dispatchRoutedChannelTurn.mockImplementationOnce(async (turn) => {
+      // Immediate execution settles its source before the dispatcher sends its final.
+      await turn.replyOptions?.turnAdoptionLifecycle?.onSettled?.();
+      await turn.delivery.deliver?.({ text: "immediate answer" }, { kind: "final" });
+      return { status: "handled" };
+    });
+    try {
+      await dispatch();
+      expect(delivered).toHaveBeenCalledWith({ text: "immediate answer" }, { kind: "final" });
+      expect(owner.hasRetainedConsumers).toBe(false);
+    } finally {
+      await owner.dispose();
+    }
+  });
+
+  it("keeps queued source callbacks live until queue settlement, then revokes them", async () => {
+    const { owner, delivered, dispatch } = createOwnedInboundFixture();
+    let settle: (() => void | Promise<void>) | undefined;
+    dispatchRoutedChannelTurn.mockImplementationOnce(async (turn) => {
+      turn.replyOptions?.turnAdoptionLifecycle?.onDeferred?.();
+      return { status: "handled" };
+    });
+    try {
+      await dispatch();
+      const queued = dispatchRoutedChannelTurn.mock.calls.at(-1)?.[0];
+      if (!queued) {
+        throw new Error("Dispatch did not retain the queued source");
+      }
+      settle = queued.replyOptions?.turnAdoptionLifecycle?.onSettled;
+      expect(owner.hasRetainedConsumers).toBe(true);
+      const deliver = queued.replyOptions?.onQueuedFollowupReplyBatch;
+      const batch = {
+        kind: "queued-followup" as const,
+        runId: "queued-run",
+        originatingChannel: "owned-channel",
+        payloads: [{ text: "answer" }],
+        completion: { kind: "completed" as const },
       };
-      const turn = {
-        cfg: {},
-        channel: "qa-channel",
-        route: { agentId: "main", sessionKey: "agent:main:qa-channel:direct:test" },
-        ctxPayload: { Body: "test", CommandAuthorized: false },
-        delivery: { deliver: async () => undefined },
-        dispatchReplyFromConfig: callerDispatch,
-        replyOptions,
-      } satisfies Parameters<typeof channel.inbound.dispatch>[0];
+      await deliver?.(batch);
+      expect(delivered).toHaveBeenCalledExactlyOnceWith(batch);
+      await settle?.();
+      expect(owner.hasRetainedConsumers).toBe(false);
+      expect(() => deliver?.(batch)).toThrow("consumer is closed");
+      settle = undefined;
+    } finally {
+      await settle?.();
+      await owner.dispose();
+    }
+  });
 
-      await channel[surface].dispatch(turn);
+  it.each([true, false])("inbound preserves dispatch precedence (bound=%s)", async (bound) => {
+    const boundReplyDispatch = bound ? vi.fn() : undefined;
+    const callerDispatch = vi.fn();
+    const channel = createRuntimeChannel({ dispatchReplyFromConfig: boundReplyDispatch });
+    expect(channel.turn).toBe(channel.inbound);
+    const replyOptions = {
+      disableTools: true,
+      internalEventExecution: { onStarted: vi.fn() },
+      onReplyOperationOwned: vi.fn(),
+    };
+    const turn = {
+      cfg: {},
+      channel: "qa-channel",
+      route: { agentId: "main", sessionKey: "agent:main:qa-channel:direct:test" },
+      ctxPayload: { Body: "test", CommandAuthorized: false },
+      delivery: { deliver: async () => undefined },
+      dispatchReplyFromConfig: callerDispatch,
+      replyOptions,
+    } satisfies Parameters<typeof channel.inbound.dispatch>[0];
 
-      expect(dispatchRoutedChannelTurn).toHaveBeenCalledWith({
-        ...turn,
-        dispatchReplyFromConfig: boundReplyDispatch ?? callerDispatch,
-        replyOptions: { isHeartbeat: true },
-      });
-    },
-  );
+    await channel.inbound.dispatch(turn);
+
+    expect(dispatchRoutedChannelTurn).toHaveBeenCalledWith({
+      ...turn,
+      dispatchReplyFromConfig: boundReplyDispatch ?? callerDispatch,
+      replyOptions: { disableTools: true },
+    });
+  });
 });
 
 describe("runtimeContexts", () => {
-  it("registers, resolves, watches, and unregisters contexts", () => {
-    const channel = createRuntimeChannel();
-    const onEvent = vi.fn();
-    const unsubscribe = channel.runtimeContexts.watch({
-      channelId: "matrix",
-      accountId: "default",
-      capability: "approval.native",
-      onEvent,
-    });
-
-    const lease = channel.runtimeContexts.register({
-      channelId: "matrix",
-      accountId: "default",
-      capability: "approval.native",
-      context: { client: "ok" },
-    });
-
-    expect(
-      channel.runtimeContexts.get<{ client: string }>({
-        channelId: "matrix",
-        accountId: "default",
-        capability: "approval.native",
-      }),
-    ).toEqual({ client: "ok" });
-    expect(onEvent).toHaveBeenCalledWith({
-      type: "registered",
-      key: {
-        channelId: "matrix",
-        accountId: "default",
-        capability: "approval.native",
-      },
-      context: { client: "ok" },
-    });
-
-    lease.dispose();
-
-    expect(
-      channel.runtimeContexts.get({
-        channelId: "matrix",
-        accountId: "default",
-        capability: "approval.native",
-      }),
-    ).toBeUndefined();
-    expect(onEvent).toHaveBeenLastCalledWith({
-      type: "unregistered",
-      key: {
-        channelId: "matrix",
-        accountId: "default",
-        capability: "approval.native",
-      },
-    });
-
-    unsubscribe();
-  });
-
-  it("auto-disposes registrations when the abort signal fires", () => {
-    const channel = createRuntimeChannel();
+  const scope = { channelId: "matrix", accountId: "default", capability: "approval.native" };
+  function fixture() {
+    const contexts = createRuntimeChannel().runtimeContexts;
     const controller = new AbortController();
-    const lease = channel.runtimeContexts.register({
-      channelId: "telegram",
-      accountId: "default",
-      capability: "approval.native",
-      context: { token: "abc" },
-      abortSignal: controller.signal,
-    });
-
-    controller.abort();
-
-    expect(
-      channel.runtimeContexts.get({
-        channelId: "telegram",
-        accountId: "default",
-        capability: "approval.native",
-      }),
-    ).toBeUndefined();
-    lease.dispose();
-  });
-
-  it("removes its abort listener when the lease is disposed", () => {
-    const channel = createRuntimeChannel();
-    const controller = new AbortController();
-    const initialListenerCount = getEventListeners(controller.signal, "abort").length;
-    const lease = channel.runtimeContexts.register({
-      channelId: "telegram",
-      accountId: "default",
-      capability: "approval.native",
-      context: { token: "abc" },
-      abortSignal: controller.signal,
-    });
-
-    expect(getEventListeners(controller.signal, "abort")).toHaveLength(initialListenerCount + 1);
-
-    lease.dispose();
-
-    expect(getEventListeners(controller.signal, "abort")).toHaveLength(initialListenerCount);
-  });
+    return {
+      controller,
+      register: (context: object) =>
+        contexts.register({ ...scope, context, abortSignal: controller.signal }),
+      watch: (onEvent: Parameters<typeof contexts.watch>[0]["onEvent"]) =>
+        contexts.watch({ ...scope, onEvent }),
+      read: () => contexts.get(scope),
+    };
+  }
 
   it("removes the stale lease abort listener after a replacement registration", () => {
-    const channel = createRuntimeChannel();
-    const controller = new AbortController();
+    const { controller, register, read } = fixture();
     const initialListenerCount = getEventListeners(controller.signal, "abort").length;
-    const staleLease = channel.runtimeContexts.register({
-      channelId: "whatsapp",
-      accountId: "default",
-      capability: "connection.controller",
-      context: { token: "stale" },
-      abortSignal: controller.signal,
-    });
-    channel.runtimeContexts.register({
-      channelId: "whatsapp",
-      accountId: "default",
-      capability: "connection.controller",
-      context: { token: "replacement" },
-      abortSignal: controller.signal,
-    });
+    const staleLease = register({ token: "stale" });
+    register({ token: "replacement" });
 
     expect(getEventListeners(controller.signal, "abort")).toHaveLength(initialListenerCount + 2);
 
-    // Channel plugins dispose the previous lease after registering its replacement,
-    // so the stale token check must not skip listener cleanup.
     staleLease.dispose();
 
     expect(getEventListeners(controller.signal, "abort")).toHaveLength(initialListenerCount + 1);
-    expect(
-      channel.runtimeContexts.get({
-        channelId: "whatsapp",
-        accountId: "default",
-        capability: "connection.controller",
-      }),
-    ).toEqual({ token: "replacement" });
+    expect(read()).toEqual({ token: "replacement" });
   });
 
-  it("does not register contexts when the abort signal is already aborted", () => {
-    const channel = createRuntimeChannel();
-    const onEvent = vi.fn();
-    const controller = new AbortController();
-    controller.abort();
-    channel.runtimeContexts.watch({
-      channelId: "matrix",
-      accountId: "default",
-      capability: "approval.native",
-      onEvent,
-    });
-
-    const lease = channel.runtimeContexts.register({
-      channelId: "matrix",
-      accountId: "default",
-      capability: "approval.native",
-      context: { client: "stale" },
-      abortSignal: controller.signal,
-    });
-
-    expect(
-      channel.runtimeContexts.get({
-        channelId: "matrix",
-        accountId: "default",
-        capability: "approval.native",
-      }),
-    ).toBeUndefined();
-    expect(onEvent).not.toHaveBeenCalled();
-    lease.dispose();
-  });
+  it.each(["before registration", "during notification"] as const)(
+    "disposes on abort %s",
+    (timing) => {
+      const { controller, register, watch, read } = fixture();
+      const onEvent = vi.fn((event) => {
+        if (timing === "during notification" && event.type === "registered") {
+          controller.abort();
+        }
+      });
+      watch(onEvent);
+      if (timing === "before registration") {
+        controller.abort();
+      }
+      const lease = register({ client: "stale" });
+      expect(read()).toBeUndefined();
+      expectWatcherEvents(
+        onEvent,
+        ...(timing === "before registration" ? [] : ["registered", "unregistered"]),
+      );
+      lease.dispose();
+    },
+  );
 
   it("isolates watcher exceptions so registration and disposal still complete", () => {
-    const channel = createRuntimeChannel();
+    const { register, watch, read } = fixture();
     const badWatcher = vi.fn((event) => {
       throw new Error(`boom:${event.type}`);
     });
     const goodWatcher = vi.fn();
 
-    channel.runtimeContexts.watch({
-      channelId: "matrix",
-      accountId: "default",
-      capability: "approval.native",
-      onEvent: badWatcher,
-    });
-    channel.runtimeContexts.watch({
-      channelId: "matrix",
-      accountId: "default",
-      capability: "approval.native",
-      onEvent: goodWatcher,
-    });
+    watch(badWatcher);
+    const unsubscribe = watch(goodWatcher);
 
-    const lease = channel.runtimeContexts.register({
-      channelId: "matrix",
-      accountId: "default",
-      capability: "approval.native",
-      context: { client: "ok" },
-    });
+    const lease = register({ client: "ok" });
 
-    expect(
-      channel.runtimeContexts.get({
-        channelId: "matrix",
-        accountId: "default",
-        capability: "approval.native",
-      }),
-    ).toEqual({ client: "ok" });
-    expect(requireWatcherEvent(badWatcher, 0).type).toBe("registered");
-    expect(requireWatcherEvent(goodWatcher, 0).type).toBe("registered");
-
+    expect(read()).toEqual({ client: "ok" });
     lease.dispose();
 
-    expect(
-      channel.runtimeContexts.get({
-        channelId: "matrix",
-        accountId: "default",
-        capability: "approval.native",
-      }),
-    ).toBeUndefined();
-    expect(requireWatcherEvent(badWatcher, 1).type).toBe("unregistered");
-    expect(requireWatcherEvent(goodWatcher, 1).type).toBe("unregistered");
-  });
-
-  it("auto-disposes when a watcher aborts during the registered event", () => {
-    const channel = createRuntimeChannel();
-    const controller = new AbortController();
-    const onEvent = vi.fn((event) => {
-      if (event.type === "registered") {
-        controller.abort();
-      }
-    });
-
-    channel.runtimeContexts.watch({
-      channelId: "matrix",
-      accountId: "default",
-      capability: "approval.native",
-      onEvent,
-    });
-
-    const lease = channel.runtimeContexts.register({
-      channelId: "matrix",
-      accountId: "default",
-      capability: "approval.native",
-      context: { client: "ok" },
-      abortSignal: controller.signal,
-    });
-
-    expect(
-      channel.runtimeContexts.get({
-        channelId: "matrix",
-        accountId: "default",
-        capability: "approval.native",
-      }),
-    ).toBeUndefined();
-    expect(requireWatcherEvent(onEvent, 0).type).toBe("registered");
-    expect(requireWatcherEvent(onEvent, 1).type).toBe("unregistered");
-
-    lease.dispose();
+    expect(read()).toBeUndefined();
+    expectWatcherEvents(badWatcher, "registered", "unregistered");
+    expectWatcherEvents(goodWatcher, "registered", "unregistered");
+    unsubscribe();
   });
 });

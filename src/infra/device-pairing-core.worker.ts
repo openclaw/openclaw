@@ -38,7 +38,10 @@ export const devicePairingOperations = {
     (input: {
       deviceId: string;
       patch: Parameters<typeof core.updatePairedDeviceMetadataInWorker>[1];
-    }) => core.updatePairedDeviceMetadataInWorker(input.deviceId, input.patch),
+      accessIdentity?: Parameters<typeof core.updatePairedDeviceMetadataInWorker>[2];
+    }) =>
+      core.updatePairedDeviceMetadataInWorker(input.deviceId, input.patch, input.accessIdentity),
+    { pairedDeviceId: (input) => input.deviceId },
   ),
   "devicePairing.updatePresence": devicePairingMutation(
     (input: {
@@ -51,6 +54,7 @@ export const devicePairingOperations = {
         input.patch,
         input.expectedPairingGeneration,
       ),
+    { pairedDeviceId: (input) => input.deviceId },
   ),
   "devicePairing.approve": devicePairingMutation(
     (input: {
@@ -86,8 +90,15 @@ export const devicePairingOperations = {
       return result;
     },
   ),
-  "devicePairing.verifyToken": devicePairingMutation(tokens.verifyDeviceTokenInWorker),
-  "devicePairing.ensureToken": devicePairingMutation(tokens.ensureDeviceTokenInWorker),
-  "devicePairing.rotateToken": devicePairingMutation(tokens.rotateDeviceTokenInWorker),
+  "devicePairing.verifyToken": devicePairingMutation(tokens.verifyDeviceTokenInWorker, {
+    pairedDeviceId: (input) => input.deviceId,
+  }),
+  "devicePairing.ensureToken": devicePairingMutation(tokens.ensureDeviceTokenInWorker, {
+    pairedDeviceId: (input) => input.deviceId,
+  }),
+  "devicePairing.rotateToken": devicePairingMutation(
+    (input: Parameters<typeof tokens.rotateDeviceTokenInWorker>[0], { recordRetiredNodeToken }) =>
+      tokens.rotateDeviceTokenInWorker(input, recordRetiredNodeToken),
+  ),
   "devicePairing.revokeToken": devicePairingMutation(tokens.revokeDeviceTokenInWorker),
 } satisfies WorkerOperationHandlers;

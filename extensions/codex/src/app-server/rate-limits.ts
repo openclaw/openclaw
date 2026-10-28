@@ -89,7 +89,6 @@ type RateLimitWindowEntry = {
 export type CodexAccountUsageSummary = {
   usageLine?: string;
   blocked: boolean;
-  blockedUntilMs?: number;
   blockedUntilText?: string;
   blockedResetRelative?: string;
   blockingPeriod?: string;
@@ -109,9 +108,8 @@ export function formatCodexUsageLimitErrorMessage(params: {
   }
   const nowMs = params.nowMs ?? Date.now();
   const ordinaryUsageAllowed = readOrdinaryUsageAllowed(params.rateLimits);
-  const snapshots = collectCodexRateLimitSnapshots(params.rateLimits).filter(
-    snapshotHasDisplayableData,
-  );
+  const allSnapshots = collectCodexRateLimitSnapshots(params.rateLimits);
+  const snapshots = allSnapshots.filter(snapshotHasDisplayableData);
   const usageSnapshot = snapshots.find(isCodexLimitSnapshot) ?? snapshots[0];
   const blockingSnapshot = selectBlockingRateLimitSnapshot(snapshots, ordinaryUsageAllowed);
   const usageSummary = usageSnapshot
@@ -133,11 +131,7 @@ export function formatCodexUsageLimitErrorMessage(params: {
   const nextReset =
     blockingReset ??
     (ordinaryUsageAllowed === undefined && !usageSummary?.blocked
-      ? selectRateLimitWindowEntry(
-          collectCodexRateLimitSnapshots(params.rateLimits).flatMap(readWindowEntries),
-          nowMs,
-          "next",
-        )?.window
+      ? selectRateLimitWindowEntry(allSnapshots.flatMap(readWindowEntries), nowMs, "next")?.window
       : undefined);
   const parts = [CODEX_USAGE_LIMIT_MESSAGE_PREFIX];
   let recoveryAction = "Wait until Codex becomes available";
@@ -277,7 +271,6 @@ function summarizeRateLimitUsage(
     blocked: Boolean(blockingSnapshot),
     ...(blockingReset
       ? {
-          blockedUntilMs: blockingReset.resetsAtMs,
           blockedUntilText: `${formatCalendarResetTime(blockingReset.resetsAtMs, nowMs)} (in ${formatRelativeDuration(blockingReset.resetsAtMs - nowMs)})`,
           blockedResetRelative: `in ${formatRelativeDuration(blockingReset.resetsAtMs - nowMs)}`,
         }

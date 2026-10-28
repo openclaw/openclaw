@@ -1,7 +1,9 @@
+import { prepareSystemPrompt } from "@openclaw/ai/internal/shared";
 import type {
   ImageContent,
   Message,
   Model,
+  PreparedSystemPrompt,
   SimpleStreamOptions,
   TextContent,
   ThinkingBudgets,
@@ -12,9 +14,10 @@ import { TranscriptNotContinuableError } from "./errors.js";
 import {
   attachInternalSyncSteeringGetter,
   getInternalBeforeToolBatch,
+  getInternalRepetitionGuard,
   getInternalToolTurnCompletion,
 } from "./internal-hooks.js";
-import { isOpenClawSystemUpdateMessage } from "./operator-messages.js";
+import { PendingMessageQueue } from "./pending-message-queue.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import {
@@ -23,7 +26,6 @@ import {
   isTurnHandoffAbort,
 } from "./turn-interruption.js";
 import type {
-  AgentContext,
   AgentEvent,
   AgentLoopConfig,
   AgentLoopTurnUpdate,
@@ -68,33 +70,6 @@ type MutableAgentState = Omit<
   pendingToolCalls: Set<string>;
   errorMessage?: string;
 };
-
-function createMutableAgentState(initialState?: AgentOptions["initialState"]): MutableAgentState {
-  let tools = initialState?.tools?.slice() ?? [];
-  let messages = initialState?.messages?.slice() ?? [];
-
-  return {
-    systemPrompt: initialState?.systemPrompt ?? "",
-    model: initialState?.model ?? DEFAULT_MODEL,
-    thinkingLevel: initialState?.thinkingLevel ?? "off",
-    get tools() {
-      return tools;
-    },
-    set tools(nextTools: AgentTool[]) {
-      tools = nextTools.slice();
-    },
-    get messages() {
-      return messages;
-    },
-    set messages(nextMessages: AgentMessage[]) {
-      messages = nextMessages.slice();
-    },
-    isStreaming: false,
-    streamingMessage: undefined,
-    pendingToolCalls: new Set<string>(),
-    errorMessage: undefined,
-  };
-}
 
 /** Options for constructing an {@link Agent}. */
 export interface AgentOptions {
@@ -149,152 +124,6 @@ export interface AgentOptions {
   toolExecution?: ToolExecutionMode;
 }
 
-class PendingMessageQueue {
-  private messages: AgentMessage[] = [];
-  private readonly listeners = new Set<() => void>();
-  private readonly submitted = new Set<AgentMessage>();
-  // Drained messages stay owned here until message_end commits them.
-  // A failed run restores them ahead of messages accepted later.
-  private inFlight: AgentMessage[] = [];
-  private cancelled = new WeakSet<AgentMessage>();
-  public mode: QueueMode;
-
-  constructor(mode: QueueMode) {
-    this.mode = mode;
-  }
-
-  enqueue(message: AgentMessage): void {
-    this.admit(message)();
-  }
-
-  admit(message: AgentMessage): () => void {
-    this.messages.push(message);
-    return () => {
-      for (const listener of this.listeners) {
-        listener();
-      }
-    };
-  }
-
-  peek(): readonly AgentMessage[] {
-    // A tool checkpoint fixes the next injection batch while the response is live.
-    // Later input must wait for that batch to commit before it can reach the provider.
-    const messages = (this.inFlight.length > 0 ? this.inFlight : this.messages).filter(
-      (message) => !isOpenClawSystemUpdateMessage(message),
-    );
-    return messages.slice(0, this.mode === "all" ? undefined : 1);
-  }
-
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  reserve(messages: readonly AgentMessage[]): () => void {
-    for (const message of messages) {
-      this.submitted.add(message);
-    }
-    return () => {
-      for (const message of messages) {
-        this.submitted.delete(message);
-      }
-    };
-  }
-
-  hasItems(): boolean {
-    return this.messages.some((message) => !isOpenClawSystemUpdateMessage(message));
-  }
-
-  drain(): AgentMessage[] {
-    const input = this.messages.filter((message) => !isOpenClawSystemUpdateMessage(message));
-    let count = this.mode === "all" ? input.length : 1;
-    // Submitted input already belongs to one provider continuation. Later queued
-    // messages must not rewrite that continuation's context before it completes.
-    const boundary = input.findIndex((message) => !this.submitted.has(message));
-    if (boundary > 0) {
-      count = Math.min(count, boundary);
-    }
-    return this.drainMatching(count, (message) => !isOpenClawSystemUpdateMessage(message));
-  }
-
-  drainContext(): AgentMessage[] {
-    // Operator context accompanies admitted input; it never starts a turn itself.
-    return this.drainMatching(Infinity, isOpenClawSystemUpdateMessage);
-  }
-
-  private drainMatching(
-    count: number,
-    matches: (message: AgentMessage) => boolean,
-  ): AgentMessage[] {
-    const drained: AgentMessage[] = [];
-    this.messages = this.messages.filter((message) => {
-      if (drained.length >= count || !matches(message)) {
-        return true;
-      }
-      drained.push(message);
-      return false;
-    });
-    this.inFlight.push(...drained);
-    return drained;
-  }
-
-  commit(message: AgentMessage): void {
-    this.submitted.delete(message);
-    this.cancelled.delete(message);
-    const index = this.inFlight.indexOf(message);
-    if (index >= 0) {
-      this.inFlight.splice(index, 1);
-    }
-  }
-
-  restore(): void {
-    this.messages = [...this.inFlight, ...this.messages];
-    this.inFlight = [];
-    // Admission fences belong to the closed run. Preserve unsaved input for
-    // recovery without retaining authority over its later cancellation.
-    this.submitted.clear();
-  }
-
-  cancelFirst(predicate: (message: AgentMessage) => boolean): AgentMessage | undefined {
-    const pendingIndex = this.messages.findIndex(predicate);
-    const pendingMessage = this.messages[pendingIndex];
-    if (pendingMessage) {
-      // Provider-admitted input cannot be withdrawn. Retain its local queue
-      // owner until the ordinary transcript boundary commits the same message.
-      if (this.submitted.has(pendingMessage)) {
-        return undefined;
-      }
-      return this.messages.splice(pendingIndex, 1)[0];
-    }
-    const inFlightIndex = this.inFlight.findIndex(predicate);
-    const message = this.inFlight[inFlightIndex];
-    if (!message || this.submitted.has(message)) {
-      return undefined;
-    }
-    this.inFlight.splice(inFlightIndex, 1);
-    // The loop may already hold this object after draining; retain a cancellation
-    // fact until its next injection checkpoint so it cannot outlive queue ownership.
-    this.cancelled.add(message);
-    return message;
-  }
-
-  consumeCancellation(message: AgentMessage): boolean {
-    return this.cancelled.delete(message);
-  }
-
-  clear(): void {
-    this.messages = this.messages.filter((message) => this.submitted.has(message));
-    this.inFlight = this.inFlight.filter((message) => this.submitted.has(message));
-    this.cancelled = new WeakSet<AgentMessage>();
-  }
-}
-
-type ActiveRun = {
-  promise: Promise<void>;
-  resolve: () => void;
-  abortController: AbortController;
-};
-
 /**
  * Stateful wrapper around the low-level agent loop.
  *
@@ -303,6 +132,7 @@ type ActiveRun = {
  */
 export class Agent {
   private mutableState: MutableAgentState;
+  private preparedSystemPrompt?: PreparedSystemPrompt;
   private readonly listeners = new Set<
     (event: AgentEvent, signal: AbortSignal) => Promise<void> | void
   >();
@@ -323,7 +153,11 @@ export class Agent {
   public afterToolOutcome?: NonNullable<AgentOptions["afterToolOutcome"]>;
   public prepareNextTurn?: NonNullable<AgentOptions["prepareNextTurn"]>;
   public prepareNextTurnWithContext?: NonNullable<AgentOptions["prepareNextTurnWithContext"]>;
-  private activeRun?: ActiveRun;
+  private activeRun?: {
+    promise: Promise<void>;
+    resolve: () => void;
+    abortController: AbortController;
+  };
   /** Session identifier forwarded to providers for cache-aware backends. */
   public sessionId?: string;
   /** Optional per-level thinking token budgets forwarded to the stream function. */
@@ -336,7 +170,31 @@ export class Agent {
   public toolExecution: ToolExecutionMode;
 
   constructor(options: AgentOptions = {}) {
-    this.mutableState = createMutableAgentState(options.initialState);
+    const initialState = options.initialState;
+    let tools = initialState?.tools?.slice() ?? [];
+    let messages = initialState?.messages?.slice() ?? [];
+
+    this.mutableState = {
+      systemPrompt: initialState?.systemPrompt ?? "",
+      model: initialState?.model ?? DEFAULT_MODEL,
+      thinkingLevel: initialState?.thinkingLevel ?? "off",
+      get tools() {
+        return tools;
+      },
+      set tools(nextTools: AgentTool[]) {
+        tools = nextTools.slice();
+      },
+      get messages() {
+        return messages;
+      },
+      set messages(nextMessages: AgentMessage[]) {
+        messages = nextMessages.slice();
+      },
+      isStreaming: false,
+      streamingMessage: undefined,
+      pendingToolCalls: new Set<string>(),
+      errorMessage: undefined,
+    };
     this.convertToLlm = options.convertToLlm ?? defaultConvertToLlm;
     this.transformContext = options.transformContext;
     this.runtime = options.runtime;
@@ -490,11 +348,22 @@ export class Agent {
       );
     }
     this.toolLoopRecoveryState.criticalToolLoopSeen = false;
-    const messages = this.normalizePromptInput(input, images);
+    let messages: AgentMessage[];
+    if (Array.isArray(input)) {
+      messages = input;
+    } else if (typeof input !== "string") {
+      messages = [input];
+    } else {
+      const content: Array<TextContent | ImageContent> = [{ type: "text", text: input }];
+      if (images && images.length > 0) {
+        content.push(...images);
+      }
+      messages = [{ role: "user", content, timestamp: Date.now() }];
+    }
     await this.runPromptMessages(messages);
   }
 
-  /** Continue from the current transcript. The last message must be a user or tool-result message. */
+  /** Continue from a user, tool result, or failed assistant without rewriting its history. */
   async continue(): Promise<void> {
     if (this.activeRun) {
       throw new Error("Agent is already processing. Wait for completion before continuing.");
@@ -519,57 +388,84 @@ export class Agent {
       }
     }
 
-    if (lastMessage.role === "assistant") {
+    if (
+      lastMessage.role === "assistant" &&
+      lastMessage.stopReason !== "error" &&
+      lastMessage.stopReason !== "aborted"
+    ) {
       throw new TranscriptNotContinuableError(lastMessage.role);
     }
 
     await this.runPromptMessages([]);
   }
 
-  private normalizePromptInput(
-    input: string | AgentMessage | AgentMessage[],
-    images?: ImageContent[],
-  ): AgentMessage[] {
-    if (Array.isArray(input)) {
-      return input;
-    }
-
-    if (typeof input !== "string") {
-      return [input];
-    }
-
-    const content: Array<TextContent | ImageContent> = [{ type: "text", text: input }];
-    if (images && images.length > 0) {
-      content.push(...images);
-    }
-    return [{ role: "user", content, timestamp: Date.now() }];
-  }
-
   private async runPromptMessages(
     messages: AgentMessage[],
     options: { skipInitialSteeringPoll?: boolean } = {},
   ): Promise<void> {
-    await this.runWithLifecycle(async (signal) => {
+    if (this.activeRun) {
+      throw new Error("Agent is already processing.");
+    }
+
+    const abortController = new AbortController();
+    let resolvePromise = () => {};
+    const promise = new Promise<void>((resolve) => {
+      resolvePromise = resolve;
+    });
+    this.activeRun = { promise, resolve: resolvePromise, abortController };
+
+    this.mutableState.isStreaming = true;
+    this.mutableState.streamingMessage = undefined;
+    this.mutableState.errorMessage = undefined;
+
+    try {
+      const signal = abortController.signal;
+      this.preparedSystemPrompt = prepareSystemPrompt(
+        this.mutableState.systemPrompt,
+        this.preparedSystemPrompt,
+      );
       await runAgentLoop(
         messages,
-        this.createContextSnapshot(),
+        {
+          systemPrompt: this.mutableState.systemPrompt,
+          preparedSystemPrompt: this.preparedSystemPrompt,
+          // The loop copies messages synchronously before emitting its first event.
+          messages: this.mutableState.messages,
+          tools: this.mutableState.tools.slice(),
+        },
         this.createLoopConfig(options),
         (event) => this.processEvents(event),
         signal,
         this.streamFn,
+        this.runtime,
       );
-    });
-  }
-
-  private createContextSnapshot(): AgentContext {
-    return {
-      systemPrompt: this.mutableState.systemPrompt,
-      messages: this.mutableState.messages.slice(),
-      tools: this.mutableState.tools.slice(),
-    };
+    } catch (error) {
+      if (this.runtime?.isLocalError?.(error)) {
+        throw error;
+      }
+      const aborted = abortController.signal.aborted;
+      const failureMessage = createFailureMessage(this.mutableState.model, error, aborted);
+      await this.processEvents({ type: "message_start", message: failureMessage });
+      await this.processEvents({ type: "message_end", message: failureMessage });
+      await this.processEvents({ type: "turn_end", message: failureMessage, toolResults: [] });
+      const failureMessages: AgentMessage[] = [failureMessage];
+      if (aborted && !isTurnHandoffAbort(this.signal)) {
+        await appendInterruptedTurnMessage(failureMessages, (event) => this.processEvents(event));
+      }
+      await this.processEvents({ type: "agent_end", messages: failureMessages });
+    } finally {
+      this.steeringQueue.restore();
+      this.followUpQueue.restore();
+      this.mutableState.isStreaming = false;
+      this.mutableState.streamingMessage = undefined;
+      this.mutableState.pendingToolCalls = new Set<string>();
+      this.activeRun?.resolve();
+      this.activeRun = undefined;
+    }
   }
 
   private createLoopConfig(options: { skipInitialSteeringPoll?: boolean } = {}): AgentLoopConfig {
+    const steeringQueue = this.steeringQueue;
     let skipInitialSteeringPoll = options.skipInitialSteeringPoll === true;
     const drainSteeringMessages = () => {
       if (skipInitialSteeringPoll) {
@@ -583,16 +479,20 @@ export class Agent {
       drainSteeringMessages,
       {
         peek: () => this.steeringQueue.peek(),
+        subscribe: (listener) => this.steeringQueue.subscribe(listener),
         drainContext: () => [
           ...this.steeringQueue.drainContext(),
           ...this.followUpQueue.drainContext(),
         ],
         reserve: (messages) => this.steeringQueue.reserve(messages),
-        subscribe: (listener) => this.steeringQueue.subscribe(listener),
+        set onChange(callback: (() => void) | undefined) {
+          steeringQueue.onChange = callback;
+        },
       },
     );
     return {
       model: this.mutableState.model,
+      repetitionGuard: getInternalRepetitionGuard(this),
       thinkingLevel: this.mutableState.thinkingLevel,
       reasoning: resolveAgentReasoningOption(
         this.mutableState.model,
@@ -632,62 +532,12 @@ export class Agent {
     };
   }
 
-  private async runWithLifecycle(executor: (signal: AbortSignal) => Promise<void>): Promise<void> {
-    if (this.activeRun) {
-      throw new Error("Agent is already processing.");
-    }
-
-    const abortController = new AbortController();
-    let resolvePromise = () => {};
-    const promise = new Promise<void>((resolve) => {
-      resolvePromise = resolve;
-    });
-    this.activeRun = { promise, resolve: resolvePromise, abortController };
-
-    this.mutableState.isStreaming = true;
-    this.mutableState.streamingMessage = undefined;
-    this.mutableState.errorMessage = undefined;
-
-    try {
-      await executor(abortController.signal);
-    } catch (error) {
-      if (this.runtime?.isLocalError?.(error)) {
-        throw error;
-      }
-      await this.handleRunFailure(error, abortController.signal.aborted);
-    } finally {
-      this.finishRun();
-    }
-  }
-
-  private async handleRunFailure(error: unknown, aborted: boolean): Promise<void> {
-    const failureMessage = createFailureMessage(this.mutableState.model, error, aborted);
-    await this.processEvents({ type: "message_start", message: failureMessage });
-    await this.processEvents({ type: "message_end", message: failureMessage });
-    await this.processEvents({ type: "turn_end", message: failureMessage, toolResults: [] });
-    const messages: AgentMessage[] = [failureMessage];
-    if (aborted && !isTurnHandoffAbort(this.signal)) {
-      await appendInterruptedTurnMessage(messages, (event) => this.processEvents(event));
-    }
-    await this.processEvents({ type: "agent_end", messages });
-  }
-
-  private finishRun(): void {
-    this.steeringQueue.restore();
-    this.followUpQueue.restore();
-    this.mutableState.isStreaming = false;
-    this.mutableState.streamingMessage = undefined;
-    this.mutableState.pendingToolCalls = new Set<string>();
-    this.activeRun?.resolve();
-    this.activeRun = undefined;
-  }
-
   /**
    * Reduce internal state for a loop event, then await listeners.
    *
    * `agent_end` only means no further loop events will be emitted. The run is
    * considered idle later, after all awaited listeners for `agent_end` finish
-   * and `finishRun()` clears runtime-owned state.
+   * and run cleanup clears runtime-owned state.
    */
   private async processEvents(event: AgentEvent): Promise<void> {
     let publishedToolResult =
@@ -762,7 +612,7 @@ export class Agent {
       try {
         await listener(event, signal);
       } finally {
-        // A later redaction policy can replace a frozen, already committed tool result.
+        // Result preparation can replace a frozen, already committed tool result.
         if (
           publishedToolResult &&
           event.type === "message_end" &&

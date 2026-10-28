@@ -28,18 +28,19 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
     return { config: cfg, changes: [] };
   }
 
-  const nextConfig = structuredClone(cfg);
-  const nextEntry = asObjectRecord(nextConfig.plugins?.entries?.acpx);
-  const nextPluginConfig = asObjectRecord(nextEntry?.config);
-  if (!nextPluginConfig) {
-    return { config: cfg, changes: [] };
-  }
+  const nextPluginConfig = { ...pluginConfig };
   for (const key of retiredKeys) {
     delete nextPluginConfig[key];
   }
 
   return {
-    config: nextConfig,
+    config: {
+      ...cfg,
+      plugins: {
+        ...cfg.plugins,
+        entries: { ...cfg.plugins?.entries, acpx: { ...entry, config: nextPluginConfig } },
+      },
+    },
     changes: [
       `Removed retired ACPX plugin config: ${retiredKeys.map((key) => [...ACPX_CONFIG_PATH, key].join(".")).join(", ")}.`,
     ],

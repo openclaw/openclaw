@@ -197,7 +197,6 @@ function importAndRecordReceipt(params: {
       let imported = 0;
       let preserved = 0;
       let suppressed = 0;
-      const expectedNodeIds: string[] = [];
       for (const [nodeId, registration] of params.registrations) {
         const existing = executeSqliteQueryTakeFirstSync(
           db,
@@ -218,7 +217,6 @@ function importAndRecordReceipt(params: {
           // registration created or invalidated by the current runtime.
           apnsRegistrationFromRow(existing);
           preserved += 1;
-          expectedNodeIds.push(nodeId);
         } else if (tombstone) {
           suppressed += 1;
         } else {
@@ -227,19 +225,7 @@ function importAndRecordReceipt(params: {
             stateDb.insertInto("apns_registrations").values(apnsRegistrationToRow(registration)),
           );
           imported += 1;
-          expectedNodeIds.push(nodeId);
         }
-      }
-
-      for (const nodeId of expectedNodeIds) {
-        const verified = executeSqliteQueryTakeFirstSync(
-          db,
-          stateDb.selectFrom("apns_registrations").selectAll().where("node_id", "=", nodeId),
-        );
-        if (!verified) {
-          throw new Error("SQLite verification failed for an APNs registration");
-        }
-        apnsRegistrationFromRow(verified);
       }
 
       const reportJson = JSON.stringify({

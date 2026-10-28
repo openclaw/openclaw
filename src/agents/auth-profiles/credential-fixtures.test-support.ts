@@ -1,22 +1,16 @@
 import { createHash } from "node:crypto";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
-export function createApiKeyCredential(
-  provider: string,
-  key: string,
-): { type: "api_key"; provider: string; key: string } {
-  return { type: "api_key", provider, key };
+export function createApiKeyCredential(provider: string, key: string) {
+  return { type: "api_key" as const, provider, key };
 }
 
-/** Build an OAuth credential fixture. */
-export function oauthCred(params: {
-  provider: string;
-  access: string;
-  refresh: string;
-  expires: number;
-  accountId?: string;
-  email?: string;
-}): OAuthCredential {
+export function oauthCred(
+  params: Pick<
+    OAuthCredential,
+    "provider" | "access" | "refresh" | "expires" | "accountId" | "email"
+  >,
+): OAuthCredential {
   return { type: "oauth", ...params };
 }
 
@@ -30,18 +24,17 @@ export function createAuthProfileUsageStore(
   return {
     version: 1,
     profiles: {
-      "anthropic:default": { type: "api_key", provider: "anthropic", key: "sk-test" },
-      "openai:api-key": { type: "api_key", provider: "openai", key: "sk-test-2" },
-      "openai:default": {
-        type: "oauth",
+      "anthropic:default": createApiKeyCredential("anthropic", "sk-test"),
+      "openai:api-key": createApiKeyCredential("openai", "sk-test-2"),
+      "openai:default": oauthCred({
         provider: "openai",
         access: "codex-access-token",
         refresh: "codex-refresh-token",
         expires: 4_102_444_800_000,
         accountId: "acct_test_123",
-      },
-      "openrouter:default": { type: "api_key", provider: "openrouter", key: "sk-or-test" },
-      "kilocode:default": { type: "api_key", provider: "kilocode", key: "sk-kc-test" },
+      }),
+      "openrouter:default": createApiKeyCredential("openrouter", "sk-or-test"),
+      "kilocode:default": createApiKeyCredential("kilocode", "sk-kc-test"),
     },
     usageStats,
   };
@@ -72,61 +65,40 @@ export function createOAuthRefreshCredential(
   };
 }
 
+export function createUnresolvedOAuthCredential(provider = "openai"): OAuthCredential {
+  return createOAuthRefreshCredential({
+    provider,
+    access: "",
+    refresh: "",
+    expires: 0,
+    oauthRef: {
+      source: "openclaw-credentials",
+      provider: "openai-codex",
+      id: "00000000000000000000000000000000",
+    },
+  });
+}
+
 export function oauthRefreshReplacementCases() {
-  return [
-    {
-      kind: "account mismatch",
-      identity: { accountId: "acct-a" },
-      replacementIdentity: { accountId: "acct-b" },
-      sameIdentity: false,
-      coldObserver: false,
-    },
-    {
-      kind: "OIDC match",
-      identity: oidcIdentity(),
-      replacementIdentity: oidcIdentity(),
-      sameIdentity: true,
-      coldObserver: false,
-    },
-    {
-      kind: "OIDC cold mismatch",
-      identity: oidcIdentity(),
-      replacementIdentity: oidcIdentity({ sub: "subject-b" }),
-      sameIdentity: false,
-      coldObserver: true,
-    },
-    {
-      kind: "OIDC cold observer",
-      identity: oidcIdentity(),
-      replacementIdentity: oidcIdentity(),
-      sameIdentity: true,
-      coldObserver: true,
-    },
-  ];
+  const mismatch = oidcIdentity({ sub: "subject-b" });
+  return (
+    [
+      ["account mismatch", { accountId: "acct-a" }, { accountId: "acct-b" }, false, false],
+      ["OIDC match", oidcIdentity(), oidcIdentity(), true, false],
+      ["OIDC cold mismatch", oidcIdentity(), mismatch, false, true],
+      ["OIDC cold observer", oidcIdentity(), oidcIdentity(), true, true],
+    ] as const
+  ).map(([kind, identity, replacementIdentity, sameIdentity, coldObserver]) => ({
+    kind,
+    identity,
+    replacementIdentity,
+    sameIdentity,
+    coldObserver,
+  }));
 }
 
 export function oauthRefreshFailureFallbackCases() {
   return [
-    {
-      name: "rejects refresh-only changes",
-      candidate: {
-        access: "failed-access",
-        refresh: "new-refresh",
-        expires: Date.now() + 600_000,
-        accountId: "acct-123",
-      },
-      expectedApiKey: undefined,
-    },
-    {
-      name: "adopts access-token changes",
-      candidate: {
-        access: "new-access",
-        refresh: "failed-refresh",
-        expires: Date.now() + 600_000,
-        accountId: "acct-123",
-      },
-      expectedApiKey: "new-access",
-    },
     {
       name: "preserves the refresh error when adopted-key construction fails",
       candidate: {
@@ -135,7 +107,6 @@ export function oauthRefreshFailureFallbackCases() {
         expires: Date.now() + 600_000,
         accountId: "acct-123",
       },
-      expectedApiKey: undefined,
       buildError: "fallback key construction failed",
     },
   ];

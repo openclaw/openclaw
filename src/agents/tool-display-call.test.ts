@@ -2,15 +2,19 @@ import { describe, expect, it } from "vitest";
 import { unwrapToolCallForDisplay } from "./tool-display-call.js";
 
 describe("Tool Search display input", () => {
-  it.each([
-    [" web_search ", "web_search"],
-    ["openclaw:core:read", "read"],
-    ["mcp:docs:mcp__docs__search", "mcp__docs__search"],
-    ["client:client:exec", "exec"],
-    ["custom:tool", "custom:tool"],
-  ])("resolves %s without changing the original call", (id, name) => {
+  it.each(
+    [
+      [" web_search ", "web_search"],
+      ["openclaw:core:read", "read"],
+      ["mcp:docs:mcp__docs__search", "mcp__docs__search"],
+      ["client:client:exec", "exec"],
+      ["custom:tool", "custom:tool"],
+    ].flatMap(([id, name]) =>
+      ["dispatch_action", "tool_call"].map((dispatcher) => ({ id, name, dispatcher })),
+    ),
+  )("resolves $dispatcher/$id without changing the original call", ({ id, name, dispatcher }) => {
     const args = Object.freeze({ query: "OpenClaw release notes" });
-    const call = Object.freeze({ name: "tool_call", args: Object.freeze({ id, args }) });
+    const call = Object.freeze({ name: dispatcher, args: Object.freeze({ id, args }) });
     expect(unwrapToolCallForDisplay(call)).toEqual({ name, args });
     expect(call.args).toEqual({ id, args });
   });

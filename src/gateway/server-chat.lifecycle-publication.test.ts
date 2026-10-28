@@ -10,10 +10,12 @@ import {
   clearAgentRunContext as clearRegisteredAgentRunContext,
   registerAgentRunContext,
 } from "../infra/agent-run-registry.js";
-import { abortChatRunById, registerChatAbortController } from "./chat-abort.js";
+import { abortChatRunById } from "./chat-abort.js";
 import { createAgentEventTestHarness } from "./server-chat.agent-events.test-harness.js";
 import { subscribeAgentEvents } from "./server-chat.agent-events.test-helpers.js";
+import { registerRpcSourceForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
 import type { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
+import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 // mock-isolation: Publication tests use injected persistence without operator config or SQLite.
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
@@ -43,14 +45,16 @@ describe("single lifecycle publication", () => {
     const h = createHarness();
     const runId = "run-abort-publication";
     const sessionKey = "session-abort-publication";
-    const chatAbortControllers = new Map();
-    const registration = registerChatAbortController({
-      chatAbortControllers,
+    const registration = registerRpcSourceForTest({
       runId,
       sessionKey,
       sessionId: "session-id",
-      timeoutMs: 60_000,
     });
+    registration.initializeTiming();
+    const releaseClaim = await claimRpcSourceForTest(registration.entry, {
+      executionStarted: false,
+    });
+    onTestFinished(releaseClaim);
     const unlisten = subscribeAgentEvents(h.handler);
     onTestFinished(unlisten);
     const observedPhases: unknown[] = [];
@@ -77,7 +81,6 @@ describe("single lifecycle publication", () => {
         abortChatRunById(
           {
             ...h,
-            chatAbortControllers,
             removeChatRun: h.chatRunState.registry.remove,
           },
           { runId, sessionKey, stopReason },

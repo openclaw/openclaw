@@ -51,6 +51,7 @@ vi.mock("../../state/openclaw-agent-db.js", () => ({
 }));
 // mock-isolation: The capture producer reaches the worker boundary without acquiring real leases.
 vi.mock("../../state/openclaw-agent-execution.js", () => ({
+  captureOpenClawAgentDatabaseExecution: () => ({ release: async () => {} }),
   supportsOpenClawAgentDatabaseExecution: () => true,
 }));
 vi.mock("../future-version-guard.js", () => ({
@@ -63,9 +64,9 @@ vi.mock("./internal-session-key.js", () => ({}));
 vi.mock("./metadata.js", () => ({}));
 vi.mock("./session-accessor.sqlite-entry-cache.js", () => ({}));
 vi.mock("./session-accessor.sqlite-entry-equality.js", () => ({}));
+// mock-isolation: Synthetic capture paths must not load the native entry store or open SQLite.
 vi.mock("./session-accessor.sqlite-entry-store.js", () => ({
   readSessionEntrySelectionSnapshot: () => [],
-  readUnchangedLifecycleTargetSnapshot: () => [],
   writeSessionEntry: (_database: unknown, _key: string, entry: InternalSessionEntry) => entry,
 }));
 vi.mock("./session-accessor.sqlite-exact-read.js", () => ({}));
@@ -78,15 +79,10 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
   kickSessionEntryMaintenanceAfterWrite: boundary.maintain,
 }));
 vi.mock("./session-accessor.sqlite-normalize.js", () => ({}));
-vi.mock("./session-accessor.sqlite-scope.js", () => ({
-  resolveSqliteScope: (scope: ResolvedSqliteScope) => scope,
+vi.mock("./session-accessor.sqlite-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-accessor.sqlite-scope.js")>()),
   resolveSqliteTranscriptArchiveDirectory: () => "/synthetic/archive",
   runExclusiveSqliteSessionWrite: boundary.queue,
-  toDatabaseOptions: (scope: ResolvedSqliteScope) => ({
-    agentId: scope.agentId,
-    env: scope.env,
-    path: scope.path,
-  }),
 }));
 vi.mock("./session-accessor.sqlite-status.js", () => ({}));
 vi.mock("./session-canonical-key.js", () => ({ assertCanonicalSessionKeyWrite() {} }));
@@ -100,7 +96,6 @@ vi.mock("./session-history-eviction.js", () => ({
 vi.mock("./session-store-path.js", () => ({
   resolveSessionStorePathForScope: () => "/synthetic/store",
 }));
-vi.mock("./store-entry.js", () => ({}));
 vi.mock("./types.js", () => ({}));
 
 afterEach(() => {

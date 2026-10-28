@@ -3,7 +3,13 @@
  * This bypasses shared model runtime's content type system which does not have a "document" type.
  */
 
+import {
+  buildAnthropicClaudeCodeIdentity,
+  buildAnthropicSystemBlocks,
+  isAnthropicOAuthApiKey,
+} from "@openclaw/ai/internal/anthropic";
 import { resolveAnthropicMessagesUrl } from "@openclaw/ai/transports";
+import "../../llm/ai-transport-host.js";
 import { readResponseBodySnippet } from "../../infra/http-error-body.js";
 import {
   postJsonRequest,
@@ -14,9 +20,9 @@ import { normalizeProviderTransportWithPlugin } from "../../plugins/provider-run
 import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { createProviderErrorTextRedactor } from "../provider-http-errors.js";
+import { resolveProviderTransportSsrFPolicy } from "../provider-network-policy.js";
 import type { ModelProviderRequestTransportOverrides } from "../provider-request-config.types.js";
 import { unwrapSecretSentinelsForProviderEgress } from "../provider-secret-egress.js";
-import { resolveProviderTransportSsrFPolicy } from "../provider-transport-fetch.js";
 
 const NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS = 120_000;
 const NATIVE_PDF_ERROR_BODY_MAX_BYTES = 8 * 1024;
@@ -126,6 +132,41 @@ export async function anthropicAnalyzePdf(
     throw new Error("Anthropic PDF: apiKey required");
   }
 
+  const request = params.requestConfig?.request;
+  const headers = new Headers(params.requestConfig?.headers);
+  for (const [name, value] of Object.entries(request?.headers ?? {})) {
+    if (value === null) {
+      headers.delete(name);
+    } else {
+      headers.set(name, value);
+    }
+  }
+  const hasExplicitAuthOverride =
+    (request?.auth?.mode !== undefined && request.auth.mode !== "provider-default") ||
+    ["authorization", "x-api-key", "api-key"].some((name) => headers.has(name));
+  const usesOAuthApiKey = !hasExplicitAuthOverride && isAnthropicOAuthApiKey(apiKey);
+  if (!hasExplicitAuthOverride) {
+    headers.set(
+      usesOAuthApiKey ? "authorization" : "x-api-key",
+      usesOAuthApiKey ? `Bearer ${apiKey}` : apiKey,
+    );
+  }
+  headers.set("anthropic-version", "2023-06-01");
+  headers.set(
+    "anthropic-beta",
+    [
+      headers.get("anthropic-beta"),
+      "pdfs-2024-09-25",
+      ...(usesOAuthApiKey ? ["claude-code-20250219", "oauth-2025-04-20"] : []),
+    ]
+      .filter(Boolean)
+      .join(","),
+  );
+  const identity = usesOAuthApiKey
+    ? buildAnthropicClaudeCodeIdentity(undefined, Object.fromEntries(headers))
+    : undefined;
+  const requestHeaders = identity?.headers ?? Object.fromEntries(headers);
+
   const json = await postNativePdfJson({
     provider: "anthropic",
     api: "anthropic-messages",
@@ -133,15 +174,11 @@ export async function anthropicAnalyzePdf(
     baseUrl: params.baseUrl,
     defaultBaseUrl: resolveAnthropicMessagesUrl(undefined).replace(/\/messages$/u, ""),
     resolveUrl: resolveAnthropicMessagesUrl,
-    headers: {
-      ...params.requestConfig?.headers,
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-beta": "pdfs-2024-09-25",
-    },
+    headers: requestHeaders,
     body: {
       model: params.modelId,
       max_tokens: params.maxTokens ?? 4096,
+      system: buildAnthropicSystemBlocks(undefined, usesOAuthApiKey, undefined, identity?.version),
       messages: [
         {
           role: "user",
@@ -155,8 +192,8 @@ export async function anthropicAnalyzePdf(
         },
       ],
     },
-    request: params.requestConfig?.request,
-    defaultAuthHeader: "x-api-key",
+    request: request ? { ...request, headers: requestHeaders } : undefined,
+    defaultAuthHeader: usesOAuthApiKey ? "authorization" : "x-api-key",
     signal: params.signal,
   });
 

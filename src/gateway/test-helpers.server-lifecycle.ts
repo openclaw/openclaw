@@ -1,4 +1,3 @@
-import { startCronReceiptAuthorityHost } from "../cron/store/receipt-authority-owner.js";
 import { resetGatewaySuspendCoordinatorForLifecycleRestart } from "../infra/gateway-suspend-coordinator.js";
 import {
   resetGatewayRestartStateForInProcessRestart,
@@ -16,9 +15,6 @@ export async function resetGatewayLifecycleTestState(
   // admission. Live suite servers keep their policy and active-work binding.
   resetGatewaySuspendCoordinatorForLifecycleRestart();
   resetGatewayRestartStateForInProcessRestart();
-  if (phase === "prepare") {
-    startCronReceiptAuthorityHost();
-  }
   if (phase !== "runtime") {
     setGatewayRestartPolicy({ allowExternal: false });
     setPreRestartDeferralCheck(() => 0);

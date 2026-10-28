@@ -43,6 +43,9 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
     is disabled, and inclusion does not guarantee execution access.
   - The projection can use cached inventory while refreshing it. Unsaved UI
     edits are not inputs, and saved or runtime changes may not appear immediately.
+  - A saved `toolOverrides.webSearch=false` excludes core `web_search`. Changing
+    this override selects the matching preview instead of reusing the other
+    state's cached inventory.
   - `tools.effective` is read-only for MCP: it may project a warm session MCP
     catalog through the final tool policy, but does not create MCP runtimes,
     connect transports, or issue `tools/list`. If no matching warm catalog
@@ -68,6 +71,13 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   - `agentId` is optional; omit it to read the default agent workspace.
   - The response includes eligibility, missing requirements, config checks,
     and sanitized install options without exposing raw secret values.
+- `skills.files.get({ agentId?, path })` (`operator.read`) reads the current
+  `SKILL.md` of an installed skill. `path` is absolute, home-relative, or relative
+  to the selected agent's workspace; it must match a discovered skill. The
+  response contains `path`, `name`, and full UTF-8 `content`. Reads stay inside
+  that skill's directory and use the configured skill-file byte limit. Unknown
+  agents, unavailable files, paths outside the installed inventory, and oversized
+  files return `INVALID_REQUEST`. The method does not read arbitrary host files.
 - `skills.search` and `skills.detail` (`operator.read`) return ClawHub
   discovery metadata. `skills.detail({ slug, version? })` accepts the publisher-qualified
   `installRef` from search and reads that release's card and scan summary. See
@@ -148,15 +158,15 @@ connections retain the previous row shape. Generic client libraries do not opt
 in: a proxy forwarding a capable connection must support its negotiated row
 shape, or use a capless context for an older closed-schema consumer.
 
-Ordinary requests read the published catalog without starting provider discovery.
-Views select rows; they do not decide whether discovery runs. If the owner is not
+Ordinary requests read the published catalog while the owner acquires native
+inventory in the background. If the owner is not
 published yet, the request reports that the model catalog is not ready. A result
 whose owner becomes stale during projection is rejected with `UNAVAILABLE`,
 `retryable: true`, and `retryAfterMs: 0`. The Control UI shares one retry across
 catalog consumers, retaining cancellation and any explicit request deadline.
 
-- `preparedOnly: true` remains supported for automatic clients. Ordinary reads
-  are passive with or without this flag.
+- `preparedOnly: true` and the `"provider-config"` view do not request native
+  inventory acquisition.
 - `refresh: true` requests provider acquisition before reading the new published
   generation. Concurrent refreshes share the owner build. A failed acquisition
   retains compatible rows and reports its `providerOutcomes`; successful empty
@@ -165,11 +175,30 @@ catalog consumers, retaining cancellation and any explicit request deadline.
   aliases. Unknown provider IDs return `INVALID_REQUEST` with the rejected ID.
   Omit the filter or run `openclaw models list --all` to list models and their
   provider IDs.
-- `includeDetails: true` includes available input modalities, effective
-  `contextTokens`, and a `local` endpoint classification. It does not expose
-  endpoint URLs, headers, credentials, costs or runtime request parameters.
+- Rows include `contextWindow` (the model's maximum) and the effective
+  `contextTokens` budget when those values are known, so pickers can show the
+  active budget without session metadata.
+- `includeDetails: true` also includes available input modalities and a `local`
+  endpoint classification. It does not expose endpoint URLs, headers,
+  credentials, costs or runtime request parameters.
 
-For a conversation picker, pass `sessionKey` to read the session's canonical
+An unchanged catalog renewal emits `chat.metadata.changed` with
+`modelCatalogChanged: false` and `modelCatalogStatusChanged: true`. The Control UI
+refreshes only cached receipts that still contain `pendingProviders`; settled
+catalogs remain reusable. Inventory, availability, and account changes still
+invalidate affected catalogs.
+
+The Control UI shares the initial `models.snapshot` with matching configured
+catalog readers. If bootstrap does not deliver it within one second, readers
+fall back to `models.list`. A late bootstrap snapshot can still settle a pending
+read, but cannot overwrite a completed fallback result. This wait precedes
+the ordinary per-RPC timeout; explicit refreshes and sub-second timeout budgets
+bypass it. Cached catalogs, including pending discovery results,
+remain reusable until a catalog or session-model change invalidates their scope
+or a reported cooldown expires. A different session or account requires its own
+projection; returning to a cached scope does not fetch it again.
+
+For a conversation picker, pass `sessionKey` to read the session's saved
 agent and saved account selection. A conflicting `agentId` is rejected. The
 viewer's current account default does not replace a saved session's selection.
 For a new draft, `authProfileId` previews a retained account owned by the
@@ -178,7 +207,7 @@ default. `sessionKey` and `authProfileId` are mutually exclusive.
 
 Saved-session metadata and draft previews stay current across unrelated session
 creations and writes. Before publishing, the Gateway rechecks the selected
-session's identity and canonical metadata, runtime configuration, and current
+session's identity and saved metadata, runtime configuration, and current
 access authority. Recreating a row with identical session facts does not invalidate
 the read. `chat.metadata` also tolerates title, activity, and ordinary preference
 updates to the selected row when its metadata inputs and access facts remain
@@ -305,10 +334,10 @@ them rather than returning a native registry skill with the same slug.
 - Operator clients resolve by calling `exec.approval.resolve` (requires
   `operator.approvals`).
 - For `host=node`, `exec.approval.request` must include `systemRunPlan`
-  (canonical `argv`/`cwd`/`rawCommand`/session metadata). Requests missing
+  (prepared `argv`/`cwd`/`rawCommand`/session metadata). Requests missing
   `systemRunPlan` are rejected.
 - After approval, forwarded `node.invoke system.run` calls reuse that
-  canonical `systemRunPlan` as the authoritative command/cwd/session context.
+  stored `systemRunPlan` as the authoritative command/cwd/session context.
 - If a caller mutates `command`, `rawCommand`, `cwd`, `agentId`, or
   `sessionKey` between prepare and the final approved `system.run` forward,
   the gateway rejects the run instead of trusting the mutated payload.

@@ -1,5 +1,5 @@
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
-import { resolveMissingRequestedScope, roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
 import type {
   RotateDeviceTokenResult,
   RevokeDeviceTokenResult,
@@ -19,49 +19,16 @@ import {
   persistDevicePairingStoreState as persistState,
   updatePairedDeviceInTransaction,
 } from "./device-pairing-store.js";
+import {
+  reusablePairedDeviceToken,
+  scopesWithinApprovedDeviceBaseline,
+  verifyPairedDeviceToken,
+  type DeviceTokenVerification,
+} from "./device-pairing-token-policy.js";
 import { createDeviceAuthToken } from "./device-pairing-token-utils.js";
 import type { DeviceAuthToken, PairedDevice } from "./device-pairing.types.js";
-import { verifyPairingToken } from "./pairing-token.js";
 
-const SHARED_GATEWAY_AUTH_ISSUER_KIND = "shared-gateway-auth";
-const BROWSER_DEVICE_CLIENT_IDS = new Set(["openclaw-control-ui", "webchat-ui"]);
-const BROWSER_DEVICE_CLIENT_MODE = "webchat";
-
-function isBrowserRelatedPairedDevice(device: Pick<PairedDevice, "clientId" | "clientMode">) {
-  const clientMode = device.clientMode?.trim().toLowerCase();
-  if (clientMode === BROWSER_DEVICE_CLIENT_MODE) {
-    return true;
-  }
-  const clientId = device.clientId?.trim().toLowerCase();
-  return clientId ? BROWSER_DEVICE_CLIENT_IDS.has(clientId) : false;
-}
-
-function deviceTokenIssuerMatches(
-  entry: DeviceAuthToken,
-  issuer: DeviceAuthToken["issuer"] | undefined,
-): boolean {
-  if (!issuer) {
-    return !entry.issuer;
-  }
-  return entry.issuer?.kind === issuer.kind && entry.issuer.generation === issuer.generation;
-}
-
-function scopesWithinApprovedDeviceBaseline(params: {
-  role: string;
-  scopes: readonly string[];
-  approvedScopes: readonly string[] | null;
-}): boolean {
-  if (!params.approvedScopes) {
-    return false;
-  }
-  return roleScopesAllow({
-    role: params.role,
-    requestedScopes: params.scopes,
-    allowedScopes: params.approvedScopes,
-  });
-}
-
-/** Verify a device role token, scope it to the approval baseline, and mark last use. */
+/** Record use only if the current token still authorizes the request. */
 export function verifyDeviceTokenInWorker(params: {
   deviceId: string;
   token: string;
@@ -69,64 +36,23 @@ export function verifyDeviceTokenInWorker(params: {
   scopes: string[];
   requiredSharedGatewaySessionGeneration?: string;
   nowMs: number;
-}): { ok: boolean; reason?: string; issuer?: DeviceAuthToken["issuer"] } {
-  return updatePairedDeviceInTransaction<ReturnType<typeof verifyDeviceTokenInWorker>>(
-    params.deviceId,
-    (device) => {
-      if (!device) {
-        return { value: { ok: false, reason: "device-not-paired" } };
-      }
-      const role = normalizeDevicePairingRole(params.role);
-      if (!role) {
-        return { value: { ok: false, reason: "role-missing" } };
-      }
-      const entry = device.tokens?.[role];
-      if (!entry) {
-        return { value: { ok: false, reason: "token-missing" } };
-      }
-      if (entry.revokedAtMs) {
-        return { value: { ok: false, reason: "token-revoked" } };
-      }
-      if (!verifyPairingToken(params.token, entry.token)) {
-        return { value: { ok: false, reason: "token-mismatch" } };
-      }
-      if (
-        entry.issuer?.kind === SHARED_GATEWAY_AUTH_ISSUER_KIND &&
-        entry.issuer.generation !== params.requiredSharedGatewaySessionGeneration
-      ) {
-        return { value: { ok: false, reason: "issuer-generation-stale" } };
-      }
-      if (
-        !entry.issuer &&
-        params.requiredSharedGatewaySessionGeneration !== undefined &&
-        isBrowserRelatedPairedDevice(device)
-      ) {
-        return { value: { ok: false, reason: "legacy-browser-token" } };
-      }
-      const approvedScopes = resolveApprovedDeviceScopeBaseline(device);
-      if (
-        !scopesWithinApprovedDeviceBaseline({
-          role,
-          scopes: entry.scopes,
-          approvedScopes,
-        })
-      ) {
-        return { value: { ok: false, reason: "scope-mismatch" } };
-      }
-      const requestedScopes = normalizeDeviceAuthScopes(params.scopes);
-      if (!roleScopesAllow({ role, requestedScopes, allowedScopes: entry.scopes })) {
-        return { value: { ok: false, reason: "scope-mismatch" } };
-      }
-      return {
-        value: entry.issuer ? { ok: true, issuer: entry.issuer } : { ok: true },
-        patch: {
-          tokens: { ...device.tokens, [role]: { ...entry, lastUsedAtMs: params.nowMs } },
-          lastSeenAtMs: params.nowMs,
-          lastSeenReason: "device-token-auth",
-        },
-      };
-    },
-  );
+}): DeviceTokenVerification {
+  return updatePairedDeviceInTransaction<DeviceTokenVerification>(params.deviceId, (device) => {
+    const value = verifyPairedDeviceToken(device, params);
+    if (!value.ok || !device) {
+      return { value };
+    }
+    const role = params.role.trim();
+    const entry = device.tokens![role]!;
+    return {
+      value,
+      patch: {
+        tokens: { ...device.tokens, [role]: { ...entry, lastUsedAtMs: params.nowMs } },
+        lastSeenAtMs: params.nowMs,
+        lastSeenReason: "device-token-auth",
+      },
+    };
+  });
 }
 
 /** Return a reusable token for a role or issue one within the approved scope baseline. */
@@ -159,20 +85,9 @@ export function ensureDeviceTokenInWorker(params: {
     ) {
       return { value: null };
     }
-    if (existing && !existing.revokedAtMs) {
-      const existingWithinApproved = scopesWithinApprovedDeviceBaseline({
-        role,
-        scopes: existing.scopes,
-        approvedScopes,
-      });
-      const issuerAllowsReuse = deviceTokenIssuerMatches(existing, params.issuer);
-      if (
-        existingWithinApproved &&
-        issuerAllowsReuse &&
-        roleScopesAllow({ role, requestedScopes, allowedScopes: existing.scopes })
-      ) {
-        return { value: existing };
-      }
+    const reusable = reusablePairedDeviceToken(device, params);
+    if (reusable) {
+      return { value: reusable };
     }
     const now = params.nowMs;
     const next = createDeviceAuthToken({
@@ -215,13 +130,16 @@ function resolveDeviceTokenUpdateContext(params: { device: PairedDevice | null; 
 }
 
 /** Rotate a role token inside the device's approved scope baseline. */
-export function rotateDeviceTokenInWorker(params: {
-  deviceId: string;
-  role: string;
-  scopes?: string[];
-  callerScopes?: readonly string[];
-  nowMs: number;
-}): RotateDeviceTokenResult {
+export function rotateDeviceTokenInWorker(
+  params: {
+    deviceId: string;
+    role: string;
+    scopes?: string[];
+    callerScopes?: readonly string[];
+    nowMs: number;
+  },
+  onRetiredNodeToken?: (token: { deviceId: string; expectedToken: string }) => void,
+): RotateDeviceTokenResult {
   const state = loadDevicePairingStateForMutation(params.nowMs);
   const context = resolveDeviceTokenUpdateContext({
     device: state.pairedByDeviceId[params.deviceId.trim()] ?? null,
@@ -283,8 +201,10 @@ export function rotateDeviceTokenInWorker(params: {
     })
       ? { deviceId: device.deviceId, expectedToken: existing.token }
       : undefined;
-  // Retire the matching legacy cache with the token, even if the CLI loses its response.
-  persistState(state, undefined, "paired", { retiredNodeToken });
+  persistState(state, undefined, "paired");
+  if (retiredNodeToken) {
+    onRetiredNodeToken?.(retiredNodeToken);
+  }
   return { ok: true, entry: next };
 }
 

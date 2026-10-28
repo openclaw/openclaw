@@ -4,7 +4,7 @@ import { sleepWithAbort } from "@openclaw/retry";
 import { createConfigIO } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { hasErrnoCode } from "../infra/errno.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { resolveEffectiveUpdateChannel, type UpdateChannel } from "../infra/update-channels.js";
 import {
@@ -42,7 +42,6 @@ export function startNodeHostAutoUpdate(params: {
   const stateDir = resolveStateDir(env);
   const configIO = createConfigIO({ env, observe: false, pluginValidation: "skip" });
   let pending: (PreparedNodeRuntimeUpdate & { channel: UpdateChannel }) | undefined;
-  let paused = false;
   let handedOff = false;
   let waitingLogged = false;
 
@@ -76,16 +75,14 @@ export function startNodeHostAutoUpdate(params: {
       signal.throwIfAborted();
       return Date.now() - current.mtimeMs >= MIN_ACTIVATION_INTERVAL_MS;
     } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return true;
-      }
-      throw error;
+      ignoreMissingPath(error);
+      return true;
     }
   };
 
   const tryActivate = async () => {
     const candidate = pending;
-    if (!candidate || !(await activationAllowed())) {
+    if (!candidate) {
       return CHECK_INTERVAL_MS;
     }
     signal.throwIfAborted();
@@ -98,7 +95,6 @@ export function startNodeHostAutoUpdate(params: {
       }
       return IDLE_CHECK_INTERVAL_MS;
     }
-    paused = true;
     try {
       const { assertNodeRuntimeUpdateCompatible } = await import("./auto-update-compatibility.js");
       signal.throwIfAborted();
@@ -115,7 +111,6 @@ export function startNodeHostAutoUpdate(params: {
         pending = undefined;
         return CHECK_INTERVAL_MS;
       }
-      signal.throwIfAborted();
       await requestNodeHostLauncherRestart({
         runtimeRoot: candidate.runtimeRoot,
         version: candidate.version,
@@ -127,7 +122,6 @@ export function startNodeHostAutoUpdate(params: {
     } finally {
       if (!handedOff) {
         params.runtime.resumeAfterUpdate();
-        paused = false;
       }
     }
   };
@@ -168,10 +162,6 @@ export function startNodeHostAutoUpdate(params: {
     }
     params.log(`node auto-update preparing ${available.version}`);
     const { prepareNodeRuntimeUpdate } = await import("./auto-update-install.js");
-    const installPolicy = await readPolicy();
-    if (!installPolicy.enabled || installPolicy.channel !== policy.channel) {
-      return CHECK_INTERVAL_MS;
-    }
     signal.throwIfAborted();
     const candidate = await prepareNodeRuntimeUpdate({
       targetVersion: available.version,
@@ -181,10 +171,6 @@ export function startNodeHostAutoUpdate(params: {
     signal.throwIfAborted();
     for (const warning of candidate.warnings ?? []) {
       params.log(redactSensitiveText(warning));
-    }
-    const currentPolicy = await readPolicy();
-    if (!currentPolicy.enabled || currentPolicy.channel !== policy.channel) {
-      return CHECK_INTERVAL_MS;
     }
     pending = { ...candidate, channel: policy.channel };
     waitingLogged = false;
@@ -218,17 +204,11 @@ export function startNodeHostAutoUpdate(params: {
       }
       await sleepWithAbort(delay, signal, { ref: false });
     }
-  })()
-    .catch((error: unknown) => {
-      if (!signal.aborted) {
-        params.log(`node auto-update stopped: ${redactSensitiveText(String(error))}`);
-      }
-    })
-    .finally(() => {
-      if (paused && !handedOff) {
-        params.runtime.resumeAfterUpdate();
-      }
-    });
+  })().catch((error: unknown) => {
+    if (!signal.aborted) {
+      params.log(`node auto-update stopped: ${redactSensitiveText(String(error))}`);
+    }
+  });
 
   return {
     stop: async () => {

@@ -178,10 +178,6 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     'localized: "about ^[\\(minutes) minute](inflect: true)"',
     'localized: "about ^[\\(hours) hour](inflect: true)"',
   ],
-  "apps/ios/Sources/Voice/TalkGatewayPermissionState.swift": [
-    'String(format: String(localized: "Missing %@"), scope)',
-    'String(localized: "Requesting approval")',
-  ],
   "apps/ios/Sources/Voice/TalkModeManager.swift": [
     'format: String(localized: "Speech error: %@")',
     'format: String(localized: "Speak failed: %@")',

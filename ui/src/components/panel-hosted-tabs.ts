@@ -1,10 +1,13 @@
-import type { nothing, TemplateResult } from "lit";
+import type { JSX } from "@solidjs/web";
 
 export const PANEL_HOSTED_TABS_CHANGE_EVENT = "openclaw:panel-hosted-tabs-change";
 
 const hostedTabsChangeKeys = new WeakMap<HTMLElement, string>();
 
-export function notifyPanelHostedTabsChanged(element: HTMLElement, facts: unknown[]): void {
+export function notifyPanelHostedTabsChanged(
+  element: HTMLElement,
+  facts: readonly unknown[],
+): void {
   const key = JSON.stringify(facts);
   if (hostedTabsChangeKeys.get(element) !== key) {
     hostedTabsChangeKeys.set(element, key);
@@ -21,18 +24,19 @@ export type PanelHostedTab = {
   url?: string;
   /** Explicit icon URL; takes precedence over hostname lookup and `icon`. */
   favicon?: string;
-  icon?: TemplateResult;
+  icon?: JSX.Element;
   title?: string | null;
   statusLabel?: string | null;
   badge?: string | null;
   className?: string;
+  closeDisabled?: boolean;
 };
 
 export type PanelHostedTabsElement = HTMLElement & {
   readonly hostedTabs: PanelHostedTab[];
   readonly activeHostedTabId: string | null;
   /** Header actions while this panel is the active side panel; rendered by the host in light DOM. */
-  readonly hostedActions?: TemplateResult | typeof nothing;
+  readonly hostedActions?: HTMLElement;
   selectHostedTab(id: string): void;
   closeHostedTab(id: string): Promise<void>;
 };

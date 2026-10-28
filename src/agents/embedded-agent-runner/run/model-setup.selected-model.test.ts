@@ -7,6 +7,7 @@ import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/gener
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { writePersistedAuthProfileStoreRaw } from "../../auth-profiles/sqlite.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
+import { createEmptyPreparedModelRuntimeFixture } from "../model.fixture.test-support.js";
 import { createEmptyAgentDiscoveryStores } from "../model.js";
 import { createPreparedConfiguredRuntimeModelLookup } from "../model.static-id.js";
 import { prepareEmbeddedRunAuthPlan } from "./auth-plan.js";
@@ -123,26 +124,20 @@ describe("initial model setup", () => {
               }))
             : [];
         const snapshot: PreparedModelRuntimeSnapshot = {
-          catalogOwner: undefined,
+          ...createEmptyPreparedModelRuntimeFixture({
+            agentDir: state.agentDir(),
+            config,
+            metadataSnapshot,
+            createStores: () => stores,
+          }),
           agentId: "main",
-          agentDir: state.agentDir(),
           workspaceDir: state.workspaceDir,
-          activeProjectKeys: [],
-          config,
-          observationConfig: config,
-          isCurrent: () => true,
-          authModes: {},
-          metadataSnapshot,
           pluginRegistry: createEmptyPluginRegistry(),
-          allowGatewaySubagentBinding: false,
-          modelCatalog: { entries: [], routeVariants: [] },
-          inlineProviderModels: [],
           configuredRuntimeModels,
           findConfiguredRuntimeModel: createPreparedConfiguredRuntimeModelLookup(
             configuredRuntimeModels,
             metadataSnapshot,
           ),
-          createStores: () => stores,
         };
         await withPluginRuntimeGenerationScope(snapshot, async () => {
           const runParams: RunEmbeddedAgentInternalParams = {

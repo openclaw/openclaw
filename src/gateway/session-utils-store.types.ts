@@ -4,6 +4,7 @@ import type {
   SessionEntryReadSource,
 } from "../config/sessions/session-entry-read-source.types.js";
 import type { SessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
+import type { SessionTranscriptAnchorFacts } from "../config/sessions/session-transcript-anchor-read.types.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawRegisteredAgentDatabase } from "../state/openclaw-agent-db-contract.js";
 
@@ -21,6 +22,7 @@ export type GatewaySessionStoreTargetWithStore = GatewaySessionStoreTarget & {
   capturedReadSource?: CapturedSessionEntryReadSource;
   capturedReadSources?: CapturedSessionEntryReadSource[];
   lifecycleTimestamps?: SessionLifecycleTimestamps;
+  transcript?: SessionTranscriptAnchorFacts;
 };
 
 export type GatewaySessionStoreReadSources = Record<string, readonly SessionEntryReadSource[]>;

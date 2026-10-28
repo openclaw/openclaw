@@ -9,23 +9,21 @@ import type { MutableUpdateExecutionParams } from "./update-command-execution.ty
 import { recordMutableUpdateInterruption } from "./update-command-mutable-signals.js";
 import type { MutableUpdateExecutionResult } from "./update-command-result.js";
 
-type MutableUpdateSettlement = {
-  result: UpdateRunResult;
-  failure: MutableUpdateExecutionResult["failure"];
-  candidateFailureReason?: string;
-  databaseBackup?: UpdateDatabaseBackup;
-  databaseCaptureStep?: UpdateStepResult;
-  activationSteps: UpdateStepResult[];
-  doctorEntered: boolean;
-  packageTransaction?: PackageUpdateTransaction;
-  originalRun: MutableUpdateExecutionParams["opts"]["run"];
-  env?: NodeJS.ProcessEnv;
-  assertCurrent: () => void;
-};
-
 export async function settleMutableUpdateResult(
   params: MutableUpdateExecutionParams,
-  settlement: MutableUpdateSettlement,
+  settlement: {
+    result: UpdateRunResult;
+    failure: MutableUpdateExecutionResult["failure"];
+    candidateFailureReason?: string;
+    databaseBackup?: UpdateDatabaseBackup;
+    databaseCaptureStep?: UpdateStepResult;
+    activationSteps: UpdateStepResult[];
+    doctorEntered: boolean;
+    packageTransaction?: PackageUpdateTransaction;
+    originalRun: MutableUpdateExecutionParams["opts"]["run"];
+    env?: NodeJS.ProcessEnv;
+    assertCurrent: () => void;
+  },
 ): Promise<UpdateRunResult> {
   const { opts } = params;
   const { databaseBackup, databaseCaptureStep, activationSteps, packageTransaction } = settlement;

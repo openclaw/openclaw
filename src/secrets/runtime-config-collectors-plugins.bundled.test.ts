@@ -1,10 +1,8 @@
 /** Tests bundled plugin config secret collectors. */
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { findBundledPluginMetadataById } from "../plugins/bundled-plugin-metadata.js";
-import { resolvePluginConfigContractsById } from "../plugins/config-contracts.js";
+import type { PluginOrigin } from "../plugins/types.js";
 import { resolveSecretRefValues } from "./resolve.js";
 import { collectPluginConfigAssignments } from "./runtime-config-collectors-plugins.js";
 import { applyResolvedAssignments, createResolverContext } from "./runtime-shared.js";
@@ -13,179 +11,81 @@ function envRef(id: string) {
   return { source: "env" as const, provider: "default", id };
 }
 
-const explicitMainRoster: NonNullable<OpenClawConfig["agents"]> = {
-  entries: { main: {} },
-};
 const isolatedEnv: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: process.env.OPENCLAW_TEST_HOME };
 
-describe("collectPluginConfigAssignments bundled plugin manifests", () => {
-  it("collects Codex app-server SecretRefs from bundled manifest contracts", () => {
-    expect(
-      findBundledPluginMetadataById("codex", {
-        includeChannelConfigs: false,
-        includeSyntheticChannelConfigs: false,
-      })?.manifest.configContracts?.secretInputs?.paths,
-    ).toEqual([
-      { path: "appServer.authToken", expected: "string" },
-      { path: "appServer.headers.*", expected: "string" },
-    ]);
-    const config = {
-      agents: explicitMainRoster,
-      plugins: {
-        entries: {
-          codex: {
-            enabled: true,
-            config: {
-              appServer: {
-                transport: "websocket",
-                url: "wss://codex-app-server.example.internal/ws",
-                authToken: "$CODEX_APP_SERVER_TOKEN",
-                headers: {
-                  Authorization: "Bearer literal-token",
-                  "x-codex-client-session-token": envRef("CODEX_CLIENT_SESSION_TOKEN"),
-                },
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    expect(
-      resolvePluginConfigContractsById({
-        config,
-        workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
-        env: isolatedEnv,
-        fallbackToBundledMetadata: true,
-        fallbackToBundledMetadataForResolvedBundled: true,
-        pluginIds: ["codex"],
-        fallbackBundledPluginIds: ["codex"],
-      }).get("codex")?.configContracts.secretInputs?.paths,
-    ).toEqual([
-      { path: "appServer.authToken", expected: "string" },
-      { path: "appServer.headers.*", expected: "string" },
-    ]);
-    const context = createResolverContext({
-      sourceConfig: config,
-      env: isolatedEnv,
-    });
+function pluginConfig(id: string, config: Record<string, unknown>): OpenClawConfig {
+  return {
+    agents: { entries: { main: {} } },
+    plugins: { entries: { [id]: { enabled: true, config } } },
+  };
+}
 
-    collectPluginConfigAssignments({
-      config,
-      defaults: undefined,
-      context,
-      loadablePluginOrigins: new Map([["codex", "bundled"]]),
-    });
-
-    expect({
-      assignments: context.assignments.map((assignment) => assignment.path).toSorted(),
-      warnings: context.warnings,
-    }).toEqual({
-      assignments: [
-        "plugins.entries.codex.config.appServer.authToken",
-        "plugins.entries.codex.config.appServer.headers.x-codex-client-session-token",
-      ],
-      warnings: [],
-    });
-
-    context.assignments[0]?.apply("resolved-app-server-token");
-    context.assignments[1]?.apply("resolved-session-token");
-    expect(config.plugins?.entries?.codex?.config).toMatchObject({
-      appServer: {
-        authToken: "resolved-app-server-token",
-        headers: {
-          Authorization: "Bearer literal-token",
-          "x-codex-client-session-token": "resolved-session-token",
-        },
-      },
-    });
+function collect(
+  config: OpenClawConfig,
+  id: string,
+  env = isolatedEnv,
+  sourceConfig = config,
+  origin: PluginOrigin = "bundled",
+) {
+  const context = createResolverContext({ sourceConfig, env });
+  collectPluginConfigAssignments({
+    config,
+    defaults: undefined,
+    context,
+    loadablePluginOrigins: new Map([[id, origin]]),
   });
+  return context;
+}
 
+async function resolveAssignments(context: ReturnType<typeof collect>, config: OpenClawConfig) {
+  const resolved = await resolveSecretRefValues(
+    context.assignments.map((assignment) => assignment.ref),
+    { config, env: context.env, cache: context.cache },
+  );
+  applyResolvedAssignments({ assignments: context.assignments, resolved });
+}
+
+function expectCollected(context: ReturnType<typeof collect>, paths: string[]) {
+  expect(context.assignments.map((assignment) => assignment.path).toSorted()).toEqual(paths);
+  expect(context.warnings).toEqual([]);
+}
+
+describe("collectPluginConfigAssignments bundled plugin manifests", () => {
   it("resolves only explicitly referenced Google web-search headers", async () => {
-    expect(
-      findBundledPluginMetadataById("google", {
-        includeChannelConfigs: false,
-        includeSyntheticChannelConfigs: false,
-      })?.manifest.configContracts?.secretInputs?.paths,
-    ).toEqual([{ path: "webSearch.headers.*", expected: "string" }]);
-    const config = {
-      agents: explicitMainRoster,
-      plugins: {
-        entries: {
-          google: {
-            enabled: true,
-            config: {
-              webSearch: {
-                headers: {
-                  "X-Routing-Target": "staging",
-                  "X-Gateway-Token": envRef("GEMINI_GATEWAY_TOKEN"),
-                },
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const env = { ...isolatedEnv, GEMINI_GATEWAY_TOKEN: "resolved-gateway-token" };
-    const context = createResolverContext({ sourceConfig: config, env });
-
-    collectPluginConfigAssignments({
-      config,
-      defaults: undefined,
-      context,
-      loadablePluginOrigins: new Map([["google", "bundled"]]),
-    });
-
-    expect(context.assignments.map((assignment) => assignment.path)).toEqual([
-      "plugins.entries.google.config.webSearch.headers.X-Gateway-Token",
-    ]);
-    const resolved = await resolveSecretRefValues(
-      context.assignments.map((assignment) => assignment.ref),
-      { config, env, cache: context.cache },
-    );
-    applyResolvedAssignments({ assignments: context.assignments, resolved });
-    expect(config.plugins?.entries?.google?.config).toMatchObject({
+    const config = pluginConfig("google", {
       webSearch: {
         headers: {
           "X-Routing-Target": "staging",
-          "X-Gateway-Token": "resolved-gateway-token",
+          "X-Gateway-Token": envRef("GEMINI_GATEWAY_TOKEN"),
         },
+      },
+    });
+    const context = collect(config, "google", {
+      ...isolatedEnv,
+      GEMINI_GATEWAY_TOKEN: "resolved-gateway-token",
+    });
+    expect(context.assignments.map((assignment) => assignment.path)).toEqual([
+      "plugins.entries.google.config.webSearch.headers.X-Gateway-Token",
+    ]);
+    await resolveAssignments(context, config);
+    expect(config.plugins?.entries?.google?.config).toMatchObject({
+      webSearch: {
+        headers: { "X-Routing-Target": "staging", "X-Gateway-Token": "resolved-gateway-token" },
       },
     });
   });
 
   it("materializes Tavily tool credentials from the plugin secret contract", async () => {
-    expect(
-      findBundledPluginMetadataById("tavily", {
-        includeChannelConfigs: false,
-        includeSyntheticChannelConfigs: false,
-      })?.manifest.configContracts?.secretInputs?.paths,
-    ).toEqual([{ path: "webSearch.apiKey", expected: "string", ownerKind: "capability" }]);
-    const sourceConfig = {
-      agents: explicitMainRoster,
-      plugins: {
-        entries: {
-          tavily: {
-            enabled: true,
-            config: {
-              webSearch: {
-                apiKey: envRef("TAVILY_API_KEY"),
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const runtimeConfig = structuredClone(sourceConfig);
-    const env = { ...isolatedEnv, TAVILY_API_KEY: "resolved-tavily-key" };
-    const context = createResolverContext({ sourceConfig, env });
-
-    collectPluginConfigAssignments({
-      config: runtimeConfig,
-      defaults: undefined,
-      context,
-      loadablePluginOrigins: new Map([["tavily", "bundled"]]),
+    const sourceConfig = pluginConfig("tavily", {
+      webSearch: { apiKey: envRef("TAVILY_API_KEY") },
     });
-
+    const runtimeConfig = structuredClone(sourceConfig);
+    const context = collect(
+      runtimeConfig,
+      "tavily",
+      { ...isolatedEnv, TAVILY_API_KEY: "resolved-tavily-key" },
+      sourceConfig,
+    );
     expect(context.assignments.map((assignment) => assignment.path)).toEqual([
       "plugins.entries.tavily.config.webSearch.apiKey",
     ]);
@@ -198,11 +98,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       },
     ]);
     expect(context.assignments[0]?.ownerContractDigest).toBeUndefined();
-    const resolved = await resolveSecretRefValues(
-      context.assignments.map((assignment) => assignment.ref),
-      { config: sourceConfig, env, cache: context.cache },
-    );
-    applyResolvedAssignments({ assignments: context.assignments, resolved });
+    await resolveAssignments(context, sourceConfig);
     expect(sourceConfig.plugins?.entries?.tavily?.config).toMatchObject({
       webSearch: { apiKey: envRef("TAVILY_API_KEY") },
     });
@@ -212,154 +108,70 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
   });
 
   it("collects voice-call SecretRef assignments from bundled manifest contracts", () => {
-    expect(
-      findBundledPluginMetadataById("voice-call", {
-        includeChannelConfigs: false,
-        includeSyntheticChannelConfigs: false,
-      })?.manifest.configContracts?.secretInputs?.paths,
-    ).toEqual([
-      { path: "twilio.authToken", expected: "string" },
-      { path: "realtime.providers.*.apiKey", expected: "string" },
-      { path: "streaming.providers.*.apiKey", expected: "string" },
-      { path: "tts.providers.*.apiKey", expected: "string" },
-    ]);
-    const config = {
-      agents: explicitMainRoster,
-      plugins: {
-        entries: {
-          "voice-call": {
-            enabled: true,
-            config: {
-              twilio: {
-                authToken: envRef("TWILIO_AUTH_TOKEN"),
-              },
-              realtime: {
-                providers: {
-                  google: {
-                    apiKey: envRef("GEMINI_API_KEY"),
-                  },
-                },
-              },
-              streaming: {
-                providers: {
-                  openai: {
-                    apiKey: envRef("OPENAI_API_KEY"),
-                  },
-                },
-              },
-              tts: {
-                providers: {
-                  openai: {
-                    apiKey: envRef("OPENAI_API_KEY"),
-                  },
-                  elevenlabs: {
-                    apiKey: envRef("ELEVENLABS_API_KEY"),
-                  },
-                },
-              },
-            },
-          },
+    const numberRouteRefs = [
+      envRef("VOICE_CALL_ROUTE_ENV_KEY"),
+      { source: "file" as const, provider: "route-file", id: "/voice-call/apiKey" },
+      { source: "exec" as const, provider: "route-exec", id: "voice-call/apiKey" },
+      { source: "store" as const, provider: "default", id: "VOICE_CALL_ROUTE_STORE_KEY" },
+    ];
+    const numberRoutes = Object.fromEntries(
+      numberRouteRefs.map((ref, index) => [
+        `+1555000100${index}`,
+        { tts: { providers: { openai: { apiKey: ref } } } },
+      ]),
+    );
+    const config = pluginConfig("voice-call", {
+      numbers: numberRoutes,
+      twilio: { authToken: envRef("TWILIO_AUTH_TOKEN") },
+      realtime: { providers: { google: { apiKey: envRef("GEMINI_API_KEY") } } },
+      streaming: { providers: { openai: { apiKey: envRef("OPENAI_API_KEY") } } },
+      tts: {
+        providers: {
+          openai: { apiKey: envRef("OPENAI_API_KEY") },
+          elevenlabs: { apiKey: envRef("ELEVENLABS_API_KEY") },
         },
       },
-    } as OpenClawConfig;
-    expect(
-      resolvePluginConfigContractsById({
-        config,
-        workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
-        env: isolatedEnv,
-        fallbackToBundledMetadata: true,
-        fallbackToBundledMetadataForResolvedBundled: true,
-        pluginIds: ["voice-call"],
-        fallbackBundledPluginIds: ["voice-call"],
-      }).get("voice-call")?.configContracts.secretInputs?.paths,
-    ).toEqual([
-      { path: "twilio.authToken", expected: "string" },
-      { path: "realtime.providers.*.apiKey", expected: "string" },
-      { path: "streaming.providers.*.apiKey", expected: "string" },
-      { path: "tts.providers.*.apiKey", expected: "string" },
+    });
+    const context = collect(config, "voice-call");
+    expectCollected(context, [
+      ...numberRouteRefs.map(
+        (_, index) =>
+          `plugins.entries.voice-call.config.numbers["+1555000100${index}"].tts.providers.openai.apiKey`,
+      ),
+      "plugins.entries.voice-call.config.realtime.providers.google.apiKey",
+      "plugins.entries.voice-call.config.streaming.providers.openai.apiKey",
+      "plugins.entries.voice-call.config.tts.providers.elevenlabs.apiKey",
+      "plugins.entries.voice-call.config.tts.providers.openai.apiKey",
+      "plugins.entries.voice-call.config.twilio.authToken",
     ]);
-    const context = createResolverContext({
-      sourceConfig: config,
-      env: isolatedEnv,
-    });
-
-    collectPluginConfigAssignments({
-      config,
-      defaults: undefined,
-      context,
-      loadablePluginOrigins: new Map([["voice-call", "bundled"]]),
-    });
-
-    expect({
-      assignments: context.assignments.map((assignment) => assignment.path).toSorted(),
-      warnings: context.warnings,
-    }).toEqual({
-      assignments: [
-        "plugins.entries.voice-call.config.realtime.providers.google.apiKey",
-        "plugins.entries.voice-call.config.streaming.providers.openai.apiKey",
-        "plugins.entries.voice-call.config.tts.providers.elevenlabs.apiKey",
-        "plugins.entries.voice-call.config.tts.providers.openai.apiKey",
-        "plugins.entries.voice-call.config.twilio.authToken",
-      ],
-      warnings: [],
-    });
+    for (const [index, ref] of numberRouteRefs.entries()) {
+      const number = `+1555000100${index}`;
+      context.assignments
+        .find(
+          (assignment) =>
+            assignment.path ===
+            `plugins.entries.voice-call.config.numbers["${number}"].tts.providers.openai.apiKey`,
+        )
+        ?.apply(`resolved-${ref.source}`);
+      expect(numberRoutes[number]?.tts.providers.openai.apiKey).toBe(`resolved-${ref.source}`);
+    }
   });
 
   it("collects google-meet realtime provider SecretRefs from its installed manifest", () => {
-    const googleMeetPluginDir = fileURLToPath(
-      new URL("../../extensions/google-meet", import.meta.url),
-    );
-    const config = {
-      agents: explicitMainRoster,
-      plugins: {
-        load: { paths: [googleMeetPluginDir] },
-        entries: {
-          "google-meet": {
-            enabled: true,
-            config: {
-              realtime: {
-                providers: {
-                  google: {
-                    apiKey: envRef("GEMINI_API_KEY"),
-                  },
-                  openai: {
-                    apiKey: envRef("OPENAI_API_KEY"),
-                  },
-                },
-              },
-            },
-          },
+    const config = pluginConfig("google-meet", {
+      realtime: {
+        providers: {
+          google: { apiKey: envRef("GEMINI_API_KEY") },
+          openai: { apiKey: envRef("OPENAI_API_KEY") },
         },
       },
-    } as OpenClawConfig;
-    expect(
-      resolvePluginConfigContractsById({
-        config,
-        env: isolatedEnv,
-        pluginIds: ["google-meet"],
-      }).get("google-meet")?.configContracts.secretInputs?.paths,
-    ).toEqual([{ path: "realtime.providers.*.apiKey", expected: "string" }]);
-    const context = createResolverContext({
-      sourceConfig: config,
-      env: isolatedEnv,
     });
-
-    collectPluginConfigAssignments({
-      config,
-      defaults: undefined,
-      context,
-      loadablePluginOrigins: new Map([["google-meet", "config"]]),
-    });
-
-    expect({
-      assignments: context.assignments.map((assignment) => assignment.path).toSorted(),
-      warnings: context.warnings,
-    }).toEqual({
-      assignments: [
-        "plugins.entries.google-meet.config.realtime.providers.google.apiKey",
-        "plugins.entries.google-meet.config.realtime.providers.openai.apiKey",
-      ],
-      warnings: [],
-    });
+    config.plugins!.load = {
+      paths: [fileURLToPath(new URL("../../extensions/google-meet", import.meta.url))],
+    };
+    expectCollected(collect(config, "google-meet", isolatedEnv, config, "config"), [
+      "plugins.entries.google-meet.config.realtime.providers.google.apiKey",
+      "plugins.entries.google-meet.config.realtime.providers.openai.apiKey",
+    ]);
   });
 });

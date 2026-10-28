@@ -1,7 +1,7 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import type { MemoryFlushToolRunContext } from "../../agents/agent-tools.memory-flush.types.js";
+import { createSessionMaintenanceFollowup } from "../../agents/session-maintenance/run.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -14,7 +14,10 @@ import {
 import { getMemoryProviderRuntime } from "../../plugins/memory-state.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { resolveModelFallbackOptions } from "./agent-runner-utils.js";
-import { isToolsMemoryFlushPlan, resolveMemoryFlushPlanForRun } from "./memory-flush-plan.js";
+import {
+  isToolsMemoryFlushPlan,
+  type MemoryFlushPlanForRunResolution,
+} from "./memory-flush-plan.js";
 import {
   deriveMemoryFlushId,
   ensureMemoryFlushTargetFile,
@@ -24,57 +27,24 @@ import type { FollowupRun } from "./queue.js";
 
 const log = createSubsystemLogger("auto-reply/memory-flush");
 
-// A flush-specific model is exact: it never inherits the source fallback chain.
-function resolveMemoryFlushModelFallbackOptions(
-  run: FollowupRun["run"],
-  model: string | undefined,
-  config: FollowupRun["run"]["config"],
-) {
-  const options = resolveModelFallbackOptions(run, config);
-  const override = normalizeOptionalString(model);
-  if (!override) {
-    return options;
-  }
-  const slashIdx = override.indexOf("/");
-  const overrideProvider = override.slice(0, slashIdx).trim();
-  const overrideModel = override.slice(slashIdx + 1).trim();
-  return {
-    ...options,
-    ...(slashIdx > 0 && overrideProvider && overrideModel
-      ? { provider: overrideProvider, model: overrideModel }
-      : { model: override }),
-    requestedRouteResolution: "raw" as const,
-    fallbacksOverride: [],
-  };
-}
-
 export async function prepareMemoryFlushAttempt(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
+  runtimePolicySessionKey?: string;
   storePath?: string;
   preflightAdmission?: UserTurnTranscriptAdmissionReceipt;
+  recoveryContextTokenBudget?: number;
   flushRunId: string;
-  contextWindowTokens: number;
-  memoryFlushWritable: boolean;
+  resolution: MemoryFlushPlanForRunResolution;
   abortSignal?: AbortSignal;
   assertCurrent: () => void;
   recordPersistenceToolSuccess: () => void;
 }) {
   params.assertCurrent();
-  const resolution = resolveMemoryFlushPlanForRun({
-    cfg: params.cfg,
-    nowMs: Date.now(),
-    contextWindowTokens: params.contextWindowTokens,
-  });
-  if (!resolution) {
-    return null;
-  }
-  const plan = resolution.plan;
-  if (!isToolsMemoryFlushPlan(plan) && !params.memoryFlushWritable) {
-    return null;
-  }
+  const { resolution } = params;
+  const { plan } = resolution;
   const { sessionKey, sessionEntry, followupRun } = params;
   if (!sessionKey || !sessionEntry) {
     throw new Error("Memory flush has no current transcript target.");
@@ -95,6 +65,8 @@ export async function prepareMemoryFlushAttempt(params: {
             // Maintenance copies carry the source turn's owner status apart from their own grant.
             senderIsOwner: followupRun.memoryAudienceSenderIsOwner ?? followupRun.run.senderIsOwner,
             storePath: sourceStorePath,
+            resolveAgentStorePath: (hopAgentId) =>
+              resolveSessionStorePathForScope({ agentId: hopAgentId }, params.cfg),
             assertCallerCurrent: params.assertCurrent,
           },
           sessionEntry,
@@ -144,11 +116,19 @@ export async function prepareMemoryFlushAttempt(params: {
     const systemPrompt = [followupRun.run.extraSystemPrompt, plan.systemPrompt]
       .filter(Boolean)
       .join("\n\n");
-    const selection = resolveMemoryFlushModelFallbackOptions(
-      followupRun.run,
-      plan.model,
-      params.cfg,
-    );
+    const selection = resolveModelFallbackOptions(followupRun.run, params.cfg);
+    const sourcePolicySessionKey =
+      params.runtimePolicySessionKey ?? followupRun.run.runtimePolicySessionKey ?? sessionKey;
+    const maintenanceRun = createSessionMaintenanceFollowup({
+      run: followupRun.run,
+      sessionEntry: { sessionId: memorySession.sessionId, updatedAt: Date.now() },
+      cfg: params.cfg,
+      sessionKey: memorySession.sessionKey,
+      runtimePolicySessionKey: sourcePolicySessionKey,
+      provider: selection.provider,
+      model: selection.model,
+      auth: followupRun.run,
+    }).run;
     // Delegation shares source revocation while binding tool use to the detached session.
     params.assertCurrent();
     delegated = sourceAudience
@@ -181,14 +161,20 @@ export async function prepareMemoryFlushAttempt(params: {
       followupRun.operatorAuthority,
     );
     return {
-      plan,
       writePath: isToolsMemoryFlushPlan(plan) ? undefined : plan.relativePath,
       systemPrompt,
       selection,
       preparedRunAdmission,
-      memorySession,
+      memorySession: {
+        ...memorySession,
+        ...(params.recoveryContextTokenBudget !== undefined
+          ? { disableCompactionRecovery: true as const }
+          : {}),
+      },
       memoryAudience: delegated?.audience,
       memoryFlushTools,
+      maintenanceRun,
+      sourcePolicySessionKey,
       release,
     };
   } catch (error) {

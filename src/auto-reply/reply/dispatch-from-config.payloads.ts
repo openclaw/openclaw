@@ -1,6 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
@@ -20,19 +18,11 @@ import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.type
 
 const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runtime.js"));
 
-const NO_VISIBLE_REPLY_FALLBACK_TEXT =
-  "⚠️ OpenClaw couldn't produce or deliver a reply. Please try again. If this keeps happening, ask the operator to check the gateway logs.";
-
-export function buildNoVisibleReplyFallbackText(runId?: string): string {
-  const reference = normalizeOptionalString(runId);
-  // Caller-supplied IDs must not inject markup, mentions, or unbounded text into a channel.
-  return reference && /^[a-z0-9][a-z0-9_-]{0,127}$/iu.test(reference)
-    ? `${NO_VISIBLE_REPLY_FALLBACK_TEXT} Reference: ${reference}.`
-    : NO_VISIBLE_REPLY_FALLBACK_TEXT;
-}
-
 export const QUEUE_CAP_REJECTION_TEXT =
   "This message was not queued because the session queue is full. Please try again after the current response finishes.";
+
+export const COLLABORATIVE_STEERING_DISABLED_TEXT =
+  "Someone else’s turn is still running, and collaborative steering is disabled. Your message wasn’t queued. Resend it as /followup <message> to run it afterward.\n\nAdmins can enable collaborative steering with messages.queue.allowCollaborativeSteering: true.";
 
 type SourceReplySuppressionState = {
   ctx: { InboundEventKind?: InboundEventKind };
@@ -114,29 +104,6 @@ export function createFinalDispatchPayloadDedupeKey(payload: ReplyPayload): stri
       sourceReplyTranscriptMirror: metadata?.sourceReplyTranscriptMirror,
     },
   });
-}
-
-export function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string {
-  const metadata = getReplyPayloadMetadata(reply);
-  const text = normalizeOptionalString(reply.text);
-  const textPreview = text ? truncateUtf16Safe(text.replace(/\s+/g, " "), 160) : undefined;
-  const sendableParts = resolveSendableOutboundReplyParts(reply);
-  const richParts = [
-    reply.presentation ? "presentation" : undefined,
-    reply.interactive ? "interactive" : undefined,
-    reply.channelData ? "channelData" : undefined,
-  ].filter(Boolean);
-  return [
-    `textChars=${text?.length ?? 0}`,
-    `media=${sendableParts.mediaCount}`,
-    `rich=${richParts.length ? richParts.join("|") : "none"}`,
-    `error=${reply.isError === true}`,
-    `beforeAgentRunBlocked=${metadata?.beforeAgentRunBlocked === true}`,
-    `deliverDespiteSuppression=${metadata?.deliverDespiteSourceReplySuppression === true}`,
-    textPreview ? `textPreview=${JSON.stringify(textPreview)}` : undefined,
-  ]
-    .filter(Boolean)
-    .join(" ");
 }
 
 export async function maybeApplyTtsToReplyPayload(

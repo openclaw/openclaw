@@ -73,6 +73,10 @@ export class TeamReportsScheduler {
       throw new Error("Team Reports scheduler cannot be started again");
     }
     this.accepting = true;
+    // Keep manual generation and stored-report readers available without arming collection.
+    if (!this.options.config.schedule.enabled) {
+      return;
+    }
     const now = Date.now();
     const notBefore = now + STARTUP_GRACE_MS;
     this.catchUpDay = describePeriod("day", now - DAY_MS);
@@ -96,6 +100,7 @@ export class TeamReportsScheduler {
   async status() {
     return {
       running: this.accepting,
+      scheduleEnabled: this.options.config.schedule.enabled,
       activeRunId: this.active?.id,
       nextDue: { ...this.due },
       runs: await this.options.store.listRuns(),

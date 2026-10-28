@@ -82,6 +82,7 @@ export function createConfigSource(opts: {
       return observation;
     },
     start: files.start,
+    whenSettled: files.whenSettled,
     observe,
     accept(revision: number) {
       if (revision === observation.revision) {

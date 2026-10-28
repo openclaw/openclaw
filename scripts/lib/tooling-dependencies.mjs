@@ -84,8 +84,22 @@ export function toolingDependencyOptions(checkout, consumer, { tsx = false } = {
   }
   let root = checkout;
   try {
+    // Hook-local Git context must not redirect probes for another checkout.
+    const gitEnv = { ...process.env };
+    for (const key of [
+      "GIT_DIR",
+      "GIT_WORK_TREE",
+      "GIT_COMMON_DIR",
+      "GIT_INDEX_FILE",
+      "GIT_PREFIX",
+      "GIT_OBJECT_DIRECTORY",
+      "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ]) {
+      delete gitEnv[key];
+    }
     const git = (cwd, args) =>
       spawnSync(process.env.OPENCLAW_PR_GIT || "git", ["-C", cwd, ...args], {
+        env: gitEnv,
         encoding: "utf8",
         timeout: 10_000,
         stdio: ["ignore", "pipe", "pipe"],

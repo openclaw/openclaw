@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 
 function configRuntimeAliasBindings(source: ts.SourceFile): string {
   const names = new Set<string>();
@@ -57,14 +57,17 @@ export function isUpdateConfigRuntimeAlias(
   if (!contents.includes(target) || !contents.endsWith(bindings)) {
     return false;
   }
-  // 2026.9.5-9.8 shipped the older diagnostic templates. Retain only those
-  // exact bodies for that upgrade window; the target and generated bindings vary.
+  // 2026.9.5 through 2026.10.3 and 2026.10.5-beta.3 shipped the older reader templates.
+  // Retain only those exact bodies for that upgrade window; the target and generated
+  // bindings vary.
   const body = contents
     .slice(0, -bindings.length)
     .replace(target, 'const target = new URL("./", import.meta.url).href;');
   return [
     "f1e325b58b57ccc6f958a025bcb068bdcdc773fde0c61dc7913179c1540f2607",
     "dc8d98455b7518b7eb4f4777dee6c089d2524a7e8f9dba4b5866ec551ec03931",
+    "49fbd87500f7e9b14f67c786702adf8491b8c99890a76b7f42cc836dffaef6d1",
+    "13537ac90acba261750673c3940edbf19b9d620790b2cbef3fe9b3a2288e7ea4",
   ].includes(createHash("sha256").update(body).digest("hex"));
 }
 
@@ -78,11 +81,18 @@ export function buildUpdateConfigRuntimeAlias(
   const worker = String.raw`
 const fs = require("node:fs");
 // Reserve stdout for the response; config diagnostics must not corrupt its frame.
+const stdoutWrite = process.stdout.write.bind(process.stdout);
 globalThis.console = new (require("node:console").Console)(process.stderr, process.stderr);
 process.stdout.write = process.stderr.write.bind(process.stderr);
+// Opening process.stdout makes a pipe non-blocking, so a direct fd write can stop
+// partway. The stream queues the rest and flushes it before the natural exit; never
+// call process.exit here. Only one frame is written, so a failure cannot append another.
+let sent = false;
 function send(result) {
   const payload = JSON.stringify(result);
-  fs.writeFileSync(1, Buffer.byteLength(payload) + "\n" + payload);
+  if (sent) return;
+  sent = true;
+  stdoutWrite(Buffer.byteLength(payload) + "\n" + payload);
 }
 (async () => {
   try {
@@ -95,7 +105,7 @@ function send(result) {
     const value = await owner[request.operation](...request.args);
     send({ ok: true, value, logs });
   } catch (error) {
-    send({ ok: false, message: String(error) });
+    send({ ok: false, message: String(error), code: typeof error?.code === "string" ? error.code : undefined });
     process.exitCode = 1;
   }
 })().catch(() => { process.exitCode = 1; });
@@ -130,13 +140,27 @@ function input(operation, args, options, factory) {
   // A rollback replaces the alias too; never retain the removed candidate's hashed target.
   return JSON.stringify({ target: import.meta.url, operation, args, factory, options: options ? { ...options, logger: undefined } : undefined, captureLogs: Boolean(options?.logger) });
 }
-function finish(code, output, logger) {
+// Reader stderr may carry config diagnostics; report only the child's error and the exit facts.
+function failureReason(result, exit) {
+  if (result?.ok === false) {
+    const message = String(result.message);
+    return typeof result.code === "string" && !message.includes(result.code) ? message + " (" + result.code + ")" : message;
+  }
+  if (exit.tooLarge || exit.error?.code === "ENOBUFS") return "reader output exceeded " + spawnOptions.maxBuffer + " bytes";
+  if (exit.timedOut || exit.error?.code === "ETIMEDOUT") return "reader timed out after " + spawnOptions.timeout + " ms";
+  if (exit.error) return "reader process failed (" + (exit.error.code ?? exit.error.message) + ")";
+  if (exit.signal) return "reader process was terminated by " + exit.signal;
+  return "reader process exited with code " + exit.status + (result?.ok === true ? " after reporting success" : " without a result");
+}
+function finish(exit, output, logger) {
   let result;
   const frame = /^(\\d+)\\n([\\s\\S]*)$/.exec(output ?? "");
   try { if (frame && Number(frame[1]) === Buffer.byteLength(frame[2])) result = JSON.parse(frame[2]); } catch {}
   for (const entry of result?.logs ?? []) logger?.[entry.level]?.(...entry.args);
-  if (code === 0 && result?.ok === true) return result.value;
-  const error = new Error("Candidate config read failed; the existing service definition was left unchanged. Retry with the updated CLI.");
+  if (exit.status === 0 && !exit.error && !exit.tooLarge && result?.ok === true) return result.value;
+  const characters = Array.from(failureReason(result, exit).replace(/[\\s\\u0000-\\u001f\\u007f]+/g, " ").trim());
+  const reason = characters.length > 500 ? characters.slice(0, 499).join("") + "…" : characters.join("");
+  const error = new Error("Candidate config read failed: " + reason + ". The existing service definition was left unchanged. After the update finishes, run openclaw gateway install --force with the same --profile or --dev option as this update to refresh it.");
   error.code = "candidate-config-read-failed";
   console.warn("[update:warning:" + error.code + "] " + error.message);
   throw error;
@@ -147,10 +171,11 @@ function readSync(operation, args = [], options, factory = false) {
     env: childEnv(operation, args, options),
     input: input(operation, args, options, factory),
   });
-  return finish(child.status, child.stdout, options?.logger);
+  return finish(child, child.stdout, options?.logger);
 }
 async function read(operation, args = [], options, factory = false) {
   const request = input(operation, args, options, factory);
+  const started = Date.now();
   const child = spawn(process.execPath, ["--eval", worker], { ...spawnOptions, env: childEnv(operation, args, options) });
   let output = "";
   let outputBytes = 0;
@@ -163,12 +188,13 @@ async function read(operation, args = [], options, factory = false) {
   child.stderr.resume();
   child.stdin.on("error", () => {});
   child.stdin.end(request);
-  let failed = false;
-  const code = await new Promise(resolve => {
-    child.once("error", () => { failed = true; });
-    child.once("close", resolve);
+  let error;
+  const exit = await new Promise(resolve => {
+    child.once("error", cause => { error = cause; });
+    child.once("close", (status, signal) => resolve({ status, signal }));
   });
-  return finish(failed || outputBytes > spawnOptions.maxBuffer ? null : code, output, options?.logger);
+  const timedOut = exit.signal === spawnOptions.killSignal && Date.now() - started >= spawnOptions.timeout;
+  return finish({ ...exit, error, timedOut, tooLarge: outputBytes > spawnOptions.maxBuffer }, output, options?.logger);
 }
 const readers = {
   createConfigIO: (options) => ({

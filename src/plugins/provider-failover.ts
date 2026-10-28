@@ -1,5 +1,4 @@
 import { FAILOVER_REASONS, type FailoverReason } from "../agents/failover/signal.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveLoadedProviderRuntimePlugin,
   resolveLoadedProviderPluginsForHooks,
@@ -14,9 +13,7 @@ function isFailoverReason(value: unknown): value is FailoverReason {
 // event loop while an unrelated provider is loaded just to describe a failure.
 export function classifyProviderFailoverSignalWithPlugin(params: {
   provider?: string;
-  config?: OpenClawConfig;
   workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
   context: ProviderFailoverErrorContext;
 }) {
   const plugins = resolveProviderPluginsForScopedHook(params);

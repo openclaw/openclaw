@@ -1,6 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import { INVALID_PROJECT_ANNOTATION_KEY } from "./curated-annotations.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./openclaw-runtime-kysely.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  isPostgresSqlConnection,
+  type EngineConnection,
+} from "./openclaw-runtime-kysely.js";
 import type { MemoryEntryProvenance, MemoryOriginClass, MemorySessionKind } from "./types.js";
 
 type MemoryRecallMetadataDatabase = {
@@ -68,7 +72,7 @@ function decodeChunkProvenance(row: {
   };
 }
 
-export function readMemoryRecallMetadata(db: DatabaseSync, ids: readonly string[]) {
+export function readMemoryRecallMetadata(db: EngineConnection, ids: readonly string[]) {
   if (ids.length === 0) {
     return new Map<
       string,
@@ -111,7 +115,7 @@ export function readMemoryRecallMetadata(db: DatabaseSync, ids: readonly string[
 }
 
 export function readCuratedMemoryTriggerCandidates(
-  db: DatabaseSync,
+  db: EngineConnection,
   limit: number,
   activeProjectKeys?: readonly string[],
 ) {
@@ -124,7 +128,7 @@ export function readCuratedMemoryTriggerCandidates(
 }
 
 export function readCuratedProjectMemoryCandidates(
-  db: DatabaseSync,
+  db: EngineConnection,
   limit: number,
   activeProjectKeys: readonly string[],
 ) {
@@ -140,7 +144,7 @@ export function readCuratedProjectMemoryCandidates(
 }
 
 function readCuratedMemoryCandidates(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   limit: number;
   activeProjectKeys?: readonly string[];
   requireProject: boolean;
@@ -197,7 +201,7 @@ function readCuratedMemoryCandidates(params: {
 }
 
 function readCuratedCandidateBatch(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   limit: number;
   cursor?: { importance: number | null; path: string; id: string };
   requireProject: boolean;
@@ -240,7 +244,14 @@ function readCuratedCandidateBatch(params: {
       eb.or([
         eb("metadata.project_key", "is", null),
         ...projectKeyPrefilter.map((key) =>
-          eb(eb.fn<number>("instr", [eb.ref("metadata.project_key"), eb.val(key)]), ">", 0),
+          eb(
+            eb.fn<number>(isPostgresSqlConnection(params.db) ? "strpos" : "instr", [
+              eb.ref("metadata.project_key"),
+              eb.val(key),
+            ]),
+            ">",
+            0,
+          ),
         ),
       ]),
     );

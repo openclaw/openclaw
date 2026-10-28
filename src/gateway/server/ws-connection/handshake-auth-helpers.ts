@@ -7,6 +7,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
+import type { readConnectErrorRecoveryAdvice } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { ConnectParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { verifyDeviceSignature } from "../../../infra/device-identity.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
@@ -28,16 +29,6 @@ type PairingLocalityKind =
   | "browser_container_local"
   | "shared_secret_loopback_local"
   | "remote";
-
-export function isNativeAppUiClient(client: ConnectParams["client"]): boolean {
-  return (
-    client.mode === GATEWAY_CLIENT_MODES.UI &&
-    (client.id === GATEWAY_CLIENT_IDS.MACOS_APP ||
-      client.id === GATEWAY_CLIENT_IDS.LINUX_APP ||
-      client.id === GATEWAY_CLIENT_IDS.IOS_APP ||
-      client.id === GATEWAY_CLIENT_IDS.ANDROID_APP)
-  );
-}
 
 function resolveBrowserOriginRateLimitKey(requestOrigin?: string): string {
   const origin = URL.parse(requestOrigin?.trim() ?? "")?.origin;
@@ -260,12 +251,9 @@ export function resolveUnauthorizedHandshakeContext(params: {
 }): {
   authProvided: AuthProvidedKind;
   canRetryWithDeviceToken: boolean;
-  recommendedNextStep:
-    | "retry_with_device_token"
-    | "update_auth_configuration"
-    | "update_auth_credentials"
-    | "wait_then_retry"
-    | "review_auth_configuration";
+  recommendedNextStep: NonNullable<
+    ReturnType<typeof readConnectErrorRecoveryAdvice>["recommendedNextStep"]
+  >;
 } {
   const authProvided = params.connectAuth?.password
     ? "password"

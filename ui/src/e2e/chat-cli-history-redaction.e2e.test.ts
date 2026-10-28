@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import type { AgentMessage } from "../../../src/agents/runtime/index.js";
-import { redactTranscriptMessage } from "../../../src/agents/transcript-redact.js";
 import {
   mergeImportedChatHistoryMessages,
   readClaudeCliSessionMessagesAsync,
@@ -23,12 +22,9 @@ const suite = createChatFlowE2eSuite();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 suite.define(() => {
-  it("renders a real imported Claude transcript once without exposing its unredacted secret", async () => {
+  it("renders a real imported Claude transcript once with its original text", async () => {
     const homeDir = tempDirs.make("openclaw-cli-history-redaction-");
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-
-    try {
-      const page = await context.newPage();
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const cliSessionId = "control-ui-claude-history-redaction";
       const secret = "sk-abcdef1234567890xyz";
       const userText = `CLI user copy ${secret}`;
@@ -39,29 +35,25 @@ suite.define(() => {
       await fs.writeFile(
         filePath,
         [
-          {
-            type: "user",
-            uuid: "control-ui-claude-user-copy",
-            timestamp: "2026-03-26T16:29:54.800Z",
-            message: { role: "user", content: userText },
-          },
-          {
-            type: "assistant",
-            uuid: "control-ui-claude-imported-assistant",
-            timestamp: "2026-03-26T16:29:55.800Z",
-            message: { role: "assistant", content: assistantText },
-          },
+          ["user", "user-copy", "54", userText],
+          ["assistant", "imported-assistant", "55", assistantText],
         ]
+          .map(([role, suffix, second, content]) => ({
+            type: role,
+            uuid: `control-ui-claude-${suffix}`,
+            timestamp: `2026-03-26T16:29:${second}.800Z`,
+            message: { role, content },
+          }))
           .map((entry) => JSON.stringify(entry))
           .join("\n"),
         "utf-8",
       );
 
-      const localUserMessage = redactTranscriptMessage({
+      const localUserMessage = {
         role: "user",
         content: userText,
         timestamp: Date.parse("2026-03-26T16:29:54.800Z"),
-      } as AgentMessage);
+      } as AgentMessage;
       const mergedMessages = mergeImportedChatHistoryMessages({
         localMessages: [localUserMessage],
         importedMessages: await readClaudeCliSessionMessagesAsync({ cliSessionId, homeDir }),
@@ -81,7 +73,7 @@ suite.define(() => {
         externalId: "control-ui-claude-imported-assistant",
         importedFrom: "claude-cli",
       });
-      expect(JSON.stringify(mergedMessages)).not.toContain(secret);
+      expect(JSON.stringify(mergedMessages)).toContain(secret);
       expect(await fs.readFile(filePath, "utf-8")).toContain(secret);
 
       const gateway = await installMockGateway(page, {
@@ -90,23 +82,65 @@ suite.define(() => {
         sessionKey: "agent:main:session-a",
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
-      await waitForRequests(gateway, "chat.startup", 1);
+      await waitForRequests(gateway, "sessions.messages.subscribe", 1);
       const thread = page.locator(".chat-thread");
-      await thread.getByText("CLI user copy", { exact: false }).waitFor({ timeout: 10_000 });
-      await thread.getByText("CLI imported-only reply", { exact: false }).waitFor({
-        timeout: 10_000,
-      });
-
+      const prefixes = ["CLI user copy", "CLI imported-only reply"];
+      for (const prefix of prefixes) {
+        await thread.getByText(prefix, { exact: false }).waitFor({ timeout: 10_000 });
+      }
       const visibleMessages = await visibleChatBubbleTexts(page);
-      expect(visibleMessages.filter((message) => message.includes("CLI user copy"))).toHaveLength(
-        1,
-      );
-      expect(
-        visibleMessages.filter((message) => message.includes("CLI imported-only reply")),
-      ).toHaveLength(1);
-      expect(await thread.textContent()).not.toContain(secret);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+      for (const prefix of prefixes) {
+        expect(visibleMessages.filter((message) => message.includes(prefix))).toHaveLength(1);
+      }
+      expect(await thread.textContent()).toContain(secret);
+    });
+  });
+
+  it("preserves tool source in Activity while bounding the visible preview", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, locale: "en-US", serviceWorkers: "block" },
+      async ({ page }) => {
+        const sessionKey = "agent:main:main";
+        const command = "app.api.key=synthetic-source-value-1234567890";
+        const source = [
+          "API_TOKEN = computeToken()",
+          command,
+          "spring.datasource.password=synthetic-db-value-1234567890",
+          "Read output continues here.\n".repeat(100),
+        ].join("\n");
+        const gateway = await installMockGateway(page, {
+          sessionKey,
+          sessions: [{ key: sessionKey, kind: "direct", hasActiveRun: true, status: "running" }],
+        });
+        await page.goto(`${suite.server.baseUrl}activity?view=live`);
+        await page.locator(".activity-empty").waitFor();
+        await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
+        await gateway.emitGatewayEvent("agent", {
+          runId: "synthetic-source-run",
+          seq: 1,
+          stream: "tool",
+          ts: 1_700_000_000_000,
+          sessionKey,
+          data: {
+            phase: "result",
+            name: "read",
+            toolCallId: "synthetic-read",
+            result: { content: [{ type: "text", text: source }] },
+          },
+        });
+        const entry = page.locator(".activity-entry").filter({ hasText: "read" });
+        await entry.locator("summary").click();
+        const preview = entry.locator(".activity-entry__preview");
+        const note = entry.locator(".activity-entry__note");
+        await preview.waitFor();
+        await note.waitFor();
+        const visible = await preview.textContent();
+        expect(visible).toContain("API_TOKEN = computeToken()");
+        expect(visible).toContain(command);
+        expect(visible).toContain("spring.datasource.password=synthetic-db-value-1234567890");
+        expect(visible!.length).toBeLessThan(source.length);
+        expect(await note.textContent()).toBe("Preview truncated.");
+      },
+    );
   });
 });

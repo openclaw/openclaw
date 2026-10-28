@@ -22,7 +22,6 @@ interface FilterableSelectListTheme extends SelectListTheme {
 }
 
 /**
- * Combines text input filtering with a select list.
  * User types to filter, arrows or Ctrl+P/Ctrl+N navigate, and Escape clears or cancels.
  */
 export class FilterableSelectList extends SelectListInput implements Component, Focusable {

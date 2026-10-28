@@ -5,7 +5,7 @@ on run argv
 	set sourceTransaction to item 3 of argv
 	set installMode to item 4 of argv
 	if installMode is not "--install" and installMode is not "--uninstall" then error "Expected --install or --uninstall"
-	set expectedInstallerDigest to "6c5955700f1067c5240ad15471d80b9ac25f54547aa7288922439f1eac04d1bb"
+	set expectedInstallerDigest to "cc2c5f21121c4e0d32c401871e3bea423aed7671d379556ba3848d261335c179"
 	set expectedVerifierDigest to "4f402898b1b9c8b230bef1c6c26675a26981d2bbccb8ebe25cf2bb3095470eb3"
 	set expectedTransactionDigest to "ddc19e86c01e66a25672a3494a47e24b2ee6c0609dc4d78e37d492522b7609b3"
 	set protectedCommand to "set -eu; umask 077; " & ¬

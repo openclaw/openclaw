@@ -15,6 +15,13 @@ export type GatewayTestResponseFrame = {
   error?: { code?: string; message?: string } & Record<string, unknown>;
 };
 
+export const requestFrame = (id: string, method: string, params: unknown = {}) => ({
+  type: "req",
+  id,
+  method,
+  params,
+});
+
 export function createOperatorWsClient(
   overrides: {
     connId?: string;
@@ -49,6 +56,7 @@ export function createDispatchTestHarness(
     buildRequestContext?: () => unknown;
     isClosed?: () => boolean;
     getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
+    getMethodRegistry?: GatewayWsMessageHandlerParams["getMethodRegistry"];
   } = {},
 ) {
   const clients = new GatewayClientRegistry();
@@ -78,6 +86,7 @@ export function createDispatchTestHarness(
   const context = { broadcast: vi.fn(), getRuntimeConfig: () => config };
   const dispatcher = createGatewayAuthenticatedRequestDispatcher({
     handler: {
+      socket: { acceptsDeflatedSegments: false },
       clients,
       connId: options.connId ?? "dispatch-test-connection",
       extraHandlers: options.extraHandlers ?? {},
@@ -86,6 +95,7 @@ export function createDispatchTestHarness(
       close,
       isClosed: options.isClosed ?? (() => false),
       getRequiredSharedGatewaySessionGeneration: options.getRequiredSharedGatewaySessionGeneration,
+      getMethodRegistry: options.getMethodRegistry,
       setCloseCause,
       logGateway,
     } as unknown as GatewayWsMessageHandlerParams,
@@ -107,8 +117,19 @@ export function createDispatchTestHarness(
     awaitResponseFrame,
     close,
     dispatcher: {
-      dispatch: (frame: unknown, client: GatewayWsClient) =>
-        dispatcher.dispatch(frame, client, Buffer.byteLength(JSON.stringify(frame))),
+      dispatch: (
+        frame: unknown,
+        client: GatewayWsClient,
+        admission?: "continuation",
+        sendResponse?: GatewayWsMessageHandlerParams["send"],
+      ) =>
+        dispatcher.dispatch(
+          frame,
+          client,
+          Buffer.byteLength(JSON.stringify(frame)),
+          admission,
+          sendResponse,
+        ),
     },
     logGateway,
     send,

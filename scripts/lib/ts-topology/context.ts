@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
-import { SymbolFlags, type Checker, type Symbol } from "typescript/unstable/sync";
+import * as ts from "typescript/ast";
+import { SymbolFlags, type Checker, type Symbol } from "typescript/sync";
 import { formatNativeTypeScriptDiagnostics } from "../native-typescript-diagnostics.mts";
 import { createNativeTypeScriptProject } from "../native-typescript.mts";
 import type { CanonicalSymbol, ProgramContext, SymbolKind } from "./types.js";

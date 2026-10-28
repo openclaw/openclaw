@@ -6,6 +6,7 @@ export const RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH = "dist/runtime-dependen
 export const RUNTIME_DEPENDENCY_OWNERSHIP_ASSET_NAME = "runtime-dependency-ownership.json";
 
 export type RuntimeDependencyOwnership = {
+  // Empty extensions identify chunks used only by local test/QA SDK entries.
   chunks: Record<string, { sha256: string; extensions: string[] }>;
 };
 
@@ -19,7 +20,6 @@ function parseRuntimeDependencyOwnership(value: unknown): RuntimeDependencyOwner
       typeof chunk.sha256 !== "string" ||
       !/^[a-f0-9]{64}$/u.test(chunk.sha256) ||
       !Array.isArray(chunk.extensions) ||
-      chunk.extensions.length === 0 ||
       !chunk.extensions.every((id) => typeof id === "string" && /^[a-z0-9][a-z0-9-]*$/u.test(id)) ||
       new Set(chunk.extensions).size !== chunk.extensions.length
     ) {

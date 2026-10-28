@@ -2,7 +2,10 @@ import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
+import {
+  listAgentDatabaseAdmissionRefusals,
+  listAgentDatabaseStartupFtsRepairs,
+} from "../state/agent-database-admission.js";
 import type {
   LegacyStateMigrationStepPlan,
   LegacyStateMigrationStepReceipt,
@@ -65,7 +68,12 @@ export function readStartupMigrationWarning(includeSensitive = true): string | u
   const admissionWarnings = listAgentDatabaseAdmissionRefusals()
     .filter((refusal) => refusal.code !== "agent-database-inspection-pending")
     .map((refusal) => `${refusal.reason}\n${refusal.repairHint}`);
-  const details = [startupMigrationDetails, formatStartupMigrationDetails(admissionWarnings)]
+  const repairs = listAgentDatabaseStartupFtsRepairs();
+  const needsAttention = Boolean(startupMigrationDetails || admissionWarnings.length);
+  const details = [
+    startupMigrationDetails,
+    formatStartupMigrationDetails([...admissionWarnings, ...repairs]),
+  ]
     .filter(Boolean)
     .join("\n");
   if (!details) {
@@ -73,8 +81,10 @@ export function readStartupMigrationWarning(includeSensitive = true): string | u
   }
   // Migration errors can contain host paths; read-only status keeps only the repair hint.
   return includeSensitive
-    ? `${boundStartupMigrationDetails(details)}\n${STARTUP_MIGRATION_FOLLOW_UP}`
-    : `Startup migrations need attention. ${STARTUP_MIGRATION_FOLLOW_UP}`;
+    ? `${boundStartupMigrationDetails(details)}${needsAttention ? `\n${STARTUP_MIGRATION_FOLLOW_UP}` : ""}`
+    : needsAttention
+      ? `Startup migrations need attention. ${STARTUP_MIGRATION_FOLLOW_UP}`
+      : "Startup rebuilt stale search indexes; see startup log.";
 }
 
 export function mergeNotices(sources: NoticeSource[]): string[] {
@@ -153,6 +163,8 @@ export class DoctorStateMigrationRefusalError extends Error {
           ? "Doctor stopped because an agent database ownership mismatch remains. Independent state repairs were run; repairs requiring the refused database were skipped. Resolve the reported ownership mismatch before retrying."
           : "Doctor stopped because a state migration refused to continue. Resolve the reported migration failure before retrying. Later repairs were not run.",
         ...failureFacts.map(formatUpdateFailureFact),
+        // Actionable commands must survive the persisted failure facts' length limit.
+        ...mergeNotices(refused).map((notice) => formatStartupMigrationDetails([notice])),
       ].join("\n"),
     );
     this.name = "DoctorStateMigrationRefusalError";

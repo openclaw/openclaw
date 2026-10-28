@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { asPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
@@ -18,7 +19,6 @@ import type {
   StreamingMode,
   TextChunkMode,
 } from "../config/types.base.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
 import { selectProgressLabel } from "../shared/progress-labels.js";
 import { compactProgressText } from "../shared/text-truncate.js";
@@ -62,10 +62,6 @@ export type {
 } from "../config/types.base.js";
 
 // Runtime reads are nested-only; doctor migrates legacy streaming spellings.
-
-function asInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) ? value : undefined;
-}
 
 function parsePreviewStreamingMode(value: unknown): StreamingMode | null {
   const normalized = normalizeOptionalLowercaseString(value);
@@ -307,7 +303,7 @@ function setProgressDraftLineMetadata(
   }
 }
 
-export function copyProgressDraftLineMetadata(
+function copyProgressDraftLineMetadata(
   source: ChannelProgressDraftLine,
   target: ChannelProgressDraftLine,
   previous?: ChannelProgressDraftLine,
@@ -884,7 +880,7 @@ export function resolveChannelProgressDraftLabel(params: {
   const normalizedLabel =
     typeof progress.label === "string" ? normalizeOptionalLowercaseString(progress.label) : null;
   if (typeof progress.label === "string" && progress.label.trim() && normalizedLabel !== "auto") {
-    return redactToolPayloadText(progress.label.trim());
+    return progress.label.trim();
   }
   const labels = normalizeTrimmedStringList(progress.labels);
   const label = selectProgressLabel({
@@ -892,23 +888,21 @@ export function resolveChannelProgressDraftLabel(params: {
     seed: params.seed,
     random: params.random,
   });
-  return label ? redactToolPayloadText(label) : label;
+  return label;
 }
 
 export function resolveChannelProgressDraftMaxLines(
   entry: StreamingCompatEntry | null | undefined,
   defaultValue = 8,
 ): number {
-  const configured = asInteger(resolveChannelProgressDraftConfig(entry).maxLines);
-  return configured && configured > 0 ? configured : defaultValue;
+  return asPositiveInteger(resolveChannelProgressDraftConfig(entry).maxLines) ?? defaultValue;
 }
 
 export function resolveChannelProgressDraftMaxLineChars(
   entry: StreamingCompatEntry | null | undefined,
   defaultValue = DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS,
 ): number {
-  const configured = asInteger(resolveChannelProgressDraftConfig(entry).maxLineChars);
-  return configured && configured > 0 ? configured : defaultValue;
+  return asPositiveInteger(resolveChannelProgressDraftConfig(entry).maxLineChars) ?? defaultValue;
 }
 
 function compactProgressLineDetail(detail: string, maxChars: number): string {

@@ -1,4 +1,6 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
 import {
   decodeWindowsOutputBuffer,
@@ -17,11 +19,9 @@ import type { NodeWorkerEnvironmentStopInput } from "../worker/node-supervisor-p
 import {
   NODE_WORKER_WORKSPACE_STDERR_MAX_BYTES,
   NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
-  projectNodeWorkerWorkspaceExecResult,
   type NodeWorkerWorkspaceExecInput,
   type NodeWorkerWorkspaceExecResult,
 } from "../worker/node-workspace-protocol.js";
-import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
 
 const MAX_PROCESSES_PER_WORKSPACE = 32;
 const MAX_OUTPUT_CHARS = 4_096;
@@ -61,7 +61,7 @@ async function joinWorkspaceCleanup(operations: Promise<void>[]): Promise<void> 
   const failures = (await Promise.allSettled(operations)).flatMap((outcome) =>
     outcome.status === "rejected" ? [outcome.reason] : [],
   );
-  throwNodeHostCleanupErrors(failures, "Workspace process cleanup failed");
+  throwCollectedErrors(failures, "Workspace process cleanup failed");
 }
 
 /** A workspace owns preview processes across tool calls and joins their trees before retirement. */
@@ -104,7 +104,7 @@ export class NodeWorkerWorkspaceProcesses {
     };
   }
 
-  async executeForeground(params: {
+  async execute(params: {
     input: NodeWorkerWorkspaceExecInput;
     assertCurrent: () => void;
     workspaceDir: string;
@@ -113,14 +113,15 @@ export class NodeWorkerWorkspaceProcesses {
     timeoutMs: number;
     retainWorkspace: () => () => void;
   }): Promise<NodeWorkerWorkspaceExecResult> {
+    const { input, workspaceDir, signal } = params;
     // Legacy callers retain their shipped executor, including detached lease helpers.
-    if (!params.input.nativeProcessOwner) {
-      const result = await runCommandWithTimeout(params.input.argv, {
-        cwd: params.workspaceDir,
+    if (!input.process && !input.nativeProcessOwner) {
+      const result = await runCommandWithTimeout(input.argv, {
+        cwd: workspaceDir,
         baseEnv: params.env,
-        ...(params.input.input === undefined ? {} : { input: params.input.input }),
+        ...(input.input === undefined ? {} : { input: input.input }),
         timeoutMs: params.timeoutMs,
-        ...(params.signal ? { signal: params.signal } : {}),
+        ...(signal ? { signal } : {}),
         killProcessTree: true,
         requireProcessTreeExtinction: true,
         maxOutputBytes: {
@@ -129,29 +130,13 @@ export class NodeWorkerWorkspaceProcesses {
         },
         terminateOnOutputLimit: true,
       });
-      return projectNodeWorkerWorkspaceExecResult(params.workspaceDir, result);
+      return { ...result, workspaceDir };
     }
-    return this.execute({
-      ...params,
-      input: {
-        ...params.input,
-        process: { action: "start", processId: "foreground-" + randomUUID() },
-      },
-      foregroundTimeoutMs: params.timeoutMs,
-    });
-  }
-
-  async execute(params: {
-    input: NodeWorkerWorkspaceExecInput;
-    assertCurrent: () => void;
-    workspaceDir: string;
-    env: NodeJS.ProcessEnv;
-    signal?: AbortSignal;
-    retainWorkspace: () => () => void;
-    foregroundTimeoutMs?: number;
-  }): Promise<NodeWorkerWorkspaceExecResult> {
-    const { input, workspaceDir, signal } = params;
-    const operation = input.process!;
+    const operation: NonNullable<NodeWorkerWorkspaceExecInput["process"]> = input.process ?? {
+      action: "start",
+      processId: "foreground-" + randomUUID(),
+    };
+    const foregroundTimeoutMs = input.process ? undefined : params.timeoutMs;
     const key = JSON.stringify([
       input.gatewayNamespace,
       input.environmentId,
@@ -169,9 +154,7 @@ export class NodeWorkerWorkspaceProcesses {
     }
     let process = owner?.processes.get(operation.processId);
     if (operation.action === "start") {
-      const fingerprint = createHash("sha256")
-        .update(JSON.stringify([input.argv, input.input ?? null]))
-        .digest("hex");
+      const fingerprint = sha256Hex(JSON.stringify([input.argv, input.input ?? null]));
       if (process && process.fingerprint !== fingerprint) {
         throw new Error("INVALID_REQUEST: processId already belongs to a different command");
       }
@@ -200,7 +183,7 @@ export class NodeWorkerWorkspaceProcesses {
           this.owners.set(key, owner);
         }
         if (
-          params.foregroundTimeoutMs === undefined &&
+          foregroundTimeoutMs === undefined &&
           [...owner.processes.values()].filter((entry) => !entry.output).length >=
             MAX_PROCESSES_PER_WORKSPACE
         ) {
@@ -223,7 +206,7 @@ export class NodeWorkerWorkspaceProcesses {
           settled: false,
           started: Promise.resolve(),
           releaseWorkspace: params.retainWorkspace(),
-          ...(params.foregroundTimeoutMs !== undefined
+          ...(foregroundTimeoutMs !== undefined
             ? {
                 output: {
                   stdout: createCapturedOutputBuffers(),
@@ -268,9 +251,9 @@ export class NodeWorkerWorkspaceProcesses {
               exactEnv: true,
               ...(input.input === undefined ? {} : { input: input.input }),
               captureOutput: false,
-              ...(params.foregroundTimeoutMs !== undefined
+              ...(foregroundTimeoutMs !== undefined
                 ? {
-                    timeoutMs: params.foregroundTimeoutMs,
+                    timeoutMs: foregroundTimeoutMs,
                     onStdoutRaw: (bytes: Buffer) => capture("stdout", bytes),
                     onStderrRaw: (bytes: Buffer) => capture("stderr", bytes),
                   }
@@ -323,7 +306,7 @@ export class NodeWorkerWorkspaceProcesses {
       throw new Error("INVALID_REQUEST: unknown workspace process");
     }
     await process.started;
-    if (params.foregroundTimeoutMs !== undefined) {
+    if (foregroundTimeoutMs !== undefined) {
       const accepted = process;
       const cancelAccepted = () => accepted.run!.cancel();
       signal?.addEventListener("abort", cancelAccepted, { once: true });
@@ -377,7 +360,7 @@ export class NodeWorkerWorkspaceProcesses {
         : completion?.reason === "manual-cancel" || completion?.reason === "signal"
           ? "signal"
           : "exit",
-      ...(params.foregroundTimeoutMs !== undefined
+      ...(foregroundTimeoutMs !== undefined
         ? {
             killIssuedByAbort: signal?.aborted === true || undefined,
             stdoutTruncatedBytes: process.output?.stdout.truncatedBytes || undefined,

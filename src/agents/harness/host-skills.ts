@@ -5,7 +5,6 @@ import {
   readLocalFileFromRoots,
   resolveLocalPathFromRootsSync,
 } from "../../infra/fs-safe.js";
-import { assertDatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { prepareSkillLibrarySelection } from "../../skills/library/selection.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -15,33 +14,19 @@ import { prepareInstalledSkillCatalog } from "../installed-skill-runtime.js";
 import type { SandboxContext } from "../sandbox/types.js";
 import { cloneHostSnapshot } from "./host-snapshot.js";
 
-/** Keep pinned resources and their physical source through awaited tool construction. */
+/** Carry the admitted pin's prepared entries through awaited tool construction. */
 export async function prepareHostSkillLibraryResources(
   selections: readonly SkillLibrarySelection[],
   assertActive: () => void,
 ) {
   const context = captureOpenClawStateReadWorkerContext();
-  const identity = context.admission.identity;
-  const assertSourceCurrent = () => {
-    context.maintenanceScope?.assertAdmission();
-    context.admission.assertCurrent();
-  };
-  const assertCurrent = () => {
-    assertActive();
-    assertSourceCurrent();
-  };
   // Retain exact entries so cache eviction cannot select the synchronous SDK fallback.
   const entries = cloneHostSnapshot(
-    await prepareSkillLibrarySelection(selections, { env: context.environment }, assertCurrent),
+    await prepareSkillLibrarySelection(selections, { env: context.environment }, assertActive),
   );
   return {
     entries,
-    assertCurrent,
-    assertPublicationCurrent: () => {
-      // Core tool preparation can yield after the reader's physical-source check.
-      assertSourceCurrent();
-      assertDatabasePathIdentity(context.admission.databasePath, identity);
-    },
+    assertCurrent: assertActive,
   };
 }
 

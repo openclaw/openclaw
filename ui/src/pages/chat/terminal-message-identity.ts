@@ -52,6 +52,14 @@ export function readLiveTerminalRunId(message: unknown): string | null {
   return readLiveTerminalIdentity(message)?.runId ?? null;
 }
 
+/** A presentation clone carries the same outcome without publishing a new one. */
+export function copyLiveTerminalIdentity(source: unknown, target: object): void {
+  const identity = readLiveTerminalIdentity(source);
+  if (identity) {
+    liveTerminalIdentities.set(target, identity);
+  }
+}
+
 export function readLiveTerminalDisposition(
   message: unknown,
 ): LiveTerminalIdentity["disposition"] | null {

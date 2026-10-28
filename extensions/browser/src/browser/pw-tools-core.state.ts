@@ -184,7 +184,7 @@ export async function setGeolocationViaPlaywright(
   await context.setGeolocation({
     latitude: opts.latitude,
     longitude: opts.longitude,
-    accuracy: typeof opts.accuracy === "number" ? opts.accuracy : undefined,
+    accuracy: opts.accuracy,
   });
   const origin =
     normalizeOptionalString(opts.origin) ||

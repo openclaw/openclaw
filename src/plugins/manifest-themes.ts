@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, omitUndefinedFields } from "@openclaw/normalization-core/record-coerce";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import type { Expression, Property } from "acorn";
 import {
   isThemeId,
@@ -11,7 +12,6 @@ import {
   THEME_BRAND_ICON_IDS,
   THEME_CRITTER_IDS,
 } from "../../packages/gateway-protocol/src/theme.ts";
-import { omitUndefinedManifestFields } from "./manifest-capability-normalizers.js";
 import type { PluginManifestTheme } from "./manifest-types.js";
 
 const MAX_PLUGIN_THEMES = 32;
@@ -46,7 +46,7 @@ function validateArtworkDuplicates(source: string): void {
       }
       for (const artwork of objectProperties(theme)) {
         const kind = propertyName(artwork);
-        if (kind !== "icons" && kind !== "hats" && kind !== "critters") {
+        if (kind !== "icons" && kind !== "hats" && kind !== "critters" && kind !== "backgrounds") {
           continue;
         }
         const ids = new Set<string>();
@@ -94,6 +94,34 @@ function normalizeArtworkPath(value: unknown, label: string): string {
   return relativePath;
 }
 
+function normalizeBackgrounds(
+  value: unknown,
+  label: string,
+): PluginManifestTheme["backgrounds"] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const entries = isRecord(value) ? Object.entries(value) : [];
+  if (!entries.length || entries.some(([mode]) => mode !== "light" && mode !== "dark")) {
+    throw new Error(`${label} must map light and/or dark to an image`);
+  }
+  return Object.fromEntries(
+    entries.map(([mode, source]) => {
+      const relativePath = typeof source === "string" ? source.replace(/^\.\//, "") : "";
+      if (
+        !/^(?:[a-z0-9_-][a-z0-9._-]*\/)*[a-z0-9_-][a-z0-9._-]*\.(?:png|jpe?g|webp)$/i.test(
+          relativePath,
+        )
+      ) {
+        throw new Error(
+          `${label}.${mode} must be a PNG, JPEG, or WebP file inside the plugin root`,
+        );
+      }
+      return [mode, relativePath];
+    }),
+  );
+}
+
 function normalizeCritter(metadata: unknown, label: string) {
   if (!isRecord(metadata)) {
     throw new Error(`${label} must be an object with an SVG source`);
@@ -114,7 +142,7 @@ function normalizeCritter(metadata: unknown, label: string) {
   ) {
     throw new Error(`${label}.crossMs must be an integer from 5000 to 90000`);
   }
-  return omitUndefinedManifestFields({
+  return omitUndefinedFields({
     source: normalizeArtworkPath(source, `${label}.source`),
     title,
     crossMs,
@@ -144,18 +172,23 @@ export function normalizeManifestThemes(
   const themes: PluginManifestTheme[] = [];
   const ids = new Set<string>();
   for (const [index, entry] of value.entries()) {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    if (!isRecord(entry)) {
       return { ok: false, error: `themes[${index}] must be an object` };
     }
-    // SAFETY: entry is a non-null, non-array object; every field is validated below.
-    const { id, name, description, source, icons, hats, critters } = entry as Record<
-      string,
-      unknown
-    >;
+    const { id, name, description, source, icons, hats, critters, backgrounds } = entry;
     if (
       Object.keys(entry).some(
         (key) =>
-          !["id", "name", "description", "source", "icons", "hats", "critters"].includes(key),
+          ![
+            "id",
+            "name",
+            "description",
+            "source",
+            "icons",
+            "hats",
+            "critters",
+            "backgrounds",
+          ].includes(key),
       ) ||
       typeof id !== "string" ||
       !THEME_LOCAL_ID_PATTERN.test(id) ||
@@ -166,9 +199,7 @@ export function normalizeManifestThemes(
       typeof description !== "string" ||
       !description.trim() ||
       description.trim().length > THEME_DESCRIPTION_MAX_LENGTH ||
-      Array.from(name + description).some(
-        (char) => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f,
-      ) ||
+      containsAsciiControlCharacter(name + description) ||
       typeof source !== "string"
     ) {
       return {
@@ -189,7 +220,7 @@ export function normalizeManifestThemes(
         name: name.trim(),
         description: description.trim(),
         source: relativePath,
-        ...omitUndefinedManifestFields({
+        ...omitUndefinedFields({
           icons: normalizeArtworkEntries(
             icons,
             `themes[${index}].icons`,
@@ -208,6 +239,7 @@ export function normalizeManifestThemes(
             THEME_CRITTER_IDS,
             normalizeCritter,
           ),
+          backgrounds: normalizeBackgrounds(backgrounds, `themes[${index}].backgrounds`),
         }),
       });
     } catch (error) {
@@ -215,7 +247,10 @@ export function normalizeManifestThemes(
     }
     ids.add(id);
   }
-  if (manifestSource && themes.some((theme) => theme.icons || theme.hats || theme.critters)) {
+  if (
+    manifestSource &&
+    themes.some((theme) => theme.icons || theme.hats || theme.critters || theme.backgrounds)
+  ) {
     try {
       validateArtworkDuplicates(manifestSource);
     } catch (error) {

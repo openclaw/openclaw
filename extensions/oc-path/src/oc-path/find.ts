@@ -16,6 +16,7 @@ import type { JsonlAst, JsonlLine } from "./jsonl/ast.js";
 import { pickJsonlLine } from "./jsonl/line.js";
 import type { OcPath, PredicateSpec } from "./oc-path.js";
 import {
+  MAX_SUB_SEGMENTS_PER_SLOT,
   MAX_TRAVERSAL_DEPTH,
   OcPathError,
   WILDCARD_RECURSIVE,
@@ -31,6 +32,7 @@ import {
   parseUnionSeg,
   quoteSeg,
   resolvePositionalSeg,
+  splitOcPathSlots,
   splitRespectingBrackets,
   unquoteSeg,
 } from "./oc-path.js";
@@ -51,6 +53,12 @@ interface SlotSub {
 
 type OnMatch = (subs: readonly SlotSub[]) => void;
 
+interface WalkContext {
+  onMatch: OnMatch;
+  visited: WeakMap<object, Set<string>>;
+  kind: OcAst["kind"];
+}
+
 export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[] {
   const subs = patternSubs(pattern);
   // Fast-path: no expansion needed — pure literals just resolve.
@@ -68,24 +76,38 @@ export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[]
   }
 
   const concretePaths: OcPath[] = [];
+  const seen = new Set<string>();
+  const flatPaths = ast.kind === "jsonc" || ast.kind === "yaml";
   const onMatch: OnMatch = (slotSubs) => {
-    concretePaths.push(repackSlotSubs(pattern, slotSubs));
+    const path = repackSlotSubs(pattern, slotSubs, ast.kind);
+    const key = JSON.stringify(
+      flatPaths
+        ? slotSubs.map(({ value }) => unquoteSeg(value))
+        : ast.kind === "jsonl"
+          ? [path.section, splitOcPathSlots(path.item, path.field).map(unquoteSeg)]
+          : [path.section, path.item, path.field],
+    );
+    if (!seen.has(key)) {
+      seen.add(key);
+      concretePaths.push(path);
+    }
   };
+  const context: WalkContext = { onMatch, visited: new WeakMap(), kind: ast.kind };
   switch (ast.kind) {
     case "jsonc":
       if (ast.root !== null) {
-        jsoncOps.walk(ast.root, subs, 0, [], onMatch);
+        jsoncOps.walk(ast.root, subs, 0, [], context);
       }
       break;
     case "jsonl":
-      walkJsonl(ast, subs, 0, [], onMatch);
+      walkJsonl(ast, subs, 0, [], context);
       break;
     case "md":
-      walkMd({ kind: "root", ast }, subs, 0, [], onMatch);
+      walkMd({ kind: "root", ast }, subs, 0, [], context);
       break;
     case "yaml":
       if (ast.doc.contents !== null) {
-        yamlOps.walk(ast.doc.contents, subs, 0, [], onMatch);
+        yamlOps.walk(ast.doc.contents, subs, 0, [], context);
       }
       break;
   }
@@ -115,23 +137,52 @@ function patternSubs(pattern: OcPath): readonly SlotSub[] {
   return out;
 }
 
-function repackSlotSubs(pattern: OcPath, slotSubs: readonly SlotSub[]): OcPath {
-  const values: Record<Slot, string[]> = { section: [], item: [], field: [] };
+function repackSlotSubs(
+  pattern: OcPath,
+  slotSubs: readonly SlotSub[],
+  kind: OcAst["kind"],
+): OcPath {
+  // Subs arrive in slot order, but a mid-path `**` matching zero
+  // segments skips a slot boundary; compact sub-runs into the first
+  // available slots so emitted paths keep the nesting contract.
+  let runs: string[][] = [];
+  let runSlot: Slot | undefined;
   for (const { slot, value } of slotSubs) {
-    values[slot].push(value);
+    if (slot !== runSlot) {
+      runs.push([]);
+      runSlot = slot;
+    }
+    runs[runs.length - 1]?.push(value);
   }
+  if (kind !== "md") {
+    const firstValueRun = kind === "jsonl" ? 1 : 0;
+    const valueRuns = runs.slice(firstValueRun);
+    if (valueRuns.some((run) => run.length > MAX_SUB_SEGMENTS_PER_SLOT)) {
+      const values = valueRuns.flat();
+      runs = runs.slice(0, firstValueRun);
+      for (let start = 0; start < values.length; start += MAX_SUB_SEGMENTS_PER_SLOT) {
+        const lastSlot = runs.length === 2;
+        // Keep excess tokens in the last slot; traversal limits remain independent.
+        runs.push(values.slice(start, lastSlot ? undefined : start + MAX_SUB_SEGMENTS_PER_SLOT));
+        if (lastSlot) {
+          break;
+        }
+      }
+    }
+  }
+  const [section, item, field] = runs;
   return {
     file: pattern.file,
-    ...(values.section.length > 0 ? { section: values.section.join(".") } : {}),
-    ...(values.item.length > 0 ? { item: values.item.join(".") } : {}),
-    ...(values.field.length > 0 ? { field: values.field.join(".") } : {}),
+    ...(section !== undefined ? { section: section.join(".") } : {}),
+    ...(item !== undefined ? { item: item.join(".") } : {}),
+    ...(field !== undefined ? { field: field.join(".") } : {}),
     ...(pattern.session !== undefined ? { session: pattern.session } : {}),
   };
 }
 
 // Per-kind ops the dispatcher uses to drive recursion. Each kind's
 // walker fills these in; the dispatcher handles every segment shape.
-interface WalkOps<T, Child = T> {
+interface WalkOps<T extends object, Child extends object = T> {
   enumerate(
     node: T,
     matches?: (child: Child) => boolean,
@@ -144,7 +195,7 @@ interface WalkOps<T, Child = T> {
     subs: readonly SlotSub[],
     i: number,
     walked: readonly SlotSub[],
-    onMatch: OnMatch,
+    context: WalkContext,
   ): void;
 }
 
@@ -152,20 +203,54 @@ function checkDepth(walked: readonly SlotSub[]): void {
   if (walked.length > MAX_TRAVERSAL_DEPTH) {
     throw new OcPathError(
       `findOcPaths exceeded MAX_TRAVERSAL_DEPTH (${MAX_TRAVERSAL_DEPTH}) — likely a pathological pattern`,
-      "",
       "OC_PATH_DEPTH_EXCEEDED",
     );
   }
 }
 
-function dispatchSeg<T, Child>(
+function dispatchSeg<T extends object, Child extends object>(
   node: T,
   ops: WalkOps<T, Child>,
   subs: readonly SlotSub[],
   i: number,
   walked: readonly SlotSub[],
-  onMatch: OnMatch,
+  context: WalkContext,
+  memoIdentity: object = node,
 ): void {
+  if (i >= subs.length) {
+    context.onMatch(walked);
+    return;
+  }
+  // Different recursive routes can reach the same node and remaining pattern.
+  const remaining = subs.slice(i);
+  let key: string;
+  if (context.kind === "jsonc" || context.kind === "yaml") {
+    key = JSON.stringify([
+      remaining.map(({ value }) => value),
+      walked.map(({ value }) => unquoteSeg(value)),
+    ]);
+  } else if (context.kind === "jsonl") {
+    // Preserve the complete physical-line slot; later slots share value-path semantics.
+    const firstSlot = walked[0]?.slot;
+    const firstChange = walked.findIndex(({ slot }) => slot !== firstSlot);
+    const boundary = firstChange < 0 ? walked.length : firstChange;
+    key = JSON.stringify([
+      remaining,
+      walked.slice(0, boundary),
+      walked.slice(boundary).map(({ value }) => unquoteSeg(value)),
+    ]);
+  } else {
+    key = JSON.stringify([remaining, walked]);
+  }
+  let visited = context.visited.get(memoIdentity);
+  if (visited?.has(key)) {
+    return;
+  }
+  if (!visited) {
+    visited = new Set();
+    context.visited.set(memoIdentity, visited);
+  }
+  visited.add(key);
   const cur = expectDefined(subs[i], "dispatch index checked by walker");
 
   if (isUnionSeg(cur.value)) {
@@ -176,7 +261,7 @@ function dispatchSeg<T, Child>(
     for (const alt of alts) {
       const altSubs = subs.slice();
       altSubs[i] = { slot: cur.slot, value: alt };
-      ops.walk(node, altSubs, i, walked, onMatch);
+      ops.walk(node, altSubs, i, walked, context);
     }
     return;
   }
@@ -187,28 +272,25 @@ function dispatchSeg<T, Child>(
       return;
     }
     for (const m of ops.predicate(node, pred)) {
-      ops.walk(m.child, subs, i + 1, [...walked, { slot: cur.slot, value: m.keySub }], onMatch);
+      ops.walk(m.child, subs, i + 1, [...walked, { slot: cur.slot, value: m.keySub }], context);
     }
     return;
   }
 
   if (cur.value === WILDCARD_RECURSIVE) {
-    // `**` — descend with `**` consumed (i+1) AND retained (i) so
-    // deeper structures still match. Emit if no subs remain.
-    if (i + 1 >= subs.length) {
-      onMatch(walked);
-    }
+    // Terminal Markdown item walkers also need the consumed-child match.
+    ops.walk(node, subs, i + 1, walked, context);
     for (const m of ops.enumerate(node)) {
       const nextWalked: readonly SlotSub[] = [...walked, { slot: cur.slot, value: m.keySub }];
-      ops.walk(m.child, subs, i + 1, nextWalked, onMatch);
-      ops.walk(m.child, subs, i, nextWalked, onMatch);
+      ops.walk(m.child, subs, i + 1, nextWalked, context);
+      ops.walk(m.child, subs, i, nextWalked, context);
     }
     return;
   }
 
   if (cur.value === WILDCARD_SINGLE) {
     for (const m of ops.enumerate(node)) {
-      ops.walk(m.child, subs, i + 1, [...walked, { slot: cur.slot, value: m.keySub }], onMatch);
+      ops.walk(m.child, subs, i + 1, [...walked, { slot: cur.slot, value: m.keySub }], context);
     }
     return;
   }
@@ -219,7 +301,7 @@ function dispatchSeg<T, Child>(
   if (m === null) {
     return;
   }
-  ops.walk(m.child, subs, i + 1, [...walked, { slot: cur.slot, value: m.keySub }], onMatch);
+  ops.walk(m.child, subs, i + 1, [...walked, { slot: cur.slot, value: m.keySub }], context);
 }
 
 const jsoncOps: WalkOps<JsoncValue> = {
@@ -244,10 +326,12 @@ const jsoncOps: WalkOps<JsoncValue> = {
       // path key so the walker matches the resolver's behavior.
       const lookupKey = unquoteSeg(key);
       const e = node.entries.find((entry) => entry.key === lookupKey);
-      return e === undefined ? null : { keySub: key, child: e.value };
+      return e === undefined
+        ? null
+        : { keySub: key === lookupKey ? quoteSeg(e.key) : key, child: e.value };
     }
     if (node.kind === "array") {
-      const idx = parseArrayIndexSegment(key, node.items.length);
+      const idx = parseArrayIndexSegment(unquoteSeg(key), node.items.length);
       if (idx === null) {
         return null;
       }
@@ -263,24 +347,16 @@ const jsoncOps: WalkOps<JsoncValue> = {
     if (concrete === null) {
       return null;
     }
-    const match = jsoncOps.lookup(node, concrete);
-    if (match === null || node.kind !== "object") {
-      return match;
-    }
-    return { keySub: quoteSeg(concrete), child: match.child };
+    return jsoncOps.lookup(node, node.kind === "object" ? quoteSeg(concrete) : concrete);
   },
   *predicate(node, pred) {
     yield* jsoncOps.enumerate(node, (child) =>
       evaluatePredicate(jsoncChildFieldText(child, pred.key, "null"), pred),
     );
   },
-  walk(node, subs, i, walked, onMatch) {
+  walk(node, subs, i, walked, context) {
     checkDepth(walked);
-    if (i >= subs.length) {
-      onMatch(walked);
-      return;
-    }
-    dispatchSeg(node, jsoncOps, subs, i, walked, onMatch);
+    dispatchSeg(node, jsoncOps, subs, i, walked, context);
   },
 };
 
@@ -290,15 +366,15 @@ function walkJsonl(
   subs: readonly SlotSub[],
   i: number,
   walked: readonly SlotSub[],
-  onMatch: OnMatch,
+  context: WalkContext,
 ): void {
   checkDepth(walked);
   if (i >= subs.length) {
-    onMatch(walked);
+    context.onMatch(walked);
     return;
   }
   if (walked.length === 0) {
-    dispatchSeg(ast, jsonlOps, subs, i, walked, onMatch);
+    dispatchSeg(ast, jsonlOps, subs, i, walked, context);
   }
 }
 
@@ -331,19 +407,19 @@ const jsonlOps: WalkOps<JsonlAst, JsonlLine> = {
     );
   },
   // Union alternatives revisit the file; consumed line slots descend into JSONC.
-  walk(child, subs, i, walked, onMatch) {
+  walk(child, subs, i, walked, context) {
     if (child.kind === "jsonl") {
-      walkJsonl(child, subs, i, walked, onMatch);
+      walkJsonl(child, subs, i, walked, context);
       return;
     }
     if (i >= subs.length) {
-      onMatch(walked);
+      context.onMatch(walked);
       return;
     }
     if (child.kind !== "value") {
       return;
     }
-    jsoncOps.walk(child.value, subs, i, walked, onMatch);
+    jsoncOps.walk(child.value, subs, i, walked, context);
   },
 };
 
@@ -374,10 +450,10 @@ const yamlOps: WalkOps<Node> = {
       });
       return pair?.value === undefined || pair.value === null
         ? null
-        : { keySub: key, child: pair.value as Node };
+        : { keySub: key === lookupKey ? quoteSeg(lookupKey) : key, child: pair.value as Node };
     }
     if (isSeq(node)) {
-      const idx = parseArrayIndexSegment(key, node.items.length);
+      const idx = parseArrayIndexSegment(unquoteSeg(key), node.items.length);
       if (idx === null) {
         return null;
       }
@@ -391,20 +467,19 @@ const yamlOps: WalkOps<Node> = {
   },
   positional(node, seg) {
     const concrete = resolveYamlPositionalSegment(node, seg);
-    return concrete === null ? null : yamlOps.lookup(node, concrete);
+    if (concrete === null) {
+      return null;
+    }
+    return yamlOps.lookup(node, isMap(node) ? quoteSeg(concrete) : concrete);
   },
   *predicate(node, pred) {
     yield* yamlOps.enumerate(node, (child) =>
       evaluatePredicate(yamlChildFieldText(child, pred.key), pred),
     );
   },
-  walk(node, subs, i, walked, onMatch) {
+  walk(node, subs, i, walked, context) {
     checkDepth(walked);
-    if (i >= subs.length) {
-      onMatch(walked);
-      return;
-    }
-    dispatchSeg(node, yamlOps, subs, i, walked, onMatch);
+    dispatchSeg(node, yamlOps, subs, i, walked, context);
   },
 };
 
@@ -455,10 +530,10 @@ function walkMd(
   subs: readonly SlotSub[],
   i: number,
   walked: readonly SlotSub[],
-  onMatch: OnMatch,
+  context: WalkContext,
 ): void {
   if (i >= subs.length) {
-    onMatch(walked);
+    context.onMatch(walked);
     return;
   }
   const cur = expectDefined(subs[i], "Markdown walk index checked above");
@@ -467,12 +542,12 @@ function walkMd(
   if (level.kind === "root" && walked.length === 0 && cur.value === "[frontmatter]") {
     const next = subs[i + 1];
     if (next === undefined) {
-      onMatch([{ slot: cur.slot, value: cur.value }]);
+      context.onMatch([{ slot: cur.slot, value: cur.value }]);
       return;
     }
     if (next.value === WILDCARD_SINGLE || next.value === WILDCARD_RECURSIVE) {
       for (const fm of level.ast.frontmatter) {
-        onMatch([
+        context.onMatch([
           { slot: cur.slot, value: cur.value },
           { slot: next.slot, value: fm.key },
         ]);
@@ -484,34 +559,53 @@ function walkMd(
     if (entry === undefined) {
       return;
     }
-    onMatch([
+    context.onMatch([
       { slot: cur.slot, value: cur.value },
       { slot: next.slot, value: next.value },
     ]);
     return;
   }
 
-  // Item-level field slot is terminal — descending would loop.
+  // Fields are leaves; recursive wildcards may match zero segments around the key.
   if (level.kind === "item") {
-    walkMdItemField(level.item, cur, walked, onMatch);
+    let field: SlotSub | undefined;
+    for (let j = i; j < subs.length; j++) {
+      const sub = expectDefined(subs[j], "Markdown field index checked above");
+      if (sub.value === WILDCARD_RECURSIVE) {
+        continue;
+      }
+      if (field) {
+        return;
+      }
+      field = sub;
+    }
+    walkMdItemField(level.item, field ?? cur, walked, context);
     return;
   }
 
-  dispatchSeg(level, mdOps, subs, i, walked, onMatch);
+  dispatchSeg(
+    level,
+    mdOps,
+    subs,
+    i,
+    walked,
+    context,
+    level.kind === "root" ? level.ast : level.block,
+  );
 }
 
 function walkMdItemField(
   item: AstItem,
   cur: SlotSub,
   walked: readonly SlotSub[],
-  onMatch: OnMatch,
+  context: WalkContext,
 ): void {
   if (item.kv === undefined) {
     return;
   }
   const key = item.kv.key;
-  const emit = (value: string): void => {
-    onMatch([...walked, { slot: cur.slot, value }]);
+  const emit = (): void => {
+    context.onMatch([...walked, { slot: cur.slot, value: quoteSeg(key) }]);
   };
   if (isUnionSeg(cur.value)) {
     const alts = parseUnionSeg(cur.value);
@@ -519,8 +613,8 @@ function walkMdItemField(
       return;
     }
     for (const alt of alts) {
-      if (alt.toLowerCase() === key.toLowerCase()) {
-        emit(key);
+      if (unquoteSeg(alt).toLowerCase() === key.toLowerCase()) {
+        emit();
       }
     }
     return;
@@ -528,16 +622,16 @@ function walkMdItemField(
   if (isPredicateSeg(cur.value)) {
     const pred = parsePredicateSeg(cur.value);
     if (pred !== null && mdItemMatchesPredicate(item, pred)) {
-      emit(key);
+      emit();
     }
     return;
   }
   if (cur.value === WILDCARD_SINGLE || cur.value === WILDCARD_RECURSIVE) {
-    emit(key);
+    emit();
     return;
   }
-  if (key.toLowerCase() === cur.value.toLowerCase()) {
-    emit(cur.value);
+  if (key.toLowerCase() === unquoteSeg(cur.value).toLowerCase()) {
+    emit();
   }
 }
 
@@ -557,7 +651,7 @@ const mdOps: WalkOps<MdLevel> = {
       for (const block of level.ast.blocks) {
         const child = { kind: "block" as const, block };
         if (!matches || matches(child)) {
-          yield { keySub: block.slug, child };
+          yield { keySub: quoteSeg(block.slug), child };
         }
       }
       return;
@@ -569,7 +663,7 @@ const mdOps: WalkOps<MdLevel> = {
       for (const [idx, item] of level.block.items.entries()) {
         const child = { kind: "item" as const, item };
         if (!matches || matches(child)) {
-          const seg = (counts.get(item.slug) ?? 0) > 1 ? `#${idx}` : item.slug;
+          const seg = (counts.get(item.slug) ?? 0) > 1 ? `#${idx}` : quoteSeg(item.slug);
           yield { keySub: seg, child };
         }
       }
@@ -577,9 +671,11 @@ const mdOps: WalkOps<MdLevel> = {
   },
   lookup(level, key) {
     if (level.kind === "root") {
-      const target = key.toLowerCase();
+      const target = unquoteSeg(key).toLowerCase();
       const block = level.ast.blocks.find((b) => b.slug === target);
-      return block === undefined ? null : { keySub: key, child: { kind: "block", block } };
+      return block === undefined
+        ? null
+        : { keySub: quoteSeg(block.slug), child: { kind: "block", block } };
     }
     if (level.kind === "block") {
       if (isOrdinalSeg(key)) {
@@ -595,9 +691,11 @@ const mdOps: WalkOps<MdLevel> = {
           },
         };
       }
-      const target = key.toLowerCase();
+      const target = unquoteSeg(key).toLowerCase();
       const item = level.block.items.find((it) => it.slug === target);
-      return item === undefined ? null : { keySub: key, child: { kind: "item", item } };
+      return item === undefined
+        ? null
+        : { keySub: quoteSeg(item.slug), child: { kind: "item", item } };
     }
     return null;
   },

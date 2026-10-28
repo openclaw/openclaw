@@ -5,7 +5,7 @@ import {
 } from "openclaw/plugin-sdk/config-mutation";
 import {
   loadCronStore,
-  resolveCronStorePath,
+  resolveCronStorePathAsync,
   saveCronStore,
 } from "openclaw/plugin-sdk/cron-store-runtime";
 import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
@@ -131,7 +131,7 @@ export async function maybePersistResolvedTelegramTarget(params: {
   }
 
   try {
-    const storePath = resolveCronStorePath();
+    const storePath = await resolveCronStorePathAsync();
     const store = await loadCronStore(storePath);
     let cronChanged = false;
     for (const job of store.jobs) {

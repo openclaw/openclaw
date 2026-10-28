@@ -1,4 +1,3 @@
-// Shared STT plus agent-consult meeting engine.
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 import type { RealtimeTranscriptionSession } from "../realtime-transcription/provider-types.js";
@@ -9,8 +8,6 @@ import {
 import {
   createMeetingRealtimeHarness,
   formatMeetingAgentAudioModelLog,
-  formatMeetingAgentTtsResultLog,
-  formatMeetingTranscriptSummaryLog,
   normalizeMeetingTtsPromptText,
   resolveMeetingRealtimeTranscriptionProvider,
 } from "./realtime-engine-support.js";
@@ -31,7 +28,7 @@ export async function startMeetingAgentRealtimeEngine(
   let realtimeReady = false;
   let ttsQueue = Promise.resolve();
   const agentLogScope = params.logPrefix ? `${params.logPrefix} agent` : "agent";
-  const resolved = resolveMeetingRealtimeTranscriptionProvider({
+  const resolved = await resolveMeetingRealtimeTranscriptionProvider({
     config: params.config,
     fullConfig: params.fullConfig,
     providers: params.providers,
@@ -102,13 +99,6 @@ export async function startMeetingAgentRealtimeEngine(
           return;
         }
         harness.recordTranscript("assistant", normalized);
-        params.logger.info(
-          formatMeetingTranscriptSummaryLog(
-            params.platform.logScope,
-            `${agentLogScope} assistant`,
-            normalized,
-          ),
-        );
         const turnId = harness.ensureTurn();
         harness.emit({
           type: "output.text.done",
@@ -126,9 +116,6 @@ export async function startMeetingAgentRealtimeEngine(
         if (!result.success || !result.audioBuffer || !result.sampleRate) {
           throw new Error(result.error ?? "TTS conversion failed");
         }
-        params.logger.info(
-          formatMeetingAgentTtsResultLog(params.platform.logScope, agentLogScope, result),
-        );
         await writeOutputAudio(
           convertMeetingTtsAudioForBridge(
             result.audioBuffer,
@@ -221,21 +208,7 @@ export async function startMeetingAgentRealtimeEngine(
           payload: { meetingSessionId: params.meetingSessionId, text: trimmed, role: "user" },
         });
         harness.recordTranscript("user", trimmed);
-        params.logger.info(
-          formatMeetingTranscriptSummaryLog(
-            params.platform.logScope,
-            `${agentLogScope} user`,
-            trimmed,
-          ),
-        );
         if (harness.isLikelyAssistantEchoTranscript(trimmed)) {
-          params.logger.info(
-            formatMeetingTranscriptSummaryLog(
-              params.platform.logScope,
-              `${agentLogScope} ignored assistant echo transcript`,
-              trimmed,
-            ),
-          );
           return;
         }
         harness.talkback?.enqueue(trimmed);

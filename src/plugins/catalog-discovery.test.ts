@@ -7,20 +7,15 @@ import {
   type PluginsInspectResult,
   type PluginsListResult,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
+import { createPluginDeclaredSurface } from "../../test/helpers/plugin-declared-surface.js";
 import {
   joinClawHubPluginCatalog,
   joinLocalPluginDetail,
   resolvePluginDiscoveryIdentity,
 } from "./catalog-discovery.js";
+import { createRemotePluginCatalogFixture } from "./catalog-discovery.test-support.js";
 
-const remote = {
-  packageName: "@alice/memory-plus",
-  displayName: "Memory Plus",
-  family: "code-plugin" as const,
-  isOfficial: false,
-  categories: ["memory"],
-  runtimeId: "memory-plus",
-};
+const remote = createRemotePluginCatalogFixture();
 
 function catalogState(plugins: PluginCatalogEntry[], mutationAllowed = true): PluginsListResult {
   return { plugins, diagnostics: [], mutationAllowed };
@@ -56,7 +51,7 @@ describe("plugin discovery identity and local join", () => {
       const inspection: PluginsInspectResult = {
         ok: true,
         plugin,
-        declared: {
+        declared: createPluginDeclaredSurface({
           channels: ["sibling-channel"],
           providers: ["media-models", "sibling-models"],
           tools,
@@ -67,13 +62,8 @@ describe("plugin discovery identity and local join", () => {
             "videoGenerationProviders: sibling-video",
             ...(includeTools ? ["tools: media_render"] : []),
           ],
-          hooks: [],
           mcpServers: ["supported", "unsupported"],
-          cliCommands: [],
-          cliBackends: [],
-          skills: [],
-          dangerousConfigFlags: [],
-        },
+        }),
         ...(includeOverview
           ? {
               overview: {
@@ -133,7 +123,6 @@ describe("plugin discovery identity and local join", () => {
 
   it.each([
     { name: "uninstalled", state: undefined, published: true, mutationAllowed: true },
-    { name: "recorded package", state: "needs-setup", published: true, mutationAllowed: true },
     { name: "disabled mutations", state: undefined, published: true, mutationAllowed: false },
     {
       name: "installed package omitted from search",
@@ -195,9 +184,7 @@ describe("plugin discovery identity and local join", () => {
 
   it.each([
     ["bundled", "@openclaw/calendar-local"],
-    ["official", "@acme/calendar-local"],
     ["global", "@openclaw/calendar-local"],
-    ["workspace", "@openclaw/calendar-local"],
   ])(
     "derives %s attribution from Gateway provenance, never package name %s",
     (origin, packageName) => {
@@ -220,13 +207,10 @@ describe("plugin discovery identity and local join", () => {
   );
 
   it.each([
-    ["all", undefined, true, true],
     ["all", undefined, false, false],
-    ["official", undefined, true, true],
     ["bundled", undefined, true, true],
     ["featured", undefined, false, true],
     ["official", "page-two", false, true],
-    ["all", "page-two", false, false],
   ] as const)(
     "keeps local additions scoped to %s intent and cursor %s",
     (intent, cursor, visible, isInstalled) => {

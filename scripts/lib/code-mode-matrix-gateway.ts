@@ -12,11 +12,17 @@ import { isRecord as record } from "@openclaw/normalization-core/record-coerce";
 import { parse } from "acorn";
 import type { CodeModeExecutorId } from "../../src/agents/code-mode-executor-types.js";
 import { resolveCodeModeConfig } from "../../src/agents/code-mode-runtime.js";
+import { normalizeUsage } from "../../src/agents/usage.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
-import { mergeDeep } from "../../src/infra/deep-merge.js";
 import { readResponseWithLimit } from "../../src/infra/http-response-body.js";
 import type { ManagedRun } from "../../src/process/supervisor/types.js";
-import type { CodeModeMatrixCellResult, RunCellParams } from "../code-mode-model-matrix.ts";
+import type {
+  CodeModeMatrixAutoTier,
+  CodeModeMatrixCellResult,
+  RunCellParams,
+} from "../code-mode-model-matrix.ts";
+import { createBuildSmokeEnv } from "./build-smoke-env.mts";
+import { createGatewayMatrixConfig } from "./code-mode-matrix-config.ts";
 import {
   createGatewayMatrixFixture,
   createGatewayMatrixPluginManifest,
@@ -30,9 +36,9 @@ import {
   type MatrixPerformanceTask,
 } from "./code-mode-matrix-performance-fixtures.ts";
 import type { MatrixPerformanceFixture } from "./code-mode-matrix-performance-types.ts";
+import { createGatewayMatrixProcessSupervisor } from "./code-mode-matrix-process-owner.ts";
 import {
   classifyCodeModeMatrixProviderFailure,
-  matrixModelConfig,
   matrixProviderEnv,
 } from "./code-mode-matrix-provider.ts";
 import {
@@ -108,6 +114,13 @@ export function parseGatewayMatrixActivationDiagnostic(line: string) {
     toolsDisabled: value.toolsDisabled,
     rawRun: value.rawRun,
     fallbackActive: value.fallbackActive,
+    ...(typeof value.modelProvider === "string" ? { modelProvider: value.modelProvider } : {}),
+    ...(typeof value.modelId === "string" ? { modelId: value.modelId } : {}),
+    ...(value.modelCodeMode === "unflagged" ||
+    value.modelCodeMode === "preferred" ||
+    value.modelCodeMode === "capable"
+      ? { modelCodeMode: value.modelCodeMode }
+      : {}),
     ...(typeof value.allowlist === "string" ? { allowlist: value.allowlist } : {}),
   };
 }
@@ -116,7 +129,9 @@ export function evaluateGatewayMatrixActivation(params: {
   diagnostics: readonly GatewayMatrixActivationDiagnostic[];
   rootRunId?: string;
   childRunIds: readonly string[];
-  expectedEnabled: boolean;
+  expectedEnabled: boolean | "auto";
+  expectedModel?: string;
+  expectedAutoTier?: CodeModeMatrixAutoTier;
 }) {
   const requiredActivationRuns = [
     ...new Set([...(params.rootRunId ? [params.rootRunId] : []), ...params.childRunIds]),
@@ -132,7 +147,16 @@ export function evaluateGatewayMatrixActivation(params: {
     Boolean(params.rootRunId) &&
     requiredActivationRuns.every((runId) =>
       qualifyingActivation.some((entry) => entry.runId === runId),
-    );
+    ) &&
+    (params.expectedEnabled !== "auto" ||
+      qualifyingActivation.every(
+        (entry) =>
+          entry.modelProvider !== undefined &&
+          entry.modelId !== undefined &&
+          `${entry.modelProvider}/${entry.modelId}` === params.expectedModel &&
+          entry.modelCodeMode !== undefined &&
+          !entry.fallbackActive,
+      ));
   return {
     requiredActivationRuns,
     observedActivation,
@@ -141,7 +165,16 @@ export function evaluateGatewayMatrixActivation(params: {
     actualCodeMode: activationComplete && qualifyingActivation.every((entry) => entry.active),
     engagement:
       activationComplete &&
-      qualifyingActivation.every((entry) => entry.active === params.expectedEnabled),
+      qualifyingActivation.every(
+        (entry) =>
+          (params.expectedEnabled !== "auto" ||
+            params.expectedAutoTier === undefined ||
+            entry.modelCodeMode === params.expectedAutoTier) &&
+          entry.active ===
+            (params.expectedEnabled === "auto"
+              ? entry.modelCodeMode === "preferred"
+              : params.expectedEnabled),
+      ),
   };
 }
 
@@ -225,6 +258,7 @@ export function createGatewayMatrixWorkload(
       .update(fixture.prompt)
       .update("\0")
       .update(fixture.interviewPrompt)
+      .update(fixture.instructions ? `\0${fixture.instructions}` : "")
       .digest("hex"),
     fixtureSha256: createHash("sha256")
       .update(fixture.pluginSource)
@@ -266,7 +300,7 @@ function gatewayAllowedTools(
   if (task === "automation-contracts") {
     return ["automations"];
   }
-  if (task === "process-contracts") {
+  if (task === "process-contracts" || task === "process-wait-recovery") {
     return ["exec", "process"];
   }
   if (task === "javascript-contracts") {
@@ -332,17 +366,17 @@ export function collectGatewayMatrixTrace(events: readonly unknown[]) {
       if (typeof message.provider === "string" && typeof message.model === "string") {
         models.add(`${message.provider}/${message.model}`);
       }
-      const usage = record(message.usage) ? message.usage : {};
-      const inputTokens = asFiniteNumber(usage.input);
-      const outputTokens = asFiniteNumber(usage.output);
+      const usage = normalizeUsage(record(message.usage) ? message.usage : undefined);
+      const inputTokens = usage?.input;
+      const outputTokens = usage?.output;
       if (inputTokens !== undefined && outputTokens !== undefined) {
         usageSamples += 1;
         input += inputTokens;
         output += outputTokens;
-        total = addObservedNumber(total, usage.totalTokens);
-        cacheRead = addObservedNumber(cacheRead, usage.cacheRead);
-        cacheWrite = addObservedNumber(cacheWrite, usage.cacheWrite);
-        costUsd = addObservedNumber(costUsd, record(usage.cost) ? usage.cost.total : undefined);
+        total = addObservedNumber(total, usage?.total);
+        cacheRead = addObservedNumber(cacheRead, usage?.cacheRead);
+        cacheWrite = addObservedNumber(cacheWrite, usage?.cacheWrite);
+        costUsd = addObservedNumber(costUsd, usage?.cost?.total);
       }
       for (const block of Array.isArray(message.content) ? message.content : []) {
         if (
@@ -397,7 +431,7 @@ export function collectGatewayMatrixTrace(events: readonly unknown[]) {
     if (
       !call ||
       (call.name === "exec" && typeof call.args.code === "string") ||
-      ["tool_search", "tool_describe", "tool_call", "wait"].includes(call.name) ||
+      ["tool_search", "tool_describe", "dispatch_action", "wait"].includes(call.name) ||
       activities.some((item) => item.parentId === call.id && item.sessionKey === call.sessionKey)
     ) {
       continue;
@@ -815,7 +849,7 @@ export function evaluateGatewayMatrixTask(params: {
         initialJobs.toSorted((a, b) => String(a.id).localeCompare(String(b.id))),
         finalJobs.toSorted((a, b) => String(a.id).localeCompare(String(b.id))),
       );
-  } else if (task === "process-contracts") {
+  } else if (task === "process-contracts" || task === "process-wait-recovery") {
     const processes = activity.filter((item) => item.name === "process");
     const launches = trace.activities.filter((item) => item.name === "exec");
     const helperSessionIds = new Set(
@@ -832,8 +866,10 @@ export function evaluateGatewayMatrixTask(params: {
       helperSessionIds.has(String(item.input.sessionId)),
     );
     checks.realProcessControl =
-      processes.some((item) => item.input.action === "list") &&
-      processes.some((item) => item.input.action === "poll" || item.input.action === "log");
+      task === "process-wait-recovery"
+        ? processes.some((item) => item.input.action === "poll")
+        : processes.some((item) => item.input.action === "list") &&
+          processes.some((item) => item.input.action === "poll" || item.input.action === "log");
     checks.singleHelperLaunch =
       launches.length === 1 &&
       launches.every(
@@ -862,6 +898,80 @@ export function evaluateGatewayMatrixTask(params: {
       helperOperations.some((item) =>
         JSON.stringify(item.result).includes(String(expected.marker)),
       );
+    if (task === "process-wait-recovery") {
+      const launch = launches.length === 1 ? launches[0] : undefined;
+      const launchCell = trace.calls.find(
+        (call) =>
+          launch !== undefined &&
+          call.id === launch.parentId &&
+          call.sessionKey === launch.sessionKey,
+      );
+      const launchOutcome = launchCell
+        ? trace.outcomes.find(
+            (outcome) =>
+              outcome.id === launchCell.id && outcome.sessionKey === launchCell.sessionKey,
+          )
+        : undefined;
+      const sessionId = launch?.result.sessionId;
+      const waits = trace.calls.filter((call) => call.name === "wait");
+      const wrongWait = waits.length === 1 ? waits[0] : undefined;
+      const failedWait = wrongWait
+        ? trace.outcomes.find(
+            (outcome) => outcome.id === wrongWait.id && outcome.sessionKey === wrongWait.sessionKey,
+          )
+        : undefined;
+      checks.completedLaunchWithRunningProcess =
+        launch?.result.status === "running" &&
+        launchOutcome?.details.status === "completed" &&
+        !launchOutcome.isError &&
+        record(launchOutcome.details.value) &&
+        launchOutcome.details.value.status === "running" &&
+        launchOutcome.details.value.sessionId === sessionId;
+      checks.wrongWaitObserved =
+        typeof sessionId === "string" &&
+        wrongWait !== undefined &&
+        wrongWait.args.runId === sessionId &&
+        trace.calls.filter(
+          (call) =>
+            call.eventIndex === wrongWait.eventIndex && call.sessionKey === wrongWait.sessionKey,
+        ).length === 1 &&
+        wrongWait.sessionKey === launchCell?.sessionKey &&
+        wrongWait.eventIndex > (launchOutcome?.eventIndex ?? Infinity) &&
+        failedWait !== undefined &&
+        failedWait.eventIndex > wrongWait.eventIndex &&
+        (failedWait.isError || failedWait.details.status === "failed");
+      // A later assistant call proves the failed result reached a new model turn;
+      // activity completion alone could also come from a premature/same-turn poll.
+      const processCalls = trace.activities
+        .filter((item) => item.name === "process")
+        .map((item) => ({
+          item,
+          call: trace.calls.find(
+            (call) => call.id === item.parentId && call.sessionKey === item.sessionKey,
+          ),
+        }));
+      checks.recoveryAfterFailedWait =
+        failedWait !== undefined &&
+        processCalls.length > 0 &&
+        processCalls.every(
+          ({ item, call }) =>
+            call?.name === "exec" &&
+            call.sessionKey === wrongWait?.sessionKey &&
+            call.eventIndex > failedWait.eventIndex &&
+            item.input.sessionId === sessionId,
+        );
+      checks.completedRecoveryPoll = processCalls.some(
+        ({ item, call }) =>
+          item.input.action === "poll" &&
+          item.input.sessionId === sessionId &&
+          !item.isError &&
+          item.result.status === "completed" &&
+          item.result.exitCode === 0 &&
+          item.result.sessionId === sessionId &&
+          call !== undefined &&
+          completedCallOutcome(callOutcomes(trace, call)) !== undefined,
+      );
+    }
   } else if (task === "partial-failure") {
     const mutations = receiptRows.filter((row) => row.kind === "effect");
     const failedCall = trace.activities.find(
@@ -1110,6 +1220,7 @@ async function agentRequest(
   abortSignal?: AbortSignal,
   sessionKey?: string,
   maxOutputTokens?: number,
+  instructions?: string,
 ) {
   const url = `http://127.0.0.1:${port}/v1/responses`;
   const timeout = AbortSignal.timeout(timeoutSeconds * 1_000);
@@ -1126,6 +1237,7 @@ async function agentRequest(
     body: JSON.stringify({
       model: "openclaw/qa",
       input: prompt,
+      ...(instructions ? { instructions } : {}),
       ...(previousId ? { previous_response_id: previousId } : {}),
       ...(maxOutputTokens === undefined ? {} : { max_output_tokens: maxOutputTokens }),
       stream: false,
@@ -1341,70 +1453,23 @@ export async function runGatewayMatrixCell(
   }
   const port = await availablePort();
   const configPath = path.join(stateDir, "openclaw.json");
-  const baseConfig = {
-    logging: {
-      level: "info",
-      consoleLevel: "info",
-      consoleStyle: "compact",
-      file: path.join(root, "gateway.log"),
-    },
-    env: { shellEnv: { enabled: false } },
-    agents: {
-      defaults: {
-        workspace,
-        skipBootstrap: true,
-        thinkingDefault: params.thinking,
-        heartbeat: { every: "0m" },
-        systemAgent: { agentId: "qa" },
-      },
-      entries: { qa: {} },
-    },
-    plugins: {
-      allow: [
-        provider,
-        ...(executor === "quickjs" ? ["code-mode-quickjs"] : []),
-        ...(fixture.requiredTools.length ? ["code-mode-matrix-fixture"] : []),
-      ],
-      slots: { memory: "none" },
-      ...(fixture.requiredTools.length ? { load: { paths: [pluginDir] } } : {}),
-      entries: {
-        [provider]: { enabled: true },
-        ...(executor === "quickjs" ? { "code-mode-quickjs": { enabled: true } } : {}),
-        ...(fixture.requiredTools.length
-          ? { "code-mode-matrix-fixture": { enabled: true, config: { receiptsPath } } }
-          : {}),
-      },
-    },
-    memory: { search: { enabled: false } },
-    skills: { load: { watch: false } },
-    discovery: { mdns: { mode: "off" } },
-    tools: {
-      profile: "full",
-      allow: allowedTools,
-      fs: { workspaceOnly: true },
-      exec: { security: "full", ask: "off" },
-    },
-    gateway: {
-      mode: "local",
-      bind: "loopback",
-      port,
-      auth: { mode: "token", token },
-      controlUi: { enabled: false },
-      http: { endpoints: { responses: { enabled: true } } },
-    },
-  };
-  // Task-specific limits cannot change the selected treatment, runtime, or model settings.
-  const cfg = mergeDeep(mergeDeep(baseConfig, performance?.configPatch ?? {}), {
-    agents: matrixModelConfig(params.cell.model, params.thinking),
-    tools: { codeMode: { enabled: params.cell.mode === "code", executor } },
+  const cfg = createGatewayMatrixConfig({
+    root,
+    port,
+    token,
+    model: params.cell.model,
+    thinking: params.thinking,
+    mode: params.cell.mode,
+    executor,
+    requiredTools: fixture.requiredTools,
+    allowedTools,
+    configPatch: performance?.configPatch,
   });
   await fs.writeFile(configPath, JSON.stringify(cfg), { mode: 0o600 });
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH,
     SystemRoot: process.env.SystemRoot,
-    HOME: path.join(root, "home"),
-    USERPROFILE: path.join(root, "home"),
-    OPENCLAW_HOME: path.join(root, "home"),
+    ...createBuildSmokeEnv(path.join(root, "home"), {}),
     TMPDIR: path.join(root, "tmp"),
     TEMP: path.join(root, "tmp"),
     TMP: path.join(root, "tmp"),
@@ -1423,9 +1488,10 @@ export async function runGatewayMatrixCell(
     NO_COLOR: "1",
   };
   const startedAt = Date.now();
-  const { createProcessSupervisor } = await import("../../src/process/supervisor/supervisor.js");
+  const supervisor = await createGatewayMatrixProcessSupervisor(
+    params.runtime.processOwnerBootstrap,
+  );
   const { runCommandWithTimeout } = await import("../../src/process/exec.js");
-  const supervisor = createProcessSupervisor();
   const scopeKey = `code-mode-matrix:${randomUUID()}`;
   const cleanup = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
   let child: ManagedRun | undefined;
@@ -1545,6 +1611,7 @@ export async function runGatewayMatrixCell(
         params.abortSignal,
         rootSessionKey,
         performance ? undefined : MAX_MODEL_OUTPUT_TOKENS,
+        fixture.instructions,
       );
     } finally {
       taskResponseAt = Date.now();
@@ -1690,7 +1757,9 @@ export async function runGatewayMatrixCell(
       ledger?.runs
         .filter((run) => run.requesterSessionKey === rootSessionKey)
         .map((run) => run.runId) ?? [],
-    expectedEnabled: params.cell.mode === "code",
+    expectedEnabled: params.cell.mode === "auto" ? "auto" : params.cell.mode === "code",
+    expectedModel: params.cell.model,
+    expectedAutoTier: params.expectedAutoTier,
   });
   let behavior: Record<string, boolean>;
   if (performance) {
@@ -1759,6 +1828,7 @@ export async function runGatewayMatrixCell(
     cleanupCertain &&
     task.status === "completed" &&
     identity &&
+    engagement &&
     behaviorPassed &&
     (performance !== undefined ||
       (interview.status === "completed" && Object.values(interviewChecks).every(Boolean)));
@@ -1834,6 +1904,8 @@ export async function runGatewayMatrixCell(
     },
   };
   await write("evidence.json", {
+    codeModeConfigured: record(cfg) && record(cfg.tools) && Object.hasOwn(cfg.tools, "codeMode"),
+    expectedAutoTier: params.expectedAutoTier ?? null,
     gateway,
     task,
     interview,

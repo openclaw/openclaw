@@ -1,5 +1,8 @@
 // Coverage for deciding when embedded run results should trigger model fallback.
 import { describe, expect, it } from "vitest";
+import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import { buildKnownAgentRunFailureReplyPayload } from "../../auto-reply/reply/agent-runner-failure-reply.js";
+import { FailoverError } from "../failover-error.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../failover/user-copy.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
@@ -21,15 +24,64 @@ function classifyErrorPayload(provider: string, model: string, text: string) {
 }
 
 describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
-  it("defaults embedded cyber failover to Daybreak Blue", () => {
+  it.each([false, true])(
+    "retains retry exhaustion across fallback aggregation (billing=%s)",
+    async (billing) => {
+      const rawError = "429 rate limit exceeded. Please try again in 221ms.";
+      const runs: string[] = [];
+      const failure: unknown = await runWithModelFallback({
+        cfg: undefined,
+        provider: "external",
+        model: "primary",
+        fallbacksOverride: ["external/fallback"],
+        skipAuthProfileRuntime: true,
+        run: async (provider, model) => {
+          runs.push(model);
+          const errorMessage =
+            billing && model === "fallback" ? "402 Insufficient credits" : rawError;
+          return {
+            payloads: buildPayloads({
+              provider,
+              lastAssistant: makeAssistantMessageFixture({ provider, model, errorMessage }),
+              rateLimitRetriesExhausted: billing && model === "fallback" ? undefined : 9,
+            }),
+            meta: { durationMs: 1 },
+          };
+        },
+        classifyResult: classifyEmbeddedAgentRunResultForModelFallback,
+      }).catch((error: unknown) => error);
+      expect(runs).toEqual(["primary", "fallback"]);
+      expect(failure).toBeInstanceOf(FailoverError);
+      if (!(failure instanceof FailoverError)) {
+        throw new Error("expected failover error");
+      }
+      expect(failure.attempts?.[0]).toMatchObject({
+        error: rawError,
+        rateLimitRetriesExhausted: 9,
+      });
+      const payload = buildKnownAgentRunFailureReplyPayload({
+        err: failure,
+        sessionCtx: {},
+        resolvedVerboseLevel: "off",
+      });
+      expect(payload?.text).toContain(
+        billing ? "billing" : "on the final model after 9 automatic retries",
+      );
+      expect(payload?.text).not.toContain("221ms");
+      if (billing) {
+        expect(payload?.text).not.toContain("automatic retries");
+      }
+    },
+  );
+
+  it("defaults embedded cyber failover to automatic same-model retry", () => {
     expect(resolveEmbeddedCyberFailoverConfig(undefined)).toEqual({
       mode: "auto",
-      model: "openai/gpt-daybreak-blue-latest",
       cooloffMs: 600_000,
     });
   });
 
-  it("accepts an embedded cyber failover override", () => {
+  it("preserves explicit embedded cyber failover disablement and cooloff", () => {
     expect(
       resolveEmbeddedCyberFailoverConfig({
         agents: {
@@ -37,7 +89,6 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
             embeddedAgent: {
               cyberFailover: {
                 mode: "off",
-                model: "openai/gpt-daybreak-red-latest",
                 cooloffMs: 30_000,
               },
             },
@@ -46,7 +97,6 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
       }),
     ).toEqual({
       mode: "off",
-      model: "openai/gpt-daybreak-red-latest",
       cooloffMs: 30_000,
     });
   });
@@ -143,75 +193,94 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     ).toBeNull();
   });
 
-  it("classifies provider business-denial error payloads as fallback-worthy", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
+  it.each([
+    {
+      name: "classifies provider business-denial error payloads as fallback-worthy",
       provider: "zai",
       model: "glm-5.1",
-      result: {
-        payloads: [
-          {
-            isError: true,
-            text: '{"success":false,"code":"CE-011","message":"当前ak因违规请求被禁止访问该模型"}',
-          },
-        ],
-        meta: {
-          durationMs: 42,
-        },
-      },
-    });
-
-    expect(result).toEqual({
+      rawError: '{"success":false,"code":"CE-011","message":"当前ak因违规请求被禁止访问该模型"}',
+      reason: "auth",
       message:
         'zai/glm-5.1 ended with a provider error: {"success":false,"code":"CE-011","message":"当前ak因违规请求被禁止访问该模型"}',
+    },
+    {
+      name: "classifies Google invalid-key result payloads before fallback settlement",
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      rawError:
+        "Google Generative AI API error (400): API key not valid. Please pass a valid API key. [code=INVALID_ARGUMENT]",
       reason: "auth",
-      code: "embedded_error_payload",
-      rawError: '{"success":false,"code":"CE-011","message":"当前ak因违规请求被禁止访问该模型"}',
-    });
-  });
-
-  it("classifies Google invalid-key result payloads before fallback settlement", () => {
-    const rawError =
-      "Google Generative AI API error (400): API key not valid. Please pass a valid API key. [code=INVALID_ARGUMENT]";
-
-    const result = classifyErrorPayload("google", "gemini-3.1-pro-preview", rawError);
-
-    expect(result).toEqual({
-      message: `google/gemini-3.1-pro-preview ended with a provider error: ${rawError}`,
-      reason: "auth",
-      code: "embedded_error_payload",
-      rawError,
-    });
-  });
-
-  it("classifies structured provider upstream_error payloads as fallback-worthy", () => {
-    const rawError =
-      '{"error":{"message":"Upstream request failed","type":"upstream_error","param":"","code":null}}';
-
-    const result = classifyErrorPayload("openai-compatible", "primary-model", rawError);
-
-    expect(result).toEqual({
-      message: `openai-compatible/primary-model ended with a provider error: ${rawError}`,
+      message:
+        "google/gemini-3.1-pro-preview ended with a provider error: Google Generative AI API error (400): API key not valid. Please pass a valid API key. [code=INVALID_ARGUMENT]",
+    },
+    {
+      name: "classifies structured provider upstream_error payloads as fallback-worthy",
+      provider: "openai-compatible",
+      model: "primary-model",
+      rawError:
+        '{"error":{"message":"Upstream request failed","type":"upstream_error","param":"","code":null}}',
       reason: "server_error",
-      code: "embedded_error_payload",
-      rawError,
-    });
-  });
-
-  it("classifies structured provider overloaded_error payloads as fallback-worthy", () => {
-    const rawError =
-      '{"error":{"message":"Provider overloaded","type":"overloaded_error","param":"","code":null}}';
-
-    const result = classifyErrorPayload("openai-compatible", "primary-model", rawError);
-
-    expect(result).toEqual({
-      message: `openai-compatible/primary-model ended with a provider error: ${rawError}`,
+      message:
+        'openai-compatible/primary-model ended with a provider error: {"error":{"message":"Upstream request failed","type":"upstream_error","param":"","code":null}}',
+    },
+    {
+      name: "classifies structured provider overloaded_error payloads as fallback-worthy",
+      provider: "openai-compatible",
+      model: "primary-model",
+      rawError:
+        '{"error":{"message":"Provider overloaded","type":"overloaded_error","param":"","code":null}}',
       reason: "overloaded",
+      message:
+        'openai-compatible/primary-model ended with a provider error: {"error":{"message":"Provider overloaded","type":"overloaded_error","param":"","code":null}}',
+    },
+    {
+      name: "classifies Codex subscription usage-limit payloads as rate-limit fallback",
+      provider: "openai",
+      model: "gpt-5.5",
+      rawError:
+        "You've reached your Codex subscription usage limit. Next reset in 32 minutes, Jun 20 at 3:44 PM EDT. Wait until the reset time, use another Codex account if available, or switch to another configured model/provider.",
+      reason: "rate_limit",
+      message:
+        "openai/gpt-5.5 ended with a provider error: You've reached your Codex subscription usage limit. Next reset in 32 minutes, Jun 20 at 3:44 PM EDT. Wait until the reset time, use another Codex account if available, or switch to another configured model/provider.",
+    },
+    {
+      // HTTP 500 is a server failure, not the timeout classification from #143649.
+      name: "treats a provider 500 error payload as a fallback-eligible server_error",
+      provider: "custom",
+      model: "llama-3.1",
+      rawError: "HTTP 500: internal server error",
+      reason: "server_error",
+      message: "custom/llama-3.1 ended with a provider error: HTTP 500: internal server error",
+    },
+    {
+      name: "classifies generic 'LLM request failed.' payloads as timeout fallback (#138531)",
+      provider: "custom",
+      model: "llama-3.1",
+      rawError: "LLM request failed.",
+      reason: "timeout",
+      message: "custom/llama-3.1 ended with a provider error: LLM request failed.",
+    },
+  ])("$name", ({ provider, model, rawError, reason, message }) => {
+    expect(classifyErrorPayload(provider, model, rawError)).toEqual({
+      message,
+      reason,
       code: "embedded_error_payload",
       rawError,
     });
   });
 
   it.each([
+    {
+      name: "a status-less serialized Google 503 error",
+      createPayloads: () => [
+        {
+          isError: true,
+          text: "Google Generative AI API error (503): The service is currently unavailable. [code=UNAVAILABLE]",
+        },
+      ],
+      code: "embedded_error_payload",
+      reason: "server_error",
+    },
     {
       name: "a generic external runner failure",
       createPayloads: () => [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
@@ -299,23 +368,6 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
       }
     },
   );
-
-  it("classifies Codex subscription usage-limit payloads as rate-limit fallback", () => {
-    const errorText =
-      "You've reached your Codex subscription usage limit. " +
-      "Next reset in 32 minutes, Jun 20 at 3:44 PM EDT. " +
-      "Wait until the reset time, use another Codex account if available, " +
-      "or switch to another configured model/provider.";
-
-    const result = classifyErrorPayload("openai", "gpt-5.5", errorText);
-
-    expect(result).toEqual({
-      message: "openai/gpt-5.5 ended with a provider error: " + errorText,
-      reason: "rate_limit",
-      code: "embedded_error_payload",
-      rawError: errorText,
-    });
-  });
 
   it("does not classify normal visible assistant output as fallback-worthy", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
@@ -422,6 +474,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
         payloads: [],
         meta: {
           durationMs: 42,
+          terminalReply: { disposition: "silent" },
           finalAssistantRawText: "NO_REPLY",
           finalAssistantVisibleText: "NO_REPLY",
         },
@@ -431,92 +484,17 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     expect(result).toBeNull();
   });
 
-  it("does not retry unclassified non-GPT error payloads", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "custom",
-      model: "llama-3.1",
-      result: {
-        payloads: [
-          {
-            isError: true,
-            text: "the model produced an application-level error",
-          },
-        ],
-        meta: {
-          durationMs: 42,
-        },
-      },
-    });
-
-    expect(result).toBeNull();
-  });
-
-  it("treats a provider 500 error payload as a fallback-eligible server_error", () => {
-    // An untyped 500 is a provider-side failure, not a timing one. #143649 already
-    // made `timeout` payloads fallback-eligible, so this payload reached the chain
-    // before, but labelled `timeout`; it now carries `server_error`, which is also
-    // an allowlisted ProviderErrorPayloadFailoverReason.
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "custom",
-      model: "llama-3.1",
-      result: {
-        payloads: [
-          {
-            isError: true,
-            text: "HTTP 500: internal server error",
-          },
-        ],
-        meta: {
-          durationMs: 42,
-        },
-      },
-    });
-
-    expect(result).toEqual({
-      message: "custom/llama-3.1 ended with a provider error: HTTP 500: internal server error",
-      reason: "server_error",
-      code: "embedded_error_payload",
-      rawError: "HTTP 500: internal server error",
-    });
-  });
-
-  it("classifies generic 'LLM request failed.' payloads as timeout fallback (#138531)", () => {
-    const rawError = "LLM request failed.";
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "custom",
-      model: "llama-3.1",
-      result: {
-        payloads: [{ isError: true, text: rawError }],
-        meta: { durationMs: 42 },
-      },
-    });
-
-    expect(result).toEqual({
-      message: `custom/llama-3.1 ended with a provider error: ${rawError}`,
-      reason: "timeout",
-      code: "embedded_error_payload",
-      rawError,
-    });
-  });
-
-  it("does not retry non-business transport error payloads", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "custom",
-      model: "llama-3.1",
-      result: {
-        payloads: [
-          {
-            isError: true,
-            text: "connection closed before a response arrived",
-          },
-        ],
-        meta: {
-          durationMs: 42,
-        },
-      },
-    });
-
-    expect(result).toBeNull();
+  it.each([
+    [
+      "does not retry unclassified non-GPT error payloads",
+      "the model produced an application-level error",
+    ],
+    [
+      "does not retry non-business transport error payloads",
+      "connection closed before a response arrived",
+    ],
+  ])("%s", (_name, text) => {
+    expect(classifyErrorPayload("custom", "llama-3.1", text)).toBeNull();
   });
 
   it("keeps tool-authored incomplete summaries fallback-eligible", () => {
@@ -569,6 +547,13 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
       label: "an exact terminal tool batch intentionally completes the turn",
       meta: { intentionalTerminalCompletion: "tool-batch" as const },
     },
+    {
+      label: "an optional empty result completes without a reply",
+      meta: {
+        terminalReply: { disposition: "empty" as const },
+        terminalReplyExpectation: "optional" as const,
+      },
+    },
   ])("does not fallback after $label", ({ meta }) => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "openai",
@@ -581,6 +566,26 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
 
     expect(result).toBeNull();
   });
+
+  it.each([undefined, "required", "result-required"] as const)(
+    "keeps a clean empty %s turn fallback-eligible",
+    (terminalReplyExpectation) => {
+      expect(
+        classifyEmbeddedAgentRunResultForModelFallback({
+          provider: "openai",
+          model: "gpt-5.5",
+          result: {
+            payloads: [],
+            meta: {
+              durationMs: 42,
+              terminalReply: { disposition: "empty" },
+              terminalReplyExpectation,
+            },
+          },
+        }),
+      ).toMatchObject({ reason: "format", code: "empty_result" });
+    },
+  );
 
   it.each([
     {
@@ -660,6 +665,12 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
       payloads: [{ isReasoning: true, text: "thinking" }, { text: "Here is the answer" }],
     },
     { name: "media-only", payloads: [{ mediaUrl: "https://example.test/result.png" }] },
+    {
+      name: "speech-only before synthesis",
+      payloads: [
+        setReplyPayloadMetadata({ text: "" }, { tts: { tagged: true, text: "Spoken answer." } }),
+      ],
+    },
     {
       name: "rich error",
       payloads: [{ isError: true, mediaUrl: "https://example.test/error.png" }],

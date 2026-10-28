@@ -1,5 +1,5 @@
 import { t } from "../../i18n/index.ts";
-import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
 import { chatQueueOrderKey } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
@@ -21,7 +21,7 @@ import {
   retireOutboxPayload,
 } from "./outbox-payloads.ts";
 
-registerNewSessionSetupEnglish();
+registerNewSessionRuntimeEnglish();
 
 const stagedTransfers = new WeakMap<
   CreationComposerTransfer,
@@ -133,14 +133,8 @@ async function performCreatedComposerAdmission(
       ),
     );
     stagedTransfers.set(transfer, { owner, host });
-  } else if (stagedOwner.host !== host) {
-    for (const input of transfer.inputs) {
-      const retained = owner.locate(stagedOwner.host, input.id);
-      if (retained && !retained.durable) {
-        owner.keep(host, retained.scope, retained.item, true);
-        owner.change(stagedOwner.host, input.id);
-      }
-    }
+  } else {
+    // The outbox owns volatile custody; a remount only changes the transfer host.
     stagedOwner.host = host;
   }
   const staged = transfer.inputs.flatMap((input) => {
@@ -219,6 +213,5 @@ async function performCreatedComposerAdmission(
       void resumeStoredChatOutboxes(host);
     }
   }
-  host.requestUpdate?.();
   return true;
 }

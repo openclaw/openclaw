@@ -12,9 +12,9 @@ import {
 } from "../runtime/session-meta-store.js";
 import type { AcpSessionResolution, AcpSessionTarget } from "./manager.types.js";
 
-export function resolveAcpAgentFromSessionKey(sessionKey: string, fallback = "main"): string {
+export function resolveAcpAgentFromSessionKey(sessionKey: string): string {
   const parsed = parseAgentSessionKey(sessionKey);
-  return normalizeAgentId(parsed?.agentId ?? fallback);
+  return normalizeAgentId(parsed?.agentId ?? "main");
 }
 
 function resolveMissingMetaError(sessionKey: string): AcpRuntimeError {

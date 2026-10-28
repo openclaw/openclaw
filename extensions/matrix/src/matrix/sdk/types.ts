@@ -149,11 +149,11 @@ export type MatrixCryptoBootstrapApi = MatrixVerificationCryptoApi &
       userId: string,
       deviceId: string,
     ) => Promise<MatrixDeviceVerificationStatusLike | null>;
-    getOwnIdentity?: () => Promise<
+    getOwnIdentity: () => Promise<
       | {
-          free?: () => void;
-          isVerified?: () => boolean;
-          verify?: () => Promise<unknown>;
+          free: () => void;
+          isVerified: () => boolean;
+          verify: () => Promise<unknown>;
         }
       | undefined
     >;

@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { restoreMocksAndGlobals } from "../test-helpers/mock-cleanup.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createUpdateRunReceipts } from "./update-run-receipts.ts";
 
@@ -7,10 +8,7 @@ const ACKNOWLEDGED_KEY = "openclaw:control-ui:update-acknowledged:v1";
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
 });
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
+afterEach(() => restoreMocksAndGlobals());
 
 describe("update result acknowledgments", () => {
   it("retains result dismissal across reload while scoping it to Gateway, profile, and run", () => {

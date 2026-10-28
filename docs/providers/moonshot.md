@@ -25,6 +25,8 @@ Explicit `models.mode: "replace"` keeps catalog seeding enabled; custom model ro
 | Model ref                           | Name                     | Reasoning        | Input              | Context   | Max output |
 | ----------------------------------- | ------------------------ | ---------------- | ------------------ | --------- | ---------- |
 | `moonshot/kimi-k3`                  | Kimi K3                  | low / high / max | text, image, video | 1,048,576 | 1,048,576  |
+| `moonshot/kimi-k3.1-pro`            | Kimi K3.1 Pro            | low / high / max | text, image, video | 1,048,576 | 1,048,576  |
+| `moonshot/kimi-k3.1-pro-highspeed`  | Kimi K3.1 Pro Highspeed  | low / high / max | text, image, video | 1,048,576 | 1,048,576  |
 | `moonshot/kimi-k2.7-code`           | Kimi K2.7 Code           | Always on        | text, image, video | 262,144   | 262,144    |
 | `moonshot/kimi-k2.7-code-highspeed` | Kimi K2.7 Code HighSpeed | Always on        | text, image, video | 262,144   | 262,144    |
 
@@ -42,8 +44,11 @@ and `max` (the default). On the direct Moonshot route OpenClaw exposes only
 `frequency_penalty`) that K3 fixes to provider defaults. Kimi K2.7 Code also
 always uses native thinking but requires both `thinking` and
 `reasoning_effort` to be omitted; the HighSpeed variant uses the same contract.
+Kimi K3.1 Pro and K3.1 Pro Highspeed use the same contract as K3, including
+native video input; Highspeed is a faster variant of K3.1 Pro.
 Kimi K3 is the onboarding default.
-See Moonshot's [Kimi K3 quickstart](https://platform.kimi.ai/docs/guide/kimi-k3-quickstart).
+See Moonshot's [Kimi K3 quickstart](https://platform.kimi.ai/docs/guide/kimi-k3-quickstart)
+and [Kimi K3.1 Pro quickstart](https://platform.kimi.ai/docs/guide/kimi-k3-1-pro-quickstart).
 
 ## Getting started
 
@@ -189,7 +194,7 @@ onboarding.
     **Best for:** code-focused tasks via the Kimi Coding endpoint.
 
     <Note>
-    Kimi Coding uses a different API key and provider prefix (`kimi/...`) than Moonshot (`moonshot/...`). Current refs are `kimi/k3` for up to 1M context (tier-gated), `kimi/k3-256k` for 256K context with lower quota use, `kimi/kimi-for-coding`, and `kimi/kimi-for-coding-highspeed`. Legacy refs `kimi/kimi-code` and `kimi/k2p5` normalize to `kimi/kimi-for-coding`; legacy `kimi/k3[1m]` normalizes to `kimi/k3`.
+    Kimi Coding uses a different API key and provider prefix (`kimi/...`) than Moonshot (`moonshot/...`). Current refs are `kimi/k3.1-pro` and `kimi/k3.1-pro-highspeed`, `kimi/k3` for up to 1M context (tier-gated), `kimi/k3-256k` for 256K context with lower quota use, `kimi/kimi-for-coding`, and `kimi/kimi-for-coding-highspeed`. Legacy refs `kimi/kimi-code` and `kimi/k2p5` normalize to `kimi/kimi-for-coding`; legacy `kimi/k3[1m]` normalizes to `kimi/k3`.
     </Note>
 
     The coding service accepts both OpenAI-compatible
@@ -201,6 +206,8 @@ onboarding.
 
     | Model ref | Name | Reasoning | Input | Context | Max output |
     | --- | --- | --- | --- | --- | --- |
+    | `kimi/k3.1-pro` | Kimi K3.1 Pro | always on; low / high / max effort | text, image | 1,048,576 | 131,072 |
+    | `kimi/k3.1-pro-highspeed` | Kimi K3.1 Pro Highspeed | always on; low / high / max effort | text, image | 1,048,576 | 131,072 |
     | `kimi/k3` | Kimi K3 | adaptive; low / high / max effort | text, image | 1,048,576 | 131,072 |
     | `kimi/k3-256k` | Kimi K3 (256k) | adaptive; low / high / max effort | text, image | 262,144 | 131,072 |
 
@@ -239,6 +246,15 @@ onboarding.
         ```
       </Step>
     </Steps>
+
+    Kimi Coding's default model, `kimi/kimi-for-coding`, and its
+    `kimi/kimi-for-coding-highspeed` variant expose only `/think on` (level `low`)
+    and default to it. Their K2 backend can put raw reasoning into visible replies
+    when thinking is disabled. OpenClaw keeps thinking enabled with a 1024-token
+    budget; stored `off` preferences resolve to `on` without failing the turn.
+    These models do not expose K3's effort levels. Explicit model
+    `params.thinking` overrides are still honored, including disabling thinking,
+    but disabling it can expose raw reasoning in replies.
 
     Kimi Coding K3 always uses adaptive thinking when reasoning is enabled and
     defaults to high effort. `/think minimal|low` maps to low effort,
@@ -328,7 +344,7 @@ at $0.30 per million tokens. See
 
 <AccordionGroup>
   <Accordion title="Native thinking mode">
-    Moonshot API Kimi K3 always reasons at maximum effort. OpenClaw exposes only
+    Moonshot API Kimi K3, K3.1 Pro and K3.1 Pro Highspeed always reason at maximum effort. OpenClaw exposes only
     `/think max`, sends `reasoning_effort: "max"`, and ignores stale lower or
     `off` settings.
 
@@ -336,7 +352,9 @@ at $0.30 per million tokens. See
     Its Anthropic-compatible endpoint receives `thinking.type: "disabled"` for
     off. Every enabled level uses adaptive thinking; minimal/low maps to low
     effort, medium/high/adaptive maps to high effort, and xhigh/max maps to max
-    effort. This applies to both `kimi/k3` and `kimi/k3-256k`. Legacy
+    effort. This applies to `kimi/k3`, `kimi/k3-256k`, `kimi/k3.1-pro` and
+    `kimi/k3.1-pro-highspeed`. Kimi Code rejects disabled thinking for K3.1 Pro,
+    so the K3.1 refs do not offer `off` and default to `high`. Legacy
     `kimi/k3[1m]` normalizes to `kimi/k3`.
 
     Self-hosted K3 registrations under `kimi` with model ID `kimi-k3` or
@@ -421,8 +439,16 @@ at $0.30 per million tokens. See
 
   </Accordion>
 
+  <Accordion title="Tool schema compatibility">
+    On Moonshot-family OpenAI-compatible routes, OpenClaw adds missing `type`
+    fields to `anyOf` and `oneOf` tool-schema branches when their literal values
+    or constraints identify a single type. This prevents Moonshot from rejecting
+    common MCP schemas with untyped branches. Explicit types and ambiguous
+    branches are left unchanged; other providers do not receive this rewrite.
+  </Accordion>
+
   <Accordion title="Tool call id sanitization">
-    Moonshot Kimi serves native tool_call ids shaped like `functions.<name>:<index>`. OpenClaw preserves the first occurrence of each native Kimi id and rewrites later duplicates to deterministic OpenAI-style `call_*` ids. Matching tool results are remapped with the same id so replay remains unique without stripping Kimi's first native id. This behavior is wired into the bundled Moonshot provider and is not a user-configurable setting.
+    Moonshot Kimi serves native tool_call ids shaped like `functions.<name>:<index>`. OpenClaw preserves the first occurrence of each native Kimi id and rewrites later duplicates to stable OpenAI-style `call_*` ids. Matching tool results are remapped with the same id so replay remains unique without stripping Kimi's first native id. This behavior is wired into the bundled Moonshot provider and is not a user-configurable setting.
   </Accordion>
 
   <Accordion title="Streaming usage compatibility">
@@ -447,7 +473,7 @@ at $0.30 per million tokens. See
     | Kimi Coding| `kimi/`          | Kimi Coding endpoint           | `KIMI_API_KEY`      |
     | Web search | N/A              | Same as Moonshot API region    | `KIMI_API_KEY` or `MOONSHOT_API_KEY` |
 
-    - Kimi web search uses `KIMI_API_KEY` or `MOONSHOT_API_KEY`, and defaults to `https://api.moonshot.ai/v1` with model `kimi-k2.6`.
+    - Kimi web search uses `KIMI_API_KEY` or `MOONSHOT_API_KEY` with `POST /tools/search`, defaulting to `https://api.moonshot.ai/v1`. It returns structured results without a chat model; `plugins.entries.moonshot.config.webSearch.model` is deprecated and ignored. See [Kimi search](/tools/kimi-search).
     - Override pricing and context metadata in `models.providers` if needed.
     - If Moonshot publishes different context limits for a model, adjust `contextWindow` accordingly.
 

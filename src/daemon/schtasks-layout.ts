@@ -1,5 +1,4 @@
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeProfileName } from "../cli/profile-utils.js";
@@ -259,6 +258,24 @@ async function readWindowsTaskCommand(
   const env = target.kind === "scheduled-task" ? target.env : {};
   const startupEntryPath = target.kind === "startup-entry" ? target.path : undefined;
   const requireEffective = options?.requireEffective || options?.requireLoaded;
+  const inspectionFailureMessage =
+    startupEntryPath !== undefined
+      ? "Startup service command could not be inspected."
+      : "Effective Scheduled Task service command could not be inspected.";
+  const launcherParseError = (
+    lineNumber: number,
+    reason:
+      | "multiple commands"
+      | "invalid environment assignment"
+      | "ambiguous command"
+      | "dynamic command"
+      | "ambiguous working directory",
+  ) => {
+    // Only closed parse facts leave this boundary; launcher text may contain credentials.
+    const error = new ServiceInspectionError(undefined);
+    error.message = `${inspectionFailureMessage} Launcher line ${lineNumber}: ${reason}. Review the launcher and use literal values with a single Gateway command before retrying.`;
+    return error;
+  };
   const timeoutDeadline =
     options?.timeoutMs === undefined ? undefined : performance.now() + options.timeoutMs;
   const deadline =
@@ -370,36 +387,6 @@ async function readWindowsTaskCommand(
       (registered && !directExecutable) || startupEntryPath !== undefined
         ? await captureLaunchers(options?.onLauncherContent)
         : undefined;
-    const assertRegistrationCurrent = async (source?: { path: string; content: string }) => {
-      if (!registered && !launchers) {
-        return;
-      }
-      if (
-        (launchers && !isDeepStrictEqual(await captureLaunchers(), launchers)) ||
-        (source && (await readTaskFile(source.path, deadline)) !== source.content)
-      ) {
-        throw new Error("Task launcher changed during inspection");
-      }
-      assertInspectionDeadline();
-      if (!registered) {
-        return;
-      }
-      const current = probeScheduledTaskState(taskName, remainingTimeout());
-      if (current.status === "unknown") {
-        throw new ScheduledTaskInspectionError(current);
-      }
-      assertInspectionDeadline();
-      if (
-        current.status !== registered.status ||
-        (registered.status === "found" &&
-          (current.status !== "found" ||
-            normalizeWindowsTaskIdentity(current.taskPath ?? "") !==
-              normalizeWindowsTaskIdentity(registered.taskPath ?? "") ||
-            !isDeepStrictEqual(current.actions, registered.actions)))
-      ) {
-        throw new Error("Scheduled Task registration changed during inspection");
-      }
-    };
     if (directExecutable) {
       assertStaticTaskPath(action.path);
       const argumentsText = action.arguments.trim();
@@ -412,7 +399,7 @@ async function readWindowsTaskCommand(
       ) {
         throw new Error("Scheduled Task executable arguments cannot be inspected");
       }
-      await assertRegistrationCurrent();
+      assertInspectionDeadline();
       const command = {
         programArguments: [action.path, ...splitArgsPreservingQuotes(argumentsText)],
         ...(action.workingDirectory ? { workingDirectory: action.workingDirectory } : {}),
@@ -421,7 +408,7 @@ async function readWindowsTaskCommand(
       return command;
     }
     if (launchers?.length === 0) {
-      await assertRegistrationCurrent();
+      assertInspectionDeadline();
       return null;
     }
     const scriptPath = launchers?.[0]?.scriptPath ?? resolveTaskScriptPath(env);
@@ -430,7 +417,7 @@ async function readWindowsTaskCommand(
     let workingDirectory = "";
     let commandLine = "";
     const environment: Record<string, string> = {};
-    for (const rawLine of content.split(/\r?\n/)) {
+    for (const [lineIndex, rawLine] of content.split(/\r?\n/).entries()) {
       const line = rawLine.trim();
       if (!line) {
         continue;
@@ -441,7 +428,7 @@ async function readWindowsTaskCommand(
       }
       if (commandLine) {
         if (requireEffective) {
-          throw new Error("Multiple Scheduled Task launcher commands");
+          throw launcherParseError(lineIndex + 1, "multiple commands");
         }
         break;
       }
@@ -454,16 +441,22 @@ async function readWindowsTaskCommand(
       if (lower.startsWith("set ")) {
         const assignment = parseCmdSetAssignment(rawLine.trimStart().slice(4), requireEffective);
         if (!assignment && requireEffective) {
-          throw new Error("Invalid Scheduled Task environment assignment");
+          throw launcherParseError(lineIndex + 1, "invalid environment assignment");
         }
         if (assignment) {
           environment[assignment.key] = assignment.value;
         }
         continue;
       }
+      // Redirection targets are shell syntax, not executable argv or cwd.
+      const parsedCommand = lower.startsWith("cd /d ") ? line : stripTrailingCmdRedirections(line);
+      if (parsedCommand === null && requireEffective) {
+        throw launcherParseError(lineIndex + 1, "ambiguous command");
+      }
+      const effectiveLine = parsedCommand ?? line;
       // Managed literals are encoded; unresolved CMD expansion cannot prove argv or cwd.
-      if (requireEffective && /[%!]/.test(line.replace(/%%|\^!/g, ""))) {
-        throw new Error("Dynamic Scheduled Task launcher command");
+      if (requireEffective && /[%!]/.test(effectiveLine.replace(/%%|\^!/g, ""))) {
+        throw launcherParseError(lineIndex + 1, "dynamic command");
       }
       if (lower.startsWith("cd /d ")) {
         const cdArguments = parseCmdScriptCommandLine(line);
@@ -471,18 +464,12 @@ async function readWindowsTaskCommand(
           requireEffective &&
           (stripTrailingCmdRedirections(line) !== line || cdArguments.length !== 3)
         ) {
-          throw new Error("Ambiguous Scheduled Task working directory");
+          throw launcherParseError(lineIndex + 1, "ambiguous working directory");
         }
         workingDirectory = cdArguments[2] ?? "";
         continue;
       }
-      // Generated stdin and operator-added output redirections are shell syntax,
-      // not arguments of the process whose ownership lifecycle controls verify.
-      const parsedCommand = stripTrailingCmdRedirections(line);
-      if (parsedCommand === null && requireEffective) {
-        throw new Error("Ambiguous Scheduled Task launcher command");
-      }
-      commandLine = parsedCommand ?? line;
+      commandLine = effectiveLine;
     }
     if (!commandLine) {
       throw new Error("Missing Scheduled Task command");
@@ -493,7 +480,7 @@ async function readWindowsTaskCommand(
     if (requireEffective && programArguments.length === 0) {
       throw new Error("Missing Scheduled Task command");
     }
-    await assertRegistrationCurrent({ path: scriptPath, content });
+    assertInspectionDeadline();
     assertCommandProfile({ programArguments, environment });
     if (
       (registered || startupEntryPath !== undefined) &&
@@ -575,11 +562,7 @@ async function readWindowsTaskCommand(
     }
   }
   // Native failures can contain raw service credentials; expose only the closed diagnostic.
-  throw new Error(
-    startupEntryPath !== undefined
-      ? "Startup service command could not be inspected."
-      : "Effective Scheduled Task service command could not be inspected.",
-  );
+  throw new Error(inspectionFailureMessage);
 }
 
 function createLauncherScriptLines(

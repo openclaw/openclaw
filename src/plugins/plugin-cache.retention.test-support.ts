@@ -13,78 +13,44 @@ import {
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 
 function readFailure(rootDir: string, scenario: string): Error {
-  let error: unknown;
+  let result: { ok: true } | { ok: false; error?: unknown } = { ok: true };
   const params = { rootDir, relativePath: "file.json", rejectHardlinks: false };
-  switch (scenario) {
-    case "formatter":
-    case "formatter-call-sites":
-    case "directory":
-      try {
-        readPluginCacheDirectory(path.join(rootDir, "missing"));
-      } catch (failure) {
-        error = failure;
-      }
-      break;
-    case "entry-boundary":
-    case "entry-hardlink": {
-      const result = checkPluginCacheEntry({
-        ...params,
-        relativePath: scenario === "entry-boundary" ? "../outside.json" : "hardlink.json",
-        rejectHardlinks: true,
-      });
-      assert.equal(result.ok, false);
-      if (!result.ok) {
-        error = result.error;
-      }
-      break;
+  if (["formatter", "formatter-call-sites", "directory"].includes(scenario)) {
+    try {
+      readPluginCacheDirectory(path.join(rootDir, "missing"));
+    } catch (error) {
+      result = { ok: false, error };
     }
-    case "file-missing":
-    case "file-hardlink":
-    case "file-read":
-    case "file-overflow": {
-      const result = readPluginCacheFile({
-        ...params,
-        relativePath: scenario === "file-missing" ? "missing.json" : "hardlink.json",
-        rejectHardlinks: scenario === "file-hardlink",
-        maxBytes: scenario === "file-overflow" ? 2 : undefined,
-      });
-      assert.equal(result.ok, false);
-      if (!result.ok) {
-        error = result.failure.error;
-      }
-      break;
-    }
-    case "regular-missing":
-    case "regular-overflow": {
-      const result = readPluginCacheJsonFile(
-        path.join(rootDir, scenario === "regular-missing" ? "missing.json" : "file.json"),
-        { maxBytes: scenario === "regular-overflow" ? 2 : undefined },
-      );
-      assert.equal(result.ok, false);
-      if (!result.ok) {
-        error = result.error;
-      }
-      break;
-    }
-    case "json":
-    case "json5": {
-      const file = readPluginCacheFile(params);
-      assert.equal(file.ok, true);
-      if (!file.ok) {
-        throw new Error("Expected invalid JSON bytes to be readable");
-      }
-      const result = parsePluginCacheJson(file, { json5: scenario === "json5" });
-      assert.equal(result.ok, false);
-      if (!result.ok) {
-        error = result.error;
-      }
-      break;
-    }
-    default:
-      throw new Error(`Unknown metadata failure scenario: ${scenario}`);
+  } else if (["entry-boundary", "entry-hardlink"].includes(scenario)) {
+    result = checkPluginCacheEntry({
+      ...params,
+      relativePath: scenario === "entry-boundary" ? "../outside.json" : "hardlink.json",
+      rejectHardlinks: true,
+    });
+  } else if (["file-missing", "file-hardlink", "file-read", "file-overflow"].includes(scenario)) {
+    const file = readPluginCacheFile({
+      ...params,
+      relativePath: scenario === "file-missing" ? "missing.json" : "hardlink.json",
+      rejectHardlinks: scenario === "file-hardlink",
+      maxBytes: scenario === "file-overflow" ? 2 : undefined,
+    });
+    assert.ok(!file.ok);
+    result = file.failure;
+  } else if (["regular-missing", "regular-overflow"].includes(scenario)) {
+    result = readPluginCacheJsonFile(
+      path.join(rootDir, scenario === "regular-missing" ? "missing.json" : "file.json"),
+      { maxBytes: scenario === "regular-overflow" ? 2 : undefined },
+    );
+  } else if (["json", "json5"].includes(scenario)) {
+    const file = readPluginCacheFile(params);
+    assert.ok(file.ok, "Expected invalid JSON bytes to be readable");
+    result = parsePluginCacheJson(file, { json5: scenario === "json5" });
+  } else {
+    throw new Error(`Unknown metadata failure scenario: ${scenario}`);
   }
-  assert.ok(error instanceof Error, "The cached failure must preserve its Error object");
-  return error;
+  assert.ok(!result.ok);
+  assert.ok(result.error instanceof Error, "The cached failure must preserve its Error object");
+  return result.error;
 }
 
 function captureCaller(rootDir: string, scenario: string) {

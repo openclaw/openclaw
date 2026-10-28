@@ -1,176 +1,194 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import * as mediaMime from "@openclaw/media-core/mime";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { saveMediaBuffer } from "../../media/store.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox/context.js";
+import {
+  buildEmbeddedRunnerAssistant,
+  makeEmbeddedRunnerAttempt,
+} from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(resetAgentRunRegistryForTest);
-afterEach(() => vi.restoreAllMocks());
-
-describe("agent harness reply media", () => {
-  it("rejects Gateway sibling decoys while retaining managed media and HTTP references", async () => {
-    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-      const outside = state.path("gateway-generated", `${"decoy-".repeat(30)}.txt`);
-      fs.mkdirSync(path.dirname(outside));
-      fs.writeFileSync(outside, "Gateway sibling must not be sent");
-      const managed = await saveMediaBuffer(
-        Buffer.from("managed attachment"),
-        "text/plain",
-        "inbound",
-      );
-      const managedUrl = `media://inbound/${managed.id}`;
-      const httpUrl = "https://example.com/attachment.pdf";
-      const host = await createAdmittedHostCapabilityTestFixture({
-        runId: "run-remote-reply-namespace",
-        agentId: "main",
-        sessionId: "remote-reply-namespace",
-        sessionKey: "agent:main:remote-reply-namespace",
-        workspaceDir: state.workspaceDir,
-        cwd: state.workspaceDir,
-        config: { tools: { allow: ["read"], fs: { workspaceOnly: false } } },
-      });
-      const readWorkspaceFile = vi.fn(async () => Buffer.from("unexpected remote read"));
-      try {
-        const result = await host.hostCapabilities.prepareReplyMedia!({
-          kind: "payload",
-          payload: {
-            mediaUrls: [
-              outside,
-              path.relative(state.workspaceDir, outside),
-              managedUrl,
-              managed.path,
-              httpUrl,
-            ],
-          },
-          workspaceRoot: "/remote-workspace",
-          readWorkspaceFile,
-        });
-        if (result.kind !== "payload") {
-          throw new Error("expected prepared reply payload");
-        }
-        const mediaUrls = result.payload.mediaUrls ?? [];
-        expect(mediaUrls).toHaveLength(2);
-        expect(mediaUrls[1]).toBe(httpUrl);
-        expect(fs.readFileSync(mediaUrls[0] ?? "", "utf8")).toBe("managed attachment");
-        expect(readWorkspaceFile).not.toHaveBeenCalled();
-        const failures = getReplyPayloadMetadata(result.payload)?.assistantMediaFailures;
-        expect(failures).toHaveLength(2);
-        expect(failures?.map((failure) => failure.label)).toEqual([
-          expect.stringMatching(/^Remote file: decoy-/),
-          expect.stringMatching(/^Remote file: decoy-/),
-        ]);
-        expect(failures?.[0]?.label.length).toBeLessThanOrEqual(180);
-        expect(failures?.[0]?.label).not.toContain(state.root);
-      } finally {
-        host.closeHost();
-        host.closeAdmission();
-      }
-    });
+let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
+let host: Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>> | undefined;
+beforeEach(async () => {
+  host = undefined;
+  state = await createOpenClawTestState({ layout: "state-only" });
+});
+afterEach(async () => {
+  try {
+    host?.closeHost();
+    host?.closeAdmission();
+    await state?.cleanup();
+  } finally {
+    resetAgentRunRegistryForTest();
+    vi.restoreAllMocks();
+  }
+});
+async function mediaHost(
+  overrides: Partial<Parameters<typeof createAdmittedHostCapabilityTestFixture>[0]> = {},
+) {
+  host = await createAdmittedHostCapabilityTestFixture({
+    runId: "reply-media",
+    agentId: "main",
+    sessionId: "reply-media",
+    sessionKey: "agent:main:reply-media",
+    config: {},
+    workspaceDir: state.workspaceDir,
+    cwd: state.workspaceDir,
+    ...overrides,
   });
+  return host.hostCapabilities;
+}
 
-  it("reads reply attachments from the remote sandbox instead of a stale Gateway sandbox", async () => {
-    const fixture = tempDirs.make("openclaw-reply-sandbox-");
-    const workspaceDir = path.join(fixture, "workspace");
-    fs.mkdirSync(workspaceDir);
-    const attempt = {
-      runId: "run-reply-sandbox",
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      cwd: workspaceDir,
-      workspaceDir,
-      config: {
-        agents: {
-          defaults: {
-            sandbox: {
-              mode: "all",
-              scope: "session",
-              workspaceAccess: "ro",
-              workspaceRoot: path.join(fixture, "sandboxes"),
-            },
+it.each(["missing", "pending", "delivered"] as const)(
+  "selects current-input media after an earlier final reply (%s)",
+  async (sourceReplyDeliveryState) => {
+    const caps = await mediaHost({ sourceReplyDeliveryMode: "automatic" });
+    const text = "Current answer.\nMEDIA:./current.pdf";
+    const assistant = buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] });
+    const bytes = Buffer.from("%PDF-1.4\nCurrent input attachment\n%%EOF\n");
+    const readWorkspaceFile = vi.fn(async () => bytes);
+    const result = await caps.prepareReplyMedia!({
+      kind: "attempt",
+      attempt: {
+        ...makeEmbeddedRunnerAttempt({
+          assistantTexts: [text],
+          lastAssistant: assistant,
+          currentAttemptCompletedAssistant: assistant,
+          didSendViaMessagingTool: true,
+          didDeliverSourceReplyViaMessageTool: true,
+          sourceReplyDeliveryState,
+          messagingToolSourceReplyPayloads: [{ text: "Earlier reply.", sourceReplyFinal: true }],
+        }),
+        answerSegments: [
+          {
+            textEnd: 0,
+            messageEnd: 1,
+            finalMessageStart: 1,
+            lastAssistant: buildEmbeddedRunnerAssistant({}),
+            sourceReplyDeliveryState: "delivered",
           },
-        },
-      } satisfies OpenClawConfig,
-    };
-    const sandbox = await ensureSandboxWorkspaceForSession({
-      config: attempt.config,
-      sessionKey: attempt.sessionKey,
-      workspaceDir,
+        ],
+      },
+      workspaceRoot: "/remote-workspace",
+      readWorkspaceFile,
     });
-    if (!sandbox) {
-      throw new Error("expected configured sandbox workspace");
-    }
-    fs.writeFileSync(
-      path.join(sandbox.workspaceDir, "artifact.txt"),
-      "stale Gateway sandbox bytes",
-    );
-    const host = await createAdmittedHostCapabilityTestFixture(attempt);
-    try {
-      const readWorkspaceFile = vi.fn(async () => Buffer.from("remote sandbox bytes"));
-      const result = await host.hostCapabilities.prepareReplyMedia?.({
-        kind: "payload",
-        payload: { text: "MEDIA:./artifact.txt" },
-        workspaceRoot: "/remote-workspace",
-        readWorkspaceFile,
-      });
-      expect(result?.kind).toBe("payload");
-      if (result?.kind !== "payload" || !result.payload.mediaUrl) {
-        throw new Error("expected prepared remote attachment");
-      }
-      expect(fs.readFileSync(result.payload.mediaUrl, "utf8")).toBe("remote sandbox bytes");
+    assert(result.kind === "attempt");
+    if (sourceReplyDeliveryState !== "missing") {
+      expect(readWorkspaceFile).not.toHaveBeenCalled();
+      expect(result.preparedMedia).toEqual([]);
+    } else {
       expect(readWorkspaceFile).toHaveBeenCalledOnce();
-    } finally {
-      host.closeHost();
-      host.closeAdmission();
+      expect(result.preparedMedia).toHaveLength(1);
+      const outcome = result.preparedMedia[0]?.outcome;
+      assert(outcome && "mediaUrl" in outcome);
+      expect(outcome.trustedLocalMedia).toBe(true);
+      expect(fs.readFileSync(outcome.mediaUrl)).toEqual(bytes);
     }
-  });
+  },
+);
 
-  it("discards staged reply media when its host closes during MIME detection", async () => {
-    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-      const mediaDir = state.statePath("media", "outbound");
-      fs.mkdirSync(mediaDir, { recursive: true });
-      const host = await createAdmittedHostCapabilityTestFixture({
-        runId: "run-reply-media-staging",
-        agentId: "main",
-        sessionId: "reply-media-staging",
-        sessionKey: "agent:main:reply-media-staging",
-        workspaceDir: state.workspaceDir,
-        cwd: state.workspaceDir,
-        config: {},
-      });
-      const bytes = Buffer.from("%PDF-1.4\n%%EOF\n");
-      const readWorkspaceFile = vi.fn(async () => bytes);
-      const detectMime = mediaMime.detectMime;
-      let inspected = false;
-      vi.spyOn(mediaMime, "detectMime").mockImplementation(async (params) => {
-        const mime = await detectMime(params);
-        expect(readWorkspaceFile).toHaveBeenCalledOnce();
-        inspected = true;
-        host.closeHost();
-        return mime;
-      });
-      try {
-        const operation = host.hostCapabilities.prepareReplyMedia!({
-          kind: "payload",
-          payload: { text: "MEDIA:./artifact.pdf" },
-          readWorkspaceFile,
-        });
-        await expect(operation).rejects.toThrow(/no longer active|aborted/i);
-        expect(fs.readdirSync(mediaDir)).toEqual([]);
-        expect(inspected).toBe(true);
-        expect(readWorkspaceFile).toHaveBeenCalledOnce();
-      } finally {
-        host.closeHost();
-        host.closeAdmission();
-      }
-    });
+it("rejects Gateway sibling decoys but keeps managed media and HTTP references", async () => {
+  const caps = await mediaHost({
+    config: { tools: { allow: ["read"], fs: { workspaceOnly: false } } },
   });
+  const outside = state.path("gateway-generated", `${"decoy-".repeat(30)}.txt`);
+  fs.mkdirSync(path.dirname(outside));
+  fs.writeFileSync(outside, "Gateway sibling must not be sent");
+  const managed = await saveMediaBuffer(Buffer.from("managed attachment"), "text/plain", "inbound");
+  const httpUrl = "https://example.com/attachment.pdf";
+  const readWorkspaceFile = vi.fn(async () => Buffer.from("unexpected remote read"));
+  const result = await caps.prepareReplyMedia!({
+    kind: "payload",
+    payload: {
+      mediaUrls: [
+        outside,
+        path.relative(state.workspaceDir, outside),
+        `media://inbound/${managed.id}`,
+        managed.path,
+        httpUrl,
+      ],
+    },
+    workspaceRoot: "/remote-workspace",
+    readWorkspaceFile,
+  });
+  assert(result.kind === "payload");
+  const urls = result.payload.mediaUrls ?? [];
+  expect(urls).toHaveLength(2);
+  expect(urls[1]).toBe(httpUrl);
+  expect(fs.readFileSync(urls[0] ?? "", "utf8")).toBe("managed attachment");
+  expect(readWorkspaceFile).not.toHaveBeenCalled();
+  const failures = getReplyPayloadMetadata(result.payload)?.assistantMediaFailures;
+  expect(failures).toHaveLength(2);
+  expect(failures?.map(({ label }) => label)).toEqual([
+    expect.stringMatching(/^Remote file: decoy-/),
+    expect.stringMatching(/^Remote file: decoy-/),
+  ]);
+  expect(failures?.[0]?.label.length).toBeLessThanOrEqual(180);
+  expect(failures?.[0]?.label).not.toContain(state.root);
+});
+
+it("reads remote sandbox bytes instead of a stale Gateway sandbox", async () => {
+  const config = {
+    agents: {
+      defaults: {
+        sandbox: {
+          mode: "all" as const,
+          scope: "session" as const,
+          workspaceAccess: "ro" as const,
+          workspaceRoot: state.path("sandboxes"),
+        },
+      },
+    },
+  };
+  const caps = await mediaHost({ config });
+  const sandbox = await ensureSandboxWorkspaceForSession({
+    config,
+    sessionKey: "agent:main:reply-media",
+    workspaceDir: state.workspaceDir,
+  });
+  assert(sandbox);
+  fs.writeFileSync(path.join(sandbox.workspaceDir, "artifact.txt"), "stale Gateway sandbox bytes");
+  const readWorkspaceFile = vi.fn(async () => Buffer.from("remote sandbox bytes"));
+  const result = await caps.prepareReplyMedia!({
+    kind: "payload",
+    payload: { text: "MEDIA:./artifact.txt" },
+    workspaceRoot: "/remote-workspace",
+    readWorkspaceFile,
+  });
+  assert(result.kind === "payload" && result.payload.mediaUrl);
+  expect(fs.readFileSync(result.payload.mediaUrl, "utf8")).toBe("remote sandbox bytes");
+  expect(readWorkspaceFile).toHaveBeenCalledOnce();
+});
+
+it("discards staged media if its host closes during MIME detection", async () => {
+  const caps = await mediaHost();
+  const mediaDir = state.statePath("media", "outbound");
+  fs.mkdirSync(mediaDir, { recursive: true });
+  const readWorkspaceFile = vi.fn(async () => Buffer.from("%PDF-1.4\n%%EOF\n"));
+  const detectMime = mediaMime.detectMime;
+  let inspected = false;
+  vi.spyOn(mediaMime, "detectMime").mockImplementation(async (params) => {
+    const mime = await detectMime(params);
+    expect(readWorkspaceFile).toHaveBeenCalledOnce();
+    inspected = true;
+    host!.closeHost();
+    return mime;
+  });
+  await expect(
+    caps.prepareReplyMedia!({
+      kind: "payload",
+      payload: { text: "MEDIA:./artifact.pdf" },
+      readWorkspaceFile,
+    }),
+  ).rejects.toThrow(/no longer active|aborted/i);
+  expect(fs.readdirSync(mediaDir)).toEqual([]);
+  expect(inspected).toBe(true);
+  expect(readWorkspaceFile).toHaveBeenCalledOnce();
 });

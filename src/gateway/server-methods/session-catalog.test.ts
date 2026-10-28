@@ -10,15 +10,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
+import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import {
+  catalogHost,
+  catalogProvider as provider,
+  catalogSession,
+  expectCatalog,
+  expectCatalogHost,
+  expectCatalogs,
+} from "./session-catalog.fixtures.test-support.js";
 import {
   bindPluginRegistryRuntime,
   call,
   conversationBindingMocks,
   createPluginRuntime,
-  createSessionCatalogTestContext,
   hoisted,
-  provider,
   resetSessionCatalogTestState,
   resolveRegisteredCatalogCreateTarget,
   sessionCatalogHandlers,
@@ -31,237 +39,210 @@ const { default: sessionSharePlugin } = await loadBundledPluginFacade<{
   default: { register: (api: OpenClawPluginApi) => void };
 }>({ pluginId: "session-share", artifactBasename: "index.js" });
 
+function useCatalogs(...catalogs: ReturnType<typeof provider>[]) {
+  hoisted.activeRegistry.sessionCatalogs = catalogs.map((catalog) => ({ provider: catalog }));
+}
+const listCatalogs = (params: unknown = {}, config: Record<string, unknown> = {}) =>
+  call("sessions.catalog.list", params, config);
+function expectCreateCapability(respond: unknown) {
+  expectCatalog(respond, {
+    capabilities: expect.objectContaining({ createSession: { model: createTarget.model } }),
+  });
+}
+function expectInvalidRequest(respond: unknown, message: string) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, {
+    code: ErrorCodes.INVALID_REQUEST,
+    message,
+  });
+}
+function hostEvent(sessions: unknown[]) {
+  return expect.objectContaining({
+    catalog: expect.objectContaining({ hosts: [expect.objectContaining({ sessions })] }),
+  });
+}
+const noActions = { continueSession: false, archive: false };
+const createTarget = { model: "anthropic/claude-opus-4-8", agentRuntime: "claude-cli" };
+function useCreationTarget(
+  resolveCreateSession: ReturnType<typeof provider>["resolveCreateSession"],
+) {
+  hoisted.activeRegistry.sessionCatalogs = [
+    { pluginId: "anthropic", provider: provider("claude", { resolveCreateSession }) },
+  ];
+}
+
 describe("session catalog Gateway methods", () => {
   beforeEach(resetSessionCatalogTestState);
 
-  it("prepares the login-shell PATH before synchronous catalog availability checks", async () => {
-    let finishProbe: (() => void) | undefined;
-    type ShellProcess = childProcess.ChildProcessByStdio<null, PassThrough, PassThrough>;
-    type ShellSpawnOptions = childProcess.SpawnOptionsWithStdioTuple<"ignore", "pipe", "pipe">;
-    const asyncExec = vi.fn<
-      (command: string, args: readonly string[], options: ShellSpawnOptions) => ShellProcess
-    >(() => {
-      const stdout = new PassThrough();
-      const stderr = new PassThrough();
-      const stdio: ShellProcess["stdio"] = [null, stdout, stderr, null, null];
-      const child = Object.assign(new ChildProcess(), { stdin: null, stdout, stderr, stdio });
-      finishProbe = () => {
-        child.stdout?.emit("data", Buffer.from("\0PATH=/catalog/bin\0"));
-        child.emit("close", 0, null);
-      };
-      return child;
-    });
-    const syncExec = vi.fn<typeof childProcess.execFileSync>(() => {
-      throw new Error("catalog request blocked on synchronous shell probe");
-    });
-    vi.doMock("node:child_process", () => ({
-      ...childProcess,
-      spawn: asyncExec,
-      execFileSync: syncExec,
-    }));
-    vi.resetModules();
-    const shell = await vi.importActual<typeof import("../../infra/shell-env.js")>(
-      "../../infra/shell-env.js",
-    );
-    const options = { env: process.env, platform: "linux" as const };
-    hoisted.prepareShellPathFromLoginShell.mockImplementation(() =>
-      shell.prepareShellPathFromLoginShell(options),
-    );
-    const list = vi.fn(async () => {
-      expect(shell.getShellPathFromLoginShell(options)).toBe("/catalog/bin");
-      return [];
-    });
-    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("local", { list }) }];
-    const pending = call("sessions.catalog.list", {});
-    try {
-      expect(list).not.toHaveBeenCalled();
-      expect(asyncExec).toHaveBeenCalledOnce();
-      finishProbe?.();
-      const respond = await pending;
-      expect(respond).toHaveBeenCalledWith(true, {
-        catalogs: [expect.objectContaining({ id: "local", hosts: [] })],
+  it("prepares the login-shell PATH before synchronous catalog availability checks", () =>
+    withMockedPlatform("linux", async () => {
+      let finishProbe: (() => void) | undefined;
+      type ShellProcess = childProcess.ChildProcessByStdio<null, PassThrough, PassThrough>;
+      type ShellSpawnOptions = childProcess.SpawnOptionsWithStdioTuple<"ignore", "pipe", "pipe">;
+      const asyncExec = vi.fn<
+        (command: string, args: readonly string[], options: ShellSpawnOptions) => ShellProcess
+      >(() => {
+        const stdout = new PassThrough();
+        const stderr = new PassThrough();
+        const stdio: ShellProcess["stdio"] = [null, stdout, stderr, null, null];
+        const child = Object.assign(new ChildProcess(), { stdin: null, stdout, stderr, stdio });
+        finishProbe = () => {
+          child.stdout?.emit("data", Buffer.from("\0PATH=/catalog/bin\0"));
+          child.emit("close", 0, null);
+        };
+        return child;
       });
-      expect(list).toHaveBeenCalledOnce();
-      expect(syncExec).not.toHaveBeenCalled();
-    } finally {
-      finishProbe?.();
-      await pending;
-      vi.doUnmock("node:child_process");
-    }
-  });
+      const syncExec = vi.fn<typeof childProcess.execFileSync>(() => {
+        throw new Error("catalog request blocked on synchronous shell probe");
+      });
+      vi.doMock("node:child_process", () => ({
+        ...childProcess,
+        spawn: asyncExec,
+        execFileSync: syncExec,
+      }));
+      vi.resetModules();
+      const shell = await vi.importActual<typeof import("../../infra/shell-env.js")>(
+        "../../infra/shell-env.js",
+      );
+      const options = { env: process.env };
+      hoisted.prepareShellPathFromLoginShell.mockImplementation(() =>
+        shell.prepareShellPathFromLoginShell(options),
+      );
+      const list = vi.fn(async () => {
+        expect(shell.getShellPathFromLoginShell(options)).toBe("/catalog/bin");
+        return [];
+      });
+      useCatalogs(provider("local", { list }));
+      const pending = listCatalogs();
+      try {
+        expect(list).not.toHaveBeenCalled();
+        expect(asyncExec).toHaveBeenCalledOnce();
+        finishProbe?.();
+        const respond = await pending;
+        expectCatalog(respond, { id: "local", hosts: [] });
+        expect(list).toHaveBeenCalledOnce();
+        expect(syncExec).not.toHaveBeenCalled();
+      } finally {
+        finishProbe?.();
+        await pending;
+        vi.doUnmock("node:child_process");
+      }
+    }));
 
-  it("returns catalog metadata without listing providers or acquiring session projection", async () => {
-    const list = vi.fn(async () => []);
-    const createListOperation = vi.fn(() => {
-      throw new Error("history unavailable");
-    });
-    hoisted.activeRegistry.sessionCatalogs = [
-      { provider: provider("zeta", { createListOperation }) },
-      {
-        provider: provider("alpha", {
+  it.each(["history unavailable", undefined])(
+    "isolates provider error %s and returns metadata without listing or projection",
+    async (failure) => {
+      const list = vi.fn(async () => []);
+      const createListOperation = vi.fn(() => {
+        throw new Error(failure);
+      });
+      useCatalogs(
+        provider("zeta", {
           list,
+          openTerminal: async () => ({ kind: "local", argv: ["codex", "resume", "thread"] }),
           resolveCreateSession: () => ({ model: "openai/gpt-5.6-sol", agentRuntime: "codex" }),
           startTerminalSession: async ({ cwd }) => ({ kind: "local", argv: ["codex"], cwd }),
         }),
-      },
-    ];
-    const config = {};
-    const expected = {
-      catalogs: [
-        {
-          id: "alpha",
-          label: "ALPHA",
-          capabilities: {
-            continueSession: false,
-            archive: false,
-            startTerminal: true,
-            createSession: { model: "openai/gpt-5.6-sol", startTerminal: true },
+        provider(
+          "alpha",
+          failure === undefined
+            ? { list: async () => createListOperation() }
+            : { createListOperation },
+        ),
+      );
+      const config = {};
+      const expected = {
+        catalogs: [
+          { id: "alpha", label: "ALPHA", capabilities: noActions, hosts: [] },
+          {
+            id: "zeta",
+            label: "ZETA",
+            capabilities: {
+              ...noActions,
+              openTerminal: true,
+              startTerminal: true,
+              createSession: { model: "openai/gpt-5.6-sol", startTerminal: true },
+            },
+            hosts: [],
           },
-          hosts: [],
-        },
+        ],
+      };
+
+      const readProjection = vi.fn(() => {
+        throw new Error("metadata must not acquire the session projection");
+      });
+      const broadcastToConnIds = vi.fn();
+      const context = bindSessionRowProjection(
+        { getRuntimeConfig: () => config, broadcastToConnIds },
+        readProjection,
+      );
+      const metadata = vi.fn();
+      const readMetadata = () =>
+        sessionCatalogHandlers["sessions.catalog.list"]!({
+          params: { metadataOnly: true, progressId: "metadata-progress" },
+          context,
+          respond: metadata,
+          client: { connId: "metadata-client", connect: gatewayConnect([]) },
+        } as never);
+      await readMetadata();
+      expect(list).not.toHaveBeenCalled();
+      expect(createListOperation).not.toHaveBeenCalled();
+      expect(readProjection).not.toHaveBeenCalled();
+      expect(broadcastToConnIds).not.toHaveBeenCalled();
+      expect(metadata).toHaveBeenCalledWith(true, expected);
+
+      const full = await listCatalogs({}, config);
+      expect(list).toHaveBeenCalledOnce();
+      expect(createListOperation).toHaveBeenCalledOnce();
+      expectCatalogs(full, [
         {
-          id: "zeta",
-          label: "ZETA",
-          capabilities: { continueSession: false, archive: false },
-          hosts: [],
+          ...expected.catalogs[0],
+          error: { code: "catalog_error", message: failure ?? "session catalog provider failed" },
         },
-      ],
-    };
+        expected.catalogs[1],
+      ]);
 
-    const readProjection = vi.fn(() => {
-      throw new Error("metadata must not acquire the session projection");
-    });
-    const broadcastToConnIds = vi.fn();
-    const context = bindSessionRowProjection(
-      { getRuntimeConfig: () => config, broadcastToConnIds },
-      readProjection,
-    );
-    const metadata = vi.fn();
-    const readMetadata = () =>
-      sessionCatalogHandlers["sessions.catalog.list"]!({
-        params: { metadataOnly: true, progressId: "metadata-progress" },
-        context,
-        respond: metadata,
-        client: { connId: "metadata-client" },
-      } as never);
-    await readMetadata();
-    expect(list).not.toHaveBeenCalled();
-    expect(createListOperation).not.toHaveBeenCalled();
-    expect(readProjection).not.toHaveBeenCalled();
-    expect(broadcastToConnIds).not.toHaveBeenCalled();
-    expect(metadata).toHaveBeenCalledWith(true, expected);
-
-    const full = await call("sessions.catalog.list", {}, config);
-    expect(list).toHaveBeenCalledOnce();
-    expect(createListOperation).toHaveBeenCalledOnce();
-    expect(full).toHaveBeenCalledWith(true, {
-      catalogs: [
-        expected.catalogs[0],
-        {
-          ...expected.catalogs[1],
-          error: { code: "catalog_error", message: "history unavailable" },
-        },
-      ],
-    });
-
-    metadata.mockClear();
-    await readMetadata();
-    expect(metadata).toHaveBeenCalledWith(true, expected);
-    expect(readProjection).not.toHaveBeenCalled();
-    expect(broadcastToConnIds).not.toHaveBeenCalled();
-    expect(list).toHaveBeenCalledOnce();
-    expect(createListOperation).toHaveBeenCalledOnce();
-  });
+      metadata.mockClear();
+      await readMetadata();
+      expect(metadata).toHaveBeenCalledWith(true, expected);
+      expect(readProjection).not.toHaveBeenCalled();
+      expect(broadcastToConnIds).not.toHaveBeenCalled();
+      expect(list).toHaveBeenCalledOnce();
+      expect(createListOperation).toHaveBeenCalledOnce();
+    },
+  );
 
   it("keeps metadata selection bound to the current catalog registry and agent", async () => {
     const first = provider("alpha");
-    hoisted.activeRegistry.sessionCatalogs = [{ provider: first }, { provider: provider("beta") }];
+    useCatalogs(first, provider("beta"));
     const config = { agents: { ownership: "explicit", entries: { main: {} } } };
     const params = { agentId: "main", catalogId: "alpha", metadataOnly: true };
-    const selected = await call("sessions.catalog.list", params, config);
-    expect(selected).toHaveBeenCalledWith(true, {
-      catalogs: [expect.objectContaining({ id: "alpha", label: "ALPHA", hosts: [] })],
-    });
+    const selected = await listCatalogs(params, config);
+    expectCatalog(selected, { id: "alpha", label: "ALPHA", hosts: [] });
 
-    hoisted.activeRegistry.sessionCatalogs = [
-      { provider: provider("alpha", { label: "New label" }) },
-    ];
-    const refreshed = await call("sessions.catalog.list", params, config);
-    expect(refreshed).toHaveBeenCalledWith(true, {
-      catalogs: [expect.objectContaining({ id: "alpha", label: "New label", hosts: [] })],
-    });
+    useCatalogs(provider("alpha", { label: "New label" }));
+    const refreshed = await listCatalogs(params, config);
+    expectCatalog(refreshed, { id: "alpha", label: "New label", hosts: [] });
 
-    const unknownAgent = await call(
-      "sessions.catalog.list",
-      { ...params, agentId: "missing" },
-      config,
+    expectInvalidRequest(
+      await listCatalogs({ ...params, agentId: "missing" }, config),
+      'unknown agent id "missing"',
     );
-    expect(unknownAgent).toHaveBeenCalledWith(false, undefined, {
-      code: ErrorCodes.INVALID_REQUEST,
-      message: 'unknown agent id "missing"',
-    });
-    hoisted.activeRegistry.sessionCatalogs = [];
-    const retired = await call("sessions.catalog.list", params, config);
-    expect(retired).toHaveBeenCalledWith(false, undefined, {
-      code: ErrorCodes.INVALID_REQUEST,
-      message: "unknown session catalog: alpha",
-    });
+    useCatalogs();
+    expectInvalidRequest(await listCatalogs(params, config), "unknown session catalog: alpha");
     expect(first.list).not.toHaveBeenCalled();
   });
 
-  it("sorts catalogs and isolates provider failures", async () => {
-    hoisted.activeRegistry.sessionCatalogs = [
-      { provider: provider("zeta") },
-      {
-        provider: provider("alpha", {
-          list: vi.fn(async () => {
-            throw new Error();
-          }),
-        }),
-      },
-    ];
-    const respond = await call("sessions.catalog.list", {});
-    expect(respond).toHaveBeenCalledWith(true, {
-      catalogs: [
-        expect.objectContaining({
-          id: "alpha",
-          hosts: [],
-          error: { code: "catalog_error", message: "session catalog provider failed" },
-        }),
-        expect.objectContaining({ id: "zeta", hosts: [] }),
-      ],
-    });
-  });
-
   it("forwards one explicit multi-agent owner through list, read, continue, and archive", async () => {
-    const host = {
-      hostId: "gateway:local",
+    const host = catalogHost({
       label: "Local Codex",
-      kind: "gateway" as const,
-      connected: true,
-      sessions: [
-        {
-          threadId: "thread-beta",
-          status: "stored",
-          archived: false,
-          canContinue: true,
-          canArchive: true,
-        },
-      ],
-    };
+      sessions: [catalogSession("thread-beta", { canArchive: true })],
+    });
     const list = vi.fn(async (_request: { agentId?: string }) => [host]);
     const read = vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }));
     const continueSession = vi.fn(async () => ({ sessionKey: "agent:beta:continued" }));
     const archive = vi.fn(async () => ({ ok: true as const }));
-    hoisted.activeRegistry.sessionCatalogs = [
-      { provider: provider("codex", { list, read, continueSession, archive }) },
-    ];
-    const config = {
-      agents: {
-        ownership: "explicit",
-        entries: { alpha: {}, beta: {} },
-      },
-    };
+    useCatalogs(provider("codex", { list, read, continueSession, archive }));
+    const config = { agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } } };
     const locator = {
       catalogId: "codex",
       hostId: "gateway:local",
@@ -269,7 +250,7 @@ describe("session catalog Gateway methods", () => {
       agentId: "beta",
     };
 
-    await call("sessions.catalog.list", { catalogId: "codex", agentId: "beta" }, config);
+    await listCatalogs({ catalogId: "codex", agentId: "beta" }, config);
     await call("sessions.catalog.read", locator, config);
     await call("sessions.catalog.continue", locator, config);
     await call("sessions.catalog.archive", { ...locator, confirmNoOtherRunner: true }, config);
@@ -290,12 +271,12 @@ describe("session catalog Gateway methods", () => {
       observedHostIds.push(hostIds ? [...hostIds] : undefined);
       return [];
     });
-    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("codex", { list }) }];
+    useCatalogs(provider("codex", { list }));
     const config = {};
 
     await Promise.all([
-      call("sessions.catalog.list", { hostIds: ["host-a", "host-b"] }, config),
-      call("sessions.catalog.list", { hostIds: ["host-b", "host-a"] }, config),
+      listCatalogs({ hostIds: ["host-a", "host-b"] }, config),
+      listCatalogs({ hostIds: ["host-b", "host-a"] }, config),
     ]);
 
     expect(list).toHaveBeenCalledTimes(2);
@@ -305,93 +286,37 @@ describe("session catalog Gateway methods", () => {
     ]);
   });
 
-  it("serves changed resident provider rows on the next identical list", async () => {
-    const session = {
-      threadId: "external-thread",
-      status: "stored",
-      archived: false,
-      canContinue: false,
-      canArchive: false,
-    };
-    let sessions: (typeof session)[] = [];
-    const list = vi.fn(async () => [
-      {
-        hostId: "gateway:local",
-        label: "Local",
-        kind: "gateway" as const,
-        connected: true,
-        sessions,
-      },
-    ]);
-    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("codex", { list }) }];
-    const config = {};
-    const client = { connId: "resident-requester" };
-    const before = await call("sessions.catalog.list", {}, config, client);
-    expect(before.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([]);
-
-    sessions = [session];
-    const after = await call("sessions.catalog.list", {}, config, client);
-    expect(after.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([session]);
-  });
-
   it("projects authoritative creator ownership onto streamed and final catalog rows", async () => {
     const broadcastToConnIds = vi.fn();
-    const host = {
-      hostId: "gateway:local",
+    const host = catalogHost({
       label: "Local Claude",
-      kind: "gateway" as const,
-      connected: true,
-      sessions: [
-        {
-          threadId: "owned-thread",
-          status: "stored",
-          archived: false,
-          sessionKey: "agent:main:owned",
-          createdActor: { type: "human" as const, id: "provider-spoof" },
-          canContinue: true,
-          canArchive: false,
-        },
-        {
-          threadId: "missing-thread",
-          status: "stored",
-          archived: false,
-          sessionKey: "agent:main:missing",
-          createdActor: { type: "human" as const, id: "provider-spoof" },
-          canContinue: true,
-          canArchive: false,
-        },
-        {
-          threadId: "external-thread",
-          status: "stored",
-          archived: false,
-          createdActor: { type: "human" as const, id: "provider-spoof" },
-          canContinue: true,
-          canArchive: false,
-        },
-      ],
-    };
+      sessions: ["owned", "missing", "external"].map((id) =>
+        catalogSession(`${id}-thread`, {
+          ...(id !== "external" ? { sessionKey: `agent:main:${id}` } : {}),
+          createdActor: { type: "human", id: "provider-spoof" },
+        }),
+      ),
+    });
     setSessionCatalogEntries([
       {
         sessionKey: "agent:main:owned",
         entry: { createdActor: { type: "agent", id: "worker-1" }, updatedAt: 1 },
       },
     ]);
-    hoisted.activeRegistry.sessionCatalogs = [
-      {
-        provider: provider("claude", {
-          list: vi.fn(async ({ onHost }) => {
-            onHost?.(host);
-            return [host];
-          }),
+    useCatalogs(
+      provider("claude", {
+        list: vi.fn(async ({ onHost }) => {
+          onHost?.(host);
+          return [host];
         }),
-      },
-    ];
+      }),
+    );
 
     const respond = await call(
       "sessions.catalog.list",
       { progressId: "progress-creator" },
       {},
-      { connId: "requester", connect: {} },
+      { connId: "requester", connect: gatewayConnect([]) },
       { broadcastToConnIds },
     );
     const projectedSessions = [
@@ -409,74 +334,11 @@ describe("session catalog Gateway methods", () => {
 
     expect(broadcastToConnIds).toHaveBeenCalledWith(
       "sessions.catalog.host",
-      expect.objectContaining({
-        catalog: expect.objectContaining({
-          hosts: [expect.objectContaining({ sessions: projectedSessions })],
-        }),
-      }),
+      hostEvent(projectedSessions),
       new Set(["requester"]),
       { dropIfSlow: true },
     );
-    expect(respond).toHaveBeenCalledWith(true, {
-      catalogs: [
-        expect.objectContaining({
-          hosts: [expect.objectContaining({ sessions: projectedSessions })],
-        }),
-      ],
-    });
-  });
-
-  it("does not clone the shared list projection across catalog requests", async () => {
-    const storedEntries = [
-      {
-        sessionKey: "agent:main:shared",
-        entry: { createdActor: { type: "agent" as const, id: "worker" }, updatedAt: 1 },
-      },
-    ];
-    setSessionCatalogEntries(storedEntries);
-    const observedEntries: unknown[] = [];
-    hoisted.activeRegistry.sessionCatalogs = [
-      {
-        provider: provider("claude", {
-          list: vi.fn(async ({ sessionEntries }) => {
-            observedEntries.push(sessionEntries?.entriesForAgent("main"));
-            return [];
-          }),
-        }),
-      },
-    ];
-    const config = {};
-    const context = createSessionCatalogTestContext(config);
-    const cloneSpy = vi.spyOn(globalThis, "structuredClone");
-    try {
-      for (let pass = 0; pass < 2; pass++) {
-        const respond = vi.fn();
-        await sessionCatalogHandlers["sessions.catalog.list"]!({
-          params: {},
-          context,
-          respond,
-        } as never);
-        expect(respond).toHaveBeenCalledWith(true, expect.anything());
-      }
-
-      expect(cloneSpy).not.toHaveBeenCalled();
-      expect(observedEntries).toEqual([
-        [
-          expect.objectContaining({
-            sessionKey: "agent:main:shared",
-            entry: expect.objectContaining(storedEntries[0]!.entry),
-          }),
-        ],
-        [
-          expect.objectContaining({
-            sessionKey: "agent:main:shared",
-            entry: expect.objectContaining(storedEntries[0]!.entry),
-          }),
-        ],
-      ]);
-    } finally {
-      cloneSpy.mockRestore();
-    }
+    expectCatalogHost(respond, { sessions: projectedSessions });
   });
 
   it("shares one lazy Gateway node snapshot across catalog providers", async () => {
@@ -502,18 +364,15 @@ describe("session catalog Gateway methods", () => {
           return [];
         }),
       });
-    hoisted.activeRegistry!.sessionCatalogs = [
-      { provider: catalogUsingNodes("zeta") },
-      { provider: catalogUsingNodes("alpha") },
-    ];
+    useCatalogs(catalogUsingNodes("zeta"), catalogUsingNodes("alpha"));
 
-    await call("sessions.catalog.list", {});
+    await listCatalogs();
 
     expect(dispatchNodeList).toHaveBeenCalledOnce();
   });
 
   it("rejects host cursors without a catalog selector", async () => {
-    const respond = await call("sessions.catalog.list", {
+    const respond = await listCatalogs({
       cursors: { "gateway:local": "next" },
     });
 
@@ -527,80 +386,30 @@ describe("session catalog Gateway methods", () => {
     );
   });
 
-  it("advertises terminal opening only for providers that implement it", async () => {
-    hoisted.activeRegistry.sessionCatalogs = [
-      {
-        provider: provider("codex", {
-          openTerminal: async () => ({ kind: "local", argv: ["codex", "resume", "thread"] }),
-        }),
-      },
-      { provider: provider("readonly") },
-    ];
-    const respond = await call("sessions.catalog.list", {});
-    expect(respond).toHaveBeenCalledWith(true, {
-      catalogs: [
-        expect.objectContaining({ capabilities: expect.objectContaining({ openTerminal: true }) }),
-        expect.objectContaining({ capabilities: { continueSession: false, archive: false } }),
-      ],
-    });
-  });
-
   it("memoizes create targets until config changes", async () => {
-    const metadataOnly = false;
-    let createSession: { model: string; agentRuntime: string } | undefined = {
-      model: "anthropic/claude-opus-4-8",
-      agentRuntime: "claude-cli",
-    };
+    let createSession: typeof createTarget | undefined = createTarget;
     const resolveCreateSession = vi.fn(() => createSession);
-    hoisted.activeRegistry.sessionCatalogs = [
-      {
-        pluginId: "anthropic",
-        provider: provider("claude", {
-          resolveCreateSession,
-        }),
-      },
-    ];
+    useCreationTarget(resolveCreateSession);
     const config = {};
 
-    const respond = await call("sessions.catalog.list", { metadataOnly }, config);
+    const respond = await listCatalogs({}, config);
 
-    expect(respond).toHaveBeenCalledWith(true, {
-      catalogs: [
-        expect.objectContaining({
-          id: "claude",
-          capabilities: {
-            continueSession: false,
-            archive: false,
-            createSession: { model: "anthropic/claude-opus-4-8" },
-          },
-        }),
-      ],
+    expectCatalog(respond, {
+      id: "claude",
+      capabilities: {
+        ...noActions,
+        createSession: { model: createTarget.model },
+      },
     });
 
     createSession = undefined;
-    const cached = await call("sessions.catalog.list", { metadataOnly }, config);
-    expect(cached).toHaveBeenCalledWith(true, {
-      catalogs: [
-        expect.objectContaining({
-          capabilities: expect.objectContaining({
-            createSession: { model: "anthropic/claude-opus-4-8" },
-          }),
-        }),
-      ],
-    });
+    expectCreateCapability(await listCatalogs({}, config));
     expect(resolveCreateSession).toHaveBeenCalledOnce();
 
-    const refreshed = await call("sessions.catalog.list", { metadataOnly }, {});
-    expect(refreshed).toHaveBeenCalledWith(true, {
-      catalogs: [
-        expect.objectContaining({
-          id: "claude",
-          capabilities: {
-            continueSession: false,
-            archive: false,
-          },
-        }),
-      ],
+    const refreshed = await listCatalogs();
+    expectCatalog(refreshed, {
+      id: "claude",
+      capabilities: noActions,
     });
     expect(resolveCreateSession).toHaveBeenCalledTimes(2);
   });
@@ -613,35 +422,14 @@ describe("session catalog Gateway methods", () => {
       .mockImplementationOnce(() => {
         throw new Error("provider warming");
       })
-      .mockReturnValue({
-        model: "anthropic/claude-opus-4-8",
-        agentRuntime: "claude-cli",
-      });
-    hoisted.activeRegistry.sessionCatalogs = [
-      { provider: provider("claude", { resolveCreateSession }) },
-    ];
+      .mockReturnValue(createTarget);
+    useCatalogs(provider("claude", { resolveCreateSession }));
     const config = {};
 
     try {
-      const unavailable = await call("sessions.catalog.list", {}, config);
-      expect(unavailable).toHaveBeenCalledWith(true, {
-        catalogs: [
-          expect.objectContaining({
-            capabilities: { continueSession: false, archive: false },
-          }),
-        ],
-      });
+      expectCatalog(await listCatalogs({}, config), { capabilities: noActions });
       now += 3_001;
-      const recovered = await call("sessions.catalog.list", {}, config);
-      expect(recovered).toHaveBeenCalledWith(true, {
-        catalogs: [
-          expect.objectContaining({
-            capabilities: expect.objectContaining({
-              createSession: { model: "anthropic/claude-opus-4-8" },
-            }),
-          }),
-        ],
-      });
+      expectCreateCapability(await listCatalogs({}, config));
       expect(resolveCreateSession).toHaveBeenCalledTimes(2);
     } finally {
       nowSpy.mockRestore();
@@ -649,62 +437,30 @@ describe("session catalog Gateway methods", () => {
   });
 
   it("resolves creation capability for the requested agent", async () => {
-    const metadataOnly = true;
     const resolveCreateSession = vi.fn(({ agentId }: { agentId?: string }) =>
-      agentId === "research"
-        ? { model: "anthropic/claude-opus-4-8", agentRuntime: "claude-cli" }
-        : undefined,
+      agentId === "research" ? createTarget : undefined,
     );
-    hoisted.activeRegistry.sessionCatalogs = [
-      {
-        pluginId: "anthropic",
-        provider: provider("claude", { resolveCreateSession }),
-      },
-    ];
+    useCreationTarget(resolveCreateSession);
 
-    const available = await call(
-      "sessions.catalog.list",
-      {
-        agentId: "research",
-        catalogId: "claude",
-        metadataOnly,
-      },
+    const available = await listCatalogs(
+      { agentId: "research", catalogId: "claude", metadataOnly: true },
       { agents: { entries: { main: {}, research: {} } } },
     );
     expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "research" });
-    expect(available).toHaveBeenCalledWith(true, {
-      catalogs: [
-        expect.objectContaining({
-          capabilities: {
-            continueSession: false,
-            archive: false,
-            createSession: { model: "anthropic/claude-opus-4-8" },
-          },
-        }),
-      ],
+    expectCatalog(available, {
+      capabilities: {
+        ...noActions,
+        createSession: { model: createTarget.model },
+      },
     });
   });
 
   it("resolves the private runtime target separately from the public capability", () => {
-    hoisted.activeRegistry.sessionCatalogs = [
-      {
-        pluginId: "anthropic",
-        provider: provider("claude", {
-          resolveCreateSession: () => ({
-            model: "anthropic/claude-opus-4-8",
-            agentRuntime: "claude-cli",
-          }),
-        }),
-      },
-    ];
+    useCreationTarget(() => createTarget);
 
     expect(resolveRegisteredCatalogCreateTarget("claude", "research", {})).toEqual({
       ok: true,
-      target: {
-        model: "anthropic/claude-opus-4-8",
-        agentRuntime: "claude-cli",
-        pluginOwnerId: "anthropic",
-      },
+      target: { ...createTarget, pluginOwnerId: "anthropic" },
     });
     expect(resolveRegisteredCatalogCreateTarget("missing", "research", {})).toEqual({
       ok: false,
@@ -737,7 +493,7 @@ describe("session catalog Gateway methods", () => {
       "sessions.catalog.continue",
       { catalogId: "remote", hostId: "node:devbox", threadId: "thread-1" },
       {},
-      { connect: { scopes: ["operator.write", "operator.admin"] } },
+      { connect: gatewayConnect(["operator.write", "operator.admin"]) },
     );
 
     expect(continueSession).toHaveBeenCalledWith({
@@ -814,7 +570,7 @@ it("keeps a delayed source off the catalog RPC path", async () => {
       service = registered;
     },
     registerSessionCatalog: (registeredCatalog) => {
-      hoisted.activeRegistry.sessionCatalogs = [{ provider: registeredCatalog }];
+      useCatalogs(registeredCatalog);
     },
   });
   sessionSharePlugin.register(api);
@@ -825,19 +581,30 @@ it("keeps a delayed source off the catalog RPC path", async () => {
   hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
   const clients = Array.from({ length: 6 }, (_, index) => ({
     connId: `viewer-${index}`,
-    connect: { scopes: ["operator.admin"] },
+    connect: gatewayConnect(["operator.admin"]),
   }));
   const broadcasts = clients.map(() => vi.fn());
+  const request = (
+    params: Record<string, unknown> = {},
+    client = clients[0],
+    broadcast?: ReturnType<typeof vi.fn>,
+  ) =>
+    startCall(
+      "sessions.catalog.list",
+      { catalogId: "openclaw", ...params },
+      config,
+      client,
+      broadcast ? { broadcastToConnIds: broadcast } : {},
+    );
+  const progressiveQuery = { progressId: "progress-0", allowPartialResults: true };
   const elapsed: number[] = [];
   const started = Date.now();
   try {
     const calls = clients.map((client, index) =>
-      startCall(
-        "sessions.catalog.list",
-        { catalogId: "openclaw", progressId: `progress-${index}`, allowPartialResults: true },
-        config,
+      request(
+        { progressId: `progress-${index}`, allowPartialResults: true },
         client,
-        { broadcastToConnIds: broadcasts[index] },
+        broadcasts[index],
       ),
     );
     const done = Promise.all(
@@ -846,105 +613,45 @@ it("keeps a delayed source off the catalog RPC path", async () => {
         elapsed.push(Date.now() - started);
       }),
     );
-    const metadata = startCall(
-      "sessions.catalog.list",
-      { catalogId: "openclaw", hostIds: ["node:source"] },
-      config,
-      clients[0],
-    );
+    const metadata = request({ hostIds: ["node:source"] });
     await vi.advanceTimersByTimeAsync(49);
     expect(elapsed).toHaveLength(6);
     expect(Math.max(...elapsed)).toBe(baselineMs);
     expect(Math.max(...elapsed)).toBeLessThan(50);
     expect(invokeNode).toHaveBeenCalledTimes(1);
     for (const pendingCall of calls) {
-      expect(pendingCall.respond).toHaveBeenCalledWith(true, {
-        catalogs: [
-          expect.objectContaining({
-            hosts: [
-              expect.objectContaining({
-                hostId: "node:source",
-                sessions: [],
-                error: expect.objectContaining({ code: "CATALOG_LOADING" }),
-              }),
-            ],
-          }),
-        ],
+      expectCatalogHost(pendingCall.respond, {
+        hostId: "node:source",
+        sessions: [],
+        pending: true,
       });
+      const catalog = pendingCall.respond.mock.calls[0]?.[1]?.catalogs[0];
+      expect(catalog).not.toHaveProperty("error");
+      expect(catalog?.hosts[0]).not.toHaveProperty("error");
     }
-    expect(metadata.respond).toHaveBeenCalledWith(true, {
-      catalogs: [
-        expect.objectContaining({
-          hosts: [
-            expect.objectContaining({
-              error: expect.objectContaining({ code: "CATALOG_LOADING" }),
-            }),
-          ],
-        }),
-      ],
-    });
+    expect(metadata.respond).not.toHaveBeenCalled();
     clients[5]!.connect.scopes = ["operator.read"];
     await vi.advanceTimersByTimeAsync(sourceDelayMs - 49);
     source.resolve();
     await vi.advanceTimersByTimeAsync(0);
     await done;
     await metadata.completion;
+    expectCatalog(metadata.respond, { pending: true, hosts: [] });
+    const metadataCatalog = metadata.respond.mock.calls[0]?.[1]?.catalogs[0];
+    expect(metadataCatalog).not.toHaveProperty("error");
     for (const [index, broadcast] of broadcasts.entries()) {
       expect(broadcast).toHaveBeenLastCalledWith(
         "sessions.catalog.host",
-        expect.objectContaining({
-          catalog: expect.objectContaining({
-            hosts: [
-              expect.objectContaining({
-                sessions: index === 5 ? [] : [expect.objectContaining(row)],
-              }),
-            ],
-          }),
-        }),
+        hostEvent(index === 5 ? [] : [expect.objectContaining(row)]),
         new Set([clients[index]!.connId]),
         { dropIfSlow: true },
       );
     }
-    for (let index = 0; index < 6; index++) {
-      const warm = startCall(
-        "sessions.catalog.list",
-        { catalogId: "openclaw" },
-        config,
-        clients[0],
-      );
-      await warm.completion;
-      expect(warm.respond).toHaveBeenCalledWith(true, {
-        catalogs: [
-          expect.objectContaining({
-            hosts: [
-              expect.objectContaining({
-                sessions: [expect.objectContaining(row)],
-              }),
-            ],
-          }),
-        ],
-      });
-    }
-    expect(invokeNode).toHaveBeenCalledTimes(1);
-    console.log(
-      JSON.stringify({
-        clock: "fake",
-        baselineMs,
-        sourceDelayMs,
-        gatewayP99Ms: Math.max(...elapsed),
-        invocations: invokeNode.mock.calls.length,
-      }),
-    );
-    const progressiveQuery = {
-      catalogId: "openclaw",
-      progressId: "progress-0",
-      allowPartialResults: true,
-    };
-    const current = startCall("sessions.catalog.list", progressiveQuery, config, clients[0], {
-      broadcastToConnIds: broadcasts[0],
-    });
+    const current = request();
+    await vi.advanceTimersByTimeAsync(0);
     await current.completion;
     expect(current.respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([row]);
+    expect(invokeNode).toHaveBeenCalledTimes(2);
     invokeNode
       .mockRejectedValueOnce(new Error("Paired node did not respond"))
       .mockImplementation(async () => {
@@ -952,10 +659,8 @@ it("keeps a delayed source off the catalog RPC path", async () => {
         throw new Error("Paired node did not respond");
       });
     await vi.advanceTimersByTimeAsync(60_005);
-    expect(invokeNode).toHaveBeenCalledTimes(3);
-    const refreshing = startCall("sessions.catalog.list", progressiveQuery, config, clients[0], {
-      broadcastToConnIds: broadcasts[0],
-    });
+    expect(invokeNode).toHaveBeenCalledTimes(4);
+    const refreshing = request(progressiveQuery, clients[0], broadcasts[0]);
     await refreshing.completion;
     expect(refreshing.respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]).toMatchObject({
       sessions: [],
@@ -968,24 +673,14 @@ it("keeps a delayed source off the catalog RPC path", async () => {
     await vi.advanceTimersByTimeAsync(0);
     for (const errorCode of ["NODE_INVOKE_FAILED", "NODE_OFFLINE"]) {
       connected = errorCode !== "NODE_OFFLINE";
-      const expired = startCall(
-        "sessions.catalog.list",
-        { catalogId: "openclaw" },
-        config,
-        clients[0],
-      );
+      const expired = request();
+      if (connected) {
+        await vi.advanceTimersByTimeAsync(0);
+      }
       await expired.completion;
-      expect(expired.respond).toHaveBeenCalledWith(true, {
-        catalogs: [
-          expect.objectContaining({
-            hosts: [
-              expect.objectContaining({
-                sessions: [],
-                error: expect.objectContaining({ code: errorCode }),
-              }),
-            ],
-          }),
-        ],
+      expectCatalogHost(expired.respond, {
+        sessions: [],
+        error: expect.objectContaining({ code: errorCode }),
       });
     }
   } finally {

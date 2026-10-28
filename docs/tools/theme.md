@@ -173,8 +173,9 @@ publishing the definition elsewhere.
 Plugins contribute theme definitions declaratively through their manifest.
 Personal themes use only the built-in brand icon, hat, and critter catalog IDs; plugin themes
 may also reference their own SVG artwork IDs declared in the
-[plugin manifest](/plugins/manifest/surfaces#themes). Definitions never contain
-artwork markup or external URLs.
+[plugin manifest](/plugins/manifest/surfaces#themes), and their manifest can
+declare light and dark canvas backgrounds. Definitions never contain artwork
+markup or external URLs.
 The shared catalog updates when the plugin is enabled, disabled, or reloaded;
 a Gateway restart is not required. The agent continues using the same `theme`
 tool rather than receiving a new tool for each plugin.

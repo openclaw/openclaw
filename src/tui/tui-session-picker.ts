@@ -20,11 +20,6 @@ export type SessionPickerChoice = {
   matchText: string;
 };
 
-export type ResumeResolution =
-  | { kind: "match"; session: SessionPickerChoice }
-  | { kind: "ambiguous"; candidates: SessionPickerChoice[] }
-  | { kind: "none" };
-
 /** Load the same bounded recent-session window used by the TUI Ctrl+P picker. */
 export async function loadRecentSessions(
   client: Pick<TuiBackend, "listSessions">,
@@ -47,11 +42,9 @@ export function buildSessionChoices(sessions: readonly TuiSessionEntry[]): Sessi
     const title = session.derivedTitle ?? session.displayName;
     const formattedKey = parseAgentSessionKey(session.key)?.rest ?? session.key;
     const label = title && title !== formattedKey ? `${title} (${formattedKey})` : formattedKey;
-    const timePart = session.updatedAt
-      ? formatRelativeTimestamp(session.updatedAt, { dateFallback: true, fallback: "" })
-      : "";
+    const timePart = session.updatedAt ? formatRelativeTimestamp(session.updatedAt) : "";
     const preview = session.lastMessagePreview?.replace(/\s+/g, " ").trim();
-    const description = timePart && preview ? `${timePart} · ${preview}` : (preview ?? timePart);
+    const description = timePart && preview ? `${timePart} · ${preview}` : preview || timePart;
     const searchableNames = [
       session.derivedTitle,
       session.displayName,
@@ -74,7 +67,10 @@ export function buildSessionChoices(sessions: readonly TuiSessionEntry[]): Sessi
 export function resolveResumeSession(
   sessions: readonly TuiSessionEntry[],
   query: string,
-): ResumeResolution {
+):
+  | { kind: "match"; session: SessionPickerChoice }
+  | { kind: "ambiguous"; candidates: SessionPickerChoice[] }
+  | { kind: "none" } {
   const trimmedQuery = query.trim();
   const normalizedQuery = normalizeLowercaseStringOrEmpty(trimmedQuery);
   const choices = buildSessionChoices(sessions);

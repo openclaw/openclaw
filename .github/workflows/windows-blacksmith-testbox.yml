@@ -56,6 +56,8 @@ jobs:
     if: ${{ !cancelled() && needs.admission.result == 'success' }}
     concurrency:
       group: ${{ github.event_name == 'workflow_dispatch' && needs.admission.outputs.group || format('testbox-validation-{0}-{1}', github.workflow, github.run_id) }}
+      # Preserve earlier waiters when unrelated leases share a budget slot.
+      queue: max
       cancel-in-progress: false
     name: windows
     runs-on: ${{ needs.admission.outputs.runner }}

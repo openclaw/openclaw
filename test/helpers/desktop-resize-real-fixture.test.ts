@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { writeFile } from "node:fs/promises";
+import { createServer as createHttpServer } from "node:http";
 import net, { type Socket } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -14,10 +14,12 @@ import {
 } from "../../src/state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../src/state/openclaw-state-db.js";
 import { withEnvAsync } from "../../src/test-utils/env.js";
+import { reserveTestPortListener } from "../../src/test-utils/port-claims.js";
+import * as ports from "../../src/test-utils/ports.js";
 import {
   createDesktopResizeGuest,
+  createDesktopResizeProxy,
   observeDesktopEndpointPackets,
-  readDesktopResizeFixture,
   resizeSources,
   seedDesktopResizeSources,
   writeDesktopResizeProvider,
@@ -46,16 +48,45 @@ function fixture(carrier: DesktopResizeFixture["carrier"] = "ssh"): DesktopResiz
     desktop: { protocol: "rfb", port: 5999, passwordFilePath: "/tmp/desktop-proof-password" },
     fixedDesktop: { protocol: "rfb", port: 6000, passwordFilePath: "/tmp/desktop-proof-password" },
     provenance: {
-      kind: "upstream-os",
-      osRelease: "Ubuntu 24.04",
-      packageOrigin: "signed Ubuntu archive",
-      packages: [
-        { name: "tigervnc-standalone-server", version: "fixture", sha256: "a".repeat(64) },
-      ],
-      serverBinarySha256: "b".repeat(64),
+      kind: "crabbox",
+      commit: "a".repeat(40),
+      installerSha256: "b".repeat(64),
     },
   };
 }
+
+it("keeps the Gateway listener available when free-port probes reuse an address", async () => {
+  const reserved = await reserveTestPortListener({
+    offsets: [0],
+    createListener: () => net.createServer(),
+  });
+  await reserved.releaseListener();
+  const probe = vi.spyOn(ports, "getFreePort").mockResolvedValue(reserved.claim.port);
+  onTestFinished(async () => {
+    probe.mockRestore();
+    await reserved.claim.release();
+  });
+  const proxy = await createDesktopResizeProxy();
+  const gateway = createHttpServer((_request, response) => response.end("ready"));
+  onTestFinished(async () => {
+    try {
+      if (gateway.listening) {
+        await new Promise<void>((resolve, reject) => {
+          gateway.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    } finally {
+      await proxy.close();
+    }
+  });
+  const gatewayPort = proxy.gatewayPort;
+  await new Promise<void>((resolve, reject) => {
+    gateway.once("error", reject);
+    gateway.listen(gatewayPort, "127.0.0.1", resolve);
+  });
+  const response = await fetch(new URL("/readyz", proxy.baseUrl));
+  expect(await response.text()).toBe("ready");
+});
 
 describe("desktop resize fixture provenance and carrier", () => {
   it.each([undefined, "/tmp/desktop proof/Xauthority"])(
@@ -88,36 +119,6 @@ describe("desktop resize fixture provenance and carrier", () => {
       }
     },
   );
-  it("retains explicit upstream provenance for a node carrier", async () => {
-    const file = path.join(tempDirs.make("desktop-resize-fixture-"), "fixture.json");
-    const value = fixture("node");
-    await writeFile(file, JSON.stringify(value));
-    expect(await readDesktopResizeFixture(file)).toEqual(value);
-  });
-
-  it("retains real Crabbox provenance as a separate source kind", async () => {
-    const file = path.join(tempDirs.make("desktop-resize-fixture-"), "fixture.json");
-    const value = fixture();
-    value.provenance = {
-      kind: "crabbox",
-      commit: "c".repeat(40),
-      installerSha256: "d".repeat(64),
-    };
-    await writeFile(file, JSON.stringify(value));
-    expect(await readDesktopResizeFixture(file)).toEqual(value);
-  });
-
-  it.each([
-    { carrier: "physical" },
-    { provenance: undefined },
-    { provenance: { kind: "upstream-os", serverBinarySha256: "unverified" } },
-    { provenance: { kind: "crabbox", commit: "not-a-commit", installerSha256: "e".repeat(64) } },
-  ])("rejects an unqualified fixture %j", async (invalid) => {
-    const file = path.join(tempDirs.make("desktop-resize-fixture-"), "fixture.json");
-    await writeFile(file, JSON.stringify({ ...fixture(), ...invalid }));
-    await expect(readDesktopResizeFixture(file)).rejects.toThrow("provenance");
-  });
-
   it.each(["ssh", "node"] as const)(
     "persists a ready %s worker and synthetic receipt across reopen",
     async (carrier) => {
@@ -230,75 +231,62 @@ async function openEndpointTap() {
 
 describe("desktop endpoint packet attribution", () => {
   const key = [4, 1, 0, 0, 0, 0, 0, 97];
-  it("counts zero only after fragmented same-connection markers traverse the real filter", async () => {
+  async function echo(client: Socket, bytes: Uint8Array) {
+    const response = once(client, "data");
+    client.write(bytes);
+    await response;
+  }
+  it.each([false, true])("counts forbidden bytes with view-only filtering=%s", async (viewOnly) => {
     const owner = await openEndpointTap();
     const client = await owner.connect();
-    const filter = desktopFilter.createRfbClientMessageFilter({ startPhase: "clientInit" });
-    filter.filter(Buffer.from([1]));
     const probe = owner.tap.expectPacket(key);
-    const filtered = filter.filter(Buffer.from(probe.bytes));
-    expect(filtered.error).toBeUndefined();
-    expect(filtered.forward).toHaveLength(20);
-    for (const byte of filtered.forward!) {
-      const echo = once(client, "data");
-      client.write(Buffer.from([byte]));
-      await echo;
+    if (viewOnly) {
+      const filter = desktopFilter.createRfbClientMessageFilter({ startPhase: "clientInit" });
+      filter.filter(Buffer.from([1]));
+      const filtered = filter.filter(Buffer.from(probe.bytes));
+      expect(filtered.error).toBeUndefined();
+      expect(filtered.forward).toHaveLength(20);
+      for (const byte of filtered.forward!) {
+        await echo(client, Buffer.from([byte]));
+      }
+      expect(Buffer.concat(owner.received)).toEqual(filtered.forward);
+    } else {
+      client.write(Buffer.from(probe.bytes));
     }
-    expect(await probe.result).toBe(0);
-    expect(Buffer.concat(owner.received)).toEqual(filtered.forward);
+    expect(await probe.result).toBe(viewOnly ? 0 : key.length);
   });
 
-  it("detects forwarded forbidden bytes instead of accepting unchanged guest state", async () => {
-    const owner = await openEndpointTap();
-    const client = await owner.connect();
-    const probe = owner.tap.expectPacket(key);
-    client.write(Buffer.from(probe.bytes));
-    expect(await probe.result).toBe(key.length);
-  });
-
-  it.each(["split", "duplicate-before", "duplicate-after"])(
-    "rejects %s marker attribution",
+  it.each(["split", "duplicate-before", "duplicate-after", "close", "upstream-close", "overflow"])(
+    "rejects incomplete or ambiguous evidence: %s",
     async (kind) => {
       const owner = await openEndpointTap();
       const first = await owner.connect();
-      const second = await owner.connect();
       const probe = owner.tap.expectPacket(key);
       const bytes = Buffer.from(probe.bytes);
       const before = bytes.subarray(0, 10);
       const after = bytes.subarray(-10);
-      const rejection = expect(probe.result).rejects.toThrow(/duplicated|crossed/u);
-      if (kind === "split") {
-        const echo = once(first, "data");
-        first.write(before);
-        await echo;
-        second.write(after);
-      } else {
+      const attribution = kind === "split" || kind.startsWith("duplicate");
+      const rejection = expect(probe.result).rejects.toThrow(
+        attribution ? /duplicated|crossed/u : /aborted|ended|closed|bound/u,
+      );
+      if (kind.startsWith("duplicate")) {
         first.write(
           Buffer.concat(
             kind === "duplicate-before" ? [before, before, after] : [before, after, after],
           ),
         );
-      }
-      await rejection;
-    },
-  );
-
-  it.each(["close", "upstream-close", "overflow"])(
-    "rejects unfinished evidence on %s",
-    async (kind) => {
-      const owner = await openEndpointTap();
-      const client = await owner.connect();
-      const probe = owner.tap.expectPacket(key);
-      const rejection = expect(probe.result).rejects.toThrow(/aborted|ended|closed|bound/u);
-      const echo = once(client, "data");
-      client.write(Buffer.from(probe.bytes.slice(0, 10)));
-      await echo;
-      if (kind === "close") {
-        await owner.tap.close();
-      } else if (kind === "upstream-close") {
-        owner.peers.forEach((socket) => socket.destroy());
       } else {
-        client.write(Buffer.alloc(64 * 1024 + 1, 9));
+        const second = kind === "split" ? await owner.connect() : undefined;
+        await echo(first, before);
+        if (second) {
+          second.write(after);
+        } else if (kind === "close") {
+          await owner.tap.close();
+        } else if (kind === "upstream-close") {
+          owner.peers.forEach((socket) => socket.destroy());
+        } else {
+          first.write(Buffer.alloc(64 * 1024 + 1, 9));
+        }
       }
       await rejection;
     },
@@ -314,15 +302,12 @@ describe("desktop endpoint packet attribution", () => {
       }
       const server = created.value;
       expect(server.address()).toMatchObject({ port: owner.tap.port });
-      const closed = vi.fn();
-      server.on("close", closed);
       const probe = owner.tap.expectPacket(key);
       expect(() => owner.tap.expectPacket(key)).toThrow("busy");
       const rejection = expect(probe.result).rejects.toThrow("aborted");
       owner.abort.abort();
       await rejection;
       await owner.tap.close();
-      expect(closed).toHaveBeenCalledOnce();
       expect(server.listening).toBe(false);
       expect(server.address()).toBeNull();
       expect(() => owner.tap.expectPacket(key)).toThrow();

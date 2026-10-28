@@ -9,7 +9,6 @@ import type * as PlaywrightCore from "playwright-core";
 
 const require = createRequire(import.meta.url);
 
-/** Loads the Playwright runtime on first Browser use. */
 export function getPlaywrightCore(): typeof PlaywrightCore {
   return require("playwright-core") as typeof PlaywrightCore;
 }

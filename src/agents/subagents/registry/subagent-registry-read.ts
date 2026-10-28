@@ -1,17 +1,20 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listLiveAgentRunIds } from "../../../infra/agent-run-registry.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { listSwarmRunReservationIds } from "../swarm/swarm-scheduler.js";
+import { matchesSubagentChildSessionIdentity } from "./subagent-child-owner-match.js";
 import {
+  getRecordedSubagentChildAuthority,
+  getSubagentChildSessionCandidates,
   getSubagentRunsForChildSession,
   getSubagentSessionReadLookup,
+  immutableSubagentRunSessionList,
   subagentRuns,
 } from "./subagent-registry-memory.js";
 import {
   buildLatestSubagentRunReadIndexFromRuns,
   buildSubagentRunReadIndexFromRuns,
-  countPendingDescendantRunsFromRuns,
-  getLatestSubagentRunByChildSessionKeyFromRuns,
   getLatestSubagentRunForChild,
   getSubagentRunByChildSessionKeyFromRuns,
   listRunsForControllerFromRuns,
@@ -26,11 +29,15 @@ import {
   getSubagentRunsSnapshotForChildSession,
   getSubagentSessionListRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForSessions,
-  withSubagentRunReadSnapshot,
+  prepareSubagentSessionListReadCache,
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import {
+  compareSubagentRunGeneration,
+  copySubagentRunRuntimeOwner,
+  latestSubagentRun,
+} from "./subagent-run-generation.js";
 import { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.js";
-import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
 export { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.js";
 
 export type { SubagentRunReadIndex } from "./subagent-registry-queries.js";
@@ -39,8 +46,42 @@ export type { SubagentRunRecord } from "./subagent-registry.types.js";
 export {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
+  isSubagentRunPausedForContinuation,
   resolveSubagentSessionStatus,
 } from "./subagent-session-metrics.js";
+
+/** Hydrate retained custody before resolving a private input's restart owner. */
+export async function getPrivateRequesterSettleRecoveryOwner(
+  requester: {
+    entry: { sessionId: string; lifecycleRevision?: string };
+    agentId: string;
+    canonicalKey: string;
+    storePath: string;
+    physicalStorePath?: string;
+  },
+  runId: string | undefined,
+) {
+  if (!runId) {
+    return undefined;
+  }
+  const { initSubagentRegistry } = await import("./subagent-registry.js");
+  await initSubagentRegistry();
+  const [
+    { prepareSqliteTargetFromSessionStorePath },
+    { resolvePrivateRequesterSettleRecoveryOwner },
+  ] = await Promise.all([
+    import("../../../config/sessions/session-sqlite-target.js"),
+    import("./subagent-registry-restart-recovery.js"),
+  ]);
+  const physical = await prepareSqliteTargetFromSessionStorePath(
+    requester.physicalStorePath ?? requester.storePath,
+    { agentId: requester.agentId },
+  );
+  return resolvePrivateRequesterSettleRecoveryOwner(
+    { ...requester, physicalStorePath: physical.path },
+    runId,
+  );
+}
 
 /** Resolve live owners through the existing aliases without scanning retained history. */
 export function listActiveSubagentSessionKeys(): string[] {
@@ -66,11 +107,27 @@ export function buildSubagentSessionListReadIndex(
     (sessionKeys
       ? getSubagentSessionListRunsSnapshotForSessions(subagentRuns, sessionKeys)
       : getSubagentSessionListRunsSnapshotForRead(subagentRuns));
+  // Liveness copies carry runtime ownership; shared display facts must never acquire it.
   return buildSubagentRunReadIndexFromRuns({
     runs,
     inMemoryRuns: sessionKeys
-      ? [...runs.keys()].flatMap((runId) => subagentRuns.get(runId) ?? [])
-      : subagentRuns.values(),
+      ? [...runs.keys()].flatMap((runId) => {
+          const entry = subagentRuns.get(runId);
+          return entry
+            ? [
+                copySubagentRunRuntimeOwner(
+                  entry,
+                  Object.freeze({ ...immutableSubagentRunSessionList(entry) }),
+                ),
+              ]
+            : [];
+        })
+      : Array.from(subagentRuns.values(), (entry) =>
+          copySubagentRunRuntimeOwner(
+            entry,
+            Object.freeze({ ...immutableSubagentRunSessionList(entry) }),
+          ),
+        ),
     now,
   });
 }
@@ -108,26 +165,11 @@ export async function countPendingDescendantRuns(
   assertCurrent: () => void,
 ): Promise<number> {
   assertCurrent();
-  const count = await withSubagentRunReadSnapshot(
-    subagentRuns,
-    (snapshot) => {
-      assertCurrent();
-      const sessionKeys = collectSubagentSessionReadKeys([rootSessionKey], snapshot.values());
-      return {
-        runIds: [...snapshot.values()]
-          .filter((entry) => sessionKeys.has(entry.childSessionKey.trim()))
-          .map((entry) => entry.runId),
-        sessionKeys: [],
-      };
-    },
-    (_selection, runs) => {
-      assertCurrent();
-      return countPendingDescendantRunsFromRuns(new Map(runs), rootSessionKey);
-    },
-    { sessionKeys: [rootSessionKey], descendants: true },
-  );
+  await prepareSubagentSessionListReadCache();
   assertCurrent();
-  return count;
+  return buildSubagentSessionListReadIndex(Date.now(), [rootSessionKey]).countPendingDescendantRuns(
+    rootSessionKey,
+  );
 }
 
 export async function resolveRequesterForChildSession(
@@ -170,7 +212,7 @@ export function isSubagentSessionRunActive(
 ): boolean {
   // Liveness is mutation ownership, so a persisted snapshot must not outvote the raw live map.
   return isSubagentRunLive(
-    getLatestSubagentRunForChild(subagentRuns, { childSessionKey, childAgentId }),
+    getLatestLiveSubagentRunByChildSessionKey(childSessionKey, undefined, childAgentId),
   );
 }
 
@@ -179,7 +221,15 @@ export function listSubagentRunsForRequester(
   options?: Parameters<typeof listRunsForRequesterFromRuns>[2],
 ): SubagentRunRecord[] {
   // Request-run lifetime scoping must observe the raw live map, including rows not persisted yet.
-  return listRunsForRequesterFromRuns(subagentRuns, requesterSessionKey, options);
+  const lookup = getSubagentSessionReadLookup(subagentRuns);
+  return listRunsForRequesterFromRuns(
+    subagentRuns,
+    requesterSessionKey,
+    options,
+    lookup
+      .selectReadScope([requesterSessionKey], lookup, false)
+      .map((runId) => subagentRuns.get(runId)!),
+  );
 }
 
 export async function getLatestSubagentRunByChildSessionKey(
@@ -206,13 +256,37 @@ export function getLatestLiveSubagentRunByChildSessionKey(
   childAgentId?: string,
 ): SubagentRunRecord | null {
   const key = childSessionKey.trim();
-  // Mutation ownership is process-local; persisted rows can be stale after a replacement.
+  // The live index owns child/agent matching; retained snapshots cannot confer custody.
+  return latestSubagentRun(getSubagentRunsForChildSession(key, childAgentId), matches) ?? null;
+}
+
+const qualifiedChildKey = /^agent:/i;
+
+/** Read registry-owned buckets directly; executor and reservation authority stays live. */
+export function getSubagentChildControllerSessionKey(
+  childSessionKey: string,
+  session: { sessionId?: string; lifecycleRevision?: string },
+): string | undefined {
+  const key = childSessionKey.trim();
+  if (!qualifiedChildKey.test(key)) {
+    return undefined;
+  }
+  const candidates = getSubagentChildSessionCandidates(key);
+  let latest: SubagentRunRecord | undefined;
+  let index = 0;
+  while (index < candidates.length) {
+    const candidate = candidates[index++]!;
+    if (
+      (isSubagentRunLive(candidate) || isSubagentRunQueued(candidate)) &&
+      getRecordedSubagentChildAuthority(candidate).status !== "mismatch" &&
+      matchesSubagentChildSessionIdentity(candidate, session) &&
+      (!latest || compareSubagentRunGeneration(candidate, latest) > 0)
+    ) {
+      latest = candidate;
+    }
+  }
   return (
-    getLatestSubagentRunByChildSessionKeyFromRuns(
-      getSubagentRunsForChildSession(key, childAgentId),
-      key,
-      matches,
-      childAgentId,
-    ) ?? null
+    normalizeOptionalString(latest?.controllerSessionKey) ??
+    normalizeOptionalString(latest?.requesterSessionKey)
   );
 }

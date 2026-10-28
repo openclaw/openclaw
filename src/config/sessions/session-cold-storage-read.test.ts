@@ -56,7 +56,7 @@ describe("readRestoredSessionTranscript", () => {
     [new Error("read unavailable"), false, 1, 0],
     [new SessionTranscriptColdError("another-transcript"), false, 1, 0],
     [new SessionTranscriptColdError(scope.sessionId), true, 1, 0],
-    [new SessionTranscriptColdError(scope.sessionId), false, 3, 2],
+    [new SessionTranscriptColdError(scope.sessionId), false, 2, 1],
   ] as const)(
     "propagates %s (readOnly=%s, reads=%i, restorations=%i)",
     async (failure, readOnly, reads, restorations) => {

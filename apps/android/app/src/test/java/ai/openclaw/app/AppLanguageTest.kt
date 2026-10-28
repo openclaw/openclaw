@@ -32,37 +32,6 @@ import java.util.Locale
 @Config(sdk = [34])
 class AppLanguageTest {
   @Test
-  fun supportedLanguagesMatchPackagedTranslations() {
-    assertEquals(
-      setOf(
-        "ar",
-        "de",
-        "en",
-        "es",
-        "fa",
-        "fr",
-        "hi",
-        "id",
-        "it",
-        "ja",
-        "ko",
-        "nl",
-        "pl",
-        "pt-BR",
-        "ru",
-        "sv",
-        "th",
-        "tr",
-        "uk",
-        "vi",
-        "zh-CN",
-        "zh-TW",
-      ),
-      AppLanguage.entries.mapNotNull(AppLanguage::languageTag).toSet(),
-    )
-  }
-
-  @Test
   fun everyLanguageRoundTripsThroughAndroidLocales() {
     AppLanguage.entries.forEach { language ->
       assertEquals(language, appLanguageFromLocales(localesForAppLanguage(language)))

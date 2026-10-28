@@ -12,12 +12,84 @@ How the Gateway reports which nodes are connected, and which server-pushed event
 
 ## Presence
 
-- `system-presence` returns entries keyed by device identity, including
-  `deviceId`, `roles`, and `scopes`, so UIs can show one row per device even
-  when it connects as both operator and node.
+- `system-presence` returns one row per live operator connection, including
+  `deviceId`, `roles`, and `scopes`. Separate tabs keep their own watched-session
+  facts. Reconnecting removes offline rows for the same identity: device ID,
+  then client instance ID, then connection ID. When the last connection closes,
+  at most one offline row for that identity remains until the five-minute TTL.
+  Node connections retain device-keyed rows. UIs can group rows by device or person.
 - `node.list` includes optional `lastSeenAtMs` and `lastSeenReason`. Connected
   nodes report current connection time with reason `connect`; paired nodes can
   also report durable background presence via a trusted node event.
+
+### Opt-in presence deltas
+
+Operator clients can advertise `presence-deltas` in connect `caps`. The Control
+UI and current macOS, iOS, and Android operator connections do so. Older app
+versions and clients without the capability retain the existing `presence` event
+payload `{ presence: [...] }`. Ordinary `system-presence` calls still return an array.
+
+For opted-in readers, the same `presence` event carries one of two payloads:
+
+```json
+{
+  "reset": true,
+  "version": 12,
+  "presence": [{ "connectionId": "connection-a", "ts": 1000 }],
+  "keys": ["1"]
+}
+```
+
+```json
+{
+  "base": 12,
+  "version": 13,
+  "upsert": [{ "key": "1", "set": { "ts": 2000 }, "unset": ["watchedSessions"] }],
+  "remove": [],
+  "order": ["1"]
+}
+```
+
+Keys are opaque, stable identities assigned by the presence owner, independent
+of display names and recipient visibility. A reset replaces the complete roster;
+keys are compact identifiers, not connection or device IDs, and are never reused
+within a Gateway process after a row expires or is removed. Do not persist or parse them.
+`keys` parallels `presence`. For an existing row, an upsert's `set` contains only
+changed top-level fields and `unset` names removed fields. Nested objects and arrays
+are replaced as fields, not merged. A new row uses `{ key, presence }` with its
+complete contents. A field patch requires an existing row; otherwise recover with
+a snapshot. Apply removals and upserts, then select rows in the complete `order` array.
+This preserves the full snapshot's ordering even when only one row changes.
+All rows are projected for that recipient before comparison, including watched
+session visibility changes.
+
+Heartbeat and activity timestamps are included in patches, so freshness remains
+identical to a full snapshot without retransmitting each connection's metadata.
+
+`version` uses `stateVersion.presence`. Apply a delta only when `base` matches
+the last accepted version. On mismatch, request `system-presence` with
+`{ "snapshot": true }`; an opted-in client receives the reset shape above.
+Ordinary calls still return the existing array. The Control UI reconciles these
+updates in its Gateway store so downstream consumers receive full rosters.
+The shared macOS/iOS channel reconstructs rosters before bounded subscriber
+queues, and reconnects to resynchronize if a version or transport sequence gap
+occurs. It also accepts full snapshots from older Gateways. Android currently
+ignores roster events, so its operator sockets opt in without maintaining a roster.
+Node-only connections do not receive presence events. Native changes take effect
+with app updates; a Gateway restart does not upgrade connected app code.
+
+The hello snapshot remains `snapshot.presence` with `snapshot.stateVersion.presence`.
+This implementation sends a reset on the first post-hello presence event instead
+of assuming the hello roster is a recorded delivery baseline. Reconnects start
+the same way. A reset is also sent when there is no baseline, after a recovery
+RPC, or when encoding a delta would not save bytes.
+
+Presence remains best effort with `dropIfSlow`. Each connection retains only
+references to its last sent projected rows and their version. A dropped frame
+invalidates that baseline, so the next presence event is a reset. The baseline
+advances only after the socket accepts a frame; send failures and disconnects
+clear it. Ordered WebSocket delivery makes successfully sent deltas composable;
+this is not a peer acknowledgment or a durable delivery guarantee.
 
 Native macOS nodes can also send authenticated `node.presence.activity` events
 with bounded input idle time and an optional `source`: `app` for interaction
@@ -73,16 +145,29 @@ The Gateway accepts updates only from the current node connection and stamps
 updates appear as `hostStats` in `node.list` and `node.describe` and broadcast
 `node.hostStats` with `{ nodeId, hostStats }` to read-scoped operators, using
 `dropIfSlow: true`. Stats are operator-facing and do not update model-visible
-node context. When received, the Gateway persists the snapshot as `lastHostStats`
-on the paired node record. Disconnecting or reconnecting without a new snapshot
-leaves the previous value intact.
-`node.list` and `node.describe` use live session stats while connected and
-project the saved snapshot as `hostStats` while offline, keeping its original
-`updatedAtMs` so clients can show the last-known age.
+node context. The first accepted snapshot is persisted immediately as
+`lastHostStats` on the paired node record. Later snapshots stay in the live
+session until the last successfully saved snapshot's receipt time plus five
+minutes, when the latest snapshot is checkpointed. New reports do not postpone
+that deadline. Disconnect folds the final snapshot into its connection-history
+write, and orderly Gateway shutdown drains pending snapshots before closing
+storage. Disconnecting or reconnecting without a new snapshot leaves the
+previous value intact. Pairing identity, approval, revocation, token, name, and
+consent changes remain immediately durable.
+
+`node.list` and `node.describe` use live session stats while connected and project
+the saved snapshot as `hostStats` while offline, keeping its original `updatedAtMs`
+so clients can show the last-known age. The offline view can briefly show the
+previous saved snapshot while the disconnect write completes. A crash can lose
+roughly the last five minutes of accepted telemetry while reports continue and
+checkpoints succeed; scheduling or write delays extend that interval. Failed
+writes are logged and retried on a later report or final drain, without an
+immediate retry loop. Sensor silence can leave the saved sample arbitrarily old.
 
 The structured `node.event` result uses `reason: "updated"`, `"stale_connection"`,
 or `"invalid_payload"`. An older Gateway may return `handled: false`; the node
-continues at the normal cadence without an immediate retry.
+continues at the normal cadence without an immediate retry. An accepted result
+and live broadcast do not wait for checkpoint persistence.
 
 ### Node background alive event
 
@@ -134,7 +219,7 @@ sessions do not passively receive session content
   for each recipient, including in hello snapshots and `system-presence` replies.
 - Transport events such as `heartbeat` and `tick` remain available to every
   authenticated session.
-- Unknown broadcast event families are scope-gated by default (fail-closed)
+- Unknown broadcast event families are blocked unless the caller has the required scope
   unless a registered handler explicitly relaxes them.
 
 Each client connection keeps its own per-client sequence number, so broadcasts

@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { sqliteSessionIdWriteScope } from "../../infra/sqlite-database-admission.js";
+import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import { executeOpenClawAgentWorkerPublication } from "../../state/openclaw-agent-worker-store.js";
@@ -12,6 +14,8 @@ import type {
   ReclamationDatabaseOptions,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
+import type { SessionEntryCommitContext } from "./session-accessor.types.js";
+import { readSessionActorEntryFacts } from "./session-actor-replica.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import type {
   SessionLifecycleProjectionCommit,
@@ -19,10 +23,11 @@ import type {
 } from "./session-lifecycle-projection.types.js";
 import type { SessionLifecyclePlanningOperations } from "./session-lifecycle-projection.worker.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
+import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
 type SessionLifecyclePlanningOwner = {
   database: ReclamationDatabaseOptions;
-  execution: OpenClawAgentDatabaseExecution;
+  execution?: OpenClawAgentDatabaseExecution;
 };
 
 function runSessionLifecyclePlanningInWorker<Key extends keyof SessionLifecyclePlanningOperations>(
@@ -33,7 +38,7 @@ function runSessionLifecyclePlanningInWorker<Key extends keyof SessionLifecycleP
   return withSessionEntryWorker(
     params.database,
     undefined,
-    () => params.execution.assertCurrent(),
+    () => params.execution?.assertCurrent(),
     async (execution, source) => {
       const result = await execution.runExisting(source, async (worker) => ({
         value: await executeOpenClawAgentWorkerPublication<SessionLifecyclePlanningOperations, Key>(
@@ -58,21 +63,50 @@ function runSessionLifecyclePlanningInWorker<Key extends keyof SessionLifecycleP
   );
 }
 
-export function readSessionEntryLifecycleCountInWorker(params: SessionLifecyclePlanningOwner) {
-  return runSessionLifecyclePlanningInWorker(params, "count", undefined);
-}
-
 /** Keep builders outside SQL while retaining the caller's physical FIFO and exact source. */
 export async function projectSessionEntryLifecycleMutationInWorker(
   params: SessionLifecyclePlanningOwner & {
+    execution: OpenClawAgentDatabaseExecution;
     input: LifecycleRemovalProjectionInput;
     upserts: readonly SessionEntryLifecycleUpsert[];
   },
 ) {
+  const upsert = params.upserts[0];
+  const sessionKey = upsert?.sessionKey.trim();
+  const identity = params.execution.fileIdentity;
+  const resident =
+    identity &&
+    sessionKey &&
+    !params.input.allowCanonicalRepair &&
+    params.input.removals.length === 0 &&
+    params.upserts.length === 1 &&
+    !upsert?.relatedSessionKeys?.some((key) => key !== sessionKey)
+      ? readSessionActorEntryFacts({ database: identity, sessionKey })
+      : undefined;
+  const retained =
+    resident?.snapshots === "full" &&
+    resident.entry &&
+    (upsert?.relatedSessionKeys === undefined || !resident.entry.parentSessionKey)
+      ? resident
+      : undefined;
   const prepared = await runSessionLifecyclePlanningInWorker(params, "prepare", {
     ...params.input,
-    upsertSessionKeys: params.upserts.map((upsert) => upsert.sessionKey.trim()),
+    retainedEntry: retained && {
+      writeToken: retained.writeToken,
+      writeScopes: [
+        ...collectSessionEntryLookupKeys(sessionKey!),
+        ...retained.dependencySessionIds.map(sqliteSessionIdWriteScope),
+      ],
+    },
+    upserts: params.upserts.map(({ sessionKey: key, relatedSessionKeys }) => ({
+      sessionKey: key,
+      ...(relatedSessionKeys !== undefined ? { relatedSessionKeys } : {}),
+    })),
   });
+  if (prepared.reuseEntry) {
+    // The worker accepted this exact frozen preimage's receipt; builders still own their copies.
+    prepared.store[sessionKey!] = retained!.entry!;
+  }
   const upsertedEntries = await buildProjectedLifecycleUpserts(
     prepared.store,
     prepared.selected,
@@ -87,11 +121,23 @@ export async function projectSessionEntryLifecycleMutationInWorker(
       archiveRecovery: prepared.archiveRecovery,
     };
   }
-  return runSessionLifecyclePlanningInWorker(params, "finish", {
-    ...prepared,
+  // The former finish round trip detached caller-owned metadata at this boundary.
+  for (const preparedUpsert of upsertedEntries) {
+    if (preparedUpsert.routeContext) {
+      preparedUpsert.routeContext = structuredClone(preparedUpsert.routeContext);
+    }
+    if (preparedUpsert.resetBoundary) {
+      preparedUpsert.resetBoundary = structuredClone(preparedUpsert.resetBoundary);
+    }
+  }
+  return {
+    ...(await runSessionLifecyclePlanningInWorker(params, "finish", {
+      store: prepared.store,
+      selected: prepared.selected,
+      archiveDirectory: params.input.archiveDirectory,
+    })),
     upsertedEntries,
-    archiveDirectory: params.input.archiveDirectory,
-  });
+  };
 }
 
 export function commitSessionLifecycleProjectionInWorker(params: {
@@ -100,8 +146,12 @@ export function commitSessionLifecycleProjectionInWorker(params: {
   execution: OpenClawAgentDatabaseExecution;
   assertCurrent: () => void;
   assertPrepared: () => void;
-  assertCandidate: (candidate: SessionLifecycleProjectionCommitted) => void;
+  assertCandidate: (
+    candidate: SessionLifecycleProjectionCommitted,
+    operation: RetainedWorkerTransactionAdmission,
+  ) => void;
   onLifecycleCommitted?: () => void;
+  afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
 }) {
   return runSessionEntryWorkerOperation<
     SessionLifecycleProjectionCommitted,
@@ -122,7 +172,7 @@ export function commitSessionLifecycleProjectionInWorker(params: {
         startSessionTranscriptIndexReconcile({ ...params.database, preferredSessionId: sessionId });
       }
     },
-    onCommitted(candidate, published, identity) {
+    async onCommitted(candidate, published, identity, context) {
       for (const sessionKey of candidate.progressCardResetKeys) {
         emitSessionLifecycleEvent({
           agentId: params.input.agentId,
@@ -139,6 +189,7 @@ export function commitSessionLifecycleProjectionInWorker(params: {
           published.prepared,
         );
       }
+      await params.afterCommitted?.(context);
       return candidate.result;
     },
   });

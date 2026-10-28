@@ -5,14 +5,14 @@ import {
 } from "../infra/gateway-active-work.js";
 import { onGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import {
+  gatewayWorkMetricsDemand,
   hasGatewayWorkMetricsListeners,
-  onGatewayWorkMetricsDemand,
   publishGatewayWorkMetrics,
 } from "../infra/gateway-work-metrics.js";
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
-import { runSynchronousWork } from "../shared/synchronous-work.js";
 import { createGatewayServerActiveWorkInspectors } from "./server-active-work.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
@@ -56,7 +56,7 @@ export function startGatewayWorkMetrics(params: {
     }
     await projection.withSelectionPreparation(async () => {
       do {
-        await projection.prepareSelection(true);
+        await projection.prepareSelection({ yieldForCatalog: true });
         if (stopped || !needed() || projection !== getSessionRowProjection(params.context)) {
           return;
         }
@@ -68,11 +68,11 @@ export function startGatewayWorkMetrics(params: {
         now: Date.now(),
         metadataPrepared: true,
       });
-      const selection = runSynchronousWork(selectSessionEntries(filters));
+      const selection = selectSessionEntries(filters);
       const sessions = { running: 0, queued: 0 };
-      for (const [key, entry] of selection.entries) {
+      for (const [key] of selection.entries) {
         const target = prepared.getTarget(key)!;
-        const active = presentation.active(target.key, entry, target.agentId)!;
+        const active = presentation.active(target)!;
         sessions[active.status === "queued" ? "queued" : "running"]++;
       }
       const { agentRuns, chatRuns, queuedTurns } = createGatewayActiveWorkSnapshot(
@@ -107,7 +107,7 @@ export function startGatewayWorkMetrics(params: {
       setImmediate(() => {
         scheduled = undefined;
         dirty = false;
-        pending = refresh()
+        pending = runWithMainThreadTask("gateway:work-metrics", refresh)
           .catch((error: unknown) => {
             if (!stopped) {
               publishGatewayWorkMetrics(undefined);
@@ -125,14 +125,14 @@ export function startGatewayWorkMetrics(params: {
     scheduled.unref();
   };
   const unsubscribeWorkChanges = onGatewayWorkMetricsChanged(changed);
-  const unsubscribeDemand = onGatewayWorkMetricsDemand(changed);
+  gatewayWorkMetricsDemand.onChanged = changed;
   changed();
   return {
     stop: async () => {
       stopped = true;
       unsubscribeSessionChanges?.();
       unsubscribeWorkChanges();
-      unsubscribeDemand();
+      gatewayWorkMetricsDemand.onChanged = () => {};
       if (scheduled) {
         clearImmediate(scheduled);
         scheduled = undefined;

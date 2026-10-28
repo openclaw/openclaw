@@ -1,8 +1,10 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+import { WorkerEnvironmentStartStatusSchema } from "./environments.js";
 import { NonEmptyString } from "./primitives.js";
 import { SESSION_PLACEMENT_STATES } from "./session-placement-state.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 import { WorkerIdentifierSchema } from "./worker-protocol-primitives.js";
 
 export {
@@ -10,29 +12,8 @@ export {
   type SessionPlacementState,
 } from "./session-placement-state.js";
 
-/** Durable gateway ownership states for one session execution placement.
- * The literal list stays explicit because Type.Union needs a tuple for
- * Static inference (a mapped array collapses Static to never); the guard
- * below keeps it in lockstep with SESSION_PLACEMENT_STATES. */
-export const SessionPlacementStateSchema = Type.Union([
-  Type.Literal("local"),
-  Type.Literal("requested"),
-  Type.Literal("provisioning"),
-  Type.Literal("syncing"),
-  Type.Literal("starting"),
-  Type.Literal("active"),
-  Type.Literal("draining"),
-  Type.Literal("reconciling"),
-  Type.Literal("reclaimed"),
-  Type.Literal("failed"),
-]);
-
-type MutuallyAssignable<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
-const placementStateVocabularyInSync: MutuallyAssignable<
-  Static<typeof SessionPlacementStateSchema>,
-  (typeof SESSION_PLACEMENT_STATES)[number]
-> = true;
-void placementStateVocabularyInSync;
+/** Durable gateway ownership states for one session execution placement. */
+export const SessionPlacementStateSchema = stringLiteralUnion(SESSION_PLACEMENT_STATES);
 
 const SessionPlacementTimingProperties = {
   generation: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
@@ -67,14 +48,14 @@ const SessionPlacementAckProperties = {
 };
 
 export const SessionPlacementDiskSpaceSchema = closedObject({
-  status: Type.Union([Type.Literal("ok"), Type.Literal("warning"), Type.Literal("critical")]),
+  status: stringLiteralUnion(["ok", "warning", "critical"]),
   availableBytes: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
   totalBytes: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
   observedAtMs: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
 });
 
 export const SessionPlacementWorkerRuntimeInstallSchema = closedObject({
-  phase: Type.Union([Type.Literal("transferring"), Type.Literal("installing")]),
+  phase: stringLiteralUnion(["transferring", "installing"]),
   transferredBytes: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
   totalBytes: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
   startedAtMs: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
@@ -83,7 +64,7 @@ export const SessionPlacementWorkerRuntimeInstallSchema = closedObject({
 
 export const SessionPlacementRunnerSchema = closedObject({
   kind: Type.Literal("device"),
-  status: Type.Union([Type.Literal("available"), Type.Literal("offline")]),
+  status: stringLiteralUnion(["available", "offline"]),
   deviceId: Type.Optional(WorkerIdentifierSchema),
 });
 
@@ -177,6 +158,7 @@ const ProvisioningSessionPlacementSchema = closedObject({
   ...SessionPlacementIdentityProperties,
   environmentId: Type.Optional(NonEmptyString),
   workerRuntimeInstall: Type.Optional(SessionPlacementWorkerRuntimeInstallSchema),
+  startStatus: Type.Optional(WorkerEnvironmentStartStatusSchema),
 });
 
 const SyncingSessionPlacementSchema = closedObject({
@@ -367,13 +349,6 @@ export const SessionMoveTargetSchema = Type.Union([
   SessionMoveDeviceTargetSchema,
 ]);
 
-/** Durable operator-visible progress for one placement move intent. */
-export const SessionPlacementMoveSchema = closedObject({
-  target: SessionMoveTargetSchema,
-  updatedAtMs: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
-  error: Type.Optional(Type.String({ minLength: 1, maxLength: 1_024 })),
-});
-
 const SessionsMoveTargetCorrelationSchema = Type.Union([
   Type.Object({ target: SessionMoveGatewayTargetSchema }),
   Type.Object(
@@ -384,14 +359,31 @@ const SessionsMoveTargetCorrelationSchema = Type.Union([
   ),
 ]);
 
+const SessionMoveRequestProperties = {
+  expected: SessionMoveExpectedSourceSchema,
+  target: SessionMoveTargetSchema,
+  abandonSource: Type.Optional(Type.Literal(true)),
+};
+
+/** Durable progress and the original request facts needed after a failed move. */
+export const SessionPlacementMoveSchema = closedObject({
+  target: SessionMoveTargetSchema,
+  updatedAtMs: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  error: Type.Optional(Type.String({ minLength: 1, maxLength: 1_024 })),
+  retry: Type.Optional(
+    Type.Object(SessionMoveRequestProperties, {
+      additionalProperties: false,
+      allOf: [SessionsMoveTargetCorrelationSchema],
+    }),
+  ),
+});
+
 /** Requests one exact-source placement move without replaying active work. */
 export const SessionsMoveParamsSchema = Type.Object(
   {
     key: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
-    expected: SessionMoveExpectedSourceSchema,
-    target: SessionMoveTargetSchema,
-    abandonSource: Type.Optional(Type.Literal(true)),
+    ...SessionMoveRequestProperties,
   },
   {
     additionalProperties: false,
@@ -402,10 +394,7 @@ export const SessionsMoveParamsSchema = Type.Object(
 );
 
 /** Successful terminal states returned by sessions.move. */
-export const SessionMovePlacementStateSchema = Type.Union([
-  Type.Literal("local"),
-  Type.Literal("active"),
-]);
+export const SessionMovePlacementStateSchema = stringLiteralUnion(["local", "active"]);
 
 /** Bounded placement state returned by sessions.move. */
 export const SessionMovePlacementSchema = closedObject({

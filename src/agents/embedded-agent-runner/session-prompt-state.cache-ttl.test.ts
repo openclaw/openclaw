@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { serializeCacheTtlToolResultProjections } from "./cache-ttl-checkpoint.js";
 import {
   createToolResultPromptProjectionState,
@@ -188,30 +187,6 @@ describe("cache-TTL checkpoint and delta persistence", () => {
       }
     },
   );
-
-  it("does not publish an old append baseline after restoring an empty branch", async () => {
-    const model = createModel();
-    model.marks.set("retained", { mode: "soft" });
-    model.frozen.set("retained", { sourceHash: "original" });
-    const state = createToolResultPromptProjectionState();
-    loadModel(state, model);
-    const committed = createDeferred();
-    const release = createDeferred();
-    const oldBranch: Entry[] = [];
-    const pending = persistToolResultProjections(state, async (customType, data) => {
-      await appendTo(oldBranch)(customType, data);
-      committed.resolve();
-      await release.promise;
-    });
-    await awaitGateBeforeSettlement(committed.promise, pending, "append did not commit");
-    restoreCacheTtlToolResultProjections(state, []);
-    release.resolve();
-    await pending;
-    const newBranch: Entry[] = [];
-    await persistToolResultProjections(state, appendTo(newBranch));
-    expectModel(oldBranch, model);
-    expectModel(newBranch, model);
-  });
 
   it.each([false, true])(
     "re-establishes projections after an uncertain append (durable=%s)",

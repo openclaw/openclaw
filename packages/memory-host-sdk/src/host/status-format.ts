@@ -1,5 +1,3 @@
-// Shared status text/tone formatter for memory health summaries.
-
 /** Display tone used by memory status renderers. */
 export type Tone = "ok" | "warn" | "muted";
 

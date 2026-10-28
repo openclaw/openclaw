@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  assertProviderAuthAuthority,
+  attachProviderAuthAuthority,
+  getProviderAuthAuthority,
+} from "../../plugins/provider-auth-authority.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
@@ -13,8 +18,8 @@ import { resolveModelAsync } from "../embedded-agent-runner/model.js";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
 import {
   applySecretRefHeaderSentinels,
-  ensureAuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreAsync,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
 } from "../model-auth.js";
 import { isCliRuntimeAliasForProvider, isCliRuntimeProvider } from "../model-runtime-aliases.js";
 import { isOpenAIProvider } from "../openai-routing.js";
@@ -35,7 +40,7 @@ import {
   resolvePreparedRuntimeModelAuth,
 } from "../runtime-plan/resolve-auth.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
-import { resolveAgentHarnessNativeToolPolicyRestricted } from "./execution-environment.js";
+import { prepareAgentHarnessNativeToolPolicyRestricted } from "./execution-environment.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import {
   assertCompactionSource,
@@ -225,12 +230,12 @@ async function resolveHarnessCompactApiKey(params: {
     return fallbackResolution(initialHarness);
   }
   const runtimeAuthProfileStore = isOpenAIProvider(provider)
-    ? ensureAuthProfileStore(agentDir, {
+    ? await ensureAuthProfileStoreAsync(agentDir, {
         profileId: compactParams.authProfileId ?? reusableRuntimeAuthPlan?.forwardedAuthProfileId,
         externalCliProviderIds: ["openai"],
         allowKeychainPrompt: false,
       })
-    : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+    : await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir, {
         profileId: compactParams.authProfileId ?? reusableRuntimeAuthPlan?.forwardedAuthProfileId,
         allowKeychainPrompt: false,
       });
@@ -335,7 +340,13 @@ async function resolveHarnessCompactApiKey(params: {
           ? undefined
           : compactParams.resolvedApiKey?.trim();
         if (existing) {
-          return { plan: attempt.plan, auth: { apiKey: existing } };
+          return {
+            plan: attempt.plan,
+            auth: attachProviderAuthAuthority(
+              { apiKey: existing },
+              getProviderAuthAuthority(callerRuntimeModel),
+            ),
+          };
         }
         const auth = await resolvePreparedRuntimeModelAuth({
           plan: attempt.plan,
@@ -349,7 +360,10 @@ async function resolveHarnessCompactApiKey(params: {
             : {}),
           secretSentinels: true,
         });
-        return { plan: auth.plan, auth: { apiKey: auth.auth.apiKey?.trim() || undefined } };
+        return {
+          plan: auth.plan,
+          auth: { ...auth.auth, apiKey: auth.auth.apiKey?.trim() || undefined },
+        };
       },
       errorMessage: `Prepared native compaction auth attempts could not be resolved for ${provider}/${modelId}.`,
     });
@@ -363,7 +377,10 @@ async function resolveHarnessCompactApiKey(params: {
   return {
     harness,
     apiKey: resolved.auth.apiKey,
-    runtimeModel: resolved.model,
+    runtimeModel: attachProviderAuthAuthority(
+      resolved.model,
+      getProviderAuthAuthority(resolved.auth),
+    ),
     runtimeAuthPlan: resolved.plan,
   };
 }
@@ -509,7 +526,7 @@ async function maybeCompactAgentHarnessSessionInGeneration(
     });
     assertSourceCurrent();
     harness = resolved.harness;
-    const nativeToolPolicyRestricted = resolveAgentHarnessNativeToolPolicyRestricted(
+    const nativeToolPolicyRestricted = await prepareAgentHarnessNativeToolPolicyRestricted(
       {
         ...params,
         agentId: compactIdentity.agentId,
@@ -620,6 +637,11 @@ async function maybeCompactAgentHarnessSessionInGeneration(
         retainSourceAuthority,
       }),
     };
+    if (sourceAuthority.prepareDispatch) {
+      await sourceAuthority.prepareDispatch();
+    }
+    assertSourceCurrent();
+    assertProviderAuthAuthority(dispatchParams.runtimeModel);
     if (options.nativeCompactionRequest) {
       if (nativeCompaction) {
         // Registry ownership, not a public harness property or result, grants

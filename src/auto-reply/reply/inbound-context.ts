@@ -35,7 +35,7 @@ function normalizeTextField(value: unknown): string | undefined {
 
 export function isFinalizedInboundContext<T extends Record<string, unknown>>(
   ctx: T,
-): ctx is T & CanonicalInboundText {
+): ctx is T & FinalizedRuntimeMsgContext {
   return (ctx as T & { [FINALIZED_INBOUND_CONTEXT]?: boolean })[FINALIZED_INBOUND_CONTEXT] === true;
 }
 
@@ -206,12 +206,16 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
     FinalizedRuntimeMsgContext;
 }
 
-/** Keeps the shipped Plugin SDK return type while internal callers use the stricter type above. */
+/** Preserve SDK media projections while exposing the finalizer's prepared command fact. */
 export function finalizeInboundContextForSdk<T extends Record<string, unknown>>(
   ctx: T,
   opts: FinalizeInboundContextOptions = {},
-): T & FinalizedMsgContext & CanonicalInboundText {
+): T &
+  FinalizedMsgContext &
+  CanonicalInboundText &
+  Pick<FinalizedRuntimeMsgContext, "CommandTurn"> {
   return finalizeInboundContextImpl(ctx, opts, true) as T &
     FinalizedMsgContext &
-    CanonicalInboundText;
+    CanonicalInboundText &
+    Pick<FinalizedRuntimeMsgContext, "CommandTurn">;
 }

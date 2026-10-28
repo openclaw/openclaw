@@ -1,7 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MigrationPlan } from "../../plugins/types.js";
 
-/** Common options accepted by migrate list, plan, apply, and default flows. */
 export type MigrateCommonOptions = {
   provider?: string;
   source?: string;
@@ -31,7 +30,6 @@ export type MigrateCommonOptions = {
   itemIds?: string[];
 };
 
-/** Options for migrate apply, including backup and preflight-plan controls. */
 export type MigrateApplyOptions = MigrateCommonOptions & {
   yes?: boolean;
   noBackup?: boolean;
@@ -42,7 +40,6 @@ export type MigrateApplyOptions = MigrateCommonOptions & {
   allowPartialResult?: boolean;
 };
 
-/** Options for the default migrate command that can plan, dry-run, or apply. */
 export type MigrateDefaultOptions = MigrateApplyOptions & {
   dryRun?: boolean;
 };

@@ -1,10 +1,14 @@
 import { createTimeZoneDayKeyFormatter } from "./format-time/format-datetime.js";
-import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
+import type {
+  SessionCostUsageDeferredMetadata,
+  SessionCostUsageRollupRow,
+} from "./session-cost-usage-cache.kernel.js";
 import {
   canUseUsageCostRollupForPartial,
   decodeUsageCostRollup,
   decodeUsageCostRollupEnvelope,
   isUsageCostRollupFresh,
+  type UsageCostRollupEntry,
 } from "./session-cost-usage-rollup-codec.js";
 import {
   addRollupToCostUsageSummary,
@@ -29,11 +33,16 @@ export type UsageCostRollupRowSource = {
   readRow: (filePath: string) => SessionCostUsageRollupRow | undefined;
   readBody: (row: SessionCostUsageRollupRow) => Uint8Array | null | Promise<Uint8Array | null>;
   onInvalidBody: (key: string) => void;
+  /** Null defers a valid row whose exact projection exceeded the report budget. */
+  readEntry?: (row: SessionCostUsageRollupRow) => Promise<UsageCostRollupEntry | null | undefined>;
   /** Snapshot rows whose keys are absent from the resolved files. */
   remainingRows: Iterable<SessionCostUsageRollupRow>;
+  /** Cache payloads omitted before materialization because of the report allowance. */
+  deferredPaths?: ReadonlySet<string>;
+  deferredMetadata?: ReadonlyMap<string, SessionCostUsageDeferredMetadata>;
 };
 
-const createUsageDayKeyFormatter = (dayBucket?: UsageDailyBucket): UsageDayKeyFormatter => {
+export const createUsageDayKeyFormatter = (dayBucket?: UsageDailyBucket): UsageDayKeyFormatter => {
   if (dayBucket?.mode === "utc-offset") {
     return (date) =>
       formatUtcDayKey(new Date(date.getTime() + dayBucket.utcOffsetMinutes * 60 * 1000));
@@ -142,9 +151,13 @@ function createRollupProjectionReader(
     ) {
       const row = params.readRow(filePath);
       const envelope = readEnvelope(row);
+      const metadata = envelope ?? params.deferredMetadata?.get(filePath);
+      if (metadata) {
+        latestScan = Math.max(latestScan, metadata.scannedAt);
+      }
       // Aggregate freshness precedes body reads; session freshness follows decoding.
       const fresh = freshnessFile
-        ? isUsageCostRollupFresh({ checkpoint: envelope?.checkpoint, file: freshnessFile })
+        ? isUsageCostRollupFresh({ checkpoint: metadata?.checkpoint, file: freshnessFile })
         : undefined;
       const usable = envelope
         ? requests.filter(({ file }) =>
@@ -152,18 +165,24 @@ function createRollupProjectionReader(
           )
         : [];
       const entry =
-        row && usable.length > 0
-          ? decodeUsageCostRollup(
-              row.valueJson,
-              params.pricingFingerprint,
-              await params.readBody(row),
-            )
-          : undefined;
-      const invalidBody = Boolean(row && usable.length > 0 && !entry);
+        row?.bodyBytes !== undefined && envelope?.body.storedBytes !== row.bodyBytes
+          ? undefined
+          : params.deferredPaths?.has(filePath)
+            ? null
+            : row && usable.length > 0
+              ? params.readEntry
+                ? await params.readEntry(row)
+                : decodeUsageCostRollup(
+                    row.valueJson,
+                    params.pricingFingerprint,
+                    await params.readBody(row),
+                  )
+              : undefined;
+      const invalidBody = Boolean(row && usable.length > 0 && entry === undefined);
       if (invalidBody && row) {
         params.onInvalidBody(row.key);
       }
-      return { fresh, entry, requests: usable, invalidBody };
+      return { fresh, checkpoint: metadata?.checkpoint, entry, requests: usable, invalidBody };
     },
     refreshedAt() {
       for (const row of params.remainingRows) {
@@ -188,11 +207,14 @@ export async function projectCostUsageSummary(
   const formatDay = createUsageDayKeyFormatter(params.dayBucket);
   let cachedFiles = 0;
   let staleFiles = 0;
+  let deferredFiles = 0;
   const reader = createRollupProjectionReader(params);
   // Keep file order and per-bucket additions: folding per-file totals changes rounding.
   for (const file of params.files) {
     const { fresh, entry, invalidBody } = await reader.read(file.filePath, [{ file }], file);
-    if (!fresh || invalidBody) {
+    if (entry === null && fresh) {
+      deferredFiles += 1;
+    } else if (!fresh || invalidBody || !entry) {
       staleFiles += 1;
     }
     if (!entry) {
@@ -208,7 +230,37 @@ export async function projectCostUsageSummary(
       totals,
     });
   }
-  const refreshedAt = reader.refreshedAt();
+  return finishUsageCostSummary({
+    daily,
+    totals,
+    startMs: params.startMs,
+    endMs: params.endMs,
+    formatDay,
+    cacheStatus: {
+      status:
+        staleFiles === 0 && deferredFiles === 0
+          ? "fresh"
+          : cachedFiles > 0 || deferredFiles > 0
+            ? "partial"
+            : "stale",
+      cachedFiles,
+      pendingFiles: staleFiles + deferredFiles,
+      staleFiles,
+      refreshedAt: reader.refreshedAt(),
+    },
+  });
+}
+
+/** Zero-fill the requested calendar and order daily totals for `usage.cost`. */
+export function finishUsageCostSummary(params: {
+  daily: Map<string, CostUsageTotals>;
+  totals: CostUsageTotals;
+  startMs: number;
+  endMs: number;
+  formatDay: UsageDayKeyFormatter;
+  cacheStatus: UsageCacheStatus;
+}): CostUsageSummary {
+  const { daily, formatDay } = params;
   fillMissingDays(daily, params.startMs, params.endMs, formatDay);
   return {
     updatedAt: Date.now(),
@@ -216,14 +268,8 @@ export async function projectCostUsageSummary(
     daily: Array.from(daily, ([date, bucket]) => Object.assign({ date }, bucket)).toSorted((a, b) =>
       a.date.localeCompare(b.date),
     ),
-    totals,
-    cacheStatus: {
-      status: staleFiles === 0 ? "fresh" : cachedFiles > 0 ? "partial" : "stale",
-      cachedFiles,
-      pendingFiles: staleFiles,
-      staleFiles,
-      refreshedAt,
-    },
+    totals: params.totals,
+    cacheStatus: params.cacheStatus,
   };
 }
 
@@ -267,9 +313,17 @@ export async function projectSessionCostSummaries(
     (params.startMs === undefined && params.endMs === undefined);
   const formatDay = createUsageDayKeyFormatter(params.dayBucket);
   let cachedFiles = 0;
+  const deferredIndexes = new Set<number>();
   const reader = createRollupProjectionReader(params);
   for (const [filePath, requests] of requestsByPath) {
-    const { entry, requests: usableRequests } = await reader.read(filePath, requests);
+    const { entry, checkpoint, requests: usableRequests } = await reader.read(filePath, requests);
+    if (entry === null) {
+      for (const { index, file } of requests) {
+        if (isUsageCostRollupFresh({ checkpoint, file })) {
+          deferredIndexes.add(index);
+        }
+      }
+    }
     if (!entry) {
       continue;
     }
@@ -293,16 +347,24 @@ export async function projectSessionCostSummaries(
   }
   const staleSessionFiles = new Set<string>();
   for (const [index, session] of params.sessions.entries()) {
-    if (summaries[index] === null || summaries[index]?.staleSince !== undefined) {
+    if (
+      !deferredIndexes.has(index) &&
+      (summaries[index] === null || summaries[index]?.staleSince !== undefined)
+    ) {
       staleSessionFiles.add(params.files[index]?.sourcePath ?? session.sessionFile);
     }
   }
   return {
     summaries,
     cacheStatus: {
-      status: staleSessionFiles.size === 0 ? "fresh" : cachedFiles > 0 ? "partial" : "stale",
+      status:
+        staleSessionFiles.size === 0 && deferredIndexes.size === 0
+          ? "fresh"
+          : cachedFiles > 0 || deferredIndexes.size > 0
+            ? "partial"
+            : "stale",
       cachedFiles,
-      pendingFiles: staleSessionFiles.size,
+      pendingFiles: staleSessionFiles.size + deferredIndexes.size,
       staleFiles: staleSessionFiles.size,
       refreshedAt: reader.refreshedAt(),
     },

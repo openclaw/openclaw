@@ -18,7 +18,7 @@ function readGrantDefinitionProjection(jobId: string) {
     .get(jobId);
 }
 
-it("preserves the grant generation when clearing an absent description", async () => {
+it("preserves grant generations across non-definition edits and advances changed definitions", async () => {
   const { storePath } = await makeStorePath();
   const cron = new CronService({
     scheduler: createTestGatewayScheduler(),
@@ -27,7 +27,6 @@ it("preserves the grant generation when clearing an absent description", async (
     cronEnabled: true,
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   await cron.start();
@@ -51,6 +50,21 @@ it("preserves the grant generation when clearing an absent description", async (
 
     expect(updated.description).toBeUndefined();
     expect(after).toEqual(before);
+
+    await cron.update(created.id, { enabled: false });
+    expect(readGrantDefinitionProjection(created.id)).toEqual(before);
+    await cron.update(created.id, { enabled: true });
+    expect(readGrantDefinitionProjection(created.id)).toEqual(before);
+
+    await cron.update(created.id, { payload: { kind: "agentTurn", message: "changed" } });
+    const changed = readGrantDefinitionProjection(created.id);
+    expect(changed?.grant_definition_generation).toBe(2);
+    expect(changed?.grant_definition_revision).not.toBe(before?.grant_definition_revision);
+    await cron.update(created.id, { payload: { kind: "agentTurn", message: "run" } });
+    expect(readGrantDefinitionProjection(created.id)).toEqual({
+      ...before,
+      grant_definition_generation: 3,
+    });
   } finally {
     cron.stop();
   }

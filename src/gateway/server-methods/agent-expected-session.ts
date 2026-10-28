@@ -1,10 +1,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
-  consumeSessionWorkAdmissionHandoff,
-  type SessionWorkAdmissionInterrupt,
-  type SessionWorkAdmissionLease,
-} from "../../sessions/session-lifecycle-admission.js";
+  consumeSessionEffectHandoff,
+  type SessionEffectInterrupt,
+  type SessionEffectRef,
+  type SessionTarget,
+} from "../../sessions/session-controller.lifecycle.js";
 
 export type ExpectedExistingSessionConstraint = {
   handoffId?: string;
@@ -86,19 +87,21 @@ export function assertExpectedExistingSession(params: {
 
 export function consumeExpectedSessionWorkAdmission(params: {
   constraint?: ExpectedExistingSessionConstraint;
-  identities: Iterable<string | undefined>;
-  onInterrupt: SessionWorkAdmissionInterrupt;
-  scope: string;
-}): SessionWorkAdmissionLease | undefined {
+  target: SessionTarget;
+  onInterrupt: SessionEffectInterrupt;
+  isSettling?: () => boolean;
+  getAbortReason?: () => unknown;
+}): SessionEffectRef | undefined {
   const handoffId = params.constraint?.handoffId;
   if (!handoffId) {
     return undefined;
   }
-  const lease = consumeSessionWorkAdmissionHandoff({
+  const lease = consumeSessionEffectHandoff({
     handoffId,
-    scope: params.scope,
-    identities: params.identities,
+    target: params.target,
     onInterrupt: params.onInterrupt,
+    isSettling: params.isSettling,
+    getAbortReason: params.getAbortReason,
   });
   if (!lease) {
     throw new Error("session work admission handoff is unavailable");

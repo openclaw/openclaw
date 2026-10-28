@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
+import { waitForBrowserStartup } from "../sdk-node-runtime.js";
 import {
   assertChromeMcpCdpTransportAllowed,
   resolveCdpReachabilityPolicy,
@@ -28,21 +29,21 @@ import {
   type RunningChrome,
   stopOpenClawChrome,
 } from "./chrome.js";
-import type { ResolvedBrowserProfile } from "./config.js";
+import { isLocalManagedProfile, type ResolvedBrowserProfile } from "./config.js";
+import { BROWSER_STARTUP_TIMEOUT_MS } from "./constants.js";
 import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
 import { getExtensionRelayModule } from "./extension-relay.runtime.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import {
   CDP_READY_AFTER_LAUNCH_MIN_TIMEOUT_MS,
   CDP_READY_AFTER_LAUNCH_POLL_MS,
-  CDP_READY_AFTER_LAUNCH_WINDOW_MS,
 } from "./server-context.constants.js";
 import {
   assertProfileLifecycleContext,
   beginProfileTransition,
   enqueueProfileStart,
   getProfileLifecycle,
-  isProfileGenerationCurrent,
+  isProfileOperationCurrent,
   isProfileRestartRequiredError,
   isWithinProfileOperationLease,
   ProfileRestartRequiredError,
@@ -63,7 +64,6 @@ type AvailabilityDeps = {
   profile: ResolvedBrowserProfile;
   state: () => BrowserServerState;
   runtime: ProfileRuntimeState;
-  configRevision: number;
 };
 
 type AvailabilityOps = Pick<
@@ -136,9 +136,9 @@ export function createProfileAvailability({
   profile,
   state,
   runtime,
-  configRevision,
 }: AvailabilityDeps): AvailabilityOps {
   const actor = getProfileLifecycle(runtime);
+  const managed = isLocalManagedProfile(profile);
   const redactedProfileCdpUrl = redactCdpUrl(profile.cdpUrl) ?? profile.cdpUrl;
   const capabilities = getBrowserProfileCapabilities(profile);
   const resolveTimeouts = (timeoutMs: number | undefined) =>
@@ -210,10 +210,10 @@ export function createProfileAvailability({
       return ready.ready && state().extensionRelays?.get(profile.name) === relay;
     }
     if (capabilities.usesChromeMcp) {
-      // countChromeMcpTabs creates the session if needed — no separate availability call required.
+      // Listing creates the session if needed and checks its command channel.
       assertChromeMcpCdpTransportAllowed(profile, getCdpReachabilityPolicy());
-      const { countChromeMcpTabs } = await getChromeMcpModule();
-      await countChromeMcpTabs(profile.name, profile, {
+      const { listChromeMcpTabs } = await getChromeMcpModule();
+      await listChromeMcpTabs(profile.name, profile, {
         ...(timeoutMs != null ? { timeoutMs } : {}),
         ...(options?.signal ? { signal: options.signal } : {}),
       });
@@ -297,13 +297,12 @@ export function createProfileAvailability({
     }
   };
 
-  const adoptRunning = (running: RunningChrome, generation: number, signal: AbortSignal): void => {
+  const adoptRunning = (running: RunningChrome, signal: AbortSignal): void => {
     if (
-      !isProfileGenerationCurrent({
+      !isProfileOperationCurrent({
         state: state(),
         runtime,
-        configRevision,
-        generation,
+        signal,
       })
     ) {
       signal.throwIfAborted();
@@ -357,8 +356,7 @@ export function createProfileAvailability({
   ): Promise<void> => {
     // launchOpenClawChrome() can return before Chrome is fully ready to serve /json/version + CDP WS.
     // If a follow-up call races ahead, we can hit PortInUseError trying to launch again on the same port.
-    const deadlineMs =
-      Date.now() + (state().resolved.localCdpReadyTimeoutMs ?? CDP_READY_AFTER_LAUNCH_WINDOW_MS);
+    const deadlineMs = Date.now() + state().resolved.localCdpReadyTimeoutMs;
     while (Date.now() < deadlineMs) {
       const remainingMs = Math.max(0, deadlineMs - Date.now());
       const attemptTimeoutMs = Math.max(
@@ -446,7 +444,6 @@ export function createProfileAvailability({
 
   const ensureBrowserAvailableOnce = async (
     signal: AbortSignal,
-    generation: number,
     options?: BrowserEnsureOptions,
   ): Promise<void> => {
     signal.throwIfAborted();
@@ -538,7 +535,7 @@ export function createProfileAvailability({
       }
       try {
         await waitForCdpReadyAfterLaunch(signal, launched);
-        adoptRunning(launched, generation, signal);
+        adoptRunning(launched, signal);
         runtime.managedLaunchFailure = undefined;
       } catch (err) {
         await stopExactRunning(launched);
@@ -596,9 +593,8 @@ export function createProfileAvailability({
       await withProfileOperationLease({
         state: state(),
         runtime,
-        configRevision,
         signal: options?.signal,
-        run: async (signal) => await ensureBrowserAvailableOnce(signal, actor.generation, options),
+        run: async (signal) => await ensureBrowserAvailableOnce(signal, options),
       });
       return;
     }
@@ -606,23 +602,53 @@ export function createProfileAvailability({
     const key = typeof options?.headless === "boolean" ? `headless:${options.headless}` : "default";
     for (;;) {
       try {
-        await enqueueProfileStart({
-          state: state(),
-          runtime,
-          configRevision,
-          key,
-          signal: options?.signal,
-          run: async (signal, generation) => {
-            await ensureBrowserAvailableOnce(signal, generation, options);
-          },
-        });
+        const start = () =>
+          enqueueProfileStart({
+            state: state(),
+            runtime,
+            key,
+            signal: options?.signal,
+            run: async (signal) => {
+              if (!managed) {
+                return await ensureBrowserAvailableOnce(signal, options);
+              }
+              const startup = new AbortController();
+              const timer = setTimeout(
+                () =>
+                  startup.abort(
+                    new BrowserProfileUnavailableError(
+                      `Browser startup for profile "${profile.name}" did not finish within ${BROWSER_STARTUP_TIMEOUT_MS}ms. Check the browser startup logs before retrying.`,
+                    ),
+                  ),
+                BROWSER_STARTUP_TIMEOUT_MS,
+              );
+              try {
+                await ensureBrowserAvailableOnce(
+                  AbortSignal.any([signal, startup.signal]),
+                  options,
+                );
+              } catch (error) {
+                if (startup.signal.aborted && !signal.aborted) {
+                  recordManagedLaunchFailure(runtime, error);
+                }
+                throw error;
+              } finally {
+                clearTimeout(timer);
+              }
+            },
+          });
+        if (managed) {
+          await waitForBrowserStartup(start);
+        } else {
+          await start();
+        }
         return;
       } catch (err) {
         if (!isProfileRestartRequiredError(err)) {
           throw err;
         }
         // A route may already hold an ordinary lease. Let its wrapper release
-        // and retry so a restart never waits on its own generation lease.
+        // and retry so a restart never waits on its own settlement lease.
         if (isWithinProfileOperationLease(runtime)) {
           throw err;
         }
@@ -637,7 +663,7 @@ export function createProfileAvailability({
 
   const stopRunningBrowser = async (): Promise<{ stopped: boolean }> => {
     const current = state();
-    assertProfileLifecycleContext({ state: current, runtime, configRevision });
+    assertProfileLifecycleContext({ state: current, runtime });
     runtime.managedLaunchFailure = undefined;
     const result = await beginProfileTransition({
       state: current,

@@ -1,8 +1,9 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentToolSurfacePresentation } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { CodeModeConfig as AuthoredCodeModeConfig } from "../config/types.tools.js";
 import { modelKey } from "../shared/model-key.js";
 import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
@@ -10,7 +11,7 @@ import type { CodeModeFailureCode } from "./code-mode-executor-types.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { CODE_MODE_RESULTS_API_FILE } from "./code-mode-results-api.js";
 import { MAX_CODE_MODE_PENDING_TOOL_CALLS } from "./code-mode-worker-types.js";
-import type { ToolSearchConfig, ToolSearchToolContext } from "./tool-search.js";
+import type { ToolSearchConfig } from "./tool-search.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
 
 export { CODE_MODE_WORKER_WATCHDOG_GRACE_MS } from "./code-mode-worker-types.js";
@@ -54,20 +55,26 @@ export type CodeModeHeadlessResult =
       toolCallCount: number;
     };
 
-function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | undefined {
+type CodeModeOptions = Exclude<AuthoredCodeModeConfig, boolean | "auto">;
+type CodeModeLimit = Exclude<keyof CodeModeOptions, "enabled" | "executor" | "mode">;
+
+function normalizeCodeModeRawConfig(
+  value: AuthoredCodeModeConfig | undefined,
+): CodeModeOptions | undefined {
   if (typeof value === "boolean" || value === "auto") {
     return { enabled: value };
   }
-  return isRecord(value) ? value : undefined;
+  return value;
 }
 
 function readCodeModeRawConfig(
   config?: OpenClawConfig,
   agentId?: string,
   model?: { provider: string; modelId: string },
-): Record<string, unknown> {
-  const tools = isRecord(config?.tools) ? config.tools : undefined;
-  const globalRaw = normalizeCodeModeRawConfig(tools?.codeMode) ?? { enabled: "auto" };
+): CodeModeOptions {
+  const globalRaw: CodeModeOptions = normalizeCodeModeRawConfig(config?.tools?.codeMode) ?? {
+    enabled: "auto",
+  };
   const agent = config && agentId ? resolveAgentConfig(config, agentId) : undefined;
   const agentRaw = normalizeCodeModeRawConfig(agent?.tools?.codeMode);
   const key = model
@@ -86,37 +93,19 @@ function readCodeModeRawConfig(
   };
 }
 
-function readEnabled(value: unknown): boolean | "auto" {
-  // Authored option-bearing objects keep their historical opt-in behavior.
-  return typeof value === "boolean" || value === "auto" ? value : false;
-}
-
-function readExecutor(value: unknown): CodeModeConfig["executor"] {
-  if (value === undefined) {
-    return "node";
-  }
-  if (value === "node" || value === "quickjs") {
-    return value;
-  }
-  throw new ToolInputError('Code Mode executor must be "node" or "quickjs".');
-}
-
-export function readPositiveInteger(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
-}
-
 export function resolveCodeModeConfig(
   config?: OpenClawConfig,
   agentId?: string,
   model?: { provider: string; modelId: string },
 ): CodeModeConfig {
   const raw = readCodeModeRawConfig(config, agentId, model);
-  const limit = (key: string, fallback: number, min: number, max: number) =>
-    clampNumber(readPositiveInteger(raw[key], fallback), min, max);
+  const limit = (key: CodeModeLimit, fallback: number, min: number, max: number) =>
+    clampNumber(asPositiveInteger(raw[key]) ?? fallback, min, max);
   const maxSearchLimit = limit("maxSearchLimit", 50, 1, 50);
   return {
-    enabled: readEnabled(raw.enabled),
-    executor: readExecutor(raw.executor),
+    // Authored option-bearing objects keep their historical opt-in behavior.
+    enabled: raw.enabled ?? false,
+    executor: raw.executor ?? "node",
     mode: "only",
     timeoutMs: limit("timeoutMs", 10_000, 100, 60_000),
     memoryLimitBytes: limit("memoryLimitBytes", 64 * 1024 * 1024, 1024 * 1024, 1024 * 1024 * 1024),
@@ -157,28 +146,6 @@ export function toToolSearchConfig(config: CodeModeConfig): ToolSearchConfig {
     searchDefaultLimit: config.searchDefaultLimit,
     maxSearchLimit: config.maxSearchLimit,
   };
-}
-
-export function resolveCodeModeHeadlessConfig(
-  ctx: ToolSearchToolContext,
-  overrides?: Partial<
-    Pick<
-      CodeModeConfig,
-      | "timeoutMs"
-      | "memoryLimitBytes"
-      | "maxOutputBytes"
-      | "maxSnapshotBytes"
-      | "maxPendingToolCalls"
-    >
-  >,
-): CodeModeConfig {
-  const base = resolveCodeModeConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId);
-  const definedOverrides = Object.fromEntries(
-    Object.entries(overrides ?? {}).filter(([, value]) => value !== undefined),
-  );
-  return resolveCodeModeConfig({
-    tools: { codeMode: { ...base, ...definedOverrides } },
-  } as OpenClawConfig);
 }
 
 export function readCode(args: unknown): {

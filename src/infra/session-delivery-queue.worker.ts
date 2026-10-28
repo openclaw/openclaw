@@ -144,9 +144,6 @@ export const sessionDeliveryOperations = {
             deliveryStartedAt: undefined,
             ...(updates?.message ? { message: updates.message } : {}),
             ...(updates?.expectedMediaUrls ? { expectedMediaUrls: updates.expectedMediaUrls } : {}),
-            ...(updates?.suppressTextDelivery === true
-              ? { suppressTextDelivery: true as const }
-              : {}),
           },
     );
   },

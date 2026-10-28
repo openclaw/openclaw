@@ -9,7 +9,7 @@ title: "Voice wake (macOS)"
 
 ## Requirements
 
-Voice Wake and push-to-talk require macOS 26 or newer. Their device controls
+Voice Wake and push-to-talk require macOS 26.2 or newer. Their device controls
 appear in **Dashboard → Settings → Talk → This Mac**, which reports when voice
 features are unavailable on this Mac.
 
@@ -22,7 +22,7 @@ Voice Wake requires Apple Speech to support on-device recognition for the select
 
 ## Runtime behavior (wake-word)
 
-- The recognizer lives in `VoiceWakeRuntime`.
+- `VoiceWakeRuntime` manages wake-word sessions; `SpeechCaptureResources` owns the shared recognizer and microphone lifecycle used by Voice Wake, push-to-talk, and Quick Chat dictation.
 - Trigger fires only when there is a meaningful pause between the wake word and the next word (`triggerPauseWindow` = 0.55s). The overlay/chime can start on the pause even before the command begins.
 - Silence windows: 2.0s (`silenceWindow`) when speech is flowing, 5.0s (`triggerOnlySilenceWindow`) if only the trigger was heard.
 - Hard stop: 120s (`captureHardStop`) to prevent runaway sessions.

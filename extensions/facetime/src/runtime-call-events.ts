@@ -12,9 +12,8 @@ import {
   type AuthenticatedFaceTimeOwner,
   type FaceTimeCallStatusEvent,
 } from "./call-events.js";
-import type { FaceTimeCallRegistry } from "./call-lifecycle.js";
 import type { FaceTimeConfig } from "./config.js";
-import { projectFaceTimeNativeAction } from "./helper-results.js";
+import { assertFaceTimeNativeAction } from "./helper-results.js";
 import type { FaceTimeHelperPeer, FaceTimeHelperSocketServer } from "./helper-rpc.js";
 import {
   doesFaceTimeCallMatchPendingDial,
@@ -23,10 +22,14 @@ import {
 } from "./outbound-call.js";
 import type { createFaceTimeCallControl } from "./runtime-call-control.js";
 import { retainHelperResultPeers } from "./runtime-helper-results.js";
-import { ActiveFaceTimeCall, updateCallStatus } from "./runtime-state.js";
+import {
+  ActiveFaceTimeCall,
+  updateCallStatus,
+  type FaceTimeCallRegistry,
+} from "./runtime-state.js";
 
 export function createFaceTimeCallEventHandler(params: {
-  calls: FaceTimeCallRegistry<ActiveFaceTimeCall>;
+  calls: FaceTimeCallRegistry;
   helper: FaceTimeHelperSocketServer;
   config: FaceTimeConfig;
   logger: RuntimeLogger;
@@ -164,7 +167,7 @@ export function createFaceTimeCallEventHandler(params: {
         generation,
         action: async () => await params.helper.answerCall(callUUID),
       });
-      projectFaceTimeNativeAction("answer", answerResult);
+      assertFaceTimeNativeAction("answer", answerResult);
       retainHelperResultPeers(call, answerResult);
       await params.callControl.activateCallTalk(call);
       params.logger.info("[facetime] answered authorized FaceTime call");
@@ -251,7 +254,7 @@ export function createFaceTimeCallEventHandler(params: {
     const verifiedTransport = isVerifiedFaceTimeTransport(event);
     if (existingCall && !verifiedTransport && !isEndedCall(event)) {
       params.logger.warn(
-        "[facetime] managed call transport lost FaceTime verification; closing fail-closed",
+        "[facetime] managed call transport lost FaceTime verification; closing the call",
       );
       await params.callControl.attemptCarrierHangup(existingCall, "transport-verification-lost");
       return;
@@ -299,14 +302,14 @@ export function createFaceTimeCallEventHandler(params: {
         }
         if (ringingCall) {
           try {
-            const generation = ringingCall.captureGeneration();
+            const generation = ringingCall.generation;
             const muteResult = await ringingCall.runCarrierCommand({
               generation,
               action: async () => await params.helper.safetyMute(ringingCall.carrierCallUUID),
             });
             ringingCall.lastHelperAction = muteResult;
             retainHelperResultPeers(ringingCall, muteResult);
-            projectFaceTimeNativeAction("safe-mute", muteResult);
+            assertFaceTimeNativeAction("safe-mute", muteResult);
           } catch (error) {
             params.logger.warn(
               `[facetime] outbound ringing safety mute failed: ${formatErrorMessage(error)}`,
@@ -384,7 +387,7 @@ export function createFaceTimeCallEventHandler(params: {
     if (isUnknownCallStatus(event)) {
       const unknownCall = params.calls.get(callUUID);
       if (unknownCall) {
-        params.logger.warn("[facetime] unknown native call status; closing carrier fail-closed");
+        params.logger.warn("[facetime] unknown native call status; closing the carrier");
         await params.callControl.attemptCarrierHangup(unknownCall, "unknown-native-status");
       }
     }

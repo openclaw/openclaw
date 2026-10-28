@@ -1,15 +1,26 @@
+import { isMainThread } from "node:worker_threads";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { VERSION } from "../version.js";
 import { runPluginRegistration } from "./api-lifecycle.js";
 import { tryNativeRequireModule } from "./native-module-require.js";
 import { getPluginCache, withPluginCache } from "./plugin-cache.js";
-import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
+import { PluginInventoryRetiredError } from "./plugin-instance-error.js";
+import {
+  bindPluginInstanceModuleLoader,
+  hasRetainedNativeEsmArtifact,
+} from "./plugin-instance-module-loader.js";
 import { getPluginInstance, getPluginValueInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { withProfile } from "./plugin-load-profile.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
+import { nativeAdmissionStateFor } from "./plugin-native-admission-state.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
-import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
+import { resolveBundledPluginStateOperationCapture } from "./plugin-state-operation-module-loader.js";
+import {
+  getPluginRegistryInspectionResources,
+  type PluginRegistryInspectionResources,
+} from "./registry-inspection-resources.js";
+import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import { withPluginRegistrationContext } from "./runtime.js";
 import { prepareGatewayContextBindingOwner } from "./runtime/gateway-context-binding-owner.js";
@@ -103,6 +114,32 @@ export function runPluginRegisterSyncInRegistry(
   }
 }
 
+export function createDeferredGatewaySubagentRuntime(
+  runtime: PluginRuntime,
+): PluginRuntime["subagent"] {
+  const subagent: PluginRuntime["subagent"] = {
+    get native() {
+      return runtime.subagent.native;
+    },
+    complete: (...args) => runtime.subagent.complete(...args),
+    forkSession: (...args) => runtime.subagent.forkSession(...args),
+    run: (...args) => runtime.subagent.run(...args),
+    waitForRun: (...args) => runtime.subagent.waitForRun(...args),
+    getSessionMessages: (...args) => runtime.subagent.getSessionMessages(...args),
+    deleteSession: (...args) => runtime.subagent.deleteSession(...args),
+  };
+  bindGatewayContextResolver(subagent, getGatewayContextResolver(runtime));
+  return subagent;
+}
+
+export function createDeferredGatewayNodesRuntime(runtime: PluginRuntime): PluginRuntime["nodes"] {
+  return {
+    list: (...args) => runtime.nodes.list(...args),
+    invoke: (...args) => runtime.nodes.invoke(...args),
+    openDuplex: (...args) => runtime.nodes.openDuplex(...args),
+  };
+}
+
 export function createPluginModuleLoader(options: {
   devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
@@ -137,15 +174,39 @@ export function createPluginModuleLoader(options: {
       ...(captured.tryNative !== undefined ? { tryNative: captured.tryNative } : {}),
     });
   };
-  return (
+  type Owner = {
+    record: PluginRecord;
+    rootDir: string;
+    registry: PluginRegistry;
+    standalone?: boolean;
+    /** Installer-proven identity when the plugin source cannot change in place. */
+    immutableInstallIdentity?: string;
+  };
+  // Only uncached inspections of immutable installs may share evaluated code.
+  const inspection = (owner: Owner) =>
+    getPluginRegistryInspectionResources(owner.registry) === undefined
+      ? {}
+      : {
+          inspectionSourceIdentity: owner.immutableInstallIdentity,
+          inspectionRetention: nativeAdmissionStateFor(cache).inspectionNativeEsm,
+        };
+  const binding = (
     modulePath: string,
-    owner?: {
-      record: PluginRecord;
-      rootDir: string;
-      registry: PluginRegistry;
-      standalone?: boolean;
-    },
-  ): unknown =>
+    owner: Owner,
+    instance: Parameters<typeof bindPluginInstanceModuleLoader>[0]["instance"],
+  ) => ({
+    instance,
+    origin: owner.record.origin,
+    source: modulePath,
+    rootDir: owner.rootDir,
+    standalone: owner.standalone,
+    expectedSourceDigest: captured.expectedSourceDigests?.[owner.record.id],
+    ...inspection(owner),
+    devSourceRoot: captured.devSourceRoot,
+    pluginSdkResolution: captured.pluginSdkResolution,
+    createHostModuleLoader: () => createLoaderForModule(modulePath),
+  });
+  const load = (modulePath: string, owner?: Owner): unknown =>
     withPluginCache(cache, () => {
       if (!owner) {
         return createLoaderForModule(modulePath)(toSafeImportPath(modulePath));
@@ -153,17 +214,7 @@ export function createPluginModuleLoader(options: {
       let instance = getPluginInstance(owner.record);
       if (!instance) {
         instance = new PluginInstance(owner.record.id, owner);
-        bindPluginInstanceModuleLoader({
-          instance,
-          origin: owner.record.origin,
-          source: modulePath,
-          rootDir: owner.rootDir,
-          standalone: owner.standalone,
-          expectedSourceDigest: captured.expectedSourceDigests?.[owner.record.id],
-          devSourceRoot: captured.devSourceRoot,
-          pluginSdkResolution: captured.pluginSdkResolution,
-          createHostModuleLoader: () => createLoaderForModule(modulePath),
-        });
+        bindPluginInstanceModuleLoader(binding(modulePath, owner, instance));
       }
       const expected = captured.expectedSourceDigests?.[owner.record.id];
       if (expected !== undefined && instance.sourceDigest !== expected) {
@@ -171,6 +222,69 @@ export function createPluginModuleLoader(options: {
       }
       return instance.loadModule(modulePath);
     });
+  return Object.assign(load, {
+    async prepare(modulePath: string, owner: Owner): Promise<void> {
+      // Compute workers already own retained native-ESM source captures. Keep their
+      // inline acquisition path so a prepared artifact cannot compete with that owner.
+      // An inspection that joins a retained native ESM artifact binds it synchronously;
+      // acquiring another worker capture would only be discarded.
+      const retained = () =>
+        hasRetainedNativeEsmArtifact({
+          origin: owner.record.origin,
+          source: modulePath,
+          ...inspection(owner),
+          devSourceRoot: captured.devSourceRoot,
+          pluginSdkResolution: captured.pluginSdkResolution,
+          registry: owner.registry,
+        });
+      if (!isMainThread || getPluginInstance(owner.record) || retained()) {
+        return;
+      }
+      await withPluginCache(cache, async () => {
+        const bundledCapture =
+          owner.record.origin === "bundled"
+            ? resolveBundledPluginStateOperationCapture({
+                rootDir: owner.rootDir,
+                source: modulePath,
+              })
+            : undefined;
+        if (owner.record.origin === "bundled" && !bundledCapture) {
+          return;
+        }
+        const { preparePluginGenerationArtifact } = await import("./plugin-generation-worker.js");
+        const preparedArtifact = await preparePluginGenerationArtifact(
+          bundledCapture ?? {
+            rootDir: owner.rootDir,
+            source: modulePath,
+            standalone: owner.standalone,
+          },
+        );
+        if (cache.retirement || isPluginRegistryRetired(owner.registry)) {
+          await preparedArtifact.artifact.disposeAsync();
+          throw new PluginInventoryRetiredError();
+        }
+        try {
+          // Reentrant loading may have installed this exact owner while acquisition
+          // yielded, or a concurrent inspection retained the same native ESM artifact.
+          // Never replace its module identity with a second capture.
+          if (getPluginInstance(owner.record) || retained()) {
+            await preparedArtifact.artifact.disposeAsync();
+            return;
+          }
+          const instance = new PluginInstance(owner.record.id, owner);
+          instance.run(() =>
+            bindPluginInstanceModuleLoader({
+              ...binding(modulePath, owner, instance),
+              preparedArtifact,
+            }),
+          );
+        } catch (error) {
+          await preparedArtifact.artifact.disposeAsync();
+          throw error;
+        }
+      });
+    },
+  });
 }
 
 function formatPluginRuntimeModuleResolutionError(params: {
@@ -194,8 +308,10 @@ export function createLazyPluginRuntime(params: {
   devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
   runtimeOptions?: CreatePluginRuntimeOptions;
+  inspectionResources?: PluginRegistryInspectionResources;
 }): PluginRuntime {
-  const cache = getPluginCache();
+  // Inspections own their cache through physical disposal; raw runtime views retain theirs.
+  const cache = params.inspectionResources ? new WeakRef(getPluginCache()) : getPluginCache();
   type RuntimeModule = {
     createPluginRuntime?: PluginRuntimeFactory;
   };
@@ -213,30 +329,35 @@ export function createLazyPluginRuntime(params: {
       );
     }
     const resolvedPath = resolution.resolvedPath;
-    return withPluginCache(cache, () =>
-      withProfile({ source: resolvedPath }, "runtime-module", () => {
-        const native = tryNativeRequireModule(resolvedPath, {
-          aliasMap: preparePluginLoaderAliases({
-            modulePath: resolvedPath,
-            moduleUrl: import.meta.url,
-            devSourceRoot: params.devSourceRoot,
-            pluginSdkResolution: params.pluginSdkResolution,
-          }).resolveAlias,
-        });
-        if (!native.ok) {
-          throw new Error(
-            `Unable to load host plugin runtime natively: ${resolvedPath}. Use a supported native TypeScript loader for a source host, or rebuild the host runtime.`,
-          );
-        }
-        return native.moduleExport as RuntimeModule;
-      }),
-    );
+    return withProfile({ source: resolvedPath }, "runtime-module", () => {
+      const native = tryNativeRequireModule(resolvedPath, {
+        aliasMap: preparePluginLoaderAliases({
+          modulePath: resolvedPath,
+          moduleUrl: import.meta.url,
+          devSourceRoot: params.devSourceRoot,
+          pluginSdkResolution: params.pluginSdkResolution,
+        }).resolveAlias,
+      });
+      if (!native.ok) {
+        throw new Error(
+          `Unable to load host plugin runtime natively: ${resolvedPath}. Use a supported native TypeScript loader for a source host, or rebuild the host runtime.`,
+        );
+      }
+      return native.moduleExport as RuntimeModule;
+    });
   };
 
   const base = createRuntimeBase();
   let resolvedRuntime: PluginRuntime | null = null;
   const resolveRuntime = (): PluginRuntime => {
-    resolvedRuntime ??= withPluginCache(cache, () => {
+    if (resolvedRuntime) {
+      return resolvedRuntime;
+    }
+    const owner = cache instanceof WeakRef ? cache.deref() : cache;
+    if (!owner) {
+      throw new PluginInventoryRetiredError();
+    }
+    resolvedRuntime = withPluginCache(owner, () => {
       const { createPluginRuntime } = resolveRuntimeModule();
       if (typeof createPluginRuntime !== "function") {
         throw new Error("Plugin runtime module missing createPluginRuntime export");
@@ -264,7 +385,13 @@ export function createLazyPluginRuntime(params: {
       if (prop === "version") {
         return VERSION;
       }
-      if (prop === "capabilities" || prop === "config" || prop === "state" || prop === "system") {
+      if (
+        prop === "capabilities" ||
+        prop === "config" ||
+        prop === "llm" ||
+        prop === "state" ||
+        prop === "system"
+      ) {
         return base[prop];
       }
     }
@@ -284,8 +411,8 @@ export function createLazyPluginRuntime(params: {
         return getRuntimeProperty(prop);
       },
     };
-    // Policy facets match the runtime's getter-only contract before loading too.
-    if (prop !== "modelAuth" && prop !== "modelConfig") {
+    // Host and policy facets retain their getter-only contract before loading too.
+    if (prop !== "modelAuth" && prop !== "modelConfig" && prop !== "llm") {
       descriptor.set = (value: unknown) => {
         Reflect.set(resolveRuntime() as object, prop, value);
       };

@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 
 export const legacySessionMigrationReadOperations = {
-  "legacySessionMigration.readLedger": (_input: undefined, database: DatabaseSync) => ({
+  "legacySessionMigration.readLedger": (_input: undefined, database: EngineConnection) => ({
     type: "legacySessionMigration.readLedger" as const,
     row: executeSqliteQueryTakeFirstSync(
       database,

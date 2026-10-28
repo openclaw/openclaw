@@ -42,31 +42,53 @@ refreshes its session-hosting declaration and current worker slots. The Gateway
 waits for that fresh declaration before making the host available again; the
 app or node-host process does not need to restart.
 
-When a session first needs the current worker build, the Gateway sends its sealed
-worker artifact to the paired host. The node verifies the exact content hash,
+After a Gateway update or reconnect, supported persistent paired hosts prefetch
+the current sealed worker archive in the background. Prefetch downloads and verifies
+the archive only; it does not extract, prewarm, or launch a worker. A session arriving
+during prefetch takes priority and cancels the background transfer if needed.
+Prefetch failures produce a warning and leave normal session installation available.
+Older nodes and cloud-enrolled nodes keep session-owned installation.
+
+When a session first needs the current worker build, the node reuses a valid
+prefetched archive or acquires it from the paired Gateway. It verifies the exact content hash,
 publishes the artifact atomically, and prewarms it when supported by the execution mode.
 The artifact contains its complete JavaScript dependency closure; the node does
 not install packages or execute lifecycle scripts. Runtime chunks are sealed and
 verified with the artifact, and cold workers complete admission before loading
-the turn runtime. Installation belongs to the
-session request and receives its cancellation signal. Reconnect maintenance does
-not install or prewarm a worker build.
+the turn runtime. Installation belongs to the session request and receives its
+cancellation signal.
 
 Once installed, persistent nodes retain one current worker artifact per Gateway
-namespace, even with no sessions. Older builds remain only while a live or
-recoverable placement needs them; normal maintenance removes unreferenced builds.
+namespace, even with no sessions. Prefetched archives use the same bounded retention.
+Older builds remain only while a live or recoverable placement needs them;
+normal maintenance removes unreferenced builds.
 Each new dispatch still validates the installed artifact and reuses it when valid,
 avoiding another download. Cloud-enrolled nodes keep their own execution-mode-specific
 installation and retention lifecycle.
 
-You can also enroll and enable a service host in one step with
-`openclaw connect --service --session-host`.
+The command printed by `openclaw devices join-code` enrolls and enables a
+service host in one step with `openclaw connect <join-url> --service --session-host`.
+Omit `--session-host` for a command-only node service.
+
+To enable hosting on an already-paired headless node, run on that device:
+
+```bash
+openclaw config set nodeHost.workerRuns.enabled true
+openclaw node install --force
+```
 
 For a process-scoped host, enroll in the foreground with
 `openclaw connect <join-url> --session-host`. The join URL is single-use; after
 that process stops, restart the host with `openclaw node run --session-host`,
 which reuses the saved pairing. See
 [Reconnect a paired node](/cli/connect#reconnect-a-paired-node).
+
+After a host reboot, the node releases interrupted native worker slots and records
+the interrupted turn when its saved launch boot identity differs from the current
+OS boot identity. The next turn can start normally after the node reconnects.
+Older launch records and hosts whose boot identity cannot be read keep the existing
+conservative cleanup checks. Container workers still require their container
+engine to confirm cleanup, including when that engine runs on another host.
 
 In Control UI New Session, a
 write-scoped operator chooses either a specific paired device or **Auto**.
@@ -77,6 +99,22 @@ session-owned managed workspace, dispatches it with the exact
 `deviceId` or `autoDevice: true`, and sends the first turn only after the chosen
 device placement becomes active. New Session does not bind `execNode` or browse
 the device filesystem.
+
+The selected model's **harness** must also support the chosen device. OpenAI
+models using the Codex harness require the official Codex plugin on that node;
+installing it only on the Gateway is not enough. On the node, run:
+
+```bash
+openclaw plugins install @openclaw/codex
+openclaw node restart
+```
+
+If the plugin is already installed but disabled, explicitly enable it with
+`openclaw plugins enable codex` before restarting. Approve the node's updated
+command surface on the Gateway. The picker keeps the device unavailable for
+Codex until it advertises the command and approval is complete. Alternatively,
+choose a model using the OpenClaw harness; OpenClaw does not switch harnesses
+silently or install Codex when you enable session hosting.
 
 On POSIX hosts, OpenClaw keeps its managed workspace directories private (`0700`),
 including when the host uses umask `0002`. Existing node-owned workspace ancestry
@@ -128,7 +166,7 @@ local turns, including the Gateway's resolved model settings and limits. Code
 Mode runs on the node and calls each catalog tool at its declared execution
 location. Its catalog and pending cells belong to the current turn; a retained
 worker receives a fresh presentation on the next turn.
-Node workers use `tool_call` for Tool Search, including when directory mode is configured.
+Node workers use `dispatch_action` for Tool Search, including when directory mode is configured.
 
 Concurrent Gateway tool calls wait for the existing transport budget, so larger
 model tool batches do not lose calls. Cancellation and heartbeats remain independent.
@@ -172,6 +210,9 @@ for a durable slot. A slot occupied only by an idle worker can be reclaimed for
 new work; active turns and background commands keep their slots. When no free
 or reclaimable slot remains, the node stays available for status and cancellation
 but is not selected for a new session turn.
+
+If a capacity refresh fails, the node logs a warning and advertises no available
+slots. Restart the node host if its capacity does not recover.
 
 Capacity, host-stat, and skill-bin updates do not interrupt active node work or
 change its pairing authority. This behavior requires an updated Gateway; node
@@ -224,6 +265,16 @@ the node's supervisor. Recovery keeps capacity occupied while the previous owner
 finishes stopping its commands. An upgraded node host preserves the released
 startup message and detached process-group ownership for older worker bundles.
 
+Windows node hosts record when the native Job launcher contains a worker tree
+with kill-on-close ownership. If that node host dies, Windows terminates the Job;
+after restart, recovery waits until the recorded supervisor and worker are gone,
+checking their PIDs and process creation times. It then allows one second for
+the remaining Job members to exit before interrupting the launch and releasing
+its slot. A descendant that broke away from the Job or is unusually slow to die
+could briefly overlap the next turn; this is an accepted recovery tradeoff.
+Older receipts and launches without the native helper retain conservative cleanup
+checks.
+
 Installed node hosts package the POSIX launch helpers separately to reduce
 per-turn startup work. Update and restart the node host to receive this
 improvement. The worker still waits for its durable launch receipt before
@@ -238,12 +289,14 @@ exec-server directly, so it does not consume or require a worker slot. Its
 required command must appear in the node's effective `invocableCommands`,
 not merely its declared capabilities. A declared command is usable only when
 the approved pairing and Gateway command allowlist both authorize it.
-Connected non-hosts, ineligible
-or saturated hosts, update-required devices, and unavailable hosts remain
-visible but disabled with an actionable reason. Enable hosting with
-`openclaw connect --service --session-host` or the `nodeHost.workerRuns`
-setting, then restart the node host. Update-required hosts must be upgraded and
-restarted before selection.
+Connected non-hosts, ineligible or saturated hosts, update-required devices,
+and unavailable hosts remain visible but disabled with an actionable reason.
+The session picker and command palette show a warning icon and **Unavailable**
+for these computers. Focus or tap the row to read why it cannot host the session;
+the command palette shows one unavailable row instead of repeating project choices.
+For an already-paired headless node, enable `nodeHost.workerRuns.enabled` and
+run `openclaw node install --force` as shown above. Update-required hosts must
+be upgraded and restarted before selection.
 
 While node inventory refreshes, or if that refresh fails, the picker keeps known
 devices visible but disables remote selection and Start until fresh inventory
@@ -267,7 +320,7 @@ slots does not cancel it; the node checks physical capacity when the session
 launches a turn.
 Node identity and command authorization remain checked throughout preparation.
 
-If no host is eligible, the error explains whether no session hosts are paired,
+If no host is eligible, the error explains whether no devices have session hosting enabled,
 hosts are disconnected or at capacity, a host needs an update, or the selected
 runtime is unsupported. Current pairing, connection, and command errors take
 precedence over previously advertised worker slots. The dispatch response
@@ -311,8 +364,73 @@ the Gateway pauses advisory disk-space checks and retains the last sample for
 that placement. Checks resume on the next scheduled sweep after the current
 runner reconnects. Disabling hosting does not discard the session's workspace.
 
+The Gateway samples the volume containing the placement's remote workspace.
+New placements, placement activity, and runner availability changes refresh the
+sample on the next maintenance pass. An unchanged idle placement reuses its
+successful sample for up to 15 minutes. Samples are advisory and do not block
+turns or workspace writes.
+
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.
+
+### Work in an existing device folder
+
+Session hosting allows existing folders by default. To restrict sessions to specific
+directory roots, configure the paired device:
+
+```json5
+{
+  nodeHost: {
+    workerRuns: {
+      enabled: true,
+      folders: ["~/Projects"],
+    },
+  },
+}
+```
+
+`nodeHost.workerRuns.folders` has three modes:
+
+- Unset: any existing directory is allowed, except filesystem roots and directories
+  overlapping private worker storage. The node advertises existing-folder support.
+- A non-empty list: only those roots and their subdirectories are allowed.
+- `[]`: existing-folder sessions are disabled and the node does not advertise support.
+
+Paths must be absolute or home-relative (`~/`). The node resolves symlinks and
+checks the directory on every use; symlinks cannot escape configured roots.
+Restart the node host after changing the setting.
+
+This default uses the existing session-host trust boundary: operators can already
+run agents with exec on the node. Folder restrictions are an optional guardrail,
+not an exec sandbox. Only enable session hosting on a trusted device; use a narrow
+root list or `[]` if you do not want unrestricted in-place folder selection. The
+selected folder becomes the session workspace root, so deployments that contain
+`operator.write` sessions with `tools.fs.workspaceOnly` should also set a root list.
+
+For a specific paired device that advertises `workerHost.deviceFolders: true`,
+choose **Existing folder on device** in the workspace picker and enter an
+absolute path on that device. This option is not available for **Auto**, cloud
+workers, runtimes without worker-turn execution, or devices that do not advertise
+the capability. Operators with `operator.admin` can also choose **Browse folders
+on** _device_ to list folders on that device through its `fs.listDir` command.
+The listing is not limited to `folders` roots; the device validates the chosen
+folder when the session is created. The Gateway never browses or resolves this
+path locally.
+
+The session records `deviceFolder: { deviceId, path }` and dispatches to that
+exact device. Do not combine `deviceFolder` with a project, repository,
+managed worktree, or Gateway `cwd`. The worker uses the existing folder in place:
+OpenClaw does not create a worktree, transfer a workspace, or reconcile its files
+back to the Gateway. Back up important files before giving an agent write access.
+The session display retains the device and folder path. Deleting the session
+does not remove the existing folder.
+
+Device-folder sessions cannot move to another device or continue on the Gateway.
+Attachment staging is not supported for these sessions; use a managed workspace
+when you need to upload attachments. The Gateway Files panel and workspace reveal
+are unavailable for device-folder sessions; use the agent's file tools on the
+selected device instead. Gateway file operations reject these sessions rather
+than reading or writing a similarly named local workspace.
 
 ### Isolate hosted worker sessions in containers
 
@@ -327,7 +445,7 @@ worker inside its own container instead:
       enabled: true,
       isolation: "container",
       // Optional: use a digest-pinned, private-registry, or preloaded image.
-      // containerImage: "registry.example.com/openclaw/node:24.21.0-slim",
+      // containerImage: "registry.example.com/openclaw/node:24.22.1-slim",
     },
   },
 }
@@ -337,6 +455,14 @@ Restart the node host after changing either setting. Isolation defaults to
 `"none"`, preserving the existing direct-process behavior. This setting is
 enforced locally on the node; the Gateway cannot silently disable it or fall
 back to an unisolated worker.
+
+Isolation applies only to sessions placed on this node. When `sessions.dispatch`
+to the node is refused (for example, because no container engine works), the
+session stays unplaced, and its turns run on the Gateway like any other
+undispatched session. To forbid Gateway-local execution entirely, set
+[`cloudWorkers.requiredProfile`](/gateway/config-cloud-workers#required-worker-profile)
+to a device profile for this node; turns then fail with an actionable error
+instead of running on the Gateway.
 
 Container isolation is supported on Linux and macOS node hosts; Windows is
 unsupported because native Windows paths cannot be mounted at their original
@@ -354,10 +480,10 @@ If an engine command times out, the launch error names the engine and operation
 (for example, `docker info`) and its deadline. It omits command arguments and
 environment values. Check that operation against the selected daemon before retrying.
 
-The default image is `node:24.21.0-slim`; the engine pulls it on first use when it
+The default image is `node:24.22.1-slim`; the engine pulls it on first use when it
 is not already present. Set `nodeHost.workerRuns.containerImage` to choose a
 digest-pinned image, a private-registry image, or an image already available
-to the engine. The image must provide a supported Node.js 24.16+ or 26.1+ runtime on
+to the engine. The image must provide a supported Node.js 24.22.1+ or 26.12.1+ runtime on
 its standard executable search path. If the image cannot be pulled, is
 inaccessible, or does not provide a suitable Node.js runtime, that session
 launch fails visibly; it never retries as a bare host process. Preload the
@@ -365,20 +491,26 @@ image or configure registry access before hosting sessions on an offline or
 restricted node. The default image can advance when OpenClaw updates its dependencies.
 Before upgrading an offline node, preload the new default image or set
 `nodeHost.workerRuns.containerImage` to a supported image already cached on that node.
-For example, a cached `node:24.19.0-slim` remains supported and can be selected explicitly.
+For example, a cached `node:26.12.1-slim` can be selected explicitly.
 Existing explicit image settings are preserved; replace unsupported Node images before
 upgrading OpenClaw. Worker startup requires a supported runtime; older releases may
 fail before the runtime diagnostic can run.
 
-Each worker container receives only two host bind mounts: its verified worker
-bundle root is read-only, and its assigned session workspace is read-write.
-Both are mounted at their original absolute host paths so the sealed bundle
-and workspace descriptor remain valid; the session workspace is also the
-container working directory. OpenClaw passes only the existing frozen,
+Each worker container mounts its verified worker bundle root read-only and its
+assigned session workspace read-write. When the worker's private HOME differs
+from that workspace, it receives a third, read-write mount for HOME. For
+existing-folder sessions, this private HOME belongs to OpenClaw's namespaced
+session-generation storage and follows its lease and retention lifecycle; it
+is not the node user's home directory. Collecting that private state does not
+remove the user-owned existing folder.
+
+These directories are mounted at their original absolute host paths so the
+sealed bundle and workspace descriptor remain valid; the session workspace is
+also the container working directory. OpenClaw passes only the existing frozen,
 non-secret worker environment allowlist and adds no other host mounts.
 Container isolation protects the rest of the host filesystem and separates
 the worker process, but the worker can still modify its assigned workspace
-and connect to the Gateway.
+and private HOME and connect to the Gateway.
 
 The container uses the engine's normal outbound networking and must be able
 to reach the Gateway worker WebSocket endpoint. A Gateway address such as

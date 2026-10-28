@@ -5,6 +5,7 @@ import {
   buildJsonChannelConfigSchema,
 } from "../channels/plugins/config-schema.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import {
   normalizeBundledPluginStringList,
@@ -19,6 +20,8 @@ import type {
 import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./package-entrypoints.js";
 import { pluginCacheExistsSync } from "./plugin-cache-files.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
+
+const log = createSubsystemLogger("plugins");
 
 const CONFIG_SCHEMA_CANDIDATES = [
   ...[".ts", ".js", ".mts", ".mjs", ".cts", ".cjs"].map((extension) =>
@@ -100,7 +103,11 @@ function loadChannelConfigSurfaceModuleSync(modulePath: string): ChannelConfigSu
     });
     const imported = load(modulePath) as Record<string, unknown>;
     return resolveConfigSchemaExport(imported);
-  } catch {
+  } catch (error) {
+    log.warn(
+      `Unable to load bundled channel config metadata from ${modulePath}; using manifest metadata`,
+      { error },
+    );
     return null;
   }
 }

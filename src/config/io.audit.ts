@@ -10,6 +10,7 @@ import { normalizeNullableString } from "@openclaw/normalization-core/string-coe
 import { createSqliteAuditRecordWriter } from "../infra/sqlite-audit-record-store.async.js";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
 import { redactSecrets } from "../logging/redact.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { resolveConfigAuditStoreEnv } from "./config-journal-snapshot.js";
 import type { ConfigHealthFingerprint } from "./io.health-state.types.js";
 import type { ConfigWriteAuditOrigin } from "./io.types.js";
@@ -385,16 +386,9 @@ type ConfigAuditAppendParams = {
   record: ConfigAuditRecord;
 };
 
-export type ConfigAuditScrubResult = {
-  scanned: number;
-  rewritten: number;
-  skipped: number;
-  // True when the scrub detected concurrent appends mid-rewrite and refused
-  // to swap the file. Caller should re-run `openclaw doctor --fix` once the
-  // gateway is idle. No on-disk content was modified on abort.
-  aborted: boolean;
-};
-
+// aborted is true when the scrub detected concurrent appends mid-rewrite and refused
+// to swap the file. Caller should re-run `openclaw doctor --fix` once the
+// gateway is idle. No on-disk content was modified on abort.
 // Apply the current argv redactor to historical logs, preserving malformed lines
 // verbatim for forensic recovery. Stage changed bytes at mode 0o600 before replacing
 // the log, and leave already-redacted files untouched.
@@ -402,7 +396,7 @@ export async function scrubConfigAuditLog(params: {
   env: NodeJS.ProcessEnv;
   homedir: () => string;
   dryRun?: boolean;
-}): Promise<ConfigAuditScrubResult> {
+}) {
   const auditPath = resolveLegacyConfigAuditLogPath(params.env, params.homedir);
   let raw: string;
   try {
@@ -525,7 +519,7 @@ function configAuditEntryKey(record: ConfigAuditRecord): string {
 }
 
 export function sanitizeConfigAuditRecord(record: ConfigAuditRecord): ConfigAuditRecord {
-  const sanitized = structuredClone(record);
+  const sanitized = { ...record };
   if (sanitized.event !== "config.external") {
     sanitized.argv = redactConfigAuditArgv(capArgv(sanitized.argv));
     sanitized.execArgv = redactConfigAuditArgv(capArgv(sanitized.execArgv));
@@ -574,15 +568,9 @@ export async function appendConfigAuditRecord(
   await captureConfigAuditAppender(params, assertCurrent)(params.record);
 }
 
-export function appendConfigAuditRecordSync(params: ConfigAuditAppendParams): void {
-  try {
-    const record = sanitizeConfigAuditRecord(params.record);
-    openConfigAuditStore(resolveConfigAuditStoreEnv(params)).register(
-      configAuditEntryKey(record),
-      record,
-      Date.parse(record.ts),
-    );
-  } catch {
-    // best-effort
-  }
+/** Synchronous observations join their task's cleanup without opening SQLite here. */
+export function enqueueConfigAuditRecord(params: ConfigAuditAppendParams): void {
+  void trackAsyncWork(() => appendConfigAuditRecord(params)).catch(() => {
+    // A closed task can reject admission; diagnostic history remains best-effort.
+  });
 }

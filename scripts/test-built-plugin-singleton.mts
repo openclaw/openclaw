@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
 import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { installProcessWarningFilter } from "./process-warning-filter.mts";
@@ -12,6 +13,10 @@ import { prepareBundledPluginRuntime } from "./stage-bundled-plugin-runtime.mts"
 installProcessWarningFilter();
 
 const repoRoot = resolveRepoRoot(import.meta.url);
+const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-build-smoke-"));
+const smokeEnv = createBuildSmokeEnv(tempRoot);
+// Built modules can resolve state during import, before loader options are passed.
+Object.assign(process.env, smokeEnv);
 async function runBuiltPluginSingletonSmoke(signal: AbortSignal) {
   signal.throwIfAborted();
   const smokeEntryPath = path.join(repoRoot, "dist", "plugins", "build-smoke-entry.js");
@@ -36,7 +41,6 @@ async function runBuiltPluginSingletonSmoke(signal: AbortSignal) {
   assert.equal(typeof getPluginModuleLoaderStats, "function", "plugin loader stats missing");
   assert.equal(typeof matchPluginCommand, "function", "matchPluginCommand missing");
 
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-build-smoke-"));
   const pluginId = "build-smoke-plugin";
   const distPluginDir = path.join(repoRoot, "dist", "extensions", pluginId);
   const runtimePluginDir = path.join(repoRoot, "dist-runtime", "extensions", pluginId);
@@ -45,7 +49,6 @@ async function runBuiltPluginSingletonSmoke(signal: AbortSignal) {
     clearPluginCommands();
     fs.rmSync(distPluginDir, { recursive: true, force: true });
     fs.rmSync(runtimePluginDir, { recursive: true, force: true });
-    fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 
   process.on("exit", cleanup);
@@ -162,7 +165,7 @@ async function runBuiltPluginSingletonSmoke(signal: AbortSignal) {
             },
           },
           env: {
-            ...process.env,
+            ...smokeEnv,
             OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "extensions"),
           },
           workspaceDir: tempRoot,
@@ -280,7 +283,7 @@ async function runBuiltPluginSingletonSmoke(signal: AbortSignal) {
       for (const preferBuiltPluginArtifacts of [undefined, false]) {
         const values = {
           config: artifactConfig,
-          env: { ...process.env, OPENCLAW_STATE_DIR: path.join(tempRoot, "artifact-state") },
+          env: { ...smokeEnv, OPENCLAW_STATE_DIR: path.join(tempRoot, "artifact-state") },
           manifestRegistry: artifactManifestRegistry,
           installRecords: {},
           preferBuiltPluginArtifacts,
@@ -330,7 +333,7 @@ async function runBuiltPluginSingletonSmoke(signal: AbortSignal) {
     ].entries()) {
       const options = {
         config: artifactConfig,
-        env: { ...process.env, OPENCLAW_STATE_DIR: path.join(tempRoot, "artifact-state") },
+        env: { ...smokeEnv, OPENCLAW_STATE_DIR: path.join(tempRoot, "artifact-state") },
         workspaceDir: path.join(tempRoot, `cache-order-${orderIndex}`),
         manifestRegistry: {
           ...artifactManifestRegistry,
@@ -368,7 +371,7 @@ async function runBuiltPluginSingletonSmoke(signal: AbortSignal) {
       cache: false,
       workspaceDir: tempRoot,
       env: {
-        ...process.env,
+        ...smokeEnv,
         OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "dist-runtime", "extensions"),
       },
       config: {
@@ -485,4 +488,5 @@ try {
 } finally {
   process.off("SIGINT", onSigint);
   process.off("SIGTERM", onSigterm);
+  fs.rmSync(tempRoot, { recursive: true, force: true });
 }

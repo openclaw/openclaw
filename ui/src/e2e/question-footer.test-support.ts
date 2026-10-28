@@ -1,7 +1,13 @@
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { Question, QuestionRecord, QuestionResolveResult } from "@openclaw/gateway-protocol";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
+import {
+  captureControlUiE2eFailureDiagnostics,
+  recordControlUiE2eFailureFacts,
+} from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import type { MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
 import { openDetailsPullRequests } from "./chat-details.test-support.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
@@ -14,35 +20,38 @@ type QuestionFooterFixtures = {
   ) => Promise<{ gateway: MockGatewayControls; page: Page }>;
   questionRecord: (id: string, questions: Question[]) => QuestionRecord;
   questionSessionKey: string;
-  screenshot: (page: Page, name: string) => Promise<void>;
 };
 
 export function defineQuestionFooterTests({
   openQuestionPage,
   questionRecord,
   questionSessionKey,
-  screenshot,
 }: QuestionFooterFixtures) {
-  it.each([
-    { height: 844, screenshotName: "portrait", width: 390 },
-    { height: 390, screenshotName: "landscape", width: 844 },
-  ])(
-    "keeps a collapsed question separate from PRs, notices, and the input on $screenshotName",
-    async ({ height, screenshotName, width }) => {
-      const { gateway, page } = await openQuestionPage({ height, width }, true);
+  it("keeps a collapsed question separate from PRs, notices, and the input in portrait and landscape", async () => {
+    const { gateway, page } = await openQuestionPage({ height: 844, width: 390 }, true);
+    for (const { height, width, orientation } of [
+      { height: 844, orientation: "portrait", width: 390 },
+      { height: 390, orientation: "landscape", width: 844 },
+    ]) {
+      await page.setViewportSize({ height, width });
+      const sentCount = (await gateway.getRequests("chat.send")).length;
+      const resolutionCount = (await gateway.getRequests("question.resolve")).length;
       const composer = page.locator(".agent-chat__input");
       const draft = composer.locator(".agent-chat__composer-combobox > textarea");
       await draft.fill("Review the footer controls");
       await draft.press("Enter");
-      const sent = requireRecord((await gateway.waitForRequest("chat.send")).params);
+      const sent = requireRecord(
+        (await gateway.waitForRequest("chat.send", { after: sentCount })).params,
+      );
       const runId = requireString(sent.idempotencyKey, "sent run ID");
+      const errorMessage = `The ${orientation} verification run failed. Please try again.`;
       await gateway.emitGatewayEvent("chat", {
         sessionKey: questionSessionKey,
         runId,
         state: "error",
-        errorMessage: "The verification run failed. Please try again.",
+        errorMessage,
       });
-      await page.locator(".chat-error").waitFor();
+      await page.locator(".chat-error").filter({ hasText: errorMessage }).waitFor();
       const watchedKey = await waitForWatchedSessionKey(gateway, questionSessionKey);
       await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
         sessions: {
@@ -63,21 +72,18 @@ export function defineQuestionFooterTests({
           },
         },
       });
-      const pullRequest = page.locator(".chat-pr__link");
-      await openDetailsPullRequests(page);
+      const pullRequests = await openDetailsPullRequests(page);
+      const pullRequest = pullRequests.locator(".chat-pr-mobile__row");
       await pullRequest.waitFor();
       await page.keyboard.press("Escape");
       await draft.fill("Keep this follow-up draft");
       const prompt = "Which progress note should I use?";
-      const request = questionRecord("question-mobile-context", [
+      const request = questionRecord(`question-mobile-context-${orientation}`, [
         {
           questionId: "progress_note",
           header: "Progress note",
           question: prompt,
-          options: [
-            { label: "Concise", description: "Keep the update short." },
-            { label: "Detailed", description: "Include the supporting evidence." },
-          ],
+          options: [{ label: "Concise" }, { label: "Detailed" }],
         },
       ]);
       await gateway.emitGatewayEvent("question.requested", request);
@@ -94,54 +100,70 @@ export function defineQuestionFooterTests({
           document.documentElement.dataset.themeMode = mode;
         }, theme);
         await draft.focus();
-        const layout = await shell.evaluate((element) => {
-          const question = element.querySelector<HTMLElement>(".chat-question-panel--collapsed")!;
-          const input = element.querySelector<HTMLElement>(".agent-chat__input")!;
-          const hasPullRequests = element.querySelector(".chat-pr") !== null;
-          const notice = element.querySelector<HTMLElement>(".chat-error")!;
-          const stack = element.querySelector<HTMLElement>(".chat-footer__context")!;
-          const questionStyle = getComputedStyle(question);
-          const inputStyle = getComputedStyle(input);
+        const layout = await shell.evaluate((element, viewportHeight) => {
+          const get = (selector: string) => element.querySelector<HTMLElement>(selector)!;
+          const question = get(".chat-question-panel--collapsed");
+          const input = get(".agent-chat__input");
+          const q = question.getBoundingClientRect();
+          const i = input.getBoundingClientRect();
+          const rounded = (node: Element, edge: string) =>
+            ["left", "right"].every(
+              (side) =>
+                Number.parseFloat(
+                  getComputedStyle(node).getPropertyValue(`border-${edge}-${side}-radius`),
+                ) > 0,
+            );
+          const shellStyle = getComputedStyle(element);
           return {
-            shellBorder: getComputedStyle(element).borderTopWidth,
-            shellShadow: getComputedStyle(element).boxShadow,
-            hasPullRequests,
-            noticeTop: notice.getBoundingClientRect().top,
-            noticeBottom: notice.getBoundingClientRect().bottom,
-            questionTop: question.getBoundingClientRect().top,
-            contextBottom: stack.getBoundingClientRect().bottom,
-            inputTop: input.getBoundingClientRect().top,
-            inputBottom: input.getBoundingClientRect().bottom,
-            questionBottomCorners: [
-              questionStyle.borderBottomLeftRadius,
-              questionStyle.borderBottomRightRadius,
-            ],
-            inputTopCorners: [inputStyle.borderTopLeftRadius, inputStyle.borderTopRightRadius],
-            touchTargetHeight: question.querySelector("button")!.getBoundingClientRect().height,
+            borderless: shellStyle.borderTopWidth === "0px",
+            shadowless: shellStyle.boxShadow === "none",
+            noPullRequests: element.querySelector(".chat-pr") === null,
+            noticeBeforeQuestion: get(".chat-error").getBoundingClientRect().bottom <= q.top,
+            contextBeforeInput: get(".chat-footer__context").getBoundingClientRect().bottom < i.top,
+            inputInViewport: i.bottom <= viewportHeight,
             inputOutsideContext: !input.closest(".chat-footer__context"),
+            touchTarget: question.querySelector("button")!.getBoundingClientRect().height >= 48,
+            rounded: rounded(question, "bottom") && rounded(input, "top"),
           };
-        });
-        expect(layout.shellBorder).toBe("0px");
-        expect(layout.shellShadow).toBe("none");
-        expect(layout.hasPullRequests).toBe(false);
-        expect(layout.noticeBottom).toBeLessThanOrEqual(layout.questionTop);
-        expect(layout.contextBottom).toBeLessThan(layout.inputTop);
-        expect(layout.inputBottom).toBeLessThanOrEqual(height);
-        expect(layout.inputOutsideContext).toBe(true);
-        expect(layout.touchTargetHeight).toBeGreaterThanOrEqual(48);
-        for (const radius of [...layout.questionBottomCorners, ...layout.inputTopCorners]) {
-          expect(Number.parseFloat(radius)).toBeGreaterThan(0);
-        }
-        await screenshot(
-          page,
-          "07-question-mobile-context-" + screenshotName + "-" + theme + ".png",
-        );
+        }, height);
+        expect(Object.entries(layout).filter(([, passed]) => !passed)).toEqual([]);
       }
       await openDetailsPullRequests(page);
       await pullRequest.click({ trial: true });
       await page.keyboard.press("Escape");
+      // Closing Details animates the footer back into place before it can be tapped.
+      await waitForLayoutSettled(page, ".chat-question-panel__collapsed-button");
       await expand.tap();
-      await expect.poll(() => composer.count()).toBe(0);
+      try {
+        await expect.poll(() => composer.count()).toBe(0);
+      } catch (error) {
+        recordControlUiE2eFailureFacts(page, { questionFooterLandscape: width > height });
+        await withTimeout(
+          page.evaluate(() => {
+            const details = document.querySelector<HTMLElement>(".chat-mobile-host");
+            return {
+              questionFooterComposerCount: document.querySelectorAll(".agent-chat__input").length,
+              questionFooterCollapsedCount: document.querySelectorAll(
+                ".chat-question-panel--collapsed",
+              ).length,
+              questionFooterExpandCount: document.querySelectorAll(
+                ".chat-question-panel__collapsed-button",
+              ).length,
+              questionFooterDetailsHidden: details?.hidden ?? null,
+              questionFooterDetailsVisible:
+                details?.checkVisibility({ visibilityProperty: true }) ?? false,
+            };
+          }),
+          1_000,
+        )
+          .then((facts) => recordControlUiE2eFailureFacts(page, facts))
+          .catch(() => undefined);
+        await captureControlUiE2eFailureDiagnostics(page, {
+          error: error instanceof Error ? error : new Error(String(error)),
+          label: "question footer expansion",
+        });
+        throw error;
+      }
       await panel.getByRole("radio", { name: /Concise/ }).tap();
       const answers = { answers: { progress_note: ["Concise"] } };
       await gateway.setMethodResponse("question.resolve", {
@@ -149,7 +171,9 @@ export function defineQuestionFooterTests({
         answers,
       } satisfies QuestionResolveResult);
       await panel.getByRole("button", { name: "Submit", exact: true }).tap();
-      expect((await gateway.waitForRequest("question.resolve")).params).toEqual({
+      expect(
+        (await gateway.waitForRequest("question.resolve", { after: resolutionCount })).params,
+      ).toEqual({
         id: request.id,
         answers,
       });
@@ -159,6 +183,6 @@ export function defineQuestionFooterTests({
       await openDetailsPullRequests(page);
       await pullRequest.click({ trial: true });
       await page.keyboard.press("Escape");
-    },
-  );
+    }
+  });
 }

@@ -14,6 +14,9 @@ function contrast(first: Rgb, second: Rgb): number {
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
 
+/** The strongest any background image paints, whatever the palette allows. */
+export const BACKGROUND_IMAGE_OPACITY_CAP = 0.32;
+
 /** Bound every possible image pixel, not a sparse sample of a particular photograph. */
 export function backgroundImageOpacityLimit(
   surface: Rgb,
@@ -50,7 +53,7 @@ export function backgroundImageOpacityLimit(
         : (low + 0.05) / (textHigh + 0.05) >= target;
     });
   let low = 0;
-  let high = 0.32;
+  let high = BACKGROUND_IMAGE_OPACITY_CAP;
   for (let step = 0; step < 16; step++) {
     const middle = (low + high) / 2;
     if (preservesContrast(middle)) {

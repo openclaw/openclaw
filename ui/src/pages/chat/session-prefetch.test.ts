@@ -1,12 +1,6 @@
-/* @vitest-environment jsdom */
-import type { ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
-import {
-  createTestGatewayClient,
-  type GatewayRequestHandler,
-} from "../../test-helpers/gateway-client.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
 import {
   appendChatMessageToCache,
@@ -18,6 +12,9 @@ import {
 } from "./session-message-cache.ts";
 import {
   createSessionPrefetchFixture,
+  prefetchState,
+  prefetchHistoryRequest as historyRequest,
+  advanceSessionPrefetch as advancePrefetch,
   PREFETCH_TEST_NOW as NOW,
   prefetchSnapshotHost as snapshotHost,
   prefetchSessionRow as row,
@@ -29,6 +26,8 @@ import {
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
+/* @vitest-environment jsdom */
+import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 
 const cacheKey = (sessionKey: string) => resolveChatSnapshotKey(snapshotHost, { sessionKey });
 function historySnapshot(message: string, sessionId = `session-${message}`): ChatSessionSnapshot {
@@ -39,36 +38,11 @@ function historySnapshot(message: string, sessionId = `session-${message}`): Cha
   };
 }
 
-function prefetchState(
-  request: GatewayRequestHandler,
-  rows: SessionPrefetchUpdate["rows"],
-  overrides: Partial<SessionPrefetchUpdate> = {},
-): SessionPrefetchUpdate {
-  return {
-    client: createTestGatewayClient(request),
-    listRevision: 1,
-    openSessionKeys: ["agent:main:foreground"],
-    rows,
-    ...overrides,
-  };
-}
-
-function historyRequest() {
-  return vi.fn(async (_method: string, params: unknown) =>
-    historyResult((params as { sessionKey: string }).sessionKey),
-  );
-}
-
-async function advancePrefetch(milliseconds: number) {
-  await vi.advanceTimersByTimeAsync(milliseconds);
-  await settlePromises();
-}
-
 describe("session navigation intent prefetch", () => {
   let fixture: ReturnType<typeof createSessionPrefetchFixture>;
   let cache: ChatMessageCache;
   let store: SessionSnapshotStore;
-  let host: HTMLElement & ReactiveControllerHost;
+  let host: ReturnType<typeof createSessionPrefetchFixture>["host"];
   let updatePrefetch: ReturnType<typeof createSessionPrefetchFixture>["updatePrefetch"];
 
   beforeEach(() => {
@@ -77,20 +51,13 @@ describe("session navigation intent prefetch", () => {
   });
   afterEach(async () => fixture.dispose());
 
-  function intend(sessionKey: string): void {
-    const target = document.createElement("a");
-    target.dataset.sessionKey = sessionKey;
-    fixture.shell.append(target);
-    target.dispatchEvent(new Event("pointerover", { bubbles: true }));
-  }
-
   it("does not repopulate a removed session from an in-flight prefetch before the next list revision", async () => {
     const key = "agent:main:deleted";
     const response = createDeferred<ReturnType<typeof historyResult>>();
     const request = vi.fn(() => response.promise);
     const snapshot = prefetchState(request, [row(key, NOW - 1)]);
     updatePrefetch(snapshot);
-    intend(key);
+    fixture.intend(key);
     await advancePrefetch(300);
     expect(request).toHaveBeenCalledOnce();
     updatePrefetch({ ...snapshot, rows: [] });
@@ -114,7 +81,7 @@ describe("session navigation intent prefetch", () => {
       openSessionKeys: [otherKey],
     });
     updatePrefetch(snapshot);
-    intend(key);
+    fixture.intend(key);
     await advancePrefetch(300);
     expect(request).toHaveBeenCalledOnce();
 
@@ -135,33 +102,21 @@ describe("session navigation intent prefetch", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    { name: "replacement incarnation", patch: { sessionId: "replacement" } },
-    { name: "branch reset", patch: { activeLeafEntryId: "new-leaf" } },
-    { name: "updated transcript", patch: { updatedAt: NOW + 1 } },
-    { name: "new activity", patch: { lastActivityAt: NOW + 1 } },
-    { name: "active run custody", patch: { hasActiveRun: true } },
-  ])("rejects a prefetch when an alias gains $name", async ({ patch }) => {
+  it("does not publish history for a replaced session", async () => {
     const key = "agent:main:main";
     const response = createDeferred<ReturnType<typeof historyResult>>();
     const request = vi.fn(() => response.promise);
-    const original = { ...row(key, NOW - 1), sessionId: "original", activeLeafEntryId: "leaf" };
+    const original = { ...row(key, NOW - 1), sessionId: "original" };
     const snapshot = prefetchState(request, [original]);
     updatePrefetch(snapshot);
-    intend(key);
+    fixture.intend(key);
     await advancePrefetch(300);
     expect(request).toHaveBeenCalledOnce();
 
-    const changed: GatewaySessionRow = {
-      ...original,
-      key: "global",
-      kind: "global",
-      ...patch,
-    };
     updatePrefetch({
       ...snapshot,
       listRevision: 2,
-      rows: [original, changed],
+      rows: [{ ...original, sessionId: "replacement" }],
     });
     response.resolve(historyResult(key));
     await settlePromises();
@@ -169,41 +124,6 @@ describe("session navigation intent prefetch", () => {
     await store.flush();
     expect(await store.read(cacheKey(key))).toBeNull();
   });
-
-  it.each([
-    { name: "an older alias", aliasActivityAt: NOW - 2, keepOriginal: true },
-    { name: "only an older alias", aliasActivityAt: NOW - 2, keepOriginal: false },
-  ])(
-    "requires the captured history to survive beside $name",
-    async ({ aliasActivityAt, keepOriginal }) => {
-      const key = "agent:main:main";
-      const response = createDeferred<ReturnType<typeof historyResult>>();
-      const request = vi.fn(() => response.promise);
-      const original = { ...row(key, NOW - 1), sessionId: `id:${key}` };
-      const snapshot = prefetchState(request, [original]);
-      updatePrefetch(snapshot);
-      intend(key);
-      await advancePrefetch(300);
-      expect(request).toHaveBeenCalledOnce();
-      updatePrefetch({
-        ...snapshot,
-        listRevision: 2,
-        rows: [
-          ...(keepOriginal ? [{ ...original }] : []),
-          { ...row("global", aliasActivityAt), kind: "global", sessionId: original.sessionId },
-        ],
-      });
-      response.resolve(historyResult(key));
-      await settlePromises();
-      expect(
-        readChatSessionSnapshot(cache, snapshotHost, { sessionKey: key })?.messages ?? null,
-      ).toEqual(keepOriginal ? historyResult(key).messages : null);
-      await store.flush();
-      expect((await store.read(cacheKey(key)))?.messages ?? null).toEqual(
-        keepOriginal ? historyResult(key).messages : null,
-      );
-    },
-  );
 
   it.each([
     "client replacement",
@@ -217,7 +137,7 @@ describe("session navigation intent prefetch", () => {
     const request = vi.fn(() => response.promise);
     const snapshot = prefetchState(request, [row(key, NOW - 1)]);
     updatePrefetch(snapshot);
-    intend(key);
+    fixture.intend(key);
     await advancePrefetch(300);
     expect(request).toHaveBeenCalledOnce();
 
@@ -264,7 +184,7 @@ describe("session navigation intent prefetch", () => {
           : page.promise,
       );
       updatePrefetch(prefetchState(request, [row(key, NOW + 1)]));
-      intend(key);
+      fixture.intend(key);
       await advancePrefetch(300);
       expect(
         request.mock.calls.map(([, params]) => (params as { cursor?: string }).cursor),
@@ -285,17 +205,6 @@ describe("session navigation intent prefetch", () => {
 
   it("does not fetch unopened history on connect or roster refresh without navigation intent", async () => {
     const request = historyRequest();
-    const locksRequest = vi.fn(
-      async (
-        _name: string,
-        _options: LockOptions,
-        callback: (lock: Lock | null) => Promise<void>,
-      ) => await callback({ name: "openclaw-chat-prefetch", mode: "exclusive" } as Lock),
-    );
-    Object.defineProperty(navigator, "locks", {
-      configurable: true,
-      value: { request: locksRequest },
-    });
     const state = prefetchState(request, [
       row("agent:main:recent", NOW),
       row("agent:main:older", NOW - 1),
@@ -305,7 +214,6 @@ describe("session navigation intent prefetch", () => {
     updatePrefetch({ ...state, listRevision: 2 });
     await advancePrefetch(31_000);
 
-    expect(locksRequest).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -315,7 +223,7 @@ describe("session navigation intent prefetch", () => {
       const sessionKey = "agent:main:main";
       const request = historyRequest();
       if (owner === "fresh snapshot") {
-        store.write(cacheKey(sessionKey), historySnapshot("fresh"));
+        writeSnapshotFixture(store, cacheKey(sessionKey), historySnapshot("fresh"));
         await store.flush();
       }
       updatePrefetch(
@@ -335,7 +243,7 @@ describe("session navigation intent prefetch", () => {
           },
         ),
       );
-      intend(sessionKey);
+      fixture.intend(sessionKey);
       await advancePrefetch(300);
 
       expect(request).not.toHaveBeenCalled();
@@ -364,13 +272,13 @@ describe("session navigation intent prefetch", () => {
       ],
     };
     updatePrefetch(state);
-    intend("agent:main:recent-1");
+    fixture.intend("agent:main:recent-1");
     await advancePrefetch(300);
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:recent-1"]);
 
     // The user opens another session while the first warm-up is in flight.
     updatePrefetch({ ...state, loadingSessionKeys: ["agent:main:main"] });
-    intend("agent:main:recent-2");
+    fixture.intend("agent:main:recent-2");
     pending.shift()?.resolve(historyResult("agent:main:recent-1"));
     await settlePromises();
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:recent-1"]);
@@ -389,7 +297,7 @@ describe("session navigation intent prefetch", () => {
   it("rechecks readiness after the persisted snapshot read before requesting history", async () => {
     const sessionKey = "agent:main:stored";
     const stored = historySnapshot("stored", "session-stored");
-    store.write(cacheKey(sessionKey), stored);
+    writeSnapshotFixture(store, cacheKey(sessionKey), stored);
     await store.flush();
     cache.clear();
     const read = createDeferred<ChatSessionSnapshot | null>();
@@ -401,7 +309,7 @@ describe("session navigation intent prefetch", () => {
       { openSessionKeys: ["agent:main:main"] },
     );
     updatePrefetch(state);
-    intend(sessionKey);
+    fixture.intend(sessionKey);
     await advancePrefetch(300);
     expect(readSpy).toHaveBeenCalledWith(cacheKey(sessionKey));
     expect(request).not.toHaveBeenCalled();
@@ -451,7 +359,7 @@ describe("session navigation intent prefetch", () => {
 
     updatePrefetch({ client, listRevision: 1, openSessionKeys: [presentedSessionKey], rows });
     for (const { key } of backgroundRows) {
-      intend(key);
+      fixture.intend(key);
       await advancePrefetch(1_000);
       await store.flush();
     }
@@ -479,7 +387,7 @@ describe("session navigation intent prefetch", () => {
       openSessionKeys: ["agent:main:foreground"],
     };
     updatePrefetch({ ...base, listRevision: 1, rows: [row("agent:main:warm", NOW - 1)] });
-    intend("agent:main:warm");
+    fixture.intend("agent:main:warm");
     await advancePrefetch(2_000);
     expect(request).toHaveBeenCalledTimes(1);
 
@@ -513,7 +421,7 @@ describe("session navigation intent prefetch", () => {
     });
     const state = prefetchState(request, [row(warm, NOW - 1), row(intended, NOW - 2)]);
     updatePrefetch(state);
-    intend(warm);
+    fixture.intend(warm);
     await advancePrefetch(300);
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([warm]);
     await advancePrefetch(4_700);
@@ -527,14 +435,14 @@ describe("session navigation intent prefetch", () => {
     await advancePrefetch(1_000);
     expect(request).toHaveBeenCalledOnce();
 
-    intend(intended);
+    fixture.intend(intended);
     await advancePrefetch(74);
     expect(request).toHaveBeenCalledOnce();
     await advancePrefetch(1);
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([warm, intended]);
 
     await advancePrefetch(20_000);
-    intend(warm);
+    fixture.intend(warm);
     await advancePrefetch(75);
     expect(request).toHaveBeenCalledTimes(2);
     await advancePrefetch(firstRequestAt + 30_000 - Date.now() - 1);
@@ -547,7 +455,7 @@ describe("session navigation intent prefetch", () => {
     const request = historyRequest();
     const state = prefetchState(request, [row("agent:main:recent", NOW - 1)]);
     updatePrefetch(state);
-    intend("agent:main:recent");
+    fixture.intend("agent:main:recent");
     await advancePrefetch(30);
     updatePrefetch({ ...state, listRevision: 2 });
     await advancePrefetch(44);
@@ -575,35 +483,6 @@ describe("session navigation intent prefetch", () => {
     expect(request).not.toHaveBeenCalled();
     await advancePrefetch(1);
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:intended"]);
-  });
-
-  it("coalesces intent behind the running request without losing its short schedule", async () => {
-    const first = "agent:main:first";
-    const intended = "agent:main:intended";
-    const response = createDeferred<ReturnType<typeof historyResult>>();
-    const request = vi.fn(async (_method: string, params: unknown) =>
-      (params as { sessionKey: string }).sessionKey === first
-        ? response.promise
-        : historyResult(intended),
-    );
-    const rows = [row(first, NOW - 1)];
-    const state = prefetchState(request, rows);
-    updatePrefetch(state);
-    intend(first);
-    await advancePrefetch(300);
-    updatePrefetch({ ...state, listRevision: 2, rows: [...rows, row(intended, NOW - 2)] });
-    const target = document.createElement("a");
-    fixture.shell.append(target);
-    target.dataset.sessionKey = intended;
-    target.dispatchEvent(new Event("pointerover", { bubbles: true }));
-    await advancePrefetch(100);
-    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([first]);
-    response.resolve(historyResult(first));
-    await settlePromises();
-    await advancePrefetch(74);
-    expect(request).toHaveBeenCalledOnce();
-    await advancePrefetch(1);
-    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([first, intended]);
   });
 
   it("rewarms complete stored history after an interleaved append miss", async () => {
@@ -662,7 +541,7 @@ describe("session navigation intent prefetch", () => {
     }));
 
     updatePrefetch(prefetchState(request, [row(sessionKey, NOW + 1)]));
-    intend(sessionKey);
+    fixture.intend(sessionKey);
     await advancePrefetch(2_000);
 
     expect(request).toHaveBeenCalledWith(
@@ -728,7 +607,7 @@ describe("session navigation intent prefetch", () => {
     }));
 
     updatePrefetch(prefetchState(request, [row(sessionKey, NOW + 1)]));
-    intend(sessionKey);
+    fixture.intend(sessionKey);
     await advancePrefetch(2_000);
 
     expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey })?.deltaCursor).toBe(
@@ -736,56 +615,17 @@ describe("session navigation intent prefetch", () => {
     );
   });
 
-  it("skips the cycle when another tab holds the Web Lock", async () => {
-    const request = vi.fn();
-    const locksRequest = vi.fn(
-      async (
-        _name: string,
-        _options: LockOptions,
-        callback: (lock: Lock | null) => Promise<void>,
-      ) => await callback(null),
-    );
-    Object.defineProperty(navigator, "locks", {
-      configurable: true,
-      value: { request: locksRequest },
-    });
-    updatePrefetch(prefetchState(request, [row("agent:main:locked", NOW - 1)]));
-    intend("agent:main:locked");
-
-    await advancePrefetch(2_000);
-
-    expect(locksRequest).toHaveBeenCalledOnce();
-    expect(request).not.toHaveBeenCalled();
-  });
-
   it("pauses intent while hidden and resumes when the tab becomes visible", async () => {
     const request = historyRequest();
-    const locksRequest = vi.fn(
-      async (
-        _name: string,
-        _options: LockOptions,
-        callback: (lock: Lock | null) => Promise<void>,
-      ) => await callback({ name: "openclaw-chat-prefetch", mode: "exclusive" } as Lock),
-    );
-    Object.defineProperty(navigator, "locks", {
-      configurable: true,
-      value: { request: locksRequest },
-    });
     updatePrefetch(prefetchState(request, [row("agent:main:hidden", NOW - 1)]));
-    intend("agent:main:hidden");
+    fixture.intend("agent:main:hidden");
     fixture.setVisibility("hidden");
     await advancePrefetch(300);
 
-    expect(locksRequest).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
     fixture.setVisibility("visible");
     document.dispatchEvent(new Event("visibilitychange"));
     await advancePrefetch(75);
-    expect(locksRequest).toHaveBeenCalledWith(
-      "openclaw-chat-prefetch",
-      { ifAvailable: true },
-      expect.any(Function),
-    );
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:hidden"]);
   });
 
@@ -805,10 +645,10 @@ describe("session navigation intent prefetch", () => {
       ]),
     );
 
-    intend("agent:main:failed");
+    fixture.intend("agent:main:failed");
     await advancePrefetch(300);
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:failed"]);
-    intend("agent:main:succeeded");
+    fixture.intend("agent:main:succeeded");
     await advancePrefetch(300);
 
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([

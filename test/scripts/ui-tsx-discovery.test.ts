@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -18,6 +18,7 @@ import {
   nonBrowserTestBasenamePattern,
 } from "../vitest/vitest.include-patterns.ts";
 import { matchesVitestGlob } from "../vitest/vitest.pattern-file.ts";
+import { createUiIsolatedVitestConfig } from "../vitest/vitest.ui-isolated.config.ts";
 import {
   controlUiTestGlobs,
   controlUiE2eTestGlobs,
@@ -40,6 +41,38 @@ function fixture(files: Record<string, string>) {
 }
 
 describe("TSX discovery", () => {
+  it.each([false, true])("retains indexed TSX owners in sparse checkouts (linked=%s)", (linked) => {
+    const cwd = fixture({ "ui/src/view.tsx": "export {};\n", "kept/marker": "retained\n" });
+    const options = { cwd, env: createNestedGitEnv(), encoding: "utf8" } as const;
+    execFileSync("git", ["init", "-q"], options);
+    execFileSync("git", ["add", "."], options);
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.test",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-qm",
+        "test: seed sparse owners",
+      ],
+      options,
+    );
+    const checkout = linked ? temporary.make("ui-sparse-worktree-") : cwd;
+    if (linked) {
+      execFileSync("git", ["worktree", "add", "--detach", "--quiet", checkout], options);
+    }
+    execFileSync("git", ["sparse-checkout", "set", "--no-cone", "/kept/"], {
+      ...options,
+      cwd: checkout,
+    });
+    expect(existsSync(path.join(checkout, "ui/src/view.tsx"))).toBe(false);
+    expect(resolveUiTypeScriptPath("ui/src/view.ts", checkout)).toBe("ui/src/view.tsx");
+  });
+
   it("retains isolated execution ownership for an unstaged TSX rename", () => {
     const original = "ui/src/app/bootstrap.test.ts";
     const renamed = `${original}x`;
@@ -150,6 +183,7 @@ describe("TSX discovery", () => {
     for (const [file, expected] of [
       ["src/component.test.tsx", "unit"],
       ["src/component.node.test.tsx", "unit-node"],
+      ["src/pages/chat/chat-pane-session-controls.permissions.node.test.ts", "unit-node"],
       ["src/component.browser.test.tsx", "browser"],
       ["../extensions/example/browser/view.test.tsx", "unit"],
     ] as const) {
@@ -175,16 +209,21 @@ describe("TSX discovery", () => {
           filterFilesByPatterns([file], uiNodeConfig.test?.include ?? [], [], matchesVitestGlob),
         ).toEqual([file]);
       }
-      const root = createUiVitestConfig({}).test!;
       const repositoryFile = path.posix.normalize(`ui/${file}`);
+      const rootProjects = [createUiVitestConfig({}).test!, createUiIsolatedVitestConfig({}).test!];
       expect(
-        filterFilesByPatterns(
-          [repositoryFile],
-          root.include ?? [],
-          root.exclude ?? [],
-          matchesVitestGlob,
-        ),
-      ).toEqual(expected === "browser" ? [] : [repositoryFile]);
+        rootProjects
+          .filter(
+            (test) =>
+              filterFilesByPatterns(
+                [repositoryFile],
+                test.include ?? [],
+                test.exclude ?? [],
+                matchesVitestGlob,
+              ).length,
+          )
+          .map((test) => test.name),
+      ).toEqual(expected === "browser" ? [] : ["ui"]);
     }
   });
 

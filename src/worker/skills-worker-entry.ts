@@ -1,4 +1,5 @@
 import path from "node:path";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 
 try {
   const [workspace, home, operation, ...extra] = process.argv.slice(2);
@@ -15,9 +16,20 @@ try {
     input: process.stdin,
     output: process.stdout,
   });
-  // Native state owners can retain process handles; every result write has drained.
-  process.exit(0);
 } catch (error) {
   process.stderr.write(`Skills worker failed: ${String(error)}\n`);
-  process.exit(1);
+  process.exitCode = 1;
+} finally {
+  // The serving owner has drained results and retired watchers. Release its
+  // native state workers as well as a publisher that may still hold stdin open.
+  process.stdin.destroy();
+  try {
+    await drainGlobalSingletonLifecycleState();
+  } catch (error) {
+    process.stderr.write(`Skills worker cleanup failed: ${String(error)}\n`);
+    process.exitCode = 1;
+  }
+  if (process.connected) {
+    process.disconnect?.();
+  }
 }

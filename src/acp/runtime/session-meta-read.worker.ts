@@ -1,7 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { sql } from "kysely";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import {
@@ -9,6 +7,7 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { isIncognitoSessionKey, normalizeAgentId } from "../../routing/session-key.js";
 import {
   CONTENT_VERSION_KEY,
@@ -34,11 +33,11 @@ import type {
 export function prepareAcpSessionMetadataRead(
   command: Extract<AcpSessionReadCommand, { type: "acpSessions.metadata" }>,
 ) {
-  const keys = [...new Set(command.entries.flatMap((entry) => entry.keys))].slice(0, 500);
+  const keys = [...new Set(command.entries.flatMap((entry) => entry.keys))];
   let firstCohort: AcpSessionRow[] | undefined;
   let failed: { error: unknown } | undefined;
   return {
-    readContentVersionRow(this: void, db: DatabaseSync) {
+    readContentVersionRow(this: void, db: EngineConnection) {
       try {
         const database = getNodeSqliteKysely<Pick<DB, "acp_sessions" | "config_machine_state">>(db);
         const rows = executeSqliteQuerySync(
@@ -49,7 +48,7 @@ export function prepareAcpSessionMetadataRead(
               join.on("marker.state_key", "=", CONTENT_VERSION_KEY),
             )
             .leftJoin("acp_sessions", (join) =>
-              join.on("acp_sessions.session_key", "in", sqliteStringSet(keys)),
+              join.on("acp_sessions.session_key", "in", sqliteStringSet(keys.slice(0, 500))),
             )
             .selectAll("acp_sessions")
             .select([
@@ -92,25 +91,19 @@ export function prepareAcpSessionMetadataRead(
         return readStateSchemaContentVersionRow(db);
       }
     },
-    read(db: DatabaseSync) {
+    read(db: EngineConnection) {
       if (failed) {
         throw failed.error;
       }
-      return readAcpSessionCommand(db, command, firstCohort);
+      return readAcpSessionMetadata(db, command, keys, firstCohort);
     },
   };
 }
 
 function selectAcpResumeSessions(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: Extract<AcpSessionReadCommand, { type: "acpSessions.resume" }>,
 ): AcpResumeSessionRow[] {
-  // Match String.trim(), including historical whitespace, without decoding metadata on the host.
-  // These expressions must match the canonical resume indexes.
-  const whitespace = sql`char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279)`;
-  const identity = sql`CASE WHEN json_valid(identity_json) THEN identity_json END`;
-  const agentSessionId = sql`trim(json_extract(${identity}, '$.agentSessionId'), ${whitespace})`;
-  const acpxSessionId = sql`trim(json_extract(${identity}, '$.acpxSessionId'), ${whitespace})`;
   const rows = executeSqliteQuerySync(
     db,
     getAcpSessionKysely(db)
@@ -125,14 +118,8 @@ function selectAcpResumeSessions(
       )
       .where((eb) =>
         eb.or([
-          eb.and([
-            eb(agentSessionId, "=", input.resumeSessionId),
-            eb(sql`json_type(${identity}, '$.agentSessionId')`, "=", "text"),
-          ]),
-          eb.and([
-            eb(acpxSessionId, "=", input.resumeSessionId),
-            eb(sql`json_type(${identity}, '$.acpxSessionId')`, "=", "text"),
-          ]),
+          eb("resume_agent_session_id", "=", input.resumeSessionId),
+          eb("resume_acpx_session_id", "=", input.resumeSessionId),
         ]),
       ),
   ).rows;
@@ -161,9 +148,8 @@ function selectAcpResumeSessions(
 }
 
 export function readAcpSessionCommand(
-  db: DatabaseSync,
+  db: EngineConnection,
   command: AcpSessionReadCommand,
-  firstCohort?: readonly AcpSessionRow[],
 ): AcpSessionReadResult {
   if (command.type === "acpSessions.list") {
     return { type: command.type, rows: selectAcpSessionRows(db) };
@@ -172,19 +158,29 @@ export function readAcpSessionCommand(
     return { type: command.type, rows: selectAcpResumeSessions(db, command) };
   }
   const cohortKeys = [...new Set(command.entries.flatMap((entry) => entry.keys))];
-  const rows = new Map(
-    [...selectAcpSessionRowsByKeys(db, cohortKeys, firstCohort)].map((row) => [
-      row.session_key,
-      row,
-    ]),
-  );
+  return readAcpSessionMetadata(db, command, cohortKeys);
+}
+
+function readAcpSessionMetadata(
+  db: EngineConnection,
+  command: Extract<AcpSessionReadCommand, { type: "acpSessions.metadata" }>,
+  cohortKeys: readonly string[],
+  firstCohort?: readonly AcpSessionRow[],
+): Extract<AcpSessionReadResult, { type: "acpSessions.metadata" }> {
+  const rows = new Map<string, AcpSessionRow>();
+  for (const row of selectAcpSessionRowsByKeys(db, cohortKeys, firstCohort)) {
+    rows.set(row.session_key, row);
+  }
   return {
     type: command.type,
-    rows: command.entries.map(
-      ({ keys, entry }) =>
-        keys
-          .map((key) => rows.get(key))
-          .find((row) => row && (!entry || acpSessionRowMatchesEntry(row, entry))) ?? null,
-    ),
+    rows: command.entries.map(({ keys, entry }) => {
+      for (const key of keys) {
+        const row = rows.get(key);
+        if (row && acpSessionRowMatchesEntry(row, entry)) {
+          return row;
+        }
+      }
+      return null;
+    }),
   };
 }

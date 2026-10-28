@@ -3,7 +3,6 @@ import { performance } from "node:perf_hooks";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { serializeNativeErrorResponse } from "./native-error-response.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { readSqliteIntegrityFileIdentity } from "./sqlite-file-generation.js";
 import type {
   SqliteIntegrityWorkerInput,
@@ -44,14 +43,16 @@ async function check(input: SqliteIntegrityWorkerInput): Promise<SqliteIntegrity
   try {
     await sendPhase("opening");
     readSqliteIntegrityFileIdentity(input.pathname, input.identity);
-    database = openNodeSqliteDatabase(input.pathname, { readOnly: true });
-    setSqliteBusyTimeout(database, input.busyTimeoutMs);
+    database = openNodeSqliteDatabase(input.pathname, {
+      readOnly: true,
+      timeout: input.busyTimeoutMs,
+    });
     configureSqliteMaintenanceCache(database);
     readSqliteIntegrityFileIdentity(input.pathname, input.identity);
     await sendPhase("checking");
     const startedAt = performance.now();
     try {
-      assertSqliteIntegrity(database, input.databaseLabel);
+      assertSqliteIntegrity(database, input.databaseLabel, input.integrity);
     } finally {
       checkElapsedMs = performance.now() - startedAt;
     }

@@ -1,12 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import {
   isLegacySessionRecordOwnedByTarget,
   shouldFilterLegacySessionRecordsByTarget,
 } from "../config/sessions/legacy-store-inspection.js";
-import { loadExactSessionEntryCandidates } from "../config/sessions/session-accessor.sqlite-exact-read.js";
+import { loadExactSessionEntryCandidatesReadOnly } from "../config/sessions/session-accessor.sqlite-exact-read.js";
 import {
   resolveConfiguredAgentDatabaseTargets,
   type SessionStoreTarget,
@@ -16,18 +17,20 @@ import {
   readDeferredPluginMigrations,
   withDeferredPluginMigrationsCurrent,
 } from "../infra/deferred-plugin-migrations.js";
+import { DeferredPluginSessionImportSchema } from "../infra/deferred-plugin-session-import-schema.js";
+import { readDeferredPluginSessionImportReceipt } from "../infra/deferred-plugin-session-source-read.js";
+import { rebuildDeferredPluginSessionSourceIndex } from "../infra/deferred-plugin-session-source-recovery.js";
 import {
   hasDeferredPluginSessionImport,
   prepareSessionSourceVerification,
   readDeferredPluginSessionImport,
-  readDeferredPluginSessionImportReceipt,
   readStaleDeferredPluginSessionImport,
-  rebuildDeferredPluginSessionSourceIndex,
   resolveVerifiedSessionSource,
   type DeferredPluginSessionImport,
   type SessionImportSource,
 } from "../infra/deferred-plugin-session-sources.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import {
   moveMigrationArtifact,
   readMigrationArtifactIdentity,
@@ -50,7 +53,6 @@ import {
   readTranscriptFingerprint,
   resolveTargetSqlitePath,
 } from "../infra/session-sqlite-migration-readers.js";
-import { DeferredPluginSessionImportSchema } from "../infra/state-migrations.deferred-session-import.js";
 import { markLegacyMigrationSourceRemovedInDatabase } from "../infra/state-migrations.receipts.js";
 import {
   createRetainedAgentDatabaseMatcher,
@@ -67,6 +69,28 @@ import type {
   DoctorSessionSqliteMode,
   DoctorSessionSqliteTargetReport,
 } from "./doctor-session-sqlite-types.js";
+
+/** Sidecars settle with archived transcripts or terminally missing trajectory targets. */
+export function collectRetainedTrajectoryPointers(
+  sources: ReadonlySet<string>,
+  conflicts?: ReadonlyMap<string, string>,
+): string[] {
+  return [...sources].filter((source) => {
+    const transcript = source.replace(/\.trajectory-path\.json$/u, ".jsonl");
+    if (sources.has(transcript)) {
+      // Receipt-backed pointers follow transcript verification, not a missing runtime target.
+      return transcript !== source && !conflicts?.has(transcript) && !fs.existsSync(transcript);
+    }
+    const target = source.endsWith(".trajectory-path.json") && tryReadJsonSync(source);
+    return (
+      isRecord(target) &&
+      target.traceSchema === "openclaw-trajectory-pointer" &&
+      typeof target.runtimeFile === "string" &&
+      !fs.existsSync(transcript) &&
+      !fs.existsSync(path.resolve(path.dirname(source), target.runtimeFile))
+    );
+  });
+}
 
 /** Archival, not plugin completion alone, ends the original index's no-replay obligation. */
 export function retireDeferredPluginSessionImport(
@@ -101,29 +125,27 @@ export function retireDeferredPluginSessionImport(
   }
   runOpenClawStateWriteTransaction(
     ({ db }) =>
-      withDeferredPluginMigrationsCurrent({ env: params.env, expectedPending }, () => {
-        params.assertCurrent?.();
-        if (
-          !isDeepStrictEqual(
-            readDeferredPluginSessionImportReceipt({ ...params, database: db }),
-            receipt,
-          )
-        ) {
-          throw new Error("Deferred session import receipt changed before retirement.");
-        }
-        if (hasRemainingSources()) {
-          return;
-        }
-        // Diagnostic callbacks and cached verification cannot authorize retirement.
-        readDeferredPluginSessionImport({
-          cfg: params.cfg,
-          env: params.env,
-          target: params.target,
-          sqlitePath: params.sqlitePath,
-          database: db,
-        });
-        markLegacyMigrationSourceRemovedInDatabase(db, receipt.sourceKey);
-      }),
+      withDeferredPluginMigrationsCurrent(
+        { env: params.env, expectedPending, phase: "session source retirement" },
+        () => {
+          params.assertCurrent?.();
+          if (
+            !isDeepStrictEqual(
+              readDeferredPluginSessionImportReceipt({ ...params, database: db }),
+              receipt,
+            )
+          ) {
+            throw new Error("Deferred session import receipt changed before retirement.");
+          }
+          if (hasRemainingSources()) {
+            return;
+          }
+          // Diagnostic callbacks and cached verification cannot authorize retirement.
+          const { cfg, env, target, sqlitePath } = params;
+          readDeferredPluginSessionImport({ cfg, env, target, sqlitePath, database: db });
+          markLegacyMigrationSourceRemovedInDatabase(db, receipt.sourceKey);
+        },
+      ),
     { env: params.env },
     { operationLabel: "state.retire-plugin-session-source" },
   );
@@ -175,6 +197,11 @@ export async function prepareRetainedSessionImport(
     }),
     allowMissingIndex: true,
     onEmptySource: (sourcePath: string, reason: string) => emptySources.set(sourcePath, reason),
+    onMissingSource: (sourcePath: string, reason: string) =>
+      issues.push({
+        code: "retained_missing_transcript_superseded",
+        message: `${sourcePath}: ${reason}`,
+      }),
     onSourceConflict: (sourcePath: string, artifactPath = sourcePath, error?: unknown) => {
       if (sourceConflicts.has(artifactPath)) {
         return;
@@ -189,7 +216,7 @@ export async function prepareRetainedSessionImport(
         code: fs.existsSync(params.target.storePath)
           ? "retained_plugin_source_conflict"
           : "historical_transcript_deferred",
-        message: `${artifactPath}: ${reason} Canonical SQLite sessions remain authoritative. Preserve this input and its backups. Restore the verified original at ${sourcePath}, then run openclaw doctor --session-sqlite recover --session-sqlite-all-agents against the same state/config.`,
+        message: `${artifactPath}: ${reason} The SQLite sessions remain the active records. Preserve this input and its backups. Restore the verified original at ${sourcePath}, then run openclaw doctor --session-sqlite recover --session-sqlite-all-agents against the same state/config.`,
       });
     },
   };
@@ -200,7 +227,7 @@ export async function prepareRetainedSessionImport(
           if (!readStaleDeferredPluginSessionImport(sourceVerification)) {
             issues.push({
               code: "retained_plugin_source_index_rebuilt",
-              message: `Rebuilt the verified source index and database binding from the deferred import receipt: ${params.target.storePath}. Canonical SQLite sessions were not replayed.`,
+              message: `Rebuilt the verified source index and database binding from the deferred import receipt: ${params.target.storePath}. Existing SQLite sessions were not reimported.`,
             });
           }
         }
@@ -231,7 +258,14 @@ export async function prepareRetainedSessionImport(
         if (current?.isFile() && current.size > 0) {
           continue;
         }
-        if (resolveVerifiedSessionSource(source, sourceVerification.resolvedTarget, params.env)) {
+        if (
+          resolveVerifiedSessionSource(
+            source,
+            sourceVerification.resolvedTarget,
+            params.env,
+            sourceVerification.verification,
+          )
+        ) {
           continue;
         }
       } catch (error) {
@@ -288,7 +322,7 @@ function appendRetainedIndexComparison(
       return;
     }
     const current = new Map(
-      loadExactSessionEntryCandidates({
+      loadExactSessionEntryCandidatesReadOnly({
         readOnly: true,
         env: params.env,
         readSource: {
@@ -302,7 +336,7 @@ function appendRetainedIndexComparison(
       const canonical = current.get(sessionKey);
       let message: string;
       if (!canonical || canonical.sessionId !== entry.sessionId) {
-        message = "Retained session identity differs from the current canonical SQLite row.";
+        message = "Retained session identity differs from the current SQLite row.";
       } else {
         const sourceFields = new Map(Object.entries(entry));
         const canonicalFields = new Map(Object.entries(canonical));
@@ -317,18 +351,18 @@ function appendRetainedIndexComparison(
         if (!changedFields.length) {
           continue;
         }
-        message = `Retained session identity matches canonical SQLite, but metadata differs: ${changedFields.join(", ")}.`;
+        message = `Retained session identity matches the SQLite records, but metadata differs: ${changedFields.join(", ")}.`;
       }
       issues.push({
         code: "retained_plugin_source_conflict",
         sessionKey,
-        message: `${message} Canonical values were kept; the retained index remains protected for recovery.`,
+        message: `${message} Existing values were kept; the retained index remains protected for recovery.`,
       });
     }
   } catch (error) {
     issues.push({
       code: "retained_plugin_source_conflict",
-      message: `Could not compare retained session metadata: ${formatErrorMessage(error)}. Canonical SQLite sessions were not changed.`,
+      message: `Could not compare retained session metadata: ${formatErrorMessage(error)}. Existing SQLite sessions were not changed.`,
     });
   }
 }
@@ -438,7 +472,7 @@ export async function archiveConflictingRetainedSessionSources(
         code: params.verifiedEmpty
           ? "retained_empty_transcript_superseded"
           : "retained_plugin_source_conflict",
-        message: `${source}: ${reason} Preserved at ${move.archivePath}; canonical SQLite sessions were not replayed.`,
+        message: `${source}: ${reason} Preserved at ${move.archivePath}; existing SQLite sessions were not reimported.`,
       });
     } catch (error) {
       report.issues.push({

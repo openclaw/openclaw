@@ -1,7 +1,7 @@
 // Tests ACP dispatch delivery routing and visible reply handoff.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { raceWithTimeoutResult } from "../../../test/helpers/promise.js";
+import { createDeferred, raceWithTimeoutResult } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
@@ -163,82 +163,6 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     channelPluginMocks.shouldTreatRoutedTextAsVisible = undefined;
   });
 
-  it.each([true])(
-    "keeps block admission independent of delivery settlement, no-send=%s",
-    async (noSend) => {
-      const delivered: unknown[] = [];
-      let releaseDelivery: (() => void) | undefined;
-      let markDeliveryStarted: (() => void) | undefined;
-      const deliveryStarted = new Promise<void>((resolve) => {
-        markDeliveryStarted = resolve;
-      });
-      const deliveryGate = new Promise<void>((resolve) => {
-        releaseDelivery = resolve;
-      });
-      const dispatcher = createReplyDispatcher({
-        deliver: async (payload) => {
-          delivered.push(payload);
-          markDeliveryStarted?.();
-          await deliveryGate;
-          if (noSend) {
-            throw new PlatformMessageNotDispatchedError("offline", { cause: new Error("offline") });
-          }
-        },
-      });
-      const coordinator = createCoordinator({
-        ctx: buildTestCtx({
-          Provider: noSend ? "plainchat" : "visiblechat",
-          Surface: noSend ? "plainchat" : "visiblechat",
-          SessionKey: "agent:codex-acp:session-1",
-        }),
-        dispatcher,
-      });
-
-      const deliveryPromise = coordinator.deliver("block", { text: "hello" }, { skipTts: true });
-
-      await deliveryStarted;
-      await Promise.resolve();
-
-      expect(delivered).toEqual([{ text: "hello" }]);
-      await expect(deliveryPromise).resolves.toBe(true);
-
-      let transcriptSettled = false;
-      const transcriptPromise = coordinator
-        .resolveAccumulatedDeliveredTranscriptText()
-        .then((text) => {
-          transcriptSettled = true;
-          return text;
-        });
-      await Promise.resolve();
-      expect(transcriptSettled).toBe(false);
-
-      const fallback = coordinator.settleVisibleText().then(() => coordinator.recoverBlockText());
-      await Promise.resolve();
-      releaseDelivery?.();
-      await expect(transcriptPromise).resolves.toBe(noSend ? "" : "hello");
-      await fallback;
-      expect(delivered).toEqual(
-        noSend ? [{ text: "hello" }, { text: "hello" }] : [{ text: "hello" }],
-      );
-      await dispatcher.waitForIdle();
-    },
-  );
-
-  it("excludes direct output cancelled by a core before-delivery hook", async () => {
-    const dispatcher = createReplyDispatcher({ deliver: vi.fn(async () => {}) });
-    dispatcher.appendBeforeDeliver?.(() => null);
-    const coordinator = createCoordinator({
-      dispatcher,
-    });
-
-    await expect(
-      coordinator.deliver("block", { text: "cancelled output" }, { skipTts: true }),
-    ).resolves.toBe(true);
-    await dispatcher.waitForIdle();
-
-    await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
-  });
-
   it("keeps canonical ACP text after an outbound hook rewrites the payload", async () => {
     const delivered: unknown[] = [];
     const dispatcher = createReplyDispatcher({
@@ -262,26 +186,10 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     );
   });
 
-  it("does not treat custom dispatcher enqueue acceptance as confirmed delivery", async () => {
-    const coordinator = createCoordinator();
-
-    await expect(
-      coordinator.deliver("block", { text: "unconfirmed" }, { skipTts: true }),
-    ).resolves.toBe(true);
-
-    await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
-  });
-
   it("waits for pending direct block delivery before resolving tool delivery", async () => {
     const delivered: unknown[] = [];
-    let releaseDelivery: (() => void) | undefined;
-    let markDeliveryStarted: (() => void) | undefined;
-    const deliveryStarted = new Promise<void>((resolve) => {
-      markDeliveryStarted = resolve;
-    });
-    const deliveryGate = new Promise<void>((resolve) => {
-      releaseDelivery = resolve;
-    });
+    const { resolve: markDeliveryStarted, promise: deliveryStarted } = createDeferred();
+    const { resolve: releaseDelivery, promise: deliveryGate } = createDeferred();
     const dispatcher = createReplyDispatcher({
       deliver: async (payload) => {
         delivered.push(payload);
@@ -423,18 +331,6 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(coordinator.hasFailedVisibleTextDelivery()).toBe(true);
   });
 
-  it("starts reply lifecycle only once when called directly and through deliver", async () => {
-    const onReplyStart = vi.fn(async () => {});
-    const coordinator = createCoordinator({ onReplyStart });
-
-    await coordinator.startReplyLifecycle();
-    await coordinator.deliver("final", { text: "hello" });
-    await coordinator.startReplyLifecycle();
-    await coordinator.deliver("block", { text: "world" });
-
-    expect(onReplyStart).toHaveBeenCalledTimes(1);
-  });
-
   it("does not block delivery when reply lifecycle startup hangs", async () => {
     const onReplyStart = vi.fn(
       async () =>
@@ -508,50 +404,6 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(routeParams.policySessionKey).toBe("agent:main:main");
   });
 
-  it("uses Slack DM TransportThreadId for routed ACP when ReplyToId is the current message", async () => {
-    const coordinator = createCoordinator({
-      ctx: buildTestCtx({
-        Provider: "slack",
-        Surface: "slack",
-        SessionKey: "agent:main:slack:direct:u123",
-        AccountId: "default",
-        ChatType: "direct",
-        MessageSid: "101.000",
-        ReplyToId: "101.000",
-        TransportThreadId: "101.000",
-        MessageThreadId: undefined,
-      }),
-      shouldRouteToOriginating: true,
-      originatingChannel: "slack",
-      originatingTo: "user:U123",
-    });
-
-    await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
-
-    const [routeParams] = expectDefined(deliveryMocks.routeReply.mock.calls[0], "route call");
-    expect(routeParams.threadId).toBe("101.000");
-    expect(routeParams.replyDelivery).toEqual({
-      chatType: "direct",
-      replyToMode: "all",
-    });
-  });
-
-  it("uses the routed channel's listed default account for reply policy", async () => {
-    channelPluginMocks.accountIds = ["work"];
-    channelPluginMocks.replyToModeForAccount = (accountId) =>
-      accountId === "work" ? "off" : "all";
-    const coordinator = createVisibleChatAcpCoordinator(createAcpTestConfig());
-
-    await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
-
-    const [routeParams] = expectDefined(deliveryMocks.routeReply.mock.calls[0], "route call");
-    expect(routeParams.accountId).toBe("work");
-    expect(routeParams.replyDelivery).toEqual({
-      chatType: "direct",
-      replyToMode: "off",
-    });
-  });
-
   it("passes caller cancellation through routed ACP delivery", async () => {
     const controller = new AbortController();
     controller.abort();
@@ -587,7 +439,6 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       ok: true,
       delivered: false,
       suppressed: true,
-      reason: "cancelled_by_reply_payload_sending_hook",
     });
     const coordinator = createCoordinator({
       shouldRouteToOriginating: true,

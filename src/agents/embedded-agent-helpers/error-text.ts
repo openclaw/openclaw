@@ -1,11 +1,12 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
+  REPETITIVE_OUTPUT_ERROR_MESSAGE,
   REPEATED_TOOL_ERROR_CODE,
   REPEATED_TOOL_ERROR_MESSAGE,
 } from "../../../packages/agent-core/src/errors.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
-import type { AssistantMessage } from "../../llm/types.js";
+import { REPETITIVE_OUTPUT_ERROR_CODE, type AssistantMessage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   CONTEXT_OVERFLOW_ERROR_MESSAGE,
@@ -36,6 +37,8 @@ import { resolveExecutionApprovalFailureMessage } from "../failover/message-patt
 import type { PreparedProviderFailoverOwner } from "../failover/provider-patterns.js";
 import {
   AUTH_INVALID_TOKEN_USER_TEXT,
+  OAUTH_REFRESH_CONTENTION_USER_TEXT,
+  TLS_CERTIFICATE_ERROR_USER_TEXT,
   formatBillingErrorMessage,
   formatDiskSpaceErrorCopy,
   isInvalidStreamingEventOrderError,
@@ -44,7 +47,10 @@ import {
   isStreamingJsonParseError,
   renderRateLimitOrOverloadedCopy,
 } from "../failover/user-copy.js";
-import { formatSandboxToolPolicyBlockedMessage } from "../sandbox/runtime-status.js";
+import {
+  formatSandboxToolPolicyBlockedMessage,
+  type resolveSandboxRuntimeStatus,
+} from "../sandbox/runtime-status.js";
 import { buildAssistantFailoverSignal } from "./assistant-message-failures.js";
 import { classifyProviderRuntimeFailureKind } from "./provider-runtime-failure.js";
 const log = createSubsystemLogger("errors");
@@ -58,7 +64,7 @@ const RUNTIME_FAILURE_COPY: Partial<
 > = {
   auth_refresh:
     "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
-  refresh_contention: "Another sign-in is still in progress. Wait a moment, then try again.",
+  refresh_contention: OAUTH_REFRESH_CONTENTION_USER_TEXT,
   refresh_timeout:
     "Signing in took too long. Try again in a moment. If it keeps happening, sign in again under Models in the Control UI.",
   callback_timeout:
@@ -74,8 +80,7 @@ const RUNTIME_FAILURE_COPY: Partial<
     "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
   proxy:
     "Couldn't connect to the AI service. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
-  tls_certificate:
-    "Couldn't connect securely to the AI service. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+  tls_certificate: TLS_CERTIFICATE_ERROR_USER_TEXT,
   model_not_found: MODEL_NOT_FOUND_USER_TEXT,
 };
 const TOOL_CALL_INPUT_MISSING_RE =
@@ -91,6 +96,7 @@ type AssistantErrorTextOptions = {
   model?: string;
   /** Credential auth mode; OAuth/token billing copy omits API-key language (#80877). */
   authMode?: string;
+  sandboxRuntime?: ReturnType<typeof resolveSandboxRuntimeStatus>;
 };
 type ClassifiedAssistantErrorFacts = ReturnType<typeof classifyAssistantErrorFacts>;
 function classifyAssistantErrorFacts(msg: AssistantMessage, opts?: AssistantErrorTextOptions) {
@@ -135,16 +141,21 @@ export function formatAssistantErrorText(
     status: formatStatus,
     providerRuntimeFailureKind,
   } = classifiedFacts;
+  if (formatStatus === 403 && (msg.errorType ?? parseApiErrorInfo(raw)?.type) === "FreeTierError") {
+    return "This model's free tier is limited to the provider's own client. Choose another model or use a paid plan.";
+  }
   const unknownTool =
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
     raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
-  if (unknownTool?.[1]) {
+  // Error formatting uses prepared policy only; missing facts preserve the provider error.
+  if (unknownTool?.[1] && opts?.sandboxRuntime) {
     const audit = !sandboxToolPolicyAuditMessages.has(msg);
     const rewritten = formatSandboxToolPolicyBlockedMessage({
       cfg: opts?.cfg,
       sessionKey: opts?.sessionKey,
       agentId: opts?.agentId,
       toolName: unknownTool[1],
+      preparedRuntimeStatus: opts.sandboxRuntime,
       audit,
     });
     if (rewritten) {
@@ -304,6 +315,9 @@ export function formatUserFacingAssistantErrorText(
   msg: AssistantMessage,
   opts?: AssistantErrorTextOptions,
 ): string {
+  if (msg.errorCode === REPETITIVE_OUTPUT_ERROR_CODE) {
+    return REPETITIVE_OUTPUT_ERROR_MESSAGE;
+  }
   if (msg.errorCode === REPEATED_TOOL_ERROR_CODE) {
     return REPEATED_TOOL_ERROR_MESSAGE;
   }

@@ -9,6 +9,23 @@ import {
   parseReleaseVersion,
 } from "./release-version.mjs";
 
+export function parsePublicationCliValues(command, argv) {
+  const values = {};
+  for (let index = 0; index < argv.length; index += 2) {
+    const key = argv[index];
+    const value = argv[index + 1];
+    if (!key?.startsWith("--") || value === undefined || value.startsWith("--")) {
+      throw new Error(`Invalid ${command} argument near ${key ?? "<missing>"}.`);
+    }
+    const name = key.slice(2).replace(/-([a-z])/gu, (_, letter) => letter.toUpperCase());
+    if (values[name] !== undefined) {
+      throw new Error(`Duplicate ${command} option: ${key}`);
+    }
+    values[name] = value;
+  }
+  return values;
+}
+
 // npm may accept a publish before its exact version becomes readable. Publication
 // callers keep their one-shot probes; only postpublish readback uses this budget.
 export function npmRegistryReadbackDeadline() {

@@ -4,41 +4,23 @@ import {
   parseTree,
   printParseErrorCode,
 } from "jsonc-parser/lib/esm/main.js";
-import type { Diagnostic } from "../ast.js";
 import type { JsoncAst, JsoncEntry, JsoncValue } from "./ast.js";
 
 const MAX_PARSE_DEPTH = 256;
 
 // parseTree allocates before our depth check; cap source bytes to bound that allocation.
 export const MAX_JSONC_INPUT_BYTES = 16 * 1024 * 1024;
-const JSONC_PARSE_INVALID_SYMBOL = 1;
-const JSONC_PARSE_END_OF_FILE_EXPECTED = 9;
-
-interface JsoncParseResult {
-  readonly ast: JsoncAst;
-  readonly diagnostics: readonly Diagnostic[];
-}
 
 type LineForOffset = (offset: number) => number;
 
-export function parseJsonc(raw: string): JsoncParseResult {
+export function parseJsonc(raw: string): JsoncAst & { oversizedInputBytes?: number } {
   const inputBytes = Buffer.byteLength(raw, "utf8");
   if (inputBytes > MAX_JSONC_INPUT_BYTES) {
-    return {
-      ast: { kind: "jsonc", raw, root: null },
-      diagnostics: [
-        {
-          line: 1,
-          message: `input exceeds MAX_JSONC_INPUT_BYTES (${MAX_JSONC_INPUT_BYTES} bytes; got ${inputBytes})`,
-          severity: "error",
-          code: "OC_JSONC_INPUT_TOO_LARGE",
-        },
-      ],
-    };
+    return { kind: "jsonc", raw, root: null, oversizedInputBytes: inputBytes };
   }
 
   if (raw.trim().length === 0) {
-    return { ast: { kind: "jsonc", raw, root: null }, diagnostics: [] };
+    return { kind: "jsonc", raw, root: null };
   }
 
   const parseSource = raw.startsWith("\uFEFF") ? raw.slice(1) : raw;
@@ -48,48 +30,24 @@ export function parseJsonc(raw: string): JsoncParseResult {
     disallowComments: false,
     allowEmptyContent: true,
   });
-  const lineForOffset = createLineForOffset(raw);
-  const diagnostics = errors.map((error) => toDiagnostic(error, lineForOffset, tree));
+  const lineForOffset = createLineForOffset(parseSource);
+  const treeEnd = tree ? tree.offset + tree.length : 0;
   let root: JsoncValue | null = null;
-  if (tree && diagnostics.every((d) => d.severity !== "error")) {
+  if (
+    tree &&
+    errors.every((error) => {
+      const code = printParseErrorCode(error.error);
+      return code === "EndOfFileExpected" || (code === "InvalidSymbol" && error.offset >= treeEnd);
+    })
+  ) {
     try {
       root = nodeToJsoncValue(tree, lineForOffset, 0);
-    } catch (err) {
-      diagnostics.push({
-        line: 1,
-        message: err instanceof Error ? err.message : String(err),
-        severity: "error",
-        code: "OC_JSONC_DEPTH_EXCEEDED",
-      });
+    } catch {
+      // Depth-limited values remain unaddressable; raw bytes are retained.
     }
   }
 
-  return {
-    ast: {
-      kind: "jsonc",
-      raw,
-      root,
-    },
-    diagnostics,
-  };
-}
-
-function toDiagnostic(
-  error: ParseError,
-  lineForOffset: LineForOffset,
-  tree: JsoncParserNode | undefined,
-): Diagnostic {
-  const treeEnd = tree ? tree.offset + tree.length : 0;
-  const errorCode: number = error.error;
-  const isTrailingInput =
-    errorCode === JSONC_PARSE_END_OF_FILE_EXPECTED ||
-    (tree !== undefined && errorCode === JSONC_PARSE_INVALID_SYMBOL && error.offset >= treeEnd);
-  return {
-    line: lineForOffset(error.offset),
-    message: printParseErrorCode(error.error),
-    severity: isTrailingInput ? "warning" : "error",
-    code: isTrailingInput ? "OC_JSONC_TRAILING_INPUT" : "OC_JSONC_PARSE_FAILED",
-  };
+  return { kind: "jsonc", raw, root };
 }
 
 function nodeToJsoncValue(
@@ -148,7 +106,7 @@ function nodeToJsoncValue(
 function createLineForOffset(raw: string): LineForOffset {
   const starts = [0];
   for (let i = 0; i < raw.length; i++) {
-    if (raw[i] === "\n") {
+    if (raw[i] === "\n" || (raw[i] === "\r" && raw[i + 1] !== "\n")) {
       starts.push(i + 1);
     }
   }

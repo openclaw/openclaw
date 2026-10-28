@@ -54,7 +54,6 @@ function recordedInstallIdentity(record: PluginInstallRecord | undefined) {
 export async function detectConfiguredPluginInstallHealthIssues(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  baselineRecords?: Record<string, PluginInstallRecord>;
 }): Promise<ConfiguredPluginInstallHealthIssue[]> {
   const env = params.env ?? process.env;
   const pluginIds = collectConfiguredPluginIds(params.cfg, env);
@@ -66,7 +65,6 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
     configuredPluginIds: pluginIds,
     configuredChannelIds: channelIds,
     blockedPluginIds,
-    baselineRecords: params.baselineRecords,
   });
   const {
     configuredPluginIdsWithStaleDescriptors: staleDescriptorPluginIds,
@@ -194,6 +192,8 @@ export function configuredPluginInstallIssueToHealthFinding(
 ): HealthFinding {
   const detail = CONFIGURED_PLUGIN_INSTALL_ISSUE_DETAILS[issue.kind];
   const installSpec = "installSpec" in issue ? issue.installSpec : undefined;
+  const installTarget =
+    "installSource" in issue && issue.installSource === "npm" ? `npm:${installSpec}` : installSpec;
   const subject = issue.kind === "stale-version-bound-runtime" ? "runtime plugin" : "plugin";
   const message = `Configured ${subject} ${issue.pluginId} ${detail.message}`;
   return {
@@ -211,7 +211,7 @@ export function configuredPluginInstallIssueToHealthFinding(
         ? `Run \`openclaw doctor --fix\` to install ${issue.installSpec}.`
         : (detail.fixHint ??
           (installSpec
-            ? `Run \`openclaw plugins install ${installSpec} --force\` to reinstall the configured plugin package.`
+            ? `Run \`openclaw plugins install ${installTarget} --force\` to reinstall the configured plugin package.`
             : "Run `openclaw doctor --fix` to repair the configured plugin install. An exact reinstall command is unavailable because the install record has no package spec.")),
   };
 }

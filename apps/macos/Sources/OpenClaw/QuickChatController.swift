@@ -148,7 +148,6 @@ final class QuickChatController: NSObject {
             }
         }
         self.hotkeyRegistered = true
-        quickChatLogger.info("quick chat hotkey handler registered")
     }
 
     private func unregisterHotkeyIfNeeded() {
@@ -201,8 +200,6 @@ final class QuickChatController: NSObject {
         self.visibleFrame = self.cursorScreen()?.visibleFrame ?? .zero
         self.ensurePanel()
         let target = self.targetFrame()
-        quickChatLogger.info(
-            "quick chat present visible=\(NSStringFromRect(self.visibleFrame)) target=\(NSStringFromRect(target))")
         guard let panel = self.panel else { return }
         panel.alphaValue = 1
         if wasVisible {
@@ -218,9 +215,6 @@ final class QuickChatController: NSObject {
     func dismiss(immediate: Bool = false) {
         self.stopDictation()
         self.cancelPasteRequest()
-        if self.isVisible {
-            quickChatLogger.info("quick chat dismiss immediate=\(immediate)")
-        }
         self.windowPicker?.cancel()
         self.invalidateRecentsFetch()
         SimpleTaskSupport.stop(task: &self.presentationTask)

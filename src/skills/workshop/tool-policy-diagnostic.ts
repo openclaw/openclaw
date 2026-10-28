@@ -12,6 +12,7 @@ import type { ToolPolicyFilterEvent } from "../../agents/tool-policy-pipeline.js
 import type { AnyAgentTool } from "../../agents/tools/common.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../../config/types.tools.js";
+import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveSkillWorkshopToolConstructionBlock } from "./tool-availability.js";
 
@@ -126,14 +127,6 @@ function describeExclusion(params: {
       : label
           .replace(`agents.${params.agentId}.tools`, agent?.path ?? "agents.entries.*.tools")
           .replace("agent tools", agent?.path ?? "agents.entries.*.tools");
-  if (!isToolAllowedByPolicyName(SKILL_WORKSHOP_TOOL_NAME, { deny: params.event.policy.deny })) {
-    const source = normalizedLabel.replace(/\.allow$/, ".deny");
-    return {
-      source,
-      detail: `${source} denies ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)}.`,
-      fix: `Remove the matching ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)} deny entry from ${source}.`,
-    };
-  }
   return {
     source: normalizedLabel,
     detail: `${normalizedLabel} does not include ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)}.`,
@@ -141,29 +134,54 @@ function describeExclusion(params: {
   };
 }
 
-type SkillWorkshopToolPolicyAvailability = {
-  available: boolean;
-  exclusion?: ToolPolicyFilterEvent;
-};
+const skillWorkshopPolicyProbe = {
+  name: SKILL_WORKSHOP_TOOL_NAME,
+  label: SKILL_WORKSHOP_TOOL_NAME,
+  description: "Skill Workshop policy availability check.",
+  parameters: { type: "object", properties: {} },
+  execute: async () => ({ content: [], details: {} }),
+} as AnyAgentTool;
 
-function makeSkillWorkshopPolicyProbe(): AnyAgentTool {
-  return {
-    name: SKILL_WORKSHOP_TOOL_NAME,
-    label: SKILL_WORKSHOP_TOOL_NAME,
-    description: "Skill Workshop policy availability check.",
-    parameters: { type: "object", properties: {} },
-    execute: async () => ({ content: [], details: {} }),
-  } as AnyAgentTool;
+// A stand-in for one plugin tool, carrying the owner metadata that plugin-ID and
+// group:plugins policy entries match, so policy can be checked without constructing it.
+function pluginPolicyProbe(name: string, pluginId: string): AnyAgentTool {
+  const probe: AnyAgentTool = {
+    ...skillWorkshopPolicyProbe,
+    name,
+    label: name,
+    description: "Policy availability check.",
+  };
+  setPluginToolMeta(probe, { pluginId, optional: false });
+  return probe;
+}
+
+/**
+ * Returns which of one plugin's `toolNames` the final tool-policy composition keeps,
+ * including name, glob, profile, plugin-ID and group:plugins entries.
+ */
+export function resolveAllowedPluginToolNames(params: {
+  config: OpenClawConfig;
+  conversationCapabilityProfile: ResolvedConversationCapabilityProfile;
+  pluginId: string;
+  toolNames: readonly string[];
+}): Set<string> {
+  const tools = applyFinalEffectiveToolPolicy({
+    bundledTools: params.toolNames.map((name) => pluginPolicyProbe(name, params.pluginId)),
+    config: params.config,
+    conversationCapabilityProfile: params.conversationCapabilityProfile,
+    warn: () => {},
+  });
+  return new Set(tools.map((tool) => tool.name));
 }
 
 /** Applies the real final tool-policy composition used by agent sessions and /learn. */
 export function resolveSkillWorkshopToolPolicyAvailability(params: {
   config: OpenClawConfig;
   conversationCapabilityProfile: ResolvedConversationCapabilityProfile;
-}): SkillWorkshopToolPolicyAvailability {
+}) {
   let exclusion: ToolPolicyFilterEvent | undefined;
   const tools = applyFinalEffectiveToolPolicy({
-    bundledTools: [makeSkillWorkshopPolicyProbe()],
+    bundledTools: [skillWorkshopPolicyProbe],
     config: params.config,
     conversationCapabilityProfile: params.conversationCapabilityProfile,
     warn: () => {},
@@ -192,6 +210,21 @@ export function detectSkillWorkshopToolPolicyDiagnostic(params: {
     return null;
   }
   const agentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.config));
+  const model = resolveDefaultModelForAgent({ cfg: params.config, agentId });
+  const capabilityProfile = resolveConversationCapabilityProfile({
+    config: params.config,
+    agentId,
+    modelProvider: model.provider,
+    modelId: model.model,
+  });
+  // A deny is an intentional opt-out, even when a profile excludes the tool first.
+  if (
+    !isToolAllowedByPolicyName(SKILL_WORKSHOP_TOOL_NAME, {
+      deny: capabilityProfile.policy.explicitToolDenylist,
+    })
+  ) {
+    return null;
+  }
   const prefix = `Skill Workshop is active, but ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)} is hidden for agent ${JSON.stringify(agentId)}:`;
   const sandbox = resolveSandboxConfigForAgent(params.config, agentId);
   const constructionBlock = resolveSkillWorkshopToolConstructionBlock({
@@ -211,13 +244,6 @@ export function detectSkillWorkshopToolPolicyDiagnostic(params: {
       message: `${prefix} ${detail} ${constructionBlock.fix}`,
     };
   }
-  const model = resolveDefaultModelForAgent({ cfg: params.config, agentId });
-  const capabilityProfile = resolveConversationCapabilityProfile({
-    config: params.config,
-    agentId,
-    modelProvider: model.provider,
-    modelId: model.model,
-  });
   const availability = resolveSkillWorkshopToolPolicyAvailability({
     config: params.config,
     conversationCapabilityProfile: capabilityProfile,

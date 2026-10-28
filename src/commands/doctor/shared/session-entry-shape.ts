@@ -1,31 +1,37 @@
 import { randomUUID } from "node:crypto";
-import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asNonNegativeFiniteNumber,
+  parseStrictFiniteNumber,
+  parseStrictNonNegativeInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { validateSessionId } from "../../../config/sessions/paths.js";
 import { isMainRestartRecoveryCandidate } from "../../../config/sessions/restart-recovery-state.js";
+import { admitCanonicalSessionEntry } from "../../../config/sessions/session-entry-json.js";
+import {
+  SESSION_ENTRY_NUMERIC_FIELDS,
+  type SessionEntryNumericSnapshot,
+} from "../../../config/sessions/session-entry-numeric-snapshot.js";
 import {
   hasLegacySessionProviderState,
   LEGACY_SESSION_ENTRY_STATE_FIELDS,
   LEGACY_SESSION_PROVIDER_FIELDS,
 } from "../../../config/sessions/session-entry-state-format.js";
 import {
-  normalizePendingFinalDelivery,
+  normalizeCount,
   normalizeFallbackNotice,
   normalizeMemoryFlush,
-  projectCanonicalSessionEntryShape,
+  normalizeOptionalTimestamp,
+  normalizePendingFinalDelivery,
 } from "../../../config/sessions/store-entry-shape.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../../routing/session-key.js";
 
-function normalizeOptionalTimestamp(value: unknown): number | undefined {
-  return value === undefined ? undefined : (asNonNegativeFiniteNumber(value) ?? 0);
-}
-
-function normalizeCount(value: unknown): number | undefined {
-  const number = asNonNegativeFiniteNumber(value);
-  return number === undefined ? undefined : Math.floor(number);
-}
+export type SessionEntryStateRepair = {
+  entry: Record<string, unknown>;
+  numericChanges?: SessionEntryNumericSnapshot;
+};
 
 /** Doctor retires legacy activity while preserving the previous writer's completed yield. */
 export function migrateLegacySessionRunOutcome(
@@ -128,8 +134,9 @@ export function migrateLegacySessionEntryState(
   value: Record<string, unknown>,
   updatedAt: unknown = value.updatedAt,
   sessionKey?: string,
-): Record<string, unknown> {
+): SessionEntryStateRepair {
   const next = { ...value };
+  const numericChanges: SessionEntryNumericSnapshot = {};
   if (hasLegacySessionProviderState(value)) {
     for (const [legacy, current] of LEGACY_SESSION_PROVIDER_FIELDS) {
       if (typeof value[current] !== "string" && typeof value[legacy] === "string") {
@@ -186,7 +193,24 @@ export function migrateLegacySessionEntryState(
       next.memoryFlush = { kind: "succeeded", compactionCount };
     }
   }
-  return migrateLegacySessionRunOutcome(next, sessionKey, updatedAt);
+  for (const field of SESSION_ENTRY_NUMERIC_FIELDS) {
+    const candidate = next[field];
+    if (typeof candidate !== "string") {
+      continue;
+    }
+    const number =
+      field === "spawnDepth"
+        ? parseStrictNonNegativeInteger(candidate)
+        : parseStrictFiniteNumber(candidate);
+    if (number !== undefined) {
+      next[field] = number;
+      numericChanges[field] = number;
+    }
+  }
+  return {
+    entry: migrateLegacySessionRunOutcome(next, sessionKey, updatedAt),
+    numericChanges,
+  };
 }
 
 // Persisted stores may contain old or malformed ids; reject path-like ids before use.
@@ -219,8 +243,8 @@ export function normalizePersistedSessionEntryShape(
   }
 
   const modelSelectionLocked = value.modelSelectionLocked === true;
-  let next = projectCanonicalSessionEntryShape(
-    migrateLegacySessionEntryState(value, value.updatedAt, options.sessionKey),
+  let next = admitCanonicalSessionEntry(
+    migrateLegacySessionEntryState(value, value.updatedAt, options.sessionKey).entry,
   );
   if (value.sessionId !== undefined) {
     if (!isSafeSessionId(value.sessionId)) {

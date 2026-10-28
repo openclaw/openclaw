@@ -10,8 +10,9 @@ const mocks = vi.hoisted(() => ({
   buildServiceEnvironment: vi.fn(),
   resolveGatewayProgramArguments: vi.fn(),
 }));
+// mock-isolation: Executable-path planning excludes host credentials and their service-env effects.
 vi.mock("./daemon-install-auth-profiles-source.runtime.js", () => ({
-  hasAnyAuthProfileStoreSource: () => false,
+  hasAnyAuthProfileStoreSourceAsync: async () => false,
 }));
 vi.mock("../daemon/runtime-paths.js", () => ({
   resolvePreferredNodePath: async () => "/opt/node",

@@ -1,4 +1,3 @@
-import { randomBytes } from "@noble/hashes/utils.js";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type {
   PluginStateKeyedStore,
@@ -15,8 +14,11 @@ import {
   type ReefAuditHeadRecord,
   type ReefAuditStateRecord,
 } from "./audit-state-format.js";
-import type { ReefAuditOperationConfig, ReefAuditOperations } from "./audit-state-operation.js";
-import { ReefLegacySqliteAuditStore } from "./audit-state.legacy.js";
+import type {
+  ReefAuditAppendEvent,
+  ReefAuditOperationConfig,
+  ReefAuditOperations,
+} from "./audit-state-operation.js";
 
 export {
   REEF_AUDIT_NAMESPACE,
@@ -35,10 +37,14 @@ export {
   type ReefAuditStateRecord,
 } from "./audit-state-format.js";
 
+export interface ReefAuditStore extends AuditStore {
+  appendEvents(events: readonly ReefAuditAppendEvent[]): Promise<AuditEntry[]>;
+}
+
 export type ReefAuditOperationState = {
-  head: PluginStateKeyedStore<ReefAuditHeadRecord>;
-  migration: PluginStateKeyedStore<{ pending: true }>;
-  entries: PluginStateKeyedStore<ReefAuditStateRecord>;
+  head: PluginStateKeyedStore<ReefAuditHeadRecord, 2>;
+  migration: PluginStateKeyedStore<{ pending: true }, 2>;
+  entries: PluginStateKeyedStore<ReefAuditStateRecord, 2>;
   auditKey: Uint8Array;
   maxEntries: number;
 };
@@ -48,7 +54,7 @@ const auditOperationHandler = {
   exportName: "executeReefAuditOperation",
 };
 
-class ReefSqliteAuditStore implements AuditStore {
+class ReefSqliteAuditStore implements ReefAuditStore {
   readonly operationState: ReefAuditOperationState;
   readonly #operation: PluginStateOperation<ReefAuditOperations>;
   readonly #config: ReefAuditOperationConfig;
@@ -56,19 +62,19 @@ class ReefSqliteAuditStore implements AuditStore {
   constructor(
     runtime: PluginRuntime,
     auditKey: Uint8Array,
-    head: PluginStateKeyedStore<ReefAuditHeadRecord>,
+    head: PluginStateKeyedStore<ReefAuditHeadRecord, 2>,
     maxEntries = REEF_AUDIT_MAX_ENTRIES,
     authoritySignal?: AbortSignal,
   ) {
     if (auditKey.length !== 32) {
       throw new Error("audit key must be 32 bytes");
     }
-    const migration = runtime.state.openKeyedStore<{ pending: true }>({
+    const migration = runtime.state.openKeyedStoreV2<{ pending: true }>({
       namespace: REEF_AUDIT_MIGRATION_NAMESPACE,
       maxEntries: REEF_AUDIT_MIGRATION_MAX_ENTRIES,
       overflowPolicy: "reject-new",
     });
-    const entries = runtime.state.openKeyedStore<ReefAuditStateRecord>({
+    const entries = runtime.state.openKeyedStoreV2<ReefAuditStateRecord>({
       namespace: REEF_AUDIT_NAMESPACE,
       maxEntries: maxEntries + 1,
       overflowPolicy: "reject-new",
@@ -93,14 +99,17 @@ class ReefSqliteAuditStore implements AuditStore {
     payload: unknown,
     ts = Math.floor(Date.now() / 1000),
   ): Promise<AuditEntry> {
-    const event = { type, payload: structuredClone(payload), ts };
+    return (await this.appendEvents([{ type, payload, ts }]))[0]!;
+  }
+
+  async appendEvents(events: readonly ReefAuditAppendEvent[]): Promise<AuditEntry[]> {
     // Submit before yielding: the shared owner preserves FIFO across audit handles.
     const result = await this.#operation.execute(
-      { type: "append", input: { ...this.#config, events: [event] } },
+      { type: "append", input: { ...this.#config, events: structuredClone(events) } },
       { writeStores: [this.#config.head, this.#config.entries] },
     );
     // A lost acknowledgement propagates; accepted writes are never replayed.
-    return result.value[0]!;
+    return result.value;
   }
 
   async entries(): Promise<AuditEntry[]> {
@@ -124,22 +133,11 @@ export function openReefAuditStore(
   auditKey: Uint8Array,
   maxEntries?: number,
   authoritySignal?: AbortSignal,
-): AuditStore {
-  const head = runtime.state.openKeyedStore<ReefAuditHeadRecord>({
+): ReefAuditStore {
+  const head = runtime.state.openKeyedStoreV2<ReefAuditHeadRecord>({
     namespace: REEF_AUDIT_HEAD_NAMESPACE,
     maxEntries: REEF_AUDIT_HEAD_MAX_ENTRIES,
     overflowPolicy: "reject-new",
   });
-  // Retain released-host support until the approved minimum-host increase.
-  // A present worker capability's failure never selects native execution.
-  if (!head.createOperation) {
-    return new ReefLegacySqliteAuditStore(
-      runtime,
-      auditKey,
-      randomBytes,
-      maxEntries,
-      authoritySignal,
-    );
-  }
   return new ReefSqliteAuditStore(runtime, auditKey, head, maxEntries, authoritySignal);
 }

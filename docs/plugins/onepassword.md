@@ -32,12 +32,10 @@ configured item registry.
 - Every access attempt is recorded in OpenClaw's shared SQLite state. Audit
   rows include the supplied reason; keep reasons non-sensitive. The broker
   never copies a fetched value or the service token into an audit row.
-- After the current tool execution, OpenClaw-owned transcript persistence
-  replaces a successful `get` value with redacted metadata.
-- The value is model-visible for that execution. If the model copies it into a
-  later tool call or reply, that separate record is outside this plugin's
-  persistence hook. Keep policies narrow and do not ask the model to echo a
-  value.
+- A successful `get` value reaches the model and remains in tool results and
+  persisted transcripts without secret masking. Later tool calls and replies
+  can also contain it. Keep policies narrow, protect transcripts, and review
+  conversation text before sharing it.
 - The plugin invokes `op` once per cache miss. It does not retry rate limits or
   other failures.
 - Each `op` call runs with a minimal environment that disables 1Password
@@ -293,6 +291,14 @@ when the attempt failed, and a truncated reason. The reason is stored as
 supplied; the broker never adds the fetched value to the audit log.
 
 ## 1Password CLI behavior
+
+The SecretRef resolver runs `op read`. On a nonzero exit, its protocol error
+includes up to 512 characters from the end of stderr after secret redaction.
+It removes the service-account token and any captured secret stdout from that
+detail. Both output streams are capped at 64 KiB; exceeding either cap stops
+the read and returns an output-limit error without child output. Gateway
+degradation warnings still use generic provider failure reasons. After fixing
+the underlying problem, run `openclaw secrets reload` to retry cold owners.
 
 Each cache miss runs `op item get` with the configured item, vault, and exact
 field selector, JSON output, a bounded timeout, and `--cache=false`. The child

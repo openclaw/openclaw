@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import test from "node:test";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { makeRehearsalSnapshotFixture } from "./rehearsal-snapshot.test-support.mjs";
+import { makeHandoffSnapshotFixture } from "./host-handoff.test-support.mjs";
 import { runOwner } from "./worker-config-owner-fixture.mjs";
 
 const library = new URL("./release-lib.mjs", import.meta.url).pathname;
@@ -14,7 +14,7 @@ const owner = readFileSync(new URL("./openclaw-release-deploy", import.meta.url)
 const sourceId = "a".repeat(32), targetId = "b".repeat(32), targetSha = "b".repeat(40);
 const linuxRoot = { skip: process.platform !== "linux" || process.getuid() !== 0 ? "requires disposable Linux root" : false };
 function fixture(t) {
-  const f = makeRehearsalSnapshotFixture(t);
+  const f = makeHandoffSnapshotFixture(t);
   writeFileSync(join(f.root, "etc/machine-id"), sourceId + "\n");
   const base = JSON.parse(readFileSync(f.configPath));
   base.agents.entries = { main: {}, "registered-only": {} };
@@ -22,11 +22,11 @@ function fixture(t) {
   base.worktreeRoot = join(f.root, "old-worktrees");
   base.models = { providers: { "fixture-provider": { baseUrl: "http://127.0.0.1:23456" } } };
   writeFileSync(f.config, JSON.stringify(base), { mode: 0o600 });
-  if (process.getuid() === 0) chownSync(f.config, f.runtimeUid, f.runtimeGid);
+  if (process.getuid() === 0) { chownSync(f.config, f.runtimeUid, f.runtimeGid); }
   const shared = new DatabaseSync(f.shared); shared.exec("CREATE TABLE migration_runs(id TEXT PRIMARY KEY,status TEXT,report_json TEXT)"); shared.close();
   const capacity = join(f.root, "handoff-capacity.mjs");
   writeFileSync(capacity, "import fs from 'node:fs';import {syncBuiltinESMExports} from 'node:module';const original=fs.statfsSync;fs.statfsSync=(...args)=>({...original(...args),bavail:16*1024*1024,bsize:4096});syncBuiltinESMExports();");
-  const run = (action, args = [], input, preload) => spawnSync(process.execPath, ["--import", capacity, ...(preload ? ["--import", preload] : []), library, "host-handoff", action, f.serving, ...args], { env: f.env, input: input ? JSON.stringify(input) : undefined, encoding: "utf8", timeout: 30000 });
+  const run = (action, args = [], input = undefined, preload = undefined) => spawnSync(process.execPath, ["--import", capacity, ...(preload ? ["--import", preload] : []), library, "host-handoff", action, f.serving, ...args], { env: f.env, input: input ? JSON.stringify(input) : undefined, encoding: "utf8", timeout: 30000 });
   const success = result => { assert.equal(result.status, 0, result.stderr); return result.stdout.trim(); };
   const source = JSON.parse(success(spawnSync(process.execPath, [library, "validate-release", f.initial, f.sha, String(process.getuid()), "sealed"], { env: f.env, encoding: "utf8" })));
   const admission = { source, schedules: Object.fromEntries(["openclaw-hourly-health-check.timer", "openclaw-disk-maintenance.timer"].map(name => [name, { UnitFileState: "enabled", ActiveState: "active", SubState: "waiting", LastTriggerUSec: "original-last", NextElapseUSecRealtime: "original-next" }])), process: { pid: 111, generation: "1110", instance: "fixture-instance-111" }, suspension: { id: "lease", expiresAtMs: Date.now() + 60000, status: "ready", terminalPolicy: "preserve" } };
@@ -42,19 +42,20 @@ function fixture(t) {
 test("retains a real stopped source export and refuses an active start permit or process", t => {
   const f = fixture(t), originalConfig = readFileSync(f.config);
   const id = f.begin();
+  assert.notEqual(f.run("source-check", [f.sha, "112", "1110", targetId, targetSha]).status, 0);
   assert.match(id, /^[a-f0-9-]{36}$/);
   const sourceBackup = JSON.parse(readFileSync(f.journal)).configBackup.path;
   assert.equal(lstatSync(sourceBackup).uid, process.getuid());
   assert.equal(lstatSync(sourceBackup).mode & 0o7777, 0o600);
   assert.deepEqual(readFileSync(sourceBackup), originalConfig);
-  if (process.getuid() === 0) assert.equal(lstatSync(f.config).uid, f.runtimeUid);
+  if (process.getuid() === 0) { assert.equal(lstatSync(f.config).uid, f.runtimeUid); }
   assert.notEqual(f.run("source-export").status, 0);
   assert.equal(existsSync(f.permit), true);
   f.success(f.run("source-revoke"));
   assert.notEqual(f.run("source-stopped").status, 0);
   assert.equal(f.success(f.run("status")), "SOURCE_PREPARED");
   f.stop();
-  for (const agent of f.agents) agent.writer.close();
+  for (const agent of f.agents) { agent.writer.close(); }
   const exported = JSON.parse(f.success(f.run("source-export")));
   const manifest = JSON.parse(readFileSync(exported.manifest));
   assert.equal(manifest.kind, "team-state-handoff");
@@ -132,7 +133,7 @@ handoff_source
       assert.notEqual(result.status, 0);
       assert.equal(log.includes("stopped-journal"), false);
       assert.equal(existsSync(permit), scenario === "arm-failure");
-      if (scenario === "arm-failure") assert.equal(log.includes("stop"), false);
+      if (scenario === "arm-failure") { assert.equal(log.includes("stop"), false); }
     }
     assert.equal(log.some(value => value.includes("start") || value.includes("export")), false);
   });
@@ -140,7 +141,7 @@ handoff_source
 
 test("stopped source export ignores PID reuse but retains database writer checks", t => {
   const f = fixture(t); f.begin(); f.stop();
-  for (const agent of f.agents) agent.writer.close();
+  for (const agent of f.agents) { agent.writer.close(); }
   const directory = join(f.env.OPENCLAW_TEAM_PROC_ROOT, "111");
   mkdirSync(join(directory, "fd"), { recursive: true }); mkdirSync(join(directory, "fdinfo"));
   const fields = Array(24).fill("0"); fields[0] = "S"; fields[19] = "2220";
@@ -151,24 +152,11 @@ test("stopped source export ignores PID reuse but retains database writer checks
   const refused = f.run("source-export");
   assert.notEqual(refused.status, 0);
   assert.match(refused.stderr, /writable migration database descriptor/);
+  assert.equal(f.success(f.run("status")), "SOURCE_STOPPED");
   rmSync(join(directory, "fd/1"));
   const exported = JSON.parse(f.success(f.run("source-export")));
   assert.equal(exported.sourceWritersStopped, true);
   assert.equal(f.success(f.run("status")), "SOURCE_EXPORTED");
-});
-
-test("refuses changed source inputs and external writable database descriptors", t => {
-  const f = fixture(t); f.begin();
-  assert.notEqual(f.run("source-check", [f.sha, "112", "1110", targetId, targetSha]).status, 0);
-  f.stop();
-  const writerRoot = join(f.env.OPENCLAW_TEAM_PROC_ROOT, "777");
-  mkdirSync(join(writerRoot, "fd"), { recursive: true }); mkdirSync(join(writerRoot, "fdinfo"));
-  // Real filesystem identity models a retained native writer, without spawning a production process.
-  symlinkSync(f.shared, join(writerRoot, "fd/1"));
-  writeFileSync(join(writerRoot, "fdinfo/1"), "flags:\t02\n"); writeFileSync(join(writerRoot, "maps"), "");
-  const refused = f.run("source-export");
-  assert.notEqual(refused.status, 0); assert.match(refused.stderr, /writable migration database descriptor/);
-  assert.equal(f.success(f.run("status")), "SOURCE_STOPPED");
 });
 
 function managedNode(f, malformed = false) {
@@ -179,11 +167,19 @@ function managedNode(f, malformed = false) {
 }
 
 for (const phase of ["source", "target"]) {
-  test(`handoff ${phase} binds its managed runtime before publishing a readable journal`, linuxRoot, t => {
+  test(`handoff ${phase} refuses invalid runtime publication and binds the admitted runtime`, linuxRoot, t => {
     const f = phase === "source" ? fixture(t) : targetFixture(t);
+    managedNode(f, true);
+    const invalid = phase === "source"
+      ? f.run("source-begin", [targetId, targetSha, f.config, f.shared, "@stdin"], f.admission)
+      : f.run("target-import", [f.exported.manifest, f.exported.manifestSha256]);
+    assert.notEqual(invalid.status, 0);
+    assert.match(invalid.stderr, /runtime override/);
+    assert.equal(existsSync(f.journal), false);
+    assert.equal(existsSync(f.permit), phase === "source");
     const sha256 = managedNode(f);
-    if (phase === "source") f.begin();
-    else f.success(runImport(f));
+    if (phase === "source") { f.begin(); }
+    else { f.success(runImport(f)); }
     const record = JSON.parse(readFileSync(f.journal));
     assert.equal(record.gatewayRuntime.kind, "node");
     assert.equal(record.gatewayRuntime.binary.sha256, sha256);
@@ -192,18 +188,6 @@ for (const phase of ["source", "target"]) {
     managedNode(f, true);
     assert.notEqual(f.run("status").status, 0);
     assert.deepEqual(readFileSync(f.journal), retained);
-  });
-
-  test(`handoff ${phase} refuses an invalid runtime before journal publication`, linuxRoot, t => {
-    const f = phase === "source" ? fixture(t) : targetFixture(t);
-    managedNode(f, true);
-    const result = phase === "source"
-      ? f.run("source-begin", [targetId, targetSha, f.config, f.shared, "@stdin"], f.admission)
-      : f.run("target-import", [f.exported.manifest, f.exported.manifestSha256]);
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /runtime override/);
-    assert.equal(existsSync(f.journal), false);
-    assert.equal(existsSync(f.permit), phase === "source");
   });
 }
 
@@ -215,9 +199,9 @@ test("default Node still reads retained handoff journals without runtime metadat
 });
 
 
-function targetFixture(t) {
+function targetFixture(t, candidateVersion = 1) {
   const f = fixture(t); f.begin(); f.stop();
-  for (const agent of f.agents) agent.writer.close();
+  for (const agent of f.agents) { agent.writer.close(); }
   const exported = JSON.parse(f.success(f.run("source-export")));
   const manifest = JSON.parse(readFileSync(exported.manifest));
   const sourceJournal = readFileSync(f.journal);
@@ -231,7 +215,13 @@ function targetFixture(t) {
   chmodSync(join(candidate, "package.json"), 0o644);
   const candidatePackage = JSON.parse(readFileSync(join(candidate, "package.json")));
   candidatePackage.exports = { "./plugin-sdk/core": "./fixture-sdk.cjs" };
+  candidatePackage.openclaw.schemaVersions = { state: candidateVersion, agent: candidateVersion };
   writeFileSync(join(candidate, "package.json"), JSON.stringify(candidatePackage));
+  const manifestPath = join(candidate, "deployment.json");
+  chmodSync(manifestPath, 0o644);
+  const deployment = JSON.parse(readFileSync(manifestPath));
+  deployment.schemaVersions = candidatePackage.openclaw.schemaVersions;
+  writeFileSync(manifestPath, JSON.stringify(deployment));
   writeFileSync(join(candidate, "fixture-sdk.cjs"), `module.exports={candidate:${JSON.stringify(targetSha)}};`);
   f.success(spawnSync(process.execPath, [library, "seal-tree", candidate], { env: f.env, encoding: "utf8" }));
   for (const snapshot of manifest.backups) {
@@ -252,7 +242,7 @@ function targetFixture(t) {
 function runImport(f, interruption = "") {
   if (!f.importCommands) {
     for (const [name, value] of Object.entries({ system: "inactive", "system-enabled": "disabled", pid: "0", "system-exec-main-pid": "0", "listener-pid": "0" }))
-      writeFileSync(join(f.state, name), value);
+      { writeFileSync(join(f.state, name), value); }
     const systemctl = join(f.commands, "handoff-systemctl");
     writeFileSync(systemctl, `#!/usr/bin/env bash
 set -euo pipefail
@@ -284,7 +274,7 @@ fs.linkSync=function(a,b){const result=link(a,b);if(b===${JSON.stringify(f.journ
 }
 
 test("imports one host into a disabled target and gates activation on Doctor and exact native config repairs", t => {
-  const f = targetFixture(t), { exported, candidate, sourceJournal } = f;
+  const f = targetFixture(t), { exported, sourceJournal } = f;
   assert.notEqual(f.run("target-import", [exported.manifest, "0".repeat(64)]).status, 0);
   writeFileSync(join(f.root, "etc/machine-id"), "c".repeat(32) + "\n");
   assert.notEqual(f.run("target-import", [exported.manifest, exported.manifestSha256]).status, 0);
@@ -295,7 +285,7 @@ test("imports one host into a disabled target and gates activation on Doctor and
   assert.equal(lstatSync(targetBackup).uid, process.getuid());
   assert.equal(lstatSync(targetBackup).mode & 0o7777, 0o600);
   assert.deepEqual(readFileSync(targetBackup), readFileSync(f.config));
-  if (process.getuid() === 0) assert.equal(lstatSync(f.config).uid, f.runtimeUid);
+  if (process.getuid() === 0) { assert.equal(lstatSync(f.config).uid, f.runtimeUid); }
   assert.deepEqual(JSON.parse(readFileSync(f.journal)).schedules, f.admission.schedules);
   assert.equal(f.success(f.run("target-import", [exported.manifest, exported.manifestSha256])), target);
   f.success(runImport(f));
@@ -305,6 +295,12 @@ test("imports one host into a disabled target and gates activation on Doctor and
   assert.doesNotMatch(readFileSync(f.eventlog, "utf8"), /service\.system\.(start|stop|restart|enable|disable)/);
   assert.equal(existsSync(f.permit), false);
   assert.notEqual(f.run("target-permit").status, 0);
+  // Doctor may refresh native maintenance receipts after the imported copy was verified.
+  for (const [path, role, agentId] of [[f.shared, "global", null], ...f.agents.map(agent => [agent.file, "agent", agent.id])]) {
+    const db = new DatabaseSync(path);
+    db.prepare("INSERT INTO schema_meta VALUES ('doctor-maintenance', ?, 1, ?)").run(role, agentId);
+    db.close();
+  }
   f.success(f.run("target-doctor"));
   f.success(f.run("target-doctor"));
   const verifiedJournal = readFileSync(f.journal);
@@ -346,21 +342,22 @@ test("imports one host into a disabled target and gates activation on Doctor and
 
 for (const interruption of ["journal", "previous", "current"]) {
   test(`import resumes after ${interruption} publication with the same journal and candidate SDK`, t => {
-    const f = targetFixture(t);
+    // The current-pointer case imports source-schema stores for a newer candidate before Doctor.
+    const f = targetFixture(t, interruption === "current" ? 2 : 1);
     const stopped = runImport(f, interruption);
     // Pointer publication reports the injected mv failure through the owner's error path.
     assert.equal(stopped.status, interruption === "journal" ? 73 : 1, stopped.stderr);
     assert.equal(existsSync(f.permit), false);
     const original = readFileSync(f.journal);
     const pointers = ["previous", "current"].map(name => lstatSync(join(f.serving, name), { throwIfNoEntry: false }));
-    if (interruption !== "current") assert.notEqual(f.run("target-doctor").status, 0);
+    if (interruption !== "current") { assert.notEqual(f.run("target-doctor").status, 0); }
     const resumed = runImport(f);
     assert.equal(resumed.status, 0, resumed.stderr);
     assert.match(resumed.stdout, /HANDOFF_IMPORTED.*candidate-selected=true start-permit=absent/);
     assert.deepEqual(readFileSync(f.journal), original);
     assert.equal(f.success(f.sdk()), targetSha);
     for (const [index, name] of ["previous", "current"].entries()) {
-      if (pointers[index]) assert.equal(lstatSync(join(f.serving, name)).ino, pointers[index].ino);
+      if (pointers[index]) { assert.equal(lstatSync(join(f.serving, name)).ino, pointers[index].ino); }
     }
     assert.equal(existsSync(f.permit), false);
   });
@@ -370,13 +367,13 @@ for (const fault of ["current-without-previous", "foreign-current", "foreign-pre
   test(`import refuses ${fault} without replacing the observed namespace`, t => {
     const f = targetFixture(t);
     assert.equal(runImport(f, "journal").status, 73);
-    if (fault === "current-without-previous") symlinkSync(f.candidate, join(f.serving, "current"));
+    if (fault === "current-without-previous") { symlinkSync(f.candidate, join(f.serving, "current")); }
     if (fault === "foreign-current") {
       symlinkSync(f.initial, join(f.serving, "previous"));
       symlinkSync(f.initial, join(f.serving, "current"));
     }
-    if (fault === "foreign-previous") symlinkSync(f.candidate, join(f.serving, "previous"));
-    if (fault === "permit-present") writeFileSync(f.permit, '{"version":1,"purpose":"gateway-start-permit"}\n', { mode: 0o600 });
+    if (fault === "foreign-previous") { symlinkSync(f.candidate, join(f.serving, "previous")); }
+    if (fault === "permit-present") { writeFileSync(f.permit, '{"version":1,"purpose":"gateway-start-permit"}\n', { mode: 0o600 }); }
     const before = ["previous", "current"].map(name => lstatSync(join(f.serving, name), { throwIfNoEntry: false })?.ino);
     const journal = readFileSync(f.journal);
     const refused = runImport(f);

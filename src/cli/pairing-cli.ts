@@ -12,7 +12,7 @@ import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { listPairingChannels, notifyPairingApproved } from "../channels/plugins/pairing.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { bootstrapCommandOwnerFromPairing } from "../pairing/command-owner.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 import { approveChannelPairingCode, listChannelPairingRequests } from "../pairing/pairing-store.js";
@@ -202,7 +202,7 @@ export function registerPairingCli(program: Command) {
         await notifyPairingApproved({
           channelId: channel,
           id: approved.id,
-          cfg: getRuntimeConfig(),
+          cfg: await captureRuntimeConfigAsyncReader()(),
           ...(approvedAccountId ? { accountId: approvedAccountId } : {}),
           ...(approved.entry.meta ? { meta: approved.entry.meta } : {}),
         });

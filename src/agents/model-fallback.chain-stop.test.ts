@@ -1,15 +1,12 @@
 import { afterAll, afterEach, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { testApi as loggerTestApi } from "../logging/logger.test-support.js";
 import { loggingState } from "../logging/state.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
-import { enqueueCommandInLane } from "../process/command-queue.js";
+import { CommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { AgentRunTerminalOutcomeError } from "./agent-run-terminal-error.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
-import { resolveEmbeddedRunAttemptTerminalState } from "./embedded-agent-runner/run/terminal-outcome.js";
-import { resolveEmbeddedRunTerminalTimeout } from "./embedded-agent-runner/run/terminal-timeout.js";
 import { FailoverError } from "./failover-error.js";
 import { AgentHarnessPreflightError } from "./harness/errors.js";
 import { type ModelFallbackStepHandler, runFallbackAttempt } from "./model-fallback-attempt.js";
@@ -21,7 +18,6 @@ import {
   createAgentRunRestartAbortError,
 } from "./run-termination.js";
 import { toSandboxProvisioningError } from "./sandbox/provisioning-error.js";
-import { makeEmbeddedRunnerAttempt } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
 
 vi.mock("../plugins/provider-failover.js", () => ({
   classifyProviderFailoverSignalWithPlugin: () => undefined,
@@ -44,7 +40,6 @@ const logPaths = createSuiteLogPathTracker("openclaw-chain-stop-");
 const warn = vi.fn<(...data: unknown[]) => void>();
 let capture: ReturnType<typeof createDiagnosticLogRecordCapture>;
 let previousConsole: typeof loggingState.rawConsole;
-let laneSequence = 0;
 beforeAll(() => logPaths.setup());
 afterAll(() => logPaths.cleanup());
 beforeEach(() => {
@@ -82,31 +77,6 @@ function terminalTimeout() {
     providerStarted: true,
   });
 }
-async function commandLaneTimeout(): Promise<Error> {
-  const entered = createDeferred();
-  const task = createDeferred();
-  const release = new AbortController();
-  const queued = enqueueCommandInLane(
-    `chain-stop-owned-${++laneSequence}`,
-    async () => {
-      entered.resolve();
-      await task.promise;
-    },
-    { taskTimeoutMs: 60_000, taskTimeoutReleaseSignal: release.signal },
-  );
-  const failure = queued.catch((error: unknown) => error);
-  try {
-    await entered.promise;
-    release.abort();
-    const error = await failure;
-    assert(error instanceof Error);
-    expect(error.name).toBe("CommandLaneTaskTimeoutError");
-    return error;
-  } finally {
-    task.resolve();
-    await task.promise;
-  }
-}
 async function terminalAbortWrapper(): Promise<Error> {
   const reason = new Error("private wrapper detail");
   reason.name = "TimeoutError";
@@ -127,7 +97,13 @@ const stopCases: Array<{
   { reason: "agent_run_terminal_timeout", make: () => ({ error: terminalTimeout() }) },
   {
     reason: "command_lane_task_timeout",
-    make: async () => ({ error: await commandLaneTimeout() }),
+    make: () => ({
+      error: new CommandLaneTaskTimeoutError("chain-stop-lane", {
+        cause: "release-signal",
+        elapsedMs: 0,
+        taskBudgetMs: 60_000,
+      }),
+    }),
   },
   {
     reason: "agent_harness_preflight",
@@ -180,38 +156,10 @@ it("preserves an idle-breaker result without reporting fallback success or tryin
 });
 
 it("does not attribute a returned timeout to a deduplicated single-candidate chain", async () => {
-  const attempt = makeEmbeddedRunnerAttempt({
-    terminal: { kind: "timeout", phase: "prompt", source: "run_budget", aborted: true },
-  });
-  const run = vi.fn(async () =>
-    resolveEmbeddedRunTerminalTimeout({
-      terminalPrepared: {
-        replyDeliveryState: "missing",
-        reportedModelRef: { provider: "runtime-provider", model: "runtime-model" },
-        finalAssistantVisibleText: undefined,
-        finalAssistantRawText: undefined,
-        timedOutDuringPrompt: true,
-        recoveredFinalAssistantPayloadsAfterPromptTimeout: undefined,
-        hasSuccessfulFinalAssistantAfterPromptTimeout: false,
-        hasPartialAssistantTextAfterPromptTimeout: false,
-        payloads: [],
-        payloadsWithToolMedia: [],
-        agentMeta: {
-          sessionId: "chain-stop-session",
-          provider: "runtime-provider",
-          model: "runtime-model",
-        },
-        attemptToolSummary: undefined,
-        failureSignal: undefined,
-        terminalToolFailure: undefined,
-      },
-      attempt,
-      terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant: undefined }),
-      resolveReplayInvalid: () => false,
-      setTerminalLifecycleMeta: vi.fn(),
-      startedAtMs: Date.now(),
-    }),
-  );
+  const agentMeta = { provider: "runtime-provider", model: "runtime-model" };
+  const run = vi.fn(async () => ({
+    meta: { agentMeta, modelFallbackStopReason: "agent_run_terminal_timeout" },
+  }));
   const result = await runWithModelFallback({
     ...fallbackOptions,
     fallbacksOverride: ["fixture-primary/fixture-model"],
@@ -219,10 +167,7 @@ it("does not attribute a returned timeout to a deduplicated single-candidate cha
     classifyResult: () => ({ stopReason: "agent_run_terminal_timeout" }),
   });
   expect(run).toHaveBeenCalledOnce();
-  expect(result.result?.meta.agentMeta).toMatchObject({
-    provider: "runtime-provider",
-    model: "runtime-model",
-  });
+  expect(result.result.meta.agentMeta).toEqual(agentMeta);
   await capture.flush();
   expect(fallbackRecords()).toHaveLength(0);
 });

@@ -1,97 +1,54 @@
-// Message command tests cover CLI message sending, environment handling, and runtime dependency wiring.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
-import { captureEnv } from "../test-utils/env.js";
 import { messageCommand } from "./message.js";
+import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
-type ResetPluginRuntimeStateForTest =
-  typeof import("../plugins/runtime.js").resetPluginRuntimeStateForTest;
-type SetActivePluginRegistry = typeof import("../plugins/runtime.js").setActivePluginRegistry;
-type CreateTestRegistry = typeof import("../test-utils/channel-plugins.js").createTestRegistry;
+let resetPluginRuntimeStateForTest: typeof import("../plugins/runtime.js").resetPluginRuntimeStateForTest;
+let setActivePluginRegistry: typeof import("../plugins/runtime.js").setActivePluginRegistry;
+let createTestRegistry: typeof import("../test-utils/channel-plugins.js").createTestRegistry;
 
-let resetPluginRuntimeStateForTest: ResetPluginRuntimeStateForTest;
-let setActivePluginRegistry: SetActivePluginRegistry;
-let createTestRegistry: CreateTestRegistry;
-
-type RunMessageActionParams = {
-  cfg?: unknown;
-  action: string;
-  broadcastAccountPlan?: {
-    accountId: string;
-    candidateChannels: string[];
-    secretChannels: string[];
-  };
-  params: Record<string, unknown>;
-  agentId?: string;
-  senderIsOwner?: boolean;
-  conversationReadOrigin?: "delegated" | "direct-operator";
-  gateway?: {
-    clientName?: string;
-    mode?: string;
-  };
-};
+type RunMessageActionParams = Parameters<
+  typeof import("../infra/outbound/message-action-runner.js").runMessageAction
+>[0];
 
 function readOnlyMessageActionCall(): RunMessageActionParams {
   expect(runMessageActionMock).toHaveBeenCalledOnce();
-  const call = runMessageActionMock.mock.calls[0]?.[0];
-  if (!call) {
-    throw new Error("Expected message action call");
-  }
-  return call;
+  return expectDefined(runMessageActionMock.mock.calls[0]?.[0], "Expected message action call");
 }
 
 let testConfig: Record<string, unknown> = {};
 const applyPluginAutoEnable = vi.hoisted(() => vi.fn(({ config }) => ({ config, changes: [] })));
+// mock-isolation: Message dispatch receives testConfig without reading host channel credentials.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => testConfig,
   loadConfig: () => testConfig,
+  captureRuntimeConfigAsyncReader: () => async () => testConfig,
 }));
 
-vi.mock("../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable,
-}));
+// mock-isolation: Auto-enable only the synthetic config selected by each message scenario.
+vi.mock("../config/plugin-auto-enable.js", () => ({ applyPluginAutoEnable }));
 
 const resolveCommandConfigWithSecrets = vi.hoisted(() =>
-  vi.fn(async ({ config }: { config: unknown }) => ({
-    resolvedConfig: config,
-    effectiveConfig: config,
+  vi.fn(async (opts: { autoEnable?: boolean; config: unknown; env?: NodeJS.ProcessEnv }) => ({
+    resolvedConfig: opts.config,
+    effectiveConfig:
+      opts.autoEnable === true
+        ? applyPluginAutoEnable({ config: opts.config, env: opts.env ?? process.env }).config
+        : opts.config,
     diagnostics: [] as string[],
   })),
 );
-
+// mock-isolation: Resolve fixture SecretRefs without reading operator credentials.
 vi.mock("../cli/command-config-resolution.js", () => ({
-  resolveCommandConfigWithSecrets: async (opts: {
-    autoEnable?: boolean;
-    config: unknown;
-    env?: NodeJS.ProcessEnv;
-    runtime?: { log: (message: string) => void };
-  }) => {
-    const result = await resolveCommandConfigWithSecrets(opts);
-    for (const entry of result.diagnostics ?? []) {
-      opts.runtime?.log(`[secrets] ${entry}`);
-    }
-    const effectiveConfig =
-      opts.autoEnable === true
-        ? applyPluginAutoEnable({
-            config: result.resolvedConfig,
-            env: opts.env ?? process.env,
-          }).config
-        : result.effectiveConfig;
-    return {
-      ...result,
-      effectiveConfig,
-    };
-  },
+  resolveCommandConfigWithSecrets,
 }));
 
 const getScopedChannelsCommandSecretTargets = vi.hoisted(() =>
-  vi.fn(() => ({
-    targetIds: new Set(["channels.telegram.token"]),
-  })),
+  vi.fn(() => ({ targetIds: new Set(["channels.telegram.token"]) })),
 );
 
 vi.mock("../cli/command-secret-targets.js", () => ({
@@ -117,94 +74,57 @@ vi.mock("../infra/outbound/message-action-runner.js", () => ({
   runMessageAction: runMessageActionMock,
 }));
 
-let envSnapshot: ReturnType<typeof captureEnv>;
-
 beforeAll(async () => {
   ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } =
     await import("../plugins/runtime.js"));
   ({ createTestRegistry } = await import("../test-utils/channel-plugins.js"));
 });
 
-const runtime: RuntimeEnv = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(() => {
-    throw new Error("exit");
-  }),
-};
+const runtime = createThrowingTestRuntime();
 
 beforeEach(() => {
   resetPluginRuntimeStateForTest();
   setActivePluginRegistry(createTestRegistry([]));
-  envSnapshot = captureEnv(["TELEGRAM_BOT_TOKEN", "DISCORD_BOT_TOKEN"]);
-  process.env.TELEGRAM_BOT_TOKEN = "";
-  process.env.DISCORD_BOT_TOKEN = "";
+  vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+  vi.stubEnv("DISCORD_BOT_TOKEN", "");
   testConfig = {};
-  runMessageActionMock.mockClear();
-  resolveCommandConfigWithSecrets.mockClear();
-  getScopedChannelsCommandSecretTargets.mockClear();
-  applyPluginAutoEnable.mockClear();
+  vi.clearAllMocks();
   applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
-  vi.mocked(runtime.log).mockClear();
-  vi.mocked(runtime.error).mockClear();
-  vi.mocked(runtime.exit).mockClear();
 });
 
 afterEach(() => {
-  envSnapshot.restore();
+  vi.unstubAllEnvs();
   resetPluginRuntimeStateForTest();
 });
 
-function createAccountPlugin(id: "slack" | "telegram", accountIds: string[]): ChannelPlugin {
+function createAccountPlugin(
+  id: string,
+  accountIds: string[],
+  config: Partial<ChannelPlugin["config"]> = {},
+  capabilities: ChannelPlugin["capabilities"] = { chatTypes: ["direct", "group"], media: true },
+): ChannelPlugin {
   return {
     id,
-    meta: {
-      id,
-      label: id,
-      selectionLabel: id,
-      docsPath: `/channels/${id}`,
-      blurb: "test",
-    },
-    capabilities: { chatTypes: ["direct", "group"], media: true },
+    meta: { id, label: id, selectionLabel: id, docsPath: `/channels/${id}`, blurb: "test" },
+    capabilities,
     config: {
       listAccountIds: () => accountIds,
       inspectAccount: () => ({ enabled: true }),
       resolveAccount: () => {
         throw new Error("raw account credentials must not resolve during planning");
       },
+      ...config,
     },
   };
 }
 
-function createLegacySingleAccountPlugin(params: {
-  id: "buzz";
-  resolveAccount: ChannelPlugin["config"]["resolveAccount"];
-}): ChannelPlugin {
-  return {
-    id: params.id,
-    meta: {
-      id: params.id,
-      label: params.id,
-      selectionLabel: params.id,
-      docsPath: `/channels/${params.id}`,
-      blurb: "test",
-    },
-    capabilities: { chatTypes: ["group"] },
-    config: {
-      listAccountIds: () => ["default"],
-      resolveAccount: params.resolveAccount,
-    },
-  };
-}
-
-const makeDeps = (overrides: Partial<CliDeps> = {}): CliDeps => ({
+const makeDeps = (): CliDeps => ({
   whatsapp: vi.fn(),
   telegram: vi.fn(),
   discord: vi.fn(),
   slack: vi.fn(),
   signal: vi.fn(),
   imessage: vi.fn(),
-  ...overrides,
 });
 
 function createTelegramSecretRawConfig() {
@@ -254,6 +174,28 @@ async function runMessageCommand(opts: Record<string, unknown> = {}) {
     runtime,
   );
 }
+function jsonOutput(): unknown {
+  return JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0]));
+}
+const runBroadcast = (accountId: string, targets: string[]) =>
+  runMessageCommand({ action: "broadcast", channel: "all", target: undefined, targets, accountId });
+function expectBroadcastPlan(
+  accountId: string,
+  candidateChannels: string[],
+  secretChannels: string[],
+) {
+  expect(getScopedChannelsCommandSecretTargets).toHaveBeenCalledWith({
+    config: testConfig,
+    channel: undefined,
+    channels: secretChannels,
+    accountId,
+  });
+  expect(readOnlyMessageActionCall().broadcastAccountPlan).toEqual({
+    accountId,
+    candidateChannels,
+    secretChannels,
+  });
+}
 
 describe("messageCommand", () => {
   it("includes aggregate broadcast failure and every target row in JSON output", async () => {
@@ -276,20 +218,23 @@ describe("messageCommand", () => {
       targets: ["123", "456"],
     });
 
-    const output = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0])) as {
-      ok?: boolean;
-      payload?: { results?: unknown[] };
-    };
-    expect(output.ok).toBe(false);
-    expect(output.payload?.results).toEqual(results);
+    expect(jsonOutput()).toMatchObject({ ok: false });
+    expect(jsonOutput()).toHaveProperty("payload.results", results);
   });
 
-  it("rejects a malformed explicit account before resolving secrets", async () => {
-    await expect(runMessageCommand({ accountId: "!!!" })).rejects.toThrow("Invalid account ID");
-
-    expect(resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
-    expect(runMessageActionMock).not.toHaveBeenCalled();
-  });
+  it.each([
+    [{ accountId: "!!!" }, "Invalid account ID", true],
+    [{ action: "nope" }, "Unknown message action", false],
+  ] as const)(
+    "rejects invalid command %j before dispatch",
+    async (options, error, beforeSecrets) => {
+      await expect(runMessageCommand(options)).rejects.toThrow(error);
+      if (beforeSecrets) {
+        expect(resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+      }
+      expect(runMessageActionMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("scopes unqualified broadcast secrets to channels accepting the explicit account", async () => {
     const slackPlugin = createAccountPlugin("slack", ["shared"]);
@@ -303,72 +248,31 @@ describe("messageCommand", () => {
         { pluginId: "telegram", source: "test", plugin: telegramPlugin },
       ]),
     );
-    testConfig = {
-      channels: {
-        slack: { accounts: { shared: { botToken: { $secret: "vault://slack/shared" } } } },
-        telegram: {
-          accounts: { default: { botToken: { $secret: "vault://telegram/default" } } },
-        },
-      },
-    };
+    testConfig = { channels: { slack: {}, telegram: {} } };
 
-    await runMessageCommand({
-      action: "broadcast",
-      channel: "all",
-      target: undefined,
-      targets: ["slack:channel:ops", "telegram:123"],
-      accountId: "shared",
-    });
+    await runBroadcast("shared", ["slack:channel:ops", "telegram:123"]);
 
-    expect(getScopedChannelsCommandSecretTargets).toHaveBeenCalledWith({
-      config: testConfig,
-      channel: undefined,
-      channels: ["slack"],
-      accountId: "shared",
-    });
-    expect(readOnlyMessageActionCall().broadcastAccountPlan).toEqual({
-      accountId: "shared",
-      candidateChannels: ["slack", "telegram"],
-      secretChannels: ["slack"],
-    });
+    expectBroadcastPlan("shared", ["slack", "telegram"], ["slack"]);
     expect(slackPlugin.config.isEnabled).not.toHaveBeenCalled();
   });
 
   it("excludes unknown legacy-plugin accounts before account or secret resolution", async () => {
     const resolveAccount = vi.fn(() => ({ accountId: "default", enabled: true }));
-    const buzzPlugin = createLegacySingleAccountPlugin({ id: "buzz", resolveAccount });
+    const buzzPlugin = createAccountPlugin(
+      "buzz",
+      ["default"],
+      { inspectAccount: undefined, resolveAccount },
+      { chatTypes: ["group"] },
+    );
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "buzz", source: "test", plugin: buzzPlugin }]),
     );
-    testConfig = {
-      channels: {
-        buzz: {
-          relayUrl: "wss://buzz.example.test",
-          privateKey: { source: "file", provider: "vault", id: "/buzz/private-key" },
-        },
-      },
-    };
+    testConfig = { channels: { buzz: {} } };
 
-    await runMessageCommand({
-      action: "broadcast",
-      channel: "all",
-      target: undefined,
-      targets: ["00000000-0000-4000-8000-000000000001"],
-      accountId: "ops",
-    });
+    await runBroadcast("ops", ["00000000-0000-4000-8000-000000000001"]);
 
     expect(resolveAccount).not.toHaveBeenCalled();
-    expect(getScopedChannelsCommandSecretTargets).toHaveBeenCalledWith({
-      config: testConfig,
-      channel: undefined,
-      channels: [],
-      accountId: "ops",
-    });
-    expect(readOnlyMessageActionCall().broadcastAccountPlan).toEqual({
-      accountId: "ops",
-      candidateChannels: ["buzz"],
-      secretChannels: [],
-    });
+    expectBroadcastPlan("ops", ["buzz"], []);
   });
 
   it("threads resolved SecretRef config into message actions", async () => {
@@ -415,12 +319,7 @@ describe("messageCommand", () => {
 
   it("keeps the retained legacy owner after config load strips the default marker", async () => {
     const migrated = createCanonicalAgentConfigFixture({
-      agents: {
-        entries: {
-          ops: { default: true },
-          research: {},
-        },
-      },
+      agents: { entries: { ops: { default: true }, research: {} } },
       channels: { telegram: {} },
     }).config as Record<string, unknown>;
     testConfig = migrated;
@@ -436,47 +335,44 @@ describe("messageCommand", () => {
     expect(readOnlyMessageActionCall().agentId).toBe("ops");
   });
 
-  it.each([false])(
-    "guides an ownerless explicit fleet to a system owner (dryRun=%s)",
-    async (dryRun) => {
-      const ownerlessConfig = {
-        agents: {
-          ownership: "explicit" as const,
-          entries: { ops: {}, research: {} },
-        },
-      };
-      mockResolvedCommandConfig({
-        rawConfig: {},
-        resolvedConfig: ownerlessConfig,
-        diagnostics: [],
-      });
+  it("guides an ownerless explicit fleet to a system owner", async () => {
+    const ownerlessConfig = {
+      agents: {
+        ownership: "explicit" as const,
+        entries: { ops: {}, research: {} },
+      },
+    };
+    mockResolvedCommandConfig({
+      rawConfig: {},
+      resolvedConfig: ownerlessConfig,
+      diagnostics: [],
+    });
 
-      const failedRun = runMessageCommand({ dryRun });
-      await expect(failedRun).rejects.toMatchObject({
-        code: "AGENT_SELECTION_REQUIRED",
-        hint: expect.stringContaining("agents.defaults.systemAgent.agentId"),
-      });
-      await expect(failedRun).rejects.not.toThrow("--agent");
-      expect(runMessageActionMock).not.toHaveBeenCalled();
+    const failedRun = runMessageCommand({ dryRun: false });
+    await expect(failedRun).rejects.toMatchObject({
+      code: "AGENT_SELECTION_REQUIRED",
+      hint: expect.stringContaining("agents.defaults.systemAgent.agentId"),
+    });
+    await expect(failedRun).rejects.not.toThrow("--agent");
+    expect(runMessageActionMock).not.toHaveBeenCalled();
 
-      const effectiveConfig = {
-        agents: {
-          ...ownerlessConfig.agents,
-          defaults: { systemAgent: { agentId: "ops" } },
-        },
-      };
-      mockResolvedCommandConfig({
-        rawConfig: {},
-        resolvedConfig: effectiveConfig,
-        diagnostics: [],
-      });
+    const effectiveConfig = {
+      agents: {
+        ...ownerlessConfig.agents,
+        defaults: { systemAgent: { agentId: "ops" } },
+      },
+    };
+    mockResolvedCommandConfig({
+      rawConfig: {},
+      resolvedConfig: effectiveConfig,
+      diagnostics: [],
+    });
 
-      await runMessageCommand({ dryRun });
+    await runMessageCommand({ dryRun: false });
 
-      expect(readOnlyMessageActionCall().cfg).toBe(effectiveConfig);
-      expect(readOnlyMessageActionCall().agentId).toBe("ops");
-    },
-  );
+    expect(readOnlyMessageActionCall().cfg).toBe(effectiveConfig);
+    expect(readOnlyMessageActionCall().agentId).toBe("ops");
+  });
 
   it("normalizes poll actions and sender ownership before dispatch", async () => {
     await runMessageCommand({
@@ -518,43 +414,37 @@ describe("messageCommand", () => {
       dryRun: false,
     });
     await runMessageCommand({ channel: "discord", target: "channel:general" });
-    const json = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0]));
+    const json = jsonOutput();
     expect(json).toMatchObject({
       ok: false,
       deliveryStatus: "partial_failed",
       error: { type: "cli_error", message: "second attachment rejected" },
+      messageId: "first-part-1",
+      sentBeforeError: true,
     });
-    expect(json.payload).toEqual(sendResult);
-    expect(json.messageId).toBe("first-part-1");
-    expect(json.sentBeforeError).toBe(true);
+    expect(json).toHaveProperty("payload", sendResult);
   });
 
-  it.each([
-    ["rejected poll", "poll", { ok: false, error: "Poll rejected" }, "Poll rejected"],
-  ] as const)("reports %s truthfully in JSON output", async (_name, action, payload, expected) => {
+  it("reports rejected polls truthfully in JSON output", async () => {
+    const payload = { ok: false, error: "Poll rejected" };
     runMessageActionMock.mockResolvedValueOnce({
-      kind: action === "poll" ? action : "action",
+      kind: "poll",
       channel: "telegram",
-      action,
+      action: "poll",
       to: "123456",
       handledBy: "plugin",
       payload,
       dryRun: false,
-    } as MessageActionResult);
+    });
 
-    await runMessageCommand({ action });
+    await runMessageCommand({ action: "poll" });
 
-    const json = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0]));
+    const json = jsonOutput();
     expect(json).toMatchObject({
       ok: false,
-      error: { type: "cli_error", message: expected },
+      error: { type: "cli_error", message: "Poll rejected" },
     });
-    expect(json.payload).toEqual(payload);
+    expect(json).toHaveProperty("payload", payload);
     expect(json).not.toHaveProperty("deliveryStatus");
-  });
-
-  it("rejects unknown message actions before dispatch", async () => {
-    await expect(runMessageCommand({ action: "nope" })).rejects.toThrow("Unknown message action");
-    expect(runMessageActionMock).not.toHaveBeenCalled();
   });
 });

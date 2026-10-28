@@ -112,7 +112,11 @@ vi.mock("../../process/exec.js", async (original) => {
     },
   };
 });
-vi.mock("./progress.js", () => ({ printResult: vi.fn() }));
+vi.mock("./progress.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./progress.js")>()),
+  printResult: vi.fn(),
+  prepareResult: async () => () => {},
+}));
 vi.mock("../../commands/doctor-completion.js", async (original) => ({
   ...(await original<typeof import("../../commands/doctor-completion.js")>()),
   checkShellCompletionStatus: vi.fn(async () => ({ shell: null })),

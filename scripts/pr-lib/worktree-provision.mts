@@ -121,6 +121,73 @@ async function needsNativeGit(git: GitPolicyReader, env: NodeJS.ProcessEnv): Pro
 
 let advertisedCleanupGrace = false;
 
+/** The private registry upgrades through the same captured owner as standalone Doctor. */
+async function preparePrStateSchema(
+  env: NodeJS.ProcessEnv,
+  assertCurrent: () => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const { preflightOpenClawDatabaseSchemas } =
+    await import("../../src/state/openclaw-database-preflight.js");
+  assertCurrent();
+  const preflight = await preflightOpenClawDatabaseSchemas({
+    env,
+    signal,
+    scope: "state",
+    preserveSourceArtifacts: false,
+  });
+  assertCurrent();
+  // An unclassified store is never assumed current: guarded preparation re-inspects it
+  // instead of leaving a pending migration to the uncaptured lease open.
+  const migration =
+    preflight.pendingMigrations?.find(({ kind }) => kind === "state") ??
+    preflight.indeterminate.find(({ kind }) => kind === "state");
+  // Missing/current stores keep ordinary allocation concurrency and admission.
+  if (!migration) {
+    return;
+  }
+  const { acquireGatewayStateOwner } = await import("../../src/infra/gateway-state-owner.js");
+  const { createOpenClawDatabaseMaintenanceScope } =
+    await import("../../src/state/openclaw-state-db-async-lifecycle.js");
+  const { runWithDoctorMigrationBackup } =
+    await import("../../src/infra/update-doctor-migration-attribution.js");
+  const { captureFreshDoctorMigrationTables } =
+    await import("../../src/commands/doctor-migration-backup.js");
+  const { completeDoctorMigrationBackups } =
+    await import("../../src/commands/doctor-migration-backup-artifacts.js");
+  const { prepareOpenClawStateDatabaseSchema } =
+    await import("../../src/state/openclaw-state-db.js");
+  assertCurrent();
+  const owner = acquireGatewayStateOwner({ databasePath: migration.path });
+  const resources = createOpenClawDatabaseMaintenanceScope({
+    schemaMaintenance: true,
+    assertOwnerCurrent() {
+      owner.assertCurrent();
+      assertCurrent();
+    },
+    assertDatabaseAccess: owner.assertDatabaseAccess,
+  });
+  try {
+    await resources.run(() =>
+      runWithDoctorMigrationBackup(captureFreshDoctorMigrationTables, async () => {
+        const result = await prepareOpenClawStateDatabaseSchema({ env }, "doctor-preparation");
+        assertCurrent();
+        if (result.warnings.length) {
+          throw new Error(result.warnings.join("\n"));
+        }
+        completeDoctorMigrationBackups(env, [migration.path], true);
+      }),
+    );
+  } finally {
+    try {
+      await resources.close();
+      assertCurrent();
+    } finally {
+      owner.release();
+    }
+  }
+}
+
 async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
   if (
     !/^[1-9][0-9]*$/.test(params.pr) ||
@@ -158,14 +225,30 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
       },
     );
     if (checked.status !== 0) {
+      // A failed check does not prove lock loss. Preserve process evidence for
+      // the existing redacted diagnostic formatter instead of guessing its cause.
       throw new Error(
-        "PR operation lock changed or is unreadable; retain provisioning state for recovery.",
+        `PR operation lock check failed (status=${checked.status}, signal=${checked.signal}); retain provisioning state for recovery.${checked.stderr?.trim() ? `\n${checked.stderr.trim()}` : ""}`,
+        { cause: checked.error },
       );
     }
   };
   assertPrAuthority();
+  await preparePrStateSchema(
+    storageEnv,
+    () => {
+      params.signal?.throwIfAborted();
+      assertPrAuthority();
+    },
+    params.signal,
+  );
   await withWorktreeAllocationLease(
-    { env: storageEnv, signal: params.signal, commitGuard: assertPrAuthority },
+    {
+      env: storageEnv,
+      signal: params.signal,
+      commitGuard: assertPrAuthority,
+      rollbackGuard: assertPrAuthority,
+    },
     async (guard) => {
       const assertCurrent = () => {
         guard.signal?.throwIfAborted();

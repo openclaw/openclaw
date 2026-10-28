@@ -19,8 +19,8 @@ import type { SessionsListResult } from "./session-utils.types.js";
 
 it.runIf(process.env.OPENCLAW_SESSION_PUBLICATIONS_BENCH === "1")(
   "measures 8,000 resident rows with ten appends and three list calls per simulated second",
-  async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = {
         agents: { entries: { main: {} }, defaults: { thinkingDefault: "off" as const } },
       };
@@ -32,11 +32,7 @@ it.runIf(process.env.OPENCLAW_SESSION_PUBLICATIONS_BENCH === "1")(
         Object.fromEntries(
           Array.from({ length: 8_000 }, (_, index) => [
             `agent:main:dashboard:bench-${index}`,
-            {
-              sessionId: `bench-${index}`,
-              updatedAt: index + 1,
-              visibility: "shared" as const,
-            },
+            { sessionId: `bench-${index}`, updatedAt: index + 1, visibility: "shared" as const },
           ]),
         ),
       );
@@ -137,7 +133,6 @@ it.runIf(process.env.OPENCLAW_SESSION_PUBLICATIONS_BENCH === "1")(
         release();
         vi.useRealTimers();
       }
-    });
-  },
+    }),
   120_000,
 );

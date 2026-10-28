@@ -19,9 +19,6 @@ export function createDebugProxyCaptureReaderAsync(params: {
         { context },
       );
       context.admission.assertCurrent();
-      if (result && (!result.ok || result.type !== "capture.readOnlyEvents")) {
-        throw new Error("Unexpected capture events read result");
-      }
       return result?.events ?? [];
     },
     async readBlob(blobId) {
@@ -31,9 +28,6 @@ export function createDebugProxyCaptureReaderAsync(params: {
         { context },
       );
       context.admission.assertCurrent();
-      if (result && (!result.ok || result.type !== "capture.readOnlyBlob")) {
-        throw new Error("Unexpected capture blob read result");
-      }
       return result?.blob ?? null;
     },
   };

@@ -3,7 +3,7 @@ import type {
   ChannelApprovalKind,
   PendingApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { createChannelApprovalNativeRuntimeAdapterAsync } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import {
   buildPluginApprovalPendingReplyPayload,
@@ -19,7 +19,6 @@ import type {
 } from "openclaw/plugin-sdk/approval-runtime";
 import { resolveGatewayPublicOrigin } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
@@ -27,6 +26,7 @@ import {
   buildTelegramNativeExpiredApprovalText,
   buildTelegramNativeResolvedApprovalText,
 } from "./approval-terminal.js";
+import { buildTelegramRoutingTarget } from "./bot/helpers.js";
 import { normalizeTelegramButtonStyle, resolveTelegramInlineButtons } from "./button-types.js";
 import { normalizeControlUiBasePath } from "./control-ui-base-path.js";
 import {
@@ -34,6 +34,8 @@ import {
   shouldHandleTelegramExecApprovalRequest,
 } from "./exec-approvals.js";
 import { escapeTelegramHtml } from "./format.js";
+import { parseTelegramThreadId } from "./outbound-params.js";
+import { resolveTelegramSendThreadSpec } from "./reply-parameters.js";
 import {
   editMessageReplyMarkupTelegram,
   editMessageTelegram,
@@ -48,21 +50,29 @@ const log = createSubsystemLogger("telegram/approvals");
 const terminalizedSystemAgentApprovals = new Set<string>();
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
+type TelegramApprovalTarget = {
+  chatId: string;
+  messageThreadId?: number;
+  directMessagesTopicId?: number;
+};
 type TelegramPendingDelivery = {
   text: string;
   buttons: ReturnType<typeof resolveTelegramInlineButtons>;
 };
-type TelegramExecApprovalHandlerDeps = {
-  sendTyping?: typeof sendTypingTelegram;
-  sendMessage?: typeof sendMessageTelegram;
-  editMessage?: typeof editMessageTelegram;
-  editReplyMarkup?: typeof editMessageReplyMarkupTelegram;
-};
-
 type TelegramApprovalHandlerContext = {
   token: string;
-  deps?: TelegramExecApprovalHandlerDeps;
 };
+
+function approvalTargetKey(target: TelegramApprovalTarget): string {
+  return buildTelegramRoutingTarget(
+    target.chatId,
+    resolveTelegramSendThreadSpec({
+      messageThreadId: target.messageThreadId,
+      targetDirectMessagesTopicId: target.directMessagesTopicId,
+      chatType: parseTelegramTarget(target.chatId).chatType,
+    }),
+  );
+}
 
 function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext) {
   const context = params.context as TelegramApprovalHandlerContext | undefined;
@@ -151,10 +161,10 @@ function buildPendingPayload(params: {
   };
 }
 
-export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
+export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapterAsync<
   TelegramPendingDelivery,
-  { chatId: string; messageThreadId?: number; directMessagesTopicId?: number },
-  { chatId: string; messageId: string },
+  TelegramApprovalTarget,
+  TelegramApprovalTarget & { messageId: string },
   never,
   { text: string }
 >({
@@ -211,16 +221,14 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       if (!resolved) {
         return null;
       }
-      const sendTyping = resolved.context.deps?.sendTyping ?? sendTypingTelegram;
-      const sendMessage = resolved.context.deps?.sendMessage ?? sendMessageTelegram;
       const options = {
         ...resolved.options(),
         ...(preparedTarget.messageThreadId != null
           ? { messageThreadId: preparedTarget.messageThreadId }
           : {}),
       };
-      await sendTyping(preparedTarget.chatId, options).catch(() => {});
-      const result = await sendMessage(preparedTarget.chatId, pendingPayload.text, {
+      await sendTypingTelegram(preparedTarget.chatId, options).catch(() => {});
+      const result = await sendMessageTelegram(preparedTarget.chatId, pendingPayload.text, {
         ...options,
         buttons: pendingPayload.buttons,
         ...(preparedTarget.directMessagesTopicId != null
@@ -228,6 +236,7 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
           : {}),
       });
       return {
+        ...preparedTarget,
         chatId: result.chatId,
         messageId: result.messageId,
       };
@@ -237,10 +246,9 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       if (!resolved) {
         return;
       }
-      const editMessage = resolved.context.deps?.editMessage ?? editMessageTelegram;
       let editError: unknown;
       try {
-        await editMessage(entry.chatId, entry.messageId, escapeTelegramHtml(payload.text), {
+        await editMessageTelegram(entry.chatId, entry.messageId, escapeTelegramHtml(payload.text), {
           ...resolved.options(),
           textMode: "html",
           buttons: [],
@@ -258,22 +266,28 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
           ? normalizeTelegramChatId(parsedOrigin.chatId)
           : undefined;
         const originThreadId =
-          parseStrictPositiveInteger(request.request.turnSourceThreadId) ??
+          parseTelegramThreadId(request.request.turnSourceThreadId) ??
           parsedOrigin?.messageThreadId;
         const sourceAccountId = request.request.turnSourceAccountId?.trim();
         const isSourceAccount = !sourceAccountId || sourceAccountId === resolved.accountId;
         if (originChatId && isSourceAccount) {
+          const origin = {
+            chatId: originChatId,
+            messageThreadId: originThreadId,
+            directMessagesTopicId: parsedOrigin?.directMessagesTopicId,
+          };
+          // An edit reaches only its own topic; General uses the sender's root normalization.
           if (
-            (entry.chatId !== originChatId || editError !== undefined) &&
+            (approvalTargetKey(entry) !== approvalTargetKey(origin) || editError !== undefined) &&
             !terminalizedSystemAgentApprovals.has(request.id)
           ) {
-            const sendMessage = resolved.context.deps?.sendMessage ?? sendMessageTelegram;
-            const originTo =
-              parsedOrigin?.directMessagesTopicId != null ? originTarget! : originChatId;
-            await sendMessage(originTo, escapeTelegramHtml(payload.text), {
+            await sendMessageTelegram(originChatId, escapeTelegramHtml(payload.text), {
               ...resolved.options(),
               textMode: "html",
               ...(originThreadId != null ? { messageThreadId: originThreadId } : {}),
+              ...(origin.directMessagesTopicId != null
+                ? { directMessagesTopicId: origin.directMessagesTopicId }
+                : {}),
             });
           }
           terminalizedSystemAgentApprovals.add(request.id);
@@ -290,9 +304,7 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       if (!resolved) {
         return;
       }
-      const editReplyMarkup =
-        resolved.context.deps?.editReplyMarkup ?? editMessageReplyMarkupTelegram;
-      await editReplyMarkup(entry.chatId, entry.messageId, [], resolved.options());
+      await editMessageReplyMarkupTelegram(entry.chatId, entry.messageId, [], resolved.options());
     },
   },
   observe: {

@@ -1,3 +1,4 @@
+import { classifyDoctorMaintenanceRefusal } from "../commands/doctor-maintenance-inspection.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import { readPackageVersion } from "./package-json.js";
@@ -13,6 +14,7 @@ import {
 import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
+import { settleGitUpdateCleanup } from "./update-runner-git-cleanup.js";
 import { gitCleanCheckArgs } from "./update-runner-git-commands.js";
 import {
   readCurrentGitUpdateRecovery,
@@ -25,6 +27,7 @@ import {
 import {
   runGitActivationBranchCheckStep,
   runGitCleanCheckStep,
+  readGitRollbackPreservation,
   runGitRollbackSteps,
   runGitUpstreamStep,
 } from "./update-runner-git-steps.js";
@@ -165,6 +168,7 @@ export async function updateGitCheckout(params: {
     | undefined;
   let stateMigrationStarted = false;
   let cleanupUncertain = false;
+  const cleanupReportingFailures: unknown[] = [];
   let recovery = await verifyGitUpdateRecovery({ root: gitRoot, sha: beforeSha });
   let rollbackOutcome: NonNullable<UpdateRunResult["rollbackOutcome"]> = {
     status: "not-needed",
@@ -201,18 +205,21 @@ export async function updateGitCheckout(params: {
     runtimeSha = beforeSha,
     source?: { sha: string; branch: string | null },
   ) => {
-    const restoreSource = () =>
-      runGitRollbackSteps({
-        beforeSha,
-        branch,
-        gitRoot,
-        createdDevBranchDuringUpdate,
-        sourceTreeStagingPaths: runtimePromotion?.sourceTreeStagingPaths,
-        recoveryStep,
-        checkSourceUnchanged,
-        assertCurrent,
-        activatedSource: source,
-      });
+    const rollback = {
+      beforeSha,
+      branch,
+      gitRoot,
+      createdDevBranchDuringUpdate,
+      sourceTreeStagingPaths: runtimePromotion?.sourceTreeStagingPaths,
+      recoveryStep,
+      checkSourceUnchanged,
+      assertCurrent,
+      activatedSource: source,
+    };
+    const restoreSource = () => runGitRollbackSteps(rollback);
+    // Check before runtime restoration rewrites tracked output.
+    const preserved = source ? undefined : await readGitRollbackPreservation(rollback);
+    steps.push(...(preserved ? [preserved] : []));
     // Retained rollback must settle every source/ref fence before changing runtime.
     let sourceRestored = source ? await restoreSource() : false;
     let runtimeRestored = true;
@@ -224,7 +231,7 @@ export async function updateGitCheckout(params: {
       steps.push(failureStep("git-runtime-rollback", "restore previous runtime", String(error)));
     }
     // Immediate activation recovery reconstructs tracked output after runtime restoration.
-    if (!source) {
+    if (!source && !preserved) {
       sourceRestored = await restoreSource();
     }
     recovery = !sourceRestored
@@ -332,8 +339,7 @@ export async function updateGitCheckout(params: {
     }
     return undefined;
   };
-
-  try {
+  const runUpdate = async (): Promise<UpdateRunResult> => {
     const inspectAndPrepare = async (
       inspectionRoot: string,
       runInspectionCommand: CommandRunner,
@@ -381,7 +387,7 @@ export async function updateGitCheckout(params: {
         steps,
       });
       if (!fetched.ok) {
-        return { status: "error" as const, reason: "fetch-failed" };
+        return { status: "error" as const, reason: fetched.reason ?? "fetch-failed" };
       }
       const inspectTarget = async (revision: string, root = inspectionRoot) => {
         await prepareGitMutation({
@@ -404,6 +410,7 @@ export async function updateGitCheckout(params: {
         channel,
         devTarget,
         refreshedRemotes: fetched.refreshedRemotes,
+        devSource: fetched.devSource,
         beforeSha,
         beforeRuntimeVerified: recovery.serviceRestartSafe,
         sourceRuntimePrepared: opts.sourceRuntimePrepared,
@@ -415,6 +422,7 @@ export async function updateGitCheckout(params: {
         beforeCandidate: inspectTarget,
         validateCandidate: opts.validateCandidate,
         prepareGitExposure: opts.prepareGitExposure,
+        onCleanupReportingError: (error) => cleanupReportingFailures.push(error),
         retainCleanup: (cleanup) => {
           runtimeCleanups.candidate = cleanup;
           return true;
@@ -457,9 +465,7 @@ export async function updateGitCheckout(params: {
         return selected;
       }
       if (!publishedCandidate) {
-        const upstreamRef = selected.selectedDevUpstream
-          ? `refs/remotes/${selected.selectedDevUpstream}`
-          : undefined;
+        const upstreamRef = selected.selectedDevUpstream ?? undefined;
         const imported = await importCandidate(selected.candidateSha, upstreamRef);
         if (imported.status !== "ok") {
           return imported;
@@ -608,16 +614,25 @@ export async function updateGitCheckout(params: {
     // Source conversion migrates only after its prepared global exposure is swapped.
     if (!opts.prepareGitExposure) {
       stateMigrationStarted = true;
-      recovery = { serviceRestartSafe: false, reason: "state-migration-started" };
+      recovery = {
+        serviceRestartSafe: false,
+        reason: "state-migration-started",
+        dataAtRisk: "state-migrated-no-rollback",
+      };
       const doctorSteps: UpdateStepResult[] = [];
       let doctorStep: UpdateStepResult | null;
       try {
         doctorStep = await opts.runGitDoctor(gitRoot, doctorSteps);
       } catch (error) {
+        const refusal = classifyDoctorMaintenanceRefusal(error);
+        if (refusal.kind === "data-at-risk") {
+          recovery.dataAtRisk = refusal.reason;
+        }
         steps.push(...doctorSteps);
         throw error;
       }
       steps.push(
+        ...doctorSteps.filter((result) => result !== doctorStep),
         doctorStep ??
           failureStep(
             "openclaw doctor",
@@ -674,28 +689,43 @@ export async function updateGitCheckout(params: {
       steps,
       durationMs: Date.now() - startedAt,
     };
-  } catch (error) {
-    cleanupUncertain = hasCommandProcessCleanupError(error);
-    if (!mutationPrepared || cleanupUncertain) {
-      throw error;
-    }
-    const fact = createUpdateErrorFact("git update", error, defaultCommandEnv);
-    steps.push({
-      ...failureStep("git-update", "update checkout", fact.message),
-      failureFacts: [fact],
-    });
-    return await rollbackError(
-      error instanceof UpdateRequesterRevokedError ? error.code : "unexpected-error",
-    ).catch((rollbackFailure: unknown) => {
-      cleanupUncertain = hasCommandProcessCleanupError(rollbackFailure);
-      throw rollbackFailure;
-    });
-  } finally {
-    if (!cleanupUncertain) {
-      await candidateTransfer?.cleanup(step("git-update-pack-cleanup", [], gitRoot));
-      if (!runtimeRetained && (await cleanupCandidateRuntime())) {
-        await runtimePromotion?.cleanup();
+  };
+  return settleGitUpdateCleanup(
+    async () => {
+      try {
+        return await runUpdate();
+      } catch (error) {
+        cleanupUncertain = hasCommandProcessCleanupError(error);
+        if (!mutationPrepared || cleanupUncertain) {
+          throw error;
+        }
+        const fact = createUpdateErrorFact("git update", error, defaultCommandEnv);
+        steps.push({
+          ...failureStep("git-update", "update checkout", fact.message),
+          failureFacts: [fact],
+        });
+        let rollbackFailure: unknown;
+        try {
+          return await rollbackError(
+            error instanceof UpdateRequesterRevokedError ? error.code : "unexpected-error",
+          );
+        } catch (cause) {
+          cleanupUncertain = hasCommandProcessCleanupError(cause);
+          rollbackFailure = cause;
+        }
+        throw new AggregateError([error, rollbackFailure], "Git update and rollback failed", {
+          cause: error,
+        });
       }
-    }
-  }
+    },
+    async () => {
+      if (!cleanupUncertain) {
+        await candidateTransfer?.cleanup(step("git-update-pack-cleanup", [], gitRoot));
+        if (!runtimeRetained && (await cleanupCandidateRuntime())) {
+          await runtimePromotion?.cleanup();
+        }
+      }
+    },
+    cleanupReportingFailures,
+  );
 }

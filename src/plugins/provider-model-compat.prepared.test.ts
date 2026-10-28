@@ -15,34 +15,19 @@ vi.mock("../agents/provider-attribution.js", () => ({
   resolveProviderRequestCapabilities,
 }));
 
+import { buildCatalogModel } from "../plugin-sdk/provider-catalog.test-support.js";
+import { makeEmptyPluginMetadataOwners } from "./plugin-metadata-empty.test-support.js";
 import { normalizeModelCompat } from "./provider-model-compat.js";
 
 function makeOwners(provider: string): PluginMetadataSnapshotOwnerMaps {
-  return {
-    channels: new Map(),
-    channelConfigs: new Map(),
-    providers: new Map([[provider, [provider]]]),
-    modelCatalogProviders: new Map(),
-    cliBackends: new Map(),
-    setupProviders: new Map(),
-    commandAliases: new Map(),
-    contracts: new Map(),
-    providerAuthContributions: [],
-    modelIdNormalizationPolicies: new Map(),
-  };
+  return { ...makeEmptyPluginMetadataOwners(), providers: new Map([[provider, [provider]]]) };
 }
 
 const model = {
-  id: "model",
-  name: "Model",
+  ...buildCatalogModel("model", { name: "Model" }),
   provider: "custom",
   api: "openai-completions",
   baseUrl: "https://models.example/v1",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
-  maxTokens: 8_192,
 } as Model;
 
 describe("normalizeModelCompat prepared metadata", () => {

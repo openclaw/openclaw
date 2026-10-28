@@ -7,13 +7,167 @@ recovery, acceptance, and adoption contracts. It is not another scheduler or an
 alternative public update CLI. Do not add it to runtime packages or default
 Vitest projects.
 
-The source is Manager commit
+The controller originated in Manager commit
 `d02035d40a9a2a9d73afee700aec26a10d1c66a9`, directory
-`ops/openclaw/team-hourly-update/`. The imported controller includes its existing
-agent-schema 24→25 admission; this move adds no schema edge or storage migration.
-Native replacement must settle outstanding controller transactions before
-retiring their recovery code. See the
+`ops/openclaw/team-hourly-update/`. Schema migrations now belong to the candidate
+release's native update/Doctor path. The controller does not enumerate supported
+schema edges or rehearse migrations on copied databases. See the
 [immutable update design](https://docs.openclaw.ai/reference/team-immutable-update-design).
+
+## Schema updates and recovery
+
+Ordinary deployments wait up to 180 seconds when the canonical deployment lock
+is busy, allowing routine health checks and disk maintenance to finish without
+discarding the update request. The controller retains the same exclusive lock
+and post-lock maintenance-idle admission. A wait timeout exits `75` (deferred),
+not a successful `SKIP`; other lock errors retain their failure status. Bound
+maintenance and recovery actions retain their immediate contention refusal.
+This change requires complete-pair adoption; landing it does not deploy it.
+
+The incumbent keeps serving while the controller builds and seals the candidate.
+For a schema crossing, the controller takes its ordinary maintenance suspension,
+drains and stops the Gateway, then invokes the candidate:
+
+```sh
+node <candidate>/dist/index.js update migrate --backup-root <transaction>/native
+```
+
+This internal supervisor command uses the same native database backup and Doctor
+owners as `openclaw update`. It rejects databases newer than the candidate,
+captures WAL-safe backups and authored configuration before repair, and writes a
+durable receipt before Doctor can migrate. Forward migrations are selected by
+OpenClaw, including crossings that the controller has never seen.
+
+After migration, the controller selects the candidate, starts it, and verifies
+readiness and real session continuity through the existing acceptance path.
+When activation fails, it stops the owned candidate, invokes its `update restore`
+command with the same backup root, restores the old release pointers, and
+verifies the predecessor. Native restore retains the displaced candidate
+databases for diagnosis. If restoration cannot complete, the Gateway stays
+stopped with the journal and backup intact; it never starts an old reader on
+newer state. A retained transaction resumes through `--recover`.
+
+For a retained native-update transaction, `--recover` first checks whether the
+selected candidate is already the running system Gateway. It binds that
+candidate's process generation and runs full deployment acceptance, including
+identity, RPC, health/startup/readiness, configured channels, and session
+continuity. Successful forward recovery records the verified candidate and
+retires the exact journal without draining, stopping, restarting, or restoring
+the Gateway. The native backup remains on disk. This also applies to
+`ROLLBACK_FAILED` with the candidate still selected. An absent or unverifiable
+candidate follows the existing compatibility-checked rollback path.
+
+Native transaction roots under `<runtime-home>/.openclaw-update/` stay on disk
+until the controller next prunes releases with no activation journal present:
+before a deployment, after an accepted one, and in `--cleanup`. Without a
+journal, an earlier transaction's pre-migration snapshot can only undo state
+that was since accepted. Roots whose receipt is absent (Doctor never ran),
+`migrated`, `restored`, or `finished` are then retired: the runtime account
+removes their contents and the controller removes the emptied directory,
+printing `RETIRED_NATIVE_UPDATE`. A `backed-up`, `failed`, `restoring-config`,
+or unreadable receipt stays with a `RETAIN unsettled native update` line for
+the operator. The current deployment keeps its own root until the next prune,
+so a failed `update finish` can be retried. Displaced candidate databases sit
+beside the live databases and are not touched. This change requires
+complete-pair adoption; landing it does not deploy it.
+
+An interruption while the native owner publishes restored database files can
+require explicit recovery of the retained backup and displaced files. Database
+publication is not resumable per file; recovery fails closed instead of starting
+the predecessor on a mixture of database generations.
+
+These commands are lifecycle-owner interfaces, not a second public updater.
+They require stopped writers. Build, drain, migration, and readiness have their
+own existing budgets. A migration can still take substantial downtime: the
+controller removes deployment-specific admission machinery, not the work
+performed by the database migration itself.
+
+Candidate acceptance and predecessor rollback use the same verification owner.
+`OPENCLAW_TEAM_VERIFICATION_BUDGET` defaults to 600 seconds and bounds each
+started process's convergence, marker admission, dispatch reconciliation, and
+terminal observation together. An empty loopback listener snapshot waits within
+that deadline and emits one `VERIFICATION_WAITING` diagnostic per acceptance
+attempt; an invalid or foreign listener still fails verification. Deadline expiry
+still emits `VERIFICATION_FAILED`. Readiness waits and RPC retries never renew that
+deadline. The 60-second marker RPC timeout bounds a transport exchange; it is
+not the whole startup acceptance window.
+
+Before the marker, the owner waits for native `/startupz` to report that critical
+initial startup has settled, `/readyz` to report readiness without a refusal for
+the configured `modelAgent`, and a sampled main-thread delay below one second.
+A `system.info` response within ten seconds must identify the same process and
+instance. CPU/utilization warnings with bounded loop delay permit default
+acceptance; native degradation remains reported and steady profiling remains
+ineligible under load. The existing `--allow-cpu-degraded` argument remains
+accepted for installed service invocations. Native background recovery,
+transcript maintenance, and prewarming
+can continue after initial startup readiness; their completion is not another
+acceptance gate. A native `agent-database-inspection` startup reason for other
+agents does not delay an admitted model agent when `/readyz` is healthy; critical
+sidecar startup and the model agent's own pending admission still wait. Missing
+transport responses and pending startup/admission
+facts wait inside the original budget. Malformed evidence, corruption, changed
+identity, protocol failures, and authentication failures remain failures.
+If native readiness becomes unavailable again after convergence, a well-formed
+HTTP 503 readiness snapshot waits within that same deadline. It never authorizes
+marker dispatch. `elapsed_seconds` in `VERIFICATION_FAILED` measures the named
+step, not the elapsed startup or marker budget.
+
+If marker dispatch has a typed transport timeout, the owner checks readiness
+again and replays the byte-identical request with its original idempotency key.
+The Gateway owns reservation and replay; a minimal `in_flight` acknowledgement
+still names that same run. Acceptance requires the subsequent `agent.wait`
+terminal receipt to bind the exact session, visible marker, and configured
+requested provider/model. The effective model must be that primary or one of its
+configured fallbacks captured with the protected policy; fallback changes are
+policy changes. The release's native model-reference parser separates auth-profile
+suffixes for receipt comparisons; the full configured references remain protected.
+A successful configured fallback remains valid when the primary
+is rate-limited. Neither a healthy probe nor a timeout becomes successful
+acceptance. A deadline expiry retains recovery evidence.
+
+Suspension drain defaults to 30 seconds even when the controller is invoked
+outside its systemd unit. Larger `OPENCLAW_TEAM_DRAIN_BUDGET` values are capped
+at 30 with a diagnostic. The controller acquires one drain lease and never
+renews it; the Gateway owns its absolute 45-second cutoff. After the drain
+budget, transient write custody receives at most five more seconds before the
+controller defers and resumes its exact lease. Final custody reads retain the
+five-second RPC bound. The remaining grace permits handoff or cleanup; pending
+writes never become permission to stop. If the custody polling sleep exhausts
+the window, the controller reports `write custody wait expired` and the last
+observed blockers without starting another status RPC. This is a custody timeout,
+not evidence that `gateway.suspend.status` failed to respond.
+Adopt this controller closure alongside
+the Gateway's bounded-drain change; landing either does not deploy it.
+
+Activation audits the current and previous sealed release trees before closing
+Gateway admission. The deployment lock excludes other pointer writers; a direct
+current-target comparison still precedes journal publication. Fresh suspension,
+process-generation, protected-identity, and policy checks remain at the stop
+boundary, including after handoff arming. Adopt the reviewed controller closure
+to move these audits out of the client-visible offline window.
+
+During graceful suspension drain, status reads use a five-second transport and
+subprocess bound (shortened by the original drain deadline). A typed timeout,
+connection loss, or service-restart close retries after one, two, then at most
+four seconds, with each wait capped by the remaining drain budget. These reads
+do not renew the deadline or the suspension lease. If request preparation consumes
+the remaining budget before CLI dispatch, the same deadline policy applies; no
+RPC is started. Missing or malformed failure
+evidence, authentication or protocol failures, and definitive Gateway refusals
+remain fatal. Deadline expiry still requires the existing fresh lease,
+process-generation, and write-custody proof before authorized interruption;
+failed observations never authorize stopping the Gateway. Adopt the changed
+script and library together through the complete-pair procedure below.
+
+Migration and restoration receive at least two hours, or the existing build
+budget when larger. A measured synthetic 25 → 26 crossing took 4m04s for
+3.865 GiB, roughly 39 minutes at 37 GiB by linear extrapolation before backup;
+this estimate does not predict production downtime.
+
+Complete any transaction created by the former controller using its original
+installed closure before adopting this version. Its edge-specific journals and
+rehearsal artifacts are not inputs to the generic update path.
 
 ## Installed closure
 
@@ -26,7 +180,7 @@ no group or other write access. Libraries use mode `0644`; the executable uses
 | File                              | Installed path                                                 | Responsibility                                                              |
 | --------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------- |
 | `openclaw-release-deploy`         | `/usr/local/sbin/openclaw-release-deploy`                      | Deployment, recovery, and maintenance orchestration under the existing lock |
-| `release-lib.mjs`                 | `/usr/local/lib/openclaw-team/release-lib.mjs`                 | Admission, journal, backup, migration, and acceptance contracts             |
+| `release-lib.mjs`                 | `/usr/local/lib/openclaw-team/release-lib.mjs`                 | Release admission, journal, native-update handoff, and acceptance           |
 | `gateway-suspension-contract.mjs` | `/usr/local/lib/openclaw-team/gateway-suspension-contract.mjs` | Self-contained pinned suspension protocol validator                         |
 | `startup-profile.mjs`             | `/usr/local/lib/openclaw-team/startup-profile.mjs`             | Controller-owned startup capture lifecycle                                  |
 
@@ -94,17 +248,94 @@ here: stopped-owner checks now reuse the native stopped-manager proof when the
 retired user bus is absent; source export distinguishes PID reuse from the
 original Gateway generation while still checking database writers; and optional
 profile closure compares activation hashes from the same phase. Pointer
-publication propagates failures before another lifecycle step; workspace
-containment is checked before creating rehearsal directories; and history
+publication propagates failures before another lifecycle step; history
 verification checks captured transcript generations even when a logical session
-key survives. Migration rollback arms the native handoff before stopping a
-draining successor, and switching recovery verifies the restored predecessor
+key survives. Rollback arms the native handoff before stopping a
+draining successor, and recovery verifies the restored predecessor
 before retiring its journal. Stopped-current recovery waits for a restored
 persistent timer's catch-up invocation before applying its final snapshot checks.
 The profile inspection change is transient; persisted arm records keep their existing shape.
 Tests cover these repairs and use one prepared lease expiry in custody fixtures.
 
+The controller delegates retired Workshop proposal preservation to native Doctor.
+Doctor owns draft export and recovery warnings before dropping the retired tables;
+the controller must not require those rows to remain in SQLite. Its original
+lossless backups, physical database ownership checks, and session witnesses still
+apply. See the [state schema history](../../../../docs/reference/database-schemas/state-schema-history.md#skill-workshop-proposal-retirement-state-schema-20-same-version)
+for the retirement contract.
+
 ## Complete-pair adoption
+
+Release preparation fetches only the frozen commit from the already verified
+official mirror. Each candidate keeps its own shallow Git object database, with
+no alternates or dependency on the mirror after publication. Ancestry checks
+continue to use the full mirror before preparation.
+
+Capacity admission measures each release tree in one Python subprocess, keeping
+large metadata walks outside V8 after an optimized `lstatSync` loop crashed.
+It still budgets each entry's larger logical/allocated size, counts hardlinks
+separately for independent copies, does not follow symlinks, and rejects special
+files or filesystem crossings. Byte/inode reserves and shared-filesystem demand
+aggregation remain unchanged. Python 3 must be available to the controller;
+failed inventories refuse admission. This change requires ordinary complete-pair
+adoption and does not change the selected controller or Gateway runtime.
+
+The build account retains pnpm's content-addressed store under
+`OPENCLAW_TEAM_BUILD_HOME/cache/store` across candidates. The frozen lockfile and
+pnpm's integrity checks select package contents; `clone-or-copy` imports keep
+candidate files independent of writable store inodes. pnpm owns store format,
+invalidation, and pruning. Operators can reclaim unused packages with
+`pnpm store prune --store-dir <build-home>/cache/store` as the build account when
+the deployment owner is idle. Candidate cleanup removes only the work and
+staging trees. Staging uses reflinks where supported and ordinary copies
+otherwise; sealing, filesystem ownership, manifest validation, and directory
+publication remain unchanged. The build account also retains the build owner's
+artifact cache at `cache/build-artifacts`. Input content hashes select reusable
+package, plugin, and Control UI outputs; copies use independent inodes and reflinks
+where available. A missing, changed, or incomplete cache entry rebuilds normally.
+This cache is disposable while the deployment owner is idle.
+
+The fresh build overlaps the Control UI's staged build and precompression with
+runtime finalization after the compiler and plugin builders finish. Both
+writers finish before final build metadata is emitted, including when either
+fails. Runtime compiler configs overlap in pairs only with the build owner's
+full 12 GiB heap budget; smaller budgets retain serial native allocations.
+All build checks still run; cached compiler output never substitutes for a
+validation result. The Control UI refreshes release identity and its offline
+shell even when its bundles and precompressed assets are reused.
+
+Sealing makes every regular file read-only (preserving executable bits as `0555`),
+every directory `0555`, and leaves relative in-tree symlinks intact. The staging
+copy has independent inodes, is root-owned, and is not exposed to the runtime
+user. After the permission walk, sealing fsyncs regular files followed by
+directories, with at most eight open handles at once. This persists file bytes,
+inode modes, symlinks, and directory entries before publication without requesting
+a filesystem-wide flush of unrelated dirty data. Storage contention can still
+slow those operations. The durability deadline is two minutes plus ten
+milliseconds per file/directory and one second per eight MiB of file data.
+A failed fsync or expired deadline aborts publication; no sync subprocess is
+left behind. The rename retains its separate parent-directory fsync. Adopt the
+script and library together to remove the former fixed 120-second sealing bound.
+
+The manifest binds the exact source SHA, build ID, schema declarations, official
+origin, and Control UI entrypoint SHA-256; validation also checks build stamps,
+asset presence, ownership, modes, and contained symlinks across the tree. This
+is a durable, owner-protected release, not a cryptographic digest of every file
+or protection against subsequent root writes. New builds also record their
+selected input hashes in `dist/build-cache-inputs.json` and the deployment
+manifest. Admission compares these records; older sealed releases without cache
+metadata remain supported. Sealing preserves the existing integrity contract.
+
+Release publication now prewarms Node's release-scoped compile cache before
+cutover, including reuse of an already published release. The bounded import
+runs as `openclaw`, with the selected Gateway runtime, after publication at its
+final path. It loads the Gateway graph without starting a server or reading
+Gateway state; the existing cache owner chooses the build-ID namespace and
+retention policy. Missing prewarm entries in older releases are skipped, and
+prewarm failures warn and leave ordinary cold startup available. Bun does not
+use Node's compile cache. Night Watch must adopt this reviewed controller
+change through the complete-pair procedure below; landing it does not change
+the installed controller or authorize a Team deployment.
 
 Only the designated Night Watch executor performs these steps. Resolve its
 exact host and coordinator session from the private operator record, preserve
@@ -139,7 +370,7 @@ publication is not a deployment or a request to restart the Gateway.
 
 ## Standalone tests
 
-Use disposable Linux with Node 24.16+ or 26.1+, Bun 1.4+, Bash, Python 3, GNU
+Use disposable Linux with Node 24.22.1+ or 26.12.1+, Bun 1.4.3+, Bash, Python 3, GNU
 coreutils, `flock`, and `/usr/bin/bwrap`. Full coverage requires root and working user/mount
 namespaces. Tests use synthetic temporary state, services, processes, and
 Gateways; they do not contact Team. Some boundary tests extract Bash functions;
@@ -150,9 +381,7 @@ The runtime deliberately pins the suspension bundle's installed path. Runtime
 tests require actual root-owned Node and Bun binaries under root-owned,
 non-writable ancestors; symlinks into a user's toolcache do not qualify. Provide
 them at `/usr/bin/node` and `/usr/local/bin/bun` on the disposable host. Copy the
-test closure with matching ownership. Run offline Doctor as an ordinary user,
-because its fixtures model unprivileged state ownership; the other files run as
-root for their explicitly privileged cases:
+test closure with matching ownership. Run the suite as root for its explicitly privileged cases:
 
 ```sh
 controller=.agents/skills/update-team-server/controller
@@ -163,16 +392,9 @@ sudo chmod -R a+rX /opt/openclaw-controller-test
 sudo install -o root -g root -m 0644 "$controller/gateway-suspension-contract.mjs" \
   /usr/local/lib/openclaw-team/gateway-suspension-contract.mjs
 sudo install -d -o root -g root -m 0755 /var/tmp/openclaw-controller-root
-mkdir -p /var/tmp/openclaw-controller-user
 cd /opt/openclaw-controller-test
-root_tests=()
-for file in *.test.mjs; do
-  [[ "$file" == offline-doctor.test.mjs ]] || root_tests+=("$file")
-done
 sudo env TMPDIR=/var/tmp/openclaw-controller-root /usr/bin/node \
-  --import ./test-environment.mjs --test "${root_tests[@]}"
-TMPDIR=/var/tmp/openclaw-controller-user /usr/bin/node \
-  --import ./test-environment.mjs --test offline-doctor.test.mjs
+  --import ./test-environment.mjs --test ./*.test.mjs
 ```
 
 Use disk-backed temporary storage with at least 18 GiB free. A smaller `/tmp`
@@ -196,54 +418,12 @@ runtime inputs; the validated generated bundle is retained byte-for-byte.
 `update.test.mjs` becomes `release.test.mjs` after removing only its retired
 mutable-updater fixture and cases. `suspension-custody.test.mjs` retains current
 custody/tamper coverage and omits the two historical mixed-pair cases that need
-the excluded legacy snapshot. Other controller tests and their four support
-fixtures remain. New profile tests cover the publication substitutions.
+the excluded legacy snapshot. Other controller tests and their support fixtures remain. New profile tests cover the publication substitutions.
 The lease and handoff fixtures retain their assertions while updating their
 canonical database layout, command responses, and independent capacity inputs.
 
-## Source SHA-256
+## Source integrity
 
-These are the original Manager bytes, before the documented privacy edits,
-review repairs, and test extraction. `release.test.mjs` maps to original
-`update.test.mjs`. Newly written README, test profile, and regression files have no
-imported source hash. The third-party notice comes from TypeBox 1.3.34's license.
-For installation, hash the exact **merged** files; the source hashes below are
-provenance, not replacement-file approval.
-
-| Imported file                            | Original SHA-256                                                   |
-| ---------------------------------------- | ------------------------------------------------------------------ |
-| `abandon-rehearsal.test.mjs`             | `74572231b90b140fe96bf99f4bfb164e2a06f310781b1d76b456c69fade046d6` |
-| `admission-rpc-diagnostics.test.mjs`     | `8efc59afde9f305f42b3d7a129086ffd44ee8a532accf5c5fc3e0026f5a8e858` |
-| `agent20-cold-schema.fixture.sql`        | `6ce179fcc05ccc5cef34f82ec36d117b7de9c05b35ca8760e9cb5cc447e16431` |
-| `drain-deadline.test.mjs`                | `eaff1e9d1b7944737d2088119a3443d629ba2454382725c155000e03147c4dea` |
-| `frozen-continuation.test.mjs`           | `0b079810d5c4ad4b900915d7794bb713bab27a8bc5826fb523c86bb28ed755be` |
-| `gateway-suspension-contract.mjs`        | `dfdf7487710647a5ea5a7ae4f2edb06812b2b251cb2ec4880d791ad650a5e456` |
-| `host-handoff.test.mjs`                  | `183188b5246bedd78105d1ff9e74abf523519c968a83fc33783dda1fc31b24a5` |
-| `maintenance-budget.test.mjs`            | `ab0902cf5d973c55352dd7ba5c218b14bdf923202a18f234c9027eed8c26af07` |
-| `marker-deadline.test.mjs`               | `dfaee3fe08e4ea46c9b49105fe1c66c6e1533a90e299fe214f9707e4b1cecd5d` |
-| `migration-admission.test.mjs`           | `07056b17f6984c6b931faa7ae9a9dc5871ea1794ae32a964896a727eb36f0eca` |
-| `migration-forward-recovery.test.mjs`    | `68909a6ec391cab3f4cacaa3ecc196d9853e836f7bc474bdccb877c8985b32fb` |
-| `migration-handoff-owner.test.mjs`       | `1bb8e0774fbc2d11ac99bf7f8313baaf9a1c9a8d17e3bb8ed3c5e47f5f3e6320` |
-| `migration-lease-clock.test-support.mjs` | `358b33c60f3b58a746d903f04a79e222f19673c5f2f58fb65d859cf50bbfc27b` |
-| `migration-lease-owner.test.mjs`         | `fb57d590a938c5a1c2b4540a230ad77a12b75e4bd79560fddbb7660ccd465ff2` |
-| `mirror-budget.test.mjs`                 | `7dd013ff8bc4996a90a4f747380d4aeec2d4bdb9e5b36ee5547d3ee47055cf2b` |
-| `offline-doctor.test.mjs`                | `20e6d10c04633594109cfa00a97844b76bcc72a4aa327c818e286dad97e67633` |
-| `openclaw-release-deploy`                | `fd5879efa3d440f03e5c2ffdbc49b3fd855b8b9e5da5c1aa29c58b6de98fd056` |
-| `prepare-release.test.mjs`               | `80373ab23f580a3b1835af475855f70f42defb46d0a7b544c239a499fcd1357e` |
-| `reconciliation-terminal-fence.test.mjs` | `336ae6020e229ae469323c85590235f80335baca773925d104c55124051e58f0` |
-| `rehearsal-journal-mode.test.mjs`        | `f52a4c8a6c0eb79868f702597d35d27af3dec65588ce5bcee642c70d85b45a92` |
-| `rehearsal-outcome.test.mjs`             | `b9238fc89942974a8beb3b504594663f7ffec25f8676d1b79738fb44e103fe11` |
-| `rehearsal-snapshot.test-support.mjs`    | `6af1a32bd98c5956e74619364f79bb4762dfa631550f17ce5cf0547bddcfc6e6` |
-| `rehearsal-snapshot.test.mjs`            | `631cbc7b5b10fc3c4d6c725a42709cb8fa2d15c396079c29e20ff34e85589d24` |
-| `release-lib.mjs`                        | `d1de214a652259995c86ca030aff7f2bc304beaa06c0547b2a8b03d3e3b881e6` |
-| `runtime-switch.test.mjs`                | `e8fc5465d2e842aff73ff044df9eeb14514bc9b139594e5f78bf7c88b7dd4f79` |
-| `startup-profile.mjs`                    | `329ed7455f00c92bc6d54ea475606b5f4c15a871f2205f3ea213189c8abff1c9` |
-| `stopped-current-recovery.test.mjs`      | `138684ebf26c28c0e100a3ec654bfcca3da644f9df5ceca94e4fcc656756a849` |
-| `stopped-restored-recovery.test.mjs`     | `014bb15afee2e3ab5cdb6adbfc2185d7ad8f381a977f07771fca21c2b81a460f` |
-| `suspension-custody.test.mjs`            | `b6bcf83330906e1b3c3e32c8756af2b0bca0e840cae29d1e438b322b44c9792e` |
-| `terminal-persistence-waiver.test.mjs`   | `05ed889573e7fc09eb9a0caeca76b5d4216ae8461b7ed7aa4f23e20fd0d8dbcf` |
-| `release.test.mjs`                       | `b873e32bfbd4667cae71821cf9136a210cb84c805ce175598d8fbd88a0343ff8` |
-| `user-ownership.test.mjs`                | `06d26a68e0c4d58163b67e2491248fdb91b700633e8f29a23b7f45bd742745c5` |
-| `worker-config-owner-fixture.mjs`        | `c9e90908ebdf463814140ce71149b7f26279459f50ad0aab6c0fe4ddf3c1caad` |
-| `worker-config-owner.test.mjs`           | `51b1fb7c24a32e51b41b2196f9f294d9b2b80d4cf681109c5c567c44a2031aa0` |
-| `worker-config.test.mjs`                 | `f8c4eabb4d62d577106f7d70653a15cae7a3d3b9760c9fdb4730b026294cb781` |
+Hash all four files from the exact reviewed, merged tree before adoption. Retain
+those hashes with the operator's installation receipt and predecessor closure.
+A historical import hash is provenance, not approval to install modified bytes.

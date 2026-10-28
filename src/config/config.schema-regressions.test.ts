@@ -19,6 +19,39 @@ function validateBinding(agentId: string, entries: Record<string, unknown>) {
 }
 
 describe("config schema regressions", () => {
+  it("accepts and preserves mixed extra memory path entries", () => {
+    const extraPaths = [
+      "../team-notes",
+      { path: "../shared", pattern: "runbooks/**/*.md", evergreen: true },
+    ];
+    const result = validateConfigObject({
+      memory: { search: { extraPaths } },
+      agents: { entries: { main: {} } },
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.memory?.search?.extraPaths).toEqual(extraPaths);
+    }
+  });
+
+  it.each([
+    { pattern: "**/*.md" },
+    { path: "../shared", pattern: 42 },
+    { path: "../shared", evergreen: "yes" },
+    { path: "../shared", name: "legacy-qmd-name" },
+  ])("rejects invalid extra memory path object %j", (entry) => {
+    const result = validateConfigObject({
+      memory: { search: { extraPaths: [entry] } },
+      agents: { entries: { main: {} } },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.some((issue) => issue.path.startsWith("memory.search.extraPaths"))).toBe(
+        true,
+      );
+    }
+  });
+
   it.each([["ops"], ["ops-*"], [], ["*"]].map((send) => ({ send })))(
     "accepts per-agent send destinations $send",
     ({ send }) => {

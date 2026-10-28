@@ -1,20 +1,25 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getRuntimeConfig } from "../../../config/config.js";
-import {
-  resolveAgentIdFromSessionKey,
-  resolveSessionStorePathCore,
-  type InternalSessionEntry as SessionEntry,
-} from "../../../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions.js";
 import {
   readSessionEntryReadOnlyInWorker,
   withSessionEntryReadOnlyInWorker,
 } from "../../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../../config/sessions/session-incognito-binding.js";
+import { findTranscriptEvent } from "../../../config/sessions/session-transcript-match.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { waitForAgentJob } from "../../../gateway/agent-turn/agent-job.js";
+import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
+import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
+import { sanitizeAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
+import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
+import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { withSubagentSessionSource } from "../spawn/subagent-session-source.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
+import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import { hasRetainedRequiredCompletionDelivery } from "./subagent-delivery-state.js";
 import {
@@ -23,6 +28,7 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
+import { resolveRecoveredSubagentExecutions } from "./subagent-recovered-executions.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
 
@@ -36,7 +42,105 @@ export type SubagentSessionCompletion = {
   endedAt: number;
   outcome: SubagentRunOutcome;
   reason: SubagentLifecycleEndedReason;
+  terminalReply?: AgentRunTerminalReplySnapshot;
 };
+
+export async function resolveCompletionForSubagentRun(
+  entry: SubagentRunRecord,
+  session: SessionEntry | undefined,
+  assertCurrent: () => void,
+): Promise<SubagentSessionCompletion | null> {
+  const authority = resolveSubagentChildAuthority(entry, session);
+  if (!session || authority.status !== "verified") {
+    return null;
+  }
+  const recovered = entry.runId.startsWith("announce:requester-settle:")
+    ? [...resolveRecoveredSubagentExecutions(session)].findLast(
+        ([, source]) => source === entry.runId,
+      )
+    : undefined;
+  const executionRunId = recovered?.[0] ?? entry.runId;
+  const snapshot = await waitForAgentJob({ runId: executionRunId, timeoutMs: 0 });
+  assertCurrent();
+  if (!snapshot) {
+    // A previous boot has no job snapshot; persisted timing must name this execution.
+    if (session.lastRunId !== executionRunId) {
+      return null;
+    }
+    const completion = resolveCompletionFromSessionEntry(session, entry.createdAt, {
+      notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
+    });
+    if (!completion) {
+      return null;
+    }
+    const { agentId, storePath } = resolveSubagentChildSessionOwner(entry, getRuntimeConfig());
+    const final = await withSubagentSessionSource(
+      { agentId, storePath, sessionKey: entry.childSessionKey, assertCurrent },
+      async (source) => {
+        if (!source && isIncognitoSessionKey(entry.childSessionKey)) {
+          return undefined;
+        }
+        return findTranscriptEvent(
+          {
+            agentId,
+            storePath: source?.path ?? storePath,
+            sessionKey: entry.childSessionKey,
+            sessionId: session.sessionId,
+          },
+          { kind: "visible-final", runId: executionRunId },
+        );
+      },
+    );
+    assertCurrent();
+    const text = extractStoredAssistantText(
+      isRecord(final?.event) ? final.event.message : undefined,
+    );
+    return {
+      ...completion,
+      terminalReply: text ? sanitizeAgentRunTerminalReply(text) : undefined,
+    };
+  }
+  if (
+    !snapshot.session ||
+    snapshot.session.sessionId !== session.sessionId ||
+    snapshot.session.sessionKey !== entry.childSessionKey ||
+    (snapshot.session.agentId !== undefined &&
+      snapshot.session.agentId !== authority.childAgentId) ||
+    !isAgentEventLifecycleGenerationCurrent(snapshot.session.lifecycleGeneration) ||
+    (snapshot.yielded && !entry.collect) ||
+    typeof snapshot.endedAt !== "number"
+  ) {
+    return null;
+  }
+  const terminal = buildAgentRunTerminalOutcomeFromWaitResult(snapshot);
+  if (!terminal) {
+    return null;
+  }
+  const classification =
+    snapshot.yielded && terminal.status !== "timeout" && terminal.reason !== "blocked"
+      ? "success"
+      : classifySubagentTerminalOutcome(terminal);
+  return {
+    startedAt: snapshot.startedAt,
+    endedAt: snapshot.endedAt,
+    terminalReply: snapshot.terminalReply,
+    outcome:
+      classification === "success"
+        ? { status: "ok" }
+        : classification === "timeout"
+          ? { status: "timeout" }
+          : {
+              status: "error",
+              error: classification === "cancellation" ? "subagent run terminated" : terminal.error,
+            },
+    reason:
+      classification === "cancellation"
+        ? SUBAGENT_ENDED_REASON_KILLED
+        : classification === "success" || classification === "timeout"
+          ? SUBAGENT_ENDED_REASON_COMPLETE
+          : SUBAGENT_ENDED_REASON_ERROR,
+  };
+}
 
 function terminalSessionTimestamp(sessionEntry: SessionEntry | undefined): number | undefined {
   return asFiniteNumber(sessionEntry?.endedAt) ?? asFiniteNumber(sessionEntry?.updatedAt);
@@ -75,10 +179,9 @@ export async function loadSubagentSessionEntry(params: {
   if (!key) {
     return undefined;
   }
-  const agentId = resolveAgentIdFromSessionKey(key, params.childAgentId);
   const cfg = params.cfg ?? getRuntimeConfig();
-  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-  if (isIncognitoSessionKey(key) && captureIncognitoSessionSource()) {
+  const { agentId, storePath } = resolveSubagentChildSessionOwner(params, cfg);
+  if (isIncognitoSessionKey(key)) {
     return withSubagentSessionEntry({ ...params, cfg }, (entry) => entry);
   }
   return readSessionEntryReadOnlyInWorker(
@@ -219,8 +322,14 @@ export async function withSubagentSessionEntry<T>(
   const { agentId, storePath } = resolveSubagentChildSessionOwner(params, cfg);
   return withSubagentSessionSource(
     { agentId, storePath, sessionKey: params.childSessionKey, assertCurrent: params.assertCurrent },
-    async () =>
-      withSessionEntryReadOnlyInWorker(
+    async (source) => {
+      if (source) {
+        return consume(source.actor.snapshot(source.authority)?.entry);
+      }
+      if (isIncognitoSessionKey(params.childSessionKey)) {
+        return consume(undefined);
+      }
+      return withSessionEntryReadOnlyInWorker(
         { agentId, storePath, sessionKey: params.childSessionKey, projection: "list" },
         () => params.assertCurrent?.(),
         async (result) => {
@@ -229,7 +338,8 @@ export async function withSubagentSessionEntry<T>(
           }
           return consume(result.value);
         },
-      ),
+      );
+    },
   );
 }
 

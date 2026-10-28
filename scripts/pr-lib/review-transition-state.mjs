@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { isDirectRunUrl } from "../lib/direct-run.mjs";
 
 const [source, target] = process.argv.slice(2);
 const readBuffer = Buffer.alloc(128 * 1024);
@@ -56,7 +57,7 @@ function mergeResolveUndoCandidate() {
     }
     throw error;
   }
-  return bases.length === 1 ? [bases[0], ...parentIds] : undefined;
+  return bases.length === 1 ? { commits: [bases[0], ...parentIds], resolution: merge } : undefined;
 }
 
 function singleParentCommits(...args) {
@@ -85,7 +86,10 @@ function rebaseResolveUndoCandidates() {
   return originals.flatMap((commit) =>
     rewrites
       .filter((rewrite) => rewrite.identity === commit.identity)
-      .map((rewrite) => [commit.parent, rewrite.parent, commit.commit]),
+      .map((rewrite) => ({
+        commits: [commit.parent, rewrite.parent, commit.commit],
+        resolution: rewrite.commit,
+      })),
   );
 }
 
@@ -119,6 +123,36 @@ function committedResolveUndo(from, index) {
     }
     return cache.get(key);
   }
+  const renameCache = new Map();
+  function renamedSource(commit, resolution, pathname) {
+    const key = `${commit}\0${resolution}`;
+    if (!renameCache.has(key)) {
+      const changes = records(
+        "diff-tree",
+        "-r",
+        "--no-commit-id",
+        "--name-status",
+        "-z",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--find-renames",
+        "--diff-filter=R",
+        commit,
+        resolution,
+      );
+      const renames = new Map();
+      for (let offset = 0; offset < changes.length; offset += 3) {
+        const [kind, previous, next] = changes.slice(offset, offset + 3);
+        if (!/^R\d+$/.test(kind ?? "") || !previous || !next) {
+          throw new Error("Invalid transition rename entry");
+        }
+        renames.set(next, renames.has(next) ? null : previous);
+      }
+      renameCache.set(key, renames);
+    }
+    // Ambiguous or heavily rewritten renames that Git cannot detect stay unowned.
+    return renameCache.get(key).get(pathname);
+  }
   const paths = new Map();
   for (const record of undo) {
     const match = /^([0-7]{6}) ([a-f0-9]{40}) ([123])\t([\s\S]+)$/.exec(record);
@@ -134,7 +168,14 @@ function committedResolveUndo(from, index) {
   let rebases;
   for (const [pathname, entries] of paths) {
     const matches = (candidate) =>
-      candidate.every((commit, offset) => entry(commit, pathname) === entries.get(offset + 1));
+      candidate.commits.every((commit, offset) => {
+        const expected = entries.get(offset + 1);
+        if (entry(commit, pathname) === expected) {
+          return true;
+        }
+        const previous = renamedSource(commit, candidate.resolution, pathname);
+        return typeof previous === "string" && entry(commit, previous) === expected;
+      });
     if (
       index.get(pathname) !== from.get(pathname) ||
       !((merge && matches(merge)) || (rebases ??= rebaseResolveUndoCandidates()).some(matches))
@@ -156,7 +197,7 @@ function stat(pathname) {
   }
 }
 
-function worktreeEntry(pathname) {
+export function worktreeEntry(pathname) {
   const parts = pathname.split("/");
   // A source file/symlink can occupy a target directory. Never follow it to
   // inspect target descendants outside the worktree.
@@ -209,87 +250,91 @@ function worktreeEntry(pathname) {
   return `${mode} ${hash.digest("hex")}`;
 }
 
-try {
-  if (
-    process.argv.length !== 4 ||
-    !/^[a-f0-9]{40}$/.test(source) ||
-    !/^[a-f0-9]{40}$/.test(target)
-  ) {
-    throw new Error("Invalid transition endpoints");
-  }
-  const from = tree(source);
-  const to = tree(target);
-  const index = new Map(
-    records("ls-files", "--stage", "-z").map((record) => {
-      const match = /^([0-7]{6}) ([a-f0-9]{40}) 0\t([\s\S]+)$/.exec(record);
-      if (!match) {
-        throw new Error("Unmerged transition index");
-      }
-      return [match[3], `${match[1]} ${match[2]}`];
-    }),
-  );
-  // Intent-to-add has a normal H tag and can match an empty endpoint blob.
-  // Compare both Git views; retain all hidden flags and conflict metadata on refusal.
-  const indexDiff = [
-    "diff",
-    "--cached",
-    "--raw",
-    "--no-ext-diff",
-    "--no-textconv",
-    "--no-renames",
-    "-z",
-  ];
-  if (
-    records("ls-files", "-v", "-z").some((record) => record[0] !== "H") ||
-    git(...indexDiff, "--ita-visible-in-index", source) !==
-      git(...indexDiff, "--ita-invisible-in-index", source)
-  ) {
-    throw new Error("Transition index contains hidden or unsupported entries");
-  }
-  const inspect = new Set([
-    ...committedResolveUndo(from, index),
-    ...records(
-      "-c",
-      "core.filemode=true",
-      "-c",
-      "core.ignoreStat=false",
-      "diff-files",
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
+  try {
+    if (
+      process.argv.length !== 4 ||
+      !/^[a-f0-9]{40}$/.test(source) ||
+      !/^[a-f0-9]{40}$/.test(target)
+    ) {
+      throw new Error("Invalid transition endpoints");
+    }
+    const from = tree(source);
+    const to = tree(target);
+    const index = new Map(
+      records("ls-files", "--stage", "-z").map((record) => {
+        const match = /^([0-7]{6}) ([a-f0-9]{40}) 0\t([\s\S]+)$/.exec(record);
+        if (!match) {
+          throw new Error("Unmerged transition index");
+        }
+        return [match[3], `${match[1]} ${match[2]}`];
+      }),
+    );
+    // Intent-to-add has a normal H tag and can match an empty endpoint blob.
+    // Compare both Git views; retain all hidden flags and conflict metadata on refusal.
+    const indexDiff = [
+      "diff",
+      "--cached",
+      "--raw",
       "--no-ext-diff",
       "--no-textconv",
       "--no-renames",
-      "--name-only",
       "-z",
-    ),
-  ]);
-  for (const pathname of new Set([...from.keys(), ...to.keys(), ...index.keys()])) {
-    const entry = index.get(pathname);
-    if (entry !== from.get(pathname) && entry !== to.get(pathname)) {
-      throw new Error(
-        `Index entry ${JSON.stringify(pathname)} is neither its journaled source nor target entry`,
-      );
+    ];
+    if (
+      records("ls-files", "-v", "-z").some((record) => record[0] !== "H") ||
+      git(...indexDiff, "--ita-visible-in-index", source) !==
+        git(...indexDiff, "--ita-invisible-in-index", source)
+    ) {
+      throw new Error("Transition index contains hidden or unsupported entries");
     }
-    if (from.get(pathname) !== to.get(pathname)) {
+    const inspect = new Set([
+      ...committedResolveUndo(from, index),
+      ...records(
+        "-c",
+        "core.filemode=true",
+        "-c",
+        "core.ignoreStat=false",
+        "diff-files",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        "--name-only",
+        "-z",
+      ),
+    ]);
+    for (const pathname of new Set([...from.keys(), ...to.keys(), ...index.keys()])) {
+      const entry = index.get(pathname);
+      if (entry !== from.get(pathname) && entry !== to.get(pathname)) {
+        throw new Error(
+          `Index entry ${JSON.stringify(pathname)} is neither its journaled source nor target entry`,
+        );
+      }
+      if (from.get(pathname) !== to.get(pathname)) {
+        inspect.add(pathname);
+      }
+    }
+    for (const pathname of records("ls-files", "--others", "--exclude-standard", "-z")) {
+      if (pathname === ".local" || pathname.startsWith(".local/")) {
+        continue;
+      }
+      if (!from.has(pathname) && !to.has(pathname)) {
+        throw new Error(
+          `Untracked entry ${JSON.stringify(pathname)} is not owned by the transition`,
+        );
+      }
       inspect.add(pathname);
     }
-  }
-  for (const pathname of records("ls-files", "--others", "--exclude-standard", "-z")) {
-    if (pathname === ".local" || pathname.startsWith(".local/")) {
-      continue;
+    for (const pathname of inspect) {
+      const entry = worktreeEntry(pathname);
+      if (entry !== from.get(pathname) && entry !== to.get(pathname)) {
+        throw new Error(
+          `Working-tree entry ${JSON.stringify(pathname)} is neither its journaled source nor target entry`,
+        );
+      }
     }
-    if (!from.has(pathname) && !to.has(pathname)) {
-      throw new Error(`Untracked entry ${JSON.stringify(pathname)} is not owned by the transition`);
-    }
-    inspect.add(pathname);
+  } catch (error) {
+    console.error(error.message);
+    process.exitCode = 1;
   }
-  for (const pathname of inspect) {
-    const entry = worktreeEntry(pathname);
-    if (entry !== from.get(pathname) && entry !== to.get(pathname)) {
-      throw new Error(
-        `Working-tree entry ${JSON.stringify(pathname)} is neither its journaled source nor target entry`,
-      );
-    }
-  }
-} catch (error) {
-  console.error(error.message);
-  process.exitCode = 1;
 }

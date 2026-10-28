@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { coerceErrorMessage } from "./error-format.mts";
+import { listBundleDependencies } from "./package-bundle-dependencies.mts";
 import {
   collectPatchedMcpArtifactErrors,
   isSupportedPatchedMcpVersion,
@@ -26,6 +27,7 @@ const REQUIRED_AI_RUNTIME_ENTRIES = [
   { subpath: "", whenExported: false },
   { subpath: "providers", whenExported: false },
   { subpath: "transports", whenExported: true },
+  { subpath: "internal/model-request-body", whenExported: true },
   { subpath: "internal/openai-completions-compat", whenExported: true },
   { subpath: "internal/openai-responses-payload-policy", whenExported: true },
   { subpath: "internal/runtime", whenExported: false },
@@ -35,21 +37,6 @@ const REQUIRED_AI_RUNTIME_ENTRIES = [
   entry: `dist/${subpath || "index"}.mjs`,
   whenExported: whenExported ? `./${subpath}` : undefined,
 }));
-
-function listBundleDependencies(packageJson: unknown): string[] {
-  if (!isRecord(packageJson)) {
-    return [];
-  }
-  if (packageJson.bundleDependencies === true || packageJson.bundledDependencies === true) {
-    return Object.keys(isRecord(packageJson.dependencies) ? packageJson.dependencies : {});
-  }
-  const bundleDependencies = Array.isArray(packageJson.bundleDependencies)
-    ? packageJson.bundleDependencies
-    : packageJson.bundledDependencies;
-  return Array.isArray(bundleDependencies)
-    ? bundleDependencies.filter((name): name is string => typeof name === "string")
-    : [];
-}
 
 function resolveBundledPackageSpecifiers(
   packageRoot: string,

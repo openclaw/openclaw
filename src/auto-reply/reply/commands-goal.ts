@@ -1,4 +1,3 @@
-/** Handles /goal session objective commands and continuation prompt formatting. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   clearSessionGoal,
@@ -8,7 +7,7 @@ import {
   updateSessionGoalObjective,
   updateSessionGoalStatus,
 } from "../../config/sessions.js";
-import { loadSessionEntry as getSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { applyCommandTextToParams } from "./command-context-rewrite.js";
 import { commandReply as goalReply, defineAuthorizedTextCommand } from "./command-gates.js";
@@ -49,11 +48,14 @@ export function parseGoalCommand(raw: string): { action: string; text: string } 
   return { action, text: args };
 }
 
-function syncGoalSessionEntry(params: HandleCommandsParams): void {
+async function refreshGoalSessionEntry(params: HandleCommandsParams): Promise<void> {
   if (!params.sessionStore || !params.sessionKey) {
     return;
   }
-  const entry = getSessionEntry({ sessionKey: params.sessionKey, storePath: params.storePath });
+  const entry = await readSessionEntryReadOnlyInWorker({
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  });
   if (!entry) {
     return;
   }
@@ -97,12 +99,6 @@ export function isFormattedGoalContinuationPrompt(message: string): boolean {
 
 type ParsedGoalCommand = NonNullable<ReturnType<typeof parseGoalCommand>>;
 
-type SessionGoalCommandResult = {
-  text: string;
-  continuationPrompt?: string;
-  changed: boolean;
-};
-
 /** Execute goal storage policy once for auto-reply, Gateway, and embedded callers. */
 export async function executeSessionGoalCommand(params: {
   parsed: ParsedGoalCommand;
@@ -111,7 +107,11 @@ export async function executeSessionGoalCommand(params: {
   fallbackEntry?: SessionEntry;
   agentId?: string;
   readOnlyStatus?: boolean;
-}): Promise<SessionGoalCommandResult> {
+}): Promise<{
+  text: string;
+  continuationPrompt?: string;
+  changed: boolean;
+}> {
   const common = {
     sessionKey: params.sessionKey,
     storePath: params.storePath,
@@ -200,7 +200,7 @@ export const handleGoalCommand: CommandHandler = defineAuthorizedTextCommand(
         readOnlyStatus: true,
       });
       if (result.changed || parsed.action === "status" || parsed.action === "clear") {
-        syncGoalSessionEntry(params);
+        await refreshGoalSessionEntry(params);
       }
       if (result.changed) {
         markCommandSessionMetadataChanged(params);

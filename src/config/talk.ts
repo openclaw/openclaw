@@ -202,40 +202,20 @@ export function buildTalkConfigResponse(
     return undefined;
   }
 
-  const payload: TalkConfigResponse = {};
-  if (typeof normalized?.agentId === "string") {
-    payload.agentId = normalized.agentId;
-  }
-  if (typeof normalized?.interruptOnSpeech === "boolean") {
-    payload.interruptOnSpeech = normalized.interruptOnSpeech;
-  }
-  if (typeof normalized?.silenceTimeoutMs === "number") {
-    payload.silenceTimeoutMs = normalized.silenceTimeoutMs;
-  }
-  if (typeof normalized?.consultThinkingLevel === "string") {
-    payload.consultThinkingLevel = normalized.consultThinkingLevel;
-  }
-  if (typeof normalized?.consultFastMode === "boolean") {
-    payload.consultFastMode = normalized.consultFastMode;
-  }
-  if (typeof normalized?.speechLocale === "string") {
-    payload.speechLocale = normalized.speechLocale;
-  }
-  if (normalized?.providers && Object.keys(normalized.providers).length > 0) {
-    payload.providers = normalized.providers;
-  }
-  if (normalized?.realtime && Object.keys(normalized.realtime).length > 0) {
-    payload.realtime = normalized.realtime;
-  }
+  const provider = activeProviderFromTalk(normalized);
+  const payload: TalkConfigResponse = {
+    agentId: normalized.agentId,
+    interruptOnSpeech: normalized.interruptOnSpeech,
+    silenceTimeoutMs: normalized.silenceTimeoutMs,
+    consultThinkingLevel: normalized.consultThinkingLevel,
+    consultFastMode: normalized.consultFastMode,
+    speechLocale: normalized.speechLocale,
+    providers: Object.keys(normalized.providers ?? {}).length ? normalized.providers : undefined,
+    realtime: Object.keys(normalized.realtime ?? {}).length ? normalized.realtime : undefined,
+    ...(provider
+      ? { provider, resolved: { provider, config: normalized.providers?.[provider] ?? {} } }
+      : {}),
+  };
 
-  const resolved = resolveActiveTalkProviderConfig(normalized);
-  const activeProvider = resolved?.provider;
-  if (activeProvider) {
-    payload.provider = activeProvider;
-  }
-  if (resolved) {
-    payload.resolved = resolved;
-  }
-
-  return Object.keys(payload).length > 0 ? payload : undefined;
+  return omitUndefinedTalkFields(payload);
 }

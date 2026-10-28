@@ -1,5 +1,6 @@
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { expressionBuilder } from "kysely";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -8,12 +9,19 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { isSessionStoreTopologyChange, sessionChanges } from "../sessions/session-row-changes.js";
+import { hasClawDeletionOwnership } from "./agent-deletion-journal-authority.worker.js";
 import { hasPreJournalStateSchema } from "./agent-deletion-journal-history.js";
 import { readAgentDeletionRecoveryHolds } from "./agent-deletion-journal-recovery.kernel.js";
+import {
+  getAgentDeletionJournalStatus,
+  loadAgentDeletionJournalStatus,
+  seedAgentDeletionDiscovery,
+} from "./agent-deletion-journal-status.js";
 import type {
   AgentDatabaseDeletionSnapshot,
   AgentDatabaseDeletionWorkerSnapshot,
@@ -23,6 +31,7 @@ import type {
   RetainedAgentDeletion,
 } from "./agent-deletion-journal.types.js";
 import {
+  isAgentDatabaseRegistryChangedError,
   isOpenClawAgentDatabaseRegistryChange,
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
 } from "./openclaw-agent-db-registry-listing.js";
@@ -32,10 +41,25 @@ import {
   executeExistingOpenClawStateRead,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "./openclaw-state-db-readonly.js";
-import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import { resolveDatabasePath, resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { prepareOpenClawStateReadSource } from "./openclaw-state-worker-context.js";
+
+class AgentDatabaseDeletionSnapshotChangedError extends Error {
+  constructor() {
+    super("Agent database deletion snapshot changed during consumption.");
+    this.name = "AgentDatabaseDeletionSnapshotChangedError";
+  }
+}
+
+/** These owners require a fresh read, never replay of an already-entered consumer. */
+export function isAgentDatabaseDeletionSnapshotChangedError(error: unknown): boolean {
+  return (
+    error instanceof AgentDatabaseDeletionSnapshotChangedError ||
+    isAgentDatabaseRegistryChangedError(error)
+  );
+}
 
 export async function readAgentDeletionRecoveryHoldsInWorker(
   options: OpenClawStateDatabaseOptions = {},
@@ -46,9 +70,6 @@ export async function readAgentDeletionRecoveryHoldsInWorker(
     { type: "agentRecovery.holds", input: { statePath } },
     { current: true },
   );
-  if (reply && (!reply.ok || reply.type !== "agentRecovery.holds")) {
-    throw new Error("Unexpected agent recovery holds result");
-  }
   return reply?.held ?? [];
 }
 
@@ -61,17 +82,18 @@ export async function readAgentDeletionJournalForCreation(
     { type: "agentRecovery.creationJournal", input: { agentId: normalizeAgentId(agentId) } },
     { current: true },
   );
-  if (reply && (!reply.ok || reply.type !== "agentRecovery.creationJournal")) {
-    throw new Error("Unexpected agent creation journal result");
-  }
   return reply?.journal;
 }
 
 /** Completed cleanup still retains a deletion tombstone. */
 export function readAgentDeletionJournalStatusInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   agentId: string,
 ): AgentDeletionJournalStatus {
+  const cached = getAgentDeletionJournalStatus(database, agentId);
+  if (cached) {
+    return cached;
+  }
   if (!tableExists(database, "agent_deletion_journal")) {
     return "absent";
   }
@@ -90,23 +112,20 @@ export async function readAgentDeletionJournalStatusInWorker(
   options: OpenClawStateDatabaseOptions = {},
   signal?: AbortSignal,
 ): Promise<AgentDeletionJournalStatus> {
-  const reply = await executeExistingOpenClawStateRead(
-    options,
-    { type: "agentDeletionJournal.status", agentId: normalizeAgentId(agentId) },
-    { current: true, signal },
-  );
-  if (reply && (!reply.ok || reply.type !== "agentDeletionJournal.status")) {
-    throw new Error("Unexpected agent deletion journal read result");
-  }
-  return reply?.status ?? "absent";
+  signal?.throwIfAborted();
+  return loadAgentDeletionJournalStatus(resolveDatabasePath(options), agentId, async () => {
+    const reply = await executeExistingOpenClawStateRead(
+      options,
+      { type: "agentDeletionJournal.status", agentId: normalizeAgentId(agentId) },
+      { current: true, signal },
+    );
+    return reply?.status ?? "absent";
+  });
 }
 
 export function parseAgentDeletionDatabasePaths(value: string): string[] {
   const parsed: unknown = JSON.parse(value);
-  if (
-    Array.isArray(parsed) &&
-    parsed.every((entry): entry is string => typeof entry === "string")
-  ) {
+  if (isStringArray(parsed)) {
     return parsed;
   }
   throw new Error("Invalid agent deletion database path journal.");
@@ -114,9 +133,10 @@ export function parseAgentDeletionDatabasePaths(value: string): string[] {
 
 /** Read existing deletion history without initializing or repairing the journal. */
 export function readRetainedAgentDeletionsFromDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   statePath: string,
   purpose: AgentDeletionJournalPurpose = "maintenance",
+  deletedAgents?: AgentDatabaseDeletionWorkerSnapshot["deletedAgents"],
 ): AgentDeletionJournalDisposition {
   let entries: RetainedAgentDeletion[] = [];
   let missing = false;
@@ -124,15 +144,43 @@ export function readRetainedAgentDeletionsFromDatabase(
   try {
     missing = !tableExists(database, "agent_deletion_journal");
     if (!missing) {
+      const eb = expressionBuilder<Pick<DB, "agent_deletion_journal">, "agent_deletion_journal">();
+      const retained = eb.and([eb("cleanup_completed", "=", 1), eb("delete_files", "=", 0)]);
+      // Pending stores leave runtime discovery as soon as deletion commits.
+      const included =
+        purpose !== "runtime" ? eb.or([retained, eb("cleanup_completed", "=", 0)]) : retained;
       entries = executeSqliteQuerySync(
         database,
         getNodeSqliteKysely<Pick<DB, "agent_deletion_journal">>(database)
           .selectFrom("agent_deletion_journal")
-          .select(["agent_id", "agent_dir", "database_paths_json"])
-          .where("cleanup_completed", "=", 1)
-          .where("delete_files", "=", 0)
+          .select(["agent_id", "cleanup_completed"])
+          // Read-only upgrade inspection can precede the additive phase migration.
+          .select(
+            tableHasColumn(database, "agent_deletion_journal", "phase")
+              ? "phase"
+              : eb.lit(null).as("phase"),
+          )
+          // Status-only tombstones must not transfer their retained path payloads.
+          .select([
+            eb.case().when(included).then(eb.ref("agent_dir")).else(null).end().as("agent_dir"),
+            eb
+              .case()
+              .when(included)
+              .then(eb.ref("database_paths_json"))
+              .else("[]")
+              .end()
+              .as("database_paths_json"),
+          ])
+          .$if(!deletedAgents, (query) => query.where(included))
           .orderBy("agent_id", "asc"),
-      ).rows.map((row) => {
+      ).rows.flatMap((row) => {
+        deletedAgents?.push({
+          agentId: row.agent_id,
+          status: row.cleanup_completed === 1 ? "complete" : "pending",
+        });
+        if (row.agent_dir === null) {
+          return [];
+        }
         let databasePaths: string[] = [];
         try {
           databasePaths = parseAgentDeletionDatabasePaths(row.database_paths_json);
@@ -142,11 +190,20 @@ export function readRetainedAgentDeletionsFromDatabase(
           }
           // Unreadable path details cannot erase this row's known deleted identity.
         }
-        return {
+        const entry: RetainedAgentDeletion = {
           agentId: row.agent_id,
           agentDir: row.agent_dir,
           databasePaths: [path.join(row.agent_dir, "openclaw-agent.sqlite"), ...databasePaths],
+          cleanupCompleted: row.cleanup_completed === 1,
         };
+        if (
+          row.cleanup_completed === 0 &&
+          row.phase == null &&
+          hasClawDeletionOwnership({ db: database }, row.agent_id)
+        ) {
+          entry.manualClawRemoval = true;
+        }
+        return entry;
       });
     }
   } catch (error) {
@@ -182,7 +239,7 @@ export function readAgentDatabaseDeletionSnapshot(
 ): AgentDatabaseDeletionSnapshot | undefined {
   return withExistingOpenClawStateDatabaseReadOnly(
     ({ db, path: statePath }) =>
-      runSqliteDeferredTransactionSync(
+      runSqliteReadSnapshotSync(
         db,
         () => ({
           retainedDeletions: readRetainedAgentDeletionsFromDatabase(db, statePath, purpose),
@@ -233,8 +290,8 @@ export function prepareAgentDatabaseDeletionSnapshotRead(
       { context: readContext, current: true },
     );
     assertReadCurrent();
-    if (reply && (!reply.ok || reply.type !== "agentDatabaseDeletion.snapshot")) {
-      throw new Error("Unexpected agent database deletion snapshot result");
+    if (purpose === "runtime-discovery" && reply) {
+      seedAgentDeletionDiscovery(options.path, reply.snapshot.retainedDeletions);
     }
     return { snapshot: reply?.snapshot, assertCurrent: assertReadCurrent };
   };
@@ -283,7 +340,7 @@ export function prepareAgentDatabaseDeletionSnapshotRead(
           return await consume(snapshot, () => {
             assertCurrent();
             if (changed) {
-              throw new Error("Agent database deletion snapshot changed during consumption.");
+              throw new AgentDatabaseDeletionSnapshotChangedError();
             }
             assertRegistryCurrent?.();
           });

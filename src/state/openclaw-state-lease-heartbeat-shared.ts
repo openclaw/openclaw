@@ -1,5 +1,7 @@
 import type { MessagePort } from "node:worker_threads";
+import type { DatabaseEngineSelection } from "../infra/database-engine/context.js";
 import type { StateLeaseProcessOwner } from "../infra/state-lease-process-owner.js";
+import type { StateLeaseLoss } from "../shared/state-lease-loss.js";
 import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 import type { OpenClawStateWorkerErrorPayload } from "./openclaw-state-worker-error.js";
 
@@ -10,11 +12,10 @@ export const LEASE_CONTENTION_RETRY_TIMEOUT_MS = 2_000;
 
 export const leaseHeartbeatState = {
   status: 0,
-  request: 1,
-  ack: 2,
   expiresAt: 3,
   lastRenewedAt: 4,
   startupPhase: 5,
+  ownerFence: 6,
   starting: 0n,
   ready: 1n,
   closed: 2n,
@@ -42,9 +43,12 @@ export type LeaseHeartbeatRenewalFailure = {
 export type LeaseHeartbeatLoss = {
   path: "automatic-renewal" | "activation" | "explicit-verify" | "explicit-renew";
   outcome: "no-current-owned-unexpired-row" | "operation-error";
+  leaseLoss?: StateLeaseLoss;
 };
 
 export type LeaseHeartbeatWorkerData = {
+  postgresPool?: import("../infra/postgres-sync/pool-state.js").PostgresPoolEndpoints;
+  databaseEngineSelection?: DatabaseEngineSelection;
   databaseAdmissionPort: MessagePort;
   path: string;
   expectedIdentity: string;
@@ -56,10 +60,8 @@ export type LeaseHeartbeatWorkerData = {
   heartbeatMs: number;
   processOwner?: { identity: StateLeaseProcessOwner; env: NodeJS.ProcessEnv };
   shared: SharedArrayBuffer;
-  /** Odd while native renewal is in flight; progress is never lease authority. */
+  /** Odd while a native renewal must settle before worker termination. */
   renewalProgress: SharedArrayBuffer;
-  /** Latest completed asynchronous request; completion is never lease authority. */
-  completedRequest: SharedArrayBuffer;
 };
 
 export type LeaseHeartbeatRequest = {
@@ -67,7 +69,7 @@ export type LeaseHeartbeatRequest = {
   operation: "verify" | "renew";
 };
 
-export type LeaseHeartbeatParentMessage = LeaseHeartbeatRequest | { startup: "activate" } | null;
+export type LeaseHeartbeatParentMessage = LeaseHeartbeatRequest | { startup: "activate" };
 
 export type LeaseHeartbeatReply =
   | LeaseHeartbeatRenewalFailure

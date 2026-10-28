@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import * as sessionReads from "../../config/sessions/session-entry-read-runtime.js";
 import type {
   LegacyInteractiveReply,
   MessagePresentationAction,
@@ -151,9 +151,7 @@ function buildDiagnosticsParams(
   } as HandleCommandsParams;
 }
 
-function registerHostTrustedReservedCommandForTest(
-  command: Parameters<typeof registerPluginCommand>[1],
-) {
+function registerCodexCommandForTest(handler: PluginCommandHandler) {
   const pluginRegistry = createPluginRegistry({
     logger: {
       info() {},
@@ -164,8 +162,23 @@ function registerHostTrustedReservedCommandForTest(
     runtime: {} as PluginRuntime,
     activateGlobalSideEffects: true,
   });
-  pluginRegistry.registerCommand(createBundledPluginRecord(command.name), command);
+  pluginRegistry.registerCommand(createBundledPluginRecord("codex"), {
+    name: "codex",
+    description: "Codex command",
+    acceptsArgs: true,
+    ownership: "reserved",
+    handler,
+  });
   setActivePluginRegistry(pluginRegistry.registry);
+}
+
+function createCodexDiagnosticsSessionEntry() {
+  return {
+    sessionId: "session-1",
+    sessionFile: "/tmp/session.jsonl",
+    updatedAt: 1,
+    agentHarnessId: "codex",
+  };
 }
 
 function registerCodexDiagnosticsCommandForTest(
@@ -234,13 +247,7 @@ function registerCodexDiagnosticsCommandForTest(
       },
     };
   });
-  registerHostTrustedReservedCommandForTest({
-    name: "codex",
-    description: "Codex command",
-    acceptsArgs: true,
-    handler: commandHandler,
-    ownership: "reserved",
-  });
+  registerCodexCommandForTest(commandHandler);
   return { calls, commandHandler };
 }
 
@@ -381,12 +388,7 @@ describe("diagnostics command", () => {
     const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
     const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
     const params = buildDiagnosticsParams("/diagnostics flaky tool call", {
-      sessionEntry: {
-        sessionId: "session-1",
-        sessionFile: "/tmp/session.jsonl",
-        updatedAt: 1,
-        agentHarnessId: "codex",
-      },
+      sessionEntry: createCodexDiagnosticsSessionEntry(),
     });
     params.ctx.ApprovalReviewerDeviceId = "device-diagnostics-reviewer";
     const result = await handleDiagnosticsCommand(params, true);
@@ -504,43 +506,36 @@ describe("diagnostics command", () => {
         sessionStore: { [sessionKey]: current },
         storePath,
       });
-      const reads = vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly");
-      try {
-        await handleDiagnosticsCommand(
-          { ...params, command: { ...params.command, senderIsOwner: false } },
-          true,
-        );
-        expect(reads).not.toHaveBeenCalled();
-        expect(calls).toHaveLength(0);
-        await handleDiagnosticsCommand(params, true);
-        expect(requireDiagnosticsSessions(calls[0])).toEqual([
-          expect.objectContaining({ sessionKey, sessionId: "active-session" }),
-          expect.objectContaining({
-            sessionKey: otherKey,
-            sessionId: "other-session",
-            agentHarnessId: "codex",
-            channel: "discord",
-          }),
-        ]);
-      } finally {
-        reads.mockRestore();
-      }
+      using reads = vi.spyOn(sessionReads, "readSessionEntrySummariesInWorker");
+
+      await handleDiagnosticsCommand(
+        { ...params, command: { ...params.command, senderIsOwner: false } },
+        true,
+      );
+      expect(reads).not.toHaveBeenCalled();
+      expect(calls).toHaveLength(0);
+      await handleDiagnosticsCommand(params, true);
+      expect(requireDiagnosticsSessions(calls[0])).toEqual([
+        expect.objectContaining({ sessionKey, sessionId: "active-session" }),
+        expect.objectContaining({
+          sessionKey: otherKey,
+          sessionId: "other-session",
+          agentHarnessId: "codex",
+          channel: "discord",
+        }),
+      ]);
     });
   });
 
   it("omits the Codex section for ordinary sessions without Codex targets", async () => {
-    registerHostTrustedReservedCommandForTest({
-      name: "codex",
-      description: "Codex command",
-      acceptsArgs: true,
-      ownership: "reserved",
-      handler: vi.fn(async () => ({
+    registerCodexCommandForTest(
+      vi.fn(async () => ({
         text: [
           "No Codex thread is attached to this OpenClaw session yet.",
           "Use /codex threads to find a thread, then /codex resume <thread-id> before sending diagnostics.",
         ].join("\n"),
       })),
-    });
+    );
     const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
 
     await handleDiagnosticsCommand(
@@ -573,12 +568,7 @@ describe("diagnostics command", () => {
     const result = await handleDiagnosticsCommand(
       buildDiagnosticsParams("/diagnostics flaky tool call", {
         isGroup: true,
-        sessionEntry: {
-          sessionId: "session-1",
-          sessionFile: "/tmp/session.jsonl",
-          updatedAt: 1,
-          agentHarnessId: "codex",
-        },
+        sessionEntry: createCodexDiagnosticsSessionEntry(),
       }),
       true,
     );
@@ -609,12 +599,7 @@ describe("diagnostics command", () => {
     const result = await handleDiagnosticsCommand(
       buildDiagnosticsParams("/diagnostics", {
         isGroup: true,
-        sessionEntry: {
-          sessionId: "session-1",
-          sessionFile: "/tmp/session.jsonl",
-          updatedAt: 1,
-          agentHarnessId: "codex",
-        },
+        sessionEntry: createCodexDiagnosticsSessionEntry(),
       }),
       true,
     );
@@ -634,13 +619,7 @@ describe("diagnostics command", () => {
           "- channel whatsapp, OpenClaw session session-1, Codex thread codex-thread-1",
         ].join("\n"),
       }));
-      registerHostTrustedReservedCommandForTest({
-        name: "codex",
-        description: "Codex command",
-        acceptsArgs: true,
-        handler: commandHandler,
-        ownership: "reserved",
-      });
+      registerCodexCommandForTest(commandHandler);
       const { privateReplies, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest({
         deliveryOutcome: outcome,
         privateTargets: [
@@ -736,13 +715,7 @@ describe("diagnostics command", () => {
         text: `confirmed ${ctx.args}`,
         interactive,
       }));
-      registerHostTrustedReservedCommandForTest({
-        name: "codex",
-        description: "Codex command",
-        acceptsArgs: true,
-        handler: commandHandler,
-        ownership: "reserved",
-      });
+      registerCodexCommandForTest(commandHandler);
 
       const result = await handleDiagnosticsCommand(
         buildDiagnosticsParams("/diagnostics confirm abc123def456"),

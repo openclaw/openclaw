@@ -41,36 +41,10 @@ export type ZaloUpdate = Omit<z.infer<typeof webhookUpdateSchema>, "message"> & 
   message?: ZaloMessage;
 };
 
-type ZaloSendMessageParams = {
-  chat_id: string;
-  text: string;
-};
-
-type ZaloSendPhotoParams = {
-  chat_id: string;
-  photo: string;
-  caption?: string;
-};
-
-type ZaloSendChatActionParams = {
-  chat_id: string;
-  action: "typing" | "upload_photo";
-};
-
-type ZaloSetWebhookParams = {
-  url: string;
-  secret_token: string;
-};
-
 type ZaloWebhookInfo = {
   url?: string;
   updated_at?: number;
   has_custom_certificate?: boolean;
-};
-
-type ZaloGetUpdatesParams = {
-  /** Timeout in seconds (passed as string to API) */
-  timeout?: number;
 };
 
 export class ZaloApiError extends Error {
@@ -115,6 +89,7 @@ export async function callZaloApi<T = unknown>(
   body?: Record<string, unknown>,
   options?: {
     timeoutMs?: number;
+    signal?: AbortSignal;
     fetch?: ZaloFetch;
     assertDirectAdapterHandoff?: () => void;
   },
@@ -135,7 +110,9 @@ export async function callZaloApi<T = unknown>(
         "Content-Type": "application/json",
       },
       body: body ? JSON.stringify(body) : undefined,
-      signal: controller.signal,
+      signal: options?.signal
+        ? AbortSignal.any([controller.signal, options.signal])
+        : controller.signal,
     };
     const response = await captureEffectAuthority().initiate(() => {
       options?.assertDirectAdapterHandoff?.();
@@ -169,7 +146,10 @@ export async function getMe(
 
 export async function sendMessage(
   token: string,
-  params: ZaloSendMessageParams,
+  params: {
+    chat_id: string;
+    text: string;
+  },
   fetcher?: ZaloFetch,
   assertDirectAdapterHandoff?: () => void,
 ): Promise<ZaloApiResponse<ZaloMessage>> {
@@ -181,7 +161,11 @@ export async function sendMessage(
 
 export async function sendPhoto(
   token: string,
-  params: ZaloSendPhotoParams,
+  params: {
+    chat_id: string;
+    photo: string;
+    caption?: string;
+  },
   fetcher?: ZaloFetch,
   assertDirectAdapterHandoff?: () => void,
 ): Promise<ZaloApiResponse<ZaloMessage>> {
@@ -221,7 +205,10 @@ export async function sendPhoto(
 
 export async function sendChatAction(
   token: string,
-  params: ZaloSendChatActionParams,
+  params: {
+    chat_id: string;
+    action: "typing" | "upload_photo";
+  },
   fetcher?: ZaloFetch,
   timeoutMs?: number,
 ): Promise<ZaloApiResponse<boolean>> {
@@ -236,18 +223,29 @@ export async function sendChatAction(
  */
 export async function getUpdates(
   token: string,
-  params?: ZaloGetUpdatesParams,
+  params?: {
+    signal?: AbortSignal;
+    /** Timeout in seconds (passed as string to API) */
+    timeout?: number;
+  },
   fetcher?: ZaloFetch,
 ): Promise<ZaloApiResponse<ZaloUpdate>> {
   const pollTimeoutSec = params?.timeout ?? 30;
   const timeoutMs = (pollTimeoutSec + 5) * 1000;
   const body = { timeout: String(pollTimeoutSec) };
-  return callZaloApi<ZaloUpdate>("getUpdates", token, body, { timeoutMs, fetch: fetcher });
+  return callZaloApi<ZaloUpdate>("getUpdates", token, body, {
+    timeoutMs,
+    signal: params?.signal,
+    fetch: fetcher,
+  });
 }
 
 export async function setWebhook(
   token: string,
-  params: ZaloSetWebhookParams,
+  params: {
+    url: string;
+    secret_token: string;
+  },
   fetcher?: ZaloFetch,
 ): Promise<ZaloApiResponse<ZaloWebhookInfo>> {
   return callZaloApi<ZaloWebhookInfo>("setWebhook", token, params, { fetch: fetcher });

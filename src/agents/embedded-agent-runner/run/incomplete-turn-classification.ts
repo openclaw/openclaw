@@ -4,8 +4,13 @@ import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
+import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import type { CompletedAssistantAnswer } from "../../embedded-agent-subscribe.handlers.types.js";
-import { extractEmbeddedAssistantText } from "../../embedded-agent-utils.js";
+import {
+  extractAssistantVisibleText,
+  extractEmbeddedAssistantText,
+  sanitizeAssistantVisibleStreamText,
+} from "../../embedded-agent-utils.js";
 import {
   isStrictAgenticSupportedProviderModel,
   stripProviderPrefix,
@@ -19,12 +24,13 @@ import type { EmbeddedRunAttemptResult } from "./types.js";
 export type IncompleteTurnAttempt = Pick<
   EmbeddedRunAttemptResult,
   | "assistantTexts"
+  | "preparedTerminalReply"
+  | "textToolCallAttempt"
   | "clientToolCalls"
   | "currentAttemptAssistant"
   | "currentAttemptCompletedAssistant"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
-  | "heartbeatToolResponse"
   | "toolMediaUrls"
   | "toolAudioAsVoice"
   | "toolTrustedLocalMedia"
@@ -66,6 +72,19 @@ export function hasComposedVisibleAnswerAfterSettledTools(params: {
     (message) => message.role === "user",
   );
   const currentMessages = params.messagesSnapshot.slice(latestUserIndex + 1);
+  const hasMediaOutput = (text: string): boolean => {
+    const parsed = parseReplyDirectives(text);
+    return Boolean(parsed.mediaUrls?.length || parsed.audioAsVoice);
+  };
+  if (
+    params.assistantTexts.some(hasMediaOutput) ||
+    currentMessages.some(
+      (message) =>
+        message.role === "assistant" && hasMediaOutput(resolveRawAssistantAnswerText(message)),
+    )
+  ) {
+    return true;
+  }
   const lastToolResultIndex = currentMessages.findLastIndex(
     (message) => message.role === "toolResult",
   );
@@ -89,14 +108,11 @@ export function hasComposedVisibleAnswerAfterSettledTools(params: {
   });
 }
 
-/** Excludes only plain progress text; structured or tool-owned payloads remain delivery evidence. */
+/** Excludes pre-tool progress and generated failures; structured delivery remains evidence. */
 export function countSettledTurnDeliveryPayloads(params: {
   payloads: EmbeddedAgentRunResult["payloads"];
   attempt: IncompleteTurnAttempt;
 }): number {
-  const hasNoAssistantText = params.attempt.assistantTexts.every(
-    (text) => !parseReplyDirectives(text).text.trim(),
-  );
   // A completed answer the subscriber kept for a later silent stop is this turn's answer, even
   // though it precedes the tool results that settled after it.
   const hasComposedVisibleAnswer =
@@ -109,7 +125,7 @@ export function countSettledTurnDeliveryPayloads(params: {
     const syntheticFallback =
       payload.isError === true &&
       Object.keys(payload).every((key) => key === "text" || key === "isError") &&
-      ((hasNoAssistantText && metadata?.toolErrorWarning) ||
+      ((!hasComposedVisibleAnswer && metadata?.toolErrorWarning) ||
         (canFinalizeProviderError && metadata?.terminalProviderError));
     if (syntheticFallback) {
       return false;
@@ -188,7 +204,7 @@ const RETRY_GUARD_MODEL_APIS = new Set([
   "openclaw-azure-openai-responses-transport",
 ]);
 export function joinAssistantTexts(assistantTexts?: readonly string[]): string {
-  return (assistantTexts ?? []).join("\n\n").trim();
+  return (assistantTexts ?? []).join("\n\n");
 }
 
 export function shouldApplyNonVisibleTurnRetryGuard(params: {
@@ -204,9 +220,7 @@ export function shouldApplyNonVisibleTurnRetryGuard(params: {
     (GEMINI_INCOMPLETE_TURN_PROVIDER_IDS.has(
       normalizeLowercaseStringOrEmpty(params.provider ?? ""),
     ) &&
-      GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN.test(
-        stripProviderPrefix(typeof params.modelId === "string" ? params.modelId : ""),
-      )) ||
+      GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN.test(stripProviderPrefix(params.modelId ?? ""))) ||
     RETRY_GUARD_MODEL_APIS.has(normalizeLowercaseStringOrEmpty(params.modelApi ?? "")) ||
     isOllamaIncompleteTurnProvider(params.provider)
   );
@@ -216,20 +230,31 @@ export function classifyAssistantTurn(params: {
   payloadCount: number;
   attempt: Pick<
     IncompleteTurnAttempt,
-    "assistantTexts" | "currentAttemptAssistant" | "currentAttemptCompletedAssistant"
+    | "assistantTexts"
+    | "preparedTerminalReply"
+    | "textToolCallAttempt"
+    | "currentAttemptAssistant"
+    | "currentAttemptCompletedAssistant"
   >;
 }) {
   const assistant = resolveCurrentAttemptAssistant(params.attempt);
-  const output = parseReplyDirectives(
-    assistant
-      ? resolveRawAssistantAnswerText(assistant)
-      : joinAssistantTexts(params.attempt.assistantTexts),
-  );
-  const visibleText = output.text.trim();
+  const rawAnswerText = assistant
+    ? resolveRawAssistantAnswerText(assistant)
+    : joinAssistantTexts(params.attempt.assistantTexts);
+  const prepared =
+    params.attempt.preparedTerminalReply ??
+    prepareAgentRunTerminalReply({ rawText: rawAnswerText });
+  const renderedText = params.attempt.preparedTerminalReply
+    ? prepared.text
+    : assistant
+      ? extractAssistantVisibleText(assistant, (_text, final) => (final ? prepared.text : ""))
+      : sanitizeAssistantVisibleStreamText(prepared.text);
+  const visibleText = parseReplyDirectives(renderedText).text.trim();
   const reasoningOnly = Boolean(
     assistant && assessLastAssistantMessage(assistant) === "incomplete-text",
   );
   const nonVisibleEligibleForSilentReply =
+    !params.attempt.textToolCallAttempt &&
     params.payloadCount === 0 &&
     visibleText.length === 0 &&
     assistant?.stopReason !== "error" &&
@@ -241,7 +266,10 @@ export function classifyAssistantTurn(params: {
   return {
     assistant,
     visibleText,
-    silent: output.isSilent,
+    silent:
+      prepared.terminalReply.disposition === "silent" &&
+      assistant?.stopReason === "stop" &&
+      !assistant.content.some((block) => block.type === "toolCall"),
     reasoningOnly,
     emptyResponse: nonVisibleEligibleForSilentReply && !reasoningOnly,
     nonVisibleEligibleForSilentReply,

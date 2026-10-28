@@ -35,6 +35,13 @@ function killFixtureProcess(pid: number) {
   }
 }
 
+function expectTreesAlive(trees: Iterable<ProcessTree>, alive: boolean, childrenOnly = false) {
+  const pids = [...trees].flatMap(({ child, descendant }) =>
+    childrenOnly ? [child] : [child, descendant],
+  );
+  expect(pids.map(isAlive)).toEqual(pids.map(() => alive));
+}
+
 describe.skipIf(process.platform === "win32")("Codex stdio crash recovery", () => {
   let root: string;
   let stateDir: string;
@@ -47,25 +54,28 @@ describe.skipIf(process.platform === "win32")("Codex stdio crash recovery", () =
   const retainedTrees = new Set<ProcessTree>();
   const stderr = new WeakMap<ChildProcess, string>();
 
+  function fixtureEnv(nativeEnv: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+    return {
+      HOME: root,
+      ...nativeEnv,
+      TMPDIR: root,
+      TMP: root,
+      TEMP: root,
+      PATH: process.env.PATH,
+      NODE_ENV: "test",
+    };
+  }
+
   function releaseTree(tree: ProcessTree) {
     for (const pid of [tree.descendant, tree.child]) {
-      if (isAlive(pid)) {
-        killFixtureProcess(pid);
-      }
+      killFixtureProcess(pid);
     }
     retainedTrees.delete(tree);
   }
 
   async function startOwner() {
     const parent = spawn(nodeExecPath, ["--import", "tsx", fixture], {
-      env: {
-        HOME: root,
-        TMPDIR: root,
-        TMP: root,
-        TEMP: root,
-        PATH: process.env.PATH,
-        NODE_ENV: "test",
-      },
+      env: fixtureEnv(),
       stdio: ["ignore", "ignore", "pipe", "ipc"],
     });
     parents.add(parent);
@@ -102,41 +112,38 @@ describe.skipIf(process.platform === "win32")("Codex stdio crash recovery", () =
   }
 
   async function request(parent: ChildProcess, message: OrphanFixtureRequest) {
-    return await new Promise<ProcessTree | "closed">((resolve, reject) => {
-      const cleanup = () => {
-        parent.off("error", onError);
-        parent.off("exit", onExit);
-        parent.off("message", onMessage);
-      };
-      const onError = (error: Error) => {
-        cleanup();
-        reject(error);
-      };
-      const onExit = () => onError(new Error(`Fixture exited: ${stderr.get(parent) ?? ""}`));
-      const onMessage = (response: ProcessTree | "closed" | { error: string }) => {
-        cleanup();
-        if (typeof response === "object" && "error" in response) {
-          reject(new Error(response.error));
-        } else {
-          resolve(response);
-        }
-      };
-      parent.once("error", onError);
-      parent.once("exit", onExit);
-      parent.once("message", onMessage);
-      parent.send!(message, (error) => {
-        if (error) {
-          onError(error);
-        }
-      });
-    });
+    const abort = new AbortController();
+    const { signal } = abort;
+    try {
+      const response = await Promise.race([
+        once(parent, "message", { signal }).then(
+          ([value]): ProcessTree | "closed" | { error: string } => value,
+        ),
+        once(parent, "exit", { signal }).then(() => {
+          throw new Error(`Fixture exited: ${stderr.get(parent) ?? ""}`);
+        }),
+        new Promise<never>((_resolve, reject) => {
+          parent.send!(message, (error) => {
+            if (error) {
+              reject(error);
+            }
+          });
+        }),
+      ]);
+      if (typeof response === "object" && "error" in response) {
+        throw new Error(response.error);
+      }
+      return response;
+    } finally {
+      abort.abort();
+    }
   }
 
   async function start(
     parent: ChildProcess,
     mode: "fixture" | "native",
     directory = stateDir,
-    searchPath = process.platform === "linux" ? unavailablePs : process.env.PATH,
+    inspection: NodeJS.ProcessEnv = {},
   ) {
     const native =
       mode === "native"
@@ -152,12 +159,10 @@ describe.skipIf(process.platform === "win32")("Codex stdio crash recovery", () =
       kind: "start" as const,
       stateDir: directory,
       env: {
-        HOME: root,
-        ...native?.env,
-        TMPDIR: root,
-        TMP: root,
-        TEMP: root,
-        PATH: searchPath,
+        ...fixtureEnv(native?.env),
+        // Linux inspection reads procfs, so every start proves it never needs ps.
+        PATH: process.platform === "linux" ? unavailablePs : process.env.PATH,
+        ...inspection,
         OPENCLAW_STATE_DIR: directory,
         NODE_ENV: "test",
       },
@@ -204,67 +209,41 @@ describe.skipIf(process.platform === "win32")("Codex stdio crash recovery", () =
 
   it(
     "reaps dead native and Node trees before a fresh spawn and preserves live owners",
-    {
-      timeout: 60_000,
-    },
-    async (ctx) => {
+    { timeout: 60_000 },
+    async () => {
       // Only this doomed owner needs a cold process: registration verifies its actual OS parent.
       const owner = await startOwner();
       const orphans = new Set<ProcessTree>();
-      ctx.onTestFinished(async () => {
-        try {
-          await stopOwner(owner);
-        } finally {
-          for (const tree of orphans) {
-            releaseTree(tree);
-          }
-        }
-      });
       const native = await start(owner, "native");
       orphans.add(native);
       orphans.add(await start(owner, "fixture"));
-      for (const tree of orphans) {
-        expect(isAlive(tree.child)).toBe(true);
-      }
+      expectTreesAlive(orphans, true, true);
       // Freeze the real app-server mid-command so EOF cannot complete its cleanup.
       process.kill(native.child, "SIGSTOP");
       const exited = once(owner, "exit");
       owner.kill("SIGKILL");
       await exited;
-      for (const tree of orphans) {
-        expect(isAlive(tree.child)).toBe(true);
-        expect(isAlive(tree.descendant)).toBe(true);
-      }
+      expectTreesAlive(orphans, true);
 
-      if (process.platform !== "linux") {
-        await expect(start(survivor, "fixture", stateDir, unavailablePs)).rejects.toThrow(
+      if (process.platform === "darwin") {
+        // macOS inspection is native-only; proc-safe's documented off mode makes it unavailable.
+        await expect(
+          start(survivor, "fixture", stateDir, { PROC_SAFE_NATIVE: "off" }),
+        ).rejects.toThrow(
           "Cannot inspect Codex processes. Process identity is unavailable or invalid.",
         );
-        for (const tree of orphans) {
-          expect(isAlive(tree.child)).toBe(true);
-        }
+        expectTreesAlive(orphans, true, true);
       }
 
       const fresh = await start(survivor, "fixture");
-      ctx.onTestFinished(async () => {
-        try {
-          expect(await request(survivor, { kind: "close", child: fresh.child })).toBe("closed");
-          expect(isAlive(fresh.child)).toBe(false);
-          expect(isAlive(fresh.descendant)).toBe(false);
-        } finally {
-          releaseTree(fresh);
-        }
-      });
+      expectTreesAlive(orphans, false);
       for (const tree of orphans) {
-        expect(isAlive(tree.child)).toBe(false);
-        expect(isAlive(tree.descendant)).toBe(false);
         retainedTrees.delete(tree);
-        orphans.delete(tree);
       }
-      for (const tree of [live, other, fresh]) {
-        expect(isAlive(tree.child)).toBe(true);
-        expect(isAlive(tree.descendant)).toBe(true);
-      }
+      expectTreesAlive([live, other, fresh], true);
+      expect(await request(survivor, { kind: "close", child: fresh.child })).toBe("closed");
+      expectTreesAlive([fresh], false);
+      releaseTree(fresh);
     },
   );
 });

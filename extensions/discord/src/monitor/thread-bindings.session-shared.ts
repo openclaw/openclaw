@@ -8,7 +8,6 @@ import {
 } from "./thread-bindings.persistence.js";
 import {
   BINDINGS_BY_THREAD_ID,
-  ensureBindingsLoaded,
   ensureBindingsLoadedAsync,
   resolveBindingIdsForSession,
   MANAGERS_BY_ACCOUNT_ID,
@@ -24,7 +23,6 @@ export function resolveBindingIdsForTargetSession(params: {
   accountId?: string;
   targetKind?: ThreadBindingTargetKind;
 }) {
-  ensureBindingsLoaded();
   return resolveBindingIdsForSession({
     ...params,
     accountId: params.accountId ? normalizeAccountId(params.accountId) : undefined,
@@ -37,65 +35,52 @@ export function mutateBindingsForTargetSession(
   onRemoved?: (record: ThreadBindingRecord, manager: ThreadBindingManager | undefined) => void,
 ): Promise<ThreadBindingRecord[]> {
   const accountId = params.accountId ? normalizeAccountId(params.accountId) : undefined;
-  const admittedOwners = new Map<string, { manager: ThreadBindingManager; stopping: boolean }>();
-  // Snapshot registry membership before invoking manager callbacks.
-  const ownerSnapshot = [...MANAGERS_BY_ACCOUNT_ID];
-  for (const [ownerAccountId, manager] of ownerSnapshot) {
+  const managers: ThreadBindingManager[] = [];
+  const stoppingAtAdmission = new Map<string, boolean>();
+  for (const [ownerAccountId, manager] of MANAGERS_BY_ACCOUNT_ID) {
     if (accountId === undefined || ownerAccountId === accountId) {
-      admittedOwners.set(ownerAccountId, { manager, stopping: manager.isStopping() });
+      managers.push(manager);
+      stoppingAtAdmission.set(ownerAccountId, manager.isStopping());
     }
   }
   // Include pending binds whose target rows do not exist until their account work settles.
-  return runThreadBindingAccountOperation(
-    [...admittedOwners.values()].map(({ manager }) => manager),
-    () =>
-      runThreadBindingMutation(async () => {
-        await ensureBindingsLoadedAsync();
-        const ids = resolveBindingIdsForTargetSession(params);
-        const owners = new Map<string, ThreadBindingManager | undefined>();
-        for (const bindingKey of ids) {
-          const existing = BINDINGS_BY_THREAD_ID.get(bindingKey);
-          if (!existing) {
-            continue;
-          }
-          const manager = MANAGERS_BY_ACCOUNT_ID.get(existing.accountId);
-          const admitted = admittedOwners.get(existing.accountId);
-          if (admitted?.stopping || (!admitted && manager?.isStopping())) {
-            throw new Error("Discord thread binding manager is stopping");
-          }
-          if (admitted?.manager !== manager) {
-            throw new Error("Discord thread binding manager changed");
-          }
-          owners.set(existing.accountId, manager);
+  return runThreadBindingAccountOperation(managers, () =>
+    runThreadBindingMutation(async () => {
+      await ensureBindingsLoadedAsync();
+      const ids = resolveBindingIdsForTargetSession(params);
+      for (const bindingKey of ids) {
+        const existing = BINDINGS_BY_THREAD_ID.get(bindingKey);
+        if (!existing) {
+          continue;
         }
-        const now = Date.now();
-        const updated: ThreadBindingRecord[] = [];
-        for (const bindingKey of ids) {
-          const existing = BINDINGS_BY_THREAD_ID.get(bindingKey);
-          if (!existing) {
-            continue;
-          }
-          const manager = owners.get(existing.accountId);
-          const assertCurrent = () => {
-            if (MANAGERS_BY_ACCOUNT_ID.get(existing.accountId) !== manager) {
-              throw new Error("Discord thread binding manager changed");
-            }
-          };
-          const nextRecord = update(existing, now);
-          await commitBindingRecord({
-            bindingKey,
-            previous: existing,
-            next: nextRecord,
-            persist: shouldPersistBindingMutations(),
-            assertCurrent,
-          });
-          if (!nextRecord) {
-            onRemoved?.(existing, manager);
-          }
-          updated.push(nextRecord ?? existing);
+        const manager = MANAGERS_BY_ACCOUNT_ID.get(existing.accountId);
+        // Shutdown drains admitted work; only newly discovered owners use their current state.
+        if (stoppingAtAdmission.get(existing.accountId) ?? manager?.isStopping()) {
+          throw new Error("Discord thread binding manager is stopping");
         }
-        return updated;
-      }),
+      }
+      const now = Date.now();
+      const updated: ThreadBindingRecord[] = [];
+      for (const bindingKey of ids) {
+        const existing = BINDINGS_BY_THREAD_ID.get(bindingKey);
+        if (!existing) {
+          continue;
+        }
+        const manager = MANAGERS_BY_ACCOUNT_ID.get(existing.accountId);
+        const nextRecord = update(existing, now);
+        await commitBindingRecord({
+          bindingKey,
+          previous: existing,
+          next: nextRecord,
+          persist: shouldPersistBindingMutations(),
+        });
+        if (!nextRecord) {
+          onRemoved?.(existing, manager);
+        }
+        updated.push(nextRecord ?? existing);
+      }
+      return updated;
+    }),
   );
 }
 

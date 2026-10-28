@@ -15,27 +15,55 @@ export type DoctorUpdateBudget = {
   readonly agentCount: number;
   readonly inspectionDeadlineMs: number;
   readonly disposalDeadlineMs?: number;
+  /** Set when this validation command owns a fresh driver budget; workers inherit it. */
+  readonly commandStartedAtMs?: number;
   readonly phase: "validation" | "activation";
-  readonly source: "validation-ledger" | "activation-policy" | "unavailable-validation-origin";
+  readonly source:
+    | "validation-command"
+    | "validation-ledger"
+    | "activation-policy"
+    | "unavailable-validation-origin";
   readonly deferred: Map<string, HealthFinding>;
 };
 
 // Child Doctor receives no numeric parent deadline. Keep optional work within
 // half the published 9.4 default validation window (300s, 2s cleanup).
-// The ledger origin precedes the canary clock; newer parents may allow more.
+// Two anchors exist because the child reads the ledger copied into its private
+// state during the snapshot, never the live one, so it cannot see its own step:
+// - Drivers since 2026.10.1 record `candidate-state-snapshot` before that copy,
+//   and every such driver starts a fresh >=300s budget for each named command
+//   just before spawning it. Anchor at this command's process start, less a
+//   margin for spawn and CLI respawn latency before the driver's deadline.
+// - Older drivers (published 9.4) run every command on one clock that starts
+//   after `validating`; anchoring there is conservative for 9.6+ drivers that
+//   lack the snapshot receipt.
 // Activation uses a fresh optional-work window, not the expired canary clock.
 const PUBLISHED_VALIDATION_WORK_MS = 298_000;
+const COMMAND_SPAWN_MARGIN_MS = 10_000;
+const COMMAND_VALIDATION_WORK_MS = PUBLISHED_VALIDATION_WORK_MS - COMMAND_SPAWN_MARGIN_MS;
 const INSPECTION_WINDOW_MS = PUBLISHED_VALIDATION_WORK_MS / 2;
 // The measured 480-agent Doctor took 579s. Require two seconds per agent
 // before admitting a fleet inspection; this is admission, never a kill timer.
 const AGENT_INSPECTION_ALLOWANCE_MS = 2_000;
 const RUN_INSPECTION_ALLOWANCE_MS = 5_000;
 
+/** A worker inherits its CLI's anchor; the CLI itself started this command. */
+function resolveCommandStartedAt(
+  inherited: number | undefined,
+  validationStartedAt: number,
+): number {
+  const started = inherited ?? Math.floor(performance.timeOrigin);
+  // A command cannot start before validation or after now.
+  return Math.min(Math.max(started, validationStartedAt), Date.now());
+}
+
 /** Read only the selected profile's existing ledger; these facts grant no write authority. */
 export async function resolveDoctorUpdateBudget(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   preparedAgentCount?: number;
+  /** Inherited by the lint worker from its CLI; other commands use their own process start. */
+  commandStartedAtMs?: number;
 }): Promise<DoctorUpdateBudget | undefined> {
   const rehearsal = resolveUpdateRehearsalRoot(params.env);
   const recordedUpdateDoctor =
@@ -46,12 +74,18 @@ export async function resolveDoctorUpdateBudget(params: {
   }
   const { listUpdateRunsAsync } = await import("../infra/update-run-reader.js");
   let validationStartedAt: number | undefined;
+  let freshCommandBudget = false;
   try {
     const runs = await listUpdateRunsAsync({ active: true, limit: 2 }, { env: params.env });
     const run = runs.length === 1 ? runs[0] : undefined;
     validationStartedAt = run?.steps.find(
       (step) => step.step === "validating" && step.startedAtMs !== undefined,
     )?.startedAtMs;
+    freshCommandBudget = Boolean(
+      run?.steps.some(
+        (step) => step.step === "candidate-state-snapshot" && step.status === "in_progress",
+      ),
+    );
   } catch {
     // Required schema/admission checks own unreadable state. Optional work
     // cannot consume an unknown old parent's remaining validation window.
@@ -59,23 +93,48 @@ export async function resolveDoctorUpdateBudget(params: {
   if (!rehearsal && validationStartedAt === undefined) {
     return undefined;
   }
+  const agentCount = Math.max(listAgentIds(params.cfg).length, params.preparedAgentCount ?? 0);
+  const deferred = new Map<string, HealthFinding>();
+  if (!rehearsal) {
+    return {
+      agentCount,
+      phase: "activation",
+      inspectionDeadlineMs: Date.now() + INSPECTION_WINDOW_MS,
+      source: "activation-policy",
+      deferred,
+    };
+  }
+  if (validationStartedAt === undefined) {
+    return {
+      agentCount,
+      phase: "validation",
+      inspectionDeadlineMs: Date.now(),
+      source: "unavailable-validation-origin",
+      deferred,
+    };
+  }
+  if (freshCommandBudget) {
+    const commandStartedAtMs = resolveCommandStartedAt(
+      params.commandStartedAtMs,
+      validationStartedAt,
+    );
+    return {
+      agentCount,
+      phase: "validation",
+      commandStartedAtMs,
+      disposalDeadlineMs: commandStartedAtMs + COMMAND_VALIDATION_WORK_MS,
+      inspectionDeadlineMs: commandStartedAtMs + COMMAND_VALIDATION_WORK_MS / 2,
+      source: "validation-command",
+      deferred,
+    };
+  }
   return {
-    agentCount: Math.max(listAgentIds(params.cfg).length, params.preparedAgentCount ?? 0),
-    phase: rehearsal ? "validation" : "activation",
-    ...(rehearsal && validationStartedAt !== undefined
-      ? { disposalDeadlineMs: validationStartedAt + PUBLISHED_VALIDATION_WORK_MS }
-      : {}),
-    inspectionDeadlineMs: rehearsal
-      ? validationStartedAt === undefined
-        ? Date.now()
-        : validationStartedAt + INSPECTION_WINDOW_MS
-      : Date.now() + INSPECTION_WINDOW_MS,
-    source: !rehearsal
-      ? "activation-policy"
-      : validationStartedAt === undefined
-        ? "unavailable-validation-origin"
-        : "validation-ledger",
-    deferred: new Map(),
+    agentCount,
+    phase: "validation",
+    disposalDeadlineMs: validationStartedAt + PUBLISHED_VALIDATION_WORK_MS,
+    inspectionDeadlineMs: validationStartedAt + INSPECTION_WINDOW_MS,
+    source: "validation-ledger",
+    deferred,
   };
 }
 

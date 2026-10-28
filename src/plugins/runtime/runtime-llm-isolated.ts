@@ -6,11 +6,12 @@ import { buildConfiguredModelCatalog } from "../../agents/model-selection-shared
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveThinkingProfile } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import {
   createLlmCompleteError as completionError,
   createLlmOperatorAuthorizationError,
   isLlmOperatorAuthorizationError,
+  isLlmRuntimeLifecycleFailure,
 } from "./runtime-llm-error.js";
 import type {
   LlmCompleteErrorCode,
@@ -32,20 +33,16 @@ const ISOLATED_COMPLETION_ERRORS = new Map<unknown, readonly [LlmCompleteErrorCo
   ],
 ]);
 
-function requireIsolatedUserPrompt(params: LlmCompleteParams): string {
-  if (
-    params.execution?.mode !== "isolated-agent-runtime" ||
-    !Array.isArray(params.messages) ||
-    params.messages.length !== 1 ||
-    params.messages[0]?.role !== "user" ||
-    typeof params.messages[0].content !== "string"
-  ) {
-    throw completionError(
-      "LLM_ISOLATED_INPUT_REJECTED",
-      "Isolated agent-runtime completion requires exactly one user message; pass system instructions through systemPrompt.",
-    );
+// Keep native and prompt-fallback schemas within the model-context budget.
+const MAX_OUTPUT_SCHEMA_UTF8_BYTES = 1_024;
+
+function selectOutputSchema(
+  schema: LlmIsolatedAgentRuntimeCompleteParams["outputSchema"],
+): LlmIsolatedAgentRuntimeCompleteParams["outputSchema"] {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    return undefined;
   }
-  return params.messages[0].content;
+  return boundedJsonUtf8Bytes(schema, MAX_OUTPUT_SCHEMA_UTF8_BYTES).complete ? schema : undefined;
 }
 
 export function isIsolatedAgentRuntimeRequest(
@@ -100,37 +97,6 @@ function resolveIsolatedTimeoutMs(value: number | undefined): number {
   return timeoutMs;
 }
 
-function assertIsolatedReasoningSupported(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  provider: string;
-  model: string;
-  reasoning: LlmCompleteParams["reasoning"];
-}): void {
-  if (params.reasoning === undefined) {
-    return;
-  }
-  const catalog = buildConfiguredModelCatalog({ cfg: params.cfg });
-  const profile = resolveThinkingProfile({
-    provider: params.provider,
-    model: params.model,
-    agentRuntime: resolveEffectiveAgentRuntime({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      provider: params.provider,
-      modelId: params.model,
-    }),
-    ...(catalog.length > 0 ? { catalog } : {}),
-  });
-  if (profile.levels.some((level) => level.id === params.reasoning)) {
-    return;
-  }
-  throw completionError(
-    "LLM_ISOLATED_INPUT_REJECTED",
-    `Thinking level "${params.reasoning}" is not supported for ${params.provider}/${params.model}. Use one of: ${profile.levels.map((level) => level.label).join(", ")}.`,
-  );
-}
-
 export async function runIsolatedAgentRuntimeCompletion(params: {
   request: LlmIsolatedAgentRuntimeCompleteParams;
   cfg: OpenClawConfig;
@@ -142,56 +108,72 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
   assertCurrent?: () => void;
 }): Promise<IsolatedCompletionResult> {
   params.assertCurrent?.();
-  const prompt = requireIsolatedUserPrompt(params.request);
+  const request = params.request;
+  if (
+    request.execution?.mode !== "isolated-agent-runtime" ||
+    !Array.isArray(request.messages) ||
+    request.messages.length !== 1 ||
+    request.messages[0]?.role !== "user" ||
+    typeof request.messages[0].content !== "string"
+  ) {
+    throw completionError(
+      "LLM_ISOLATED_INPUT_REJECTED",
+      "Isolated agent-runtime completion requires exactly one user message; pass system instructions through systemPrompt.",
+    );
+  }
+  const prompt = request.messages[0].content;
+  const outputSchema = selectOutputSchema(params.request.outputSchema);
   const timeoutMs = resolveIsolatedTimeoutMs(params.request.execution.timeoutMs);
-  assertIsolatedReasoningSupported({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    provider: params.provider,
-    model: params.model,
-    reasoning: params.request.reasoning,
-  });
-  const controller = new AbortController();
-  let timedOut = false;
-  const abortFromCaller = () => controller.abort(params.request.signal?.reason);
+  const { cfg, agentId, provider, model } = params;
+  const reasoning = params.request.reasoning;
+  if (reasoning !== undefined) {
+    const catalog = buildConfiguredModelCatalog({ cfg });
+    const profile = resolveThinkingProfile({
+      provider,
+      model,
+      agentRuntime: resolveEffectiveAgentRuntime({
+        cfg,
+        agentId,
+        provider,
+        modelId: model,
+      }),
+      ...(catalog.length > 0 ? { catalog } : {}),
+    });
+    if (!profile.levels.some((level) => level.id === reasoning)) {
+      throw completionError(
+        "LLM_ISOLATED_INPUT_REJECTED",
+        `Thinking level "${reasoning}" is not supported for ${provider}/${model}. Use one of: ${profile.levels.map((level) => level.label).join(", ")}.`,
+      );
+    }
+  }
   if (params.request.signal?.aborted) {
     throw completionError("LLM_COMPLETION_ABORTED", "Plugin LLM completion was aborted.");
   }
-  params.request.signal?.addEventListener("abort", abortFromCaller, { once: true });
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort(new Error(`Isolated completion timed out after ${timeoutMs}ms.`));
-  }, timeoutMs);
-  timer.unref?.();
+  const timeoutError = new Error(`Isolated completion timed out after ${timeoutMs}ms.`);
   try {
-    const operation = (async () => {
-      const { runIsolatedCompletion } = await import("../../agents/isolated-completion.js");
-      return await runIsolatedCompletion({
-        purpose: "plugin-completion",
-        config: params.cfg,
-        provider: params.provider,
-        model: params.model,
-        authProfileId: params.authProfileId,
-        operatorAuthority: params.operatorAuthority,
-        mapOperatorAuthorizationError: createLlmOperatorAuthorizationError,
-        assertCurrent: params.assertCurrent,
-        agentId: params.agentId,
-        systemPrompt: params.request.systemPrompt ?? "",
-        prompt,
-        timeoutMs,
-        abortSignal: controller.signal,
-        thinkLevel: params.request.reasoning,
-        streamParams: {
-          maxTokens: asFiniteNumber(params.request.maxTokens),
-          temperature: asFiniteNumber(params.request.temperature),
-        },
-      });
-    })();
-    return await racePromiseWithAbortSignal(operation, controller.signal, (signal) =>
-      signal.reason instanceof Error
-        ? signal.reason
-        : new Error("Isolated completion was aborted."),
-    );
+    const { runIsolatedCompletion } = await import("../../agents/isolated-completion.js");
+    return await runIsolatedCompletion({
+      purpose: "plugin-completion",
+      config: params.cfg,
+      provider: params.provider,
+      model: params.model,
+      authProfileId: params.authProfileId,
+      operatorAuthority: params.operatorAuthority,
+      mapOperatorAuthorizationError: createLlmOperatorAuthorizationError,
+      assertCurrent: params.assertCurrent,
+      agentId: params.agentId,
+      systemPrompt: params.request.systemPrompt ?? "",
+      prompt,
+      timeoutMs,
+      timeoutError,
+      abortSignal: params.request.signal,
+      thinkLevel: params.request.reasoning,
+      ...(outputSchema ? { outputSchema } : {}),
+      streamParams: {
+        maxTokens: asFiniteNumber(params.request.maxTokens),
+        temperature: asFiniteNumber(params.request.temperature),
+      },
+    });
   } catch (error) {
     if (isLlmOperatorAuthorizationError(error)) {
       throw error;
@@ -202,7 +184,10 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
     } catch (authorizationError) {
       throw createLlmOperatorAuthorizationError(authorizationError);
     }
-    if (timedOut) {
+    if (isLlmRuntimeLifecycleFailure(error)) {
+      throw error;
+    }
+    if (error === timeoutError) {
       throw completionError(
         "LLM_COMPLETION_TIMEOUT",
         `Plugin LLM completion timed out after ${timeoutMs}ms.`,
@@ -222,8 +207,5 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
       );
     }
     throw completionError("LLM_COMPLETION_FAILED", "Plugin LLM completion failed.", error);
-  } finally {
-    clearTimeout(timer);
-    params.request.signal?.removeEventListener("abort", abortFromCaller);
   }
 }

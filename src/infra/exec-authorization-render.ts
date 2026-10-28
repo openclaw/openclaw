@@ -1,3 +1,4 @@
+import { shellEscape as shellEscapeSingleArg } from "../shared/shell-quote.js";
 import type { SourceSpan } from "./command-explainer/types.js";
 import type { ExecSegmentSatisfiedBy } from "./exec-approvals-allowlist.js";
 import { resolvePlannedSegmentArgv } from "./exec-approvals-analysis.js";
@@ -19,11 +20,6 @@ type SourceReplacement = {
 };
 
 const SHELL_BARE_TOKEN_PATTERN = /^[A-Za-z0-9_@%+=:,./-]+$/u;
-
-function shellEscapeSingleArg(value: string): string {
-  const singleQuoteEscape = `'"'"'`;
-  return `'${value.replace(/'/g, singleQuoteEscape)}'`;
-}
 
 function renderBareShellToken(value: string): string {
   return value.length > 0 && SHELL_BARE_TOKEN_PATTERN.test(value)

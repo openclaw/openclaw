@@ -14,9 +14,10 @@ Object.defineProperty(performance, "now", { value: () => now });
 const append = CodeModeNodeProgress.prototype.append;
 let count = 0;
 CodeModeNodeProgress.prototype.append = function (json) {
-  append.call(this, json);
+  const outputCount = append.call(this, json);
   // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node BroadcastChannel has no targetOrigin.
   channel.postMessage(++count);
+  return outputCount;
 };
 
 await import("../../src/agents/code-mode-node.worker.js");

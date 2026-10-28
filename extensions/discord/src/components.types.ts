@@ -1,8 +1,15 @@
-import type { TopLevelComponents } from "./internal/discord.js";
+import type { TopLevelComponents } from "./internal/payload.js";
 
 export type DiscordComponentButtonStyle = "primary" | "secondary" | "success" | "danger" | "link";
 
-export type DiscordComponentSelectType = "string" | "user" | "role" | "mentionable" | "channel";
+export const DISCORD_COMPONENT_SELECT_TYPES = [
+  "string",
+  "user",
+  "role",
+  "mentionable",
+  "channel",
+] as const;
+export type DiscordComponentSelectType = (typeof DISCORD_COMPONENT_SELECT_TYPES)[number];
 export type DiscordComponentCallbackDataKind = "command" | "callback";
 
 export type DiscordComponentModalFieldType =

@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { MemoryPluginCapability } from "openclaw/plugin-sdk/memory-host-core";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
@@ -57,7 +56,7 @@ export type LanceDbMemoryProviderDeps = {
   embeddings: Pick<Embeddings, "embed">;
   resolveCurrentConfig(): MemoryConfig;
   /** Returns the normalized agent id only while memory is enabled for that agent. */
-  resolveEnabledAgentId(rawAgentId: string | undefined, cfg: OpenClawConfig): string | undefined;
+  resolveEnabledAgentId(rawAgentId: string | undefined): string | undefined;
   /** Counts one agent's stored memories without creating or mutating the table. */
   countMemories(agentId: string): Promise<number>;
   lastEmbeddingFailure(agentId: string): EmbeddingFailure | undefined;
@@ -110,7 +109,7 @@ export function createLanceDbMemoryProviderRuntime(
 ): MemoryProviderRuntime {
   return {
     async open(params: MemoryProviderOpenParams) {
-      const agentId = deps.resolveEnabledAgentId(params.agentId, params.cfg);
+      const agentId = deps.resolveEnabledAgentId(params.agentId);
       if (!agentId) {
         return { provider: null, error: "Memory is disabled for this agent." };
       }
@@ -119,6 +118,9 @@ export function createLanceDbMemoryProviderRuntime(
       const assertCurrent = () => {
         context.assertCurrent();
         context.signal?.throwIfAborted();
+        if (!deps.resolveEnabledAgentId(agentId)) {
+          throw new Error("Memory is disabled for this agent.");
+        }
       };
       const assertReadAllowed = () => {
         if (readDenial) {
@@ -264,6 +266,7 @@ export function createLanceDbMemoryProviderRuntime(
           try {
             memories = await deps.countMemories(agentId);
           } catch (error) {
+            assertCurrent();
             deps.logger.warn?.(
               `memory-lancedb: health could not read the memory store: ${formatErrorMessage(error)}`,
             );
@@ -273,6 +276,7 @@ export function createLanceDbMemoryProviderRuntime(
               details,
             };
           }
+          assertCurrent();
           if (!readDenial) {
             details.memories = memories;
           }

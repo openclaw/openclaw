@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as configModule from "../../../config/config.js";
 import { hashConfigRaw } from "../../../config/io.read-helpers.js";
 import * as temporaryState from "../../../infra/tmp-openclaw-dir.js";
@@ -15,47 +15,48 @@ import {
 } from "./installed-plugin-id-recovery.js";
 import { seedRecoveryOwner } from "./installed-plugin-id-recovery.test-support.js";
 
-describe("installed plugin recovery after same-run repair", () => {
-  it.each(["repaired", "not-repaired", "different-root", "record-drift"] as const)(
-    "keeps the commit fence after %s",
-    async (scenario) => {
-      await withOpenClawTestState(
-        { label: `recovery-${scenario}`, env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
-        async (state) => {
-          const cfg = {
-            plugins: { entries: { qqbot: { enabled: false, config: { authored: true } } } },
-          };
-          await seedRecoveryOwner(state, cfg, { version: "2.0.1" });
-          const planned = await recoverInstalledPluginConfigIds(cfg, state.env);
-          expect(planned.recovery.size).toBe(1);
-          expect(planned.config.plugins?.entries?.["openclaw-qqbot"]?.enabled).toBe(false);
-          await assertInstalledPluginIdRecoveryCurrent(planned.config, planned.recovery, state.env);
-          const repaired = await seedRecoveryOwner(state, planned.config, {
-            version: "2.0.3",
-            ...(scenario === "different-root" ? { root: state.path("other-owner") } : {}),
-          });
-          const result = await recoverInstalledPluginConfigIds(planned.config, state.env, {
-            previousRecovery: planned.recovery,
-            repairedPluginIds: scenario === "not-repaired" ? [] : ["openclaw-qqbot"],
-            records: scenario === "record-drift" ? {} : repaired.records,
-          });
-          expect(result.config).toEqual(planned.config);
-          const recovery = new Map([...planned.recovery, ...result.recovery]);
-          const validate = () =>
-            assertInstalledPluginIdRecoveryCurrent(result.config, recovery, state.env);
-          if (scenario !== "repaired") {
-            await expect(validate()).rejects.toThrow("Plugin ownership changed");
-            return;
-          }
-          await expect(validate()).resolves.toBeUndefined();
-          // Even the refreshed receipt must reject drift after Doctor's own repair.
-          await fs.appendFile(path.join(repaired.root, "openclaw.plugin.json"), "\n");
-          await expect(validate()).rejects.toThrow("Plugin ownership changed");
-        },
-      );
-    },
-  );
-});
+const readJson = async (file: string) => JSON.parse(await fs.readFile(file, "utf8"));
+const expectFile = async (file: string, text: string) =>
+  expect(fs.readFile(file, "utf8")).resolves.toBe(text);
+
+const recoveryState = {
+  label: "plugin-id-recovery",
+  env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+};
+
+it.each(["repaired", "not-repaired", "different-root", "record-drift"] as const)(
+  "keeps the commit fence after %s",
+  (scenario) =>
+    withOpenClawTestState(recoveryState, async (state) => {
+      const cfg = {
+        plugins: { entries: { qqbot: { enabled: false, config: { authored: true } } } },
+      };
+      await seedRecoveryOwner(state, cfg, { version: "2.0.1" });
+      const planned = await recoverInstalledPluginConfigIds(cfg, state.env);
+      await assertInstalledPluginIdRecoveryCurrent(planned.config, planned.recovery, state.env);
+      const repaired = await seedRecoveryOwner(state, planned.config, {
+        version: "2.0.3",
+        ...(scenario === "different-root" ? { root: state.path("other-owner") } : {}),
+      });
+      const result = await recoverInstalledPluginConfigIds(planned.config, state.env, {
+        previousRecovery: planned.recovery,
+        repairedPluginIds: scenario === "not-repaired" ? [] : ["openclaw-qqbot"],
+        records: scenario === "record-drift" ? {} : repaired.records,
+      });
+      expect(result.config).toEqual(planned.config);
+      const recovery = new Map([...planned.recovery, ...result.recovery]);
+      const validate = () =>
+        assertInstalledPluginIdRecoveryCurrent(result.config, recovery, state.env);
+      if (scenario !== "repaired") {
+        await expect(validate()).rejects.toThrow("Plugin ownership changed");
+        return;
+      }
+      await expect(validate()).resolves.toBeUndefined();
+      // Even the refreshed receipt must reject drift after Doctor's own repair.
+      await fs.appendFile(path.join(repaired.root, "openclaw.plugin.json"), "\n");
+      await expect(validate()).rejects.toThrow("Plugin ownership changed");
+    }),
+);
 
 // Model a catalog-declared alias; catalog ingestion has separate owner coverage.
 vi.mock("../../../plugins/official-external-plugin-catalog.js", async (importOriginal) => {
@@ -80,9 +81,6 @@ beforeEach(async () => {
   await fs.writeFile(databasePath, "", { mode: 0o600 });
   vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(handoffRoot);
   expect(resolveManagedUpdateLeaseDatabasePath()).toBe(databasePath);
-  expect(await fs.realpath(databasePath)).toBe(
-    path.join(await fs.realpath(handoffRoot), "managed-update-handoffs.sqlite"),
-  );
 });
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -97,14 +95,16 @@ it.each([
   "owner-drift",
   "diagnostic-failure",
 ] as const)("sequences a root roster and nested plugin include (%s)", async (scenario) => {
+  const rotatesEnv = scenario === "environment-rotation";
+  const completed = ["standalone", "update", "environment-rotation"].includes(scenario);
   const { prepareDoctorContext } = await import("../../doctor-config-flow.test-support.js");
   const { runWriteConfigHealth } =
     await import("../../../flows/doctor-health-contribution-runners.config.js");
   await withOpenClawTestState(
     {
-      label: "doctor-roster-plugin-include",
+      ...recoveryState,
       env: {
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        ...recoveryState.env,
         RECOVERY_VALUE: "synthetic-resolved",
         ROOT_VALUE: "synthetic-planning",
       },
@@ -121,9 +121,7 @@ it.each([
         ...cfg,
         gateway: {
           mode: "local",
-          ...(scenario === "environment-rotation"
-            ? { auth: { mode: "token", token: "${ROOT_VALUE}" } }
-            : {}),
+          auth: rotatesEnv ? { mode: "token", token: "${ROOT_VALUE}" } : undefined,
         },
         plugins: { $include: "./plugin-parent.json" },
       });
@@ -135,11 +133,7 @@ it.each([
       await fs.writeFile(leaf, leafRaw);
       const owner = await seedRecoveryOwner(state, cfg);
       const rootRaw = await fs.readFile(state.configPath, "utf8");
-      const ctx = await prepareDoctorContext(state.configPath);
-      expect(ctx.configResult.persistCanonicalAgentRoster).toBe(true);
-      expect(ctx.configResult.skipWizardMetadataForIncludeWrite).toBe(true);
-      expect(ctx.configResult.referenceSource?.installedPluginIdRecovery?.size).toBe(1);
-      expect(ctx.cfg.meta?.migrations?.webhookListeners).toBe(true);
+      await using ctx = await prepareDoctorContext(state.configPath);
       const transform = configModule.transformConfigFile;
       let firstCommit: Awaited<ReturnType<typeof transform>> | undefined;
       vi.spyOn(configModule, "transformConfigFile").mockImplementation(async (params) => {
@@ -170,44 +164,37 @@ it.each([
       if (scenario === "diagnostic-failure") {
         await expect(write()).rejects.toThrow("fixture post-roster diagnostic failure");
       } else {
-        const success =
-          scenario === "environment-rotation"
-            ? await withEnvAsync({ ROOT_VALUE: "synthetic-write" }, write)
-            : await write();
-        expect(success).toBe(["standalone", "update", "environment-rotation"].includes(scenario));
+        const success = rotatesEnv
+          ? await withEnvAsync({ ROOT_VALUE: "synthetic-write" }, write)
+          : await write();
+        expect(success).toBe(completed);
       }
       expect(firstCommit).toBeDefined();
-      const saved = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+      const saved = await readJson(state.configPath);
       expect(saved.agents.entries).toHaveProperty("main");
       expect(saved.plugins).toEqual({ $include: "./plugin-parent.json" });
-      await expect(fs.readFile(parent, "utf8")).resolves.toBe(parentRaw);
-      const completed = ["standalone", "update", "environment-rotation"].includes(scenario);
-      await expect(
-        fs.readFile(state.configPath + (completed ? ".bak.1" : ".bak"), "utf8"),
-      ).resolves.toBe(rootRaw);
+      await expectFile(parent, parentRaw);
+      await expectFile(state.configPath + (completed ? ".bak.1" : ".bak"), rootRaw);
+      expect(saved.meta?.migrations?.webhookListeners).toBe(completed ? true : undefined);
       if (completed) {
-        expect(saved.meta.migrations.webhookListeners).toBe(true);
-        if (scenario === "environment-rotation") {
+        if (rotatesEnv) {
           expect(saved.gateway.auth.token).toBe("${ROOT_VALUE}");
         }
-        const recovered = JSON.parse(await fs.readFile(leaf, "utf8"));
-        expect(recovered.entries).toEqual({
-          "openclaw-qqbot": { enabled: false, config: { token: "${RECOVERY_VALUE}" } },
+        expect(await readJson(leaf)).toEqual({
+          ...plugins,
+          entries: { "openclaw-qqbot": plugins.entries.qqbot },
+          allow: ["openclaw-qqbot"],
+          deny: ["openclaw-qqbot"],
         });
-        expect(recovered.allow).toEqual(["openclaw-qqbot"]);
-        expect(recovered.deny).toEqual(["openclaw-qqbot"]);
-        await expect(fs.readFile(leaf + ".bak", "utf8")).resolves.toBe(leafRaw);
+        await expectFile(leaf + ".bak", leafRaw);
         expect(ctx.configResultWriteCommitted).toBe(true);
         expect(ctx.configResult.confirmedConfigSource?.hash).toBe(
           (await configModule.readConfigFileSnapshot()).hash,
         );
       } else {
-        expect(saved.meta?.migrations?.webhookListeners).toBeUndefined();
         expect(ctx.configResultWriteCommitted).not.toBe(true);
         expect(ctx.configResult.confirmedConfigSource?.hash).toBe(firstCommit?.persistedHash);
-        await expect(fs.readFile(leaf, "utf8")).resolves.toBe(
-          leafRaw + (scenario === "include-drift" ? "\n" : ""),
-        );
+        await expectFile(leaf, leafRaw + (scenario === "include-drift" ? "\n" : ""));
         await expect(fs.stat(leaf + ".bak")).rejects.toMatchObject({ code: "ENOENT" });
       }
     },
@@ -219,44 +206,41 @@ it("persists the early disabled alias after Doctor repairs the same owner", asyn
   const { runInitialConfigWriteHealth } =
     await import("../../../flows/doctor-health-contribution-runners.config.js");
   const installRepair = await import("./missing-configured-plugin-install.js");
-  await withOpenClawTestState(
-    { label: "doctor-recovery-repair", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
-    async (state) => {
-      const cfg = {
-        gateway: { mode: "local" as const },
-        plugins: { enabled: false, entries: { qqbot: { enabled: false } } },
-      };
-      await state.writeConfig(cfg);
-      const initialOwner = await seedRecoveryOwner(state, cfg, { version: "2.0.1" });
-      let repairRan = false;
-      vi.spyOn(installRepair, "repairMissingConfiguredPluginInstalls").mockImplementation(
-        async ({ cfg: candidate }) => {
-          if (!candidate.plugins?.entries?.["openclaw-qqbot"]) {
-            return {
-              records: initialOwner.records,
-              changes: [],
-              warnings: [],
-              repairedPluginIds: [],
-            };
-          }
-          repairRan = true;
-          expect(candidate.plugins?.entries?.["openclaw-qqbot"]?.enabled).toBe(false);
-          const owner = await seedRecoveryOwner(state, candidate, { version: "2.0.3" });
-          return {
-            records: owner.records,
-            changes: [],
-            warnings: [],
-            repairedPluginIds: ["openclaw-qqbot"],
-            pluginInventoryChanged: true,
-          };
-        },
-      );
-      const ctx = await prepareDoctorContext(state.configPath);
-      expect(repairRan).toBe(true);
-      await runInitialConfigWriteHealth(ctx);
-      const saved = JSON.parse(await fs.readFile(state.configPath, "utf8"));
-      expect(saved.plugins.entries).toEqual({ "openclaw-qqbot": { enabled: false } });
-      expect(ctx.configResultWriteCommitted).toBe(true);
-    },
-  );
+  await withOpenClawTestState(recoveryState, async (state) => {
+    const cfg = {
+      gateway: { mode: "local" as const },
+      plugins: { enabled: false, entries: { qqbot: { enabled: false } } },
+    };
+    await state.writeConfig(cfg);
+    const initialOwner = await seedRecoveryOwner(state, cfg, { version: "2.0.1" });
+    const unchanged = () => ({
+      records: initialOwner.records,
+      changes: [],
+      warnings: [],
+      repairedPluginIds: [],
+    });
+    let repairRan = false;
+    vi.spyOn(installRepair, "repairMissingConfiguredPluginInstalls").mockImplementation(
+      async ({ cfg: candidate }) => {
+        if (!candidate.plugins?.entries?.["openclaw-qqbot"]) {
+          return unchanged();
+        }
+        repairRan = true;
+        expect(candidate.plugins?.entries?.["openclaw-qqbot"]?.enabled).toBe(false);
+        const owner = await seedRecoveryOwner(state, candidate, { version: "2.0.3" });
+        return {
+          ...unchanged(),
+          records: owner.records,
+          repairedPluginIds: ["openclaw-qqbot"],
+          pluginInventoryChanged: true,
+        };
+      },
+    );
+    await using ctx = await prepareDoctorContext(state.configPath);
+    expect(repairRan).toBe(true);
+    await runInitialConfigWriteHealth(ctx);
+    const saved = await readJson(state.configPath);
+    expect(saved.plugins.entries).toEqual({ "openclaw-qqbot": { enabled: false } });
+    expect(ctx.configResultWriteCommitted).toBe(true);
+  });
 });

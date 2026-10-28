@@ -1,16 +1,18 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-database-context.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import type { PreparedTranscriptCommit } from "./transcript-commit-policy.js";
 import {
   applyPreparedTranscriptCommit,
   prepareTranscriptCommit,
-  type PreparedTranscriptCommit,
 } from "./transcript-commit.kernel.js";
 import type {
   ApplyTranscriptCommitResult,
@@ -25,26 +27,22 @@ export type WorkerTranscriptOperations = {
   };
   "transcript.commit": {
     input: { messages: readonly CommittedAgentMessage[] };
-    output: { result: ApplyTranscriptCommitResult; projectionNeedsReconcile: boolean };
+    output: {
+      result: ApplyTranscriptCommitResult;
+      projectionNeedsReconcile: boolean;
+      entry?: SessionEntry;
+    };
   };
 };
 
 /** The canonical agent actor owns the connection and writer admission. */
 export function bindSqliteWorkerBackend(
   _input: undefined,
-  context: {
-    databasePath: string;
-    database: DatabaseSync;
-    admit(stage: "transaction" | "commit"): void;
-  },
+  context: SqliteWorkerDatabaseContext,
 ): SqliteWorkerBackend<WorkerTranscriptOperations> {
   let prepared: { input: TranscriptCommitInput; plan: PreparedTranscriptCommit } | undefined;
-  let closed = false;
-  return {
+  return bindSqliteWorkerDatabase<WorkerTranscriptOperations>(context.database, {
     execute(command) {
-      if (closed) {
-        throw new Error("Worker transcript domain is closed");
-      }
       if (command.type === "transcript.prepare") {
         if (prepared) {
           throw new Error("Worker transcript batch is already prepared");
@@ -60,7 +58,7 @@ export function bindSqliteWorkerBackend(
         if (command.input.scope.storePath !== context.databasePath) {
           throw new Error("Worker transcript target changed its database owner");
         }
-        const plan = runSqliteDeferredTransactionSync(context.database, () =>
+        const plan = runSqliteReadSnapshotSync(context.database, () =>
           prepareTranscriptCommit(input),
         );
         prepared = { input, plan };
@@ -78,24 +76,27 @@ export function bindSqliteWorkerBackend(
           }
           context.admit("transaction");
           let projectionNeedsReconcile = false;
-          const result = applyPreparedTranscriptCommit(input, plan, command.input.messages, () => {
-            projectionNeedsReconcile = true;
-          });
+          let entry: SessionEntry | undefined;
+          const result = applyPreparedTranscriptCommit(
+            input,
+            plan,
+            command.input.messages,
+            () => {
+              projectionNeedsReconcile = true;
+            },
+            (updatedEntry) => {
+              entry = updatedEntry;
+            },
+          );
           context.admit("commit");
-          return { result, projectionNeedsReconcile };
+          return { result, projectionNeedsReconcile, entry };
         },
         toDatabaseOptions(resolveSqliteTranscriptScope(input.scope)),
         { operationLabel: "worker.transcript.commit" },
       );
     },
-    assertSettled() {
-      if (context.database.isTransaction) {
-        throw new Error("Worker transcript command left a transaction open");
-      }
-    },
     close() {
-      closed = true;
       prepared = undefined;
     },
-  };
+  });
 }

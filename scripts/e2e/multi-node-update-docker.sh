@@ -67,7 +67,7 @@ echo ""
 
 echo "── Step 1: Setting up two Node installations ──"
 
-# node-A is the system node that ships with the Docker image (node:24-bookworm-slim).
+# node-A is the system node that ships with the Docker image (node:24-trixie-slim).
 NODE_A="$(command -v node)"
 NODE_A_DIR="$(dirname "$NODE_A")"
 NODE_A_VERSION="$("$NODE_A" --version)"

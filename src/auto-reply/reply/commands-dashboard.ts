@@ -4,7 +4,8 @@ import {
   skillCommandsToExplicitSelections,
 } from "../../skills/discovery/chat-command-invocation.js";
 import { applyCommandTextToParams } from "./command-context-rewrite.js";
-import { commandReply, defineAuthorizedTextCommand, matchCommandPrefix } from "./command-gates.js";
+import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
+import { matchSlashCommandToken } from "./commands-slash-parse.js";
 import type { CommandHandler } from "./commands-types.js";
 
 const DASHBOARD_COMMAND = "/dashboard";
@@ -15,7 +16,7 @@ const DEFAULT_DASHBOARD_REQUEST = "Create a dashboard for this session.";
 export const handleDashboardCommand: CommandHandler = defineAuthorizedTextCommand(
   {
     label: DASHBOARD_COMMAND,
-    match: (body) => matchCommandPrefix(body, DASHBOARD_COMMAND),
+    match: (body) => matchSlashCommandToken(body, DASHBOARD_COMMAND),
   },
   async (params, requirements) => {
     const loaded = (await params.loadSkillCommands?.()) ?? params.skillCommands ?? [];
@@ -31,9 +32,8 @@ export const handleDashboardCommand: CommandHandler = defineAuthorizedTextComman
         "Dashboard support is unavailable because the control-ui skill is unavailable for this agent.",
       );
     }
-    const trimmed = requirements.trim();
-    const request = trimmed
-      ? `${DEFAULT_DASHBOARD_REQUEST}\n\nDashboard requirements:\n${trimmed}`
+    const request = requirements
+      ? `${DEFAULT_DASHBOARD_REQUEST}\n\nDashboard requirements:\n${requirements}`
       : DEFAULT_DASHBOARD_REQUEST;
     const expanded = expandExplicitSkillReferences({
       text: `$${controlUi.name} ${request}`,

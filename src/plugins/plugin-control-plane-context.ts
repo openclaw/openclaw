@@ -12,13 +12,6 @@ type ResolvePluginDiscoveryContextParams = {
   loadPaths?: readonly string[];
 };
 
-export type ResolvePluginControlPlaneContextParams = ResolvePluginDiscoveryContextParams & {
-  activationFingerprint?: string;
-  index?: InstalledPluginIndex;
-  inventoryFingerprint?: string;
-  policyHash?: string;
-};
-
 export function resolvePluginDiscoveryContext(
   params: ResolvePluginDiscoveryContextParams = {},
 ): ReturnType<typeof resolvePluginCacheInputs> {
@@ -32,7 +25,12 @@ export function resolvePluginDiscoveryContext(
 
 /** Resolves a stable fingerprint for plugin control-plane activation state. */
 export function resolvePluginControlPlaneFingerprint(
-  params: ResolvePluginControlPlaneContextParams = {},
+  params: ResolvePluginDiscoveryContextParams & {
+    activationFingerprint?: string;
+    index?: InstalledPluginIndex;
+    inventoryFingerprint?: string;
+    policyHash?: string;
+  } = {},
 ): string {
   const inventoryFingerprint =
     params.inventoryFingerprint ??

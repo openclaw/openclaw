@@ -1,635 +1,140 @@
+import CryptoKit
 import Darwin
 import Foundation
 import OpenClawNativeState
 
 enum DeviceIdentitySQLiteStore {
-    // First writers serialize on the real database, including parallel native startup.
-    private static let busyTimeoutMilliseconds: Int32 = 30000
     private static let maximumLegacyIdentityBytes = 64 * 1024
-    private static let doctorClaimSuffix = ".doctor-importing"
-    private static let nativeClaimSuffix = ".native-importing"
-    private struct LegacyClaim {
-        let source: DeviceIdentityPaths.LegacyIdentitySource
-        let identityURL: URL
-        let data: Data
-        let snapshot: LegacyFileSnapshot
-        let material: DeviceIdentityMaterial
-    }
-
-    private struct LegacyFileSnapshot: Equatable {
-        let device: UInt64
-        let inode: UInt64
-        let size: UInt64
-        let modifiedAt: Date?
-    }
 
     static func loadOrCreate(
-        databaseURL: URL,
         destinationStateDirURL: URL,
         profile: GatewayDeviceIdentityProfile,
-        legacySources: [DeviceIdentityPaths.LegacyIdentitySource] = [],
-        beforeLegacyClaim: ((DeviceIdentityPaths.LegacyIdentitySource) throws -> Void)? = nil,
-        afterLegacyCommit: (() throws -> Void)? = nil) throws
-        -> DeviceIdentity
+        legacySources: [DeviceIdentityPaths.LegacyIdentitySource] = []) throws -> DeviceIdentity
     {
-        try OpenClawNativeStateSQLite.assertNoOfflineMaintenance(databaseURL: databaseURL)
-        try self.secureDirectory(destinationStateDirURL)
-        try self.secureDirectory(databaseURL.deletingLastPathComponent())
-        do {
-            // SQLite owns an existing profile; leave any downgrade-recreated legacy source for Doctor.
-            if self.pathMayExist(databaseURL),
-               let existing = try self.loadExisting(
-                   databaseURL: databaseURL,
-                   destinationStateDirURL: destinationStateDirURL,
-                   profile: profile)
+        try DeviceCredentialAccess.withOwner(root: destinationStateDirURL) { owner in
+            try self.prepareLegacy(owner: owner, root: destinationStateDirURL, profile: profile, sources: legacySources)
+            if let row = try owner.readIdentity(key: profile.rawValue) {
+                do { return try self.material(row).identity } catch {
+                    throw DeviceIdentityStore.storageError(
+                        "Local device identity row \"\(profile.rawValue)\" in \(destinationStateDirURL.path): " +
+                            "\(error.localizedDescription). Run openclaw doctor --fix")
+                }
+            }
+            let material = DeviceIdentityStore.generateMaterial()
+            return try self.material(owner.createIdentity(self.row(material, key: profile.rawValue))).identity
+        }
+    }
+
+    /// Reads retained inputs; the local receipt is the only consumed-source record.
+    static func prepareLegacy(
+        owner: OpenClawClientCredentialStore,
+        root: URL,
+        profile: GatewayDeviceIdentityProfile,
+        sources: [DeviceIdentityPaths.LegacyIdentitySource]) throws
+    {
+        let key = "identity:\(profile.rawValue)"
+        let receipt = try owner.readReceipt()?.receipt
+        if receipt?.legacyImports[key] != nil, receipt?.legacyImports["auth:\(profile.rawValue)"] != nil { return }
+        var selected: (material: DeviceIdentityMaterial, source: URL)?
+        var digest = SHA256()
+        var auth: DeviceAuthStoreFile?
+        for source in sources {
+            // Historical interrupted claims are readable inputs, never renamed or removed here.
+            if FileManager.default.fileExists(atPath: source.identityURL.path + ".doctor-importing") {
+                throw DeviceIdentityStore
+                    .storageError("Device identity Doctor import is pending; run openclaw doctor --fix")
+            }
+            for suffix in ["", ".native-importing"] {
+                let url = URL(fileURLWithPath: source.identityURL.path + suffix)
+                guard let data = try readLegacyFile(
+                    url,
+                    beneath: source.stateDirURL,
+                    maximumBytes: self.maximumLegacyIdentityBytes) else { continue }
+                let candidate = try DeviceIdentityStore.material(fromLegacyData: data)
+                if let selected, selected.material != candidate {
+                    throw DeviceIdentityStore.storageError(
+                        "Legacy device identity sources conflict across \(selected.source.path) and \(url.path): " +
+                            "\(selected.material.identity.deviceId) != \(candidate.identity.deviceId); " +
+                            "all sources preserved")
+                }
+                selected = (candidate, url)
+                digest.update(data: data)
+            }
+            if let selected,
+               let candidateAuth = try DeviceAuthStore.readLegacyFile(
+                   source.authURL,
+                   deviceID: selected.material.identity.deviceId)
             {
-                return existing
-            }
-            var claims: [LegacyClaim] = []
-            do {
-                for source in legacySources {
-                    if let claim = try self.claimLegacyIdentity(source, beforeClaim: beforeLegacyClaim) {
-                        claims.append(claim)
-                    }
+                if let auth, auth != candidateAuth {
+                    throw DeviceIdentityStore.storageError("Legacy device auth sources conflict; all sources preserved")
                 }
-                return try self.loadOrCreate(
-                    databaseURL: databaseURL,
-                    destinationStateDirURL: destinationStateDirURL,
-                    profile: profile,
-                    claims: claims,
-                    legacySources: legacySources,
-                    afterLegacyCommit: afterLegacyCommit)
-            } catch {
-                do {
-                    try self.restoreClaimedLegacyIdentities(claims)
-                } catch let restoreError {
-                    throw DeviceIdentityStore.storageError(
-                        "Device identity migration failed: \(error.localizedDescription); " +
-                            "native claim restoration failed: \(restoreError.localizedDescription)")
-                }
-                throw error
+                auth = candidateAuth
             }
-        } catch let error as OpenClawNativeStateError {
-            throw DeviceIdentityStore.storageError(error.message)
         }
-    }
-
-    static func loadExisting(
-        databaseURL: URL,
-        destinationStateDirURL: URL,
-        profile: GatewayDeviceIdentityProfile) throws -> DeviceIdentity?
-    {
-        let database = try OpenClawNativeStateSQLite(
-            databaseURL: databaseURL,
-            createIfMissing: false)
-        guard try database.schemaObjectExists(type: "table", name: "device_identities") else { return nil }
-        try self.ensureIdentityTable(database, allowVersionZeroCreation: false)
-        return try self.readIdentity(
-            database,
-            key: profile.rawValue,
-            stateDirectoryURL: destinationStateDirURL)?.identity
-    }
-
-    private static func loadOrCreate(
-        databaseURL: URL,
-        destinationStateDirURL: URL,
-        profile: GatewayDeviceIdentityProfile,
-        claims: [LegacyClaim],
-        legacySources: [DeviceIdentityPaths.LegacyIdentitySource],
-        afterLegacyCommit: (() throws -> Void)?) throws -> DeviceIdentity
-    {
-        try self.requireConsistentClaims(claims)
-        let candidate = claims.first?.material ?? DeviceIdentityStore.generateMaterial()
-        let writeTimestampMs = Int64(Date().timeIntervalSince1970 * 1000)
-
-        let database = try OpenClawNativeStateSQLite(
-            databaseURL: databaseURL,
-            busyTimeoutMilliseconds: self.busyTimeoutMilliseconds)
-        let authoritative = try database.withImmediateTransaction {
-            try self.ensureIdentityTable(database, allowVersionZeroCreation: true)
-            let existing = try self.readIdentity(
-                database,
-                key: profile.rawValue,
-                stateDirectoryURL: destinationStateDirURL)
-            let selected: DeviceIdentityMaterial
-            if let existing {
-                if let migrated = claims.first?.material,
-                   !self.hasSameKeyMaterial(migrated, existing)
-                {
-                    throw DeviceIdentityStore.storageError(
-                        "Legacy device identity conflicts with SQLite identity key " +
-                            "\(profile.rawValue); source preserved")
-                }
-                selected = existing
-            } else {
-                if claims.isEmpty, legacySources.contains(where: { source in
-                    self.pathMayExist(self.claimURL(source.identityURL, suffix: self.doctorClaimSuffix))
-                        || self.pathMayExist(self.claimURL(source.identityURL, suffix: self.nativeClaimSuffix))
-                        || self.pathMayExist(source.identityURL)
-                }) {
-                    throw DeviceIdentityStore.storageError(
-                        "Legacy device identity appeared during creation; retry without replacing its keys")
-                }
-                selected = candidate
-                try self.insertIdentity(
-                    database,
-                    key: profile.rawValue,
-                    material: selected,
-                    updatedAtMs: writeTimestampMs)
-            }
-
-            // The row reread under the write transaction is authoritative. Never return generated
-            // or migrated key material unless SQLite reports the exact canonical receipt.
-            guard let authoritative = try self.readIdentity(
-                database,
-                key: profile.rawValue,
-                stateDirectoryURL: destinationStateDirURL),
-                authoritative == selected
-            else {
-                throw DeviceIdentityStore.storageError("SQLite did not preserve the authoritative device identity")
-            }
-            try self.ensureIdentityTable(database, allowVersionZeroCreation: false)
-            return authoritative
-        }
-
-        if !claims.isEmpty {
-            try afterLegacyCommit?()
-            // The committed reread is the destructive-cleanup receipt. Doctor cannot alter the
-            // row while the native claim remains visible to every Node identity entry point.
-            guard let committedIdentity = try self.readIdentity(
-                database,
-                key: profile.rawValue,
-                stateDirectoryURL: destinationStateDirURL),
-                committedIdentity == authoritative
-            else {
-                throw DeviceIdentityStore.storageError(
-                    "Committed SQLite identity changed before legacy cleanup; native claim preserved")
-            }
-            try self.relocateLegacyAuthIfNeeded(
-                claims: claims,
-                destinationStateDirURL: destinationStateDirURL,
-                profile: profile,
-                deviceId: authoritative.identity.deviceId)
-            try self.removeClaimedLegacyIdentities(claims)
-        }
-        return authoritative.identity
-    }
-
-    private static func readIdentity(
-        _ database: OpenClawNativeStateSQLite,
-        key: String,
-        stateDirectoryURL: URL) throws -> DeviceIdentityMaterial?
-    {
-        let statement = try database.prepare("""
-        SELECT device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms
-        FROM device_identities
-        WHERE identity_key = ?
-        """)
-        try statement.bindText(key, at: 1)
-        let result = try statement.step()
-        if result == .done { return nil }
-        do {
-            guard statement.valueType(at: 3) == .integer,
-                  statement.valueType(at: 4) == .integer,
-                  statement.int64(at: 4) >= 0
-            else {
-                throw DeviceIdentityStore.storageError("SQLite device identity timestamps must be integers")
-            }
-            let material = try DeviceIdentityStore.material(
-                deviceId: statement.requiredText(at: 0, field: "device_id"),
-                publicKeyPEM: statement.requiredText(at: 1, field: "public_key_pem"),
-                privateKeyPEM: statement.requiredText(at: 2, field: "private_key_pem"),
-                createdAtMs: statement.int64(at: 3))
-            guard try statement.step() == .done else {
-                throw DeviceIdentityStore.storageError("SQLite returned duplicate device identity keys")
-            }
-            return material
-        } catch {
-            throw DeviceIdentityStore.storageError(
-                "Could not decode device identity row \"\(key)\" in state directory " +
-                    "\(stateDirectoryURL.path): \(error.localizedDescription)")
-        }
-    }
-
-    private static func ensureIdentityTable(
-        _ database: OpenClawNativeStateSQLite,
-        allowVersionZeroCreation: Bool) throws
-    {
-        let userVersion = try database.scalarInt64("PRAGMA user_version")
-        if userVersion == 0,
-           try database.schemaObjectExists(type: "table", name: "device_identities")
-        {
-            // Node can populate its canonical table before the global schema migration commits.
-            // Validate this owner surface without rejecting unrelated Node-owned v0 tables.
-            try database.validateCanonicalTable(.deviceIdentities)
+        if receipt?.legacyImports[key] != nil {
+            try DeviceAuthStore.prepareLegacy(owner: owner, profile: profile, stateDirectoryURL: root, fallback: auth)
             return
         }
-        try database.ensureCanonicalTable(
-            .deviceIdentities,
-            allowVersionZeroCreation: allowVersionZeroCreation)
-    }
-
-    private static func insertIdentity(
-        _ database: OpenClawNativeStateSQLite,
-        key: String,
-        material: DeviceIdentityMaterial,
-        updatedAtMs: Int64) throws
-    {
-        let statement = try database.prepare("""
-        INSERT INTO device_identities (
-          identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms
-        ) VALUES (?, ?, ?, ?, ?, ?)
-        """)
-        try statement.bindText(key, at: 1)
-        try statement.bindText(material.identity.deviceId, at: 2)
-        try statement.bindText(material.publicKeyPEM, at: 3)
-        try statement.bindText(material.privateKeyPEM, at: 4)
-        try statement.bindInt64(material.identity.createdAtMs, at: 5)
-        try statement.bindInt64(updatedAtMs, at: 6)
-        guard try statement.step() == .done, database.changes == 1 else {
-            throw DeviceIdentityStore.storageError("SQLite did not insert the device identity")
-        }
-    }
-
-    private static func claimLegacyIdentity(
-        _ source: DeviceIdentityPaths.LegacyIdentitySource,
-        beforeClaim: ((DeviceIdentityPaths.LegacyIdentitySource) throws -> Void)?) throws -> LegacyClaim?
-    {
-        let doctorClaimURL = self.claimURL(source.identityURL, suffix: self.doctorClaimSuffix)
-        let nativeClaimURL = self.claimURL(source.identityURL, suffix: self.nativeClaimSuffix)
-        try beforeClaim?(source)
-
-        // Doctor and native startup atomically rename the same source to distinct claims.
-        // The loser observes a durable winner instead of treating an in-flight identity as absent.
-        var ownsNativeClaim = false
-        for _ in 0..<3 {
-            if self.pathMayExist(doctorClaimURL) {
-                throw DeviceIdentityStore.storageError(
-                    "Device identity Doctor import is pending; run openclaw doctor --fix before starting the app")
-            }
-            if self.pathMayExist(nativeClaimURL) {
-                if self.pathMayExist(source.identityURL) {
-                    guard
-                        let sourceFile = try? self.readLegacyIdentity(
-                            source.identityURL,
-                            beneath: source.stateDirURL),
-                        let claimFile = try? self.readLegacyIdentity(
-                            nativeClaimURL,
-                            beneath: source.stateDirURL),
-                        sourceFile.material.identity.publicKey == claimFile.material.identity.publicKey,
-                        sourceFile.material.identity.privateKey == claimFile.material.identity.privateKey
-                    else {
-                        throw DeviceIdentityStore.storageError(
-                            "Legacy device identity source and interrupted native claim both exist")
-                    }
-                    // The acquired .stale-* identity stays parked: no online deletion point is race-free without
-                    // coupling it to the SQLite commit. One file in this pathological state beats a data-loss
-                    // window, and operators or Doctor can sweep it later.
-                    let quarantineURL = self.claimURL(
-                        nativeClaimURL,
-                        suffix: ".stale-\(UUID().uuidString)")
-                    let acquireResult = self.renameExclusive(from: nativeClaimURL, to: quarantineURL)
-                    if acquireResult != 0 {
-                        let acquireError = errno
-                        if acquireError == ENOENT { continue }
-                        throw DeviceIdentityStore.storageError(
-                            "Could not acquire stale native identity claim: " +
-                                String(cString: strerror(acquireError)))
-                    }
-
-                    // RENAME_EXCL restores only into a vacant path. EEXIST leaves the acquired file quarantined.
-                    func restoreOrParkQuarantine() {
-                        _ = self.renameExclusive(from: quarantineURL, to: nativeClaimURL)
-                    }
-                    // Validate the acquired bytes before any continue path: only a claim that
-                    // still parses and matches may be parked while startup proceeds.
-                    guard
-                        let acquiredClaim = try? self.readLegacyIdentity(
-                            quarantineURL,
-                            beneath: source.stateDirURL)
-                    else {
-                        restoreOrParkQuarantine()
-                        throw DeviceIdentityStore.storageError(
-                            "Legacy device identity source and interrupted native claim both exist")
-                    }
-                    let currentSource = try? self.readLegacyIdentity(
-                        source.identityURL,
-                        beneath: source.stateDirURL)
-                    if currentSource == nil, !self.pathMayExist(source.identityURL) {
-                        // Source vanished: put the validated claim back so the normal
-                        // claim-without-source path can still import it next iteration.
-                        restoreOrParkQuarantine()
-                        continue
-                    }
-                    guard
-                        let currentSource,
-                        currentSource.material.identity.publicKey == acquiredClaim.material.identity.publicKey,
-                        currentSource.material.identity.privateKey == acquiredClaim.material.identity.privateKey
-                    else {
-                        restoreOrParkQuarantine()
-                        throw DeviceIdentityStore.storageError(
-                            "Legacy device identity source and interrupted native claim both exist")
-                    }
-                    // Rescue imports nothing: it only vacates a stale duplicate whose bytes stay
-                    // parked. A source rewritten after this point flows through the standard
-                    // atomic claim-then-import path, whose last-writer-wins semantics predate
-                    // this rescue; serializing the source here would add no guarantee it lacks.
-                    continue
-                }
-                ownsNativeClaim = true
-                break
-            }
-            // Claims first, source last: a Doctor restore moves claim -> source atomically.
-            guard self.pathMayExist(source.identityURL) else { return nil }
-
-            let renameResult = self.renameExclusive(from: source.identityURL, to: nativeClaimURL)
-            if renameResult == 0 {
-                ownsNativeClaim = true
-                break
-            }
-
-            let renameError = errno
-            guard renameError == ENOENT || renameError == EEXIST else {
-                throw DeviceIdentityStore.storageError(
-                    "Could not claim legacy device identity: \(String(cString: strerror(renameError)))")
-            }
-        }
-        guard ownsNativeClaim else {
-            throw DeviceIdentityStore.storageError("Legacy device identity changed while being claimed")
-        }
-
-        do {
-            let claimed = try self.readLegacyIdentity(
-                nativeClaimURL,
-                beneath: source.stateDirURL)
-            return LegacyClaim(
-                source: source,
-                identityURL: nativeClaimURL,
-                data: claimed.data,
-                snapshot: claimed.snapshot,
-                material: claimed.material)
-        } catch {
-            do {
-                try self.restoreClaimedLegacyIdentity(
-                    identityURL: nativeClaimURL,
-                    sourceURL: source.identityURL)
-            } catch let restoreError {
-                throw DeviceIdentityStore.storageError(
-                    "Legacy device identity validation failed: \(error.localizedDescription); " +
-                        "native claim restoration failed: \(restoreError.localizedDescription)")
-            }
-            throw error
-        }
-    }
-
-    private static func readLegacyIdentity(
-        _ url: URL,
-        beneath stateDirURL: URL) throws
-        -> (data: Data, snapshot: LegacyFileSnapshot, material: DeviceIdentityMaterial)
-    {
-        let before = try self.legacyFileSnapshot(
-            url,
-            beneath: stateDirURL,
-            maximumBytes: self.maximumLegacyIdentityBytes)
-        let data = try Data(contentsOf: url, options: [.mappedIfSafe])
-        guard data.count <= self.maximumLegacyIdentityBytes else {
-            throw DeviceIdentityStore.storageError("Legacy device identity exceeds the maximum supported size")
-        }
-        let after = try self.legacyFileSnapshot(
-            url,
-            beneath: stateDirURL,
-            maximumBytes: self.maximumLegacyIdentityBytes)
-        guard before == after, UInt64(data.count) == before.size else {
-            throw DeviceIdentityStore.storageError("Legacy device identity changed while being claimed")
-        }
-        return try (data, before, DeviceIdentityStore.material(fromLegacyData: data))
-    }
-
-    private static func claimURL(_ sourceURL: URL, suffix: String) -> URL {
-        URL(
-            fileURLWithPath: sourceURL.path + suffix,
-            isDirectory: false)
-    }
-
-    private static func renameExclusive(from source: URL, to destination: URL) -> Int32 {
-        source.path.withCString { sourcePath in
-            destination.path.withCString { destinationPath in
-                renamex_np(sourcePath, destinationPath, UInt32(RENAME_EXCL))
-            }
-        }
-    }
-
-    private static func pathMayExist(_ url: URL) -> Bool {
-        let fileManager = FileManager.default
-        return fileManager.fileExists(atPath: url.path)
-            || (try? fileManager.destinationOfSymbolicLink(atPath: url.path)) != nil
-    }
-
-    private static func legacyFileSnapshot(
-        _ url: URL,
-        beneath rootURL: URL,
-        maximumBytes: Int) throws -> LegacyFileSnapshot
-    {
-        try self.requireNoSymlinkTraversal(url, beneath: rootURL)
-        let resourceValues = try url.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey])
-        guard resourceValues.isSymbolicLink != true, resourceValues.isRegularFile == true else {
-            throw DeviceIdentityStore.storageError("Legacy device identity source must be a regular non-symbolic file")
-        }
-        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-        guard attributes[.type] as? FileAttributeType == .typeRegular,
-              let linkCount = attributes[.referenceCount] as? NSNumber,
-              linkCount.uint64Value == 1,
-              let device = attributes[.systemNumber] as? NSNumber,
-              let inode = attributes[.systemFileNumber] as? NSNumber,
-              let size = attributes[.size] as? NSNumber,
-              size.uint64Value <= UInt64(maximumBytes)
-        else {
-            throw DeviceIdentityStore.storageError(
-                "Legacy device identity source must be a bounded regular file with exactly one link")
-        }
-        return LegacyFileSnapshot(
-            device: device.uint64Value,
-            inode: inode.uint64Value,
-            size: size.uint64Value,
-            modifiedAt: attributes[.modificationDate] as? Date)
-    }
-
-    private static func requireNoSymlinkTraversal(_ url: URL, beneath rootURL: URL) throws {
-        let root = rootURL.standardizedFileURL
-        let candidate = url.standardizedFileURL
-        let rootPrefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
-        guard candidate.path.hasPrefix(rootPrefix) else {
-            throw DeviceIdentityStore.storageError("Legacy device identity path escaped its state directory")
-        }
-        let relativePath = String(candidate.path.dropFirst(rootPrefix.count))
-        let expected = root.resolvingSymlinksInPath()
-            .appendingPathComponent(relativePath, isDirectory: false)
-            .standardizedFileURL
-        guard candidate.resolvingSymlinksInPath().standardizedFileURL == expected else {
-            throw DeviceIdentityStore.storageError("Legacy device identity path must not traverse symbolic links")
-        }
-    }
-
-    private static func requireConsistentClaims(_ claims: [LegacyClaim]) throws {
-        guard let first = claims.first else { return }
-        guard claims.dropFirst().allSatisfy({ self.hasSameKeyMaterial($0.material, first.material) }) else {
-            let descriptions = claims.map { claim in
-                "\(claim.source.identityURL.path) (deviceId: \(claim.material.identity.deviceId))"
-            }.joined(separator: ", ")
-            throw DeviceIdentityStore.storageError(
-                "Legacy device identity sources conflict across [\(descriptions)]; all sources preserved.")
-        }
-    }
-
-    private static func hasSameKeyMaterial(
-        _ lhs: DeviceIdentityMaterial,
-        _ rhs: DeviceIdentityMaterial) -> Bool
-    {
-        lhs.identity.deviceId == rhs.identity.deviceId
-            && lhs.identity.publicKey == rhs.identity.publicKey
-            && lhs.identity.privateKey == rhs.identity.privateKey
-    }
-
-    private static func relocateLegacyAuthIfNeeded(
-        claims: [LegacyClaim],
-        destinationStateDirURL: URL,
-        profile: GatewayDeviceIdentityProfile,
-        deviceId: String) throws
-    {
-        let sourceAuth = try claims.compactMap { claim -> DeviceAuthStoreFile? in
-            let source = claim.source
-            guard source.stateDirURL.standardizedFileURL != destinationStateDirURL.standardizedFileURL else {
-                return nil
-            }
-            return try self.readDeviceAuth(
-                source.authURL,
-                beneath: source.stateDirURL,
-                deviceId: deviceId)
-        }
-        if let firstSourceAuth = sourceAuth.first,
-           !sourceAuth.dropFirst().allSatisfy({ $0 == firstSourceAuth })
+        if let selected, let existing = try owner.readIdentity(key: profile.rawValue),
+           try self.material(existing) != selected.material
         {
-            throw DeviceIdentityStore.storageError(
-                "Legacy device auth sources conflict; all identity sources preserved")
+            throw DeviceIdentityStore
+                .storageError("Legacy identity conflicts with local credentials; sources preserved")
         }
-        guard let selectedAuth = sourceAuth.first else { return }
-        // Cross-container auth remains at its source; only canonical SQLite rows move.
-        try DeviceAuthStore.importLegacyStore(
-            selectedAuth,
-            stateDirectoryURL: destinationStateDirURL,
-            profile: profile)
+        _ = try owner.importLegacy(
+            key: key,
+            sha256: selected.map { _ in digest.finalize().map { String(format: "%02x", $0) }.joined() },
+            identities: selected.map { [self.row($0.material, key: profile.rawValue)] } ?? [])
+        try DeviceAuthStore.prepareLegacy(owner: owner, profile: profile, stateDirectoryURL: root, fallback: auth)
     }
 
-    private static func readDeviceAuth(
-        _ url: URL,
-        beneath stateDirURL: URL,
-        deviceId: String) throws -> DeviceAuthStoreFile?
-    {
-        let before: LegacyFileSnapshot
-        do {
-            before = try self.legacyFileSnapshot(
-                url,
-                beneath: stateDirURL,
-                maximumBytes: DeviceAuthStore.maximumLegacyAuthBytes)
-        } catch where DeviceAuthStore.isMissingFileError(error) {
-            // Absent at first observation means nothing to migrate. A disappearance after
-            // this point must fail the migration instead, so the claimed identity survives
-            // for retry rather than committing without its credentials.
-            return nil
-        }
-        do {
-            let handle = try FileHandle(forReadingFrom: url)
-            defer { try? handle.close() }
-            let data = try handle.read(upToCount: DeviceAuthStore.maximumLegacyAuthBytes + 1) ?? Data()
-            let after = try self.legacyFileSnapshot(
-                url,
-                beneath: stateDirURL,
-                maximumBytes: DeviceAuthStore.maximumLegacyAuthBytes)
-            guard before == after, UInt64(data.count) == before.size else {
-                throw DeviceIdentityStore.storageError("Device auth changed during identity migration")
-            }
-            guard let decoded = try? JSONDecoder().decode(DeviceAuthStoreFile.self, from: data),
-                  let normalized = DeviceAuthStore.normalizedStore(decoded),
-                  normalized.deviceId == deviceId
-            else {
-                throw DeviceIdentityStore.storageError(
-                    "Device auth does not belong to the migrated device identity; source preserved")
-            }
-            return normalized
-        } catch where DeviceAuthStore.isMissingFileError(error) {
-            throw DeviceIdentityStore.storageError("Device auth changed during identity migration")
-        }
+    private static func row(_ material: DeviceIdentityMaterial, key: String) -> OpenClawClientCredentialStore.Identity {
+        .init(
+            key: key,
+            deviceID: material.identity.deviceId,
+            publicKeyPEM: material.publicKeyPEM,
+            privateKeyPEM: material.privateKeyPEM,
+            createdAtMs: material.identity.createdAtMs,
+            updatedAtMs: material.identity.createdAtMs)
     }
 
-    private static func removeClaimedLegacyIdentities(_ claims: [LegacyClaim]) throws {
-        let fileManager = FileManager.default
-        for claim in claims {
-            guard !self.pathMayExist(claim.source.identityURL) else {
-                throw DeviceIdentityStore.storageError(
-                    "Legacy device identity source reappeared during migration; native claim preserved")
-            }
-            guard fileManager.fileExists(atPath: claim.identityURL.path) else {
-                if (try? fileManager.destinationOfSymbolicLink(atPath: claim.identityURL.path)) != nil {
-                    throw DeviceIdentityStore.storageError(
-                        "Legacy device identity changed to a symbolic link; source preserved")
-                }
-                continue
-            }
-            let snapshot = try self.legacyFileSnapshot(
-                claim.identityURL,
-                beneath: claim.source.stateDirURL,
-                maximumBytes: self.maximumLegacyIdentityBytes)
-            let current = try Data(contentsOf: claim.identityURL, options: [.mappedIfSafe])
-            guard snapshot == claim.snapshot, current == claim.data else {
-                throw DeviceIdentityStore
-                    .storageError("Legacy device identity changed during migration; source preserved")
-            }
-        }
-        for claim in claims where fileManager.fileExists(atPath: claim.identityURL.path) {
-            try fileManager.removeItem(at: claim.identityURL)
-        }
+    private static func material(_ row: OpenClawClientCredentialStore.Identity) throws -> DeviceIdentityMaterial {
+        try DeviceIdentityStore.material(
+            deviceId: row.deviceID,
+            publicKeyPEM: row.publicKeyPEM,
+            privateKeyPEM: row.privateKeyPEM,
+            createdAtMs: row.createdAtMs)
     }
 
-    private static func restoreClaimedLegacyIdentities(_ claims: [LegacyClaim]) throws {
-        var restorationErrors: [String] = []
-        for claim in claims.reversed() {
-            do {
-                try self.restoreClaimedLegacyIdentity(
-                    identityURL: claim.identityURL,
-                    sourceURL: claim.source.identityURL)
-            } catch {
-                restorationErrors.append("\(claim.source.identityURL.path): \(error.localizedDescription)")
-            }
+    static func readLegacyFile(_ url: URL, beneath root: URL, maximumBytes: Int) throws -> Data? {
+        var before = stat()
+        if lstat(url.path, &before) != 0 {
+            if errno == ENOENT { return nil }
+            throw DeviceIdentityStore.storageError("Could not inspect legacy credential source")
         }
-        if !restorationErrors.isEmpty {
-            throw DeviceIdentityStore.storageError(
-                "Could not restore every native device identity claim: " +
-                    restorationErrors.joined(separator: "; "))
+        let rootPath = try OpenClawClientCredentialStore.canonicalPath(root)
+        let canonical = try OpenClawClientCredentialStore.canonicalPath(url)
+        guard before.st_mode & S_IFMT == S_IFREG, before.st_nlink == 1,
+              before.st_size <= maximumBytes,
+              canonical.hasPrefix(rootPath + "/"),
+              canonical == URL(fileURLWithPath: rootPath).appendingPathComponent(
+                  String(url.standardizedFileURL.path.dropFirst(root.standardizedFileURL.path.count + 1))).path
+        else {
+            throw DeviceIdentityStore
+                .storageError("Legacy credential source must be a bounded regular file without symlinks")
         }
-    }
-
-    private static func restoreClaimedLegacyIdentity(identityURL: URL, sourceURL: URL) throws {
-        guard self.pathMayExist(identityURL) else { return }
-        let renameResult = self.renameExclusive(from: identityURL, to: sourceURL)
-        guard renameResult == 0 else {
-            let renameError = errno
-            if renameError == ENOENT, !self.pathMayExist(identityURL) {
-                return
-            }
-            throw DeviceIdentityStore.storageError(
-                "Could not restore legacy device identity: \(String(cString: strerror(renameError)))")
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let data = try handle.read(upToCount: maximumBytes + 1) ?? Data()
+        var after = stat()
+        guard fstat(handle.fileDescriptor, &after) == 0,
+              before.st_dev == after.st_dev, before.st_ino == after.st_ino,
+              before.st_size == after.st_size, data.count == Int(before.st_size),
+              before.st_mtimespec.tv_sec == after.st_mtimespec.tv_sec,
+              before.st_mtimespec.tv_nsec == after.st_mtimespec.tv_nsec
+        else {
+            throw DeviceIdentityStore.storageError("Legacy credential source changed during import; retry")
         }
-    }
-}
-
-extension DeviceIdentitySQLiteStore {
-    private static func secureDirectory(_ url: URL) throws {
-        let fileManager = FileManager.default
-        try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
-        var attributes: [FileAttributeKey: Any] = [.posixPermissions: 0o700]
-        #if os(iOS) || os(watchOS)
-        attributes[.protectionKey] = FileProtectionType.completeUntilFirstUserAuthentication
-        #endif
-        try fileManager.setAttributes(attributes, ofItemAtPath: url.path)
+        return data
     }
 }

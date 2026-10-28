@@ -1,5 +1,6 @@
 // Config-snapshot comparison: byte-stable serialization plus resolution provenance.
 import { isDeepStrictEqual } from "node:util";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { getConfigResolutionFacts, serializeConfigResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -32,8 +33,23 @@ export function configSnapshotsMatch(left: OpenClawConfig, right: OpenClawConfig
     return false;
   }
   try {
-    return stableConfigStringify(left) === stableConfigStringify(right);
+    return stableConfigText(left) === stableConfigText(right);
   } catch {
     return false;
   }
+}
+
+// Frozen configs cannot change in place, so repeated comparisons reuse their bytes.
+const immutableConfigTexts = new WeakMap<OpenClawConfig, string>();
+
+function stableConfigText(config: OpenClawConfig): string {
+  if (!isDeeplyFrozenPlainData(config)) {
+    return stableConfigStringify(config);
+  }
+  let text = immutableConfigTexts.get(config);
+  if (text === undefined) {
+    text = stableConfigStringify(config);
+    immutableConfigTexts.set(config, text);
+  }
+  return text;
 }

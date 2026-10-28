@@ -1,35 +1,25 @@
-// Matrix tests cover media plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../../runtime-api.js";
 import { setMatrixRuntime } from "../../runtime.js";
 import { MatrixMediaSizeLimitError } from "../media-errors.js";
+import type { MatrixClient } from "../sdk.js";
 import { downloadMatrixMedia } from "./media.js";
 
-function createEncryptedClient() {
+const encryptedFile = {
+  url: "mxc://example/file",
+  key: { kty: "oct", key_ops: ["encrypt", "decrypt"], alg: "A256CTR", k: "secret", ext: true },
+  iv: "iv",
+  hashes: { sha256: "hash" },
+  v: "v2",
+};
+
+function setup() {
   const decryptMedia = vi.fn().mockResolvedValue(Buffer.from("decrypted"));
-
-  return {
-    client: {
-      crypto: { decryptMedia },
-    } as unknown as import("../sdk.js").MatrixClient,
-    decryptMedia,
-  };
-}
-
-function createEncryptedFile() {
-  return {
-    url: "mxc://example/file",
-    key: {
-      kty: "oct",
-      key_ops: ["encrypt", "decrypt"],
-      alg: "A256CTR",
-      k: "secret",
-      ext: true,
-    },
-    iv: "iv",
-    hashes: { sha256: "hash" },
-    v: "v2",
-  };
+  const downloadContent = vi.fn().mockResolvedValue(Buffer.from("plain"));
+  const client = { crypto: { decryptMedia }, downloadContent } as unknown as MatrixClient;
+  const download = (options: Partial<Parameters<typeof downloadMatrixMedia>[0]> = {}) =>
+    downloadMatrixMedia({ client, mxcUrl: encryptedFile.url, maxBytes: 1024, ...options });
+  return { decryptMedia, downloadContent, download };
 }
 
 describe("downloadMatrixMedia", () => {
@@ -37,13 +27,8 @@ describe("downloadMatrixMedia", () => {
     path: "/tmp/media",
     contentType: "image/png",
   });
-
   const runtimeStub = {
-    channel: {
-      media: {
-        saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
-      },
-    },
+    channel: { media: { saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args) } },
   } as unknown as PluginRuntime;
 
   beforeEach(() => {
@@ -52,96 +37,51 @@ describe("downloadMatrixMedia", () => {
   });
 
   it("rejects encrypted media that exceeds maxBytes before decrypting", async () => {
-    const { client, decryptMedia } = createEncryptedClient();
-    const file = createEncryptedFile();
-
+    const f = setup();
     await expect(
-      downloadMatrixMedia({
-        client,
-        mxcUrl: "mxc://example/file",
+      f.download({
         contentType: "image/png",
         sizeBytes: 2048,
-        maxBytes: 1024,
-        file,
+        file: encryptedFile,
       }),
     ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
-
-    expect(decryptMedia).not.toHaveBeenCalled();
+    expect(f.decryptMedia).not.toHaveBeenCalled();
     expect(saveMediaBuffer).not.toHaveBeenCalled();
   });
 
   it("rejects oversized decrypted content before saving", async () => {
-    const { client, decryptMedia } = createEncryptedClient();
-    decryptMedia.mockResolvedValue(Buffer.alloc(1025));
-
-    await expect(
-      downloadMatrixMedia({
-        client,
-        mxcUrl: "mxc://example/file",
-        maxBytes: 1024,
-        file: createEncryptedFile(),
-      }),
-    ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
+    const f = setup();
+    f.decryptMedia.mockResolvedValue(Buffer.alloc(1025));
+    await expect(f.download({ file: encryptedFile })).rejects.toBeInstanceOf(
+      MatrixMediaSizeLimitError,
+    );
     expect(saveMediaBuffer).not.toHaveBeenCalled();
   });
 
-  it.each(["plain"])("preserves %s media error diagnostics", async (kind) => {
-    const { client, decryptMedia } = createEncryptedClient();
+  it("preserves plain media error diagnostics", async () => {
+    const f = setup();
     const error = new Error("download failed");
-    decryptMedia.mockRejectedValue(error);
-    client.downloadContent = vi.fn().mockRejectedValue(error);
-
-    const result = downloadMatrixMedia({
-      client,
-      mxcUrl: "mxc://example/file",
-      maxBytes: 1024,
-      file: kind === "encrypted" ? createEncryptedFile() : undefined,
+    f.downloadContent.mockRejectedValue(error);
+    await expect(f.download()).rejects.toMatchObject({
+      message: "Matrix media download failed: Error: download failed",
+      cause: error,
     });
-    if (kind === "encrypted") {
-      await expect(result).rejects.toBe(error);
-    } else {
-      await expect(result).rejects.toMatchObject({
-        message: "Matrix media download failed: Error: download failed",
-        cause: error,
-      });
-    }
     expect(saveMediaBuffer).not.toHaveBeenCalled();
   });
 
   it("preserves typed size-limit errors from plain media downloads", async () => {
-    const tooLargeError = new MatrixMediaSizeLimitError(
+    const f = setup();
+    const error = new MatrixMediaSizeLimitError(
       "Matrix media exceeds configured size limit (8192 bytes > 4096 bytes)",
     );
-    const downloadContent = vi.fn().mockRejectedValue(tooLargeError);
-    const client = {
-      downloadContent,
-    } as unknown as import("../sdk.js").MatrixClient;
-
-    await expect(
-      downloadMatrixMedia({
-        client,
-        mxcUrl: "mxc://example/file",
-        contentType: "image/png",
-        maxBytes: 4096,
-      }),
-    ).rejects.toBe(tooLargeError);
+    f.downloadContent.mockRejectedValue(error);
+    await expect(f.download({ contentType: "image/png", maxBytes: 4096 })).rejects.toBe(error);
   });
 
   it("passes byte limits through plain media downloads", async () => {
-    const downloadContent = vi.fn().mockResolvedValue(Buffer.from("plain"));
-
-    const client = {
-      downloadContent,
-    } as unknown as import("../sdk.js").MatrixClient;
-
-    await downloadMatrixMedia({
-      client,
-      mxcUrl: "mxc://example/file",
-      contentType: "image/png",
-      maxBytes: 4096,
-    });
-
-    expect(downloadContent).toHaveBeenCalledWith("mxc://example/file", {
+    const f = setup();
+    await f.download({ contentType: "image/png", maxBytes: 4096 });
+    expect(f.downloadContent).toHaveBeenCalledWith(encryptedFile.url, {
       maxBytes: 4096,
       readIdleTimeoutMs: 30_000,
     });

@@ -601,6 +601,11 @@ extension SettingsProTab {
 
             Section {
                 self.aboutLinkRow(
+                    title: "Support",
+                    icon: "questionmark.circle",
+                    color: .blue,
+                    url: URL(string: "https://community.openclaw.ai/")!)
+                self.aboutLinkRow(
                     title: "Website",
                     icon: "globe",
                     color: .blue,
@@ -869,39 +874,34 @@ extension SettingsProTab {
                 .font(OpenClawType.body)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+            if let hostIssue = self.manualGatewayHostIssue {
+                Text(hostIssue)
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(OpenClawBrand.warn)
+            }
             TextField("Port", text: self.manualPortBinding)
                 .font(OpenClawType.body)
                 .keyboardType(.numberPad)
-            Picker(selection: self.manualGatewayTLSBinding) {
-                Text("Unencrypted")
-                    .font(OpenClawType.captionSemiBold)
-                    .tag(false)
-                Text("Secure (TLS)")
-                    .font(OpenClawType.captionSemiBold)
-                    .tag(true)
-            } label: {
-                Text("Connection security")
-                    .font(OpenClawType.captionSemiBold)
-            }
-            .pickerStyle(.segmented)
-            .disabled(self.manualGatewayTransport.requiresTLS)
-            if let helperText = self.manualGatewayTransport.helperText {
-                Text(helperText)
-                    .font(OpenClawType.footnote)
-                    .foregroundStyle(.secondary)
-            }
+            ManualGatewaySecurityRows(
+                presentation: self.manualGatewayTransport,
+                useTLS: self.manualGatewayTLSBinding)
             self.gatewayActionButton(
                 title: "Connect Manual",
                 icon: "network",
                 color: OpenClawBrand.accent,
                 isBusy: self.connectingGateway == .manual,
                 isDisabled: self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || self.manualGatewayHostIssue != nil
                     || !self.manualPortIsValid)
             {
                 Task { await self.connectManual() }
             }
         }
         .disabled(self.setupAttemptID != nil)
+    }
+
+    private var manualGatewayHostIssue: String? {
+        GatewayConnectionController.manualHostValidationMessage(host: self.manualGatewayHost)
     }
 
     private var manualGatewayTransport: GatewayManualTransportPresentation {

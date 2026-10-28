@@ -19,37 +19,23 @@ export type MutableSession = {
     prompt?: (...args: unknown[]) => Promise<unknown>;
     streamFn?: (...args: Parameters<StreamFn>) => Promise<unknown>;
     transport?: string;
-    subscribe?: (
-      listener: (event: unknown, signal: AbortSignal) => Promise<void> | void,
-    ) => () => void;
+    subscribe?: Agent["subscribe"];
     reset: () => void;
-    state: {
-      messages: unknown[];
-      systemPrompt?: string;
-    };
+    state: Pick<Agent["state"], "systemPrompt" | "tools"> & { messages: unknown[] };
   };
   prompt: (
     prompt: string,
     options?: { images?: unknown[]; preflightResult?: (submitted: boolean) => void },
   ) => Promise<void>;
   setBaseSystemPrompt: (systemPrompt: string) => void;
-  sendCustomMessage: (
-    message: {
-      customType: string;
-      content: string;
-      display: boolean;
-      details?: Record<string, unknown>;
-    },
-    options?: { deliverAs?: "nextTurn"; triggerTurn?: boolean },
-  ) => Promise<void>;
+  sendCustomMessage: AgentSession["sendCustomMessage"];
   getActiveToolNames: () => string[];
+  getToolDefinition: AgentSession["getToolDefinition"];
   setActiveToolsByName: (toolNames: string[]) => void;
   abort: () => Promise<void>;
   dispose: () => void;
   steer: (text: string) => Promise<void>;
-  [agentSessionSetContextReplacementHook]: (
-    callback: ((tokensAfter: number, tokensBefore: number) => void) | undefined,
-  ) => void;
+  [agentSessionSetContextReplacementHook]: AgentSession[typeof agentSessionSetContextReplacementHook];
   [agentSessionSetPromptPreparation]: AgentSession[typeof agentSessionSetPromptPreparation];
   [agentSessionQueuePromptContext]: AgentSession[typeof agentSessionQueuePromptContext];
 };
@@ -98,15 +84,14 @@ export async function runPreparedTestPrompt(
     }
   };
   assertCurrent();
-  let running: Promise<PromiseSettledResult<void>> | undefined;
+  let running: Promise<void> | undefined;
   const start = (commit?: () => void) => {
     assertCurrent();
     commit?.();
     assertCurrent();
-    running = run().then(
-      (value) => ({ status: "fulfilled", value }),
-      (reason: unknown) => ({ status: "rejected", reason }),
-    );
+    running = run();
+    // Observe rejection while admission settles; await the original promise below.
+    void running.catch(() => {});
   };
   try {
     if (admit) {
@@ -115,14 +100,11 @@ export async function runPreparedTestPrompt(
       start();
     }
   } catch (error) {
-    await running;
+    await running?.catch(() => {});
     throw error;
   }
   if (!running) {
     throw new Error("Session prompt admission did not start the agent loop.");
   }
-  const result = await running;
-  if (result.status === "rejected") {
-    throw result.reason;
-  }
+  await running;
 }

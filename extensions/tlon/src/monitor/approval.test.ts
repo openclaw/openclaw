@@ -47,3 +47,40 @@ it("keeps the stored and rendered approval preview on a UTF-16 boundary", () => 
   expect(approval.messagePreview).toBe("a".repeat(99));
   expect(/[\uD800-\uDFFF]/.test(formatApprovalRequest(approval))).toBe(false);
 });
+
+describe("formatApprovalRequest club replay explanation", () => {
+  it("says the message will be answered only when it was stored for replay", () => {
+    cryptoMocks.randomBytes.mockReturnValue(Buffer.from("aabbcc", "hex"));
+    const stored = formatApprovalRequest(
+      createPendingApproval({
+        type: "dm",
+        requestingShip: "~nec",
+        clubId: "0v3.club",
+        messagePreview: "hello",
+        originalMessage: {
+          messageId: "m1",
+          messageText: "hello",
+          messageContent: [{ inline: ["hello"] }],
+          timestamp: 1,
+        },
+      }),
+    );
+    expect(stored).toContain(
+      "The message is answered as an unverified group DM sender, never as ~nec.",
+    );
+    expect(stored).not.toContain("will not be answered");
+
+    const suppressed = formatApprovalRequest(
+      createPendingApproval({
+        type: "dm",
+        requestingShip: "~nec",
+        clubId: "0v3.club",
+        messagePreview: "hello",
+      }),
+    );
+    expect(suppressed).toContain(
+      "The message is not kept, so it will not be answered; have ~nec send it again in a normal direct message to get a reply.",
+    );
+    expect(suppressed).not.toContain("The message is answered");
+  });
+});

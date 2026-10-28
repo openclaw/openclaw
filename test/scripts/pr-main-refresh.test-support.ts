@@ -11,10 +11,20 @@ import {
 import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll } from "vitest";
+import type { RollupPayload } from "../../scripts/lib/watch-pr-ci-rollup.mjs";
 import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createPrivateHandoffStoreFixture } from "./pr-private-handoff.test-support.js";
+import { validReview } from "./pr-review-artifact-fixture.js";
 import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
+
+type FixtureEvent = {
+  kind: string;
+  sha?: string;
+  shared?: string;
+  args?: string[];
+  localObject?: boolean;
+};
 
 const templateDirs = useAutoCleanupTempDirTracker(afterAll);
 const fixtureTemplates = new Map<boolean, ReturnType<typeof createMainRefreshTemplate>>();
@@ -23,13 +33,18 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/gu, `'\\''`)}'`;
 }
 
+function writeFiles(directory: string, files: Record<string, string>) {
+  for (const [name, contents] of Object.entries(files)) {
+    writeFileSync(join(directory, name), contents);
+  }
+}
+
 function createFixtureGit(root: string) {
   const home = join(root, "home");
   mkdirSync(home);
   const handoff = createPrivateHandoffStoreFixture(home);
   const env: NodeJS.ProcessEnv = {
     ...handoff.env,
-    PATH: handoff.env.PATH,
     HOME: home,
     TMPDIR: root,
     GIT_CONFIG_GLOBAL: "/dev/null",
@@ -41,7 +56,17 @@ function createFixtureGit(root: string) {
     GIT_TERMINAL_PROMPT: "0",
     XDG_CONFIG_HOME: join(home, ".config"),
   };
-  const realGit = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim();
+  const configuredGit = spawnSync("which", ["git"], { env, encoding: "utf8" }).stdout.trim();
+  const backendDirectory = join(root, "git-backend");
+  mkdirSync(backendDirectory);
+  const realGit = join(backendDirectory, "native-git");
+  // A configured Git wrapper may resolve its backend through PATH again.
+  // Retain the private handoff's Node shim but exclude later Git instrumentation.
+  writeFileSync(
+    realGit,
+    `#!/bin/sh\nexport PATH=${shellQuote(handoff.env.PATH)}\nexec ${shellQuote(configuredGit)} "$@"\n`,
+    { flag: "wx", mode: 0o700 },
+  );
   function git(cwd: string, ...args: string[]) {
     const result = spawnSync(realGit, args, { cwd, env, encoding: "utf8" });
     if (result.status !== 0) {
@@ -49,22 +74,25 @@ function createFixtureGit(root: string) {
     }
     return result.stdout.trim();
   }
-  return { env, realGit, git, handoff };
+  function configureRepository(cwd: string, perWorktreeConfig: boolean) {
+    git(cwd, "config", "user.name", "OpenClaw Test");
+    git(cwd, "config", "user.email", "test@example.invalid");
+    git(cwd, "config", "core.hooksPath", "/dev/null");
+    if (perWorktreeConfig) {
+      git(cwd, "config", "extensions.worktreeConfig", "true");
+    }
+  }
+  return { env, realGit, git, handoff, configureRepository };
 }
 
 function createMainRefreshTemplate(directory: string, perWorktreeConfig: boolean) {
   const root = realpathSync(directory);
   const canonical = join(root, "canonical");
   const origin = join(root, "origin.git");
-  const { git } = createFixtureGit(root);
+  const { git, configureRepository } = createFixtureGit(root);
   git(root, "init", "--bare", "-b", "main", origin);
   git(root, "init", "-b", "main", canonical);
-  git(canonical, "config", "user.name", "OpenClaw Test");
-  git(canonical, "config", "user.email", "test@example.invalid");
-  git(canonical, "config", "core.hooksPath", "/dev/null");
-  if (perWorktreeConfig) {
-    git(canonical, "config", "extensions.worktreeConfig", "true");
-  }
+  configureRepository(canonical, perWorktreeConfig);
   copyPrWrapperSources(canonical);
   cpSync(join(process.cwd(), ".github", "workflows"), join(canonical, ".github", "workflows"), {
     recursive: true,
@@ -73,7 +101,10 @@ function createMainRefreshTemplate(directory: string, perWorktreeConfig: boolean
   cpSync(join(process.cwd(), "tsconfig.json"), join(canonical, "tsconfig.json"));
   writeFileSync(join(canonical, ".gitignore"), ".worktrees/\n.local/\nnode_modules\n");
   mkdirSync(join(canonical, "src"), { recursive: true });
-  writeFileSync(join(canonical, "src", "subject.ts"), "export const subject = 'base';\n");
+  writeFiles(join(canonical, "src"), {
+    "subject.ts": "export const subject = 'base';\n",
+    "subject.test.ts": "// Synthetic package-command target.\n",
+  });
   git(canonical, "add", ".");
   git(canonical, "commit", "-qm", "test: trusted native wrapper");
   const main = git(canonical, "rev-parse", "HEAD");
@@ -129,7 +160,7 @@ export function createMainRefreshFixture(
   const worktree = join(canonical, ".worktrees", "pr-42");
   const bin = join(root, "bin");
   mkdirSync(bin);
-  const { env, realGit, git, handoff } = createFixtureGit(root);
+  const { env, realGit, git, handoff, configureRepository } = createFixtureGit(root);
   const privateNodeOptions = env.NODE_OPTIONS;
   const { main, head, sameTreeHead, movedMain, gateMain } = template;
   const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
@@ -143,12 +174,7 @@ export function createMainRefreshFixture(
       pathToFileURL(origin).href,
       canonical,
     );
-    git(canonical, "config", "user.name", "OpenClaw Test");
-    git(canonical, "config", "user.email", "test@example.invalid");
-    git(canonical, "config", "core.hooksPath", "/dev/null");
-    if (perWorktreeConfig) {
-      git(canonical, "config", "extensions.worktreeConfig", "true");
-    }
+    configureRepository(canonical, perWorktreeConfig);
   } else {
     // Copy complete object stores (including sameTreeHead), never shared refs or
     // hardlinks. Create worktrees afterward so their absolute back-links stay local.
@@ -202,55 +228,35 @@ export function createMainRefreshFixture(
   if (options.precreateWorktree !== false) {
     git(canonical, "worktree", "add", "--detach", worktree, head);
     mkdirSync(local);
-    writeFileSync(join(local, "pr-meta.json"), JSON.stringify(metadata));
-    writeFileSync(
-      join(local, "pr-meta.env"),
-      `PR_NUMBER=42\nPR_URL=https://example.invalid/pr/42\nPR_AUTHOR=fixture\nPR_BASE=main\nPR_HEAD=topic\nPR_HEAD_SHA=${head}\nPR_HEAD_REPO_URL=${origin}\n`,
-    );
-    writeFileSync(join(local, "review-mode.env"), "REVIEW_MODE=pr\n");
-    writeFileSync(
-      join(local, "review.md"),
-      [
+    writeFiles(local, {
+      "pr-meta.json": JSON.stringify(metadata),
+      "pr-meta.env": `PR_NUMBER=42\nPR_URL=https://example.invalid/pr/42\nPR_AUTHOR=fixture\nPR_BASE=main\nPR_HEAD=topic\nPR_HEAD_SHA=${head}\nPR_HEAD_REPO_URL=${origin}\n`,
+      "review-mode.env": "REVIEW_MODE=pr\n",
+      "review.md": [
         `Review artifact for PR #42 at ${head}`,
         ..."ABCDEFGHIJ".split("").map((letter) => `${letter}) Synthetic evidence.`),
       ].join("\n"),
-    );
-    writeFileSync(
-      join(local, "review.json"),
-      JSON.stringify({
-        pr: { number: 42, headSha: head },
-        recommendation: "READY FOR /prepare-pr",
-        findings: [],
-        nitSweep: { performed: true, status: "none", summary: "No optional nits." },
-        behavioralSweep: {
-          performed: true,
-          status: "pass",
-          summary: "Synthetic tooling fixture.",
-          silentDropRisk: "none",
-          branches: [
-            {
-              path: "src/subject.ts",
-              decision: "synthetic change",
-              outcome: "reviewed fixture value",
-            },
-          ],
-        },
-        issueValidation: {
-          performed: true,
-          source: "pr_body",
-          status: "valid",
-          summary: "Synthetic fixture.",
-        },
-        tests: { ran: ["synthetic local proof"], gaps: [], result: "pass" },
-        docs: "not_applicable",
-        changelog: "not_required",
-      }),
-    );
+    });
+    const review = {
+      ...validReview(head),
+      recommendation: "READY FOR /prepare-pr",
+      tests: { ran: ["synthetic local proof"], gaps: [], result: "pass" },
+    };
+    Object.assign(review.behavioralSweep, {
+      status: "pass",
+      summary: "Synthetic tooling fixture.",
+      branches: [
+        { path: "src/subject.ts", decision: "synthetic change", outcome: "reviewed fixture value" },
+      ],
+    });
+    Object.assign(review.issueValidation, { status: "valid", summary: "Synthetic fixture." });
+    writeFileSync(join(local, "review.json"), JSON.stringify(review));
   }
   const controlFile = join(root, "control.json");
   const eventsFile = join(root, "events.jsonl");
   const control = {
     metadata,
+    rollup: null as RollupPayload | null,
     authorPermission: "write",
     failFetch: false,
     failPrFetch: false,
@@ -283,15 +289,6 @@ export function createMainRefreshFixture(
     requiredCheckRows: undefined as
       | Array<{ name: string; bucket: string; state: string }>
       | undefined,
-    reviewComments: [
-      {
-        id: 1,
-        body: `<!-- clawsweeper-review-version item=42 reviewed_at=${new Date().toISOString()} sha=${head} source_revision=${"b".repeat(64)} lease_owner=github-run-1 lease_comment_id=1 v=1 -->
-
-<!-- clawsweeper-review item=42 -->`,
-        user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
-      },
-    ],
   };
   writeFileSync(controlFile, JSON.stringify(control));
   writeFileSync(eventsFile, "");
@@ -432,6 +429,14 @@ exec ${shellQuote(realGit)} "$@"
     prelude +
       `
 event({ kind: 'gh', args });
+function commitAuthor(oid, linked = false) {
+  const [name, email] = runGit(['-C', origin, 'show', '-s', '--format=%an%n%ae', oid + '^{commit}']).split('\\n');
+  return { commit: { author: { name, email } }, author: linked ? { ...control.metadata.author, type: 'User' } : null };
+}
+function pick(source, keys) {
+  return Object.fromEntries(keys.map(key => [key, source[key]]));
+}
+
 const inputPath = args.find(arg => arg.startsWith('--input='))?.slice('--input='.length)
   ?? (args.includes('--input') ? args[args.indexOf('--input') + 1] : undefined);
 let inputPayload;
@@ -561,6 +566,14 @@ if (args[0] === 'pr' && args[1] === 'view') {
         ref: { target: { oid: runGit(['-C', origin, 'rev-parse', 'refs/heads/main']) } },
         pullRequest: control.metadata,
       } } };
+    } else if (args.some(arg => arg.includes('statusCheckRollup'))) {
+      event({ kind: 'rollup-read' });
+      value = { data: { repository: { pullRequest: {
+        state: control.metadata.state,
+        mergeable: control.metadata.mergeable,
+        headRefOid: control.metadata.headRefOid,
+        statusCheckRollup: control.rollup,
+      } } } };
     } else {
       throw new Error('Unexpected GraphQL request');
     }
@@ -570,23 +583,18 @@ if (args[0] === 'pr' && args[1] === 'view') {
       html_url: 'https://github.com/fixture/repo',
       permissions: { admin: true },
     };
-  } else if (endpoint === 'repos/fixture/repo/branches/main/protection') {
-    // Hosted CI fixtures retain GraphQL through explicit classic branch protection.
-    value = {};
+  } else if (endpoint === 'repos/fixture/repo/rules/branches/main?per_page=100') {
+    // Signature rules retain the supported GraphQL fallback for these lifecycle cases.
+    value = [[{ type: 'required_signatures' }]];
   } else if (endpoint === 'repos/fixture/repo/git/ref/heads/main') {
     value = { ref: 'refs/heads/main', object: { type: 'commit',
       sha: runGit(['-C', origin, 'rev-parse', 'refs/heads/main']) } };
   } else if (endpoint === 'repos/fixture/repo/commits/${head}') {
-    const [name, email] = runGit(['-C', origin, 'show', '-s', '--format=%an%n%ae', ${JSON.stringify(head)}]).split('\\n');
-    value = { commit: { author: { name, email } }, author: { ...control.metadata.author, type: 'User' } };
+    value = commitAuthor(${JSON.stringify(head)}, true);
   } else if (endpoint.startsWith('repos/fixture/repo/commits?')) {
     const query = new URL(endpoint, 'https://github.com').searchParams;
     const commits = runGit(['-C', origin, 'rev-list', '--max-count=' + query.get('per_page'), query.get('sha')]).split('\\n');
-    value = commits.map(oid => {
-      const [name, email] = runGit(['-C', origin, 'show', '-s', '--format=%an%n%ae', oid + '^{commit}']).split('\\n');
-      return { sha: oid, commit: { author: { name, email } },
-        author: oid === ${JSON.stringify(head)} ? { ...control.metadata.author, type: 'User' } : null };
-    });
+    value = commits.map(oid => ({ sha: oid, ...commitAuthor(oid, oid === ${JSON.stringify(head)}) }));
   } else if (endpoint === 'users/fixture') {
     value = { id: 123 };
   } else if (endpoint?.includes('/commits/') && endpoint.includes('/check-runs?')) {
@@ -594,27 +602,18 @@ if (args[0] === 'pr' && args[1] === 'view') {
   } else if (endpoint?.includes('/commits/') && endpoint.includes('/status?')) {
     value = [{ statuses: [] }];
   } else if (new RegExp('^repos/fixture/repo/commits/[0-9a-f]{40}$').test(endpoint)) {
-    const [name, email] = runGit(['-C', origin, 'show', '-s', '--format=%an%n%ae',
-      endpoint.split('/').at(-1) + '^{commit}']).split('\\n');
-    // Synthetic Git authors have no linked GitHub account.
-    value = { commit: { author: { name, email } }, author: null };
+    value = commitAuthor(endpoint.split('/').at(-1));
   } else if (endpoint === 'repos/fixture/repo/collaborators/fixture/permission') {
     if (control.authorPermission === 'error') process.exit(1);
     value = { permission: control.authorPermission };
   } else if (endpoint.startsWith('repos/fixture/repo/commits/')) {
-    const oid = endpoint.slice('repos/fixture/repo/commits/'.length);
-    if (!/^[0-9a-f]{40}$/.test(oid)) throw new Error('Invalid synthetic commit identity');
-    const [name, email] = runGit(['-C', origin, 'show', '-s', '--format=%an%n%ae', oid]).split('\\n');
-    value = {
-      commit: { author: { name, email } },
-      author: { login: control.metadata.author.login, type: 'User' },
-    };
+    // Valid commit OIDs already matched the exact endpoint above.
+    throw new Error('Invalid synthetic commit identity');
   } else if (endpoint.startsWith('repos/fixture/repo/issues/42/comments')) {
     if (args.includes('POST')) {
       value = { html_url: 'https://example.invalid/pr/42#completion' };
     } else {
-      event({ kind: 'review-comments' });
-      value = [control.reviewComments];
+      value = [[]];
     }
   } else if (endpoint === 'repos/fixture/repo/pulls/' + control.metadata.number + '/files?per_page=100') {
     value = [control.metadata.files.map(file => ({
@@ -624,9 +623,8 @@ if (args[0] === 'pr' && args[1] === 'view') {
   } else if (endpoint === 'repos/fixture/repo/pulls/' + control.metadata.number) {
     const baseSha = control.remoteOnlyBase || control.metadata.baseRefOid;
     value = {
-      number: control.metadata.number,
+      ...pick(control.metadata, ['number', 'title', 'body', 'labels', 'assignees', 'additions', 'deletions']),
       node_id: control.metadata.id,
-      title: control.metadata.title,
       state: control.metadata.state === 'OPEN' ? 'open' : 'closed',
       merged: control.metadata.state === 'MERGED',
       merge_commit_sha: control.metadata.mergeCommit?.oid ?? null,
@@ -636,12 +634,7 @@ if (args[0] === 'pr' && args[1] === 'view') {
       draft: control.metadata.isDraft,
       user: control.metadata.author,
       html_url: control.metadata.url,
-      body: control.metadata.body,
-      labels: control.metadata.labels,
-      assignees: control.metadata.assignees,
       changed_files: control.metadata.changedFiles,
-      additions: control.metadata.additions,
-      deletions: control.metadata.deletions,
       mergeable: control.metadata.mergeable === 'MERGEABLE' ? true : control.metadata.mergeable === 'CONFLICTING' ? false : null,
       mergeable_state: control.metadata.mergeStateStatus.toLowerCase(),
       head: { sha: control.metadata.headRefOid, ref: control.metadata.headRefName, repo: {
@@ -662,8 +655,16 @@ if (args[0] === 'pr' && args[1] === 'view') {
       name, run_id: 1, run_attempt: 1, status: 'queued', conclusion: null,
       runner_id: null, steps: [],
     })) };
-  } else if (endpoint === 'repos/fixture/repo/actions/runs/1') {
-    value = { run_attempt: 1, status: 'in_progress', conclusion: null };
+  } else if (['repos/fixture/repo/actions/runs/1', 'repos/openclaw/openclaw/actions/runs/1'].includes(endpoint)) {
+    if (control.moveAtCi) {
+      runGit(['-C', origin, 'update-ref', 'refs/heads/main', movedMain]);
+    }
+    event({ kind: 'ci-completed' });
+    value = {
+      id: 1, head_sha: control.metadata.headRefOid, run_attempt: 1,
+      status: control.hostedCi === 'scheduled' ? 'completed' : 'in_progress',
+      conclusion: control.hostedCi === 'scheduled' ? 'success' : null,
+    };
   } else if (/^repos\\/(fixture\\/repo|openclaw\\/openclaw)\\/actions\\/runs\\?/.test(endpoint)) {
     if (control.remoteOnlyBase && !control.remoteOnlyBaseMoved) {
       runGit(['-C', origin, 'update-ref', 'refs/heads/main', control.remoteOnlyBase]);
@@ -772,51 +773,54 @@ if (process.argv[1]?.endsWith('/watch-pr-ci.mts')) {
     gateMain,
     env,
     git,
+    realGit,
     assertPrivateHandoffVerified: () => handoff.assertProvisionersInjected(),
     metadata,
+    enableReviewTests() {
+      // Keep the native bootstrap, guard and evidence writer; only the package
+      // command is synthetic, so these cases never install or run another suite.
+      writeFileSync(
+        join(bin, "pnpm"),
+        prelude +
+          `
+event({ kind: 'pnpm', args });
+if (JSON.stringify(args) === JSON.stringify(['install', '--frozen-lockfile'])) {
+  process.exit(0);
+}
+if (args[0] !== 'test' || args[1] !== '--' || args.length < 3) {
+  throw new Error('Unexpected package command');
+}
+console.log(args.slice(2).join('\\n'));
+`,
+        { mode: 0o755 },
+      );
+    },
     seedPreparedMerge() {
       // Merge-only cases need prepared inputs, not another prepare/gates/push run.
       // Preparation lifecycle cases still create these artifacts through the wrapper.
       git(worktree, "checkout", "-B", "pr-42-prep", head);
       git(worktree, "update-ref", "refs/heads/pr-42", head);
-      writeFileSync(
-        join(local, "prep-context.env"),
-        `PR_NUMBER=42\nPR_HEAD=topic\nPR_HEAD_SHA_BEFORE=${head}\nPREP_BRANCH=pr-42-prep\nPR_AUTHOR_ACCESS_AT_PREP=maintainer\n`,
-      );
-      writeFileSync(
-        join(local, "prep.env"),
-        `PR_NUMBER=42\nPR_AUTHOR=fixture\nPR_URL=https://github.com/fixture/repo/pull/42\nPR_HEAD=topic\nPR_HEAD_SHA_BEFORE=${head}\nPREP_HEAD_SHA=${head}\nLOCAL_PREP_HEAD_SHA=${head}\nPREP_MAINLINE_BASE_SHA=${main}\nPREP_REPLACED_HOSTED_ANCESTRY=false\nPREP_AUTHOR_ACCESS=maintainer\n`,
-      );
-      writeFileSync(
-        join(local, "gates.env"),
-        `PR_NUMBER=42\nDOCS_ONLY=false\nCHANGELOG_REQUIRED=false\nGATES_MODE=hosted_exact_or_recent_parent\nHOSTED_GATES_TARGET_HEAD_SHA=${head}\nLAST_VERIFIED_HEAD_SHA=${head}\n`,
-      );
-      writeFileSync(join(local, "prep.md"), "Prepared synthetic merge fixture.\n");
+      writeFiles(local, {
+        "prep-context.env": `PR_NUMBER=42\nPR_HEAD=topic\nPR_HEAD_SHA_BEFORE=${head}\nPREP_BRANCH=pr-42-prep\nPR_AUTHOR_ACCESS_AT_PREP=maintainer\n`,
+        "prep.env": `PR_NUMBER=42\nPR_AUTHOR=fixture\nPR_URL=https://github.com/fixture/repo/pull/42\nPR_HEAD=topic\nPR_HEAD_SHA_BEFORE=${head}\nPREP_HEAD_SHA=${head}\nLOCAL_PREP_HEAD_SHA=${head}\nPREP_MAINLINE_BASE_SHA=${main}\nPREP_REPLACED_HOSTED_ANCESTRY=false\nPREP_AUTHOR_ACCESS=maintainer\n`,
+        "gates.env": `PR_NUMBER=42\nDOCS_ONLY=false\nCHANGELOG_REQUIRED=false\nGATES_MODE=hosted_exact_or_recent_parent\nHOSTED_GATES_TARGET_HEAD_SHA=${head}\nLAST_VERIFIED_HEAD_SHA=${head}\n`,
+        "prep.md": "Prepared synthetic merge fixture.\n",
+      });
     },
     configure(update: Partial<typeof control>) {
-      Object.assign(control, update);
+      const next = { ...JSON.parse(readFileSync(controlFile, "utf8")), ...update };
       env.NODE_OPTIONS =
-        control.hostedCi === "scheduled"
+        next.hostedCi === "scheduled"
           ? privateNodeOptions
           : `${privateNodeOptions} --import=${pathToFileURL(clock).href}`;
-      writeFileSync(controlFile, JSON.stringify(control));
+      writeFileSync(controlFile, JSON.stringify(next));
     },
     events() {
       return readFileSync(eventsFile, "utf8")
         .trim()
         .split("\n")
         .filter(Boolean)
-        .map(
-          (
-            line,
-          ): {
-            kind: string;
-            sha?: string;
-            shared?: string;
-            args?: string[];
-            localObject?: boolean;
-          } => JSON.parse(line),
-        );
+        .map((line): FixtureEvent => JSON.parse(line));
     },
     run(command: string | string[], bash = "bash", from = canonical) {
       const args = typeof command === "string" ? [command, "42"] : command;

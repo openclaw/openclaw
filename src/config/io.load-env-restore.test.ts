@@ -13,6 +13,7 @@ import {
   withConfigReadEnvChanges,
 } from "./config-env-vars.js";
 import { createConfigIO, restoreEnvChangesIfUnchanged } from "./io.js";
+import type { ConfigIoFactoryOptions } from "./io.types.js";
 import { getConfigResolutionFacts } from "./resolution-facts.js";
 import { withTempHome, writeOpenClawConfig, writeStateDirDotEnv } from "./test-helpers.js";
 import { withConfigWriteLock } from "./write-lock.js";
@@ -21,48 +22,61 @@ function configIO(home: string, env: NodeJS.ProcessEnv) {
   return createConfigIO({ env, homedir: () => home, logger: { warn: () => {}, error: () => {} } });
 }
 
+function snapshotIO(options: ConfigIoFactoryOptions) {
+  return createConfigIO({ observe: false, pluginValidation: "skip", ...options });
+}
+
+const configEnv = (value: string) => ({ env: { vars: { KEY: value } } });
+
+function changeOwned(env: NodeJS.ProcessEnv, key: string, change: string) {
+  if (change === "replaced") {
+    env[key] = "replacement-owner";
+  } else if (change === "deleted") {
+    delete env[key];
+  }
+}
+
+function expectedOwned(change: string, unchanged: string) {
+  return change === "unchanged"
+    ? unchanged
+    : change === "replaced"
+      ? "replacement-owner"
+      : undefined;
+}
+
 describe("restoreEnvChangesIfUnchanged", () => {
-  it("restores external ownership when rejected config replaced equal lower-precedence bytes", () => {
-    const env = { KEY: "same" };
-    const cfg = { env: { vars: { KEY: "same" } } };
-    const before = snapshotEnv(env);
-    applyConfigEnvVars(cfg, env, { lowerPrecedenceEnv: { KEY: "same" } });
-    const after = snapshotEnv(env);
-    expect(createConfigRuntimeEnvBase(cfg, env).KEY).toBeUndefined();
-
-    restoreEnvChangesIfUnchanged({ env, before, after });
-
-    expect(env.KEY).toBe("same");
-    expect(createConfigRuntimeEnvBase(cfg, env).KEY).toBe("same");
-  });
-
-  it("preserves a later ownership change even when environment bytes are unchanged", () => {
-    const env: NodeJS.ProcessEnv = {};
-    const before = snapshotEnv(env);
-    applyConfigEnvVars({ env: { vars: { KEY: "value" } } }, env);
-    const after = snapshotEnv(env);
-    applyConfigEnvVars({}, env);
-
-    restoreEnvChangesIfUnchanged({ env, before, after });
-
-    expect(env.KEY).toBe("value");
-  });
-
-  it("restores earlier config ownership with its value after a rejected replacement", () => {
-    const env: NodeJS.ProcessEnv = {};
-    const cfg = { env: { vars: { KEY: "old" } } };
-    applyConfigEnvVars(cfg, env);
-    const before = snapshotEnv(env);
-    applyConfigEnvVars({ env: { vars: { KEY: "new" } } }, env, {
-      lowerPrecedenceEnv: { KEY: "old" },
-    });
-    const after = snapshotEnv(env);
-
-    restoreEnvChangesIfUnchanged({ env, before, after });
-
-    expect(env.KEY).toBe("old");
-    expect(createConfigRuntimeEnvBase(cfg, env).KEY).toBeUndefined();
-  });
+  it.each([
+    ["equal-byte", "same", "same", "same", "same"],
+    ["later-owner", undefined, "value", "value", undefined],
+    ["previous-config", undefined, "new", "old", undefined],
+  ] as const)(
+    "restores a rejected replacement without taking %s ownership",
+    (kind, initial, candidate, expected, base) => {
+      const env: NodeJS.ProcessEnv = initial === undefined ? {} : { KEY: initial };
+      const cfg = configEnv(kind === "previous-config" ? "old" : "same");
+      if (kind === "previous-config") {
+        applyConfigEnvVars(cfg, env);
+      }
+      const before = snapshotEnv(env);
+      applyConfigEnvVars(
+        configEnv(candidate),
+        env,
+        kind === "later-owner" ? {} : { lowerPrecedenceEnv: { KEY: env.KEY ?? "" } },
+      );
+      const after = snapshotEnv(env);
+      if (kind === "equal-byte") {
+        expect(createConfigRuntimeEnvBase(cfg, env).KEY).toBeUndefined();
+      }
+      if (kind === "later-owner") {
+        applyConfigEnvVars({}, env);
+      }
+      restoreEnvChangesIfUnchanged({ env, before, after });
+      expect(env.KEY).toBe(expected);
+      if (kind !== "later-owner") {
+        expect(createConfigRuntimeEnvBase(cfg, env).KEY).toBe(base);
+      }
+    },
+  );
 
   it("preserves an externally modified value", () => {
     const env = { KEY: "external-change" };
@@ -106,150 +120,88 @@ describe("loadConfig env restoration", () => {
   });
 });
 
-it.each(
-  (["for-write"] as const).flatMap((entry) =>
-    (["unchanged", "replaced", "deleted"] as const).map((change) => ({ entry, change })),
-  ),
-)(
-  "preserves foreign env changes during invalid $entry validation (owned=$change)",
-  async ({ entry, change }) => {
-    await withTempHome(async (home) => {
-      const ownedKey = "OPENCLAW_TEST_READER_OWNED";
-      const addedKey = "OPENCLAW_TEST_READER_ADDED";
-      const deletedKey = "OPENCLAW_TEST_READER_DELETED";
-      const configPath = await writeOpenClawConfig(home, {
-        env: { vars: { [ownedKey]: "candidate" } },
-        gateway: { port: "invalid" },
-      });
-      const env: NodeJS.ProcessEnv = {
-        HOME: home,
-        [ownedKey]: "lower-precedence",
-        [deletedKey]: "previous-owner",
-      };
-      let reachedBoundary = false;
-      let producedValue: string | undefined;
-      const io = createConfigIO({
+async function rejectedReader(change: string, native: boolean) {
+  await withTempHome(async (home) => {
+    const prefix = native
+      ? `OPENCLAW_TEST_NATIVE_${randomUUID().replaceAll("-", "_").toUpperCase()}`
+      : "OPENCLAW_TEST_READER";
+    const ownedKey = `${prefix}_OWNED`,
+      addedKey = `${prefix}_ADDED`,
+      deletedKey = `${prefix}_DELETED`;
+    const originalKey = native ? ownedKey.toLowerCase() : ownedKey;
+    const value = native ? "same" : "candidate";
+    const lower = native ? "same" : "lower-precedence";
+    const cfg = { env: { vars: { [ownedKey]: value } }, gateway: { port: "invalid" } };
+    const configPath = await writeOpenClawConfig(home, cfg);
+    const checkEnv = async (env: NodeJS.ProcessEnv) => {
+      if (native) {
+        // Native aliases enumerate one spelling; equal bytes must still restore ownership.
+        env[originalKey] = "same";
+        expect(env[ownedKey]).toBe("same");
+      }
+      let produced:
+        | { key: string | undefined; value: string | undefined; base: string | undefined }
+        | undefined;
+      const io = snapshotIO({
         configPath,
         env,
-        lowerPrecedenceEnv: { [ownedKey]: "lower-precedence" },
-        observe: false,
-        pluginValidation: "skip",
+        lowerPrecedenceEnv: { [ownedKey]: lower },
         measure: async (name, run) => {
           const result = await run();
           if (name === "config.snapshot.read.legacy-issues") {
-            reachedBoundary = true;
-            producedValue = env[ownedKey];
-            env[addedKey] = "new-owner";
-            delete env[deletedKey];
-            if (change === "replaced") {
-              env[ownedKey] = "replacement-owner";
-            } else if (change === "deleted") {
-              delete env[ownedKey];
-            }
+            produced = {
+              key: Object.keys(env).find((key) => key.toUpperCase() === ownedKey),
+              value: env[originalKey],
+              base: createConfigRuntimeEnvBase({ env: cfg.env }, env)[ownedKey],
+            };
+            env[native ? addedKey.toLowerCase() : addedKey] = "new-owner";
+            delete env[native ? deletedKey.toLowerCase() : deletedKey];
+            changeOwned(env, originalKey, change);
           }
           return result;
         },
       });
-      const snapshot =
-        entry === "for-write"
-          ? (await io.readConfigFileSnapshotForWrite()).snapshot
-          : await io.readConfigFileSnapshot();
-      expect(snapshot.valid).toBe(false);
-      expect(reachedBoundary).toBe(true);
-      expect(producedValue).toBe("candidate");
-      expect(env[ownedKey]).toBe(
-        change === "unchanged"
-          ? "lower-precedence"
-          : change === "replaced"
-            ? "replacement-owner"
-            : undefined,
+      const { snapshot } = await io.readConfigFileSnapshotForWrite();
+      expect({ valid: snapshot.valid, produced }).toEqual({
+        valid: false,
+        produced: { key: ownedKey, value, base: undefined },
+      });
+      const expected = expectedOwned(change, lower);
+      const base = createConfigRuntimeEnvBase({ env: cfg.env }, env);
+      expect([env[ownedKey], env[originalKey], base[ownedKey]]).toEqual([
+        expected,
+        expected,
+        expected,
+      ]);
+      expect([env[addedKey], env[deletedKey]]).toEqual(["new-owner", undefined]);
+      if (native) {
+        expect(Object.keys(env).filter((key) => key.toUpperCase() === ownedKey)).toEqual(
+          change === "deleted" ? [] : [change === "unchanged" ? originalKey : ownedKey],
+        );
+      }
+    };
+    if (native) {
+      await withEnvAsync(
+        { [ownedKey]: undefined, [addedKey]: undefined, [deletedKey]: "previous-owner" },
+        () => checkEnv(process.env),
       );
-      expect(env[addedKey]).toBe("new-owner");
-      expect(env[deletedKey]).toBeUndefined();
-    });
-  },
+    } else {
+      await checkEnv({ HOME: home, [ownedKey]: lower, [deletedKey]: "previous-owner" });
+    }
+  });
+}
+
+it.each(["unchanged", "replaced", "deleted"])(
+  "preserves foreign env changes during invalid for-write validation (owned=%s)",
+  (change) => rejectedReader(change, false),
 );
 
 describe("config read producer receipts", () => {
-  it.skipIf(process.platform !== "win32").each(["unchanged", "replaced", "deleted"] as const)(
+  it.skipIf(process.platform !== "win32").each(["unchanged", "replaced", "deleted"])(
     "restores native Windows env ownership without taking foreign changes (owned=%s)",
     async (change) => {
-      expect(process.platform).toBe("win32");
-      expect(isMainThread).toBe(true);
-      await withTempHome(async (home) => {
-        const prefix = `OPENCLAW_TEST_NATIVE_${randomUUID().replaceAll("-", "_").toUpperCase()}`;
-        const ownedKey = `${prefix}_OWNED`;
-        const originalKey = ownedKey.toLowerCase();
-        const addedKey = `${prefix}_ADDED`;
-        const deletedKey = `${prefix}_DELETED`;
-        const cfg = { env: { vars: { [ownedKey]: "same" } }, gateway: { port: "invalid" } };
-        const configPath = await writeOpenClawConfig(home, cfg);
-        await withEnvAsync(
-          { [ownedKey]: undefined, [addedKey]: undefined, [deletedKey]: "previous-owner" },
-          async () => {
-            // Native main-thread env aliases survive lookup but enumerate one spelling.
-            // Equal bytes must still roll back the rejected reader's ownership transfer.
-            process.env[originalKey] = "same";
-            expect(process.env[ownedKey]).toBe("same");
-            let reachedBoundary = false;
-            let producedKey: string | undefined;
-            let producedValue: string | undefined;
-            let producedOwnedValue: string | undefined;
-            const io = createConfigIO({
-              configPath,
-              env: process.env,
-              lowerPrecedenceEnv: { [ownedKey]: "same" },
-              observe: false,
-              pluginValidation: "skip",
-              measure: async (name, run) => {
-                const result = await run();
-                if (name === "config.snapshot.read.legacy-issues") {
-                  reachedBoundary = true;
-                  producedKey = Object.keys(process.env).find(
-                    (key) => key.toUpperCase() === ownedKey,
-                  );
-                  producedValue = process.env[originalKey];
-                  producedOwnedValue = createConfigRuntimeEnvBase({ env: cfg.env }, process.env)[
-                    ownedKey
-                  ];
-                  process.env[addedKey.toLowerCase()] = "new-owner";
-                  delete process.env[deletedKey.toLowerCase()];
-                  if (change === "replaced") {
-                    process.env[originalKey] = "replacement-owner";
-                  } else if (change === "deleted") {
-                    delete process.env[originalKey];
-                  }
-                }
-                return result;
-              },
-            });
-            const { snapshot } = await io.readConfigFileSnapshotForWrite();
-            expect(snapshot.valid).toBe(false);
-            expect(reachedBoundary).toBe(true);
-            expect(producedKey).toBe(ownedKey);
-            expect(producedValue).toBe("same");
-            expect(producedOwnedValue).toBeUndefined();
-            const expected =
-              change === "unchanged"
-                ? "same"
-                : change === "replaced"
-                  ? "replacement-owner"
-                  : undefined;
-            expect(process.env[ownedKey]).toBe(expected);
-            expect(process.env[originalKey]).toBe(expected);
-            expect(createConfigRuntimeEnvBase({ env: cfg.env }, process.env)[ownedKey]).toBe(
-              expected,
-            );
-            expect(
-              Object.keys(process.env).filter((key) => key.toUpperCase() === ownedKey),
-            ).toEqual(
-              change === "deleted" ? [] : [change === "unchanged" ? originalKey : ownedKey],
-            );
-            expect(process.env[addedKey]).toBe("new-owner");
-            expect(process.env[deletedKey]).toBeUndefined();
-          },
-        );
-      });
+      expect([process.platform, isMainThread]).toEqual(["win32", true]);
+      await rejectedReader(change, true);
     },
   );
 
@@ -258,12 +210,10 @@ describe("config read producer receipts", () => {
       const cfg = { env: { vars: { KEY: "same" } }, gateway: { port: "invalid" } };
       const configPath = await writeOpenClawConfig(home, cfg);
       const env = { HOME: home, KEY: "same" };
-      const io = createConfigIO({
+      const io = snapshotIO({
         configPath,
         env,
         lowerPrecedenceEnv: { KEY: "same" },
-        observe: false,
-        pluginValidation: "skip",
       });
       expect((await io.readConfigFileSnapshot()).valid).toBe(false);
       expect(env.KEY).toBe("same");
@@ -274,9 +224,7 @@ describe("config read producer receipts", () => {
   it("preserves a later ownership change with unchanged bytes", async () => {
     const env: NodeJS.ProcessEnv = {};
     await withConfigReadEnvChanges(env, async (restore) => {
-      captureConfigReadEnvMutation(env, () =>
-        applyConfigEnvVars({ env: { vars: { KEY: "value" } } }, env),
-      );
+      captureConfigReadEnvMutation(env, () => applyConfigEnvVars(configEnv("value"), env));
       await Promise.resolve();
       applyConfigEnvVars({}, env);
       restore();
@@ -304,51 +252,54 @@ describe("config read producer receipts", () => {
     });
   });
 
-  it.each(["plain", "alias"] as const)("retains Windows %s key semantics", async (kind) => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    try {
-      const env: NodeJS.ProcessEnv =
-        kind === "alias"
-          ? cloneEnvWithPlatformSemantics({ key: "old" })
-          : { key: "old", KEY: "separate" };
-      await withConfigReadEnvChanges(env, async (restore) => {
-        captureConfigReadEnvMutation(env, () => {
-          delete env.key;
-          env.KEY = "candidate";
-        });
-        await Promise.resolve();
-        env.UNRELATED = "foreign";
-        restore();
-        expect(env.key).toBe("old");
-        expect(env.KEY).toBe(kind === "alias" ? "old" : "separate");
-        expect(env.UNRELATED).toBe("foreign");
-      });
-    } finally {
-      platform.mockRestore();
-    }
-  });
-
-  it.each(["plain", "alias"] as const)(
-    "restores ownership-only changes with Windows %s key spelling",
-    async (kind) => {
+  it.each(
+    (["plain", "alias"] as const).flatMap((kind) =>
+      [false, true].map((ownershipOnly) => ({ kind, ownershipOnly })),
+    ),
+  )(
+    "restores Windows $kind receipts (ownership only=$ownershipOnly)",
+    async ({ kind, ownershipOnly }) => {
       const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       try {
+        const initial = { key: ownershipOnly ? "" : "old" };
         const env: NodeJS.ProcessEnv =
-          kind === "alias" ? cloneEnvWithPlatformSemantics({ key: "" }) : { key: "" };
-        const config = { env: { vars: { KEY: "value" } } };
-        applyConfigEnvVars(config, env);
-        expect(Object.keys(env)).toEqual(kind === "alias" ? ["key"] : ["key", "KEY"]);
+          kind === "alias"
+            ? cloneEnvWithPlatformSemantics(initial)
+            : { ...initial, ...(ownershipOnly ? {} : { KEY: "separate" }) };
+        const config = configEnv("value");
+        if (ownershipOnly) {
+          applyConfigEnvVars(config, env);
+          expect(Object.keys(env)).toEqual(kind === "alias" ? ["key"] : ["key", "KEY"]);
+        }
         await withConfigReadEnvChanges(env, async (restore) => {
-          captureConfigReadEnvMutation(env, () => applyConfigEnvVars({}, env));
+          captureConfigReadEnvMutation(env, () => {
+            if (ownershipOnly) {
+              applyConfigEnvVars({}, env);
+            } else {
+              delete env.key;
+              env.KEY = "candidate";
+            }
+          });
           await Promise.resolve();
+          if (!ownershipOnly) {
+            env.UNRELATED = "foreign";
+          }
           restore();
         });
-        expect(env.KEY).toBe("value");
-        expect(Object.entries(createConfigRuntimeEnvBase(config, env))).toEqual(
-          kind === "plain" ? [["key", ""]] : [],
-        );
-        if (kind === "plain") {
-          expect(env.key).toBe("");
+        if (ownershipOnly) {
+          expect(env.KEY).toBe("value");
+          expect(Object.entries(createConfigRuntimeEnvBase(config, env))).toEqual(
+            kind === "plain" ? [["key", ""]] : [],
+          );
+          if (kind === "plain") {
+            expect(env.key).toBe("");
+          }
+        } else {
+          expect(env).toMatchObject({
+            key: "old",
+            KEY: kind === "alias" ? "old" : "separate",
+            UNRELATED: "foreign",
+          });
         }
       } finally {
         platform.mockRestore();
@@ -373,11 +324,9 @@ describe("config read producer receipts", () => {
           },
         },
       );
-      const io = createConfigIO({
+      const io = snapshotIO({
         configPath,
         env,
-        observe: false,
-        pluginValidation: "skip",
         logger: { warn: () => {}, error: () => {} },
         measure: async (name, run) => {
           try {
@@ -399,137 +348,108 @@ describe("config read producer receipts", () => {
 });
 
 describe("snapshot source authority", () => {
-  it.each([false, true])(
-    "checks the source owner before loading dotenv (revoked=%s)",
-    async (revoked) => {
-      await withTempHome(async (home) => {
-        const configPath = await writeOpenClawConfig(home, {
-          gateway: { mode: "local" },
-        });
-        const envKey = "OPENCLAW_TEST_SNAPSHOT_DOTENV";
-        await writeStateDirDotEnv(`${envKey}=dotenv-value\n`, {
-          stateDir: path.dirname(configPath),
-        });
-        await withEnvAsync(
-          {
-            [envKey]: undefined,
-            OPENCLAW_STATE_DIR: path.dirname(configPath),
-            OPENCLAW_CONFIG_PATH: configPath,
-          },
-          async () => {
-            const io = createConfigIO({
-              configPath,
-              env: process.env,
-              observe: false,
-              pluginValidation: "skip",
-            });
-            const refusal = new Error("snapshot source owner changed");
-            let current = true;
-            await withConfigWriteLock(
-              configPath,
-              async () => {
-                current = !revoked;
-                const read = io.readConfigFileSnapshot();
-                if (revoked) {
-                  await expect(read).rejects.toBe(refusal);
-                } else {
-                  await expect(read).resolves.toMatchObject({ valid: true });
-                }
-              },
-              process.env,
-              () => {
-                if (!current) {
-                  throw refusal;
-                }
-              },
-            );
-            expect(process.env[envKey]).toBe(revoked ? undefined : "dotenv-value");
-          },
-        );
-      });
-    },
-  );
-
   it.each(
-    (["for-write"] as const).flatMap((entry) =>
-      (["env", "invalid-restore"] as const).flatMap((boundary) =>
-        [false, true].map((revoked) => ({ entry, boundary, revoked })),
-      ),
+    (["dotenv", "env", "invalid-restore"] as const).flatMap((boundary) =>
+      [false, true].map((revoked) => ({ boundary, revoked })),
     ),
-  )(
-    "preserves $entry reader authority at $boundary (revoked=$revoked)",
-    async ({ entry, boundary, revoked }) => {
-      await withTempHome(async (home) => {
-        const envKey = "OPENCLAW_TEST_SNAPSHOT_ENV";
-        const configPath = await writeOpenClawConfig(home, {
-          env: { vars: { [envKey]: "config-value" } },
-          gateway: { mode: "local", port: boundary === "env" ? 18789 : "invalid" },
-        });
-        const env: NodeJS.ProcessEnv = { HOME: home };
-        const refusal = { reason: "snapshot-source-changed" };
+  )("preserves reader authority at $boundary (revoked=$revoked)", async ({ boundary, revoked }) => {
+    await withTempHome(async (home) => {
+      const dotenv = boundary === "dotenv";
+      const envKey = `OPENCLAW_TEST_SNAPSHOT_${dotenv ? "DOTENV" : "ENV"}`;
+      const configPath = await writeOpenClawConfig(
+        home,
+        dotenv
+          ? { gateway: { mode: "local" } }
+          : {
+              env: { vars: { [envKey]: "config-value" } },
+              gateway: { mode: "local", port: boundary === "env" ? 18789 : "invalid" },
+            },
+      );
+      const checkEnv = async (env: NodeJS.ProcessEnv) => {
+        const refusal = dotenv
+          ? new Error("snapshot source owner changed")
+          : { reason: "snapshot-source-changed" };
         let current = true;
-        let reachedBoundary = false;
-        let valueAtBoundary: string | undefined;
-        const io = createConfigIO({
+        let produced: { value: string | undefined } | undefined;
+        const io = snapshotIO({
           configPath,
           env,
-          observe: false,
-          pluginValidation: "skip",
-          measure: async (name, run) => {
-            if (boundary === "env" && name === "config.snapshot.read.env") {
-              await Promise.resolve();
-              reachedBoundary = true;
-              valueAtBoundary = env[envKey];
-              current = !revoked;
-              try {
-                return await run();
-              } catch (error) {
-                throw new Error("measurement replaced the authority refusal", { cause: error });
-              }
-            }
-            const result = await run();
-            if (boundary === "invalid-restore" && name === "config.snapshot.read.legacy-issues") {
-              reachedBoundary = true;
-              valueAtBoundary = env[envKey];
-              if (revoked) {
-                env[envKey] = "replacement-owner";
-                current = false;
-              }
-            }
-            return result;
-          },
+          measure: dotenv
+            ? undefined
+            : async (name, run) => {
+                if (boundary === "env" && name === "config.snapshot.read.env") {
+                  await Promise.resolve();
+                  produced = { value: env[envKey] };
+                  current = !revoked;
+                  try {
+                    return await run();
+                  } catch (error) {
+                    throw new Error("measurement replaced the authority refusal", {
+                      cause: error,
+                    });
+                  }
+                }
+                const result = await run();
+                if (
+                  boundary === "invalid-restore" &&
+                  name === "config.snapshot.read.legacy-issues"
+                ) {
+                  produced = { value: env[envKey] };
+                  if (revoked) {
+                    env[envKey] = "replacement-owner";
+                    current = false;
+                  }
+                }
+                return result;
+              },
         });
+        const checkRead = async (read: Promise<unknown>) => {
+          if (revoked) {
+            await expect(read).rejects.toBe(refusal);
+          } else {
+            await expect(read).resolves.toMatchObject({ valid: boundary !== "invalid-restore" });
+          }
+        };
         const read = withConfigWriteLock(
           configPath,
-          async () =>
-            entry === "for-write"
-              ? (await io.readConfigFileSnapshotForWrite()).snapshot
-              : await io.readConfigFileSnapshot(),
+          async () => {
+            if (dotenv) {
+              current = !revoked;
+              await checkRead(io.readConfigFileSnapshot());
+              return undefined;
+            }
+            return (await io.readConfigFileSnapshotForWrite()).snapshot;
+          },
           env,
           () => {
             if (!current) {
-              // oxlint-disable-next-line typescript/only-throw-error -- Authority callbacks may throw non-Error values; preserve the exact synchronous refusal.
+              // oxlint-disable-next-line typescript/only-throw-error -- Preserve non-Error authority refusals through measurement wrappers.
               throw refusal;
             }
           },
         );
-        if (revoked) {
-          await expect(read).rejects.toBe(refusal);
+        if (dotenv) {
+          await read;
         } else {
-          await expect(read).resolves.toMatchObject({ valid: boundary === "env" });
+          await checkRead(read);
         }
-        expect(reachedBoundary).toBe(true);
-        expect(valueAtBoundary).toBe(boundary === "env" ? undefined : "config-value");
-        expect(env[envKey]).toBe(
-          boundary === "env"
-            ? revoked
-              ? undefined
-              : "config-value"
-            : revoked
-              ? "replacement-owner"
-              : undefined,
+        if (!dotenv) {
+          expect(produced).toEqual({ value: boundary === "env" ? undefined : "config-value" });
+        }
+        const accepted = dotenv ? "dotenv-value" : boundary === "env" ? "config-value" : undefined;
+        const rejected = boundary === "invalid-restore" ? "replacement-owner" : undefined;
+        expect(env[envKey]).toBe(revoked ? rejected : accepted);
+      };
+      if (dotenv) {
+        const stateDir = path.dirname(configPath);
+        await writeStateDirDotEnv(`${envKey}=dotenv-value\n`, { stateDir });
+        await withEnvAsync(
+          { [envKey]: undefined, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
+          () => checkEnv(process.env),
         );
-      });
-    },
-  );
+      } else {
+        await checkEnv({ HOME: home });
+      }
+    });
+  });
 });

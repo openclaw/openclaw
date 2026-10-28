@@ -116,135 +116,9 @@ function targetsRuntimeWebPath(path: string): boolean {
   return path.startsWith("plugins.entries.");
 }
 
-function collectConfiguredTargetRefPaths(params: {
-  config: OpenClawConfig;
-  targetIds: Set<string>;
-  allowedPaths?: ReadonlySet<string>;
-}): Set<string> {
-  const defaults = params.config.secrets?.defaults;
-  const configuredTargetRefPaths = new Set<string>();
-  for (const target of discoverConfigSecretTargetsByIds(params.config, params.targetIds)) {
-    if (params.allowedPaths && !params.allowedPaths.has(target.path)) {
-      continue;
-    }
-    const { ref } = resolveSecretInputRef({
-      value: resolveConfigSecretRef({
-        config: params.config,
-        path: target.path,
-        value: target.value,
-        defaults,
-      }),
-      refValue: target.refValue,
-      defaults,
-    });
-    if (ref) {
-      configuredTargetRefPaths.add(target.path);
-    }
-  }
-  return configuredTargetRefPaths;
-}
-
-function classifyConfiguredTargetRefs(params: {
-  config: OpenClawConfig;
-  configuredTargetRefPaths: Set<string>;
-  agentId?: string;
-  forcedActivePaths?: ReadonlySet<string>;
-  optionalActivePaths?: ReadonlySet<string>;
-}): {
-  needsResolution: boolean;
-  diagnostics: string[];
-} {
-  const context = createResolverContext({
-    sourceConfig: params.config,
-    env: process.env,
-  });
-  collectConfigAssignments({
-    config: cloneConfigWithResolutionFacts(params.config),
-    context,
-    agentId: params.agentId,
-  });
-
-  const activePaths = new Set(context.assignments.map((assignment) => assignment.path));
-  const inactiveWarningsByPath = new Map<string, string>();
-  for (const warning of context.warnings) {
-    if (warning.code !== "SECRETS_REF_IGNORED_INACTIVE_SURFACE") {
-      continue;
-    }
-    inactiveWarningsByPath.set(warning.path, warning.message);
-  }
-
-  const diagnostics = new Set<string>();
-  let needsResolution = false;
-
-  for (const path of params.configuredTargetRefPaths) {
-    const inactiveWarning =
-      !activePaths.has(path) &&
-      !params.forcedActivePaths?.has(path) &&
-      !params.optionalActivePaths?.has(path)
-        ? inactiveWarningsByPath.get(path)
-        : undefined;
-    if (inactiveWarning) {
-      diagnostics.add(inactiveWarning);
-    } else {
-      needsResolution = true;
-    }
-  }
-
-  return {
-    needsResolution,
-    diagnostics: [...diagnostics],
-  };
-}
-
-function parseGatewaySecretsResolveResult(payload: unknown) {
-  if (!validateSecretsResolveResult(payload)) {
-    throw new Error("gateway returned invalid secrets.resolve payload.");
-  }
-  return {
-    assignments: payload.assignments ?? [],
-    diagnostics: (payload.diagnostics ?? []).filter((entry) => entry.trim().length > 0),
-    inactiveRefPaths: (payload.inactiveRefPaths ?? []).filter((entry) => entry.trim().length > 0),
-  };
-}
-
 function inactiveSurfaceDiagnosticPath(diagnostic: string): string | undefined {
   const markerIndex = diagnostic.indexOf(": secret ref is configured on an inactive surface;");
   return markerIndex > 0 ? diagnostic.slice(0, markerIndex).trim() : undefined;
-}
-
-function filterAllowedGatewayDiagnostics(params: {
-  allowedPaths?: ReadonlySet<string>;
-  forcedActivePaths?: ReadonlySet<string>;
-  optionalActivePaths?: ReadonlySet<string>;
-  diagnostics: string[];
-}): string[] {
-  return params.diagnostics.filter((diagnostic) => {
-    const markerIndex = diagnostic.indexOf(":");
-    if (markerIndex <= 0) {
-      return true;
-    }
-    const path = diagnostic.slice(0, markerIndex).trim();
-    if (!path.includes(".")) {
-      return true;
-    }
-    if (params.forcedActivePaths?.has(path) || params.optionalActivePaths?.has(path)) {
-      return false;
-    }
-    return !params.allowedPaths || params.allowedPaths.has(path);
-  });
-}
-
-function isUnsupportedSecretsResolveError(err: unknown): boolean {
-  const message = normalizeLowercaseStringOrEmpty(formatErrorMessage(err));
-  if (!message.includes("secrets.resolve")) {
-    return false;
-  }
-  return (
-    message.includes("does not support required method") ||
-    message.includes("unknown method") ||
-    message.includes("method not found") ||
-    message.includes("invalid request")
-  );
 }
 
 function isAllowedPathsSecretsResolveCompatError(err: unknown): boolean {
@@ -332,7 +206,7 @@ async function resolveCommandSecretRefsLocally(
   const runtimeWebTargets = discoveredTargets.filter((target) =>
     targetsRuntimeWebPath(target.path),
   );
-  collectConfigAssignments({
+  await collectConfigAssignments({
     config: cloneConfigWithResolutionFacts(params.config),
     context,
     agentId: params.agentId,
@@ -566,11 +440,70 @@ export async function resolveCommandSecretRefsViaGateway(
     scrubUnresolvedSecretRefs: params.scrubUnresolvedSecretRefs !== false,
   };
   const resolution = { ...params, enforceResolved, resolutionPolicy };
-  const configuredTargetRefPaths = collectConfiguredTargetRefPaths(params);
-  const preflight =
-    configuredTargetRefPaths.size > 0
-      ? classifyConfiguredTargetRefs({ ...params, configuredTargetRefPaths })
-      : { needsResolution: false, diagnostics: [] };
+  const defaults = params.config.secrets?.defaults;
+  const configuredTargetRefPaths = new Set<string>();
+  for (const target of discoverConfigSecretTargetsByIds(params.config, params.targetIds)) {
+    if (params.allowedPaths && !params.allowedPaths.has(target.path)) {
+      continue;
+    }
+    const { ref } = resolveSecretInputRef({
+      value: resolveConfigSecretRef({
+        config: params.config,
+        path: target.path,
+        value: target.value,
+        defaults,
+      }),
+      refValue: target.refValue,
+      defaults,
+    });
+    if (ref) {
+      configuredTargetRefPaths.add(target.path);
+    }
+  }
+  let preflight: { needsResolution: boolean; diagnostics: string[] } = {
+    needsResolution: false,
+    diagnostics: [],
+  };
+  if (configuredTargetRefPaths.size > 0) {
+    const preflightScope = { ...params, configuredTargetRefPaths };
+    const context = createResolverContext({
+      sourceConfig: preflightScope.config,
+      env: process.env,
+    });
+    await collectConfigAssignments({
+      config: cloneConfigWithResolutionFacts(preflightScope.config),
+      context,
+      agentId: preflightScope.agentId,
+    });
+
+    const activePaths = new Set(context.assignments.map((assignment) => assignment.path));
+    const inactiveWarningsByPath = new Map<string, string>();
+    for (const warning of context.warnings) {
+      if (warning.code !== "SECRETS_REF_IGNORED_INACTIVE_SURFACE") {
+        continue;
+      }
+      inactiveWarningsByPath.set(warning.path, warning.message);
+    }
+
+    const diagnostics = new Set<string>();
+    let needsResolution = false;
+
+    for (const path of preflightScope.configuredTargetRefPaths) {
+      const inactiveWarning =
+        !activePaths.has(path) &&
+        !preflightScope.forcedActivePaths?.has(path) &&
+        !preflightScope.optionalActivePaths?.has(path)
+          ? inactiveWarningsByPath.get(path)
+          : undefined;
+      if (inactiveWarning) {
+        diagnostics.add(inactiveWarning);
+      } else {
+        needsResolution = true;
+      }
+    }
+
+    preflight = { needsResolution, diagnostics: [...diagnostics] };
+  }
   if (!preflight.needsResolution) {
     return {
       resolvedConfig: params.config,
@@ -608,6 +541,7 @@ export async function resolveCommandSecretRefsViaGateway(
   } catch (err) {
     const forcedActiveCompatFailure =
       Boolean(params.forcedActivePaths?.size) && isAllowedPathsSecretsResolveCompatError(err);
+    let localFailure = "Local resolution also failed.";
     try {
       const fallback = await resolveLocally();
       const recoveredLocally = Object.values(fallback.targetStatesByPath).some(
@@ -626,8 +560,8 @@ export async function resolveCommandSecretRefsViaGateway(
           ]),
         };
       }
-    } catch {
-      // Fall through to original gateway-specific error reporting.
+    } catch (error) {
+      localFailure = `Local resolution also failed (${formatErrorMessage(error)}).`;
     }
     if (forcedActiveCompatFailure) {
       throw new Error(
@@ -635,22 +569,50 @@ export async function resolveCommandSecretRefsViaGateway(
         { cause: err },
       );
     }
-    if (isUnsupportedSecretsResolveError(err)) {
+    const unsupportedMessage = normalizeLowercaseStringOrEmpty(formatErrorMessage(err));
+    if (
+      unsupportedMessage.includes("secrets.resolve") &&
+      (unsupportedMessage.includes("does not support required method") ||
+        unsupportedMessage.includes("unknown method") ||
+        unsupportedMessage.includes("method not found") ||
+        unsupportedMessage.includes("invalid request"))
+    ) {
       throw new Error(
         `${params.commandName}: active gateway does not support secrets.resolve (${formatErrorMessage(err)}). Update the gateway or run without SecretRefs.`,
         { cause: err },
       );
     }
     throw new Error(
-      `${params.commandName}: failed to resolve secrets from the active gateway snapshot (${formatErrorMessage(err)}). Local resolution also failed. Check the configured secret sources and gateway access, then retry.`,
+      `${params.commandName}: failed to resolve secrets from the active gateway snapshot (${formatErrorMessage(err)}). ${localFailure} Check the configured secret sources and gateway access, then retry.`,
       { cause: err },
     );
   }
 
-  const parsed = parseGatewaySecretsResolveResult(payload);
-  const gatewayDiagnostics = filterAllowedGatewayDiagnostics({
-    ...params,
-    diagnostics: parsed.diagnostics,
+  if (!validateSecretsResolveResult(payload)) {
+    throw new Error("gateway returned invalid secrets.resolve payload.");
+  }
+  const parsed = {
+    assignments: payload.assignments ?? [],
+    diagnostics: (payload.diagnostics ?? []).filter((entry) => entry.trim().length > 0),
+    inactiveRefPaths: (payload.inactiveRefPaths ?? []).filter((entry) => entry.trim().length > 0),
+  };
+  const diagnosticScope = { ...params, diagnostics: parsed.diagnostics };
+  const gatewayDiagnostics = diagnosticScope.diagnostics.filter((diagnostic) => {
+    const markerIndex = diagnostic.indexOf(":");
+    if (markerIndex <= 0) {
+      return true;
+    }
+    const path = diagnostic.slice(0, markerIndex).trim();
+    if (!path.includes(".")) {
+      return true;
+    }
+    if (
+      diagnosticScope.forcedActivePaths?.has(path) ||
+      diagnosticScope.optionalActivePaths?.has(path)
+    ) {
+      return false;
+    }
+    return !diagnosticScope.allowedPaths || diagnosticScope.allowedPaths.has(path);
   });
   const gatewayInactiveRefPaths = params.allowedPaths
     ? parsed.inactiveRefPaths.filter((path) => params.allowedPaths?.has(path))
@@ -748,15 +710,10 @@ export async function resolveCommandSecretRefsViaGateway(
       if (enforceResolved) {
         throw error;
       }
-      const unresolvedDiagnostics = handleUnresolvedAssignments(
-        resolution,
-        resolvedConfig,
-        analyzed.unresolved,
-      );
       diagnostics = normalizeUniqueStringEntries([
         ...diagnostics,
         `${params.commandName}: local fallback after incomplete gateway snapshot failed (${formatErrorMessage(error)}).`,
-        ...unresolvedDiagnostics,
+        ...handleUnresolvedAssignments(resolution, resolvedConfig, analyzed.unresolved),
       ]);
     }
   }
@@ -768,4 +725,3 @@ export async function resolveCommandSecretRefsViaGateway(
     hadUnresolvedTargets: Object.values(targetStatesByPath).includes("unresolved"),
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

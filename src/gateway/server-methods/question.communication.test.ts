@@ -3,6 +3,7 @@ import { createOperationalRunInstanceRef } from "../../agents/admitted-run-conte
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import * as inProcessGateway from "../../agents/tools/in-process-gateway.js";
 import { prepareSessionsSendCommunication } from "../../agents/tools/sessions-send-communication.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -36,12 +37,14 @@ async function fixture(
     ask: (signal?: AbortSignal) => Promise<void>;
   }) => Promise<void>,
 ) {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  const options = { scenario: "minimal", prepareProfileCatalog: true } as const;
+  await withOpenClawTestState(options, async (state) => {
     const storePath = state.path("sessions.json");
     const cfg: OpenClawConfig = {
       session: { store: storePath },
       agents: { entries: { main: {} } },
     };
+    setRuntimeConfigSnapshot(cfg);
     const creator = createOperatorClient({ profileId: "recipient", scopes: ["operator.write"] });
     const admin = createOperatorClient({ profileId: "admin", scopes: ["operator.admin"] });
     const peer = createOperatorClient({
@@ -214,6 +217,7 @@ it.each(["Allow once", "Deny"] as const)(
   async (decision) => {
     await fixture(async ({ endpoint, cfg, creator, admin }) => {
       cfg.session!.communication = { send: "ask", receive: "ask" };
+      setRuntimeConfigSnapshot(cfg);
       const context = createDirectChatContext({
         getRuntimeConfig: () => cfg,
         questionManager: manager,

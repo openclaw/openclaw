@@ -1,13 +1,8 @@
 import { expect, it, vi } from "vitest";
 import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
-import {
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import {
   nodeWorkerPlanHash,
   type NodeWorkerLaunchInput,
@@ -17,6 +12,7 @@ import type {
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
 import { createNodeWorkerLaunchAdapter } from "./node-launch-adapter.js";
+import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 
 const DEVICE_ID = "native-inference-device";
 
@@ -64,14 +60,9 @@ function input(): NodeWorkerLaunchInput {
 }
 
 function proof(supported: boolean): NodeWorkerSupervisorNodeProof {
-  return {
+  return createNodeWorkerBundleTestNode({
     nodeId: DEVICE_ID,
-    connId: "conn-1",
     pairingIdentity: "identity-1",
-    pairingGeneration: "generation-1",
-    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-    clientMode: GATEWAY_CLIENT_MODES.NODE,
-    protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
     workerHost: {
       enabled: true,
       capacity: { total: 1, available: 1 },
@@ -81,7 +72,7 @@ function proof(supported: boolean): NodeWorkerSupervisorNodeProof {
       ...(supported ? { nativeInference: 1 as const } : {}),
     },
     commands: ["system.run"],
-  };
+  });
 }
 
 export function registerNodeLaunchAdapterNativeInferenceSuite() {
@@ -123,13 +114,9 @@ export function registerNodeLaunchAdapterNativeInferenceSuite() {
         await expect(launch).resolves.toEqual(completed);
         expect(invoke).toHaveBeenCalledOnce();
       } else {
-        await expect(launch).rejects.toMatchObject({
-          name: "NodeRunnerUpdateRequiredError",
-          code: "node_runner_update_required",
-          message: expect.stringMatching(
-            /requires an update.*openclaw update.*reconnect.*openclaw node restart/su,
-          ),
-        });
+        await expect(launch).rejects.toThrow(
+          /Worker-local inference is not configured.*models\.providers.*usable credential.*restart the node host/su,
+        );
         expect(invoke).not.toHaveBeenCalled();
       }
     },

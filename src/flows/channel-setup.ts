@@ -34,7 +34,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveBundledPluginSources } from "../plugins/bundled-sources.js";
 import { enablePluginWithCapabilityConsent } from "../plugins/enable.js";
 import { getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
-import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "../plugins/plugin-lifecycle-lease.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { t } from "../wizard/i18n/index.js";
@@ -201,7 +201,7 @@ export async function setupChannels(
     if (existing && !forceReload) {
       return existing;
     }
-    const snapshot = loadChannelSetupPluginRegistrySnapshotForChannel({
+    const snapshot = await loadChannelSetupPluginRegistrySnapshotForChannel({
       cfg: next,
       runtime,
       channel,
@@ -219,8 +219,8 @@ export async function setupChannels(
     return plugin;
   };
   const setupCache = getPluginCache();
-  const enableChannelPluginForSetup = async (channel: ChannelChoice) =>
-    await withPluginLifecycleLease({}, async () => {
+  const enableChannelPluginForSetup = async (channel: ChannelChoice): Promise<boolean> => {
+    const outcome = await withPluginLifecycleLeaseAsync({}, async () => {
       const result = await enablePluginWithCapabilityConsent(next, channel, {
         workspaceDir: resolveWorkspaceDir(),
         onCapabilityConsent: createPluginCapabilityConsentPrompter(
@@ -235,6 +235,18 @@ export async function setupChannels(
       }
       return result;
     });
+    if (!outcome.enabled) {
+      await prompter.note(
+        t("wizard.channels.pluginEnableFailed", {
+          channel,
+          reason: outcome.reason ?? "plugin disabled",
+          command: formatCliCommand("openclaw plugins list"),
+        }),
+        t("wizard.channels.setupTitle"),
+      );
+    }
+    return outcome.enabled;
+  };
   const getVisibleSetupFlowAdapter = (channel: ChannelChoice) =>
     resolveChannelSetupWizardAdapterForPlugin(getVisibleChannelPlugin(channel));
   const preloadConfiguredExternalPlugins = async () => {
@@ -399,16 +411,7 @@ export async function setupChannels(
       );
       return false;
     }
-    const result = await enableChannelPluginForSetup(channel);
-    if (!result.enabled) {
-      await prompter.note(
-        t("wizard.channels.pluginEnableFailed", {
-          channel,
-          reason: result.reason ?? "plugin disabled",
-          command: formatCliCommand("openclaw plugins list"),
-        }),
-        t("wizard.channels.setupTitle"),
-      );
+    if (!(await enableChannelPluginForSetup(channel))) {
       return false;
     }
     const plugin = getVisibleChannelPlugin(channel);
@@ -627,7 +630,7 @@ export async function setupChannels(
     channel: ChannelChoice,
     install: Parameters<typeof runPluginInstallWithNavigation>[0]["install"],
   ) =>
-    await withPluginLifecycleLease({}, async () => {
+    await withPluginLifecycleLeaseAsync({}, async () => {
       const outcome = await runPluginInstallWithNavigation({ install, prompter, options });
       if (outcome.status !== "back" && outcome.value.installed) {
         next = outcome.value.cfg;
@@ -716,19 +719,8 @@ export async function setupChannels(
             },
           },
         } as OpenClawConfig;
-      } else {
-        const result = await enableChannelPluginForSetup(channel);
-        if (!result.enabled) {
-          await prompter.note(
-            t("wizard.channels.pluginEnableFailed", {
-              channel,
-              reason: result.reason ?? "plugin disabled",
-              command: formatCliCommand("openclaw plugins list"),
-            }),
-            t("wizard.channels.setupTitle"),
-          );
-          return "done";
-        }
+      } else if (!(await enableChannelPluginForSetup(channel))) {
+        return "done";
       }
       resumingDisabledChannel = true;
       deferredDisabledHint = resolveConfigDisabledHint(channel);

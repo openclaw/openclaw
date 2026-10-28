@@ -5,6 +5,8 @@ it.each<[string, boolean, boolean]>([
   ["ui/src/pages/chat/chat-realtime.ts", true, true],
   ["ui/src/pages/chat/chat-realtime.test.ts", false, true],
   ["scripts/lib/control-ui-i18n-config.json", true, false],
+  ["extensions/active-memory/control-ui.presentation.json", true, true],
+  ["extensions/memory-wiki/control-ui.presentation.json", true, true],
   ["src/config/schema.labels.ts", true, false],
   ["extensions/example/browser/page.ts", true, true],
   ["extensions/example/browser/page.test.ts", false, true],

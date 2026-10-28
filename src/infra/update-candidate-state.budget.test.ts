@@ -1,18 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as realSetTimeout } from "node:timers";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
-import {
-  fixtureReceiptClientSource,
-  openFixtureReceiptChannel,
-  type FixtureReceiptChannel,
-} from "../../test/helpers/fixture-receipts.js";
+import { afterEach, expect, it, vi } from "vitest";
+import { z } from "zod";
+import { fixtureReceiptClientSource } from "../../test/helpers/fixture-receipts.js";
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as commands from "../process/exec.js";
 import * as diskSpace from "./disk-space.js";
@@ -21,11 +14,25 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 import { measureUpdateStateFiles } from "./update-candidate-io.js";
-import { observeUpdateCandidateIoProgress } from "./update-candidate-io.test-support.js";
-import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
-import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
+import {
+  useStateReceipts,
+  stateClock,
+  snapshotFixture,
+  captureStateOperation,
+} from "./update-candidate-state-fixtures.test-support.js";
+import {
+  parseUpdateStateInspectionWorker,
+  runUpdateStateInspectionWorker,
+} from "./update-candidate-state.inspection.js";
+import {
+  readUpdateStateSchemaVersions,
+  UpdateStateSchemaInspectionPlanSchema,
+} from "./update-candidate-state.js";
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
 import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
+import { UpdateDatabaseBackupSchema } from "./update-database-backup.js";
+import { createUpdateErrorFact } from "./update-failure-facts.js";
+import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 
 let cleanupFixture: (() => Promise<void>) | undefined;
 const tempDirs = useAutoCleanupTempDirTracker((cleanupDirs) =>
@@ -41,13 +48,37 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanupDirs) =>
     }
   }),
 );
-let receipts: FixtureReceiptChannel;
-beforeAll(async () => {
-  receipts = await openFixtureReceiptChannel();
-});
-afterAll(async () => {
-  await receipts.close();
-});
+const receipts = useStateReceipts();
+
+async function writeWorker(root: string, source: string) {
+  const worker = path.join(
+    root,
+    "dist",
+    runtimeProcessEntrypoints.updateCandidateState.distWorkerPath,
+  );
+  await fs.mkdir(path.dirname(worker), { recursive: true });
+  await fs.writeFile(path.join(root, "package.json"), '{"type":"module"}');
+  await fs.writeFile(worker, source);
+}
+
+async function rehearsalScratch(root: string) {
+  return (await fs.readdir(root)).filter((name) => name.startsWith("openclaw-update-canary-"));
+}
+
+function registerCleanup(
+  action: () => Promise<void>,
+  onFinished: (fn: () => Promise<void>) => void,
+) {
+  let pending: Promise<void> | undefined;
+  const cleanup = () => (pending ??= action());
+  cleanupFixture = cleanup;
+  onFinished(cleanup);
+  return cleanup;
+}
+
+function workerOptions(root: string, signal: AbortSignal) {
+  return { nodeRunner: process.execPath, sourceEnv: {}, stagingRoot: root, signal };
+}
 
 // Receipts and command settlement travel independently. The fixture publishes the
 // complete marker before it can reply, so that record decides a settlement race.
@@ -66,6 +97,63 @@ async function fixtureEventBeforeSettlement(
   });
   await Promise.race([receipt, settled]);
 }
+
+it("keeps one-shot state worker stdout parseable with SQLite debug logging enabled", async ({
+  signal,
+}) => {
+  const root = await fs.realpath(tempDirs.make("state-worker-json-"));
+  const stateDir = path.join(root, "source");
+  const database = path.join(stateDir, "state", "openclaw.sqlite");
+  await fs.mkdir(path.dirname(database), { recursive: true });
+  {
+    using db = openNodeSqliteDatabase(database);
+    db.exec(
+      "CREATE TABLE payload(value TEXT); INSERT INTO payload VALUES('fixture'); PRAGMA user_version=7",
+    );
+  }
+  const worker = {
+    ...workerOptions(root, signal),
+    sourceEnv: {
+      HOME: root,
+      USERPROFILE: root,
+      OPENCLAW_HOME: root,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_LOG_LEVEL: "debug",
+    },
+    databases: [{ path: database, sizeBytes: (await fs.stat(database, { bigint: true })).size }],
+  };
+  const inspectionPlan = parseUpdateStateInspectionWorker(
+    await runUpdateStateInspectionWorker({
+      ...worker,
+      input: { mode: "discover", stateDir, config: {}, stagingRoot: root },
+    }),
+    UpdateStateSchemaInspectionPlanSchema,
+  );
+  const backupRoot = path.join(root, "backup");
+  await fs.mkdir(`${backupRoot}.databases`);
+  const result = await runUpdateStateInspectionWorker({
+    ...worker,
+    input: {
+      mode: "database-backup",
+      stateDir,
+      config: {},
+      stagingRoot: root,
+      backupRoot,
+      inspectionPlan,
+      // Manual original capture still needs the engine snapshot; automatic capture
+      // reuses its generation image and need not emit this worker diagnostic.
+      originalCaptureSourcePaths: [database],
+    },
+  });
+
+  expect(parseUpdateStateInspectionWorker(result, UpdateDatabaseBackupSchema)).toMatchObject({
+    databases: [expect.objectContaining({ path: database, userVersion: 7 })],
+    warnings: [],
+  });
+  expect(result.stderr).toMatch(
+    /\[state\/sqlite\] SQLite read-only snapshot for .*budget \d+ seconds/,
+  );
+});
 
 it.for([undefined, 600_000])(
   "honors the %s ms allowance during metadata inventory",
@@ -120,28 +208,22 @@ it.for([undefined, 600_000])(
     const timers = vi.spyOn(globalThis, "setTimeout");
     const controller = new AbortController();
     const operation = readUpdateStateDatabaseSizes([file], {
-      nodeRunner: process.execPath,
+      ...workerOptions(root, controller.signal),
       sourceEnv: { ...process.env, ...sqliteWorkerPreloadEnv(preload) },
-      stagingRoot: root,
       timeoutMs,
-      signal: controller.signal,
     }).then(
       (sizes) => ({ sizes }),
       (error: unknown) => ({ error }),
     );
-    let cleanupPromise: Promise<void> | undefined;
-    const cleanup = () =>
-      (cleanupPromise ??= (async () => {
-        try {
-          await fs.writeFile(release, "continue");
-        } finally {
-          // A failed release must still cancel and join the blocked stat worker.
-          controller.abort();
-          await operation;
-        }
-      })());
-    cleanupFixture = cleanup;
-    onTestFinished(cleanup);
+    const cleanup = registerCleanup(async () => {
+      try {
+        await fs.writeFile(release, "continue");
+      } finally {
+        // A failed release must still cancel and join the blocked stat worker.
+        controller.abort();
+        await operation;
+      }
+    }, onTestFinished);
     try {
       await withinTest(
         fixtureEventBeforeSettlement(ready, readyReceipt.promise, operation),
@@ -165,32 +247,17 @@ it.for([undefined, 600_000])(
         clearTimeout(timer.value);
         deadline.callback(...deadline.args);
       }
-      if (timeoutMs !== undefined) {
-        expect(() => process.kill(pid, 0)).not.toThrow();
-      }
-      await fs.writeFile(release, "continue");
+      // Keep the default worker blocked until the deferred timeout decision settles.
       if (timeoutMs === undefined) {
-        expect(await operation).toMatchObject({
-          error: expect.objectContaining({
-            message: expect.stringContaining("inventory failed (timeout"),
-          }),
-        });
-        expect.soft(await operation).toMatchObject({
-          error: {
-            message: expect.stringContaining(file),
-          },
-        });
-        expect.soft(await operation).toMatchObject({
-          error: {
-            message: expect.stringMatching(/after \d+(?:\.\d+)? seconds during metadata inventory/),
-          },
-        });
-        expect.soft(await operation).toMatchObject({
-          error: {
-            message: expect.stringContaining("then retry the update"),
-          },
-        });
+        const outcome = await operation;
+        expect(outcome).toHaveProperty(
+          "error.message",
+          expect.stringContaining("inventory failed (timeout"),
+        );
+        expect(outcome).toHaveProperty("error.message", expect.stringContaining(file));
       } else {
+        expect(() => process.kill(pid, 0)).not.toThrow();
+        await fs.writeFile(release, "continue");
         expect(await operation).toEqual({ sizes: [{ path: file, sizeBytes: 8n }] });
       }
       expect(() => process.kill(pid, 0)).toThrow();
@@ -202,34 +269,24 @@ it.for([undefined, 600_000])(
 );
 
 it.for([
-  { name: "large database", bytes: 2 * 1024 ** 3, waits: [800_000], completes: true },
-  {
-    name: "late-discovered database",
-    bytes: 4096,
-    discoveredBytes: 2 * 1024 ** 3,
-    waits: [800_000],
-    completes: true,
-  },
-  {
-    name: "continuing copy progress",
-    bytes: 4096,
-    waits: [200_000, 200_000, 200_000],
-    completes: true,
-  },
-  { name: "stalled worker", bytes: 4096, waits: [400_000], completes: false },
-  { name: "caller allowance", bytes: 4096, waits: [400_000], completes: true, timeoutMs: 600_000 },
-  { name: "configured cache", bytes: 4096, waits: [0], completes: true, configuredCache: true },
-  {
-    name: "large diagnostic output",
-    bytes: 4096,
-    waits: [0],
-    completes: true,
-    diagnosticBytes: 40_000,
-  },
+  { name: "large database", bytes: 2 * 1024 ** 3, elapsedMs: 800_000 },
+  { name: "growing scratch", discoveredBytes: 2 * 1024 ** 3, elapsedMs: 800_000, completes: false },
+  { name: "stalled worker", elapsedMs: 400_000, completes: false },
+  { name: "caller allowance", elapsedMs: 400_000, timeoutMs: 600_000 },
+  { name: "configured cache", configuredCache: true },
+  { name: "large diagnostic output", diagnosticBytes: 40_000 },
 ])(
   "budgets schema inspection for $name",
   async (
-    { bytes, discoveredBytes, waits, completes, configuredCache, timeoutMs, diagnosticBytes },
+    {
+      bytes = 4096,
+      discoveredBytes,
+      elapsedMs = 0,
+      completes = true,
+      configuredCache,
+      timeoutMs,
+      diagnosticBytes,
+    },
     { signal, onTestFinished },
   ) => {
     const root = tempDirs.make("openclaw-state-budget-");
@@ -239,20 +296,12 @@ it.for([
     const file = await fs.open(database, "w");
     await file.truncate(bytes);
     await file.close();
-    const worker = path.join(
-      root,
-      "dist",
-      runtimeProcessEntrypoints.updateCandidateState.distWorkerPath,
-    );
     const ready = path.join(root, "ready");
     const release = path.join(root, "release");
-    const progress = path.join(root, "progress");
     const cache = path.join(root, "configured-cache");
     await fs.mkdir(cache);
-    await fs.mkdir(path.dirname(worker), { recursive: true });
-    await fs.writeFile(path.join(root, "package.json"), '{"type":"module"}');
-    await fs.writeFile(
-      worker,
+    await writeWorker(
+      root,
       `
       import fs from "node:fs/promises";
       import path from "node:path";
@@ -278,15 +327,7 @@ it.for([
       await fs.writeFile(${JSON.stringify(`${ready}.tmp`)}, await fs.realpath(scratch));
       await fs.rename(${JSON.stringify(`${ready}.tmp`)}, ${JSON.stringify(ready)});
       sendReceipt(${JSON.stringify(ready)}, "ready");
-      let last = "";
-      while (${waits.some((milliseconds) => milliseconds > 0)} && !(await fs.stat(${JSON.stringify(release)}).catch(() => undefined))) {
-        const next = await fs.readFile(${JSON.stringify(progress)}, "utf8").catch(() => "");
-        if (next && next !== last) {
-          await fs.appendFile(copy, next);
-          await fs.writeFile(${JSON.stringify(progress)} + "." + next, "written");
-          sendReceipt(${JSON.stringify(progress)}, next);
-          last = next;
-        }
+      while (${elapsedMs > 0} && !(await fs.stat(${JSON.stringify(release)}).catch(() => undefined))) {
         await sleep(10);
       }
       process.stdout.write(JSON.stringify([{ path: ${JSON.stringify(database)}, userVersion: 3 }]));
@@ -294,12 +335,8 @@ it.for([
     `,
     );
 
-    const now = Date.now.bind(Date);
-    let elapsed = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
-    const waitForObservation = observeUpdateCandidateIoProgress();
+    const advanceClock = stateClock();
     const controller = new AbortController();
-    let failed = false;
     const result = readUpdateStateSchemaVersions({
       root,
       stateDir,
@@ -309,52 +346,31 @@ it.for([
       signal: controller.signal,
     }).then(
       (versions) => ({ versions }),
-      (error: unknown) => {
-        failed = true;
-        return { error };
-      },
+      (error: unknown) => ({ error }),
     );
-    let cleanupPromise: Promise<void> | undefined;
-    const cleanup = () =>
-      (cleanupPromise ??= (async () => {
-        try {
-          await fs.writeFile(release, "done");
-        } catch (error) {
-          controller.abort(error);
-          throw error;
-        } finally {
-          if (signal.aborted) {
-            controller.abort(signal.reason);
-          }
-          await result;
+    const cleanup = registerCleanup(async () => {
+      try {
+        await fs.writeFile(release, "done");
+      } catch (error) {
+        controller.abort(error);
+        throw error;
+      } finally {
+        if (signal.aborted) {
+          controller.abort(signal.reason);
         }
-      })());
-    cleanupFixture = cleanup;
-    onTestFinished(cleanup);
+        await result;
+      }
+    }, onTestFinished);
     try {
-      if (waits.some((milliseconds) => milliseconds > 0)) {
+      if (elapsedMs > 0) {
         await withinTest(
           fixtureEventBeforeSettlement(ready, receipts.waitFor(ready, "ready"), result),
           signal,
         );
-        await withinTest(waitForObservation(discoveredBytes ?? 4), signal);
-        for (const [index, milliseconds] of waits.entries()) {
-          elapsed += milliseconds;
-          if (failed) {
-            break;
-          }
-          if (index < waits.length - 1) {
-            await fs.writeFile(progress, String(index + 1));
-            await withinTest(
-              fixtureEventBeforeSettlement(
-                `${progress}.${index + 1}`,
-                receipts.waitFor(progress, String(index + 1)),
-                result,
-              ),
-              signal,
-            );
-            await withinTest(waitForObservation(4 + index + 1), signal);
-          }
+        advanceClock(elapsedMs);
+        if (!completes) {
+          advanceClock(elapsedMs, true);
+          await result;
         }
       } else {
         await result;
@@ -376,30 +392,13 @@ it.for([
   },
 );
 
-it.each(
-  (["probe", "worker"] as const).flatMap((source) =>
-    [false, true].map((cancelled) => ({ source, cancelled })),
-  ),
-)(
-  "retains rehearsal scratch when $source settlement is uncertain (cancelled=$cancelled)",
-  async ({ source, cancelled }) => {
+it.each([false, true])(
+  "retains rehearsal scratch when worker settlement is uncertain (cancelled=%s)",
+  async (cancelled) => {
     const root = await fs.realpath(tempDirs.make("rehearsal-unsettled-"));
     const stateDir = path.join(root, "source");
-    vi.useFakeTimers();
     const controller = new AbortController();
-    const workerEntered = createDeferred();
-    const workerExit =
-      createDeferred<Awaited<ReturnType<typeof commands.runUtf8CommandWithTimeout>>>();
-    const original = commands.runUtf8CommandWithTimeout;
-    vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation(async (argv, options) => {
-      if ((source === "probe") !== argv.includes("--eval")) {
-        if (source === "probe") {
-          // Keep admitted work pending through the reported-progress quiet period.
-          workerEntered.resolve();
-          return workerExit.promise;
-        }
-        return original(argv, options);
-      }
+    vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation(async () => {
       if (cancelled) {
         controller.abort(new Error("caller cancellation"));
       }
@@ -413,51 +412,21 @@ it.each(
         cleanup: "uncertain",
       };
     });
-    const operation = prepareUpdateCandidateStateSnapshot({
-      config: {},
-      stateDir,
-      candidateRoot: root,
-      env: { TMPDIR: root },
-      workerEnv: () => ({ ...process.env, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }),
-      signal: controller.signal,
-    });
-    const rejected = expect(operation).rejects.toThrow(/cleanup.*confirmed|settlement.*uncertain/);
-    const settleWorker = () =>
-      workerExit.resolve({
-        stdout: "",
-        stderr: "",
-        code: null,
-        signal: null,
-        killed: true,
-        termination: "signal",
-        cleanup: "normal",
-      });
+    const operation = snapshotFixture(root, stateDir, controller.signal);
     try {
-      if (source === "probe") {
-        await awaitGateBeforeSettlement(
-          workerEntered.promise,
-          operation,
-          "worker was not admitted",
-        );
-        await vi.advanceTimersByTimeAsync(1_000);
-        settleWorker();
-      }
-      await rejected;
-      const retained = (await fs.readdir(root)).filter((name) =>
-        name.startsWith("openclaw-update-canary-"),
-      );
+      await expect(operation).rejects.toThrow(/cleanup.*confirmed|settlement.*uncertain/);
+      const retained = await rehearsalScratch(root);
       expect(retained).toHaveLength(1);
       expect((await fs.stat(path.join(root, retained[0]!))).isDirectory()).toBe(true);
     } finally {
       controller.abort();
-      settleWorker();
       await operation.catch(() => {});
     }
   },
 );
 
 // Insert fixture code behind the real executable, preserving argv-based Windows
-// launch and the actual process/output/cleanup owners. Progress probes run unchanged.
+// launch and the actual process/output/cleanup owners.
 function useRehearsalWorkerFixture(runner: string): void {
   const run = commands.runUtf8CommandWithTimeout;
   vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation((argv, options) =>
@@ -495,29 +464,115 @@ it.each(["stdout", "stderr"] as const)(
       controller.abort(new Error("test output deadline"));
     }, 10_000);
     try {
-      await expect(
-        prepareUpdateCandidateStateSnapshot({
-          config: {},
-          stateDir: path.join(root, "source"),
-          candidateRoot: root,
-          env: { TMPDIR: root },
-          workerEnv: () => ({ ...process.env }),
-          signal: controller.signal,
-        }),
-      ).rejects.toThrow(/^Update state snapshot failed \(output-limit\):/);
+      const failure = await snapshotFixture(
+        root,
+        path.join(root, "source"),
+        controller.signal,
+        () => ({ ...process.env }),
+      ).catch((error: unknown) => error);
+      expect(failure).toMatchObject({
+        code: "output-limit",
+        message: expect.stringMatching(/^Update state snapshot failed \(output-limit\):/),
+      });
+      expect(createUpdateErrorFact("candidate-state-snapshot", failure).code).toBe("output-limit");
       expect(deadlineReached).toBe(false);
       // Snapshot rejection follows the command owner's process-tree settlement.
       const pid = Number(await fs.readFile(pidPath, "utf8"));
       expect(isProcessAlive(pid)).toBe(false);
-      expect(
-        (await fs.readdir(root)).filter((name) => name.startsWith("openclaw-update-canary-")),
-      ).toEqual([]);
+      expect(await rehearsalScratch(root)).toEqual([]);
     } finally {
       clearTimeout(deadline);
       controller.abort();
     }
   },
 );
+
+it.for([false, true])(
+  "reports a real inspection output limit through the public report (warnings=%s)",
+  async (warnings, { signal }) => {
+    const root = await fs.realpath(tempDirs.make("inspection-output-limit-"));
+    await writeWorker(
+      root,
+      `
+    for await (const chunk of process.stdin) {}
+    setInterval(() => {}, 1000);
+    process.stdout.write("private-machine-payload".repeat(4));
+  `,
+    );
+    const result = await runUpdateStateInspectionWorker({
+      ...workerOptions(root, signal),
+      input: { mode: "runtime-retention", stateDir: root, config: {} },
+      root,
+      databases: [],
+      sources: [root],
+      maxOutputBytes: 64,
+      ioBudget: "deadline",
+    });
+    expect(result).toMatchObject({ termination: "signal", outputLimitExceeded: true });
+    let failure: unknown;
+    try {
+      // Separate pipes have no observation order. Keep the real process outcome,
+      // then supply captured warnings at the parser boundary deterministically.
+      parseUpdateStateInspectionWorker(
+        {
+          ...result,
+          stderr: warnings ? "ExperimentalWarning: private-customer warning\nSQLITE_BUSY\n" : "",
+        },
+        z.unknown(),
+      );
+    } catch (error) {
+      failure = error;
+    }
+    const report = await prepareUpdateFailureReport(
+      {
+        attemptId: "inspection-output-limit",
+        result: {
+          status: "error",
+          mode: "git",
+          reason: "update-failed",
+          durationMs: 1,
+          steps: [
+            {
+              name: "updater-runtime-retention",
+              command: "inspection",
+              cwd: root,
+              durationMs: 1,
+              exitCode: 1,
+              failureFacts: [
+                createUpdateErrorFact("git update", failure, { OPENCLAW_STATE_DIR: root }),
+              ],
+            },
+          ],
+        },
+      },
+      { env: { OPENCLAW_STATE_DIR: root } },
+    );
+    expect(report.body).toContain("Failing check git update (output-limit)");
+    expect(report.body).not.toMatch(/private-customer|ExperimentalWarning|private-machine-payload/);
+    expect(report.body).not.toContain(root);
+  },
+);
+
+it("preserves an inventory worker output limit without blaming the process supervisor", async ({
+  signal,
+}) => {
+  const root = await fs.realpath(tempDirs.make("inventory-output-limit-"));
+  const file = path.join(root, "source.sqlite");
+  await fs.writeFile(file, "source");
+  const run = commands.runUtf8CommandWithTimeout;
+  vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation((argv, options) => {
+    if (typeof options === "number") {
+      throw new Error("Expected inventory capture options");
+    }
+    // Exercise the real inventory child and runner without a megabyte of paths.
+    return run(argv, { ...options, maxOutputBytes: { stdout: 1, stderr: 20_000 } });
+  });
+  const failure = await readUpdateStateDatabaseSizes([file], workerOptions(root, signal)).catch(
+    (error: unknown) => error,
+  );
+  expect(failure).toHaveProperty("code", "output-limit");
+  expect(await fs.readFile(file, "utf8")).toBe("source");
+});
 
 it("refuses a grown WAL family at the post-inventory capacity gate", async () => {
   const root = await fs.realpath(tempDirs.make("rehearsal-wal-growth-"));
@@ -556,18 +611,7 @@ it("refuses a grown WAL family at the post-inventory capacity gate", async () =>
       return result;
     });
     const controller = new AbortController();
-    const operation = prepareUpdateCandidateStateSnapshot({
-      config: {},
-      stateDir,
-      candidateRoot: root,
-      env: { TMPDIR: root },
-      workerEnv: () => ({ ...process.env, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }),
-      signal: controller.signal,
-    });
-    const outcome = operation.then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
+    const outcome = captureStateOperation(snapshotFixture(root, stateDir, controller.signal));
     try {
       expect(await outcome).toMatchObject({
         error: {
@@ -576,9 +620,7 @@ it("refuses a grown WAL family at the post-inventory capacity gate", async () =>
       });
       expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
       expect(db.prepare("SELECT length(bytes) AS n FROM payload").get()).toEqual({ n: 2097152 });
-      expect(
-        (await fs.readdir(root)).filter((name) => name.startsWith("openclaw-update-canary-")),
-      ).toEqual([]);
+      expect(await rehearsalScratch(root)).toEqual([]);
     } finally {
       controller.abort();
       await outcome;

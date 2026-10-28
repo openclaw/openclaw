@@ -77,11 +77,13 @@ export function listSetupNativeSessionCatalogs(
 export function applySetupNativeSessionCatalogPreference(
   params: CatalogOptions & {
     enabled: boolean;
+    onlyUnset?: boolean;
   },
 ): OpenClawConfig {
   return applyNativeSessionCatalogPreference(
     params.config,
     listSetupNativeSessionCatalogs(params).map(({ pluginId }) => pluginId),
     params.enabled,
+    params.onlyUnset,
   );
 }

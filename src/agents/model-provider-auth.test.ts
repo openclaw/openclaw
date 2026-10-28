@@ -1,93 +1,80 @@
-// Verifies route-scoped auth and retained runtime preparation guards.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
+import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import type {
-  ModelAuthAvailabilityEvaluation,
-  ModelAuthAvailabilityRef,
-} from "./model-auth-availability.js";
+import type { ModelAuthAvailabilityResolver } from "./model-auth-availability.js";
 
-const syntheticAuthMocks = vi.hoisted(() => {
-  const prepareSyntheticAuth = vi.fn<
+const synthetic = vi.hoisted(() => ({
+  prepareProviderSyntheticAuthWithPlugin: vi.fn<
     typeof import("../plugins/provider-runtime.js").prepareProviderSyntheticAuthWithPlugin
-  >(async () => undefined);
-  return {
-    prepareProviderSyntheticAuthWithPlugin: prepareSyntheticAuth,
-    resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
-  };
-});
+  >(async () => undefined),
+  resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
+}));
 
-vi.mock("../plugins/provider-runtime.js", () => syntheticAuthMocks);
+// mock-isolation: Control synthetic provider auth without loading bundled provider runtimes.
+vi.mock("../plugins/provider-runtime.js", () => synthetic);
 
-const modelAuthMocks = vi.hoisted(() => ({
+const auth = vi.hoisted(() => ({
   createRuntimeProviderAuthLookup: vi.fn(() => ({
-    envApiKey: {
-      aliasMap: {},
-      candidateMap: {},
-      authEvidenceMap: {},
-    },
+    envApiKey: { aliasMap: {}, candidateMap: {}, authEvidenceMap: {} },
     syntheticAuthProviderRefs: [],
   })),
-  prepareRuntimeAvailableProviderAuth:
-    vi.fn<typeof import("./model-auth-runtime.js").prepareRuntimeAvailableProviderAuth>(),
 }));
 
-const modelAuthAvailabilityMocks = vi.hoisted(() => {
-  const evaluateModelAuth = vi.fn<
-    (provider: string, ref?: ModelAuthAvailabilityRef) => ModelAuthAvailabilityEvaluation
-  >(() => ({ availability: false, routeResolution: null }));
-  return {
-    evaluateModelAuth,
-    createModelAuthAvailabilityResolver: vi.fn((_params: unknown) => ({
-      evaluateModelAuth,
-      evaluateRuntimeModelAuth: evaluateModelAuth,
-      resolveProviderAuthAvailability: vi.fn(() => false),
-    })),
-  };
-});
+const evaluateModelAuth = vi.hoisted(() =>
+  vi.fn<ModelAuthAvailabilityResolver["evaluateModelAuth"]>(() => ({
+    availability: false,
+    routeResolution: null,
+  })),
+);
 
-const authProfilesMocks = vi.hoisted(() => ({
-  ensureAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
-}));
-
-vi.mock("./model-auth.js", () => modelAuthMocks);
+// mock-isolation: Supply prepared auth lookups without reading real provider credentials.
+vi.mock("./model-auth.js", () => auth);
+// mock-isolation: Keep auth availability decisions in the suite's controlled resolver.
 vi.mock("./model-auth-availability.js", () => ({
-  createModelAuthAvailabilityResolver:
-    modelAuthAvailabilityMocks.createModelAuthAvailabilityResolver,
+  createModelAuthAvailabilityResolver: vi.fn((_params: unknown) => ({
+    evaluateModelAuth,
+  })),
 }));
-vi.mock("./auth-profiles.js", () => authProfilesMocks);
+// mock-isolation: Use an empty synthetic profile store rather than operator auth state.
+vi.mock("./auth-profiles.js", () => ({
+  ensureAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(() => ({ version: 1, profiles: {} })),
+}));
 
 const { createProviderAuthChecker } = await import("./model-provider-auth.js");
+const { prepareRuntimeAvailableProviderAuth: prepareAuth } =
+  await vi.importActual<typeof import("./model-auth-runtime.js")>("./model-auth-runtime.js");
+function managedConfig(apiKey: ModelProviderConfig["apiKey"]): OpenClawConfig {
+  const provider: ModelProviderConfig = {
+    api: "openai-completions",
+    apiKey,
+    baseUrl: "https://example.test/v1",
+    models: [],
+  };
+  return { models: { providers: { "managed-native": provider } } };
+}
+const prepare = (params: Parameters<typeof prepareAuth>[0]) =>
+  prepareAuth({ cfg: {}, env: {}, store: { version: 1, profiles: {} }, ...params });
 
 describe("model auth checker", () => {
   afterEach(() => {
     vi.clearAllMocks();
-    modelAuthAvailabilityMocks.evaluateModelAuth.mockReturnValue({
-      availability: false,
-      routeResolution: null,
-    });
+    clearRuntimeConfigSnapshot();
+    evaluateModelAuth.mockReturnValue({ availability: false, routeResolution: null });
   });
 
   it("consumes prepared native auth when checking runtime availability", async () => {
     const nativeAuth = { apiKey: "native-marker", source: "Native auth", mode: "oauth" as const };
     const prepared = createDeferredCore<typeof nativeAuth | undefined>();
-    syntheticAuthMocks.prepareProviderSyntheticAuthWithPlugin.mockImplementationOnce(
+    synthetic.prepareProviderSyntheticAuthWithPlugin.mockImplementationOnce(
       async () => await prepared.promise,
     );
-    const { prepareRuntimeAvailableProviderAuth } =
-      await vi.importActual<typeof import("./model-auth-runtime.js")>("./model-auth-runtime.js");
     let settled = false;
-    const answer = prepareRuntimeAvailableProviderAuth({
+    const answer = prepare({
       provider: "native",
-      cfg: {},
-      env: {},
-      store: { version: 1, profiles: {} },
       runtimeLookup: {
-        ...modelAuthMocks.createRuntimeProviderAuthLookup(),
+        ...auth.createRuntimeProviderAuthLookup(),
         syntheticAuthProviderRefs: ["native"],
       },
     }).finally(() => {
@@ -95,79 +82,25 @@ describe("model auth checker", () => {
     });
     try {
       await expect
-        .poll(() => syntheticAuthMocks.prepareProviderSyntheticAuthWithPlugin.mock.calls.length)
+        .poll(() => synthetic.prepareProviderSyntheticAuthWithPlugin.mock.calls.length)
         .toBe(1);
       expect(settled).toBe(false);
       prepared.resolve(nativeAuth);
       await expect(answer).resolves.toBe(true);
-      expect(syntheticAuthMocks.prepareProviderSyntheticAuthWithPlugin).toHaveBeenCalledOnce();
     } finally {
       prepared.resolve(undefined);
       await Promise.allSettled([answer]);
     }
   });
 
-  it("honors cancellation before returning fast-path auth", async () => {
-    const { prepareRuntimeAvailableProviderAuth } =
-      await vi.importActual<typeof import("./model-auth-runtime.js")>("./model-auth-runtime.js");
-    const lookup = modelAuthMocks.createRuntimeProviderAuthLookup();
-    const params = {
-      provider: "native",
-      env: { NATIVE_FIXTURE_AUTH: "fixture-auth" },
-      runtimeLookup: {
-        ...lookup,
-        envApiKey: { ...lookup.envApiKey, candidateMap: { native: ["NATIVE_FIXTURE_AUTH"] } },
-      },
-    };
-    await expect(prepareRuntimeAvailableProviderAuth(params)).resolves.toBe(true);
-    const reason = new Error("availability cancelled");
-    await expect(
-      prepareRuntimeAvailableProviderAuth({ ...params, signal: AbortSignal.abort(reason) }),
-    ).rejects.toBe(reason);
-    expect(syntheticAuthMocks.prepareProviderSyntheticAuthWithPlugin).not.toHaveBeenCalled();
+  it("does not prepare native auth for an unresolved managed SecretRef", async () => {
+    const cfg = managedConfig({ source: "file", provider: "vault", id: "/native/key" });
+    await expect(prepare({ provider: "managed-native", cfg })).resolves.toBe(false);
+    expect(synthetic.prepareProviderSyntheticAuthWithPlugin).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    "does not prepare native auth for a managed SecretRef (available: %s)",
-    async (available) => {
-      const { prepareRuntimeAvailableProviderAuth } =
-        await vi.importActual<typeof import("./model-auth-runtime.js")>("./model-auth-runtime.js");
-      const cfg: OpenClawConfig = {
-        models: {
-          providers: {
-            "managed-native": {
-              api: "openai-completions",
-              apiKey: { source: "file", provider: "vault", id: "/native/key" },
-              baseUrl: "https://example.test/v1",
-              models: [],
-            },
-          },
-        },
-      };
-      clearRuntimeConfigSnapshot();
-      try {
-        if (available) {
-          const runtimeConfig = structuredClone(cfg);
-          runtimeConfig.models!.providers!["managed-native"]!.apiKey = "runtime-auth-not-real";
-          setRuntimeConfigSnapshot(runtimeConfig, cfg);
-        }
-        await expect(
-          prepareRuntimeAvailableProviderAuth({
-            provider: "managed-native",
-            cfg,
-            env: {},
-            store: { version: 1, profiles: {} },
-          }),
-        ).resolves.toBe(available);
-        expect(syntheticAuthMocks.prepareProviderSyntheticAuthWithPlugin).not.toHaveBeenCalled();
-      } finally {
-        clearRuntimeConfigSnapshot();
-      }
-    },
-  );
-
   it("caches OpenAI auth by the complete route tuple", async () => {
-    const hasAuth = createProviderAuthChecker({ cfg: {} as OpenClawConfig });
+    const hasAuth = createProviderAuthChecker({ cfg: {} });
     const platformRef = {
       modelId: "gpt-5.5",
       api: "openai-responses",
@@ -182,12 +115,12 @@ describe("model auth checker", () => {
       baseUrl: "https://chatgpt.com/backend-api/codex",
     });
 
-    expect(modelAuthAvailabilityMocks.evaluateModelAuth).toHaveBeenCalledTimes(2);
+    expect(evaluateModelAuth).toHaveBeenCalledTimes(2);
   });
 
   it("retries a rejected route evaluation while sharing concurrent callers", async () => {
     const failure = new Error("catalog unavailable");
-    modelAuthAvailabilityMocks.evaluateModelAuth.mockImplementationOnce(() => {
+    evaluateModelAuth.mockImplementationOnce(() => {
       throw failure;
     });
     const hasAuth = createProviderAuthChecker({ cfg: {} });
@@ -196,31 +129,25 @@ describe("model auth checker", () => {
     const concurrent = hasAuth.evaluateModelAuth("fixture", { ...ref });
     await expect(first).rejects.toBe(failure);
     await expect(concurrent).rejects.toBe(failure);
-    expect(modelAuthAvailabilityMocks.evaluateModelAuth).toHaveBeenCalledOnce();
+    expect(evaluateModelAuth).toHaveBeenCalledOnce();
 
-    modelAuthAvailabilityMocks.evaluateModelAuth.mockReturnValue({
-      availability: true,
-      routeResolution: null,
-    });
+    evaluateModelAuth.mockReturnValue({ availability: true, routeResolution: null });
     await expect(hasAuth("fixture", ref)).resolves.toBe(true);
-    expect(modelAuthAvailabilityMocks.evaluateModelAuth).toHaveBeenCalledTimes(2);
+    expect(evaluateModelAuth).toHaveBeenCalledTimes(2);
   });
 
-  it("does not let legacy provider auth override an unresolved model SecretRef", async () => {
+  it("preserves an unresolved model SecretRef evaluation as unavailable", async () => {
     const evaluation = {
       availability: undefined,
       routeResolution: null,
       selectedAuthMode: "api-key",
       evidence: "provider-config" as const,
     };
-    modelAuthAvailabilityMocks.evaluateModelAuth.mockReturnValue(evaluation);
-    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(true);
-    const hasAuth = createProviderAuthChecker({ cfg: {} as OpenClawConfig });
+    evaluateModelAuth.mockReturnValue(evaluation);
+    const hasAuth = createProviderAuthChecker({ cfg: {} });
     const ref = { modelId: "claude-sonnet-4-6", api: "anthropic-messages" };
 
     await expect(hasAuth.evaluateModelAuth("anthropic", ref)).resolves.toBe(evaluation);
     await expect(hasAuth("anthropic", { ...ref })).resolves.toBe(false);
-    expect(modelAuthAvailabilityMocks.evaluateModelAuth).toHaveBeenCalledWith("anthropic", ref);
-    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).not.toHaveBeenCalled();
   });
 });

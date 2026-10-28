@@ -6,11 +6,10 @@ extension ChatSessionSidebar {
     func row(
         for node: ChatSessionSidebarModel.Node,
         isChild: Bool,
-        now: Date,
-        ownership: ChatSidebarOwnership,
-        previewRequest: ChatSessionSidebarPreviews.Request,
+        context: RowContext,
         menu: AnyView? = nil) -> some View
     {
+        let now = context.now
         let session = node.session
         let pageAgent = self.showsAllAgents && self.query.isEmpty && !isChild && session.pinned == true
             ? self.sessionAgentID(session)
@@ -32,11 +31,11 @@ extension ChatSessionSidebar {
             isConnected: self.viewModel.healthOK,
             webFacts: agentID.flatMap { self.viewModel.webConversation?.sidebarFacts(
                 for: .init(agentId: $0, sessionKey: session.key)) },
-            preview: self.rowPreview(for: session, previewRequest: previewRequest),
+            preview: self.rowPreview(for: session, previewRequest: context.previewRequest),
             now: now)
         let viewers = Set((self.sidebarPeople?.people ?? []).filter { $0.watchedSessions.contains(session.key) }
             .compactMap(\.profileID))
-        let attribution = ownership.attribution(
+        let attribution = context.ownership.attribution(
             for: session,
             options: self.filterOptions,
             isChild: isChild,
@@ -85,10 +84,10 @@ extension ChatSessionSidebar {
         .contextMenu {
             if let menu {
                 menu
-            } else if self.selectedBatchRows.count > 1,
+            } else if context.selectedRows.count > 1,
                       self.batch.selection.keys.contains(self.interactionIdentity(session))
             {
-                self.batchMenu.disabled(self.batch.busy)
+                self.batchMenu(rows: context.selectedRows).disabled(self.batch.busy)
             } else {
                 self.contextMenu(for: session, isChild: isChild, now: now)
             }

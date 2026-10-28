@@ -1,7 +1,3 @@
-/**
- * Amazon Bedrock Mantle discovery and bearer-token handling. It resolves
- * explicit tokens, IAM-generated tokens, model catalogs, and implicit provider config.
- */
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -77,9 +73,6 @@ function mantleEndpoint(region: string): string {
 }
 
 /**
- * Resolve a bearer token for Mantle authentication.
- *
- * Returns the value of AWS_BEARER_TOKEN_BEDROCK if set, undefined otherwise.
  * When no explicit token is set, `resolveImplicitMantleProvider` will attempt
  * to generate one from IAM credentials via `@aws/bedrock-token-generator`.
  */
@@ -91,8 +84,6 @@ export function resolveMantleBearerToken(env: NodeJS.ProcessEnv = process.env): 
 const iamTokenCache = new Map<string, { token: string; expiresAt: number }>();
 /** Last emitted IAM token failure per region, retained until token generation succeeds. */
 const iamTokenFailureDetailByRegion = new Map<string, string>();
-/** Success epoch per region; failures spanning a recovery cannot restore stale diagnostics. */
-const iamTokenSuccessEpochByRegion = new Map<string, number>();
 const IAM_TOKEN_TTL_MS = 7200_000; // Matches the 2h token lifetime we request below.
 
 function resolveMantleRegion(env: NodeJS.ProcessEnv): string {
@@ -131,7 +122,6 @@ export async function generateBearerTokenFromIam(params: {
     return cached.token;
   }
 
-  const successEpoch = iamTokenSuccessEpochByRegion.get(params.region) ?? 0;
   try {
     const { getTokenProvider } = await import("@aws/bedrock-token-generator");
     const token = await getTokenProvider({
@@ -142,16 +132,9 @@ export async function generateBearerTokenFromIam(params: {
     if (expiresAt !== undefined) {
       iamTokenCache.set(params.region, { token, expiresAt });
     }
-    iamTokenSuccessEpochByRegion.set(
-      params.region,
-      (iamTokenSuccessEpochByRegion.get(params.region) ?? 0) + 1,
-    );
     iamTokenFailureDetailByRegion.delete(params.region);
     return token;
   } catch (error) {
-    if (successEpoch !== (iamTokenSuccessEpochByRegion.get(params.region) ?? 0)) {
-      return undefined;
-    }
     // Keep retrying the credential chain while surfacing each distinct failure cause once.
     if (log.isEnabled("debug")) {
       const errorMessage = formatErrorMessage(error);
@@ -167,7 +150,6 @@ export async function generateBearerTokenFromIam(params: {
   }
 }
 
-/** Resolve the actual runtime bearer token for Mantle, generating IAM tokens when needed. */
 export async function resolveMantleRuntimeBearerToken(params: {
   apiKey: string;
   env?: NodeJS.ProcessEnv;
@@ -200,7 +182,6 @@ interface OpenAIModelsResponse {
   data: Array<{ id: string }>;
 }
 
-/** Model ID substrings that indicate reasoning/thinking support. */
 const REASONING_PATTERNS = [
   "thinking",
   "reasoner",
@@ -295,15 +276,23 @@ export async function discoverMantleModels(params: {
       const body = await readMantleModelDiscoveryJson(response);
       const models = body.data
         .filter((model) => model.id?.trim())
-        .map((model) => ({
-          id: model.id,
-          name: model.id,
-          reasoning: inferReasoningSupport(model.id),
-          input: ["text" as const],
-          cost: DEFAULT_COST,
-          contextWindow: DEFAULT_CONTEXT_WINDOW,
-          maxTokens: DEFAULT_MAX_TOKENS,
-        }))
+        .map((model) => {
+          const definition: ModelDefinitionConfig = {
+            id: model.id,
+            name: model.id,
+            reasoning: inferReasoningSupport(model.id),
+            input: ["text"],
+            cost: DEFAULT_COST,
+            contextWindow: DEFAULT_CONTEXT_WINDOW,
+            maxTokens: DEFAULT_MAX_TOKENS,
+          };
+          // Numbered GPT models use Responses; GPT-OSS keeps the generic /v1 route.
+          if (/^openai\.gpt-\d/.test(model.id)) {
+            definition.api = "openai-responses";
+            definition.baseUrl = `${mantleEndpoint(region)}/openai/v1`;
+          }
+          return definition;
+        })
         .toSorted((left, right) => left.id.localeCompare(right.id));
 
       discoveryCache.set(region, { bearerToken, models, fetchedAt: Date.now() });

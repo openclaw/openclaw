@@ -1,9 +1,20 @@
 import Foundation
 import OpenClawIPC
 import OpenClawKit
+import OpenClawNativeState
 
 @MainActor
 final class MacControlLiveOwner: MacControlOwner {
+    func credentials(root: URL, operation: ClientCredentialOperation) async throws -> ClientCredentialResult {
+        guard DeviceCredentialAccess.owns(root: root) else {
+            throw MacControlError(
+                code: "credential_root_unowned",
+                message: "The credential root does not match this app profile.")
+        }
+        let task = Task.detached { try DeviceCredentialAccess.executeForApp(root: root, operation: operation) }
+        return try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+    }
+
     func status() async throws -> MacControlStatus {
         let primary = try await self.primaryStatus()
         let gateways = try await self.gateways(retryKeychainAccess: false)

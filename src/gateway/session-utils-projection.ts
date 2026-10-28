@@ -1,4 +1,8 @@
-import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isDeepStrictEqual } from "node:util";
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { findModelCatalogEntry } from "../agents/model-catalog-lookup.js";
 import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
@@ -6,8 +10,7 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import { buildSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read.js";
 import { captureRuntimeStateEnvironment } from "../config/paths.js";
-import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
-import { resolveConcreteSessionStorePath } from "../config/sessions/paths.js";
+import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { iterateProjectedAgentRunSessionKeys } from "../infra/agent-run-projection.js";
 import {
@@ -15,13 +18,15 @@ import {
   type ProjectedAgentRunIndex,
 } from "../infra/agent-run-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { readRecentSessionUsageFromTranscript as readScopedRecentSessionUsageFromTranscript } from "./session-transcript-usage.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
+import type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 import {
   createSessionRowModelCacheKey,
   type SessionActorProfileIdentity,
   type SessionListRowContext,
 } from "./session-utils-contracts.js";
-import { resolveEstimatedSessionCostUsd } from "./session-utils-core.js";
+import { resolveEstimatedSessionCostUsd, type SessionChildLink } from "./session-utils-core.js";
 import { resolveWorkerPlacementModelRuntime } from "./worker-environments/placement-session-runtime.js";
 
 export function buildSessionListRowMetadataContext(params: {
@@ -56,11 +61,7 @@ export function buildSessionListRowMetadataContext(params: {
     configuredDefaultModelByAgent: new Map(),
     thinkingFactsByModelRef: new Map(),
     findModelCatalogEntry: (catalog, query) => {
-      let entries = catalogEntries.get(catalog);
-      if (!entries) {
-        entries = new Map();
-        catalogEntries.set(catalog, entries);
-      }
+      const entries = getOrCreateWeakOwnerMap(catalogEntries, catalog);
       const key = createSessionRowModelCacheKey(query.provider, query.modelId);
       if (!entries.has(key)) {
         entries.set(key, findModelCatalogEntry(catalog, query));
@@ -68,12 +69,8 @@ export function buildSessionListRowMetadataContext(params: {
       return entries.get(key);
     },
     selectModelCatalogRuntimeEntry: (selection) => {
-      let entries = runtimeEntries.get(selection.routeVariants);
-      if (!entries) {
-        entries = new Map();
-        runtimeEntries.set(selection.routeVariants, entries);
-      }
-      const key = `${selection.runtimeId}\0${createSessionRowModelCacheKey(selection.entry.provider, selection.entry.id)}`;
+      const entries = getOrCreateWeakOwnerMap(runtimeEntries, selection.routeVariants);
+      const key = `${selection.runtimeId}\0${selection.allowApiFallback !== false}\0${createSessionRowModelCacheKey(selection.entry.provider, selection.entry.id)}`;
       let selected = entries.get(key);
       if (!selected) {
         selected = selectModelCatalogRuntimeEntry(selection);
@@ -108,6 +105,56 @@ export function buildProjectedSubagentActivity(
   return active;
 }
 
+/** Child presentation needs live ownership and sharing facts, never the child's stored payload. */
+export function projectSessionRowChildLinks(links: readonly SessionChildLink[] | undefined) {
+  return links?.map(({ key, entry, agentId, storePath }) => ({
+    key,
+    agentId,
+    storePath,
+    parsedKey: parseAgentSessionKey(key),
+    entry: {
+      sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision,
+      updatedAt: entry.updatedAt,
+      archivedAt: entry.archivedAt,
+      status: entry.status,
+      startedAt: entry.startedAt,
+      endedAt: entry.endedAt,
+      spawnedBy: entry.spawnedBy,
+      parentSessionKey: entry.parentSessionKey,
+      sidebarRoot: entry.sidebarRoot,
+      createdActor: entry.createdActor,
+      visibility: entry.visibility,
+      incognito: entry.incognito,
+    },
+  }));
+}
+
+/** The compact producer includes absent fields; compare its whole shape without retaining child entries. */
+export function reuseSessionRowChildLinks(
+  links: readonly SessionChildLink[],
+  previous: Readonly<ReturnType<typeof projectSessionRowChildLinks>>,
+) {
+  return previous &&
+    previous.length === links.length &&
+    links.every(({ key, entry, agentId, storePath }, index) => {
+      const before = previous[index]!;
+      return (
+        key === before.key &&
+        agentId === before.agentId &&
+        storePath === before.storePath &&
+        // SAFETY: projectSessionRowChildLinks creates this compact entry with only SessionEntry keys.
+        (Object.keys(before.entry) as (keyof typeof before.entry)[]).every(
+          (field) =>
+            entry[field] === before.entry[field] ||
+            isDeepStrictEqual(entry[field], before.entry[field]),
+        )
+      );
+    })
+    ? previous
+    : links;
+}
+
 export function resolveTranscriptUsageFallbacks(params: {
   cfg: OpenClawConfig;
   key: string;
@@ -119,16 +166,22 @@ export function resolveTranscriptUsageFallbacks(params: {
   rowContext?: SessionListRowContext;
   agentId: string;
   storeAgentId?: string;
+  transcriptUsage?: SessionTranscriptUsageSnapshot | null;
 }): Map<
   string | undefined,
-  { estimatedCostUsd?: number; totalTokens?: number; totalTokensFresh?: boolean } | null
+  {
+    estimatedCostUsd?: number;
+    totalTokens?: number;
+    totalTokensFresh?: boolean;
+    usageReport?: SessionEntry["usageReport"];
+  } | null
 > {
   const { entry, agentId } = params;
   const fallbacks: ReturnType<typeof resolveTranscriptUsageFallbacks> = new Map();
-  let snapshot: ReturnType<typeof readScopedRecentSessionUsageFromTranscript> | undefined;
+  const snapshot = params.transcriptUsage;
   for (const fallbackModelRef of new Set(params.fallbackModelRefs)) {
     fallbacks.set(fallbackModelRef, null);
-    if (!entry?.sessionId) {
+    if (!entry?.sessionId || !snapshot) {
       continue;
     }
     const resolvedModel = resolveSessionModelIdentityRef(
@@ -150,40 +203,23 @@ export function resolveTranscriptUsageFallbacks(params: {
     ) {
       continue;
     }
-    if (snapshot === undefined) {
-      const storePath =
-        resolveConcreteSessionStorePath(params.storePath) ??
-        resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-      try {
-        snapshot = readScopedRecentSessionUsageFromTranscript(
-          {
-            agentId: params.storeAgentId ?? agentId,
-            sessionEntry: entry,
-            sessionId: entry.sessionId,
-            sessionKey: params.key,
-            storePath,
-          },
-          256 * 1024,
-        );
-      } catch {
-        snapshot = null;
-      }
-    }
-    if (snapshot) {
-      const estimatedCostUsd = resolveEstimatedSessionCostUsd({
-        cfg: params.cfg,
-        provider: snapshot.modelProvider ?? resolvedModel.provider,
-        model: snapshot.model ?? resolvedModel.model,
-        explicitCostUsd: snapshot.costUsd,
-        entry: snapshot,
-        rowContext: params.rowContext,
-      });
-      fallbacks.set(fallbackModelRef, {
-        totalTokens: asPositiveFiniteNumber(snapshot.totalTokens),
-        totalTokensFresh: snapshot.totalTokensFresh === true,
-        estimatedCostUsd,
-      });
-    }
+    const estimatedCostUsd = resolveEstimatedSessionCostUsd({
+      cfg: params.cfg,
+      provider: snapshot.modelProvider ?? resolvedModel.provider,
+      model: snapshot.model ?? resolvedModel.model,
+      explicitCostUsd: snapshot.costUsd,
+      entry: snapshot,
+      rowContext: params.rowContext,
+    });
+    fallbacks.set(fallbackModelRef, {
+      usageReport: snapshot.usageReport,
+      totalTokens:
+        snapshot.usageReport?.state === "available"
+          ? asNonNegativeFiniteNumber(snapshot.totalTokens)
+          : asPositiveFiniteNumber(snapshot.totalTokens),
+      totalTokensFresh: snapshot.totalTokensFresh === true,
+      estimatedCostUsd,
+    });
   }
   return fallbacks;
 }

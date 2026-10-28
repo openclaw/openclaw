@@ -258,14 +258,21 @@ resolve_prhead_remote_sha() {
   PRHEAD_REMOTE_SHA="$remote_sha"
 }
 
-verify_prep_first_parent_range_signed() {
+verify_prep_commit_range_signed() {
   local base_sha="$1"
   local prep_head_sha="$2"
+  local baseline_sha="${3:-}"
 
   pr_git merge-base --is-ancestor "$base_sha" "$prep_head_sha" || return 1
 
   local commits
-  commits=$(pr_git rev-list --first-parent "$base_sha..$prep_head_sha") || return 1
+  if [ -n "$baseline_sha" ]; then
+    # A reviewed baseline can precede the hosted head on a side parent. Exclude
+    # only that admitted main history; task commits on every parent require signatures.
+    commits=$(pr_git rev-list "$base_sha..$prep_head_sha" "^$baseline_sha") || return 1
+  else
+    commits=$(pr_git rev-list --first-parent "$base_sha..$prep_head_sha") || return 1
+  fi
   local commit
   while IFS= read -r commit; do
     [ -n "$commit" ] || continue
@@ -279,8 +286,16 @@ push_prep_head_once() {
   local prep_head_sha="$3"
   local pr="$4" observation="$5"
 
+  local publication_baseline=""
+  if [ -n "${PREP_PUBLICATION_REVIEW_SNAPSHOT:-}" ]; then
+    publication_baseline=$(run_prepared_correction_review "$pr" publication-baseline) || return 1
+    if [ -n "$publication_baseline" ] && [[ ! "$publication_baseline" =~ ^[a-f0-9]{40}$ ]]; then
+      echo "Invalid authenticated publication baseline; no transport is authorized." >&2
+      return 1
+    fi
+  fi
   local push_mode="${OPENCLAW_PR_PUSH_MODE:-auto}"
-  if [ "$push_mode" = "auto" ] && verify_prep_first_parent_range_signed "$lease_sha" "$prep_head_sha"; then
+  if [ "$push_mode" = "auto" ] && verify_prep_commit_range_signed "$lease_sha" "$prep_head_sha" "$publication_baseline"; then
     push_mode="git"
   elif [ "$push_mode" = "auto" ]; then
     push_mode="graphql"
@@ -292,7 +307,7 @@ push_prep_head_once() {
     return $?
   fi
 
-  if ! verify_prep_first_parent_range_signed "$lease_sha" "$prep_head_sha" && [ "${OPENCLAW_ALLOW_UNSIGNED_GIT_PUSH:-}" != "1" ]; then
+  if ! verify_prep_commit_range_signed "$lease_sha" "$prep_head_sha" "$publication_baseline" && [ "${OPENCLAW_ALLOW_UNSIGNED_GIT_PUSH:-}" != "1" ]; then
     echo "Refusing git-protocol PR branch push because it can publish unsigned commits." >&2
     echo "Sign the prep commit, use GitHub createCommitOnBranch, or set OPENCLAW_ALLOW_UNSIGNED_GIT_PUSH=1 for an explicit manual override." >&2
     return 2
@@ -377,12 +392,11 @@ push_prep_head_to_pr_branch() {
   pr_head_sha_after=$(pr_view_string_field "$PR_OBSERVATION" headRefOid "$pr") || return 1
   verify_pr_publication_identity "$pr" "$observation" "$PR_OBSERVATION" || return 1
 
-  fetch_pr_head "$pr" "$prep_head_sha" "refs/heads/pr-$pr-verify" "$PR_OBSERVATION" || return 1
+  fetch_pr_head "$pr" "$prep_head_sha" "refs/heads/pr-$pr" "$PR_OBSERVATION" || return 1
   local local_prep_tree
   local remote_prep_tree
   local_prep_tree=$(pr_git rev-parse "${local_prep_head_sha}^{tree}")
-  remote_prep_tree=$(pr_git rev-parse "pr-$pr-verify^{tree}")
-  pr_git branch -D "pr-$pr-verify" 2>/dev/null || true
+  remote_prep_tree=$(pr_git rev-parse "pr-$pr^{tree}")
   if [ "$local_prep_tree" != "$remote_prep_tree" ]; then
     echo "Pushed PR head tree differs from the prepared local tree."
     exit 1

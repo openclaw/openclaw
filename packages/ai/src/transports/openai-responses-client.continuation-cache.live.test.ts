@@ -1,7 +1,9 @@
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
+import { captureOpenAIResponses } from "./openai-responses-live-capture.test-support.js";
 
 // Live coverage for the idle-TTL default bump and the ready-entry
 // count/byte-budget cache (this PR's own changes) against the *real* native
@@ -13,9 +15,6 @@ import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-clien
 // (ClawSweeper P1 on #134550: "no redacted after-fix real transport trace
 // shows the 90-minute reuse behavior").
 //
-// A capturing fetch shim (not a loopback proxy) is enough here: this test
-// only needs each request body, not the raw SSE stream, so it skips the
-// tee/stream-capture machinery the unsafe-integer live test needs.
 const LIVE = process.env.OPENCLAW_LIVE_TEST === "1";
 const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
 const describeLive = LIVE && OPENAI_KEY ? describe : describe.skip;
@@ -33,50 +32,18 @@ const LIVE_TIMEOUT_MS = 120_000;
 const PAST_FORMER_TTL_DELAY_MS = 6 * 60 * 1000;
 const DELAYED_TIMEOUT_MS = PAST_FORMER_TTL_DELAY_MS + LIVE_TIMEOUT_MS;
 
-class GlobalFetchRequestCapture {
-  readonly requests: Array<Record<string, unknown>> = [];
-  private readonly realFetch = globalThis.fetch;
-
-  install(): void {
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      const body = init?.body;
-      if (url.includes("api.openai.com") && typeof body === "string") {
-        try {
-          this.requests.push(JSON.parse(body) as Record<string, unknown>);
-        } catch {
-          // Non-JSON body on this host is unexpected for a Responses call.
-        }
-      }
-      return this.realFetch(input, init);
-    }) as typeof fetch;
-  }
-
-  restore(): void {
-    globalThis.fetch = this.realFetch;
-  }
-}
-
 function userMessage(text: string, timestamp: number) {
   return { role: "user" as const, content: text, timestamp };
 }
 
 function model(): Model<"openai-responses"> {
-  return {
-    id: LIVE_MODEL_ID,
-    name: LIVE_MODEL_ID,
-    api: "openai-responses",
-    provider: "openai",
+  return makeProviderModel("openai-responses", "openai", LIVE_MODEL_ID, {
     // No compat opt-in and no forward proxy: this is the plain native
     // api.openai.com connection every real OpenClaw user gets by default --
     // the exact path the idle-TTL default and cache-bound code changed.
     baseUrl: "https://api.openai.com/v1",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 200_000,
-    maxTokens: 8192,
-  } satisfies Model<"openai-responses">;
+  }) satisfies Model<"openai-responses">;
 }
 
 async function run(context: Context, sessionId: string): Promise<AssistantMessage> {
@@ -110,9 +77,7 @@ async function runSecretRecallProof(
   secretCode: string,
   gapMs: number,
 ): Promise<{ requests: Array<Record<string, unknown>> }> {
-  const capture = new GlobalFetchRequestCapture();
-  capture.install();
-  try {
+  const captured = await captureOpenAIResponses(async () => {
     const firstUser = userMessage(
       `This is an automated test. Remember this secret code: ${secretCode}. ` +
         "Do not reply with the code yet -- just reply with exactly: ack",
@@ -144,34 +109,31 @@ async function runSecretRecallProof(
       .map((block) => block.text)
       .join("");
     expect(secondText).toContain(secretCode);
+  });
+  const requests = captured.requests;
 
-    // Exactly two requests reached the real API -- a rejected
-    // previous_response_id (the recovery path is a silent full-history
-    // resend) would show up as a third.
-    expect(capture.requests).toHaveLength(2);
-    expect(capture.requests[0]).not.toHaveProperty("previous_response_id");
-    expect(capture.requests[1]).toHaveProperty("previous_response_id");
-    expect(typeof capture.requests[1]?.previous_response_id).toBe("string");
-    expect(
-      (capture.requests[1]?.previous_response_id as string | undefined)?.length,
-    ).toBeGreaterThan(0);
-    expect(capture.requests[1]?.input).toEqual([
-      {
-        type: "message",
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: "What was the secret code I gave you? Reply with exactly that code.",
-          },
-        ],
-      },
-    ]);
-    expect(JSON.stringify(capture.requests[1])).not.toContain(secretCode);
-    return { requests: capture.requests };
-  } finally {
-    capture.restore();
-  }
+  // Exactly two requests reached the real API -- a rejected
+  // previous_response_id (the recovery path is a silent full-history
+  // resend) would show up as a third.
+  expect(requests).toHaveLength(2);
+  expect(requests[0]).not.toHaveProperty("previous_response_id");
+  expect(requests[1]).toHaveProperty("previous_response_id");
+  expect(typeof requests[1]?.previous_response_id).toBe("string");
+  expect((requests[1]?.previous_response_id as string | undefined)?.length).toBeGreaterThan(0);
+  expect(requests[1]?.input).toEqual([
+    {
+      type: "message",
+      role: "user",
+      content: [
+        {
+          type: "input_text",
+          text: "What was the secret code I gave you? Reply with exactly that code.",
+        },
+      ],
+    },
+  ]);
+  expect(JSON.stringify(requests[1])).not.toContain(secretCode);
+  return { requests };
 }
 
 describeLive(

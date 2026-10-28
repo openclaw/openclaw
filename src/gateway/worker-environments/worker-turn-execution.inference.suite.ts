@@ -1,7 +1,8 @@
 import { expect, it, vi } from "vitest";
 import { WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import {
-  completeWorkerLaunchDescriptor,
+  parseWorkerLaunchDescriptor,
   type WorkerLaunchPlan,
 } from "../../worker/launch-descriptor.js";
 import { roundTripWorkerLaunchDescriptor } from "../../worker/launch-descriptor.test-support.js";
@@ -14,6 +15,7 @@ import {
   createWorkerTurnTunnel,
   credential,
   placements,
+  reconcileUnchangedLocalWorkspace,
   seedActivePlacement,
   turn,
   unusedEnvironments,
@@ -21,11 +23,11 @@ import {
 
 export function registerWorkerTurnInferenceTests(): void {
   it.each([
-    ...[undefined, "gateway", "worker"].map((inference) => ({
+    ...[undefined, "worker"].map((inference) => ({
       providerId: "device",
       inference,
     })),
-    ...[false, null, { mode: "remote" }, "worker"].map((inference) => ({
+    ...["worker"].map((inference) => ({
       providerId: "custom-provider",
       inference,
     })),
@@ -42,9 +44,12 @@ export function registerWorkerTurnInferenceTests(): void {
       let descriptor: WorkerLaunchPlan | undefined;
       const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async ({ plan }) => {
         descriptor = roundTripWorkerLaunchDescriptor(
-          completeWorkerLaunchDescriptor(plan, {
-            kind: "unix",
-            socketPath: "/tmp/worker-local-inference.sock",
+          parseWorkerLaunchDescriptor({
+            ...plan,
+            connectionEndpoint: {
+              kind: "unix",
+              socketPath: "/tmp/worker-local-inference.sock",
+            },
           }),
         );
         throw new WorkerRunnerCapacityError();
@@ -52,9 +57,8 @@ export function registerWorkerTurnInferenceTests(): void {
       const tunnel = createWorkerTurnTunnel({
         launchTurn,
         runWorkspaceCommand: vi.fn(),
-        quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
-        reconcileWorkspace: vi.fn(),
+        reconcileWorkspace: vi.fn(reconcileUnchangedLocalWorkspace),
         stop: vi.fn(async () => {}),
       });
       const environments = {
@@ -88,15 +92,11 @@ export function registerWorkerTurnInferenceTests(): void {
                     ...(!workerLocal ? { apiKey } : {}),
                     api: "openai-completions",
                     models: [
-                      {
-                        id: params.model,
-                        name: params.model,
+                      modelDefinition(params.model, {
                         reasoning: false,
-                        input: ["text"],
                         contextWindow: 8192,
                         maxTokens: 2048,
-                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                      },
+                      }),
                     ],
                   },
                 },

@@ -77,12 +77,22 @@ const transports = [
   },
 ] as const;
 
-const scenarios = [
-  { name: "finishes at 600 ms despite comment-only heartbeats", comments: 5, deadline: 600 },
-  { name: "cancels comment-only streams at 800 ms", comments: 7, deadline: 800 },
-] as const;
-
 describe.each(transports)("guarded $api SSE liveness integration", (transport) => {
+  const progressTimeoutMs = transport.api === "openai-responses" ? 900_000 : 800;
+  const scenarios = [
+    {
+      name: "finishes at 600 ms despite comment-only heartbeats",
+      comments: 5,
+      interval: 100,
+      deadline: 600,
+    },
+    {
+      name: `cancels comment-only streams at ${progressTimeoutMs} ms`,
+      comments: 7,
+      interval: progressTimeoutMs / 8,
+      deadline: progressTimeoutMs,
+    },
+  ];
   afterEach(() => vi.useRealTimers());
 
   it.for(scenarios)("$name", async (scenario, { signal }) => {
@@ -126,7 +136,7 @@ describe.each(transports)("guarded $api SSE liveness integration", (transport) =
     const abort = new AbortController();
     let settleStream: (() => Promise<void>) | undefined;
     try {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
       const onIdleTimeout = vi.fn();
       const model = makeProviderModelFixture({
         id: "keepalive-model",
@@ -134,7 +144,13 @@ describe.each(transports)("guarded $api SSE liveness integration", (transport) =
         api: transport.api,
         baseUrl: `${origin}/v1`,
       });
-      const stream = await streamWithIdleTimeout(transport.createStream(), 400, onIdleTimeout)(
+      // A missing Responses budget must fall back to an earlier 2x idle deadline.
+      const idleTimeoutMs = Math.max(400, scenario.interval * 2);
+      const stream = await streamWithIdleTimeout(
+        transport.createStream(),
+        idleTimeoutMs,
+        onIdleTimeout,
+      )(
         model,
         { messages: [{ role: "user", content: "reply", timestamp: 1 }] },
         { apiKey: "synthetic-test-key", maxRetries: 0, signal: abort.signal },
@@ -172,12 +188,14 @@ describe.each(transports)("guarded $api SSE liveness integration", (transport) =
       );
       await waitForReceipt(transport.initialEvent);
       for (let heartbeat = 1; heartbeat <= scenario.comments; heartbeat += 1) {
-        await vi.advanceTimersByTimeAsync(100);
+        await vi.advanceTimersByTimeAsync(scenario.interval);
         const comment = `: keepalive ${heartbeat}\n`;
         response.write(comment);
         await waitForReceipt(comment);
       }
-      await vi.advanceTimersByTimeAsync(scenario.deadline - scenario.comments * 100 - 1);
+      await vi.advanceTimersByTimeAsync(
+        scenario.deadline - scenario.comments * scenario.interval - 1,
+      );
       expect(onIdleTimeout).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
 

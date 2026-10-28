@@ -1,9 +1,6 @@
-export const memoryStatsRuntimeEntrypoint = {
-  currentModuleUrl: import.meta.url,
-  sourceWorkerName: "lancedb-runtime",
-  package: {
-    name: "@openclaw/memory-lancedb",
-    distWorkerPath: "lancedb-runtime.js",
-  },
-  distWorkerPath: "extensions/memory-lancedb/lancedb-runtime.js",
-} as const;
+import { createPluginRuntimeProcessEntrypoint } from "openclaw/plugin-sdk/process-runtime";
+
+export const memoryStatsRuntimeEntrypoint = createPluginRuntimeProcessEntrypoint(
+  "memoryStatsRuntime",
+  import.meta.url,
+);

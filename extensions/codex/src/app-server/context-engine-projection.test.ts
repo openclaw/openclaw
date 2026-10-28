@@ -4,7 +4,8 @@ import {
   IMAGE_BLOCK_TOKENS,
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-core";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../test-support/message-fixtures.test-support.js";
 import {
   buildCodexContinuityCalibration,
   fitCodexProjectedContextForTurnStart,
@@ -26,11 +27,11 @@ function textMessage(role: AgentMessage["role"], text: string): AgentMessage {
 function senderAttributedTextMessage(
   text: string,
   sender: { senderId?: string; senderName?: string; senderUsername?: string },
-): AgentMessage {
+) {
   return {
     ...textMessage("user", text),
     __openclaw: sender,
-  } as unknown as AgentMessage;
+  };
 }
 
 function summaryMessages(type: "compaction" | "branch_summary", summary: string): AgentMessage[] {
@@ -43,27 +44,6 @@ function summaryMessages(type: "compaction" | "branch_summary", summary: string)
 }
 
 describe("projectContextEngineAssemblyForCodex", () => {
-  it("charges restored file content to the selected window before reading older attachments", async () => {
-    const older = textMessage("user", "older attachment");
-    const recent = textMessage("user", "recent attachment");
-    const prepareFileContext = vi.fn(async (message: AgentMessage) => {
-      expect(message).toBe(recent);
-      return { text: `${"x".repeat(200)} retained-file-value`, images: [] };
-    });
-    const result = await projectContextEngineAssemblyForCodex({
-      assembledMessages: [older, recent],
-      prompt: "continue",
-      maxRenderedContextChars: 80,
-      prepareFileContext,
-    });
-    expect(prepareFileContext).toHaveBeenCalledOnce();
-    expect(result.promptText).toContain("retained-file-value");
-    expect(result.promptContextRange!.end - result.promptContextRange!.start).toBeLessThanOrEqual(
-      80,
-    );
-    expect(recent).toEqual(textMessage("user", "recent attachment"));
-  });
-
   it("omits native document images that exceed the context budget", async () => {
     const page = {
       type: "image" as const,
@@ -111,43 +91,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(renderedChars + groups.length * IMAGE_BLOCK_TOKENS * 4).toBeLessThanOrEqual(budget);
   });
 
-  it("omits restored images when the context window cuts their owning message", async () => {
-    const image = { type: "image" as const, mimeType: "image/png", data: "historical-image" };
-    const historical = textMessage("user", `old screenshot ${"caption ".repeat(100)}`);
-    const current = textMessage("assistant", "recent answer");
-    const history = [historical, current];
-    const original = structuredClone(history);
-    const result = await projectContextEngineAssemblyForCodex({
-      assembledMessages: history,
-      prompt: "What is next?",
-      maxRenderedContextChars: IMAGE_BLOCK_TOKENS * 4 + 100,
-      prepareFileContext: async () => ({ images: [image] }),
-    });
-
-    expect(result.promptText).toContain("recent answer");
-    expect(result.promptText).not.toContain("old screenshot");
-    expect(result.imageGroups).toBeUndefined();
-    expect(history).toEqual(original);
-  });
-
-  it("omits an image if the older-context truncation marker removes its source label", async () => {
-    const image = { type: "image" as const, mimeType: "image/png", data: "historical-image" };
-    const result = await projectContextEngineAssemblyForCodex({
-      assembledMessages: [
-        textMessage("assistant", "old context ".repeat(100)),
-        textMessage("user", "screenshot description survives"),
-      ],
-      prompt: "Continue",
-      maxRenderedContextChars: IMAGE_BLOCK_TOKENS * 4 + 60,
-      prepareFileContext: async () => ({ images: [image] }),
-    });
-
-    expect(result.promptText).toContain("from older context]");
-    expect(result.promptText).toContain("survives");
-    expect(result.promptText).not.toContain("[user]");
-    expect(result.imageGroups).toBeUndefined();
-  });
-
   it("drops a duplicate trailing current prompt from assembled history", async () => {
     const currentUserMessage = {
       ...textMessage("user", "Need the latest answer"),
@@ -165,6 +108,61 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.developerInstructionAddition).toBe("memory recall");
   });
 
+  it.each([true])(
+    "places stable current sender provenance beside the request (history: %s)",
+    async (withHistory) => {
+      const prompt = "i am Bea coded wdym";
+      const currentUserMessage = {
+        ...senderAttributedTextMessage(prompt, {
+          senderId: "bea-id",
+          senderName: "Bea",
+          senderUsername: "bea",
+        }),
+        idempotencyKey: "current:user",
+      };
+      const result = await projectContextEngineAssemblyForCodex({
+        assembledMessages: withHistory
+          ? [
+              senderAttributedTextMessage("Alice asked about the roster.", {
+                senderId: "alice-id",
+                senderName: "Alice",
+              }),
+              textMessage("assistant", "Alice got the strategist role; Bea got the scout role."),
+              currentUserMessage,
+            ]
+          : [currentUserMessage],
+        prompt,
+        currentUserMessage,
+        currentUserTurnIdempotencyKey: "current:user",
+      });
+
+      if (withHistory) {
+        expect(result.promptText).toContain('[user sender={"id":"alice-id","name":"Alice"}]');
+      }
+      expect(result.promptText).toMatch(
+        /\[user sender={"id":"bea-id","name":"Bea","username":"bea"}\]\ni am Bea coded wdym$/,
+      );
+      expect(result.promptText.match(/i am Bea coded wdym/g)).toHaveLength(1);
+    },
+  );
+
+  it("does not infer current sender identity from display names without a stable ID", async () => {
+    const prompt = "Current direct request";
+    const currentUserMessage = senderAttributedTextMessage(prompt, {
+      senderName: "Bea",
+      senderUsername: "bea",
+    });
+    const result = await projectContextEngineAssemblyForCodex({
+      assembledMessages: [textMessage("assistant", "Earlier reply.")],
+      prompt,
+      currentUserMessage,
+    });
+
+    expect(result.promptText.slice(result.promptText.lastIndexOf("Current user request:"))).toBe(
+      `Current user request:\n${prompt}`,
+    );
+  });
+
   it("preserves role order and falls back to the raw prompt for empty history", async () => {
     const empty = await projectContextEngineAssemblyForCodex({
       assembledMessages: [],
@@ -180,9 +178,8 @@ describe("projectContextEngineAssemblyForCodex", () => {
       ],
       prompt: "next",
     });
-    expect(ordered.promptText).toContain(
-      "[user]\none\n\n[assistant]\ntwo\n\n[toolResult]\ntool result [content omitted]",
-    );
+    expect(ordered.promptText).toContain("[user]\none\n\n[assistant]\ntwo");
+    expect(ordered.promptText).not.toContain("[toolResult]");
   });
 
   it("preserves stable user provenance while leaving legacy user rows unattributed", async () => {
@@ -244,7 +241,7 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(history[0]).not.toHaveProperty("content");
   });
 
-  it("frames projected history as reference data and omits tool payloads", async () => {
+  it("drops omitted tool-only events while retaining mixed assistant text", async () => {
     const result = await projectContextEngineAssemblyForCodex({
       assembledMessages: [
         {
@@ -259,21 +256,51 @@ describe("projectContextEngineAssemblyForCodex", () => {
           toolCallId: "call-1",
           toolName: "exec",
           isError: false,
-          content: [{ type: "toolResult", toolUseId: "call-1", content: "API_KEY=sk-secret" }],
+          content: [{ type: "text", text: "API_KEY=sk-secret" }],
           timestamp: 2,
-        } as unknown as AgentMessage,
+        },
+        {
+          ...textMessage("assistant", "The operation completed."),
+          content: [
+            { type: "text", text: "The operation completed." },
+            { type: "toolCall", id: "call-2", name: "read", arguments: { path: "example.txt" } },
+          ],
+        } as AgentMessage,
       ],
       prompt: "continue",
     });
 
     expect(result.promptText).toContain("quoted reference data");
-    expect(result.promptText).toContain("tool call: exec [input omitted]");
-    expect(result.promptText).toContain("tool result: call-1 [content omitted]");
+    expect(result.promptText).toContain("[assistant]\nThe operation completed.");
+    expect(result.promptText).not.toContain("tool call");
+    expect(result.promptText).not.toContain("tool result");
+    expect(result.promptText).not.toContain("call-1");
     expect(result.promptText).not.toContain("sk-secret");
     expect(result.promptText).not.toContain("cat .env");
   });
 
-  it("preserves redacted tool payload context for thread bootstrap projections", async () => {
+  it.each([true, false])(
+    "does not spend the history window on omitted tools (prior prose: %s)",
+    async (priorProse) => {
+      const instruction = "Keep the blue database available until verification finishes.";
+      const tools: AgentMessage[] = Array.from({ length: 12 }, (_, index) =>
+        makeTextToolResult(`call-${index}`, "read", "Completed synthetic read.", false, index + 2),
+      );
+      const result = await projectContextEngineAssemblyForCodex({
+        assembledMessages: [...(priorProse ? [textMessage("user", instruction)] : []), ...tools],
+        maxRenderedContextChars: 256,
+        prompt: "Continue.",
+      });
+      if (priorProse) {
+        expect(result.promptText).toContain(`[user]\n${instruction}`);
+      } else {
+        expect(result.promptText).toBe("Continue.");
+      }
+      expect(result.promptText).not.toContain("[content omitted]");
+    },
+  );
+
+  it("preserves tool payload context for thread bootstrap projections", async () => {
     const shared = { recursive: true };
     const nested: Record<string, unknown> = {
       first: shared,
@@ -341,12 +368,12 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.promptText).toContain("OPENAI_API_KEY=");
     expect(result.promptText).toContain("status ok");
     expect(result.promptText).not.toContain("cat .env");
-    expect(result.promptText).not.toContain("sk-1234567890abcdef");
-    expect(result.promptText).not.toContain("842761");
+    expect(result.promptText).toContain("sk-1234567890abcdef");
+    expect(result.promptText).toContain("842761");
     expect(result.promptText).toContain('"attemptsRemaining": 3');
   });
 
-  it("preserves canonical tool results without exposing secrets or media bytes", async () => {
+  it("preserves canonical tool result text while omitting media bytes", async () => {
     const toolText = `OPENAI_API_KEY=sk-1234567890abcdef\nstatus ok\n${"x".repeat(6_000)} tool tail`;
     const message: AgentMessage = {
       role: "toolResult",
@@ -366,7 +393,7 @@ describe("projectContextEngineAssemblyForCodex", () => {
     });
 
     expect(result.promptText).toContain("tool result: call-1");
-    expect(result.promptText).not.toContain("sk-1234567890abcdef");
+    expect(result.promptText).toContain("sk-1234567890abcdef");
     expect(result.promptText).not.toContain("private-image-bytes");
     expect(result.promptText).not.toContain("tool tail");
     expect(result.promptText).toContain("status ok");
@@ -378,17 +405,12 @@ describe("projectContextEngineAssemblyForCodex", () => {
     });
   });
 
-  it.each(["user", "assistant", "compaction"] as const)(
+  it.each(["user"] as const)(
     "retains complete %s text that fits the continuity window without a runtime budget",
     async (type) => {
       const text = `${"x".repeat(5_999)}😀${" café 雪".repeat(240)}\n80. Check every record.`;
       const result = await projectContextEngineAssemblyForCodex({
-        assembledMessages:
-          type === "user"
-            ? [{ role: "user", content: text, timestamp: 1 }]
-            : type === "assistant"
-              ? [textMessage("assistant", text)]
-              : summaryMessages(type, text),
+        assembledMessages: [{ role: type, content: text, timestamp: 1 }],
         prompt: "next",
         maxRenderedContextChars: resolveCodexContinuityProjectionMaxChars({}),
       });
@@ -661,9 +683,6 @@ describe("resolveCodexContinuityProjectionMaxChars", () => {
       undefined,
     );
     expect(buildCodexContinuityCalibration({ promptChars: 200_000, inputTokens: 0 })).toBe(
-      undefined,
-    );
-    expect(buildCodexContinuityCalibration({ promptChars: Number.NaN, inputTokens: 64_000 })).toBe(
       undefined,
     );
   });

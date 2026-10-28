@@ -3,73 +3,52 @@ import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import {
   createBrowserClient,
-  type BrowserRequestEnvelope,
+  openBrowserActions,
 } from "../../../components/browser/browser-panel-controller-test-support.ts";
+import { createApplicationGatewaySnapshot } from "../../../test-helpers/application-context-fixtures.ts";
 import {
   createApplicationContextProvider,
   createApplicationGateway,
 } from "../../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
-import type { BoardWidget } from "../types.ts";
-import "./browser.ts";
+import { createBoardWidget } from "../widget.test-support.ts";
+import "./browser.tsx";
 
 const sessionKey = "agent:main:dashboard-test";
-function widget(instanceId: string): BoardWidget {
+const dashboardIdentity = { sessionKey, name: "status", instanceId: "first" };
+const browserMethods = ["browser.request", "browser.dashboard.request"];
+const widget = (instanceId: string) => createBoardWidget({ name: "status", instanceId });
+function response(instanceId = "first", paused = false, targetId = instanceId) {
   return {
-    name: "status",
-    instanceId,
-    tabId: "main",
-    contentKind: "plugin",
-    pluginKind: "browser:dashboard",
-    props: { url: "http://status.example" },
-    sizeW: 12,
-    sizeH: 8,
-    position: 0,
-    revision: 1,
-    grantState: "none",
-  };
-}
-function response(instanceId: string, paused = false, targetId = instanceId) {
-  return {
-    sessionKey,
-    name: "status",
+    ...dashboardIdentity,
     instanceId,
     revision: 1,
     paused,
     stopping: false,
     url: "http://status.example",
-    ...(paused
-      ? {}
-      : {
-          browserTab: { target: "host", profile: "openclaw", targetId },
-        }),
+    ...(paused ? {} : { browserTab: { target: "host", profile: "openclaw", targetId } }),
   };
 }
+type RequestHandler = Parameters<typeof createBrowserClient>[0];
 function mount(
-  handle: Parameters<typeof createBrowserClient>[0],
+  handle: RequestHandler,
   active = true,
   scopes: readonly string[] = ["operator.admin"],
-  methods: readonly string[] = ["browser.request", "browser.dashboard.request"],
+  advertised: readonly string[] = browserMethods,
 ) {
-  const requests: BrowserRequestEnvelope[] = [];
-  const { client, request } = createBrowserClient(
-    async (envelope) => {
-      requests.push(envelope);
-      return await handle(envelope);
-    },
-    { sessionScoped: !scopes.includes("operator.admin") },
-  );
-  const { gateway, publishEvent } = createApplicationGateway({
-    phase: "connected",
-    client,
-    hello: gatewayHelloForMethods(methods, scopes),
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: "main",
-    sessionKey,
-    lastError: null,
-    lastErrorCode: null,
+  const handler = vi.fn(handle);
+  const { client, request } = createBrowserClient(handler, {
+    sessionScoped: !scopes.includes("operator.admin"),
   });
+  const { gateway, publish, publishEvent } = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      phase: "connected",
+      client,
+      hello: gatewayHelloForMethods(advertised, scopes),
+      assistantAgentId: "main",
+      sessionKey,
+    }),
+  );
   const provider = createApplicationContextProvider({
     resourceBasePath: "",
     gateway,
@@ -80,210 +59,253 @@ function mount(
   element.active = active;
   provider.append(element);
   document.body.append(provider);
-  return { element, request, requests, publishEvent };
+  const panel = () => element.querySelector("openclaw-browser-panel");
+  const actions = () =>
+    handler.mock.calls.map(([entry]) => entry).filter((entry) => entry.path === "/dashboard");
+  return {
+    element,
+    request,
+    gateway,
+    publish,
+    panel,
+    button: (text: string) =>
+      [...element.querySelectorAll("button")].find((entry) => entry.textContent?.trim() === text),
+    changed: (instanceId = "first") =>
+      publishEvent({
+        type: "event",
+        event: "plugin.browser.dashboard_changed",
+        payload: { ...dashboardIdentity, instanceId },
+      }),
+    actions,
+    methods: () => actions().map((entry) => entry.method),
+    waitForMethods: (methods: string[]) =>
+      vi.waitFor(() => expect(actions().map((entry) => entry.method)).toEqual(methods)),
+    waitForTarget: (targetId: string) =>
+      vi.waitFor(() => expect(panel()?.fixedTab?.targetId).toBe(targetId)),
+    waitForText: (text: string, present = true) =>
+      vi.waitFor(() => expect(element.textContent?.includes(text)).toBe(present)),
+    waitForPanel: () => vi.waitFor(() => expect(panel()).not.toBeNull()),
+  };
 }
+const dashboard =
+  (handle: RequestHandler): RequestHandler =>
+  async (envelope) =>
+    envelope.path === "/dashboard" ? handle(envelope) : { running: false, tabs: [] };
+const mountDashboard = (
+  handle: RequestHandler,
+  ...options: [active?: boolean, scopes?: readonly string[], advertised?: readonly string[]]
+) => mount(dashboard(handle), ...options);
 afterEach(() => document.body.replaceChildren());
 
 describe("Browser dashboard presentation", () => {
   it.each([false, true])("routes dashboard access and transfers for admin=%s", async (admin) => {
-    const { element, request } = mount(
-      async (envelope) =>
-        envelope.path === "/dashboard" ? response("first") : { running: false, tabs: [] },
-      true,
-      [admin ? "operator.admin" : "operator.sessions.write"],
-    );
-    await vi.waitFor(() => expect(element.querySelector("openclaw-browser-panel")).not.toBeNull());
-    const panel = element.querySelector("openclaw-browser-panel")!;
+    const h = mountDashboard(async () => response(), true, [
+      admin ? "operator.admin" : "operator.sessions.write",
+    ]);
+    await h.waitForPanel();
+    const panel = h.panel()!;
     await panel.updateComplete;
-    expect(request).toHaveBeenCalledWith(
-      admin ? "browser.request" : "browser.dashboard.request",
-      expect.objectContaining(
-        admin
-          ? { target: "host", path: "/dashboard" }
-          : {
-              sessionKey,
-              dashboard: { name: "status", instanceId: "first" },
-              method: "POST",
-              path: "/dashboard",
-            },
-      ),
-      { timeoutMs: 150_000 },
-    );
+    expect(h.request.mock.calls[0]?.[0]).toBe(browserMethods[admin ? 0 : 1]);
     expect(panel.dashboardTarget?.sessionScoped).toBe(admin ? undefined : true);
-    const download = panel.shadowRoot?.querySelector('[aria-label="Download file"]');
-    if (admin) {
-      expect(download).not.toBeNull();
-    } else {
-      expect(download).toBeNull();
-      expect(panel.shadowRoot?.querySelector('[aria-label="New tab"]')).toBeNull();
-      expect(element.textContent).toContain("isolated session browser");
+    expect(panel.dashboardTarget?.instanceId).toBe("first");
+    expect(panel.querySelector('[aria-label="New tab"], [aria-label^="Close tab"]')).toBeNull();
+    const menu = await openBrowserActions(panel);
+    const download = menu.querySelector('[role="menuitem"][aria-label="Download file"]');
+    expect(download === null).toBe(!admin);
+    if (!admin) {
+      expect(menu.querySelector('[role="menuitem"][aria-label="New tab"]')).toBeNull();
+      expect(h.element.textContent).toContain("isolated session browser");
     }
   });
 
   it.each([
     [["operator.sessions.read"], ["browser.dashboard.request"]],
     [["operator.write"], ["browser.request"]],
-  ])(
-    "does not dispatch without scoped write access and advertised capability (%j)",
-    async (scopes, methods) => {
-      const { element, request } = mount(async () => response("first"), true, scopes, methods);
-      await element.updateComplete;
-      expect(request).not.toHaveBeenCalled();
-      expect(element.textContent).toContain("Connect to a Gateway with browser access");
-    },
-  );
+  ])("rejects unavailable browser access (%j)", async (scopes, methods) => {
+    const { element, request } = mount(async () => response(), true, scopes, methods);
+    await element.updateComplete;
+    expect(request).not.toHaveBeenCalled();
+    expect(element.textContent).toContain("Connect to a Gateway with browser access");
+  });
 
-  it("shows a session admission rejection without falling back to global browser access", async () => {
-    const { element, request } = mount(
-      async () => {
-        throw new Error("Session browser requires a supported sandbox backend");
-      },
-      true,
-      ["operator.write"],
-    );
-    await vi.waitFor(() => expect(element.textContent).toContain("supported sandbox backend"));
-    expect(element.querySelector("openclaw-browser-panel")).toBeNull();
-    expect(request).toHaveBeenCalledOnce();
-    expect(request.mock.calls[0]?.[0]).toBe("browser.dashboard.request");
+  it("retries session admission without global fallback", async () => {
+    const retrying = createDeferred<ReturnType<typeof response>>();
+    const handler = vi
+      .fn<RequestHandler>()
+      .mockRejectedValueOnce(new Error("Session browser requires a supported sandbox backend"))
+      .mockReturnValue(retrying.promise);
+    const h = mount(handler, true, ["operator.write"]);
+    await h.waitForText("supported sandbox backend");
+    expect(h.panel()).toBeNull();
+    expect(h.request).toHaveBeenCalledOnce();
+    h.button("Retry")!.click();
+    await vi.waitFor(() => expect(h.request).toHaveBeenCalledTimes(2));
+    await h.waitForText("supported sandbox backend", false);
+    expect(h.panel()).toBeNull();
+    expect(h.request.mock.calls.map(([method]) => method)).toEqual([
+      "browser.dashboard.request",
+      "browser.dashboard.request",
+    ]);
+    retrying.resolve(response());
+    await h.waitForPanel();
+  });
+
+  it.each(["DELETE", "GET"] as const)("keeps the panel through failed %s", async (method) => {
+    const pending = createDeferred<ReturnType<typeof response>>();
+    const retrying = createDeferred<ReturnType<typeof response>>();
+    let attempts = 0;
+    const h = mountDashboard(async (envelope) => {
+      if (envelope.method === method) {
+        return ++attempts === 1 ? pending.promise : retrying.promise;
+      }
+      return response();
+    });
+    await h.waitForPanel();
+    const panel = h.panel();
+    if (method === "DELETE") {
+      h.element.active = false;
+      await h.element.updateComplete;
+      expect(h.panel()).toBe(panel);
+      expect(panel?.presented).toBe(false);
+      expect(h.methods()).toEqual(["POST"]);
+      h.element.active = true;
+      await h.element.updateComplete;
+      h.button("Stop browser")!.click();
+      await vi.waitFor(() => expect(h.button("Stop browser")?.disabled).toBe(true));
+    } else {
+      h.changed();
+      await h.waitForMethods(["POST", "GET"]);
+      h.element.active = false;
+      await vi.waitFor(() => expect(panel?.presented).toBe(false));
+    }
+    expect(h.panel()).toBe(panel);
+
+    pending.reject(new Error("Browser request failed"));
+    await h.waitForText("Browser request failed");
+    expect(h.panel()).toBe(panel);
+    if (method === "GET") {
+      expect(panel?.presented).toBe(false);
+      expect(h.methods()).toEqual(["POST", "GET"]);
+      return;
+    }
+    await vi.waitFor(() => expect(h.button("Stop browser")?.disabled).toBe(false));
+    h.button("Stop browser")!.click();
+    await vi.waitFor(() => expect(attempts).toBe(2));
+    await h.waitForText("Browser request failed", false);
+    expect(h.button("Stop browser")?.disabled).toBe(true);
+    retrying.resolve(response("first", true));
+    await h.waitForText("browser is stopped");
+    expect(h.element.textContent).not.toContain("Browser request failed");
+    expect(h.panel()).toBeNull();
+    h.button("Resume browser")!.click();
+    await h.waitForPanel();
+    expect(h.methods()).toEqual(["POST", "DELETE", "DELETE", "POST"]);
+    expect(h.actions().at(-1)?.body).toMatchObject({ ...dashboardIdentity, resume: true });
   });
 
   it("keeps an unfinished Stop visible until closure is confirmed", async () => {
-    let stopping = false;
-    let paused = false;
-    let changed = () => {};
-    const { element, requests, publishEvent } = mount(async (envelope) => {
-      if (envelope.path !== "/dashboard") {
-        return { running: false, tabs: [] };
-      }
+    let state = response();
+    const { element, methods, changed, button, waitForText } = mountDashboard(async (envelope) => {
       if (envelope.method === "DELETE") {
-        stopping = true;
-        paused = true;
+        state = { ...response("first", true), stopping: true };
         changed();
         throw new Error("Temporary browser close failure");
       }
-      return { ...response("first", paused), stopping };
+      return state;
     });
-    changed = () =>
-      publishEvent({
-        type: "event",
-        event: "plugin.browser.dashboard_changed",
-        payload: { sessionKey, name: "status", instanceId: "first" },
-      });
-    const button = (text: string) =>
-      [...element.querySelectorAll("button")].find((entry) => entry.textContent?.trim() === text);
     await vi.waitFor(() => expect(button("Stop browser")).toBeDefined());
     button("Stop browser")!.click();
-    await vi.waitFor(() => expect(element.textContent).toContain("Browser stop is pending"));
+    await waitForText("Browser stop is pending");
     expect(element.textContent).not.toContain("browser is stopped");
     expect(button("Resume browser")).toBeUndefined();
     button("Retry stop")!.click();
     await vi.waitFor(() =>
-      expect(requests.filter((entry) => entry.method === "DELETE")).toHaveLength(2),
+      expect(methods().filter((method) => method === "DELETE")).toHaveLength(2),
     );
-    stopping = false;
+    state.stopping = false;
     changed();
-    await vi.waitFor(() => expect(element.textContent).toContain("browser is stopped"));
+    await waitForText("browser is stopped");
     expect(button("Retry stop")).toBeUndefined();
     expect(button("Resume browser")).toBeDefined();
-    expect(requests.filter((entry) => entry.method === "POST")).toHaveLength(1);
+    expect(methods().filter((method) => method === "POST")).toHaveLength(1);
   });
 
-  it("observes an agent stop/resume without reopening or replacing the dashboard", async () => {
+  it("observes agent stop/resume and reopens only a missing browser tab", async () => {
     const opening = createDeferred<ReturnType<typeof response>>();
     let paused = false;
-    let targetId = "first";
-    const { element, requests, publishEvent } = mount(async (envelope) => {
-      if (envelope.path !== "/dashboard") {
-        return { running: false, tabs: [] };
-      }
+    let targetId: string | undefined = "first";
+    let opens = 0;
+    const h = mountDashboard(async (envelope) => {
       if (envelope.method === "POST") {
-        return opening.promise;
+        return ++opens === 1 ? opening.promise : response("first", false, "reopened");
       }
-      return response("first", paused, targetId);
+      const result = response("first", paused, targetId);
+      return targetId ? result : { ...result, browserTab: undefined };
     });
-    const changed = (instanceId = "first") =>
-      publishEvent({
-        type: "event",
-        event: "plugin.browser.dashboard_changed",
-        payload: { sessionKey, name: "status", instanceId },
-      });
-    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    await h.waitForText("Loading page…");
+    expect(h.button("Reconnect")?.disabled).toBe(true);
     paused = true;
-    changed();
-    opening.resolve(response("first"));
-    await vi.waitFor(() => expect(element.textContent).toContain("browser is stopped"));
-    expect(element.querySelector("openclaw-browser-panel")).toBeNull();
+    h.changed();
+    opening.resolve(response());
+    await h.waitForText("browser is stopped");
+    expect(h.panel()).toBeNull();
     paused = false;
     targetId = "resumed-target";
-    changed();
-    await vi.waitFor(() =>
-      expect(element.querySelector("openclaw-browser-panel")?.fixedTab?.targetId).toBe(
-        "resumed-target",
-      ),
-    );
-    changed("retired-instance");
-    await element.updateComplete;
-    const actions = requests.filter((entry) => entry.path === "/dashboard");
-    expect(actions.map((entry) => entry.method)).toEqual(["POST", "GET", "GET"]);
-    expect(element.widget?.instanceId).toBe("first");
+    h.changed();
+    await h.waitForTarget("resumed-target");
+    h.changed("retired-instance");
+    await h.element.updateComplete;
+    expect(h.methods()).toEqual(["POST", "GET", "GET"]);
+    targetId = undefined;
+    h.changed();
+    await h.waitForTarget("reopened");
+    expect(h.methods()).toEqual(["POST", "GET", "GET", "GET", "POST"]);
   });
 
-  it("stays passive until opened and ignores an old widget's materialization", async () => {
-    const old = createDeferred<ReturnType<typeof response>>();
-    const { element, request } = mount(async (envelope) => {
-      if (envelope.path !== "/dashboard") {
-        return { running: false, tabs: [] };
+  it.each(["widget", "client", "auth", "command"] as const)(
+    "retires %s results",
+    async (identity) => {
+      const old = createDeferred<ReturnType<typeof response>>();
+      const replacedWidget = identity === "widget" || identity === "command";
+      const instanceId = replacedWidget ? "current" : "first";
+      const handle = vi
+        .fn<RequestHandler>()
+        .mockResolvedValue(response(instanceId, false, "current"));
+      if (identity === "command") {
+        handle.mockResolvedValueOnce(response());
       }
-      return envelope.body?.instanceId === "first" ? old.promise : response("current");
-    }, false);
-    await element.updateComplete;
-    expect(request).not.toHaveBeenCalled();
-    element.active = true;
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    element.widget = widget("current");
-    await vi.waitFor(() =>
-      expect(element.querySelector("openclaw-browser-panel")?.fixedTab?.targetId).toBe("current"),
-    );
-    old.resolve(response("first"));
-    await old.promise;
-    await element.updateComplete;
-    const panel = element.querySelector("openclaw-browser-panel")!;
-    expect(panel.fixedTab?.targetId).toBe("current");
-    expect(panel.dashboardTarget?.instanceId).toBe("current");
-    await panel.updateComplete;
-    expect(panel.shadowRoot?.querySelector('[aria-label="New tab"]')).toBeNull();
-    expect(panel.shadowRoot?.querySelector('[aria-label^="Close tab"]')).toBeNull();
-  });
-
-  it("hides without closing and stops/resumes through the dashboard owner", async () => {
-    const { element, requests } = mount(async (envelope) =>
-      envelope.path === "/dashboard"
-        ? response("first", envelope.method === "DELETE")
-        : { running: false, tabs: [] },
-    );
-    await vi.waitFor(() => expect(element.querySelector("openclaw-browser-panel")).not.toBeNull());
-    const panel = element.querySelector("openclaw-browser-panel");
-    element.active = false;
-    await element.updateComplete;
-    expect(element.querySelector("openclaw-browser-panel")).toBe(panel);
-    expect(panel?.presented).toBe(false);
-    expect(requests.filter((value) => value.method === "DELETE")).toEqual([]);
-    element.active = true;
-    await element.updateComplete;
-    const button = (text: string) =>
-      [...element.querySelectorAll("button")].find((entry) => entry.textContent?.trim() === text)!;
-    button("Stop browser").click();
-    await vi.waitFor(() => expect(element.textContent).toContain("browser is stopped"));
-    expect(element.querySelector("openclaw-browser-panel")).toBeNull();
-    button("Resume browser").click();
-    await vi.waitFor(() => expect(element.querySelector("openclaw-browser-panel")).not.toBeNull());
-    const actions = requests.filter((value) => value.path === "/dashboard");
-    expect(actions.map((value) => value.method)).toEqual(["POST", "DELETE", "POST"]);
-    expect(actions[2]?.body).toMatchObject({
-      sessionKey,
-      name: "status",
-      instanceId: "first",
-      resume: true,
-    });
-  });
+      handle.mockReturnValueOnce(old.promise);
+      const h = mountDashboard(handle, false);
+      await h.element.updateComplete;
+      expect(h.request).not.toHaveBeenCalled();
+      h.element.active = true;
+      await h.waitForMethods(["POST"]);
+      if (identity === "command") {
+        await h.waitForTarget("first");
+        h.button("Stop browser")!.click();
+        await h.waitForMethods(["POST", "DELETE"]);
+      }
+      if (replacedWidget) {
+        h.element.widget = widget("current");
+      } else if (identity === "client") {
+        const replacement = createBrowserClient(
+          dashboard(async () => response(instanceId, false, "current")),
+        );
+        h.publish({ ...h.gateway.snapshot, client: replacement.client });
+      } else {
+        h.publish({
+          ...h.gateway.snapshot,
+          hello: gatewayHelloForMethods(browserMethods, ["operator.admin", "operator.read"]),
+        });
+      }
+      await h.waitForTarget("current");
+      old.resolve(response("first", identity === "command", "retired"));
+      await old.promise;
+      await vi.dynamicImportSettled();
+      await h.element.updateComplete;
+      const panel = h.panel()!;
+      expect(panel.fixedTab?.targetId).toBe("current");
+      expect(panel.dashboardTarget?.instanceId).toBe(instanceId);
+    },
+  );
 });

@@ -1,6 +1,6 @@
 import { ComponentType, TextInputStyle, type APITextInputComponent } from "discord-api-types/v10";
 import { BaseModalComponent, clean, parseCustomId, type ComponentData } from "./components.base.js";
-import { AnySelectMenu, TextDisplay } from "./components.message.js";
+import type { AnySelectMenu, TextDisplay } from "./components.message.js";
 
 export abstract class TextInput extends BaseModalComponent {
   readonly type = ComponentType.TextInput;

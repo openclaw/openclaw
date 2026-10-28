@@ -1,15 +1,15 @@
 // Shared harness for dispatch-from-config tests and mocked runtimes.
-import { afterEach, vi } from "vitest";
+import path from "node:path";
+import { afterAll, afterEach, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { withAcpSessionEntryRead } from "../../acp/runtime/session-meta-read.js";
+import type { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
 import type { SessionWorkerPlacementContext } from "../../gateway/worker-environments/session-placement-lifecycle.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { isPluginOwnedBindingMetadata } from "../../plugins/conversation-binding-metadata.js";
-import type {
-  PluginHookBeforeDispatchResult,
-  PluginHookReplyDispatchEvent,
-  PluginHookReplyDispatchResult,
-} from "../../plugins/hook-types.js";
+import type { PluginHookBeforeDispatchResult } from "../../plugins/hook-types.js";
 import type { createHookRunner } from "../../plugins/hooks.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -18,6 +18,10 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import type { ReplyPayload } from "../types.js";
 import { createPluginBindingRecord } from "./conversation-binding.test-fixtures.js";
+import {
+  completeAcpSessionFixture,
+  type AcpSessionFixture,
+} from "./dispatch-from-config.acp-fixture.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import type { StageSandboxMediaResult } from "./stage-sandbox-media.js";
@@ -93,12 +97,9 @@ const hookMocks = vi.hoisted(() => ({
     runBeforeDispatch: vi.fn<
       (eventValue: unknown, _ctx: unknown) => Promise<PluginHookBeforeDispatchResult | undefined>
     >(async () => undefined),
-    runReplyDispatch: vi.fn<
-      (
-        eventValue: PluginHookReplyDispatchEvent,
-        _ctx: unknown,
-      ) => Promise<PluginHookReplyDispatchResult | undefined>
-    >(async () => undefined),
+    runReplyDispatch: vi.fn<ReturnType<typeof createHookRunner>["runReplyDispatch"]>(
+      async () => undefined,
+    ),
     runReplyPayloadSending: vi.fn(async () => undefined),
   },
 }));
@@ -109,7 +110,7 @@ const internalHookMocks = vi.hoisted(() => ({
 const acpMocks = vi.hoisted(() => ({
   listAcpSessionEntries: vi.fn(async () => []),
   readAcpSessionEntry: vi.fn<
-    (params: { sessionKey: string; agentId?: string; cfg?: OpenClawConfig }) => unknown
+    (params: Parameters<typeof readAcpSessionEntry>[0]) => AcpSessionFixture | null
   >(() => null),
   readAcpSessionMeta: vi.fn<
     (params: { sessionKey: string; agentId?: string; cfg?: OpenClawConfig }) => unknown
@@ -156,6 +157,11 @@ export function mockPluginBinding(params: Parameters<typeof createPluginBindingR
 const pluginConversationBindingMocks = vi.hoisted(() => ({
   shownFallbackNoticeBindingIds: new Set<string>(),
 }));
+// Unmocked capability reads open the sibling SQLite database, so each file owns its store.
+export const mockSessionStorePath = path.join(
+  useAutoCleanupTempDirTracker(afterAll).make("openclaw-dispatch-sessions-"),
+  "mock-sessions.json",
+);
 const sessionStoreMocks = vi.hoisted(() => ({
   databaseEntryLoader: undefined as
     | typeof import("../../config/sessions/session-accessor.sqlite-entry.js").loadSessionEntryForAdmission
@@ -164,7 +170,7 @@ const sessionStoreMocks = vi.hoisted(() => ({
   entriesBySessionKey: new Map<string, Record<string, unknown>>(),
   loadSessionEntry: vi.fn((..._args: unknown[]) => sessionStoreMocks.currentEntry),
   loadSessionStoreEntry: vi.fn((..._args: unknown[]) => sessionStoreMocks.currentEntry),
-  resolveSessionStorePathCore: vi.fn(() => "/tmp/mock-sessions.json"),
+  resolveSessionStorePathCore: vi.fn(() => mockSessionStorePath),
   updateSessionStoreEntry: vi.fn(
     async (params: {
       update: (entry: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
@@ -341,8 +347,16 @@ vi.mock("../../agents/tools/ask-user-tool.js", () => ({
 vi.mock("../../logging/diagnostic.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../logging/diagnostic.js")>();
   return {
+    ...actual,
     diagnosticLogger: { debug: vi.fn(), error: vi.fn(), warn: vi.fn() },
-    logMessageDispatchCompleted: diagnosticMocks.logMessageDispatchCompleted,
+    logMessageDispatchCompleted: (
+      params: Parameters<typeof actual.logMessageDispatchCompleted>[0],
+    ) => {
+      diagnosticMocks.logMessageDispatchCompleted(params);
+      if (diagnosticMocks.forwardToRealPipeline) {
+        actual.logMessageDispatchCompleted(params);
+      }
+    },
     logMessageDispatchStarted: diagnosticMocks.logMessageDispatchStarted,
     logMessageQueued: diagnosticMocks.logMessageQueued,
     logMessageProcessed: (params: Parameters<typeof actual.logMessageProcessed>[0]) => {
@@ -379,6 +393,18 @@ vi.mock("../../config/sessions/paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/paths.js")>()),
   resolveSessionStorePathCore: sessionStoreMocks.resolveSessionStorePathCore,
 }));
+// mock-isolation: Durable fixtures use fake rows; explicitly bound memory actors run real commands.
+vi.mock("../../config/sessions/session-actor-scope.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../config/sessions/session-actor-scope.js")>();
+  const { getSessionActorStorageBinding } =
+    await import("../../config/sessions/session-actor-storage-binding.js");
+  return {
+    ...actual,
+    withSessionActor: async (...args: Parameters<typeof actual.withSessionActor>) =>
+      getSessionActorStorageBinding(args[0]) ? actual.withSessionActor(...args) : undefined,
+  };
+});
 vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/session-entry-read-runtime.js")>()),
   readSessionEntryReadOnlyInWorker: async (
@@ -396,19 +422,31 @@ vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOrig
 vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../config/sessions/session-accessor.sqlite-entry.js")>();
-  const { reduceSessionEntryPatch } =
+  const { projectSessionEntryPatch } =
     await import("../../config/sessions/session-entry-patch-operation.js");
+  const { getSessionActorStorageBinding } =
+    await import("../../config/sessions/session-actor-storage-binding.js");
   return {
     ...actual,
     applySessionEntryOperation: async (
       ...[scope, operation, options]: Parameters<typeof actual.applySessionEntryOperation>
     ) => {
+      if (getSessionActorStorageBinding(scope)) {
+        return actual.applySessionEntryOperation(scope, operation, options);
+      }
       let wrote = false;
       const result = await sessionStoreMocks.updateSessionEntry(scope, (entry) => {
         const currentEntry = { sessionId: "", updatedAt: 0, ...entry };
-        const patch = reduceSessionEntryPatch(operation, currentEntry, currentEntry);
-        wrote = patch !== null;
-        return patch;
+        const next = projectSessionEntryPatch({
+          existing: currentEntry,
+          writeBase: currentEntry,
+          sessionKey: scope.sessionKey,
+          operation,
+          replaceEntry: options?.replaceEntry,
+          preserveActivity: options?.preserveActivity,
+        });
+        wrote = next !== undefined;
+        return next ? { ...next } : null;
       });
       const entry = result ? { sessionId: "", updatedAt: 0, ...result } : null;
       if (wrote && entry) {
@@ -449,6 +487,20 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookMocks.runner,
   getGlobalPluginRegistry: () => hookMocks.registry,
   resetGlobalHookRunner: vi.fn(),
+}));
+// mock-isolation: Reply routing supplies ACP snapshots without initializing live control state.
+vi.mock("../../acp/runtime/session-meta-read.js", () => ({
+  withAcpSessionEntryRead: async (
+    params: Parameters<typeof withAcpSessionEntryRead>[0],
+    consume: Parameters<typeof withAcpSessionEntryRead>[1],
+  ) =>
+    consume(
+      completeAcpSessionFixture(acpMocks.readAcpSessionEntry(params), {
+        ...params,
+        storePath: sessionStoreMocks.resolveSessionStorePathCore(),
+      }),
+      undefined,
+    ),
 }));
 // mock-isolation: Reply routing supplies ACP snapshots without initializing live control state.
 vi.mock("../../acp/runtime/session-meta.js", () => ({
@@ -584,7 +636,8 @@ vi.mock("../../config/sessions/transcript.js", () => ({
   appendAssistantMessageToSessionTranscript: (params: unknown) =>
     transcriptMocks.appendAssistantMessageToSessionTranscript(params),
 }));
-vi.mock("../../tts/tts-config.js", () => ({
+vi.mock("../../tts/tts-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../tts/tts-config.js")>()),
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
   resolveConfiguredTtsMode: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg).mode,
   resolveEffectiveTtsConfig: (cfg: OpenClawConfig) => cfg.tts ?? {},

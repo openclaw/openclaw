@@ -1,16 +1,10 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { isMissingPathError } from "./errno.js";
 import { isPathInside } from "./path-guards.js";
 
 export const LEGACY_AGENT_DIR_RECEIPT = ".legacy-agent-dir-migration.json";
-
-// Shipped standalone SDKs used the OS home, independently of OpenClaw state/home overrides.
-export function resolveLegacyStandaloneAgentDir(homedir: () => string = os.homedir): string {
-  return path.join(homedir(), ".openclaw", "agent");
-}
 
 function receiptContent(source: string, target: string): string {
   return `${JSON.stringify({ version: 1, source, target })}\n`;

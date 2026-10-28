@@ -4,10 +4,12 @@ summary: "How taxonomy coverage IDs, scenario YAML, and profiles select what a Q
 read_when:
   - You are choosing which scenarios a run covers
   - You need the Multipass suite lane
-title: "Canonical scenario coverage"
+title: "Scenario coverage"
 ---
 
-## Canonical scenario coverage
+<a id="canonical-scenario-coverage" />
+
+## Scenario coverage
 
 The root `taxonomy.yaml` defines semantic coverage IDs. Scenario YAML files
 under `qa/scenarios/` map each scenario to those IDs and own execution

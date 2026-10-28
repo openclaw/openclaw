@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import type { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
-  resolveProviderHttpRequestConfig,
+  resolveProviderApiKeyHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
@@ -15,29 +15,17 @@ export async function resolveOpenRouterGenerationRequestContext(params: {
   capability: "audio" | "image" | "video";
   jsonContentType: boolean;
 }) {
-  const auth = await resolveApiKeyForProvider({
-    provider: "openrouter",
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    store: params.authStore,
-  });
-  if (!auth.apiKey) {
-    throw new Error("OpenRouter API key missing");
-  }
-
-  return resolveProviderHttpRequestConfig({
+  return resolveProviderApiKeyHttpRequestConfig({
+    req: params,
+    missingApiKeyMessage: "OpenRouter API key missing",
+    jsonContentType: params.jsonContentType,
     baseUrl: params.cfg.models?.providers?.openrouter?.baseUrl,
     defaultBaseUrl: OPENROUTER_BASE_URL,
     allowPrivateNetwork: false,
-    defaultHeaders: {
-      Authorization: `Bearer ${auth.apiKey}`,
-      ...(params.jsonContentType ? { "Content-Type": "application/json" } : {}),
-    },
     request: sanitizeConfiguredModelProviderRequest(
       params.cfg.models?.providers?.openrouter?.request,
     ),
     provider: "openrouter",
     capability: params.capability,
-    transport: "http",
   });
 }

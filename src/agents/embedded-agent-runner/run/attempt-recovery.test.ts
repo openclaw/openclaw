@@ -1,11 +1,14 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE } from "@openclaw/ai/diagnostics";
 import { APIError } from "openai/core/error";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { projectProviderError } from "../../../../packages/ai/src/utils/provider-error.js";
 import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { sleepWithAbort } from "../../../infra/backoff.js";
 import { flushDiagnosticsTimeline } from "../../../infra/diagnostics-timeline.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
@@ -20,10 +23,15 @@ import { handleEmbeddedAssistantFailure } from "./assistant-failure.js";
 import { recoverEmbeddedRunAttempt } from "./attempt-recovery.js";
 import {
   disabledCompactionRuntime,
+  emptyLengthScenario,
+  outputLimitDetails,
+  outputLimitScenario,
+  outputLimitScenarios,
   recoverAfterTransportDrop,
   type TransportDropScenario,
 } from "./attempt-recovery.test-support.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 
 vi.mock("../../../infra/backoff.js", async (importOriginal) => ({
@@ -33,6 +41,7 @@ vi.mock("../../../infra/backoff.js", async (importOriginal) => ({
 
 const tempDirs = createTempDirTracker();
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
+beforeEach(() => vi.mocked(sleepWithAbort).mockClear());
 afterEach(() => tempDirs.cleanup());
 
 it.each(["ECONNREFUSED"])(
@@ -45,7 +54,6 @@ it.each(["ECONNREFUSED"])(
       replaySafe: true,
       content: [],
     } satisfies TransportDropScenario;
-    vi.mocked(sleepWithAbort).mockClear();
     const setup = await recoverAfterTransportDrop({ ...scenario, retryConnectionErrors: false });
     expect(setup.recovery.action).toBe("proceed");
     expect(sleepWithAbort).not.toHaveBeenCalled();
@@ -113,25 +121,6 @@ function handleAssistantFailureAfterRecovery(
   });
 }
 
-const outputLimitDetails = {
-  eventType: "response.incomplete",
-  stopReason: "length",
-  incompleteReason: "max_output_tokens",
-};
-
-const outputLimitScenario = {
-  errorCode: "incomplete_tool_call",
-  errorMessage: "Responses stream completed with an incomplete terminal tool call",
-  diagnostics: [
-    {
-      type: "openai_responses_terminal",
-      timestamp: 1,
-      details: outputLimitDetails,
-    },
-  ],
-  usage: createMockUsage(440_445, 128_000),
-} satisfies TransportDropScenario;
-
 const unsettledBatches: Array<[string, TransportDropScenario]> = [
   ["a tool result is missing", { missingToolResult: true }],
   ["a lifecycle item remains active", { activeCount: 1 }],
@@ -147,6 +136,86 @@ function recoveryCases(
   cases: Array<[string, TransportDropScenario]>,
 ): Array<[string, TransportDropScenario]> {
   return cases.map(([name, scenario]) => [`${context}: ${name}`, { ...base, ...scenario }]);
+}
+
+function terminalRecoveryInput(
+  id: string,
+  attempt: ReturnType<typeof makeEmbeddedRunnerAttempt>,
+  assistant: ReturnType<typeof buildEmbeddedRunnerAssistant>,
+) {
+  return {
+    runInput: {
+      runParams: { sessionId: `session:${id}`, runId: `run:${id}` },
+      resolvedSessionKey: `agent:main:${id}`,
+      startedAtMs: Date.now(),
+    },
+    preparedRuntime: {
+      provider: "openai",
+      modelId: "synthetic-model",
+      model: { id: "synthetic-model" },
+      genericCompactionRecoveryAllowed: false,
+      snapshot: () => ({
+        thinkLevel: "off",
+        agentHarness: { id: "codex" },
+        outerContextTokenMeta: {},
+      }),
+    },
+    normalizedAttempt: {
+      attempt,
+      sessionIdUsed: attempt.sessionIdUsed,
+      attemptAssistant: assistant,
+      currentAttemptAssistant: attempt.currentAttemptAssistant,
+      currentAttemptCompletedAssistant: undefined,
+      terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
+      setTerminalLifecycleMeta: vi.fn(),
+      attemptCompactionCount: 0,
+      activeErrorContext: { provider: "openai", model: "synthetic-model" },
+      resolveReplayInvalidForAttempt: () => false,
+      canRestartForLiveSwitch: false,
+    },
+    runtimePlan: { auth: {} },
+    sessionPromptState: { sessionFile: "/tmp/session.jsonl" },
+    usageAccumulator: createUsageAccumulator(),
+  };
+}
+
+function providerError(
+  headers?: Headers | Record<string, string>,
+  message = "provider temporarily unavailable",
+  status = 429,
+  response?: { headers: Record<string, string> },
+) {
+  return headers instanceof Headers
+    ? new APIError(status, { message }, undefined, headers)
+    : Object.assign(new Error(message), { status, headers, response });
+}
+
+function promptError(error: Error): TransportDropScenario {
+  return {
+    terminal: { kind: "failed", source: "prompt", error },
+    errorBody: JSON.stringify({ headers: { "retry-after": "99" } }),
+  };
+}
+
+function retryHeaders(milliseconds: string, seconds = "7") {
+  return { "retry-after": seconds, "retry-after-ms": milliseconds };
+}
+
+function expectNoProfileFailure(fixture: Awaited<ReturnType<typeof recoverAfterTransportDrop>>) {
+  expect(fixture.failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
+  expect(fixture.failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+}
+
+function expectNoContinuation(fixture: Awaited<ReturnType<typeof recoverAfterTransportDrop>>) {
+  expect(fixture.recovery).toEqual({ action: "proceed" });
+  expect(fixture.continueFromCurrentTranscript).not.toHaveBeenCalled();
+}
+
+function failedBatch(toolName = "exec"): TransportDropScenario {
+  return {
+    failedToolCallId: "call_2",
+    lastToolError: { toolName, error: toolName === "write" ? "write failed" : "command failed" },
+  };
 }
 
 describe("recoverEmbeddedRunAttempt", () => {
@@ -202,32 +271,28 @@ describe("recoverEmbeddedRunAttempt", () => {
       );
     },
   );
-  it.each([true, false])(
-    "continues output-limited work without replay (no tools=%s)",
-    async (noTools) => {
-      const {
-        attempt,
-        recovery,
-        markOwnedTranscriptRetry,
-        continueFromCurrentTranscript,
-        failoverRetryController,
-        onAgentEvent,
-      } = await recoverAfterTransportDrop({
-        ...outputLimitScenario,
+  it.each(
+    outputLimitScenarios.flatMap((scenario) =>
+      [true, false].map((noTools) => ({ scenario, noTools })),
+    ),
+  )(
+    "continues output-limited work without replay (no tools=$noTools)",
+    async ({ scenario, noTools }) => {
+      const fixture = await recoverAfterTransportDrop({
+        ...scenario,
         noTools,
-        assistantTexts: noTools ? [] : ["The change is saved. I am checking its results."],
+        preToolText: noTools ? undefined : "The change is saved. I am checking its results.",
       });
 
-      expect(recovery).toMatchObject({ action: "retry", lastRetryFailoverReason: null });
-      expect(markOwnedTranscriptRetry).toHaveBeenCalledTimes(2);
-      expect(continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
+      expect(fixture.recovery).toMatchObject({ action: "retry", lastRetryFailoverReason: null });
+      expect(fixture.markOwnedTranscriptRetry).toHaveBeenCalledTimes(2);
+      expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
         includeToolFailureInstruction: false,
-        messages: attempt.messagesSnapshot,
+        messages: undefined,
       });
-      expect(failoverRetryController.transientRetryCount).toBe(1);
-      expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
-      expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
-      expect(onAgentEvent).toHaveBeenCalledWith(
+      expect(fixture.failoverRetryController.transientRetryCount).toBe(1);
+      expectNoProfileFailure(fixture);
+      expect(fixture.onAgentEvent).toHaveBeenCalledWith(
         expect.objectContaining({
           stream: "run_status",
           data: expect.objectContaining({ phase: "retrying", reason: "output_limit" }),
@@ -236,45 +301,69 @@ describe("recoverEmbeddedRunAttempt", () => {
     },
   );
 
-  it("does not bypass the output-limit budget through empty-error retries", async () => {
-    const fixture = await recoverAfterTransportDrop({
-      ...outputLimitScenario,
-      noTools: true,
-      retryAvailable: false,
-    });
-    expect(fixture.recovery).toEqual({ action: "proceed" });
+  it.each([outputLimitScenario, emptyLengthScenario])(
+    "does not bypass the output-limit budget through empty-error retries",
+    async (scenario) => {
+      const fixture = await recoverAfterTransportDrop({
+        ...scenario,
+        noTools: true,
+        retryAvailable: false,
+      });
+      await expect(handleAssistantFailureAfterRecovery(fixture)).resolves.toMatchObject({
+        action: "proceed",
+        emptyErrorRetries: 0,
+      });
+      expectNoContinuation(fixture);
+      expectNoProfileFailure(fixture);
+    },
+  );
 
-    await expect(handleAssistantFailureAfterRecovery(fixture)).resolves.toMatchObject({
-      action: "proceed",
-      emptyErrorRetries: 0,
-    });
-    expect(fixture.continueFromCurrentTranscript).not.toHaveBeenCalled();
-    expect(fixture.failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(fixture.failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
-  });
+  it.each(
+    outputLimitScenarios
+      .slice(0, 2)
+      .flatMap((scenario) => [true, false].map((noTools) => ({ scenario, noTools }))),
+  )(
+    "allows only one output-limit continuation after progress (no tools=$noTools)",
+    async ({ scenario, noTools }) => {
+      const fixture = await recoverAfterTransportDrop({
+        ...scenario,
+        noTools,
+        preToolText: noTools ? undefined : "The change is saved. I am checking its results.",
+      });
+      const { recovery, recover, failoverRetryController, continueFromCurrentTranscript } = fixture;
+      expect(recovery).toMatchObject({ action: "retry", lastRetryFailoverReason: null });
+      expect(fixture.markOwnedTranscriptRetry).toHaveBeenCalledTimes(2);
+      expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
+        includeToolFailureInstruction: false,
+        messages: undefined,
+      });
+      expect(fixture.failoverRetryController.transientRetryCount).toBe(1);
+      expectNoProfileFailure(fixture);
+      expect(fixture.onAgentEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stream: "run_status",
+          data: expect.objectContaining({ phase: "retrying", reason: "output_limit" }),
+        }),
+      );
+      failoverRetryController.observeAttempt({
+        providerRetryMaxRetries: 8,
+        hasSuccessfulModelResponse: true,
+      });
 
-  it("allows only one output-limit continuation even after successful model progress", async () => {
-    const { recovery, recover, failoverRetryController, continueFromCurrentTranscript } =
-      await recoverAfterTransportDrop(outputLimitScenario);
-    expect(recovery.action).toBe("retry");
-    failoverRetryController.observeAttempt({
-      providerRetryMaxRetries: 8,
-      hasSuccessfulModelResponse: true,
-    });
+      expect(await recover()).toEqual({ action: "proceed" });
+      expect(failoverRetryController.transientRetryCount).toBe(0);
+      expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
+      expectNoProfileFailure(fixture);
+    },
+  );
 
-    expect(await recover()).toEqual({ action: "proceed" });
-    expect(failoverRetryController.transientRetryCount).toBe(1);
-    expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
-    expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
-  });
-
-  it("continues slow output generation without consuming the transient outage window", async () => {
-    const startedAt = Date.now();
-    const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
-    try {
+  it.each([outputLimitScenario, emptyLengthScenario])(
+    "continues slow output generation without consuming the transient outage window",
+    async (scenario) => {
+      const startedAt = performance.now();
+      using now = vi.spyOn(performance, "now").mockReturnValue(startedAt);
       const { recovery, recover, failoverRetryController, continueFromCurrentTranscript } =
-        await recoverAfterTransportDrop(outputLimitScenario);
+        await recoverAfterTransportDrop(scenario);
       expect(recovery.action).toBe("retry");
       now.mockReturnValue(startedAt + 16 * 60_000);
 
@@ -289,9 +378,98 @@ describe("recoverEmbeddedRunAttempt", () => {
       await expect(
         failoverRetryController.maybeRetryTransient({ reason: "server_error" }),
       ).resolves.toBe(false);
-    } finally {
-      now.mockRestore();
-    }
+    },
+  );
+
+  it.each<{ label: string } & TransportDropScenario>([
+    {
+      label: "partial answer",
+      assistant: buildEmbeddedRunnerAssistant({
+        stopReason: "length",
+        content: [{ type: "text", text: "The result so far" }],
+      }),
+    },
+    {
+      label: "completed answer before the empty stop",
+      assistantTexts: ["The result is verified."],
+    },
+    { label: "assistant media", preToolText: "MEDIA:https://example.com/result.png" },
+    {
+      label: "snapshot-only assistant media",
+      preToolText: "MEDIA:https://example.com/result.png",
+      assistantTexts: [],
+    },
+    { label: "voice output", preToolText: "[[audio_as_voice]]" },
+    { label: "tool media", toolMediaUrls: ["https://example.com/result.png"] },
+    { label: "source reply already delivered", sourceReplyDelivered: true },
+  ])("preserves $label after a length stop", async ({ label: _label, ...scenario }) => {
+    const fixture = await recoverAfterTransportDrop({
+      ...emptyLengthScenario,
+      ...scenario,
+    });
+    expectNoContinuation(fixture);
+  });
+
+  it.each(["pending", "delivered", "error"] as const)(
+    "preserves %s source delivery after an empty length stop",
+    async (state) => {
+      const fixture = await recoverAfterTransportDrop({
+        ...emptyLengthScenario,
+        resolveReplyDelivery: async () => {
+          if (state === "error") {
+            throw new Error("delivery unavailable");
+          }
+          return state;
+        },
+      });
+      expectNoContinuation(fixture);
+    },
+  );
+
+  it.each([undefined, "[[reply_to_current]]"])(
+    "continues after an earlier answer was delivered (reply target: %s)",
+    async (preToolText) => {
+      const previousAssistant = buildEmbeddedRunnerAssistant({
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "toolCall",
+            id: "previous_reply",
+            name: "message",
+            arguments: { action: "send", message: "The previous result is ready." },
+          },
+        ],
+      });
+      const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
+        ...emptyLengthScenario,
+        preToolText,
+        precedingMessages: [
+          { role: "user", content: "Send the previous result.", timestamp: 0 },
+          previousAssistant,
+          makeTextToolResult("previous_reply", "message", "Delivered.", false, 0),
+        ],
+        answerSegments: [
+          { textEnd: 0, messageEnd: 1, finalMessageStart: 1, lastAssistant: previousAssistant },
+        ],
+        resolveReplyDelivery: async (minimumAssistantMessageIndex = 0) =>
+          minimumAssistantMessageIndex <= 1 ? "delivered" : "missing",
+      });
+      expect(recovery.action).toBe("retry");
+      expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("routes a zero-output length overflow to compaction before output retries", async () => {
+    await expect(
+      recoverAfterTransportDrop({
+        assistant: buildEmbeddedRunnerAssistant({
+          stopReason: "length",
+          content: [],
+          usage: createMockUsage(199000, 0),
+        }),
+        compactionEnabled: true,
+      }),
+    ).rejects.toThrow("overflow compaction requested");
   });
 
   it.each([
@@ -299,7 +477,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     { eventType: "response.incomplete", incompleteReason: "content_filter" },
     { eventType: "response.completed", incompleteReason: "max_output_tokens" },
   ])("does not resume an incomplete call after $eventType/$incompleteReason", async (details) => {
-    const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
+    const fixture = await recoverAfterTransportDrop({
       ...outputLimitScenario,
       diagnostics: [
         {
@@ -309,8 +487,7 @@ describe("recoverEmbeddedRunAttempt", () => {
         },
       ],
     });
-    expect(recovery).toEqual({ action: "proceed" });
-    expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
+    expectNoContinuation(fixture);
   });
 
   it.each<[string, TransportDropScenario]>([
@@ -371,183 +548,160 @@ describe("recoverEmbeddedRunAttempt", () => {
     },
   );
 
-  it.each([
-    { errorMessage: "429 rate_limit_exceeded; Retry-After: 3600", delayMs: 3_600_000 },
-    {
-      errorMessage: "429 requests per minute exceeded. Please try again in 11.054s.",
-      delayMs: 11_054,
-    },
-    { headers: { "retry-after": "7", "retry-after-ms": "8500" }, delayMs: 8500 },
-    { headers: { "retry-after": "7", "retry-after-ms": "invalid" }, delayMs: 7000 },
-  ])("continues after respecting the provider floor of $delayMs ms", async (scenario) => {
-    vi.mocked(sleepWithAbort).mockClear();
-    const { recovery, onAgentEvent, continueFromCurrentTranscript } =
-      await recoverAfterTransportDrop({
-        errorMessage: scenario.errorMessage ?? "429 provider rate limit",
-        errorBody: scenario.headers ? JSON.stringify({ headers: scenario.headers }) : undefined,
+  const pacingNow = Date.parse("2026-06-11T00:00:00.000Z");
+  it.each<[number, TransportDropScenario, boolean?]>([
+    [
+      3_600_000,
+      { errorMessage: "429 rate_limit_exceeded; Retry-After: 3600", diagnostics: [] },
+      true,
+    ],
+    [
+      11_054,
+      {
+        errorMessage: "429 requests per minute exceeded. Please try again in 11.054s.",
         diagnostics: [],
-      });
-    expect(recovery).toMatchObject({ action: "retry", lastRetryFailoverReason: "rate_limit" });
-    expect(sleepWithAbort).toHaveBeenCalledExactlyOnceWith(scenario.delayMs, undefined);
-    expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
-    expect(onAgentEvent).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        stream: "run_status",
-        data: expect.objectContaining({
-          phase: "retrying",
-          attempt: 2,
-          maxAttempts: 10,
-          reason: "rate_limit",
+      },
+      true,
+    ],
+    ...["8500", "invalid"].map((ms): [number, TransportDropScenario, boolean] => [
+      ms === "invalid" ? 7000 : 8500,
+      {
+        errorMessage: "429 provider rate limit",
+        errorBody: JSON.stringify({ headers: retryHeaders(ms) }),
+        diagnostics: [],
+      },
+      true,
+    ]),
+    [8500, promptError(providerError(new Headers(retryHeaders("8500"))))],
+    [
+      7000,
+      promptError(providerError({ "Retry-After": "7", "retry-after-ms": "335" }, undefined, 503)),
+    ],
+    [
+      8500,
+      promptError(
+        providerError(undefined, undefined, 429, { headers: { "retry-after-ms": "8500" } }),
+      ),
+    ],
+    [11_054, promptError(providerError(undefined, "Please try again in 11.054s."))],
+    [12_000, promptError(providerError({ "retry-after": "7" }, "Retry-After: 12"))],
+    [
+      65 * 60_000,
+      {
+        errorMessage: `429 rate_limit_exceeded; Retry-After: ${new Date(pacingNow + 65 * 60_000).toUTCString()}`,
+      },
+    ],
+    [
+      7000,
+      projectProviderError(
+        providerError(new Headers(retryHeaders("335")), "Please try again in 1s."),
+      ),
+    ],
+  ])("honors a provider retry floor of %i ms (case %#)", async (delayMs, input, observeEvent) => {
+    using clock = vi.spyOn(Date, "now");
+    clock.mockReturnValue(pacingNow);
+    const fixture = await recoverAfterTransportDrop(input);
+    expect(fixture.recovery.action).toBe("retry");
+    expect(sleepWithAbort).toHaveBeenCalledExactlyOnceWith(delayMs, undefined);
+    expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledOnce();
+    if (observeEvent) {
+      expect(fixture.recovery).toMatchObject({ lastRetryFailoverReason: "rate_limit" });
+      expect(fixture.onAgentEvent).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          stream: "run_status",
+          data: expect.objectContaining({
+            phase: "retrying",
+            attempt: 2,
+            maxAttempts: 16,
+            reason: "rate_limit",
+            retryAt: pacingNow + delayMs,
+          }),
         }),
-      }),
-    );
-  });
-
-  it.each([
-    {
-      status: 429,
-      headers: new Headers({ "retry-after": "7", "retry-after-ms": "8500" }),
-      delayMs: 8500,
-    },
-    { status: 503, headers: { "Retry-After": "7", "retry-after-ms": "335" }, delayMs: 7000 },
-    { status: 429, response: { headers: { "retry-after-ms": "8500" } }, delayMs: 8500 },
-    { status: 429, message: "Please try again in 11.054s.", delayMs: 11_054 },
-    { status: 429, headers: { "retry-after": "7" }, message: "Retry-After: 12", delayMs: 12_000 },
-  ])(
-    "honors prompt-exception pacing for HTTP $status with floor $delayMs",
-    async ({ status, headers, response, message, delayMs }) => {
-      vi.mocked(sleepWithAbort).mockClear();
-      const error =
-        headers instanceof Headers
-          ? new APIError(
-              status,
-              { message: "provider temporarily unavailable" },
-              undefined,
-              headers,
-            )
-          : Object.assign(new Error(message ?? "provider temporarily unavailable"), {
-              status,
-              headers,
-              response,
-            });
-      const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
-        terminal: { kind: "failed", source: "prompt", error },
-        errorBody: JSON.stringify({ headers: { "retry-after": "99" } }),
-      });
-      expect(recovery.action).toBe("retry");
-      expect(sleepWithAbort).toHaveBeenCalledExactlyOnceWith(delayMs, undefined);
-      expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
-    },
-  );
-
-  it.each([65 * 60_000])("honors a Retry-After HTTP date %i ms ahead", async (delayMs) => {
-    const nowMs = Date.parse("2026-06-11T00:00:00.000Z");
-    const clock = vi.spyOn(Date, "now").mockReturnValue(nowMs);
-    try {
-      vi.mocked(sleepWithAbort).mockClear();
-      const { recovery } = await recoverAfterTransportDrop({
-        errorMessage: `429 rate_limit_exceeded; Retry-After: ${new Date(nowMs + delayMs).toUTCString()}`,
-      });
-      expect(recovery.action).toBe("retry");
-      expect(sleepWithAbort).toHaveBeenCalledExactlyOnceWith(delayMs, undefined);
-    } finally {
-      clock.mockRestore();
+      );
     }
   });
 
-  it.each([
-    {
-      label: "fails over past the saved maxRetryDelayMs when a fallback exists",
-      errorMessage:
-        '429 rate limit: {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s rate limit. Please try again later."}}',
-      errorBody: JSON.stringify({ headers: { "retry-after": "9897" } }),
-      fallbackConfigured: true,
-      replaySafe: true,
-      providerRetryMaxDelayMs: 30_000,
-      expectedAction: "proceed",
-      expectedSleepMs: undefined,
-    },
-    {
-      // Live shape: exec/write already ran, so rotation and fallback are both
-      // refused downstream. Declining the wait would end the turn; keep waiting.
-      label: "keeps waiting past the cap when tool activity made the attempt replay-unsafe",
-      errorMessage: "429 rate_limit_exceeded; Retry-After: 9897",
-      fallbackConfigured: true,
-      replaySafe: false,
-      providerRetryMaxDelayMs: 30_000,
-      expectedAction: "retry",
-      expectedSleepMs: 9_897_000,
-    },
-    {
-      label: "still sleeps the same floor with no fallback",
-      errorMessage: "429 rate_limit_exceeded; Retry-After: 9897",
-      fallbackConfigured: false,
-      replaySafe: true,
-      providerRetryMaxDelayMs: 30_000,
-      expectedAction: "retry",
-      expectedSleepMs: 9_897_000,
-    },
-    {
-      label: "keeps a floor inside the cap on the same model",
-      errorMessage: "429 rate_limit_exceeded; Retry-After: 20",
-      fallbackConfigured: true,
-      replaySafe: true,
-      providerRetryMaxDelayMs: 30_000,
-      expectedAction: "retry",
-      expectedSleepMs: 20_000,
-    },
-  ])("$label", async (scenario) => {
-    vi.mocked(sleepWithAbort).mockClear();
+  // The controller owns the cap matrix; this boundary must forward replay safety.
+  it.each([true, false])("honors retry caps only when replay-safe=%s", async (replaySafe) => {
+    const expectedSleepMs = replaySafe ? undefined : 9_897_000;
     const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
-      errorMessage: scenario.errorMessage,
-      errorBody: scenario.errorBody,
-      fallbackConfigured: scenario.fallbackConfigured,
-      replaySafe: scenario.replaySafe,
-      providerRetryMaxDelayMs: scenario.providerRetryMaxDelayMs,
+      errorMessage: "429 rate_limit_exceeded; Retry-After: 9897",
+      fallbackConfigured: true,
+      replaySafe,
+      providerRetryMaxDelayMs: 30_000,
       diagnostics: [],
     });
-    expect(recovery.action).toBe(scenario.expectedAction);
-    if (scenario.expectedSleepMs === undefined) {
+    expect(recovery.action).toBe(expectedSleepMs === undefined ? "proceed" : "retry");
+    if (expectedSleepMs === undefined) {
       expect(sleepWithAbort).not.toHaveBeenCalled();
       expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
     } else {
-      expect(sleepWithAbort).toHaveBeenCalledExactlyOnceWith(scenario.expectedSleepMs, undefined);
+      expect(sleepWithAbort).toHaveBeenCalledExactlyOnceWith(expectedSleepMs, undefined);
       expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
     }
   });
 
-  it("preserves the larger header floor after an SDK failure becomes an assistant message", async () => {
-    vi.mocked(sleepWithAbort).mockClear();
-    const projection = projectProviderError(
-      new APIError(
-        429,
-        { message: "Please try again in 1s." },
-        undefined,
-        new Headers({ "retry-after": "7", "retry-after-ms": "335" }),
-      ),
-    );
-    const { recovery } = await recoverAfterTransportDrop(projection);
-    expect(recovery.action).toBe("retry");
-    expect(sleepWithAbort).toHaveBeenCalledExactlyOnceWith(7000, undefined);
-  });
-
-  it("exhausts ten rate-limited attempts before profile rotation and model failover", async () => {
+  it("exhausts sixteen rate-limited attempts with bounded history before rotation and failover", async () => {
+    await using sessionPromptState = await createEmbeddedRunSessionPromptState({
+      runParams: {
+        sessionId: "retry-retention",
+        sessionFile: "/tmp/retry-retention",
+        sessionPersistence: "detached",
+        workspaceDir: "/tmp/retry-retention",
+        prompt: "Inspect the synthetic image.",
+        runId: "retry-retention",
+        timeoutMs: 60_000,
+      },
+      sessionAgentId: "main",
+      resolvedSessionKey: "agent:main:retry-retention",
+      lifecycleGeneration: "retry-retention",
+      onInterrupt: () => {},
+    });
     const fixture = await recoverAfterTransportDrop({
       errorMessage: "429 provider rate limit",
       diagnostics: [],
       content: [],
       replaySafe: true,
+      noTools: true,
+      continueFromCurrentTranscript: sessionPromptState.continueFromCurrentTranscript,
     });
+    const histories: WeakRef<object>[] = [];
+    const retainedBytes: number[] = [];
+    const imageBytes = 128 * 1024;
+    const replaceHistory = (retry: number) => {
+      const history = {
+        role: "user" as const,
+        content: [
+          {
+            type: "image" as const,
+            mimeType: "image/png",
+            data: Buffer.alloc((imageBytes * 3) / 4, retry).toString("base64"),
+          },
+        ],
+        timestamp: retry,
+      };
+      histories.push(new WeakRef(history));
+      fixture.attempt.messagesSnapshot = [history, fixture.erroredAssistant];
+    };
     const { failoverRetryController: failover } = fixture;
     expect(fixture.recovery.action).toBe("retry");
-    for (let retry = 2; retry <= 9; retry++) {
+    for (let retry = 2; retry <= 15; retry++) {
+      replaceHistory(retry);
       expect((await fixture.recover()).action).toBe("retry");
+      // The mock observer must not itself own old recovery arguments.
+      fixture.continueFromCurrentTranscript.mockClear();
+      if (retry === 2 || retry === 8 || retry === 15) {
+        await nextTurn();
+        queryObjects(WeakRef);
+        retainedBytes.push(histories.filter((history) => history.deref()).length * imageBytes);
+      }
     }
+    expect(retainedBytes).toEqual([imageBytes, imageBytes, imageBytes]);
     expect(failover.advanceAuthProfile).not.toHaveBeenCalled();
     expect(await fixture.recover()).toEqual({ action: "proceed" });
-    expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledTimes(9);
+    expect(fixture.continueFromCurrentTranscript).not.toHaveBeenCalled();
     expect(fixture.onAgentEvent.mock.calls.map(([event]) => event.data.attempt)).toEqual([
-      2, 3, 4, 5, 6, 7, 8, 9, 10,
+      2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
     ]);
     await expect(handleAssistantFailureAfterRecovery(fixture, "rate_limit")).rejects.toMatchObject({
       name: "FailoverError",
@@ -557,36 +711,44 @@ describe("recoverEmbeddedRunAttempt", () => {
     expect(failover.advanceAuthProfile).toHaveBeenCalledOnce();
   });
 
+  it.each<[string, TransportDropScenario, boolean]>([
+    ["no output after settled tools", { content: [] }, true],
+    ["no output before work", { content: [], noTools: true, replaySafe: true }, true],
+    ["partial reasoning", {}, false],
+    ["a native harness thread", { content: [], pluginHarnessOwnsTransport: true }, false],
+    ["an active lifecycle item", { content: [], activeCount: 1 }, false],
+    [
+      "a thrown prompt failure",
+      { content: [], ...promptError(providerError(undefined, "429 provider rate limit")) },
+      false,
+    ],
+  ])("replays the user turn after a rate limit with %s: %s", async (_name, scenario, replays) => {
+    const fixture = await recoverAfterTransportDrop({
+      errorMessage: "Rate limit reached on tokens per min (TPM). Please try again in 25ms.",
+      diagnostics: [],
+      ...scenario,
+    });
+    expect(fixture.recovery.action).toBe("retry");
+    expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
+      includeToolFailureInstruction: false,
+      messages: scenario.pluginHarnessOwnsTransport ? fixture.attempt.messagesSnapshot : undefined,
+      ...(replays ? { replayCurrentUserTurn: true } : {}),
+    });
+  });
+
   it.each<[string, TransportDropScenario]>([
     ["WebSocket drop", {}],
     ["overload before work", { noTools: true, errorMessage: "server_overloaded", diagnostics: [] }],
-    ["overload after settled tools", { errorMessage: "server_overloaded", diagnostics: [] }],
-    [
-      "WebSocket transport code",
-      {
-        errorMessage: "WebSocket closed: reason included ECONNRESET",
-        errorCode: "ERR_WEBSOCKET_TRANSPORT",
-        diagnostics: [],
-      },
-    ],
     [
       "unresolved stream",
       { errorMessage: "Responses stream ended with unresolved tool calls", diagnostics: [] },
     ],
-    [
-      "settled failed batch",
-      { failedToolCallId: "call_2", lastToolError: { toolName: "exec", error: "command failed" } },
-    ],
+    ["settled failed batch", failedBatch()],
     ...[false, true].map((toolFailed): [string, TransportDropScenario] => [
       `idle timeout, tool failed=${toolFailed}`,
       {
         terminal: { kind: "timeout", phase: "prompt", source: "idle", aborted: true },
-        ...(toolFailed
-          ? {
-              failedToolCallId: "call_2",
-              lastToolError: { toolName: "exec", error: "command failed" },
-            }
-          : {}),
+        ...(toolFailed ? failedBatch() : {}),
       },
     ]),
     ...[0, 1].map((activeCount): [string, TransportDropScenario] => [
@@ -594,17 +756,13 @@ describe("recoverEmbeddedRunAttempt", () => {
       { codeModeSuspended: true, activeCount },
     ]),
     ["uncertain outcomes", { activeCount: 1 }],
-    [
-      "mismatched failed summary",
-      { failedToolCallId: "call_2", lastToolError: { toolName: "write", error: "write failed" } },
-    ],
+    ["mismatched failed summary", failedBatch("write")],
     [
       "parked failed batch",
       {
         activeCount: 1,
         codeModeSuspended: true,
-        failedToolCallId: "call_2",
-        lastToolError: { toolName: "exec", error: "command failed" },
+        ...failedBatch(),
       },
     ],
     [
@@ -627,27 +785,19 @@ describe("recoverEmbeddedRunAttempt", () => {
       },
     ],
   ])("continues the existing transcript after %s", async (_label, scenario) => {
-    const {
-      attempt,
-      recovery,
-      markOwnedTranscriptRetry,
-      continueFromCurrentTranscript,
-      failoverRetryController,
-      onAgentEvent,
-    } = await recoverAfterTransportDrop(scenario);
-    expect(recovery).toMatchObject({
+    const fixture = await recoverAfterTransportDrop(scenario);
+    expect(fixture.recovery).toMatchObject({
       action: "retry",
       ...(scenario.terminal?.kind === "timeout" ? { lastRetryFailoverReason: "timeout" } : {}),
     });
-    expect(failoverRetryController.transientRetryCount).toBe(1);
-    expect(markOwnedTranscriptRetry).toHaveBeenCalledOnce();
-    expect(continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
+    expect(fixture.failoverRetryController.transientRetryCount).toBe(1);
+    expect(fixture.markOwnedTranscriptRetry).toHaveBeenCalledOnce();
+    expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
       includeToolFailureInstruction: Boolean(scenario.lastToolError),
-      messages: attempt.messagesSnapshot,
+      messages: undefined,
     });
-    expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
-    expect(onAgentEvent).toHaveBeenCalledWith(
+    expectNoProfileFailure(fixture);
+    expect(fixture.onAgentEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         stream: "run_status",
         data: expect.objectContaining({ phase: "retrying", retryAttempt: 1 }),
@@ -656,7 +806,20 @@ describe("recoverEmbeddedRunAttempt", () => {
   });
 
   it.each([
-    ...recoveryCases("output limit", outputLimitScenario, unsettledBatches),
+    ...outputLimitScenarios.flatMap((scenario) =>
+      recoveryCases("output limit", scenario, [
+        ...unsettledBatches,
+        ["the attempt yielded", { yieldDetected: true }],
+        ["the retry budget is disabled", { retryAvailable: false }],
+        ["raw model runs cannot carry the continuation transcript", { modelRun: true }],
+        ["prompt-free runs cannot carry the continuation transcript", { promptMode: "none" }],
+        ["the run was cancelled", { terminal: { kind: "aborted", source: "external" } }],
+        [
+          "the run deadline expired",
+          { terminal: { kind: "timeout", phase: "prompt", source: "run_budget" } },
+        ],
+      ]),
+    ),
     ...recoveryCases(
       "overflow",
       {
@@ -707,16 +870,10 @@ describe("recoverEmbeddedRunAttempt", () => {
       ["the continuation budget is spent", { retryAvailable: false }],
     ]),
   ])("keeps the replay gate closed: %s", async (_label, scenario) => {
-    const {
-      recovery,
-      markOwnedTranscriptRetry,
-      continueFromCurrentTranscript,
-      failoverRetryController,
-    } = await recoverAfterTransportDrop(scenario);
-    expect(recovery).toEqual({ action: "proceed" });
-    expect(failoverRetryController.transientRetryCount).toBe(0);
-    expect(markOwnedTranscriptRetry).not.toHaveBeenCalled();
-    expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
+    const fixture = await recoverAfterTransportDrop(scenario);
+    expectNoContinuation(fixture);
+    expect(fixture.failoverRetryController.transientRetryCount).toBe(0);
+    expect(fixture.markOwnedTranscriptRetry).not.toHaveBeenCalled();
   });
 
   it("surfaces before_agent_run blocks with current carried usage", async () => {
@@ -745,48 +902,10 @@ describe("recoverEmbeddedRunAttempt", () => {
       lastAssistant: historicalAssistant,
       currentAttemptAssistant: undefined,
     });
-    const terminalState = resolveEmbeddedRunAttemptTerminalState({
-      attempt,
-      assistant: historicalAssistant,
-    });
-    const setTerminalLifecycleMeta = vi.fn();
-
+    const input = terminalRecoveryInput("hook-block", attempt, historicalAssistant);
+    const { setTerminalLifecycleMeta } = input.normalizedAttempt;
     const recovery = await recoverEmbeddedRunAttempt({
-      runInput: {
-        runParams: {
-          sessionId: "session:hook-block",
-          runId: "run:hook-block",
-        },
-        resolvedSessionKey: "agent:main:hook-block",
-        startedAtMs: Date.now(),
-      },
-      preparedRuntime: {
-        provider: "openai",
-        modelId: "synthetic-model",
-        model: { id: "synthetic-model" },
-        genericCompactionRecoveryAllowed: false,
-        snapshot: () => ({
-          thinkLevel: "off",
-          agentHarness: { id: "codex" },
-          outerContextTokenMeta: {},
-        }),
-      },
-      normalizedAttempt: {
-        attempt,
-        sessionIdUsed: attempt.sessionIdUsed,
-        attemptAssistant: historicalAssistant,
-        currentAttemptAssistant: undefined,
-        currentAttemptCompletedAssistant: undefined,
-        terminalState,
-        setTerminalLifecycleMeta,
-        attemptCompactionCount: 0,
-        activeErrorContext: { provider: "openai", model: "synthetic-model" },
-        resolveReplayInvalidForAttempt: () => false,
-        canRestartForLiveSwitch: false,
-      },
-      runtimePlan: { auth: {} },
-      sessionPromptState: { sessionFile: "/tmp/session.jsonl" },
-      usageAccumulator: createUsageAccumulator(),
+      ...input,
       lastRunPromptUsage: carriedUsage,
     } as never);
 
@@ -856,52 +975,25 @@ describe("recoverEmbeddedRunAttempt", () => {
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
       itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
     });
-    const terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
-
+    const input = terminalRecoveryInput("compaction-failure", attempt, assistant);
     const recovery = await recoverEmbeddedRunAttempt({
+      ...input,
       runInput: {
-        runParams: {
-          config: {},
-          agentId: "main",
-          sessionId: "session:compaction-failure",
-          runId: "run:compaction-failure",
-        },
-        resolvedSessionKey: "agent:main:compaction-failure",
-        startedAtMs: Date.now(),
+        ...input.runInput,
+        runParams: { ...input.runInput.runParams, config: {}, agentId: "main" },
       },
       preparedRuntime: {
-        provider: "openai",
-        modelId: "synthetic-model",
-        model: { id: "synthetic-model" },
-        genericCompactionRecoveryAllowed: false,
+        ...input.preparedRuntime,
         maybeRefreshRuntimeAuthForAuthError: promptFailover,
         snapshot: () => ({
-          thinkLevel: "off",
-          agentHarness: { id: "codex" },
-          outerContextTokenMeta: {},
+          ...input.preparedRuntime.snapshot(),
           lastProfileId: "profile-1",
           pluginHarnessOwnsTransport: false,
         }),
       },
-      normalizedAttempt: {
-        attempt,
-        sessionIdUsed: attempt.sessionIdUsed,
-        attemptAssistant: assistant,
-        currentAttemptAssistant: assistant,
-        currentAttemptCompletedAssistant: undefined,
-        terminalState,
-        setTerminalLifecycleMeta: vi.fn(),
-        attemptCompactionCount: 0,
-        activeErrorContext: { provider: "openai", model: "synthetic-model" },
-        resolveReplayInvalidForAttempt: () => false,
-        canRestartForLiveSwitch: false,
-      },
-      runtimePlan: { auth: {} },
-      sessionPromptState: { sessionFile: "/tmp/session.jsonl" },
       failoverRetryController,
       compactionRuntime: disabledCompactionRuntime,
       contextRecoveryState: createEmbeddedRunContextRecoveryState(),
-      usageAccumulator: createUsageAccumulator(),
       lastRunPromptUsage: undefined,
       runtimeAuthRetry: false,
       codexAppServerRecoveryRetryAvailable: false,

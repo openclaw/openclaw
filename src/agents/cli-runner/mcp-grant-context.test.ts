@@ -1,22 +1,19 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildCliMcpDelegationCapabilityBinding,
   buildCliMcpGrantContext,
 } from "./mcp-grant-context.js";
 import type { RunCliAgentParams } from "./types.js";
 
+const session = { sessionId: "cli-session", updatedAt: 1 };
 function buildGrant(
   overrides: Partial<RunCliAgentParams> = {},
-  delegationCapability?: "full" | "report_only",
+  delegationCapability?: "full" | "host_only" | "report_only",
 ) {
   const run = {
     sessionKey: "agent:main:telegram:group:chat123",
     workspaceDir: "/workspace",
-    inputProvenance: {
-      kind: "inter_session",
-      sourceTool: "subagent_announce",
-    },
+    inputProvenance: { kind: "inter_session", sourceTool: "subagent_announce" },
     sourceReplyDeliveryMode: "message_tool_only",
     messageProvider: "telegram",
     currentChannelId: "telegram:chat123",
@@ -27,7 +24,7 @@ function buildGrant(
 
   return buildCliMcpGrantContext({
     run,
-    config: {} as OpenClawConfig,
+    config: {},
     requireExplicitMessageTarget: false,
     agentId: "main",
     modelProvider: "openai",
@@ -35,104 +32,49 @@ function buildGrant(
   });
 }
 
-describe("buildCliMcpGrantContext source-reply authority", () => {
-  it.each(["heartbeat", "cron-event", "exec-event"])(
-    "keeps the reply channel separate from the %s turn source",
-    (messageProvider) => {
-      expect(buildGrant({ messageProvider, messageChannel: "telegram" }).messageProvider).toBe(
-        "telegram",
-      );
-      expect(buildGrant({ messageProvider }).messageProvider).toBeUndefined();
-    },
-  );
-
-  it("stamps only trusted, message-capped subagent completion grants", () => {
-    expect(buildGrant().sourceReplyOnly).toBe(true);
-  });
-
-  it("carries the prepared model vision capability into the loopback grant", () => {
-    expect(buildGrant({ modelHasVision: true }).modelHasVision).toBe(true);
-  });
-
-  it("snapshots only the resolved logical model into the loopback grant", () => {
-    const requesterModel = {
-      provider: "selected-provider",
-      model: "selected-provider/literal-model",
-      nativeModelId: "native-model[1m]",
+describe("buildCliMcpGrantContext", () => {
+  it("snapshots policy and logical model fields without copying private metadata", () => {
+    const elevated = {
+      enabled: false,
+      allowed: false,
+      defaultLevel: "off" as const,
+      fullAccessAvailable: false,
+      privateMetadata: "must not enter the grant",
     };
-    const grant = buildGrant({ requesterModel });
-    requesterModel.model = "later-model";
-
-    expect(grant.requesterModel).toEqual({
-      provider: "selected-provider",
-      model: "selected-provider/literal-model",
-    });
-    expect(buildGrant()).not.toHaveProperty("requesterModel");
-  });
-
-  it("binds screen commands to the requesting browser in the server-owned grant", () => {
+    const selected = { provider: "selected-provider", model: "selected-provider/literal-model" };
+    const requesterModel = { ...selected, nativeModelId: "native-model[1m]" };
     const gatewayUiCommandTarget = { connId: "requester-tab", profileId: "requester" };
-    expect(buildGrant({ gatewayUiCommandTarget }).gatewayUiCommandTarget).toEqual(
-      gatewayUiCommandTarget,
-    );
+    const grant = buildGrant({ bashElevated: elevated, requesterModel, gatewayUiCommandTarget });
+    elevated.enabled = true;
+    requesterModel.model = "later-model";
+    expect(grant.requesterModel).toEqual(selected);
+    expect(grant.gatewayUiCommandTarget).toEqual(gatewayUiCommandTarget);
+    expect(grant.bashElevated).toEqual({
+      enabled: false,
+      allowed: false,
+      defaultLevel: "off",
+      fullAccessAvailable: false,
+    });
+    expect(
+      buildGrant({ bashElevated: { ...elevated, fullAccessAvailable: undefined } }).bashElevated,
+    ).not.toHaveProperty("fullAccessAvailable");
   });
-
-  it("carries the prepared reply mode into loopback message tools", () => {
-    expect(buildGrant({ replyToMode: "all" }).replyToMode).toBe("all");
-  });
-
-  it.each(["read-only", "guarded", "workspace", "full"] as const)(
-    "carries the exact %s session permission into the loopback grant",
-    (permissionMode) => {
-      const grant = buildGrant({
-        sessionEntry: {
-          sessionId: "cli-session",
-          updatedAt: 1,
-          permissionMode,
-          execHost: "gateway",
-        },
-      });
-
-      expect(grant.execSession).toMatchObject({ permissionMode, execHost: "gateway" });
-    },
-  );
 
   it.each([
-    { execMode: "deny", permissionMode: "read-only" },
-    { execMode: "allowlist", permissionMode: "guarded" },
-    { execMode: "ask", permissionMode: "guarded" },
-    { execMode: "auto", permissionMode: "workspace" },
-    { execMode: "full", permissionMode: "full" },
+    ["read-only", undefined, "read-only"],
+    ["workspace", "full", "full"],
+    ["full", "allowlist", "guarded"],
   ] as const)(
-    "preserves effective $execMode execution authority in the granted session",
-    ({ execMode, permissionMode }) => {
+    "maps persisted %s with execution override %s to %s permission",
+    (persisted, mode, permissionMode) => {
       const grant = buildGrant({
-        sessionEntry: {
-          sessionId: "cli-session",
-          updatedAt: 1,
-          permissionMode: "workspace",
-        },
-        execOverrides: { mode: execMode },
+        sessionEntry: { ...session, permissionMode: persisted, execHost: "gateway" },
+        execOverrides: mode ? { mode } : undefined,
       });
-
-      expect(grant.execSession?.permissionMode).toBe(permissionMode);
-      expect(grant.execOverrides?.mode).toBe(execMode);
+      expect(grant.execSession).toMatchObject({ permissionMode, execHost: "gateway" });
+      expect(grant.execOverrides).toEqual(mode ? { mode } : undefined);
     },
   );
-
-  it("narrows a persisted full session to guarded approval for an allowlist override", () => {
-    const grant = buildGrant({
-      sessionEntry: {
-        sessionId: "cli-session",
-        updatedAt: 1,
-        permissionMode: "full",
-      },
-      execOverrides: { mode: "allowlist" },
-    });
-
-    expect(grant.execSession?.permissionMode).toBe("guarded");
-    expect(grant.execOverrides?.mode).toBe("allowlist");
-  });
 
   it.each([
     { label: "the provider", overrides: { messageProvider: undefined } },
@@ -141,45 +83,35 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
     expect(buildGrant(overrides).sourceReplyOnly).toBe(true);
   });
 
-  it.each([
-    {
-      label: "ordinary user provenance",
-      overrides: { inputProvenance: { kind: "external_user" } },
-    },
-    {
-      label: "another inter-session source",
-      overrides: {
-        inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
-      },
-    },
-    {
-      label: "automatic source delivery",
-      overrides: { sourceReplyDeliveryMode: "automatic" },
-    },
-    {
-      label: "an unrestricted tool grant",
-      overrides: { cliToolAvailability: undefined },
-    },
-    {
-      label: "additional granted tools",
-      overrides: { cliToolAvailability: { native: [], openClaw: ["message", "read"] } },
-    },
-  ])("does not stamp source-only authority for $label", ({ overrides }) => {
-    expect(buildGrant(overrides as Partial<RunCliAgentParams>).sourceReplyOnly).toBeUndefined();
+  it.each<Partial<RunCliAgentParams>>([
+    { inputProvenance: { kind: "external_user" } },
+    { inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" } },
+    { sourceReplyDeliveryMode: "automatic" },
+    { cliToolAvailability: undefined },
+    { cliToolAvailability: { native: [], openClaw: ["message", "read"] } },
+  ])("does not stamp source-only authority for %j", (overrides) => {
+    const grant = buildGrant(overrides);
+    expect(grant.sourceReplyOnly).toBeUndefined();
+    expect(grant).not.toHaveProperty("inputProvenance");
   });
-});
+  it.each(["report_only", "host_only"] as const)("retains %s in the minted grant", (capability) => {
+    expect(buildGrant({}, capability)).toMatchObject({ delegationCapability: capability });
+  });
 
-describe("buildCliMcpGrantContext delegationCapability", () => {
-  it("stamps a report-only capability into the minted grant", () => {
-    expect(buildGrant({}, "report_only")).toMatchObject({
-      delegationCapability: "report_only",
-    });
+  it("carries policy-neutral internal provenance for plugin tools", () => {
+    const inputProvenance = {
+      kind: "internal_system",
+      sourceTool: "exec",
+      runId: "owner-run",
+    } as const;
+    expect(buildGrant({ inputProvenance }).inputProvenance).toEqual(inputProvenance);
   });
 
   it("leaves the grant shape untouched for ordinary runs", () => {
-    // Primary attempts must produce byte-identical grant contexts, so the key
-    // is absent rather than explicitly "full".
-    expect(buildGrant()).not.toHaveProperty("delegationCapability");
+    const grant = buildGrant();
+    for (const field of ["delegationCapability", "bashElevated", "requesterModel"]) {
+      expect(grant).not.toHaveProperty(field);
+    }
     expect(buildGrant({}, "full")).not.toHaveProperty("delegationCapability");
   });
 });

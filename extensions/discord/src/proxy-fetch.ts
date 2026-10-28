@@ -8,12 +8,11 @@ import type { ResolvedDiscordAccount } from "./accounts.js";
 export function resolveDiscordProxyFetchForAccount(
   account: Pick<ResolvedDiscordAccount, "config">,
   cfg: OpenClawConfig,
-  runtime?: Pick<RuntimeEnv, "error">,
 ): typeof fetch | undefined {
   return withValidatedDiscordProxy(
     normalizeOptionalString(account.config.proxy) ??
       normalizeOptionalString(cfg?.channels?.discord?.proxy),
-    runtime,
+    undefined,
     makeProxyFetch,
   );
 }
@@ -45,9 +44,6 @@ export function validateDiscordProxyUrl(proxyUrl: string): string {
   }
   if (!["http:", "https:"].includes(parsed.protocol)) {
     throw new Error("Proxy URL must use http or https");
-  }
-  if (!parsed.hostname) {
-    throw new Error("Proxy URL must include a host");
   }
   return proxyUrl;
 }

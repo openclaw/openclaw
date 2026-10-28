@@ -1,7 +1,6 @@
-import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentHarness, AgentHarnessRegistrationOptions } from "../agents/harness/types.js";
-import type { AgentExecutorController } from "./agent-executor-controller.types.js";
+import { warnOnMissingCliBackendModelProvider } from "./cli-backend-registration.js";
 import { getCoreEmbeddingProvider } from "./core-embedding-providers.js";
 import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
 import { getPluginInstance, getPluginValueInstance } from "./plugin-instance-scope.js";
@@ -9,11 +8,7 @@ import { invalidateProviderRegistryIndex } from "./provider-registry-index.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { canClaimReservedCommandOwnership } from "./registry-registrars-operations.js";
 import type { PluginRegistryState } from "./registry-state.js";
-import type {
-  PluginOwnedProviderRegistration,
-  PluginRecord,
-  PluginTextTransformsRegistration,
-} from "./registry-types.js";
+import type { PluginOwnedProviderRegistration, PluginRecord } from "./registry-types.js";
 import { validateStorageProviderContract } from "./storage-provider-registry.js";
 import type { CliBackendPlugin, ProviderPlugin } from "./types.js";
 import { validateWorkerProviderContract } from "./worker-provider-registry.js";
@@ -49,7 +44,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       record.providerIds.push(id);
     }
     if (normalizedProvider.normalizeToolSchemas) {
-      getPluginInstance(record)?.admitFactory(normalizedProvider.normalizeToolSchemas);
+      getPluginInstance(record)?.admitFactory(normalizedProvider.normalizeToolSchemas, "tool");
     }
     registry.providers.push(
       createRegistration(record, {
@@ -122,44 +117,6 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     );
   };
 
-  const registerAgentExecutorController = (
-    record: PluginRecord,
-    controller: AgentExecutorController,
-  ) => {
-    const workspaceDirectory = normalizeOptionalString(controller?.workspaceDirectory);
-    if (
-      !workspaceDirectory ||
-      (!path.posix.isAbsolute(workspaceDirectory) && !path.win32.isAbsolute(workspaceDirectory))
-    ) {
-      reportRegistrationError(
-        record,
-        "agent executor controller requires an absolute workspaceDirectory",
-      );
-      return;
-    }
-    if (typeof controller.ensure !== "function" || typeof controller.retire !== "function") {
-      reportRegistrationError(
-        record,
-        "agent executor controller requires ensure and retire methods",
-      );
-      return;
-    }
-    if (registry.agentExecutorControllers.has(record.id)) {
-      reportRegistrationError(record, `agent executor controller already registered: ${record.id}`);
-      return;
-    }
-    registry.agentExecutorControllers.set(
-      record.id,
-      createRegistration(record, {
-        controller: {
-          workspaceDirectory,
-          ensure: controller.ensure,
-          retire: controller.retire,
-        },
-      }),
-    );
-  };
-
   const registerCliBackend = (record: PluginRecord, backend: CliBackendPlugin) => {
     const id = backend.id.trim();
     if (!id) {
@@ -174,6 +131,9 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       );
       return;
     }
+    warnOnMissingCliBackendModelProvider(backend, (message) =>
+      reportRegistrationWarning(record, message),
+    );
     if (backend.prepareExecution) {
       getPluginInstance(record)?.admitFactory(backend.prepareExecution);
     }
@@ -184,27 +144,6 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       }),
     );
     record.cliBackendIds.push(id);
-  };
-
-  const registerTextTransforms = (
-    record: PluginRecord,
-    transforms: PluginTextTransformsRegistration["transforms"],
-  ) => {
-    if (
-      (!transforms.input || transforms.input.length === 0) &&
-      (!transforms.output || transforms.output.length === 0)
-    ) {
-      reportRegistrationWarning(
-        record,
-        "text transform registration has no input or output replacements",
-      );
-      return;
-    }
-    registry.textTransforms.push(
-      createRegistration(record, {
-        transforms,
-      }),
-    );
   };
 
   const registerEmbeddingProvider = (record: PluginRecord, adapter: EmbeddingProviderAdapter) => {
@@ -249,6 +188,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     <T extends { id: string }>(params: {
       kindLabel: string;
       factory?: (provider: T) => ((...args: never[]) => unknown) | undefined;
+      factoryResult?: "tool";
       registrations: Array<PluginOwnedProviderRegistration<T>>;
       ownedIds: (record: PluginRecord) => string[];
       catalogKinds?: Parameters<typeof registerModelCatalogProvider>[1]["kinds"];
@@ -274,7 +214,10 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       }
       const factory = params.factory?.(provider);
       if (factory) {
-        (getPluginValueInstance(factory) ?? getPluginInstance(record))?.admitFactory(factory);
+        (getPluginValueInstance(factory) ?? getPluginInstance(record))?.admitFactory(
+          factory,
+          params.factoryResult,
+        );
       }
       params.registrations.push(
         createIdentityRegistration(record, {
@@ -320,9 +263,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
   return {
     registerProvider,
     registerAgentHarness,
-    registerAgentExecutorController,
     registerCliBackend,
-    registerTextTransforms,
     registerEmbeddingProvider,
     registerWorkerProvider: createContractProviderRegistrar(
       "worker",
@@ -388,12 +329,14 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     registerWebFetchProvider: createProviderLikeRegistrar({
       kindLabel: "web fetch provider",
       factory: (provider) => provider.createTool,
+      factoryResult: "tool",
       registrations: registry.webFetchProviders,
       ownedIds: (record) => record.webFetchProviderIds,
     }),
     registerWebSearchProvider: createProviderLikeRegistrar({
       kindLabel: "web search provider",
       factory: (provider) => provider.createTool,
+      factoryResult: "tool",
       registrations: registry.webSearchProviders,
       ownedIds: (record) => record.webSearchProviderIds,
     }),

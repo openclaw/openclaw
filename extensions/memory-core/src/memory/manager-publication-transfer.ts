@@ -117,29 +117,62 @@ function* rowFragments(
   }
 }
 
-export function memoryPublicationHeader(replacement: MemorySourceIndexReplacement): {
-  header: MemorySourceIndexHeader;
-  rows: number;
-} {
-  const { chunks, embeddings: _embeddings, ...fields } = replacement;
-  if (fields.source !== "sessions") {
-    return { header: fields, rows: chunks.length };
-  }
+export function memoryPublicationHeader(
+  replacement: MemorySourceIndexReplacement,
+): MemorySourceIndexHeader {
   // Retained rows travel in the bounded transfer, never the header.
-  const { retained = [], ...header } = fields;
-  return {
-    header: { ...header, delta: retained.length > 0 },
-    rows: chunks.length + retained.length,
-  };
+  const {
+    chunks: _chunks,
+    embeddings: _embeddings,
+    retained: _retained,
+    removedIds,
+    ...header
+  } = replacement;
+  return { ...header, delta: removedIds !== undefined };
+}
+
+// A probe prints at most two batches; sources too large for one command keep them with the
+// unread generator so staging resumes the same print instead of repeating it.
+// The manager rebuilds replacement objects, but their prepared chunks and vectors
+// remain unchanged until publication settles.
+type PublicationProbe = {
+  fragments?: MemoryPublicationFragment[];
+  staged?: { head: MemoryPublicationFragment[][]; rest: Generator<MemoryPublicationFragment[]> };
+};
+// Prepared entries outlive their publication within a batch, so settled probes are released.
+const publicationProbes = new WeakMap<MemorySourceIndexReplacement["chunks"], PublicationProbe>();
+
+/** Drop the printed fragments once a publication settles; a late call only reprints. */
+export function releaseMemoryPublication(
+  replacement: MemorySourceIndexReplacement | readonly MemorySourceIndexReplacement[],
+) {
+  for (const item of Array.isArray(replacement) ? replacement : [replacement]) {
+    publicationProbes.delete(item.chunks);
+  }
 }
 
 export function* memoryPublicationBatches(
   replacement: MemorySourceIndexReplacement,
 ): Generator<MemoryPublicationFragment[]> {
+  const probe = publicationProbes.get(replacement.chunks);
+  if (!probe?.staged) {
+    yield* printPublicationBatches(replacement);
+    return;
+  }
+  const { head, rest } = probe.staged;
+  probe.staged = undefined;
+  yield* head;
+  yield* rest;
+}
+
+function* printPublicationBatches(
+  replacement: MemorySourceIndexReplacement,
+): Generator<MemoryPublicationFragment[]> {
   function* rows(): Generator<MemorySourceIndexRow> {
-    // The kernel validates every retained row before it writes the first new row.
-    const retained = replacement.source === "sessions" ? (replacement.retained ?? []) : [];
-    for (const chunk of retained) {
+    for (const removedId of replacement.removedIds ?? []) {
+      yield { removedId };
+    }
+    for (const chunk of replacement.retained ?? []) {
       yield {
         // Retained rows keep their stored text; identity and provenance suffice.
         chunk: { ...row(chunk), text: "" },
@@ -166,6 +199,48 @@ export function* memoryPublicationBatches(
   yield* publicationBatches(rows());
 }
 
+/** Ordinary sources fit one bounded command; larger sources retain chunked transfer. */
+export function memoryPublicationInline(replacement: MemorySourceIndexReplacement) {
+  let probe = publicationProbes.get(replacement.chunks);
+  if (!probe) {
+    const rest = printPublicationBatches(replacement);
+    const head: MemoryPublicationFragment[][] = [];
+    while (head.length < 2) {
+      const batch = rest.next();
+      if (batch.done) {
+        break;
+      }
+      head.push(batch.value);
+    }
+    probe = head.length < 2 ? { fragments: head[0] ?? [] } : { staged: { head, rest } };
+    publicationProbes.set(replacement.chunks, probe);
+  }
+  return probe.fragments
+    ? { header: memoryPublicationHeader(replacement), fragments: probe.fragments }
+    : undefined;
+}
+
+/** A group shares one bounded worker request and one native transaction. */
+export function memoryPublicationGroup(replacements: readonly MemorySourceIndexReplacement[]) {
+  const sources = [];
+  let bytes = 0;
+  for (const replacement of replacements) {
+    const source = memoryPublicationInline(replacement);
+    if (!source) {
+      return undefined;
+    }
+    bytes += JSON.stringify(source.header).length * 2;
+    for (const fragment of source.fragments) {
+      bytes += Math.max(Buffer.byteLength(fragment.json), fragment.json.length * 2) + 128;
+    }
+    if (bytes > BATCH_BYTES) {
+      return undefined;
+    }
+    sources.push(source);
+  }
+  return sources;
+}
+
 export function* memoryEmbeddingCacheBatches(
   entries: readonly MemoryEmbeddingCacheEntry[],
 ): Generator<MemoryPublicationFragment[]> {
@@ -178,11 +253,9 @@ function* publicationBatches(
 ): Generator<MemoryPublicationFragment[]> {
   let batch: MemoryPublicationFragment[] = [];
   let bytes = 0;
-  let row = 0;
   for (const value of rows) {
     const fragments = rowFragments(value, preserveNegativeZero);
     let current = fragments.next();
-    let part = 0;
     while (!current.done) {
       const next = fragments.next();
       const cost = Math.max(Buffer.byteLength(current.value), current.value.length * 2) + 128;
@@ -191,11 +264,10 @@ function* publicationBatches(
         batch = [];
         bytes = 0;
       }
-      batch.push({ row, part: part++, json: current.value, last: next.done === true });
+      batch.push({ json: current.value, last: next.done === true });
       bytes += cost;
       current = next;
     }
-    row++;
   }
   if (batch.length) {
     yield batch;

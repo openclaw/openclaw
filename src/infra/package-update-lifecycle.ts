@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isPathInside } from "./fs-safe.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
@@ -7,12 +9,14 @@ import {
   completePendingPackageLifecycle,
   discardPendingPackageLifecycle,
   PackageLifecycleOwnershipError,
+  type PackageLifecycleScript,
 } from "./package-lifecycle.js";
 import { removePackageUpdatePath } from "./package-update-filesystem.js";
 import { classifyPackageUpdatePermissionFailure } from "./package-update-manager-preflight.js";
 import type { StagedPackageInstall } from "./package-update-swap-contract.js";
 import { mergePathPrepend } from "./path-prepend.js";
 import { resolveEnvironmentValue } from "./process-env.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "./runtime-process-url.js";
 import { verifyPackageUpdateRecovery, type ResolvedGlobalInstallTarget } from "./update-global.js";
 import { prepareNativePackageStage } from "./update-native-package-stage.js";
 import {
@@ -63,12 +67,14 @@ export async function runPackageUpdateLifecycle(params: {
     await completePendingPackageLifecycle({
       packageRoot: params.packageRoot,
       timeoutMs: params.timeoutMs,
-      runScript: async (script) => {
+      runScript: async (script: PackageLifecycleScript) => {
         const step = await params.runStep({
           name: `${params.manager}-package-${script.name}`,
           argv: [
             params.nodeRunner ?? process.execPath,
-            path.join(params.packageRoot, script.relativePath),
+            fileURLToPath(
+              resolveExternalPackageRuntimeEntrypointUrl(script.name, params.packageRoot),
+            ),
           ],
           cwd: params.packageRoot,
           env,
@@ -199,12 +205,7 @@ async function cleanupStagedPackageInstall(stage: StagedPackageInstall): Promise
       await removePackageUpdatePath(stage.native.binDir);
     }
   };
-  const prefix = await fs.realpath(stage.prefix).catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return null;
-    }
-    throw error;
-  });
+  const prefix = (await fs.realpath(stage.prefix).catch(ignoreMissingPath)) ?? null;
   const candidates = [stage.packageRoot];
   if (prefix && stage.native && stage.installTarget.pnpmIsolated) {
     // Activation follows active hash links only. Disposal also removes unlinked
@@ -212,12 +213,7 @@ async function cleanupStagedPackageInstall(stage: StagedPackageInstall): Promise
     // a completed manifest or lockfile. Discovery errors must preserve the stage.
     const entries = await fs
       .readdir(stage.native.globalRoot, { withFileTypes: true })
-      .catch((error: unknown) => {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return [];
-        }
-        throw error;
-      });
+      .catch((error: unknown) => ignoreMissingPath(error) ?? []);
     for (const entry of entries) {
       if (entry.isDirectory() || entry.isSymbolicLink()) {
         candidates.push(
@@ -258,39 +254,32 @@ async function cleanupStagedPackageInstall(stage: StagedPackageInstall): Promise
 export async function discardPackageUpdateStage(params: {
   stage: StagedPackageInstall;
   committed: boolean;
-}): Promise<PackageUpdateLifecycleResult | { status: "advisory"; step: UpdateStepResult }> {
+}): Promise<UpdateStepResult | null> {
   try {
     await cleanupStagedPackageInstall(params.stage);
-    return { status: "complete" };
+    return null;
   } catch (error) {
     // Only a refused disposable-prefix removal after a verified swap is harmless.
     // Discovery, lifecycle ownership and release failures remain strict.
     if (params.committed && error instanceof PackageStageRemovalError) {
       const message = `${error.message}. Installation verification succeeded; inspect the retained stage before removing it manually.`;
       return {
-        status: "advisory",
-        step: {
-          name: "package-stage-cleanup",
-          command: `discard ${params.stage.prefix}`,
-          cwd: params.stage.prefix,
-          durationMs: 0,
-          exitCode: 1,
-          stderrTail: message,
-          advisory: { kind: "recoverable-maintenance", message },
-        },
+        name: "package-stage-cleanup",
+        command: `discard ${params.stage.prefix}`,
+        cwd: params.stage.prefix,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: message,
+        advisory: { kind: "recoverable-maintenance", message },
       };
     }
     return {
-      status: "failed",
-      preserveStage: true,
-      step: {
-        name: `${params.stage.installTarget.manager}-package-lifecycle`,
-        command: `discard ${params.stage.packageRoot}`,
-        cwd: params.stage.packageRoot,
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail: formatErrorMessage(error),
-      },
+      name: `${params.stage.installTarget.manager}-package-lifecycle`,
+      command: `discard ${params.stage.packageRoot}`,
+      cwd: params.stage.packageRoot,
+      durationMs: 0,
+      exitCode: 1,
+      stderrTail: formatErrorMessage(error),
     };
   }
 }

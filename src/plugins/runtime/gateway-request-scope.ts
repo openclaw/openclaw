@@ -7,7 +7,6 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { withAgentDatabasePreparationContext } from "../../state/agent-database-preparation-context.js";
 import {
   getPluginExecutionFrame,
-  pluginInstanceInvocation,
   runWithPluginExecutionFrame,
 } from "../plugin-instance-invocation.js";
 import type { PluginInstanceInvocation } from "../plugin-instance-invocation.types.js";
@@ -40,20 +39,26 @@ type PluginRuntimePluginScope = {
 function runWithPluginGatewayScope<T>(
   gatewayScope: PluginRuntimeGatewayRequestScope,
   run: () => T,
-  invocation = pluginInstanceInvocation.getStore(),
+  invocation?: PluginInstanceInvocation,
 ): T {
   const current = getPluginExecutionFrame();
+  const call = invocation ?? current?.invocation;
   const runtime = getPluginRuntimeExecutionFrame(current);
+  if (
+    runtime?.gatewayScope === gatewayScope &&
+    runtime.invocation === call &&
+    runtime.inputRecoveryContext === gatewayScope
+  ) {
+    return run();
+  }
   return runWithPluginExecutionFrame(
-    runtime?.gatewayScope === gatewayScope && runtime.invocation === invocation
-      ? runtime
-      : new PluginRuntimeExecutionFrame(
-          // Reuse prepared frame facts; the mutable Gateway view remains call-local.
-          current ?? {},
-          gatewayScope,
-          runtime?.generationRegistry,
-          invocation,
-        ),
+    new PluginRuntimeExecutionFrame(
+      current ?? {},
+      gatewayScope,
+      runtime?.generationRegistry,
+      call,
+      gatewayScope,
+    ),
     run,
   );
 }
@@ -85,6 +90,9 @@ export const ExpiredPluginRegistryScopeError = resolveGlobalSingleton(
     },
 );
 
+// Each binding retains its own closures; the host-owned scope is defined synchronously.
+const borrowedRegistryProperty: PropertyDescriptor = { enumerable: true, configurable: true };
+
 // Native resources inherit these views; the registry's lifecycle owner keeps the graph alive.
 function bindBorrowedRegistry(
   scope: PluginRuntimeGatewayRequestScope,
@@ -93,21 +101,18 @@ function bindBorrowedRegistry(
 ): void {
   let expired = initiallyExpired;
   let reference = registry && new WeakRef(registry);
-  Object.defineProperty(scope, "pluginRegistry", {
-    enumerable: true,
-    configurable: true,
-    get() {
-      const current = reference?.deref();
-      if (expired || (reference && !current)) {
-        throw new ExpiredPluginRegistryScopeError();
-      }
-      return current;
-    },
-    set(next: PluginRegistry | undefined) {
-      reference = next && new WeakRef(next);
-      expired = false;
-    },
-  });
+  borrowedRegistryProperty.get = () => {
+    const current = reference?.deref();
+    if (expired || (reference && !current)) {
+      throw new ExpiredPluginRegistryScopeError();
+    }
+    return current;
+  };
+  borrowedRegistryProperty.set = (next: PluginRegistry | undefined) => {
+    reference = next && new WeakRef(next);
+    expired = false;
+  };
+  Object.defineProperty(scope, "pluginRegistry", borrowedRegistryProperty);
 }
 
 function copyGatewayScope(
@@ -119,17 +124,17 @@ function copyGatewayScope(
     return scoped;
   }
   // Copy enumerable values like spread, but do not read a registry that the caller replaces.
-  for (const key of Reflect.ownKeys(current)) {
-    if (key !== "pluginRegistry" && Object.getOwnPropertyDescriptor(current, key)?.enumerable) {
-      Object.defineProperty(scoped, key, {
-        value: Reflect.get(current, key),
-        enumerable: true,
-        configurable: true,
-        writable: true,
-      });
+  for (const key of Object.keys(current)) {
+    if (key !== "pluginRegistry") {
+      Reflect.set(scoped, key, Reflect.get(current, key));
     }
   }
-  if (inheritRegistry && Object.getOwnPropertyDescriptor(current, "pluginRegistry")?.enumerable) {
+  for (const key of Object.getOwnPropertySymbols(current)) {
+    if (Object.prototype.propertyIsEnumerable.call(current, key)) {
+      Reflect.set(scoped, key, Reflect.get(current, key));
+    }
+  }
+  if (inheritRegistry && Object.prototype.propertyIsEnumerable.call(current, "pluginRegistry")) {
     try {
       bindBorrowedRegistry(scoped, current.pluginRegistry);
     } catch (error) {
@@ -176,9 +181,30 @@ export function withPluginRuntimeGatewayContextResolver<T>(
   scoped.resolveGatewayContext = resolveGatewayContext;
   delete scoped.context;
   return withAgentDatabasePreparationContext(
-    () => resolveGatewayContext?.()?.agentDatabaseStartup,
+    resolveAgentDatabasePreparation(resolveGatewayContext),
     () => runWithPluginGatewayScope(scoped, run),
   );
+}
+
+const resolveUnboundAgentDatabasePreparation = () => undefined;
+const agentDatabasePreparationResolvers = new WeakMap<
+  GatewayContextResolver,
+  () => GatewayRequestContext["agentDatabaseStartup"]
+>();
+
+// One owner callback per resolver lets nested work reuse the preparation async frame.
+function resolveAgentDatabasePreparation(
+  resolveGatewayContext: GatewayContextResolver | undefined,
+) {
+  if (!resolveGatewayContext) {
+    return resolveUnboundAgentDatabasePreparation;
+  }
+  let resolve = agentDatabasePreparationResolvers.get(resolveGatewayContext);
+  if (!resolve) {
+    resolve = () => resolveGatewayContext()?.agentDatabaseStartup;
+    agentDatabasePreparationResolvers.set(resolveGatewayContext, resolve);
+  }
+  return resolve;
 }
 
 /** Runs work against an owned registry handle while preserving any gateway request facts. */

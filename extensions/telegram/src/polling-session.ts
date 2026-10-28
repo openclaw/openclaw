@@ -173,7 +173,7 @@ export class TelegramPollingSession {
     if (this.opts.abortSignal?.aborted) {
       return "exit";
     }
-    if (!isRecoverableTelegramNetworkError(err, { context: "unknown" })) {
+    if (!isRecoverableTelegramNetworkError(err)) {
       throw err;
     }
     return this.#waitBeforeRestart(
@@ -264,7 +264,7 @@ export class TelegramPollingSession {
       this.#webhookCleared = true;
       return "ready";
     } catch (err) {
-      if (isRecoverableTelegramNetworkError(err, { context: "unknown" })) {
+      if (isRecoverableTelegramNetworkError(err)) {
         this.opts.log(
           `[telegram] deleteWebhook failed with a recoverable network error; continuing to polling so getUpdates can confirm webhook state: ${formatErrorMessage(err)}`,
         );
@@ -351,7 +351,7 @@ export class TelegramPollingSession {
     let stopTimedOut = false;
     let forceCycleTimer: ReturnType<typeof setTimeout> | undefined;
     const { promise: forceCyclePromise, resolve: forceCycleResolve } = createDeferred();
-    const unsubscribe = worker.onMessage((message) => {
+    worker.onMessage = (message) => {
       const ackSpooledUpdate: NonNullable<typeof worker.ackSpooledUpdate> = (requestId, result) => {
         try {
           worker.ackSpooledUpdate?.(requestId, result);
@@ -397,29 +397,32 @@ export class TelegramPollingSession {
         pollState.errorCode = message.errorCode ?? null;
         return;
       }
-      if (message.type === "update") {
-        const updateIdHint = resolveTelegramUpdateId(message.update) ?? "unknown";
+      if (message.type === "updates") {
         this.opts.log(
-          `[telegram][diag] isolated polling worker update received updateId=${updateIdHint} queued=${message.queued}`,
+          `[telegram][diag] isolated polling worker batch received queued=${message.queued}`,
         );
-        // The worker waits for this request's ACK before emitting the next update.
+        // The worker waits for the whole response's ACK before advancing its offset.
         // The committed spool enqueue is the ACK boundary; offset persistence is
         // monotonic catch-up and must not stall intake during a state-store outage.
         void (async () => {
-          const updateId = resolveTelegramUpdateId(message.update);
-          if (updateId === null) {
-            ackSpooledUpdate(message.requestId, {
-              ok: false,
-              message: "Telegram update missing numeric update_id.",
-            });
-            return;
+          let updateId = -1;
+          for (const update of message.updates) {
+            const id = resolveTelegramUpdateId(update);
+            if (id === null) {
+              ackSpooledUpdate(message.requestId, {
+                ok: false,
+                message: "Telegram update missing numeric update_id.",
+              });
+              return;
+            }
+            updateId = Math.max(updateId, id);
           }
           try {
-            await ingressMonitor.admit(message.update);
-            this.opts.log(`[telegram][diag] isolated polling update spooled updateId=${updateId}`);
+            await ingressMonitor.admitBatch(message.updates);
+            this.opts.log(`[telegram][diag] isolated polling batch spooled updateId=${updateId}`);
           } catch (err: unknown) {
             this.opts.log(
-              `[telegram] isolated polling update spool failed updateId=${updateIdHint}: ${formatErrorMessage(err)}`,
+              `[telegram] isolated polling batch spool failed updateId=${updateId}: ${formatErrorMessage(err)}`,
             );
             ackSpooledUpdate(message.requestId, {
               ok: false,
@@ -445,7 +448,7 @@ export class TelegramPollingSession {
         liveness.noteGetUpdatesActivity();
         ingressMonitor.requestDrain();
       }
-    });
+    };
     const stopOnAbort = () => {
       abortMedia();
       void stopWorker();
@@ -515,7 +518,7 @@ export class TelegramPollingSession {
           this.#transportState.markDirty();
         } else if (
           pollState.error &&
-          !isRecoverableTelegramNetworkError(new Error(pollState.error), { context: "polling" })
+          !isRecoverableTelegramNetworkError(new Error(pollState.error))
         ) {
           this.#status.noteError(
             pollState.error,
@@ -538,7 +541,7 @@ export class TelegramPollingSession {
       }
       if (restartRequested) {
         this.opts.log(
-          `[telegram][diag] isolated polling ingress finished reason=polling stall detected ${liveness.formatDiagnosticFields("error")}`,
+          `[telegram][diag] isolated polling ingress finished reason=polling stall detected ${liveness.formatDiagnosticFields()}`,
         );
         return await this.#waitBeforeRestart(
           (delay) => `Telegram isolated polling ingress restart requested; restarting in ${delay}.`,
@@ -555,7 +558,7 @@ export class TelegramPollingSession {
     } finally {
       clearInterval(watchdog);
       clearForceCycleTimer();
-      unsubscribe();
+      worker.onMessage = undefined;
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
       // End media work before waiting for durable handlers so every interrupted claim can retry.
       abortMedia();

@@ -78,6 +78,8 @@ export type SandboxBackendHandle = {
     workdir?: string;
     env: Record<string, string>;
     usePty: boolean;
+    /** Request piped input without a PTY; callers must honor the returned stdinMode. */
+    stdin?: boolean;
   }): Promise<SandboxBackendExecSpec>;
   finalizeExec?: (params: {
     status: "completed" | "failed";

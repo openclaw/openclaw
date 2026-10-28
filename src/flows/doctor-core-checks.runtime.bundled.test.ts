@@ -35,16 +35,35 @@ describe("doctor bundled provider catalog validation", () => {
           continue;
         }
         try {
-          const rawModels = asOptionalRecord(catalog)?.models;
-          const models = normalized?.providers?.[providerId]?.models;
-          if (!Array.isArray(rawModels) || models?.length !== rawModels.length) {
+          const rawCatalog = asOptionalRecord(catalog);
+          const rawModels = rawCatalog?.models;
+          if (!Array.isArray(rawModels)) {
             throw new Error("Manifest catalog normalization dropped a provider or model row");
           }
-          // Runtime catalogs supply their own endpoints; only static catalogs
-          // are converted directly into provider configurations by discovery.
+          const normalizedProvider = normalized?.providers?.[providerId];
+          // The normalizer intentionally omits providers with no models or credential ownership.
+          if (
+            !normalizedProvider &&
+            rawModels.length === 0 &&
+            rawCatalog?.authScope === undefined
+          ) {
+            continue;
+          }
+          const models = normalizedProvider?.models;
+          if (!Array.isArray(models) || models.length !== rawModels.length) {
+            throw new Error("Manifest catalog normalization dropped a provider or model row");
+          }
+          // Decision-only rows have no conversational provider config. Still validate
+          // every row above, and chat rows in mixed catalogs below.
+          const chatModels = models.filter((model) => model.inference?.chat !== false);
+          // Runtime catalogs supply endpoints; empty catalogs only declare credential
+          // ownership. Discovery converts only populated static catalogs into configs.
           const discovery = normalized?.discovery?.[providerId];
-          if (discovery !== "runtime" && discovery !== "refreshable") {
-            buildManifestModelProviderConfig({ providerId, catalog });
+          if (chatModels.length > 0 && discovery !== "runtime" && discovery !== "refreshable") {
+            buildManifestModelProviderConfig({
+              providerId,
+              catalog: { ...asOptionalRecord(catalog), models: chatModels },
+            });
           }
         } catch (error) {
           errors.push(`${manifest.id ?? extension.name}/${providerId}: ${String(error)}`);

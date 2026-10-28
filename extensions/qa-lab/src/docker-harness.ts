@@ -22,99 +22,11 @@ function renderHealthcheck(port: number, retries: number, startPeriod: number) {
         - CMD
         - node
         - -e
-        - fetch("http://127.0.0.1:${port}/healthz").then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))
+        - fetch("http://127.0.0.1:${port}/healthz").then(async(r)=>{await r.body?.cancel();process.exitCode=r.ok?0:1}).catch(()=>{process.exitCode=1})
       interval: 10s
       timeout: 5s
       retries: ${retries}
       start_period: ${startPeriod}s
-`;
-}
-
-function renderCompose(params: {
-  outputDir: string;
-  repoRoot: string;
-  imageName: string;
-  usePrebuiltImage: boolean;
-  bindUiDist: boolean;
-  gatewayPort: number;
-  qaLabPort: number;
-}) {
-  const repoMount = toRepoRelativePath(params.outputDir, params.repoRoot) || ".";
-  const imageBlock = params.usePrebuiltImage
-    ? `    image: ${params.imageName}\n`
-    : `    build:\n      context: ${JSON.stringify(repoMount)}\n      dockerfile: Dockerfile\n      args:\n        OPENCLAW_EXTENSIONS: "${QA_DOCKER_PLUGIN_SELECTION}"\n`;
-  const taxonomyMount = toRepoRelativePath(
-    params.outputDir,
-    path.join(params.repoRoot, "taxonomy.yaml"),
-  );
-  const qaLabUiMount = toRepoRelativePath(
-    params.outputDir,
-    path.join(params.repoRoot, "extensions", "qa-lab", "web", "dist"),
-  );
-
-  return `services:
-  qa-mock-openai:
-${imageBlock}    pull_policy: never
-${renderHealthcheck(44080, 6, 3)}    environment:
-      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
-      OPENCLAW_PROFILE: ""
-    command:
-      - node
-      - dist/index.js
-      - qa
-      - mock-openai
-      - --host
-      - "0.0.0.0"
-      - --port
-      - "44080"
-  qa-lab:
-${imageBlock}    pull_policy: never
-    ports:
-      - "127.0.0.1:${params.qaLabPort}:${QA_LAB_INTERNAL_PORT}"
-    volumes:
-      - ./state:/opt/openclaw-scaffold:ro
-      - ${JSON.stringify(`${taxonomyMount}:/app/taxonomy.yaml:ro`)}
-${params.bindUiDist ? `      - ${JSON.stringify(`${qaLabUiMount}:${QA_LAB_UI_OVERLAY_DIR}:ro`)}\n` : ""}${renderHealthcheck(QA_LAB_INTERNAL_PORT, 6, 5)}    environment:
-      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
-      OPENCLAW_CONFIG_PATH: /opt/openclaw-scaffold/openclaw.json
-      OPENCLAW_STATE_DIR: /tmp/openclaw/state
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1"
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1"
-      OPENCLAW_SKIP_CANVAS_HOST: "1"
-      OPENCLAW_PROFILE: ""
-    command:
-      - sh
-      - -lc
-      - OPENCLAW_QA_CONTROL_UI_PROXY_TOKEN="$(node -e 'const fs=require("node:fs");const cfg=JSON.parse(fs.readFileSync("/opt/openclaw-scaffold/openclaw.json","utf8"));process.stdout.write(cfg.gateway?.auth?.token ?? "")')" exec node dist/index.js qa ui --host 0.0.0.0 --port ${QA_LAB_INTERNAL_PORT} --advertise-host 127.0.0.1 --advertise-port ${params.qaLabPort} --control-ui-url http://127.0.0.1:${params.gatewayPort}/ --control-ui-proxy-target http://openclaw-qa-gateway:18789/${params.bindUiDist ? ` --ui-dist-dir ${QA_LAB_UI_OVERLAY_DIR}` : ""} --auto-kickoff-target direct --send-kickoff-on-start --embedded-gateway disabled
-    depends_on:
-      qa-mock-openai:
-        condition: service_healthy
-  openclaw-qa-gateway:
-${imageBlock}    pull_policy: never
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    ports:
-      - "127.0.0.1:${params.gatewayPort}:18789"
-    environment:
-      OPENCLAW_CONFIG_PATH: /tmp/openclaw/openclaw.json
-      OPENCLAW_STATE_DIR: /tmp/openclaw/state
-      OPENCLAW_NO_RESPAWN: "1"
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1"
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1"
-      OPENCLAW_SKIP_CANVAS_HOST: "1"
-      OPENCLAW_PROFILE: ""
-    volumes:
-      - ./state:/opt/openclaw-scaffold:ro
-      - ${JSON.stringify(`${repoMount}:/opt/openclaw-repo:ro`)}
-${renderHealthcheck(18789, 12, 15)}    depends_on:
-      qa-lab:
-        condition: service_healthy
-      qa-mock-openai:
-        condition: service_healthy
-    command:
-      - sh
-      - -lc
-      - mkdir -p /tmp/openclaw/workspace /tmp/openclaw/state && cp /opt/openclaw-scaffold/openclaw.json /tmp/openclaw/openclaw.json && cp -R /opt/openclaw-scaffold/seed-workspace/. /tmp/openclaw/workspace/ && rm -rf /tmp/openclaw/workspace/repo && ln -s /opt/openclaw-repo /tmp/openclaw/workspace/repo && exec node dist/index.js gateway run --port 18789 --bind lan --allow-unconfigured
 `;
 }
 
@@ -159,19 +71,84 @@ export async function writeQaDockerHarnessFiles(params: {
     }),
   });
 
+  const { outputDir, repoRoot } = params;
+  const repoMount = toRepoRelativePath(outputDir, repoRoot) || ".";
+  const imageBlock = usePrebuiltImage
+    ? `    image: ${imageName}\n`
+    : `    build:\n      context: ${JSON.stringify(repoMount)}\n      dockerfile: Dockerfile\n      args:\n        OPENCLAW_EXTENSIONS: "${QA_DOCKER_PLUGIN_SELECTION}"\n`;
+  const taxonomyMount = toRepoRelativePath(outputDir, path.join(repoRoot, "taxonomy.yaml"));
+  const qaLabUiMount = toRepoRelativePath(
+    outputDir,
+    path.join(repoRoot, "extensions", "qa-lab", "web", "dist"),
+  );
+
+  const compose = `services:
+  qa-mock-openai:
+${imageBlock}    pull_policy: never
+${renderHealthcheck(44080, 6, 3)}    environment:
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+      OPENCLAW_PROFILE: ""
+    command:
+      - node
+      - dist/index.js
+      - qa
+      - mock-openai
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "44080"
+  qa-lab:
+${imageBlock}    pull_policy: never
+    ports:
+      - "127.0.0.1:${qaLabPort}:${QA_LAB_INTERNAL_PORT}"
+    volumes:
+      - ./state:/opt/openclaw-scaffold:ro
+      - ${JSON.stringify(`${taxonomyMount}:/app/taxonomy.yaml:ro`)}
+${bindUiDist ? `      - ${JSON.stringify(`${qaLabUiMount}:${QA_LAB_UI_OVERLAY_DIR}:ro`)}\n` : ""}${renderHealthcheck(QA_LAB_INTERNAL_PORT, 6, 5)}    environment:
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+      OPENCLAW_CONFIG_PATH: /opt/openclaw-scaffold/openclaw.json
+      OPENCLAW_STATE_DIR: /tmp/openclaw/state
+      OPENCLAW_SKIP_GMAIL_WATCHER: "1"
+      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1"
+      OPENCLAW_SKIP_CANVAS_HOST: "1"
+      OPENCLAW_PROFILE: ""
+    command:
+      - sh
+      - -lc
+      - OPENCLAW_QA_CONTROL_UI_PROXY_TOKEN="$(node -e 'const fs=require("node:fs");const cfg=JSON.parse(fs.readFileSync("/opt/openclaw-scaffold/openclaw.json","utf8"));process.stdout.write(cfg.gateway?.auth?.token ?? "")')" exec node dist/index.js qa ui --host 0.0.0.0 --port ${QA_LAB_INTERNAL_PORT} --advertise-host 127.0.0.1 --advertise-port ${qaLabPort} --control-ui-url http://127.0.0.1:${gatewayPort}/ --control-ui-proxy-target http://openclaw-qa-gateway:18789/${bindUiDist ? ` --ui-dist-dir ${QA_LAB_UI_OVERLAY_DIR}` : ""} --auto-kickoff-target direct --send-kickoff-on-start --embedded-gateway disabled
+    depends_on:
+      qa-mock-openai:
+        condition: service_healthy
+  openclaw-qa-gateway:
+${imageBlock}    pull_policy: never
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:${gatewayPort}:18789"
+    environment:
+      OPENCLAW_CONFIG_PATH: /tmp/openclaw/openclaw.json
+      OPENCLAW_STATE_DIR: /tmp/openclaw/state
+      OPENCLAW_NO_RESPAWN: "1"
+      OPENCLAW_SKIP_GMAIL_WATCHER: "1"
+      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1"
+      OPENCLAW_SKIP_CANVAS_HOST: "1"
+      OPENCLAW_PROFILE: ""
+    volumes:
+      - ./state:/opt/openclaw-scaffold:ro
+      - ${JSON.stringify(`${repoMount}:/opt/openclaw-repo:ro`)}
+${renderHealthcheck(18789, 12, 15)}    depends_on:
+      qa-lab:
+        condition: service_healthy
+      qa-mock-openai:
+        condition: service_healthy
+    command:
+      - sh
+      - -lc
+      - mkdir -p /tmp/openclaw/workspace /tmp/openclaw/state && cp /opt/openclaw-scaffold/openclaw.json /tmp/openclaw/openclaw.json && cp -R /opt/openclaw-scaffold/seed-workspace/. /tmp/openclaw/workspace/ && rm -rf /tmp/openclaw/workspace/repo && ln -s /opt/openclaw-repo /tmp/openclaw/workspace/repo && exec node dist/index.js gateway run --port 18789 --bind lan --allow-unconfigured
+`;
+
   const files = [
-    [
-      "docker-compose.qa.yml",
-      renderCompose({
-        outputDir: params.outputDir,
-        repoRoot: params.repoRoot,
-        imageName,
-        usePrebuiltImage,
-        bindUiDist,
-        gatewayPort,
-        qaLabPort,
-      }),
-    ],
+    ["docker-compose.qa.yml", compose],
     [
       ".env.example",
       `# QA Docker harness example env
@@ -247,26 +224,10 @@ kill the container by detaching a replacement child.
   };
 }
 
-export async function buildQaDockerHarnessImage(
-  params: {
-    repoRoot: string;
-    imageName?: string;
-  },
-  deps?: {
-    runCommand?: (
-      command: string,
-      args: string[],
-      cwd: string,
-    ) => Promise<{ stdout: string; stderr: string }>;
-  },
-) {
+export async function buildQaDockerHarnessImage(params: { repoRoot: string; imageName?: string }) {
   const imageName = params.imageName ?? "openclaw:qa-local-prebaked";
-  const runCommand =
-    deps?.runCommand ??
-    ((command: string, args: string[], cwd: string) =>
-      runExec(command, args, { cwd, logOutput: false }));
 
-  await runCommand(
+  await runExec(
     "docker",
     [
       "build",
@@ -278,7 +239,7 @@ export async function buildQaDockerHarnessImage(
       "Dockerfile",
       ".",
     ],
-    params.repoRoot,
+    { cwd: params.repoRoot, logOutput: false },
   );
 
   return { imageName };

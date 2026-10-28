@@ -161,10 +161,6 @@ function splitTableAtRow(
   return undefined;
 }
 
-function isFencedCodeSource(source: string): boolean {
-  return /^ {0,3}(?:`{3}|~{3})/.test(source);
-}
-
 export function createDocxMarkdownChunk(markdown: string): DocxMarkdownChunk {
   const root = parseFeishuMarkdown(markdown);
   return {
@@ -225,7 +221,7 @@ export function splitDocxMarkdownBySize(markdown: string, maxChars: number): str
   if (
     root.children?.length === 1 &&
     root.children[0]?.type === "code" &&
-    isFencedCodeSource(markdown)
+    /^ {0,3}(?:`{3}|~{3})/.test(markdown)
   ) {
     return chunkFeishuMarkdown(markdown, maxChars);
   }

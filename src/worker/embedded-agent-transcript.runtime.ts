@@ -97,7 +97,7 @@ export function toWorkerInferenceContext(context: Context): WorkerInferenceConte
             tools: context.tools.map((tool) => ({
               name: tool.name,
               description: tool.description,
-              parameters: structuredClone(tool.parameters),
+              parameters: tool.parameters,
             })),
           }
         : {}),
@@ -106,7 +106,7 @@ export function toWorkerInferenceContext(context: Context): WorkerInferenceConte
 }
 
 export type WorkerTranscriptClient = {
-  commit: (messages: WorkerTranscriptMessage[]) => Promise<void>;
+  commit: (messages: WorkerTranscriptMessage[]) => Promise<unknown>;
 };
 
 export function createWorkerTranscriptRuntime(

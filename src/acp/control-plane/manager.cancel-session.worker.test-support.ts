@@ -1,5 +1,6 @@
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import { vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -43,6 +44,7 @@ export async function withAcpCancellationFixture(
       agents: { ownership: "explicit", entries: { main: {} } },
       acp: { enabled: true, backend: "cancellation-proof", dispatch: { enabled: true } },
     };
+    setRuntimeConfigSnapshot(cfg);
     const target = {
       cfg,
       agentId: "main",

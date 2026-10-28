@@ -7,6 +7,8 @@ import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-run
 import {
   buildHostedOutboundMediaResponseHeaders,
   createHostedOutboundMediaStore,
+  resolveHostedOutboundMediaRequest,
+  resolveOutboundMediaAccess,
   type HostedOutboundMediaChunkRecord,
   type HostedOutboundMediaEntry,
   type HostedOutboundMediaMetaRecord,
@@ -205,40 +207,6 @@ function getHostedMediaStore(accountId: string): HostedOutboundMediaStore {
   return created;
 }
 
-function createCleanup(store: HostedOutboundMediaStore, id: string): () => Promise<void> {
-  let cleanup: Promise<void> | undefined;
-  return async () => {
-    const activeCleanup = cleanup ?? store.delete(id);
-    cleanup = activeCleanup;
-    try {
-      await activeCleanup;
-    } catch (error) {
-      if (cleanup === activeCleanup) {
-        cleanup = undefined;
-      }
-      throw error;
-    }
-  };
-}
-
-function normalizeMediaAccess(params: {
-  mediaAccess?: OutboundMediaLoadOptions["mediaAccess"];
-  mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
-}): OutboundMediaLoadOptions["mediaAccess"] {
-  const localRoots = params.mediaAccess?.localRoots ?? params.mediaLocalRoots;
-  const readFile = params.mediaAccess?.readFile ?? params.mediaReadFile;
-  const workspaceDir = params.mediaAccess?.workspaceDir;
-  if (!localRoots && !readFile && !workspaceDir) {
-    return undefined;
-  }
-  return {
-    ...(localRoots ? { localRoots } : {}),
-    ...(readFile ? { readFile } : {}),
-    ...(workspaceDir ? { workspaceDir } : {}),
-  };
-}
-
 function skipAsciiWhitespace(buffer: Buffer, start: number): number {
   let cursor = start;
   while (cursor < buffer.length) {
@@ -271,13 +239,8 @@ function readUnicodeCodePoint(
   return littleEndian ? buffer.readUInt32LE(offset) : buffer.readUInt32BE(offset);
 }
 
-function containsEncodedMarkupStart(
-  buffer: Buffer,
-  width: 2 | 4,
-  littleEndian: boolean,
-  offset = 0,
-): boolean {
-  for (let cursor = offset; cursor + width * 2 <= buffer.length; cursor += width) {
+function containsEncodedMarkupStart(buffer: Buffer, width: 2 | 4, littleEndian: boolean): boolean {
+  for (let cursor = 0; cursor + width * 2 <= buffer.length; cursor += width) {
     if (
       readUnicodeCodePoint(buffer, cursor, width, littleEndian) === 0x3c &&
       isAsciiMarkupStart(readUnicodeCodePoint(buffer, cursor + width, width, littleEndian))
@@ -458,14 +421,13 @@ export async function prepareSynologyHostedMedia(params: {
     );
   }
   try {
-    await store.cleanupExpired();
     const stagedUrl = new URL(
       await store.prepareUrl({
         mediaUrl: params.mediaUrl,
         routePath: route.localRoutePath,
         publicBaseUrl: route.publicBaseUrl,
         maxBytes: SYNOLOGY_OUTBOUND_MEDIA_MAX_BYTES,
-        mediaAccess: normalizeMediaAccess(params),
+        mediaAccess: resolveOutboundMediaAccess(params),
         requestInit: { signal: AbortSignal.timeout(SYNOLOGY_OUTBOUND_MEDIA_PREPARE_TIMEOUT_MS) },
         validateBeforePersist: (media) => {
           const activeContentType = detectActiveContentType(media);
@@ -482,7 +444,7 @@ export async function prepareSynologyHostedMedia(params: {
     if (!SYNOLOGY_OUTBOUND_MEDIA_ID_RE.test(id) || !token) {
       throw new Error("Synology Chat attachment capability could not be prepared.");
     }
-    const cleanup = createCleanup(store, id);
+    const cleanup = () => store.delete(id);
     const tokenParam = `${SYNOLOGY_HOSTED_MEDIA_TOKEN_PARAM_PREFIX}_${id}`;
     const querySeparator = route.publicSearch ? "&" : "?";
     return {
@@ -499,39 +461,15 @@ export async function tryHandleSynologyHostedMediaRequest(
   res: ServerResponse,
   account: ResolvedSynologyChatAccount,
 ): Promise<boolean> {
-  let url: URL;
-  try {
-    url = new URL(req.url ?? "/", "http://localhost");
-  } catch {
-    return false;
+  const candidate = resolveHostedOutboundMediaRequest(
+    req,
+    res,
+    SYNOLOGY_HOSTED_MEDIA_TOKEN_PARAM_PREFIX,
+  );
+  if (typeof candidate === "boolean") {
+    return candidate;
   }
-  const tokenCandidates = [...url.searchParams.entries()]
-    .filter(([key]) => key.startsWith(`${SYNOLOGY_HOSTED_MEDIA_TOKEN_PARAM_PREFIX}_`))
-    .map(([key, token]) => ({
-      id: key.slice(SYNOLOGY_HOSTED_MEDIA_TOKEN_PARAM_PREFIX.length + 1),
-      token,
-    }))
-    .filter((candidate) => SYNOLOGY_OUTBOUND_MEDIA_ID_RE.test(candidate.id));
-  if (tokenCandidates.length === 0) {
-    return false;
-  }
-  if (tokenCandidates.length !== 1) {
-    res.statusCode = 400;
-    res.end("Bad Request");
-    return true;
-  }
-  const method = req.method ?? "GET";
-  if (method !== "GET" && method !== "HEAD") {
-    res.statusCode = 405;
-    res.setHeader("Allow", "GET, HEAD");
-    res.end("Method Not Allowed");
-    return true;
-  }
-
-  const candidate = tokenCandidates[0];
-  if (!candidate) {
-    return false;
-  }
+  const { url, method } = candidate;
   // Runtime replacement resets the process-local limiter state. Resolve the
   // matching store first so the lease acquired below belongs to that runtime.
   const store = getHostedMediaStore(account.accountId);

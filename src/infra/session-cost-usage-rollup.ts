@@ -37,8 +37,10 @@ type SessionUsageLatencyAggregate = {
   sum: number;
 };
 
-type SessionUsageRollupBucket = SessionUsageUntimestampedRollup & {
+export type SessionUsageRollupBucket = SessionUsageUntimestampedRollup & {
   timestampMs: number;
+  firstTimestampMs?: number;
+  lastTimestampMs?: number;
   latency: SessionUsageLatencyAggregate;
 };
 
@@ -236,7 +238,33 @@ export function appendSessionUsageRollupContribution(
   }
 }
 
-function computeLatencyStats(
+/** Fold already parsed contributions without retaining their event timestamps. */
+export function mergeSessionUsageRollupBucket(
+  target: SessionUsageRollupBucket,
+  source: SessionUsageRollupBucket,
+): void {
+  addCostUsageTotals(target.totals, source.totals);
+  addMessageCounts(target.messageCounts, source.messageCounts);
+  const tools = new Map<string, number>();
+  mergeTools(tools, target.tools);
+  mergeTools(tools, source.tools);
+  target.tools = Array.from(tools, ([name, count]) => ({ name, count }));
+  const models = new Map<string, SessionModelUsage>();
+  mergeModels(models, target.models);
+  mergeModels(models, source.models);
+  target.models = [...models.values()];
+  mergeLatencyAggregate(target.latency, source.latency);
+  target.firstTimestampMs = Math.min(
+    target.firstTimestampMs ?? target.timestampMs,
+    source.firstTimestampMs ?? source.timestampMs,
+  );
+  target.lastTimestampMs = Math.max(
+    target.lastTimestampMs ?? target.timestampMs,
+    source.lastTimestampMs ?? source.timestampMs,
+  );
+}
+
+export function computeLatencyStats(
   aggregate: SessionUsageLatencyAggregate,
 ): SessionLatencyStats | undefined {
   if (aggregate.count === 0) {
@@ -283,6 +311,9 @@ function addQuarterHourTokens(
   target: SessionUtcQuarterHourTokenUsage,
   source: SessionUtcQuarterHourTokenUsage,
 ): void {
+  if (source.usageReport?.state === "unavailable") {
+    target.usageReport = { state: "unavailable" };
+  }
   target.input += source.input;
   target.output += source.output;
   target.cacheRead += source.cacheRead;
@@ -292,6 +323,9 @@ function addQuarterHourTokens(
 }
 
 function addDailyModelUsage(target: SessionDailyModelUsage, source: SessionDailyModelUsage): void {
+  if (source.usageReport?.state === "unavailable") {
+    target.usageReport = { state: "unavailable" };
+  }
   target.tokens += source.tokens;
   target.cost += source.cost;
   target.count += source.count;
@@ -535,11 +569,11 @@ export function buildSessionCostSummaryFromRollup(params: {
   let lastActivity: number | undefined;
 
   for (const bucket of usageBucketsInRange(params.rollup, params.startMs, params.endMs)) {
-    const date = new Date(bucket.timestampMs);
+    const date = new Date(bucket.firstTimestampMs ?? bucket.timestampMs);
     const dayKey = params.formatDay(date);
     const quarter = getUtcQuarterHourBucketKey(date);
-    firstActivity ??= bucket.timestampMs;
-    lastActivity = bucket.timestampMs;
+    firstActivity ??= bucket.firstTimestampMs ?? bucket.timestampMs;
+    lastActivity = bucket.lastTimestampMs ?? bucket.timestampMs;
     addCostUsageTotals(totals, bucket.totals);
     addMessageCounts(messageCounts, bucket.messageCounts);
     mergeTools(tools, bucket.tools);
@@ -551,9 +585,10 @@ export function buildSessionCostSummaryFromRollup(params: {
 
     dailyMessages.add([{ date: dayKey, ...bucket.messageCounts }]);
     quarterMessages.add([{ ...quarter, ...bucket.messageCounts }]);
-    const { input, output, cacheRead, cacheWrite, totalTokens, totalCost } = bucket.totals;
+    const { input, output, cacheRead, cacheWrite, totalTokens, totalCost, usageReport } =
+      bucket.totals;
     quarterTokens.add([
-      { ...quarter, input, output, cacheRead, cacheWrite, totalTokens, totalCost },
+      { ...quarter, input, output, cacheRead, cacheWrite, totalTokens, totalCost, usageReport },
     ]);
     dailyModels.add(
       bucket.models.map((model) => ({
@@ -563,6 +598,7 @@ export function buildSessionCostSummaryFromRollup(params: {
         tokens: model.totals.totalTokens,
         cost: model.totals.totalCost,
         count: model.count,
+        usageReport: model.totals.usageReport,
       })),
     );
 
@@ -620,7 +656,7 @@ export function addRollupToCostUsageSummary(params: {
   totals: CostUsageTotals;
 }): void {
   for (const bucket of usageBucketsInRange(params.rollup, params.startMs, params.endMs)) {
-    const dayKey = params.formatDay(new Date(bucket.timestampMs));
+    const dayKey = params.formatDay(new Date(bucket.firstTimestampMs ?? bucket.timestampMs));
     const daily = params.daily.get(dayKey) ?? createEmptyCostUsageTotals();
     addCostUsageTotals(daily, bucket.totals);
     params.daily.set(dayKey, daily);

@@ -3,12 +3,18 @@ import {
   normalizeBackgroundPreference,
   type BackgroundPreference,
 } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { getSafeLocalStorage } from "../local-storage.ts";
 
 // The active identity is learned from hello, never from the general settings blob.
 // Do not restore private artwork before hello identifies the viewer on this boot.
 let identity: { gateway: string; profileId: string } | null = null;
 let unpersisted: { key: string; value: BackgroundPreference | undefined } | null = null;
+const identityListeners = createChangeListeners();
+export function subscribeBackgroundPreferenceIdentity(listener: () => void): () => void {
+  return identityListeners.subscribe(listener);
+}
+
 const PREFIX = "openclaw.control.background.v1:";
 
 export function backgroundPreferenceStorageKey(gatewayUrl: string): string | null {
@@ -31,12 +37,14 @@ export function setBackgroundPreferenceIdentity(
   }
   identity = profileId ? { gateway, profileId } : null;
   unpersisted = null;
+  identityListeners.publish();
   return true;
 }
 
 export function clearBackgroundPreferenceIdentity(): void {
   identity = null;
   unpersisted = null;
+  identityListeners.publish();
 }
 
 export function loadBackgroundPreference(gatewayUrl: string): BackgroundPreference | undefined {

@@ -30,7 +30,7 @@ export async function handleWhatsAppAction(
     }
     const reactionLevelInfo = resolveWhatsAppReactionLevel({
       cfg,
-      accountId: accountId ?? undefined,
+      accountId,
     });
     if (!reactionLevelInfo.agentReactionsEnabled) {
       throw new Error(
@@ -59,7 +59,7 @@ export async function handleWhatsAppAction(
     await whatsAppActionRuntime.sendReactionWhatsApp(resolved.to, messageId, resolvedEmoji, {
       verbose: false,
       fromMe,
-      participant: participant ?? undefined,
+      participant,
       accountId: resolved.accountId,
       cfg,
     });

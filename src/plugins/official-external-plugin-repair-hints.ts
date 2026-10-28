@@ -48,11 +48,12 @@ export function tracksPluginDependencyStatus(candidate: {
  * dependencies stay plugin-local, so a moved or pruned checkout leaves the dist link dangling.
  */
 export function resolveExternalPluginRuntimeDependencyRepairHint(candidate: {
+  origin: string;
   pluginId: string;
   packageName?: string;
   packageBuild?: { bundledDist?: boolean };
 }): string | undefined {
-  if (!isExternallyDistributedPlugin(candidate)) {
+  if (!tracksPluginDependencyStatus(candidate)) {
     return undefined;
   }
   // Only the official package that owns this canonical id earns its install command; a foreign
@@ -79,15 +80,17 @@ function buildOfficialExternalPluginRepairHint(
   entry: OfficialExternalPluginCatalogEntry,
   pluginIdOrChannelId: string,
 ): OfficialExternalPluginRepairHint | null {
-  const installSpec = resolveOfficialExternalPluginInstallSources(entry)[0]?.spec;
-  if (!installSpec) {
+  const installSource = resolveOfficialExternalPluginInstallSources(entry)[0];
+  if (!installSource) {
     return null;
   }
+  const installSpec = installSource.spec;
   const manifest = getOfficialExternalPluginCatalogManifest(entry);
   const pluginId = resolveOfficialExternalPluginId(entry) ?? pluginIdOrChannelId.trim();
   const channelId = manifest?.channel?.id?.trim();
   const label = resolveOfficialExternalPluginLabel(entry);
-  const installCommand = `openclaw plugins install ${installSpec}`;
+  const installTarget = installSource.source === "npm" ? `npm:${installSpec}` : installSpec;
+  const installCommand = `openclaw plugins install ${installTarget}`;
   const doctorFixCommand = "openclaw doctor --fix";
   return {
     pluginId,

@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { parseMcpOAuthStoreJson } from "../agents/mcp-oauth-store.kernel.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
@@ -12,6 +11,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -31,7 +31,7 @@ type McpOAuthMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "mcp_oauth_st
 const MIGRATION_KIND = "legacy-mcp-oauth-json";
 
 function importAndRecordReceiptInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: PreparedLegacyMcpOAuthImport,
 ): LegacyMcpOAuthImportResult {
   const { sourceKey, storeKey, now } = params;
@@ -87,15 +87,6 @@ function importAndRecordReceiptInDatabase(
     );
   }
 
-  const verified = executeSqliteQueryTakeFirstSync(
-    db,
-    stateDb.selectFrom("mcp_oauth_stores").selectAll().where("store_key", "=", storeKey),
-  );
-  if (!verified || verified.format_version !== 1) {
-    throw new Error("SQLite verification failed for an MCP OAuth store");
-  }
-  parseMcpOAuthStoreJson(storeKey, verified.store_json);
-
   const reportJson = JSON.stringify({
     source: MIGRATION_KIND,
     target: "mcp_oauth_stores",
@@ -121,8 +112,8 @@ function importAndRecordReceiptInDatabase(
 
 /** Doctor's original maintenance owner authorizes this separate migration family. */
 function migrationWrite<Input, Result>(
-  operation: (db: DatabaseSync, input: Input) => Result,
-  recordReceipt?: (db: DatabaseSync, result: Result) => void,
+  operation: (db: EngineConnection, input: Input) => Result,
+  recordReceipt?: (db: EngineConnection, result: Result) => void,
 ) {
   return (input: Input, { open }: WorkerOperationContext): Result => {
     const database = open();

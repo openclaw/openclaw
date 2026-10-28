@@ -1,15 +1,12 @@
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type {
   ContextEnginePromptCacheInfo,
   ContextEngineRuntimeContext,
   ContextEngineSessionTarget,
 } from "../../../context-engine/types.js";
-import { pruneMapToMaxSize } from "../../../infra/map-size.js";
 import type { HookRunner } from "../../../plugins/hooks.js";
-import { drainPluginNextTurnInjectionContext } from "../../../plugins/host-hook-state.js";
-import { buildPluginAgentTurnPrepareContext } from "../../../plugins/host-hooks.js";
 import type {
-  PluginNextTurnInjectionRecord,
   PluginHookAgentContext,
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
@@ -23,12 +20,13 @@ import { truncateUtf16Safe } from "../../../utils.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
+import { resolvePluginTurnContext } from "../../plugin-turn-context.js";
+import { resolveModelCallUrgency } from "../../run-trigger.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { deriveContextPromptTokens, type NormalizedUsage } from "../../usage.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
-import { normalizeContextTokenBudget } from "../utils.js";
 import type { DecisionPromptBuildFields } from "./attempt-decision-prefilter.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -38,22 +36,9 @@ export type ResolvedPromptBuildHookResult = PluginHookBeforePromptBuildResult & 
 };
 
 type PromptBuildHookRunner = Pick<HookRunner, "runBeforePromptBuild"> &
-  Partial<Pick<HookRunner, "runAgentTurnPrepare" | "runHeartbeatPromptContribution">> & {
-    hasHooks: (
-      hookName: "agent_turn_prepare" | "heartbeat_prompt_contribution" | "before_prompt_build",
-    ) => boolean;
+  Partial<Pick<HookRunner, "runAgentTurnPrepare">> & {
+    hasHooks: (hookName: "agent_turn_prepare" | "before_prompt_build") => boolean;
   };
-
-// Draining consumes durable injections. Retain them for retries of the same run.
-const PROMPT_BUILD_DRAIN_CACHE_MAX = 256;
-const promptBuildDrainCache = new Map<string, PluginNextTurnInjectionRecord[]>();
-
-/** Release at run termination so active retries retain cache headroom. */
-export function forgetPromptBuildDrainCacheForRun(runId: string | undefined): void {
-  if (runId) {
-    promptBuildDrainCache.delete(runId);
-  }
-}
 
 export async function resolvePromptBuildHookResult(params: {
   config: OpenClawConfig;
@@ -61,58 +46,13 @@ export async function resolvePromptBuildHookResult(params: {
   messages: unknown[];
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
+  refreshContinuation?: boolean;
 }): Promise<ResolvedPromptBuildHookResult> {
-  const runId = params.hookCtx.runId;
-  const cachedInjections = runId ? promptBuildDrainCache.get(runId) : undefined;
-  const queuedContext = cachedInjections
-    ? {
-        queuedInjections: cachedInjections,
-        ...buildPluginAgentTurnPrepareContext({ queuedInjections: cachedInjections }),
-      }
-    : await drainPluginNextTurnInjectionContext({
-        cfg: params.config,
-        sessionKey: params.hookCtx.sessionKey,
-        agentId: params.hookCtx.agentId,
-      });
-  if (runId && !cachedInjections) {
-    promptBuildDrainCache.delete(runId);
-    pruneMapToMaxSize(promptBuildDrainCache, PROMPT_BUILD_DRAIN_CACHE_MAX - 1);
-    promptBuildDrainCache.set(runId, queuedContext.queuedInjections);
-  }
-  // Hook ordering mirrors the prompt assembly boundary: queued injections first,
-  // then prepare/heartbeat contributions, then prompt-build hooks.
+  const turnContext = await resolvePluginTurnContext(params);
   const logHookFailure = (hookName: string) => (hookErr: unknown) => {
     log.warn(`${hookName} hook failed: ${String(hookErr)}`);
     return undefined;
   };
-  const turnPrepareResult =
-    params.hookRunner?.runAgentTurnPrepare && params.hookRunner.hasHooks("agent_turn_prepare")
-      ? await params.hookRunner
-          .runAgentTurnPrepare(
-            {
-              prompt: params.prompt,
-              messages: params.messages,
-              queuedInjections: queuedContext.queuedInjections,
-            },
-            params.hookCtx,
-          )
-          .catch(logHookFailure("agent_turn_prepare"))
-      : undefined;
-  const heartbeatContribution =
-    params.hookCtx.trigger === "heartbeat" &&
-    params.hookRunner?.runHeartbeatPromptContribution &&
-    params.hookRunner.hasHooks("heartbeat_prompt_contribution")
-      ? await params.hookRunner
-          .runHeartbeatPromptContribution(
-            {
-              sessionKey: params.hookCtx.sessionKey,
-              agentId: params.hookCtx.agentId,
-              heartbeatName: "heartbeat",
-            },
-            params.hookCtx,
-          )
-          .catch(logHookFailure("heartbeat_prompt_contribution"))
-      : undefined;
   const promptBuildResult = params.hookRunner?.hasHooks("before_prompt_build")
     ? await params.hookRunner
         .runBeforePromptBuild(
@@ -141,7 +81,7 @@ export async function resolvePromptBuildHookResult(params: {
         ),
       )
     : undefined;
-  const pendingContext = [queuedContext, turnPrepareResult, heartbeatContribution];
+  const pendingContext = [turnContext];
   const joinContext = (key: "prependContext" | "appendContext") =>
     joinPresentTextSegments([...pendingContext, promptBuildResult].map((source) => source?.[key]));
   return {
@@ -398,6 +338,12 @@ export function resolveAttemptFsWorkspaceOnly(params: {
 type AfterTurnRuntimeContextAttempt = Pick<
   EmbeddedRunAttemptParams,
   | "sessionTarget"
+  | "trigger"
+  | "bootstrapContextRunKind"
+  | "currentInboundEventKind"
+  | "inputProvenance"
+  | "spawnedBy"
+  | "trustedInternalHandoff"
   | "contextEngineAgentId"
   | "sessionKey"
   | "sandboxSessionKey"
@@ -454,12 +400,35 @@ export function buildAfterTurnRuntimeContext(params: {
           ...(target?.threadId !== undefined ? { threadId: target.threadId } : {}),
         }
       : undefined;
-  const tokenBudget = normalizeContextTokenBudget(params.tokenBudget);
-  const currentTokenCount = normalizeContextTokenBudget(params.currentTokenCount);
+  const tokenBudget = floorPositiveFiniteNumber(params.tokenBudget);
+  const currentTokenCount = floorPositiveFiniteNumber(params.currentTokenCount);
   return {
     ...buildEmbeddedCompactionRuntimeContext(
       {
-        ...params.attempt,
+        sessionKey: params.attempt.sessionKey,
+        sandboxSessionKey: params.attempt.sandboxSessionKey,
+        sandboxAgentId: params.attempt.sandboxAgentId,
+        messageChannel: params.attempt.messageChannel,
+        messageProvider: params.attempt.messageProvider,
+        agentAccountId: params.attempt.agentAccountId,
+        currentChannelId: params.attempt.currentChannelId,
+        currentThreadTs: params.attempt.currentThreadTs,
+        currentMessageId: params.attempt.currentMessageId,
+        authProfileId: params.attempt.authProfileId,
+        authProfileIdSource: params.attempt.authProfileIdSource,
+        modelSelectionLocked: params.attempt.modelSelectionLocked,
+        config: params.attempt.config,
+        toolsAllow: params.attempt.toolsAllow,
+        skillsSnapshot: params.attempt.skillsSnapshot,
+        senderId: params.attempt.senderId,
+        provider: params.attempt.provider,
+        modelId: params.attempt.modelId,
+        thinkLevel: params.attempt.thinkLevel,
+        reasoningLevel: params.attempt.reasoningLevel,
+        bashElevated: params.attempt.bashElevated,
+        extraSystemPrompt: params.attempt.extraSystemPrompt,
+        ownerNumbers: params.attempt.ownerNumbers,
+        modelCallUrgency: resolveModelCallUrgency(params.attempt),
         runtimeAuthPlan: params.attempt.runtimePlan?.auth,
         workspaceDir: params.workspaceDir,
         cwd: params.cwd,

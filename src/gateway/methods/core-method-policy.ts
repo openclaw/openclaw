@@ -1,7 +1,7 @@
 import type { OperatorScope } from "../operator-scopes.js";
 import type { CoreGatewayMethodSpec } from "./core-descriptor-types.js";
 import { CORE_GATEWAY_METHOD_SPECS } from "./core-descriptors.js";
-import { isCoreGatewayMethodProfileDependent } from "./core-profile-access.js";
+import { isCoreGatewayMethodFamilyProfileDependent } from "./core-profile-access.js";
 import {
   DYNAMIC_GATEWAY_METHOD_SCOPE,
   NODE_GATEWAY_METHOD_SCOPE,
@@ -100,9 +100,10 @@ export function createCoreGatewayMethodDescriptors(
           }
         : {}),
       profileAccess:
-        spec.sessionAccess || isCoreGatewayMethodProfileDependent(spec.name)
+        spec.profileAccess ??
+        (spec.sessionAccess || isCoreGatewayMethodFamilyProfileDependent(spec.name)
           ? "required"
-          : "independent",
+          : "independent"),
       ...(spec.since ? { since: spec.since } : {}),
       ...(spec.advertise === false ? { advertise: false } : {}),
       ...(spec.startup === true ? { startup: "unavailable-until-sidecars" } : {}),

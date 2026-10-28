@@ -1,58 +1,24 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, expect, it, vi } from "vitest";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import * as sqlite from "../../infra/kysely-sync.js";
-import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { serializeGatewayFrame } from "../serialized-json.js";
-import { retainSessionListForegroundWork } from "../session-projection-work.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
-import {
-  identifiedClient,
-  initializeSessionReadContext,
-  listSessions,
-  requestContext,
-} from "./sessions-read-cache.test-support.js";
+import { withListBenchmark } from "./sessions-list-benchmark.test-support.js";
+import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
 it.runIf(process.env.OPENCLAW_DB_WORKER_BENCH === "1").each(["same", "distinct"] as const)(
   "measures resident sessions.list for 25 connections with %s identities over 5,000 stored sessions",
-  async (identities) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const rows = 5_000;
-      const viewers = 25;
-      const cfg = { agents: { entries: { main: {} } } };
-      setRuntimeConfigSnapshot(cfg);
-      runOpenClawAgentWriteTransaction(
-        () => {
-          for (let index = 0; index < rows; index++) {
-            replaceSessionEntrySync(
-              { agentId: "main", sessionKey: `agent:main:list-bench-${index}` },
-              { sessionId: `list-bench-${index}`, updatedAt: index + 1, visibility: "shared" },
-            );
-          }
-        },
-        { agentId: "main" },
-      );
-      const release = retainSessionListForegroundWork();
-      vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
-      const context = requestContext(cfg);
-      try {
+  (identities) =>
+    withListBenchmark(
+      identities,
+      async ({ rows, viewers, context, clients: makeClients, request, replaceLast }) => {
+        vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
         await initializeSessionReadContext(context);
-        await getSessionRowProjection(context)!.ensureMaterialized();
-        const clients = Array.from({ length: viewers }, (_, index) => ({
-          ...identifiedClient(`viewer-${identities === "same" ? 0 : index}`),
-          connId: `list-bench-${index}`,
-        }));
-        const request = (client: (typeof clients)[number]) =>
-          listSessions({
-            context,
-            client,
-            acceptsSerializedJson: true,
-            request: { limit: 100, rowMode: "compact" },
-          });
+        const projection = getSessionRowProjection(context)!;
+        await projection.ensureMaterialized();
+        const clients = makeClients();
         const golden = await request(clients[0]!);
         expect(golden.totalCount).toBe(rows);
         expect(golden.sessions).toHaveLength(100);
@@ -60,25 +26,14 @@ it.runIf(process.env.OPENCLAW_DB_WORKER_BENCH === "1").each(["same", "distinct"]
         const first = vi.spyOn(sqlite, "executeSqliteQueryTakeFirstSync");
         try {
           let mainThreadQueries = 0;
-          const samples: {
-            cpuMs: number;
-            wallMs: number;
-            wireBytes: number;
-            rowArrays: number;
-            selections: number;
-          }[] = [];
+          const samples: Record<
+            "cpuMs" | "wallMs" | "wireBytes" | "rowArrays" | "selections",
+            number
+          >[] = [];
           for (let round = 0; round < 7; round++) {
-            replaceSessionEntrySync(
-              { agentId: "main", sessionKey: `agent:main:list-bench-${rows - 1}` },
-              {
-                sessionId: `list-bench-${rows - 1}`,
-                updatedAt: rows,
-                visibility: "shared",
-                label: `Changed row ${round}`,
-              },
-            );
+            replaceLast(`Changed row ${round}`);
             // Session broadcasts await row readiness before views reload the list.
-            await getSessionRowProjection(context)!.ensureMaterialized();
+            await projection.ensureMaterialized();
             query.mockClear();
             first.mockClear();
             const start = performance.now();
@@ -93,7 +48,10 @@ it.runIf(process.env.OPENCLAW_DB_WORKER_BENCH === "1").each(["same", "distinct"]
               samples.push({
                 cpuMs: (elapsed.user + elapsed.system) / 1_000 / viewers,
                 wallMs: (performance.now() - start) / viewers,
-                wireBytes: Buffer.byteLength(frames[0]!),
+                wireBytes:
+                  typeof frames[0] === "string"
+                    ? Buffer.byteLength(frames[0])
+                    : frames[0]!.byteLength,
                 rowArrays: new Set(responses.map((response) => response.sessions)).size,
                 selections: new Set(responses.map((response) => response.owners)).size,
               });
@@ -121,10 +79,6 @@ it.runIf(process.env.OPENCLAW_DB_WORKER_BENCH === "1").each(["same", "distinct"]
           query.mockRestore();
           first.mockRestore();
         }
-      } finally {
-        getSessionRowProjection(context)?.dispose();
-        release();
-      }
-    });
-  },
+      },
+    ),
 );

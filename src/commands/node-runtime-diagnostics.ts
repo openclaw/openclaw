@@ -1,5 +1,5 @@
 /** Read-only Node findings shared by Doctor and status commands. */
-import { nodeRuntimeFailure, nodeRuntimeNote } from "../../node-sqlite.mjs";
+import { nodeRuntimeFailure } from "../../node-sqlite.mjs";
 import {
   formatUnsupportedNodeVersionMessage,
   SUPPORTED_NODE_VERSIONS,
@@ -24,27 +24,20 @@ export async function collectNodeRuntimeFindings(
   const cliRuntime = await detectRuntime();
   if (cliRuntime.kind === "node" && cliRuntime.sqliteProbe) {
     const failure = nodeRuntimeFailure(cliRuntime.version, cliRuntime.sqliteProbe);
-    const message = failure ?? nodeRuntimeNote(cliRuntime.version, cliRuntime.sqliteProbe);
-    const installOwner = failure
-      ? await readInstallOwner(
-          await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url, argv1: process.argv[1] }),
-        )
-      : null;
-    if (message) {
+    if (failure) {
+      const installOwner = await readInstallOwner(
+        await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url, argv1: process.argv[1] }),
+      );
       findings.push({
         checkId: CHECK_ID,
-        severity: failure ? "error" : "info",
+        severity: "error",
         source: "cli",
-        message,
+        message: failure,
         requirement: SUPPORTED_NODE_VERSIONS,
         target: cliRuntime.execPath ?? undefined,
-        ...(failure
-          ? {
-              fixHint: installOwner
-                ? formatInstallOwnerMessage(installOwner)
-                : formatUnsupportedNodeVersionMessage(cliRuntime.version),
-            }
-          : {}),
+        fixHint: installOwner
+          ? formatInstallOwnerMessage(installOwner)
+          : formatUnsupportedNodeVersionMessage(cliRuntime.version),
       });
     }
   }
@@ -77,14 +70,6 @@ export async function collectNodeRuntimeFindings(
                 formatUnsupportedNodeVersionMessage(runtime.version),
                 "After switching Node, refresh a managed Gateway with `openclaw gateway install --force`; for an externally managed service, have its deployment owner update the launcher.",
               ].join("\n"),
-        });
-      } else if (runtime.note) {
-        findings.push({
-          checkId: CHECK_ID,
-          severity: "info",
-          source: "gateway-service",
-          message: runtime.note,
-          target: executable,
         });
       }
     }

@@ -5,6 +5,7 @@ import {
   hasCommandProcessCleanupError,
 } from "../process/exec-result.js";
 import type { CommandOptions, SpawnResult } from "../process/exec.js";
+import { createPendingPromiseTracker } from "../shared/pending-promises.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import {
   getServiceInspectionClock,
@@ -20,7 +21,13 @@ export class GatewayServiceAuthorityError extends Error {
     cause: unknown,
     readonly outcome?: "unchanged" | "restored" | "recovery-pending",
   ) {
-    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    const message = cause instanceof Error ? cause.message : String(cause);
+    super(
+      message.includes("UPDATE_NATIVE_AUTHORITY:")
+        ? message
+        : `UPDATE_NATIVE_AUTHORITY: ${message}`,
+      { cause },
+    );
     this.name = "GatewayServiceAuthorityError";
   }
 }
@@ -71,14 +78,7 @@ export async function withGatewayServiceUpdateAuthority<T>(
   let tail: Promise<unknown> = Promise.resolve();
   const pending = new Set<Promise<SpawnResult>>();
   const nativeCommand = options?.nativeCommand;
-  const track = (work: Promise<SpawnResult>) => {
-    pending.add(work);
-    void work.then(
-      () => pending.delete(work),
-      () => pending.delete(work),
-    );
-    return work;
-  };
+  const track = createPendingPromiseTracker(pending);
   const assertScope = (compensating = false) => {
     if (!active) {
       throw closedError();
@@ -134,7 +134,7 @@ export async function withGatewayServiceUpdateAuthority<T>(
           baseEnv: { ...commandOptions.baseEnv },
           env: { ...commandOptions.env },
         };
-        const now = getServiceInspectionClock(() => Date.now());
+        const now = getServiceInspectionClock();
         const deadline =
           selected.timeoutMs === undefined
             ? undefined

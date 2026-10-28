@@ -7,22 +7,17 @@ import type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection
 import type {
   ChannelBotInteractionConfig,
   ChannelExecApprovalConfig,
+  ChannelGroupDmConfig,
   ChannelReactionConfig,
   CommonChannelGroupConfig,
   CommonChannelMessagingConfig,
+  MultiAccountChannelConfig,
 } from "./types.channel-messaging-common.js";
 import type { ChannelImplicitMentionsConfig } from "./types.implicit-mentions.js";
 import type { ProviderCommandsConfig } from "./types.messages.js";
 import type { SecretInput } from "./types.secrets.js";
 
-export type SlackDmConfig = {
-  /** If false, ignore all incoming Slack DMs. Default: true. */
-  enabled?: boolean;
-  /** If true, allow group DMs (default: false). */
-  groupEnabled?: boolean;
-  /** Optional allowlist for group DM channels (ids or slugs). */
-  groupChannels?: Array<string | number>;
-};
+export type SlackDmConfig = ChannelGroupDmConfig;
 
 export type SlackChannelConfig = Omit<CommonChannelGroupConfig, "allowFrom"> & {
   /** Override mention gating in threads started by this bot; omitted preserves implicit mention policy. */
@@ -65,6 +60,8 @@ export type SlackCapabilitiesConfig = string[];
 
 export type SlackActionConfig = {
   reactions?: boolean;
+  /** Enable public workspace channel creation (default: false). */
+  channels?: boolean;
   messages?: boolean;
   pins?: boolean;
   search?: boolean;
@@ -169,8 +166,4 @@ export type SlackAccountConfig = Omit<
     typingReaction?: string;
   };
 
-export type SlackConfig = {
-  accounts?: Record<string, SlackAccountConfig>;
-  /** Optional default account id when multiple accounts are configured. */
-  defaultAccount?: string;
-} & SlackAccountConfig;
+export type SlackConfig = MultiAccountChannelConfig<SlackAccountConfig>;

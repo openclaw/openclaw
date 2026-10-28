@@ -1,9 +1,5 @@
-import { MAIN_SESSION_RECOVERY_CLEAR_PATCH } from "../agents/main-session-recovery/main-session-recovery-clear.js";
 import type { SessionAccessScope } from "../config/sessions/session-accessor.js";
-import {
-  projectPublicSessionEntry,
-  SESSION_ENTRY_PRIVATE_CLEAR_PATCH,
-} from "../config/sessions/session-entry-projection.js";
+import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import {
   readSessionEntryByIdReadOnlyInWorker,
   readSessionEntryReadOnlyInWorker,
@@ -29,7 +25,8 @@ export async function getSessionEntryAsync(
   params: SessionStoreReadParams,
 ): Promise<SessionEntry | undefined> {
   const entry = await readSessionEntryReadOnlyInWorker(toSessionAccessScope(params));
-  return entry ? projectPluginSessionEntry(entry) : undefined;
+  // The public read owns its mutable result; internal actor readers borrow committed facts.
+  return entry ? structuredClone(projectPluginSessionEntry(entry)) : undefined;
 }
 
 /** Looks up a visible current session ID in one selected store. */
@@ -74,62 +71,26 @@ export function projectPluginSessionEntry(entry: InternalSessionEntry): SessionE
   };
 }
 
-export { projectPublicSessionEntryPatch as projectPluginSessionEntryPatch } from "../config/sessions/session-entry-projection.js";
-
-export function generationValidPrivateFieldsForSameSession(
-  existingEntry: InternalSessionEntry | undefined,
-  nextSessionId: string | undefined,
-  nextLifecycleRevision: string | undefined,
-): Partial<InternalSessionEntry> | undefined {
-  if (
-    !existingEntry ||
-    existingEntry.sessionId !== nextSessionId ||
-    existingEntry.lifecycleRevision !== nextLifecycleRevision
-  ) {
-    return undefined;
+// Public results own their containers; immutable prompt strings can remain shared.
+export function copyMutableSessionEntry<T extends InternalSessionEntry | null>(entry: T): T {
+  if (!entry) {
+    return entry;
   }
-  const state: Partial<InternalSessionEntry> = {
-    ...(existingEntry.cliHistoryBoundary
-      ? { cliHistoryBoundary: existingEntry.cliHistoryBoundary }
-      : {}),
-    ...(existingEntry.activeWriterRunId !== undefined
-      ? { activeWriterRunId: existingEntry.activeWriterRunId }
-      : {}),
-    ...(existingEntry.lifecycleRunId !== undefined
-      ? { lifecycleRunId: existingEntry.lifecycleRunId }
-      : {}),
-    ...(existingEntry.pendingProjectGitUrl !== undefined
-      ? { pendingProjectGitUrl: existingEntry.pendingProjectGitUrl }
-      : {}),
-    ...(existingEntry.transcriptByteCompactionLatch
-      ? { transcriptByteCompactionLatch: existingEntry.transcriptByteCompactionLatch }
-      : {}),
-    ...(existingEntry.sessionDiffBaselineCapture
-      ? { sessionDiffBaselineCapture: existingEntry.sessionDiffBaselineCapture }
-      : {}),
-    ...(existingEntry.mainRestartRecovery
-      ? {
-          abortedLastRun: existingEntry.abortedLastRun,
-          restartRecoveryRuns: existingEntry.restartRecoveryRuns,
-          mainRestartRecovery: existingEntry.mainRestartRecovery,
-        }
-      : {}),
-  };
-  return Object.keys(state).length > 0 ? state : undefined;
+  const copied = { ...entry };
+  const pending: object[] = [copied];
+  while (pending.length) {
+    const parent = pending.pop()!;
+    for (const key of Object.keys(parent)) {
+      const value: unknown = Reflect.get(parent, key);
+      if (value === null || typeof value !== "object") {
+        continue;
+      }
+      const child = Array.isArray(value) ? [...value] : { ...value };
+      Reflect.set(parent, key, child);
+      pending.push(child);
+    }
+  }
+  return copied;
 }
 
-export function clearGenerationPrivateFieldsForRotatedSessionPatch(
-  existingEntry: InternalSessionEntry,
-  publicPatch: Partial<SessionEntry>,
-): Partial<InternalSessionEntry> {
-  return (Object.hasOwn(publicPatch, "sessionId") &&
-    publicPatch.sessionId !== existingEntry.sessionId) ||
-    (Object.hasOwn(publicPatch, "lifecycleRevision") &&
-      publicPatch.lifecycleRevision !== existingEntry.lifecycleRevision)
-    ? {
-        ...publicPatch,
-        ...SESSION_ENTRY_PRIVATE_CLEAR_PATCH,
-        ...MAIN_SESSION_RECOVERY_CLEAR_PATCH,
-      }
-    : publicPatch;
-}
+export { projectPublicSessionEntryPatch as projectPluginSessionEntryPatch } from "../config/sessions/session-entry-projection.js";

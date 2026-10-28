@@ -5,7 +5,7 @@ import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 const SWIFT_CONTRACT_PATH =
   "apps/shared/OpenClawKit/Sources/OpenClawNativeState/OpenClawNativeStateSQLite.swift";
-const TYPESCRIPT_CONTRACT_PATH = "src/state/openclaw-state-db-contract.ts";
+const TYPESCRIPT_CONTRACT_PATH = "src/state/openclaw-schema-versions.ts";
 
 function extractSingleVersion(source, pattern, label) {
   const matches = [...source.matchAll(pattern)];

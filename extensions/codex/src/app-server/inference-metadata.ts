@@ -64,13 +64,12 @@ export function readCodexInferenceMetadata(
   }
   const readTurnId = (field: string, key: string) =>
     readId(field, flat?.[key], ...nativeField(key));
+  // Codex root forks put the parent's cache key in session-id. Actual session
+  // identity remains in native metadata; the HTTP routing hint is not attribution.
+  const sessionId = readId("session", flat?.session_id, ...nativeField("session_id"));
+  const routingSessionId = readId("routing session", httpHeaders?.["session-id"]);
   return Object.freeze({
-    sessionId: readId(
-      "session",
-      flat?.session_id,
-      ...nativeField("session_id"),
-      httpHeaders?.["session-id"],
-    ),
+    sessionId: sessionId ?? routingSessionId,
     threadId: readId("thread", flat?.thread_id, nativeThreadId, httpHeaders?.["thread-id"]),
     turnId: readTurnId("turn", "turn_id"),
     parentThreadId: readId(
@@ -119,7 +118,9 @@ function readNativeMetadata(raw: unknown): Record<string, unknown> | undefined {
     if (isRecord(value)) {
       return value;
     }
-  } catch {}
+  } catch {
+    // Invalid JSON uses the same descriptive metadata rejection as a non-object payload.
+  }
   throw new Error("Codex inference request has invalid native metadata");
 }
 

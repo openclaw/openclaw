@@ -4,12 +4,17 @@ import {
   MessageInjectionAcceptedUnconfirmedError,
   withMessageInjectionAdmission,
 } from "../../auto-reply/reply/message-injection-authority.js";
+import { throwCollectedErrors } from "../../infra/error-graph-internal.js";
 import type { ImageContent, TextContent } from "../../llm/types.js";
 import { attachRuntimePromptMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { readRuntimePromptImageFactIndexes } from "../../media/runtime-prompt-image-provenance.js";
+import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
-import { mergePreparedUserTurnMessageForRuntime } from "../../sessions/user-turn-transcript.message.js";
+import {
+  mergePreparedUserTurnMessageForRuntime,
+  readModelPromptProjection,
+} from "../../sessions/user-turn-transcript.message.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
@@ -35,7 +40,7 @@ import {
 import type { CustomMessage } from "./messages.js";
 import { expandPromptTemplate } from "./prompt-templates.js";
 import type { ResourceLoader } from "./resource-loader.js";
-import { withSessionManagerWrite } from "./session-manager-write-admission.js";
+import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { setSteeringMessageIdentity } from "./steering-message-identity.js";
 
 type PostAgentRunAction = "continue" | "settled" | "handoff";
@@ -205,12 +210,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     }
 
     if (msg.stopReason === "error" && this.retryCount > 0) {
-      this.emit({
-        type: "auto_retry_end",
-        success: false,
-        attempt: this.retryCount,
-        finalError: msg.errorMessage,
-      });
+      this.emit({ type: "auto_retry_end" });
       this.retryCount = 0;
     }
 
@@ -301,7 +301,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
           );
         }
         if (options.streamingBehavior === "followUp") {
-          await this.queueFollowUp(expandedText, currentImages);
+          this.queueFollowUp(expandedText, currentImages);
         } else {
           const notify = this.queueSteer(
             this.createSteeringMessage(expandedText, currentImages),
@@ -373,9 +373,13 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         });
       const replayPersistedTurn = persistedUserIndex >= 0;
       const persistedUser = this.agent.state.messages[persistedUserIndex];
-      if (!replayPersistedCarrier && persistedUser?.role === "user") {
+      if (
+        !replayPersistedCarrier &&
+        persistedUser?.role === "user" &&
+        readModelPromptProjection(persistedUser) === undefined
+      ) {
         // Transient replay still consumes freshly resolved text/images. Preserve
-        // admission facts in place; a recorded carrier pair must keep its signed prefix.
+        // admission facts; captured prompts and carrier pairs keep their original prefix.
         const runtimeUser = this.createUserMessage(expandedText, currentImages, persistedUser);
         this.agent.state.messages = this.agent.state.messages.with(persistedUserIndex, runtimeUser);
       }
@@ -507,6 +511,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     canInject?: () => boolean,
     currentInboundContext?: CurrentInboundPromptContext,
     prepareInjection?: () => Promise<void>,
+    onAccepted?: () => void,
   ): Promise<void> {
     if (text.startsWith("/")) {
       this.throwIfExtensionCommand(text);
@@ -534,6 +539,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
             throw new Error("active session is finalizing");
           }
           notify = this.queueSteer(message, expandedText);
+          onAccepted?.();
         });
       } catch (error) {
         failure = { error };
@@ -567,7 +573,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       this.throwIfExtensionCommand(text);
     }
 
-    await this.queueFollowUp(this.expandPrompt(text), images);
+    this.queueFollowUp(this.expandPrompt(text), images);
   }
 
   private createSteeringMessage(
@@ -582,7 +588,12 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     queueIdentity?: string,
     currentInboundContext?: CurrentInboundPromptContext,
   ): AgentMessage {
-    const runtimeMessage = this.createUserMessage(text, images, transcriptContext?.message);
+    // Cold replay adds this same source envelope; include it before the first model request.
+    const runtimeMessage = this.createUserMessage(
+      annotateInterSessionPromptText(text, transcriptContext?.message.provenance),
+      images,
+      transcriptContext?.message,
+    );
     const promptMessage = media?.length
       ? attachRuntimePromptMediaFacts(runtimeMessage, media, imageOrder)
       : runtimeMessage;
@@ -602,17 +613,12 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       notifyListeners([() => this.emitQueueUpdate(), () => notifyAgent()], undefined, (error) =>
         errors.push(error),
       );
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "Steering notifications failed");
-      }
+      throwCollectedErrors(errors, "Steering notifications failed");
     };
   }
 
   /** Queue pre-expanded follow-up input without an extension-command check. */
-  private async queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
+  private queueFollowUp(text: string, images?: ImageContent[]): void {
     const message = this.createUserMessage(text, images);
     this.trackQueuedUserMessage(message, "followUp", text);
     this.emitQueueUpdate();
@@ -662,12 +668,13 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
   }
 
   private async persistCustomMessage(message: CustomMessage): Promise<void> {
-    await withSessionManagerWrite(this.sessionManager, async () => {
+    await withSessionManagerAppend(this.sessionManager, async () => {
       await this.sessionManager.appendCustomMessageEntryAsync(
         message.customType,
         message.content,
         message.display,
         message.details,
+        message.timestamp,
       );
       this.agent.state.messages.push(message);
     });

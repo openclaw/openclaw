@@ -11,6 +11,7 @@ import { AgentSideConnection, ndJsonStream, PROTOCOL_VERSION } from "@agentclien
 
 const directory = process.argv[2];
 const modelControls = process.argv.slice(3).includes("--model-controls");
+const loadSession = !process.argv.slice(3).includes("--no-session-load");
 const holdModeControl = process.argv.slice(3).includes("--hold-mode-control");
 const holdNewSession = process.argv.slice(3).includes("--hold-new-session");
 const holdPromptReply = process.argv.slice(3).includes("--hold-prompt-reply");
@@ -85,7 +86,7 @@ const connection = new AgentSideConnection(
     async initialize() {
       return {
         protocolVersion: PROTOCOL_VERSION,
-        agentCapabilities: { loadSession: true, sessionCapabilities: { close: {} } },
+        agentCapabilities: { loadSession, sessionCapabilities: { close: {} } },
         authMethods: [],
       };
     },

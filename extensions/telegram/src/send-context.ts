@@ -15,7 +15,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { getOrCreateAccountThrottler, runAuthorizedTelegramRequest } from "./account-throttler.js";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
-import { withTelegramApiErrorLogging } from "./api-logging.js";
+import { formatTelegramTransportDiagnostics, withTelegramApiErrorLogging } from "./api-logging.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
 import { resolveTelegramTransport, type TelegramTransport } from "./fetch.js";
@@ -52,34 +52,6 @@ export function resolveTelegramMessageIdOrThrow(
   throw new Error(`Telegram ${context} returned no message_id`);
 }
 
-type TelegramOutboundSuccessLogParams = {
-  accountId: string;
-  chatId: string;
-  messageId: string;
-  operation: string;
-  deliveryKind?: string;
-  messageThreadId?: number;
-  replyToMessageId?: number;
-  silent?: boolean;
-  chunkCount?: number;
-};
-
-export function logTelegramOutboundSendOk(params: TelegramOutboundSuccessLogParams): void {
-  const parts = [
-    "telegram outbound send ok",
-    `accountId=${params.accountId}`,
-    `chatId=${params.chatId}`,
-    `messageId=${params.messageId}`,
-    `operation=${params.operation}`,
-    params.deliveryKind && `deliveryKind=${params.deliveryKind}`,
-    typeof params.messageThreadId === "number" && `threadId=${params.messageThreadId}`,
-    typeof params.replyToMessageId === "number" && `replyToMessageId=${params.replyToMessageId}`,
-    params.silent === true && "silent=true",
-    typeof params.chunkCount === "number" && `chunkCount=${params.chunkCount}`,
-  ];
-  sendLogger.info(parts.filter(Boolean).join(" "));
-}
-
 export function resolveAcceptedReplyToMessageId(
   params: TelegramThreadScopedParams | TelegramRichMessageContextParams | undefined,
 ): number | undefined {
@@ -114,10 +86,7 @@ const CHAT_NOT_FOUND_RE = /400: Bad Request: chat not found/i;
 export const sendLogger = createSubsystemLogger("telegram/send");
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
 type CachedTelegramClientOptions = {
-  activeLeases: number;
   clientOptions: ApiClientOptions & { fetch: NonNullable<ApiClientOptions["fetch"]> };
-  closeStarted: boolean;
-  retired: boolean;
   transport: TelegramTransport;
 };
 const telegramClientOptionsCache = new Map<string, CachedTelegramClientOptions>();
@@ -132,25 +101,20 @@ export function resetTelegramClientOptionsCacheForTests(): void {
 
 function createTelegramHttpLogger(cfg: OpenClawConfig) {
   if (!isDiagnosticFlagEnabled("telegram.http", cfg)) {
-    return () => {};
+    return undefined;
   }
   return (label: string, err: unknown) => {
     if (!(err instanceof HttpError)) {
       return;
     }
-    const detail = redactSensitiveText(formatUncaughtError(err.error ?? err));
-    diagLogger.warn(`telegram http error (${label}): ${detail}`);
+    diagLogger.warn(
+      `telegram http error (${label}): network request failed${formatTelegramTransportDiagnostics(err)}`,
+    );
   };
 }
 
 function closeCachedTelegramClientOptions(entry: CachedTelegramClientOptions): void {
-  // Eviction may retire a cache entry while a send still holds a lease; defer
-  // transport.close until the last op-level lease releases so mid-request sockets stay open.
-  entry.retired = true;
-  if (entry.activeLeases > 0 || entry.closeStarted) {
-    return;
-  }
-  entry.closeStarted = true;
+  // Cache churn beyond 64 account/network configurations may interrupt a send.
   void entry.transport.close().catch((err: unknown) => {
     diagLogger.warn(
       `telegram client options cache transport close failed: ${redactSensitiveText(
@@ -182,13 +146,10 @@ function resolveTelegramClientOptions(
     transport,
   });
   const entry: CachedTelegramClientOptions = {
-    activeLeases: 0,
     clientOptions: {
       fetch: asTelegramClientFetch(fetchImpl),
       ...(normalizedApiRoot ? { apiRoot: normalizedApiRoot } : {}),
     },
-    closeStarted: false,
-    retired: false,
     transport,
   };
   telegramClientOptionsCache.set(cacheKey, entry);
@@ -314,21 +275,17 @@ export async function withTelegramApiContext<T>(
   try {
     ownerAgentId = resolveTelegramAccountOwnerAgentId({ cfg, accountId: account.accountId });
   } catch (error) {
-    // Ownership is local preflight, before a transport lease or Bot API operation.
+    // Ownership is local preflight, before a Bot API operation.
     throw new PlatformMessageNotDispatchedError(formatErrorMessage(error), {
       cause: error,
       retryable: false,
     });
   }
   let api: TelegramApi;
-  let client: CachedTelegramClientOptions | undefined;
   if (opts.api) {
     api = opts.api as TelegramApi;
   } else {
-    client = resolveTelegramClientOptions(account);
-    // One op-level lease covers the full send/action (including pre-request work
-    // and retries) so eviction cannot close the transport mid-operation.
-    client.activeLeases += 1;
+    const client = resolveTelegramClientOptions(account);
     const fetch = client.clientOptions.fetch;
     const clientOptions = opts.assertPlatformSendAuthorized
       ? {
@@ -368,17 +325,8 @@ export async function withTelegramApiContext<T>(
         opts.assertPlatformSendAuthorized?.();
       }
     : undefined;
-  try {
-    // A caller-supplied API has no authority transformer; flood waits re-check here.
-    return await runAuthorizedTelegramRequest(assertCurrent, () => operation(context));
-  } finally {
-    if (client) {
-      client.activeLeases -= 1;
-      if (client.retired) {
-        closeCachedTelegramClientOptions(client);
-      }
-    }
-  }
+  // A caller-supplied API has no authority transformer; flood waits re-check here.
+  return await runAuthorizedTelegramRequest(assertCurrent, () => operation(context));
 }
 
 type TelegramRequestWithDiag = <T>(
@@ -411,10 +359,12 @@ export function createTelegramRequestWithDiag(params: {
         : withTelegramApiErrorLogging({
             operation: label,
             fn: runRequest,
-            ...(options?.shouldLog ? { shouldLog: options.shouldLog } : {}),
+            shouldLog: (err) =>
+              (!options?.shouldLog || options.shouldLog(err)) &&
+              !(logHttpError && err instanceof HttpError),
           });
     return call.catch((err: unknown) => {
-      logHttpError(label, err);
+      logHttpError?.(label, err);
       throw err;
     });
   };
@@ -428,7 +378,7 @@ function wrapTelegramChatNotFoundError(err: unknown, params: { chatId: string; i
       [
         `Telegram send failed: bot is not a member of the chat, was blocked, or was kicked (chat_id=${params.chatId}).`,
         `Telegram API said: ${errorMsg}.`,
-        "Fix: Add the bot to the channel/group, or ensure it has not been removed/blocked/kicked by the user.",
+        "Fix: Add the bot to the channel/group, or check that it has not been removed/blocked/kicked by the user.",
         `Input was: ${JSON.stringify(params.input)}.`,
       ].join(" "),
     );
@@ -443,6 +393,7 @@ function wrapTelegramChatNotFoundError(err: unknown, params: { chatId: string; i
       "Likely: bot not started in DM, bot removed from group/channel, group migrated (new -100… id), or wrong bot token.",
       `Input was: ${JSON.stringify(params.input)}.`,
     ].join(" "),
+    { cause: err },
   );
 }
 

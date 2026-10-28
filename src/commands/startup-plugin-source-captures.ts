@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolveStateDir } from "../config/state-dir.js";
-import { hasErrnoCode } from "../infra/errno.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import {
   resolvePluginSourceCaptureFallbackPrefix,
   resolvePluginSourceCapturesDirectory,
@@ -9,13 +9,8 @@ import {
 import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
 
 async function hasCaptureDirectories(stateDir: string, directory: string): Promise<boolean> {
-  try {
-    await fs.access(directory);
+  if (await fs.access(directory).then(() => true, ignoreMissingPath)) {
     return true;
-  } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
   }
   const prefix = resolvePluginSourceCaptureFallbackPrefix(stateDir);
   try {
@@ -25,9 +20,7 @@ async function hasCaptureDirectories(stateDir: string, directory: string): Promi
       }
     }
   } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
+    ignoreMissingPath(error);
   }
   return false;
 }

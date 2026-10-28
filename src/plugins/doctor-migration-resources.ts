@@ -12,8 +12,9 @@ import type {
   PluginDoctorMigrationBackupWarning,
   PluginDoctorStateMigration,
 } from "./doctor-contract-module.js";
+import { sqliteOnlyMigrationNotice } from "./doctor-migration-applicability.js";
 import type { PluginStateRetentionContract } from "./doctor-retired-state.js";
-import type { PluginManifestRecord } from "./manifest-registry.types.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.types.js";
 import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "./public-surface-loader.js";
 
 export type PluginDoctorMigrationResourceCollectionParams = {
@@ -23,6 +24,7 @@ export type PluginDoctorMigrationResourceCollectionParams = {
   workspaceDir?: string;
   warnings: PluginDoctorMigrationBackupWarning[];
   requireLocalResources?: boolean;
+  manifestRegistry?: PluginManifestRegistry;
 };
 
 /** Select one whole-plugin data scope for both rehearsal inventory and execution. */
@@ -32,14 +34,20 @@ export async function preparePluginDoctorMigrationResources(
 ) {
   const rehearsalRoot = resolveUpdateRehearsalRoot(params.env);
   const resources = new Map<string, PluginDoctorMigrationBackupResource>();
+  const notices: string[] = [];
   const pluginResources = new Map<string, Set<string>>();
   for (const { pluginId, migration } of entries) {
+    const notice = sqliteOnlyMigrationNotice(migration, params.config);
+    if (notice) {
+      notices.push(notice);
+      continue;
+    }
     if (migration.collectBackupResources === undefined) {
       if (!params.warnings.some((warning) => warning.pluginId === pluginId)) {
         params.warnings.push({
           kind: "undeclared-migration-resources",
           pluginId,
-          message: `${pluginId} migration declares no data resources; its private state is not in the recovery set`,
+          message: `${pluginId} migration recovery coverage is unknown: no backup inventory was declared. Update the plugin to a version with migration backup support. Until then, keep a separate backup of its configured data before relying on rollback; ask its maintainer to add backup support. See https://docs.openclaw.ai/cli/doctor/state-migrations#plugin-migration-recovery-coverage`,
         });
       }
       continue;
@@ -109,10 +117,13 @@ export async function preparePluginDoctorMigrationResources(
   return {
     resources: selectedResources,
     deferredPluginIds,
-    notices: [...deferredPluginIds].map(
-      (pluginId) =>
-        `rehearsal: ${pluginId} state migrations deferred; declared data outside the rehearsal root left untouched`,
-    ),
+    notices: [
+      ...notices,
+      ...[...deferredPluginIds].map(
+        (pluginId) =>
+          `rehearsal: ${pluginId} state migrations deferred; declared data outside the rehearsal root left untouched`,
+      ),
+    ],
     assertCurrent,
   };
 }

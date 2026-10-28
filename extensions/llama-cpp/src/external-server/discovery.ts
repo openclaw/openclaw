@@ -1,44 +1,24 @@
 import { discoverOpenAICompatibleLocalModels } from "openclaw/plugin-sdk/provider-setup";
 import { LLAMA_SERVER_DISCOVERY_TIMEOUT_MS } from "./defaults.js";
 import { resolveLlamaServerEndpoint } from "./endpoint.js";
-import { mapLlamaServerModel, type LlamaServerDiscoveredModel } from "./models.js";
+import { mapLlamaServerModel } from "./models.js";
 
-export type LlamaServerDiscoveryResult =
-  | {
-      kind: "success";
-      endpoint: ReturnType<typeof resolveLlamaServerEndpoint>;
-      models: LlamaServerDiscoveredModel[];
-    }
-  | {
-      kind: "unreachable";
-      endpoint: ReturnType<typeof resolveLlamaServerEndpoint>;
-      error: unknown;
-    }
-  | {
-      kind: "http-error";
-      endpoint: ReturnType<typeof resolveLlamaServerEndpoint>;
-      status: number;
-      path: string;
-    }
-  | {
-      kind: "invalid-response";
-      endpoint: ReturnType<typeof resolveLlamaServerEndpoint>;
-      path: string;
-      error: unknown;
-    };
+export type LlamaServerDiscoveryResult = Awaited<ReturnType<typeof discoverLlamaServer>>;
 
 /** Discovers llama-server models without loading, waking, or unloading them. */
 export async function discoverLlamaServer(params: {
   baseUrl?: string;
   apiKey?: string;
   headers?: Record<string, string>;
+  allowPrivateNetwork?: boolean;
   signal?: AbortSignal;
   useRuntimeDefaults?: boolean;
-}): Promise<LlamaServerDiscoveryResult> {
+}) {
   const endpoint = resolveLlamaServerEndpoint(params.baseUrl);
   const result = await discoverOpenAICompatibleLocalModels({
     baseUrl: endpoint.inferenceBaseUrl,
     serverBaseUrl: endpoint.origin,
+    allowPrivateNetwork: params.allowPrivateNetwork,
     apiKey: params.apiKey,
     headers: params.headers,
     label: "llama-server",

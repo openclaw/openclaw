@@ -38,20 +38,30 @@ export function buildXaiWebSearchPayload(params: {
   };
 }
 
+/** Typed deadline the web_search boundary reports as a timeout. */
+class XaiWebSearchTimeoutError extends Error {
+  override readonly name = "TimeoutError";
+  readonly code = "ETIMEDOUT";
+  readonly timeoutMs: number;
+
+  constructor(timeoutSeconds: number, cause: Error) {
+    super(
+      `xAI web search timed out after ${timeoutSeconds}s. Check xAI authentication or try a simpler request.`,
+      { cause },
+    );
+    this.timeoutMs = timeoutSeconds * 1_000;
+  }
+}
+
 export function wrapXaiWebSearchError(error: unknown, timeoutSeconds: number): never {
   if (
     error instanceof Error &&
+    !(error instanceof XaiWebSearchTimeoutError) &&
     (error.name === "AbortError" ||
       error.name === "TimeoutError" ||
       error.message === "This operation was aborted")
   ) {
-    throw Object.assign(
-      new Error(
-        `xAI web search timed out after ${timeoutSeconds}s. Check xAI authentication or try a simpler request.`,
-        { cause: error },
-      ),
-      { code: "ETIMEDOUT" },
-    );
+    throw new XaiWebSearchTimeoutError(timeoutSeconds, error);
   }
   throw error;
 }

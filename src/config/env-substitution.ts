@@ -27,7 +27,7 @@ export type EnvTemplateToken = {
 };
 
 /** Rebuilds the authored placeholder text for a parsed token. */
-function renderEnvTemplateToken(token: EnvTemplateToken): string {
+export function renderEnvTemplateToken(token: EnvTemplateToken): string {
   return token.defaultValue === undefined
     ? `\${${token.name}}`
     : `\${${token.name}${DEFAULT_VALUE_OPERATOR}${token.defaultValue}}`;

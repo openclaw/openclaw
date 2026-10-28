@@ -57,6 +57,8 @@ Onboarding imports require a fresh OpenClaw setup. If you already have local Ope
     - Claude skills with a `SKILL.md` file are copied into the OpenClaw workspace skills directory.
     - Claude command Markdown files under `.claude/commands/` or `~/.claude/commands/` are converted into OpenClaw skills with `disable-model-invocation: true`.
 
+    If a discovered skills directory cannot be read, migration stops before importing anything. Fix access to the directory named in the error, then retry.
+
   </Accordion>
 </AccordionGroup>
 
@@ -142,7 +144,15 @@ openclaw migrate apply claude --json --yes
 
 ## Troubleshooting
 
+Source text must be an ordinary file. Optional unreadable settings are skipped;
+instructions and commands that become special files are refused before changing
+destinations or creating backups. Restore an ordinary source file and retry.
+Symlinks to ordinary source files remain supported.
+
 <AccordionGroup>
+  <Accordion title="A Claude configuration file is not valid UTF-8">
+    Migration stops before importing when a Claude JSON source contains invalid UTF-8 bytes. Re-save or re-encode the file named in the error as UTF-8, then retry. The source file and existing OpenClaw config remain unchanged. Valid Unicode, including a literal replacement character (`�`), is preserved.
+  </Accordion>
   <Accordion title="Claude state lives outside ~/.claude">
     Pass `--from /actual/path` (CLI) or `--import-source /actual/path` (onboarding).
   </Accordion>

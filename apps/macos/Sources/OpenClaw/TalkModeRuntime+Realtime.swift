@@ -18,12 +18,9 @@ extension TalkModeRuntime {
     }
 
     func stop(
-        reconfigurationGeneration expectedReconfigurationGeneration: UInt64?,
         lifecycleGeneration expectedLifecycleGeneration: Int?) async
     {
-        guard self.ownsReconfiguration(
-            expectedReconfigurationGeneration,
-            lifecycleGeneration: expectedLifecycleGeneration)
+        guard expectedLifecycleGeneration.map({ $0 == self.lifecycleGeneration }) ?? true
         else { return }
         self.pendingRealtimeRelayStartLifecycleGeneration = nil
         self.resetRealtimeRecoveryState()
@@ -34,17 +31,12 @@ extension TalkModeRuntime {
         if let realtimeSession {
             await MainActor.run { realtimeSession.stop() }
         }
-        guard self.ownsReconfiguration(
-            expectedReconfigurationGeneration,
-            lifecycleGeneration: expectedLifecycleGeneration)
+        guard expectedLifecycleGeneration.map({ $0 == self.lifecycleGeneration }) ?? true
         else { return }
         await stopSpeaking(
             reason: .manual,
-            reconfigurationGeneration: expectedReconfigurationGeneration,
             lifecycleGeneration: expectedLifecycleGeneration)
-        guard self.ownsReconfiguration(
-            expectedReconfigurationGeneration,
-            lifecycleGeneration: expectedLifecycleGeneration)
+        guard expectedLifecycleGeneration.map({ $0 == self.lifecycleGeneration }) ?? true
         else { return }
         let projectionGeneration = self.realtimeRelayGeneration
         _ = await MainActor.run {
@@ -56,33 +48,17 @@ extension TalkModeRuntime {
         }
     }
 
-    func ownsReconfiguration(
-        _ expectedReconfigurationGeneration: UInt64?,
-        lifecycleGeneration expectedLifecycleGeneration: Int?) -> Bool
-    {
-        (expectedReconfigurationGeneration.map { $0 == self.realtimeReconfigurationGeneration } ?? true) &&
-            (expectedLifecycleGeneration.map { $0 == self.lifecycleGeneration } ?? true)
-    }
-
-    func beginRealtimeReconfiguration() -> (generation: UInt64, lifecycleGeneration: Int) {
-        self.lifecycleGeneration &+= 1
-        self.realtimeReconfigurationGeneration &+= 1
-        return (self.realtimeReconfigurationGeneration, self.lifecycleGeneration)
-    }
-
     func realtimeRelayPreferenceDidChange() async {
         guard isEnabled else { return }
-        let reconfiguration = self.beginRealtimeReconfiguration()
-        await self.stop(
-            reconfigurationGeneration: reconfiguration.generation,
-            lifecycleGeneration: reconfiguration.lifecycleGeneration)
-        guard self.isCurrent(reconfiguration.lifecycleGeneration) else { return }
+        self.lifecycleGeneration &+= 1
+        let generation = self.lifecycleGeneration
+        await self.stop(lifecycleGeneration: generation)
+        guard self.isCurrent(generation) else { return }
         await self.start()
     }
 
     func start() async {
         let gen = lifecycleGeneration
-        guard self.dependencies.permissions.supported() else { return }
         let hasVoiceWakePermission = await self.dependencies.permissions.ensure(true)
         guard hasVoiceWakePermission else {
             logger.error("talk runtime not starting: permissions missing")
@@ -125,12 +101,9 @@ extension TalkModeRuntime {
                       realtimeSession == nil
                 else { return }
                 let fallbackConfig = await fetchTalkConfig()
-                guard await self.applyNativeFallbackTalkConfig(
-                    fallbackConfig,
-                    lifecycleGeneration: gen,
-                    recognitionGeneration: fallbackRecognitionGeneration,
-                    relayGeneration: fallbackRealtimeRelayGeneration)
-                else { return }
+                if let locale = await MainActor.run(body: { self.state()?.voiceWakeLocaleID }) {
+                    self.commitTalkConfig(fallbackConfig, locale: locale)
+                }
                 logger.error(
                     "talk realtime unavailable; using native fallback: " +
                         "\(error.localizedDescription, privacy: .public)")
@@ -214,7 +187,6 @@ extension TalkModeRuntime {
 
     func shouldAttemptRealtimeRelay() -> Bool {
         guard macOSRealtimeRelayOptIn else {
-            logger.debug("talk macOS realtime relay disabled locally; using native speech")
             return false
         }
         guard hasGatewayRealtimeRelayTuple else {
@@ -240,20 +212,14 @@ extension TalkModeRuntime {
         do {
             bootstrap = try await self.realtimeTalkBootstrapProvider()
         } catch {
-            try await self.applyRealtimeTalkConfig(
-                self.fallbackTalkConfig(),
-                lifecycleGeneration: generation,
-                relayGeneration: relayGeneration)
+            await self.applyTalkConfig(self.fallbackTalkConfig())
             throw error
         }
         guard isCurrent(generation), !isPaused,
               realtimeRelayGeneration == relayGeneration
         else { throw CancellationError() }
         let config = self.parseTalkConfig(bootstrap.configSnapshot)
-        try await self.applyRealtimeTalkConfig(
-            config,
-            lifecycleGeneration: generation,
-            relayGeneration: relayGeneration)
+        await self.applyTalkConfig(config)
         guard self.shouldAttemptRealtimeRelay() else {
             throw RealtimeRelayConfigurationError.incompatible
         }
@@ -276,58 +242,9 @@ extension TalkModeRuntime {
                 "model=\(self.config?.snapshot.realtime.modelId ?? "default", privacy: .public)")
     }
 
-    func applyRealtimeTalkConfig(
-        _ config: TalkModeGatewayConfigState,
-        lifecycleGeneration: Int,
-        relayGeneration: UInt64) async throws
-    {
-        let locale = await MainActor.run { () -> String? in
-            guard let state = self.state() else { return nil }
-            guard self.realtimeRelayDeliveryGate.deliver(ifActive: relayGeneration, {
-                state.seamColorHex = config.seamColorHex
-            }) else { return nil }
-            return state.voiceWakeLocaleID
-        }
-        #if DEBUG
-        if let checkpoint = self.realtimeConfigApplicationCheckpoint {
-            await checkpoint()
-        }
-        #endif
-        guard let locale,
-              self.isCurrent(lifecycleGeneration),
-              !self.isPaused,
-              self.realtimeRelayGeneration == relayGeneration,
-              self.realtimeRelayStartGeneration == relayGeneration
-        else { throw CancellationError() }
-        self.commitTalkConfig(config, locale: locale)
-    }
-
-    func applyNativeFallbackTalkConfig(
-        _ config: TalkModeGatewayConfigState,
-        lifecycleGeneration: Int,
-        recognitionGeneration: Int,
-        relayGeneration: UInt64) async -> Bool
-    {
-        let locale = await MainActor.run { self.state()?.voiceWakeLocaleID }
-        #if DEBUG
-        if let checkpoint = self.realtimeConfigApplicationCheckpoint {
-            await checkpoint()
-        }
-        #endif
-        guard let locale, self.isCurrent(lifecycleGeneration),
-              !self.isPaused,
-              self.recognitionGeneration == recognitionGeneration,
-              self.realtimeRelayGeneration == relayGeneration,
-              self.realtimeRelayStartGeneration == nil,
-              self.realtimeSession == nil
-        else { return false }
-        self.commitTalkConfig(config, locale: locale)
-        return true
-    }
-
     func fallbackTalkConfig() -> TalkModeGatewayConfigState {
         let env = ProcessInfo.processInfo.environment
-        return TalkModeGatewayConfigParser.fallback(
+        return TalkModeGatewayConfigParser.parse(
             defaultModelIdFallback: Self.defaultModelIdFallback,
             defaultSilenceTimeoutMs: Self.defaultSilenceTimeoutMs,
             envVoice: env["ELEVENLABS_VOICE_ID"],
@@ -368,9 +285,7 @@ extension TalkModeRuntime {
                 options: options,
                 audioCapture: audioCapture,
                 pcmPlayer: dependencies.pcmPlayer(),
-                onStatus: { [weak self] status in
-                    Task { await self?.handleRealtimeStatus(status, relayGeneration: relayGeneration) }
-                },
+                onStatus: { _ in },
                 onIssue: { [weak self] issue in
                     Task { await self?.handleRealtimeIssue(issue, relayGeneration: relayGeneration) }
                 },
@@ -422,6 +337,10 @@ extension TalkModeRuntime {
         realtimeSession = session
         do {
             try await session.start()
+            // A cancelled startup can return normally without a ready relay.
+            guard await MainActor.run(body: { session.isReady }) else {
+                throw CancellationError()
+            }
         } catch {
             await MainActor.run { session.stop() }
             if realtimeSession === session {
@@ -433,6 +352,8 @@ extension TalkModeRuntime {
             else {
                 throw CancellationError()
             }
+            // Only the current startup may reset the phase.
+            self.phase = .idle
             throw error
         }
         guard isCurrent(lifecycleGeneration), !isPaused,
@@ -445,13 +366,6 @@ extension TalkModeRuntime {
             }
             throw CancellationError()
         }
-    }
-
-    private func handleRealtimeStatus(_ status: String, relayGeneration: UInt64) {
-        guard let session = realtimeSession,
-              ownsRealtimeRelay(relayGeneration, session)
-        else { return }
-        logger.debug("talk realtime status=\(status, privacy: .public)")
     }
 
     private func handleRealtimeIssue(_ issue: RealtimeTalkRelayIssue, relayGeneration: UInt64) async {
@@ -523,10 +437,9 @@ extension TalkModeRuntime {
         let activeDuration = realtimeSessionReadyAt.map { Date().timeIntervalSince($0) } ?? 0
         realtimeRelayGeneration &+= 1
         let terminalGeneration = realtimeRelayGeneration
-        // Session-owned terminations close before signalling; runtime-initiated ones do not.
-        // stop() is idempotent, so closing here keeps a dead relay and its event subscription
-        // from outliving their owner while recovery starts a replacement session.
-        await MainActor.run { session.stop() }
+        // Session-owned terminations already closed; a failed microphone restart leaves the relay
+        // open. Retire it before recovery without cancelling accepted agent work.
+        await MainActor.run { session.stopAfterFailure() }
         guard self.ownsRealtimeRelay(terminalGeneration, session) else { return }
         realtimeSession = nil
         realtimeSessionReadyAt = nil
@@ -562,6 +475,10 @@ extension TalkModeRuntime {
 
     func handleRealtimeSpeakingChanged(_ speaking: Bool, relayGeneration: UInt64) async {
         guard let session = self.activeRealtimeRelay(relayGeneration) else { return }
+        // Closing an unready startup reports speaking false without becoming ready.
+        guard await MainActor.run(body: { session.isReady }),
+              self.activeRealtimeRelay(relayGeneration) === session
+        else { return }
         let phase: TalkModePhase = speaking ? .speaking : .listening
         self.phase = phase
         _ = await self.projectRealtimeRelay(relayGeneration, session) {
@@ -709,12 +626,6 @@ extension TalkModeRuntime {
 
     func _test_setRecognitionCleanupProbe(_ probe: (@Sendable () -> Void)?) {
         self.recognitionCleanupProbe = probe
-    }
-
-    func _test_setRealtimeConfigApplicationCheckpoint(
-        _ checkpoint: (@Sendable () async -> Void)?)
-    {
-        self.realtimeConfigApplicationCheckpoint = checkpoint
     }
 
     func _test_enableRealtimeRelaySelection() {

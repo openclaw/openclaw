@@ -66,55 +66,6 @@ async function rejectUnsafeWebCredsPath(authDir: string): Promise<void> {
   await assertWebCredsPathRegularFileOrMissing(resolveWebCredsPath(authDir));
 }
 
-async function safeSaveCreds(params: {
-  authDir: string;
-  saveCreds: () => Promise<void> | void;
-  logger: ReturnType<typeof getChildLogger>;
-  beforeCredentialPersistence?: () => Promise<void>;
-}): Promise<void> {
-  let backup: { content: string; filePath: string } | undefined;
-  try {
-    // Best-effort backup so we can recover after abrupt restarts.
-    // Important: don't clobber a good backup with a corrupted/truncated creds.json.
-    const credsPath = resolveWebCredsPath(params.authDir);
-    const backupPath = resolveWebCredsBackupPath(params.authDir);
-    const raw = readCredsJsonRaw(credsPath);
-    if (raw) {
-      try {
-        JSON.parse(raw);
-        backup = { content: raw, filePath: backupPath };
-      } catch {
-        // keep existing backup
-      }
-    }
-  } catch {
-    // ignore backup failures
-  }
-
-  if (backup) {
-    await params.beforeCredentialPersistence?.();
-    try {
-      await writeWebCredsRawAtomically({
-        filePath: backup.filePath,
-        content: backup.content,
-        tempPrefix: ".creds.backup",
-      });
-    } catch {
-      // keep existing backup
-    }
-  }
-
-  await params.beforeCredentialPersistence?.();
-  try {
-    await Promise.resolve(params.saveCreds());
-  } catch (err) {
-    params.logger.warn({ error: String(err) }, "failed saving WhatsApp creds");
-    if (params.beforeCredentialPersistence) {
-      throw err;
-    }
-  }
-}
-
 function abortSocketAfterCredentialPersistenceFailure(
   sock: ReturnType<typeof makeWASocket>,
   error: unknown,
@@ -259,15 +210,7 @@ async function createWaSocketInternal(
           return observeCredentialPersistence(Promise.resolve(cachedSignalKeys.get(type, ids)));
         },
         set(data) {
-          const task = (async () => {
-            try {
-              await cachedSignalKeys.set(data);
-            } catch (error) {
-              reportCredentialPersistenceError(error);
-              throw error;
-            }
-          })();
-          return observeCredentialPersistence(task);
+          return observeCredentialPersistence(Promise.resolve(cachedSignalKeys.set(data)), true);
         },
       }
     : cachedSignalKeys;
@@ -333,13 +276,50 @@ async function createWaSocketInternal(
   sock.ev.on("creds.update", () =>
     enqueueCredsSave(
       authDir,
-      () =>
-        safeSaveCreds({
-          authDir,
-          saveCreds,
-          logger: sessionLogger,
-          beforeCredentialPersistence: opts.beforeCredentialPersistence,
-        }),
+      async () => {
+        const beforeCredentialPersistence = opts.beforeCredentialPersistence;
+        let backup: { content: string; filePath: string } | undefined;
+        try {
+          // Best-effort backup so we can recover after abrupt restarts.
+          // Important: don't clobber a good backup with a corrupted/truncated creds.json.
+          const credsPath = resolveWebCredsPath(authDir);
+          const backupPath = resolveWebCredsBackupPath(authDir);
+          const raw = readCredsJsonRaw(credsPath);
+          if (raw) {
+            try {
+              JSON.parse(raw);
+              backup = { content: raw, filePath: backupPath };
+            } catch {
+              // keep existing backup
+            }
+          }
+        } catch {
+          // ignore backup failures
+        }
+
+        if (backup) {
+          await beforeCredentialPersistence?.();
+          try {
+            await writeWebCredsRawAtomically({
+              filePath: backup.filePath,
+              content: backup.content,
+              tempPrefix: ".creds.backup",
+            });
+          } catch {
+            // keep existing backup
+          }
+        }
+
+        await beforeCredentialPersistence?.();
+        try {
+          await Promise.resolve(saveCreds());
+        } catch (err) {
+          sessionLogger.warn({ error: String(err) }, "failed saving WhatsApp creds");
+          if (beforeCredentialPersistence) {
+            throw err;
+          }
+        }
+      },
       (err) => {
         sessionLogger.warn({ error: String(err) }, "WhatsApp creds save queue error");
         reportCredentialPersistenceError(err);
@@ -460,19 +440,15 @@ export async function waitForWaConnection(
       const timeoutMs = options.timeoutMs;
       timer = setTimeout(() => {
         cleanup();
-        reject(createConnectionTimeoutError(timeoutMs));
+        const error = new Error(`WhatsApp connection timed out after ${timeoutMs}ms`);
+        Object.assign(error, {
+          output: {
+            statusCode: 408,
+          },
+        });
+        reject(error);
       }, timeoutMs);
       timer.unref?.();
     }
   });
-}
-
-function createConnectionTimeoutError(timeoutMs: number): Error {
-  const error = new Error(`WhatsApp connection timed out after ${timeoutMs}ms`);
-  Object.assign(error, {
-    output: {
-      statusCode: 408,
-    },
-  });
-  return error;
 }

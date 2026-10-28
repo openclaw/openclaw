@@ -2,22 +2,20 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { buildMicrosoftSpeechProvider } from "./speech-provider.js";
 
 const mocks = vi.hoisted(() => ({
-  captureAvailable: true,
   capture: vi.fn<typeof import("openclaw/plugin-sdk/proxy-capture").captureHttpExchangeAsync>(),
   fetch: vi.fn(),
   release: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
-  get captureHttpExchangeAsync() {
-    return mocks.captureAvailable ? mocks.capture : undefined;
-  },
+vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>()),
+  captureHttpExchangeAsync: mocks.capture,
   isDebugProxyGlobalFetchPatchInstalled: () => false,
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: mocks.fetch,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname: () => undefined,
 }));
 
 beforeEach(() => {
@@ -29,10 +27,9 @@ beforeEach(() => {
   });
 });
 
-it.each(["absent", "present", "rejected"] as const)(
+it.each(["present", "rejected"] as const)(
   "lists voices and releases transport when async capture is %s",
   async (capture) => {
-    mocks.captureAvailable = capture !== "absent";
     if (capture === "rejected") {
       mocks.capture.mockRejectedValue(new Error("diagnostic store failed"));
     }
@@ -44,12 +41,8 @@ it.each(["absent", "present", "rejected"] as const)(
       expect.objectContaining({ id: "en-US-AvaNeural" }),
     ]);
     expect(mocks.release).toHaveBeenCalledOnce();
-    if (capture === "absent") {
-      expect(mocks.capture).not.toHaveBeenCalled();
-    } else {
-      expect(mocks.capture).toHaveBeenCalledWith(
-        expect.objectContaining({ meta: { provider: "microsoft", capability: "speech-voices" } }),
-      );
-    }
+    expect(mocks.capture).toHaveBeenCalledWith(
+      expect.objectContaining({ meta: { provider: "microsoft", capability: "speech-voices" } }),
+    );
   },
 );

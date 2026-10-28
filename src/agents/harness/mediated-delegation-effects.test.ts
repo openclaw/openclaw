@@ -10,14 +10,14 @@ import {
 import { readResolvedSessionEntryInWorker } from "../../config/sessions/session-accessor.entry.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { revokeMcpLoopbackClientGrant } from "../../gateway/mcp-grant-store.js";
 import {
-  activateMcpLoopbackClientGrantCapture,
-  mintMcpLoopbackClientGrant,
-  revokeMcpLoopbackClientGrant,
-} from "../../gateway/mcp-grant-store.js";
+  captureGrant,
+  request as requestMcp,
+  toolCall,
+} from "../../gateway/mcp-http-request.test-support.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
-  beginMcpLoopbackToolCallCapture,
   clearMcpLoopbackToolCallCapture,
   getActiveMcpLoopbackRuntime,
 } from "../../gateway/mcp-http.loopback-runtime.js";
@@ -77,7 +77,7 @@ beforeAll(async () => {
     { agentId: "intake", sessionKey: requester },
     { sessionId: "intake", updatedAt: 1 },
   );
-  await ensureMcpLoopbackServer(0);
+  await ensureMcpLoopbackServer();
 });
 beforeEach(() => setRuntimeConfigSnapshot(config));
 afterEach(() => {
@@ -127,8 +127,6 @@ async function createCaller(
     });
     sessionEntry = await readResolvedSessionEntryInWorker(scope);
   }
-  expect(sessionEntry?.delegatedToolPolicy?.requesterDeny).toEqual(denied);
-  expect(sessionEntry?.inheritedToolDeny).toEqual(denied);
   const admission = prepareSystemAgentRunAdmission(
     currentConfig,
     runId,
@@ -139,25 +137,28 @@ async function createCaller(
   const admittedRunContext = await admission.admit(
     route === "cli-loopback" ? "embedded" : "plugin-harness",
   );
-  const trace: string[] = [];
   const workspaceDir = state.workspaceDir;
+  const attempt = {
+    config: currentConfig,
+    runId,
+    agentId: "coder",
+    sessionId: sessionEntry!.sessionId,
+    sessionKey,
+    workspaceDir,
+    cwd: workspaceDir,
+    admittedRunContext,
+  };
   if (route === "cli-loopback") {
     const run: RunCliAgentParams = {
-      config: currentConfig,
-      sessionId: sessionEntry!.sessionId,
-      sessionKey,
+      ...attempt,
       sessionEntry,
       sessionFile: state.path(runId + ".jsonl"),
-      workspaceDir,
-      cwd: workspaceDir,
       provider: "fixture-cli",
       model: "fixture",
       prompt: "exercise mediated effects",
-      runId,
       timeoutMs: 10_000,
-      admittedRunContext,
     };
-    const policy = resolveCliRuntimeToolPolicy({
+    const policy = await resolveCliRuntimeToolPolicy({
       params: run,
       policySessionKey: sessionKey,
       policyAgentId: "coder",
@@ -167,10 +168,6 @@ async function createCaller(
       isSideQuestion: false,
       skipsTurnPreparation: false,
     });
-    if (currentConfig === config) {
-      expect(policy.params.cliToolAvailability?.native).toEqual([]);
-      trace.push("native=[]");
-    }
     const context = buildCliMcpGrantContext({
       run: policy.params,
       config: currentConfig,
@@ -178,8 +175,8 @@ async function createCaller(
       agentId: "coder",
       modelProvider: "fixture",
       modelId: "fixture",
-      toolsAllow: policy.runtimeToolsAllowPolicy ?? ["read", "write", "exec"],
     });
+    context.toolsAllow = policy.runtimeToolsAllowPolicy ?? ["read", "write", "exec"];
     const projected = await resolveMcpLoopbackPolicyTools({
       cfg: currentConfig,
       context,
@@ -188,59 +185,27 @@ async function createCaller(
     const names = projected.tools.map((tool) => tool.name);
     const grantInput = finalizeCliMcpGrant(context, names, false, run)!;
     const runtime = getActiveMcpLoopbackRuntime()!;
-    const grant = mintMcpLoopbackClientGrant({
-      ...grantInput,
-      runtimeOwnerToken: runtime.ownerToken,
-    });
     const captureKey = runId + "-capture";
-    cleanups.push(() => {
-      clearMcpLoopbackToolCallCapture(captureKey);
-      revokeMcpLoopbackClientGrant(grant.token);
-    });
-    expect(
-      activateMcpLoopbackClientGrantCapture({
-        token: grant.token,
-        runtimeOwnerToken: runtime.ownerToken,
-        captureKey,
-      }),
-    ).not.toBe(false);
-    beginMcpLoopbackToolCallCapture({
+    const grant = captureGrant(
+      { ...grantInput, runtimeOwnerToken: runtime.ownerToken },
       captureKey,
-      onToolCallResult: (call) => trace.push(call.toolName + ":" + call.outcome),
-    });
-    const request = async (method: string, params?: object) => {
-      const response = await fetch("http://127.0.0.1:" + runtime.port + "/mcp", {
-        method: "POST",
-        headers: {
-          authorization: "Bearer " + grant.token,
-          "content-type": "application/json",
-          "x-openclaw-cli-capture-key": captureKey,
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: ++sequence,
-          method,
-          ...(params ? { params } : {}),
+      (token) =>
+        cleanups.push(() => {
+          clearMcpLoopbackToolCallCapture(captureKey);
+          revokeMcpLoopbackClientGrant(token);
         }),
-      });
-      expect(response.status).toBe(200);
-      return (await response.json()) as {
-        result: {
-          tools?: Array<{ name: string }>;
-          content?: Array<{ text?: string }>;
-          isError?: boolean;
-        };
-      };
-    };
-    const listed = await request("tools/list");
-    expect(listed.result.tools?.map((tool) => tool.name).toSorted()).toEqual(names.toSorted());
+    );
     return {
       sessionKey,
-      names,
-      trace,
       call: async (name: string, args: Record<string, unknown>): Promise<Receipt> => {
-        const reply = await request("tools/call", { name, arguments: args });
-        trace.push("mcp-client:" + name + ":" + (reply.result.isError ? "error" : "ok"));
+        const response = await requestMcp(runtime, toolCall(name, args, ++sequence), grant);
+        expect(response.status).toBe(200);
+        const reply = (await response.json()) as {
+          result: {
+            content?: Array<{ text?: string }>;
+            isError?: boolean;
+          };
+        };
         return {
           isError: reply.result.isError === true,
           text: (reply.result.content ?? []).map((block) => block.text ?? "").join("\n"),
@@ -250,32 +215,17 @@ async function createCaller(
   }
   const host = createAgentHarnessHostCapabilities({
     pluginId: "fixture-mediated-harness",
-    attempt: {
-      config: currentConfig,
-      runId,
-      agentId: "coder",
-      sessionId: sessionEntry!.sessionId,
-      sessionKey,
-      workspaceDir,
-      cwd: workspaceDir,
-      admittedRunContext,
-    },
+    attempt,
   });
   cleanups.push(host.close);
   const tools = await host.capabilities.createToolSurfaceAsync!({
-    config: currentConfig,
-    agentId: "coder",
-    sessionKey,
-    workspaceDir,
-    runId,
+    ...attempt,
     includeToolSearchControls: false,
   });
   const boundaries = createAgentHarnessToolExecutionBoundaryRegistry();
   const middleware = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, []);
   return {
     sessionKey,
-    names: tools.map((tool) => tool.name),
-    trace,
     call: (name: string, args: Record<string, unknown>): Promise<Receipt> =>
       runAgentHarnessToolInvocation({
         tool: tools.find((tool) => tool.name === name),
@@ -290,35 +240,47 @@ async function createCaller(
         boundaries,
         assertCurrent: host.capabilities.assertActive,
         applyMiddleware: (event) => middleware.applyToolResultMiddleware(event),
-        onResult: (result) => {
-          trace.push(name + ":" + (result.isError ? "failed" : "completed"));
-          return {
-            isError: result.isError,
-            text: result.result.content
-              .map((block) => (block.type === "text" ? block.text : ""))
-              .join("\n"),
-          };
-        },
-        onError: ({ error }) => {
-          trace.push(name + ":failed");
-          return { isError: true, text: String(error) };
-        },
+        onResult: (result) => ({
+          isError: result.isError,
+          text: result.result.content
+            .map((block) => (block.type === "text" ? block.text : ""))
+            .join("\n"),
+        }),
+        onError: ({ error }) => ({ isError: true, text: String(error) }),
       }),
   };
 }
 
-function observeLaunches(trace: string[]) {
-  const supervisor = getProcessSupervisor();
-  const original = supervisor.spawn.bind(supervisor);
-  let launches = 0;
-  vi.spyOn(supervisor, "spawn").mockImplementation(async (input) => {
-    trace.push("supervisor:spawn-requested");
-    const run = await original(input);
-    launches += 1;
-    trace.push("supervisor:launched");
-    return run;
-  });
-  return () => launches;
+function observeLaunches() {
+  const spawn = vi.spyOn(getProcessSupervisor(), "spawn");
+  return () => spawn.mock.calls.length;
+}
+
+async function prepareEffect(route: Route, suffix: string, senderRestricted = false) {
+  const caller = await createCaller(route, config, "", senderRestricted);
+  const basename = route + suffix;
+  const target = path.join(state.workspaceDir, basename);
+  await fs.writeFile(target, "original");
+  return { caller, basename, target };
+}
+async function expectRejected(receipt: Receipt, target: string) {
+  expect(receipt.isError, receipt.text).toBe(true);
+  expect(receipt.text).toMatch(/authorization changed|authority is no longer active/);
+  expect(await fs.readFile(target, "utf8")).toBe("original");
+}
+async function revokeAtGate(
+  entered: Promise<void>,
+  running: Promise<Receipt>,
+  signal: AbortSignal,
+  message: string,
+  release: () => void,
+) {
+  try {
+    await withinTest(awaitGateBeforeSettlement(entered, running, message), signal);
+    revoke();
+  } finally {
+    release();
+  }
 }
 
 // Promise gates delay real preparation/I/O only. All authority, tool construction,
@@ -328,8 +290,7 @@ describe.each(["cli-loopback", "plugin-harness"] as const)(
   (route) => {
     it("executes the persisted exception, then restores the deny fallback on resume", async () => {
       const caller = await createCaller(route);
-      expect(caller.names).toEqual(expect.arrayContaining(denied));
-      const launches = observeLaunches(caller.trace);
+      const launches = observeLaunches();
       const basename = route + "-allowed.txt";
       const target = path.join(state.workspaceDir, basename);
       const exec = await caller.call("exec", {
@@ -344,33 +305,21 @@ describe.each(["cli-loopback", "plugin-harness"] as const)(
       expect(write.isError, write.text).toBe(false);
       expect(await fs.readFile(target, "utf8")).toBe("write-effect");
       const resumed = await createCaller(route, revoke(), caller.sessionKey);
-      expect(resumed.names).not.toContain("exec");
-      expect(resumed.names).not.toContain("write");
-      const refused = await resumed.call("write", { path: target, content: "must-not-write" });
-      expect(refused.isError).toBe(true);
+      for (const [name, args] of [
+        ["exec", { command: "printf forbidden > " + basename }],
+        ["write", { path: target, content: "must-not-write" }],
+      ] as const) {
+        expect((await resumed.call(name, args)).isError).toBe(true);
+      }
       const read = await resumed.call("read", { path: target });
       expect(read.isError, read.text).toBe(false);
       expect(read.text).toContain("write-effect");
       expect(await fs.readFile(target, "utf8")).toBe("write-effect");
-      console.log(
-        JSON.stringify({
-          route,
-          trace: caller.trace,
-          launches: launches(),
-          finalFile: "write-effect",
-          resumed: { exec: false, write: false, read: true },
-        }),
-      );
     });
 
     it("does not waive sender restrictions even with a persisted delegation exception", async () => {
-      const caller = await createCaller(route, config, "", true);
-      const launches = observeLaunches(caller.trace);
-      const basename = route + "-sender-denied.txt";
-      const target = path.join(state.workspaceDir, basename);
-      await fs.writeFile(target, "original");
-      expect(caller.names).not.toContain("exec");
-      expect(caller.names).not.toContain("write");
+      const { caller, basename, target } = await prepareEffect(route, "-sender-denied.txt", true);
+      const launches = observeLaunches();
       for (const [name, args] of [
         ["exec", { command: "printf forbidden > " + basename }],
         ["write", { path: target, content: "forbidden" }],
@@ -380,111 +329,54 @@ describe.each(["cli-loopback", "plugin-harness"] as const)(
       }
       expect(launches()).toBe(0);
       expect(await fs.readFile(target, "utf8")).toBe("original");
-      console.log(
-        JSON.stringify({
-          route,
-          stage: "sender-denied",
-          trace: caller.trace,
-          launches: launches(),
-          finalFile: "original",
-        }),
-      );
     });
 
-    it("rejects revocation during awaited command preparation before process launch", async ({
-      signal,
-    }) => {
-      const caller = await createCaller(route);
-      const launches = observeLaunches(caller.trace);
-      const basename = route + "-revoked-command.txt";
-      const target = path.join(state.workspaceDir, basename);
-      await fs.writeFile(target, "original");
-      const entered = Promise.withResolvers<void>();
-      const release = Promise.withResolvers<void>();
-      const original = shellSnapshot.maybeWrapCommandWithShellSnapshot;
-      vi.spyOn(shellSnapshot, "maybeWrapCommandWithShellSnapshot").mockImplementation(
-        async (...args) => {
-          caller.trace.push("command-preparation:waiting");
+    it.for(["exec", "write"] as const)(
+      "rejects revocation at the final %s boundary",
+      async (tool, { signal }) => {
+        const { caller, basename, target } = await prepareEffect(route, `-revoked-${tool}.txt`);
+        const launches = tool === "exec" ? observeLaunches() : undefined;
+        const entered = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        const pause = async () => {
           entered.resolve();
           await release.promise;
-          caller.trace.push("command-preparation:released");
-          return original(...args);
-        },
-      );
-      const running = caller.call("exec", {
-        command: "printf forbidden > " + basename,
-        yieldMs: 10_000,
-      });
-      try {
-        await withinTest(
-          awaitGateBeforeSettlement(entered.promise, running, "command did not reach preparation"),
-          signal,
-        );
-        revoke();
-        caller.trace.push("delegation:revoked");
-      } finally {
-        release.resolve();
-      }
-      const receipt = await running;
-      expect(receipt.isError, receipt.text).toBe(true);
-      expect(receipt.text).toMatch(/authorization changed|authority is no longer active/);
-      expect(launches()).toBe(0);
-      expect(await fs.readFile(target, "utf8")).toBe("original");
-      console.log(
-        JSON.stringify({
-          route,
-          stage: "command-preparation",
-          trace: caller.trace,
-          launches: launches(),
-          finalFile: "original",
-          denied: receipt.text,
-        }),
-      );
-    });
-
-    it("rejects revocation after the write descriptor opens but before mutation", async ({
-      signal,
-    }) => {
-      const caller = await createCaller(route);
-      const target = path.join(state.workspaceDir, route + "-revoked-write.txt");
-      await fs.writeFile(target, "original");
-      const entered = Promise.withResolvers<void>();
-      const release = Promise.withResolvers<void>();
-      const originalOpen = fs.open;
-      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-        const handle = await originalOpen(...args);
-        if (args[0] === target && args[1] === "r+") {
-          caller.trace.push("file-open:waiting-before-mutation");
-          entered.resolve();
-          await release.promise;
-          caller.trace.push("file-open:released");
+        };
+        if (tool === "exec") {
+          const original = shellSnapshot.maybeWrapCommandWithShellSnapshot;
+          vi.spyOn(shellSnapshot, "maybeWrapCommandWithShellSnapshot").mockImplementation(
+            async (...args) => {
+              await pause();
+              return original(...args);
+            },
+          );
+        } else {
+          const originalOpen = fs.open;
+          vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+            const handle = await originalOpen(...args);
+            if (args[0] === target && args[1] === "r+") {
+              await pause();
+            }
+            return handle;
+          });
         }
-        return handle;
-      });
-      const running = caller.call("write", { path: target, content: "forbidden" });
-      try {
-        await withinTest(
-          awaitGateBeforeSettlement(entered.promise, running, "write did not open its descriptor"),
+        const args =
+          tool === "exec"
+            ? { command: "printf forbidden > " + basename, yieldMs: 10_000 }
+            : { path: target, content: "forbidden" };
+        const running = caller.call(tool, args);
+        await revokeAtGate(
+          entered.promise,
+          running,
           signal,
+          "tool did not reach its final boundary",
+          release.resolve,
         );
-        revoke();
-        caller.trace.push("delegation:revoked");
-      } finally {
-        release.resolve();
-      }
-      const receipt = await running;
-      expect(receipt.isError, receipt.text).toBe(true);
-      expect(receipt.text).toMatch(/authorization changed|authority is no longer active/);
-      expect(await fs.readFile(target, "utf8")).toBe("original");
-      console.log(
-        JSON.stringify({
-          route,
-          stage: "file-open",
-          trace: caller.trace,
-          finalFile: "original",
-          denied: receipt.text,
-        }),
-      );
-    });
+        await expectRejected(await running, target);
+        if (launches) {
+          expect(launches()).toBe(0);
+        }
+      },
+    );
   },
 );

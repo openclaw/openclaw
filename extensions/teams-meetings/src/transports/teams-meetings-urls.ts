@@ -29,17 +29,13 @@ export function normalizeTeamsMeetingUrlForReuse(url: string | undefined): strin
       const launcherMatch = launcherTarget?.match(/^\/_#\/meet\/([^/?#]+)(?:\?(.+))?$/i);
       let lightMeeting: { meetingCode?: unknown; passcode?: unknown } | undefined;
       if (parsed.pathname.toLowerCase() === "/light-meetings/launch") {
-        try {
-          const coordinates = parsed.searchParams.get("coords");
-          const decoded =
-            coordinates && coordinates.length <= 16_384
-              ? JSON.parse(Buffer.from(coordinates, "base64").toString("utf8"))
-              : undefined;
-          if (decoded && typeof decoded === "object") {
-            lightMeeting = decoded as { meetingCode?: unknown; passcode?: unknown };
-          }
-        } catch {
-          return undefined;
+        const coordinates = parsed.searchParams.get("coords");
+        const decoded =
+          coordinates && coordinates.length <= 16_384
+            ? JSON.parse(Buffer.from(coordinates, "base64").toString("utf8"))
+            : undefined;
+        if (decoded && typeof decoded === "object") {
+          lightMeeting = decoded as { meetingCode?: unknown; passcode?: unknown };
         }
       }
       const match =

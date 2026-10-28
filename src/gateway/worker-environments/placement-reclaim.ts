@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { WorkerDispatchPlacement } from "./placement-dispatch-failure.js";
-import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
+import type { WorkerPlacementMoveIntent } from "./placement-move-intent.types.js";
 import type {
   WorkerPlacementReclaimBarriers,
   WorkerReclaimPlacement,
@@ -26,6 +26,7 @@ import {
 } from "./workspace-finalize.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
+  adoptReclaimedWorkspaceHistory,
   createWorkspaceResultJournal,
   finalizeWorkspaceResultConflicts,
   resolvePriorWorkspaceResultConflict,
@@ -123,6 +124,43 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
       reclaim: async (workspace, current, reauthorize) => {
         if (current.state === "reclaimed") {
           return current;
+        }
+        if (workspace.kind === "device-folder") {
+          if (moveIntent || request.recoverToGateway) {
+            throw new Error(
+              "Device folders cannot move to the Gateway; reconnect the original device.",
+            );
+          }
+          const claimId = `reclaim-${randomUUID()}`;
+          const claim = await placements.claimReclaimWorkspaceResult(
+            {
+              sessionId: current.sessionId,
+              sessionKey: current.sessionKey,
+              agentId: current.agentId,
+              claimId,
+              runId: claimId,
+              owner: placementTurnOwner(current),
+            },
+            undefined,
+            reauthorize,
+          );
+          reauthorize?.();
+          await placements.acceptWorkspaceResult(claim);
+          await placements.closeWorkerTurnToolState(claim);
+          reauthorize?.();
+          // Destroy stops the worker and releases its private state, never the user-owned folder.
+          await environments.destroy(current.environmentId);
+          const completed = await completeWorkerWorkspaceTeardown({
+            placements,
+            turnClaim: claim,
+            environmentId: current.environmentId,
+            ownerEpoch: current.activeOwnerEpoch,
+          });
+          reportPlacementTransition(onTransition, completed);
+          await environments
+            .stopTunnel(current.environmentId, current.activeOwnerEpoch)
+            .catch(() => undefined);
+          return completed;
         }
         const root = sessionWorkspaceRoot(workspace);
         const journalPlacement = { ...current };
@@ -262,14 +300,12 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                         journal,
                         stagedResult: {
                           ref: reclaimResultRef,
-                          record: (ref) => {
+                          record: (ref, workspaceId) => {
                             assertCurrent();
                             return placements.recordStagedWorkspaceResult(
                               reclaimClaim,
                               ref,
-                              workspace.kind === "repository"
-                                ? workspace.repository.workspaceId
-                                : undefined,
+                              workspaceId,
                               assertCurrent,
                             );
                           },
@@ -298,7 +334,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                       current,
                     );
                     reauthorize?.();
-                    const finalized = await finalizeWorkspaceResultConflicts({
+                    const conflictRetained = await finalizeWorkspaceResultConflicts({
                       assertCurrent: recovery.assertCurrent,
                       placements,
                       turnClaim: reclaimClaim,
@@ -311,13 +347,18 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                       report: recovery.reportConflict,
                     });
                     reauthorize?.();
+                    await adoptReclaimedWorkspaceHistory({
+                      ...recovery,
+                      assertCurrent,
+                      stagedResultRef: recordedStagedResultRef,
+                    });
                     return await settleStagedWorkspaceResult({
                       assertCurrent: recovery.assertCurrent,
                       placements,
                       turnClaim: reclaimClaim,
                       workspace,
                       stagedResultRef: recordedStagedResultRef,
-                      conflictRetained: finalized.conflictRetained,
+                      conflictRetained,
                       beforeComplete: async () => {
                         assertCurrent();
                         if (
@@ -335,11 +376,11 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                           });
                           assertCurrent();
                         }
-                        await environments.destroy(current.environmentId);
+                        await environments.reclaim(current.environmentId);
                       },
                       complete: async () => {
-                        // Destroy is the final privileged effect. Once it commits, durable placement
-                        // completion must finish even if caller authority closes during the await.
+                        // Session shutdown and cleanup acceptance are committed. Physical release
+                        // remains with the environment owner while placement completion settles.
                         const completed = await completeWorkerWorkspaceTeardown({
                           placements,
                           turnClaim: reclaimClaim,
@@ -364,11 +405,8 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
               if (reclaimed.state !== "local" && reclaimed.state !== "reclaimed") {
                 throw new Error("Cloud worker teardown produced a nonterminal placement");
               }
-              try {
-                await environments.stopTunnel(current.environmentId, current.activeOwnerEpoch);
-              } catch {
-                // Provider teardown is authoritative; local tunnel cleanup is best effort.
-              }
+              // reclaim already stopped the session transport before provider acceptance.
+              // Reentering its environment lock would wait for physical release again.
               return reclaimed;
             } catch (error) {
               if (error instanceof AcceptedWorkspacePublicationIndeterminateError) {

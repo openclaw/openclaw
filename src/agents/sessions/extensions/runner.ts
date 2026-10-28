@@ -1,9 +1,9 @@
 import type { KeyId } from "@earendil-works/pi-tui";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { cloneTranscriptView } from "../../../config/sessions/transcript-snapshot.js";
 import type { ImageContent, Model } from "../../../llm/types.js";
 import { registerListener } from "../../../shared/listeners.js";
 import { rethrowIncognitoSessionError } from "../../../state/incognito-session-error.js";
-import { interactiveAgentTheme as theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { isToolResultError } from "../../tool-result-error.js";
 import type { ResourceDiagnostic } from "../diagnostics.js";
@@ -11,12 +11,14 @@ import type { KeybindingsConfig } from "../keybindings.js";
 import type { ModelRegistry } from "../model-registry.js";
 import { SessionMetadataCommittedError } from "../session-manager-metadata-error.js";
 import type { SessionManager } from "../session-manager.js";
+import { warnSessionPersistenceDeprecation } from "../session-persistence-deprecation.js";
 import type { BuildSystemPromptOptions } from "../system-prompt-metadata.js";
 import {
   bindExtensionMetadataActions,
   bindExtensionPersistenceActions,
 } from "./metadata-actions.js";
 import { bindExtensionProviderActions } from "./provider-actions.js";
+import { noOpCommandContextActions, noOpUIContext } from "./runner-defaults.js";
 import type {
   BeforeAgentStartEvent,
   BeforeAgentStartEventResult,
@@ -174,48 +176,6 @@ export async function emitSessionShutdownEvent(
   return false;
 }
 
-const noOpUIContext: ExtensionUIContext = {
-  select: async () => undefined,
-  confirm: async () => false,
-  input: async () => undefined,
-  notify: () => {},
-  onTerminalInput: () => () => {},
-  setStatus: () => {},
-  setWorkingMessage: () => {},
-  setWorkingVisible: () => {},
-  setWorkingIndicator: () => {},
-  setHiddenThinkingLabel: () => {},
-  setWidget: () => {},
-  setFooter: () => {},
-  setHeader: () => {},
-  setTitle: () => {},
-  custom: async () => undefined as never,
-  pasteToEditor: () => {},
-  setEditorText: () => {},
-  getEditorText: () => "",
-  editor: async () => undefined,
-  addAutocompleteProvider: () => {},
-  setEditorComponent: () => {},
-  getEditorComponent: () => undefined,
-  get theme() {
-    return theme;
-  },
-  getAllThemes: () => [],
-  getTheme: () => undefined,
-  setTheme: () => ({ success: false, error: "UI not available" }),
-  getToolsExpanded: () => false,
-  setToolsExpanded: () => {},
-};
-
-const noOpCommandContextActions: ExtensionCommandContextActions = {
-  waitForIdle: async () => {},
-  newSession: async () => ({ cancelled: false }),
-  fork: async () => ({ cancelled: false }),
-  navigateTree: async () => ({ cancelled: false }),
-  switchSession: async () => ({ cancelled: false }),
-  reload: async () => {},
-};
-
 export class ExtensionRunner {
   private uiContext: ExtensionUIContext;
   private errorListeners: Set<ExtensionErrorListener> = new Set();
@@ -254,10 +214,11 @@ export class ExtensionRunner {
     contextActions: ExtensionContextActions,
     providerActions?: Parameters<ExtensionRunner["bindCore"]>[2],
   ): void {
-    this.bindCore(actions, contextActions, providerActions);
+    this.bindCoreActions(actions, contextActions, providerActions);
     bindExtensionPersistenceActions(this.sessionManager, this.runtime, actions);
   }
 
+  /** @deprecated Use bindCoreAsync with ExtensionActionsV2. Supported through 2026-12-31; removal ships in the first January 2027 stable release. */
   bindCore(
     actions: ExtensionActions,
     contextActions: ExtensionContextActions,
@@ -265,6 +226,18 @@ export class ExtensionRunner {
       registerProvider?: (name: string, config: ProviderConfig) => void;
       unregisterProvider?: (name: string) => void;
     },
+  ): void {
+    warnSessionPersistenceDeprecation(
+      "ExtensionRunner.bindCore",
+      "bindCoreAsync with ExtensionActionsV2",
+    );
+    this.bindCoreActions(actions, contextActions, providerActions);
+  }
+
+  private bindCoreActions(
+    actions: ExtensionActions,
+    contextActions: ExtensionContextActions,
+    providerActions: Parameters<ExtensionRunner["bindCore"]>[2],
   ): void {
     // Copy actions into the shared runtime (all extension APIs reference this)
     this.runtime.sendMessage = actions.sendMessage;
@@ -445,7 +418,12 @@ export class ExtensionRunner {
   }
 
   hasHandlers(eventType: string): boolean {
-    return this.extensions.some((ext) => (ext.handlers.get(eventType)?.length ?? 0) > 0);
+    for (const ext of this.extensions) {
+      if ((ext.handlers.get(eventType)?.length ?? 0) > 0) {
+        return true;
+      }
+    }
+    return false;
   }
 
   getMessageRenderer(customType: string): MessageRenderer | undefined {
@@ -714,20 +692,17 @@ export class ExtensionRunner {
   }
 
   async emitContext(messages: AgentMessage[]): Promise<AgentMessage[]> {
-    // Cloning the full session history is expensive (it can carry image
-    // payloads) and runs every turn, so skip it unless a context handler
-    // is actually registered. Handlers still receive an isolated clone.
+    // Hooks need writable containers, even for frozen resident messages,
+    // but immutable transcript strings can stay shared.
     if (!this.hasHandlers("context")) {
       return messages;
     }
-    let currentMessages = structuredClone(messages);
+    let currentMessages = cloneTranscriptView(messages, { shareImmutablePayloads: false });
 
     await this.dispatchHandlers("context", async (handler, ctx) => {
       const event: ContextEvent = { type: "context", messages: currentMessages };
       const handlerResult = (await handler(event, ctx)) as ContextEventResult | undefined;
-      if (handlerResult?.messages) {
-        currentMessages = handlerResult.messages;
-      }
+      currentMessages = handlerResult?.messages || currentMessages;
     });
 
     return currentMessages;

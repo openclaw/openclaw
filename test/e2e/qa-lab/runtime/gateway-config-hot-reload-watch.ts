@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import type { QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import { buildDeviceAuthPayloadV3 } from "../../../../packages/gateway-client/src/device-auth.js";
 import {
@@ -59,7 +58,7 @@ export async function proveHotReloadWatchPolicy({
       (command) => command !== APPROVED_COMMAND && command !== UNAPPROVED_COMMAND,
     );
     const identity = loadOrCreateDeviceIdentity({
-      path: path.join(temporaryRoot, "state/openclaw.sqlite"),
+      env: { ...process.env, OPENCLAW_STATE_DIR: temporaryRoot },
       identityKey: "runtime-policy-watch",
     });
     let connection: WatchConnection | undefined;

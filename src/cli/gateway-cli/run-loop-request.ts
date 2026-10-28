@@ -25,6 +25,8 @@ export type GatewayRunSignalRequest = {
   signal: GatewayShutdownTrigger;
   restartReason?: string;
   restartIntent?: GatewayRestartIntent;
+  /** The live suspend owner already drained and authorized interruption. */
+  interruptAfterDrain?: true;
   /** Cancellation removes the helper registry before this shutdown settles. */
   foregroundUpdate?: boolean;
   hostedStop?: ReturnType<typeof createGatewayHostLifecycle>;

@@ -26,7 +26,7 @@ env:
 jobs:
   actionlint:
     if: (github.event_name != 'workflow_dispatch')
-    runs-on: ubuntu-24.04
+    runs-on: &linux_runner_ubuntu ubuntu-24.04
     steps:
       - &workflow_sanity_checkout_step
         name: Checkout
@@ -36,9 +36,9 @@ jobs:
           persist-credentials: false
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       # Conflict markers can occur anywhere, including docs-only changes.
@@ -107,11 +107,11 @@ jobs:
         if: steps.scope.outputs.changed == 'true'
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.14.8"
 
       - name: Prepare Git owner
         if: steps.scope.outputs.changed == 'true'
-        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
       - name: Prepare trusted workflow audit configs
         if: github.event_name == 'pull_request' && steps.scope.outputs.changed == 'true'
@@ -190,7 +190,7 @@ jobs:
 
       - name: Install pre-commit
         if: steps.scope.outputs.changed == 'true'
-        run: python -m pip install --disable-pip-version-check pre-commit==4.6.2
+        run: python -m pip install --disable-pip-version-check pre-commit==4.7.0
 
       - name: Install ShellCheck
         if: steps.scope.outputs.changed == 'true'
@@ -209,9 +209,9 @@ jobs:
 
       - name: Setup Go
         if: steps.scope.outputs.changed == 'true'
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@90ad2b35f69faf97585ad74d28fa006d2739b7af # v7.0.0 + post-release fixes
         with:
-          go-version: "1.27.1"
+          go-version: "1.27.3"
           cache: false
 
       - name: Install actionlint
@@ -249,7 +249,7 @@ jobs:
 
   generated-doc-baselines:
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-24.04
+    runs-on: *linux_runner_ubuntu
     steps:
       - *workflow_sanity_checkout_step
       - name: Setup Node environment

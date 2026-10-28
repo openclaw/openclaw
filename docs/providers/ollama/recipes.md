@@ -111,7 +111,7 @@ Replace model IDs with exact names from `ollama list` or
             timeoutSeconds: 300,
             models: [
               { id: "gemma4", name: "gemma4", input: ["text"] },
-              { id: "kimi-k2.5:cloud", name: "kimi-k2.5:cloud", input: ["text", "image"] },
+              { id: "kimi-k2.6:cloud", name: "kimi-k2.6:cloud", input: ["text", "image"] },
             ],
           },
         },
@@ -120,7 +120,7 @@ Replace model IDs with exact names from `ollama list` or
         defaults: {
           model: {
             primary: "ollama/gemma4",
-            fallbacks: ["ollama/kimi-k2.5:cloud"],
+            fallbacks: ["ollama/kimi-k2.6:cloud"],
           },
         },
       },

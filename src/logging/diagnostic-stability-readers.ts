@@ -14,6 +14,13 @@ export function readRequiredNumber(value: unknown, label: string): number {
   return value;
 }
 
+export function readOptionalNumber(value: unknown, label: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return readRequiredNumber(value, label);
+}
+
 export function readOptionalPositiveInteger(value: unknown, label: string): number | undefined {
   if (value === undefined) {
     return undefined;

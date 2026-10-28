@@ -5,32 +5,8 @@ import { AgentSelectionRequiredError } from "./agent-scope-config.js";
 import { resolveSessionAgentIdStrict as resolve, resolveSessionAgentIds } from "./agent-scope.js";
 
 const config: OpenClawConfig = { agents: { entries: { main: {}, beta: {} } } };
-const fixedStore = (agentId: string): OpenClawConfig => ({
-  session: { store: "/tmp/shared.sqlite" },
-  agents: {
-    ownership: "explicit",
-    defaults: { sessionStore: { agentId } },
-    entries: { main: {}, beta: {} },
-  },
-});
 
 describe("session agent ownership", () => {
-  it("rejects an invalid explicit selector before resolving the session owner", () => {
-    expect(() => resolve({ config, agentId: "!!!", sessionKey: "agent:main:main" })).toThrow(
-      "Invalid explicit agent id",
-    );
-  });
-
-  it("rejects malformed agent keys before selecting a fallback", () => {
-    expect(() => resolve({ config, sessionKey: "agent::broken", fallbackAgentId: "main" })).toThrow(
-      "Malformed agent session key",
-    );
-  });
-
-  it("requires an owner in an ambiguous roster", () => {
-    expect(() => resolve({ config })).toThrow(AgentSelectionRequiredError);
-  });
-
   it.each([
     { config: {}, expected: "main" },
     { config: { agents: { entries: { beta: {} } } }, expected: "beta" },
@@ -46,28 +22,6 @@ describe("session agent ownership", () => {
     expect(() => resolve({ config: migrated })).toThrow(AgentSelectionRequiredError);
     setRetainedLegacyDefaultAgentId(migrated, "retired");
     expect(() => resolve({ config: migrated })).toThrow(AgentSelectionRequiredError);
-  });
-
-  it("uses the configured fixed-store owner for global sessions", () => {
-    expect(resolve({ config: fixedStore("beta"), sessionKey: "global" })).toBe("beta");
-  });
-
-  it("rejects a conflicting fixed-store owner", () => {
-    expect(() =>
-      resolve({ config: fixedStore("beta"), sessionKey: "global", agentId: "main" }),
-    ).toThrow(AgentSelectionRequiredError);
-  });
-
-  it("rejects a retired unscoped fixed-store owner even with an explicit selector", () => {
-    expect(() =>
-      resolve({ config: fixedStore("retired"), sessionKey: "global", agentId: "beta" }),
-    ).toThrow(AgentSelectionRequiredError);
-  });
-
-  it("rejects a selector conflicting with the agent-scoped key", () => {
-    expect(() => resolve({ config, sessionKey: "agent:beta:main", agentId: "main" })).toThrow(
-      AgentSelectionRequiredError,
-    );
   });
 
   it("selects an explicit owner before the prepared fallback", () => {

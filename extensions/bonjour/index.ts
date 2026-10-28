@@ -1,16 +1,5 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
-function formatBonjourInstanceName(displayName: string) {
-  const trimmed = displayName.trim();
-  if (!trimmed) {
-    return "OpenClaw";
-  }
-  if (/openclaw/i.test(trimmed)) {
-    return trimmed;
-  }
-  return `${trimmed} (OpenClaw)`;
-}
-
 export default definePluginEntry({
   id: "bonjour",
   name: "Bonjour Gateway Discovery",
@@ -19,16 +8,15 @@ export default definePluginEntry({
     api.registerGatewayDiscoveryService({
       id: "bonjour",
       advertise: async (ctx) => {
-        const [
-          { startGatewayBonjourAdvertiser },
-          { registerUncaughtExceptionHandler, registerUnhandledRejectionHandler },
-        ] = await Promise.all([
-          import("./src/advertiser.js"),
-          import("openclaw/plugin-sdk/runtime"),
-        ]);
+        const { startGatewayBonjourAdvertiser } = await import("./src/advertiser.js");
+        const displayName = ctx.machineDisplayName.trim();
         return startGatewayBonjourAdvertiser(
           {
-            instanceName: formatBonjourInstanceName(ctx.machineDisplayName),
+            instanceName: !displayName
+              ? "OpenClaw"
+              : /openclaw/i.test(displayName)
+                ? displayName
+                : `${displayName} (OpenClaw)`,
             gatewayPort: ctx.gatewayPort,
             gatewayTlsEnabled: ctx.gatewayTlsEnabled,
             gatewayTlsFingerprintSha256: ctx.gatewayTlsFingerprintSha256,
@@ -38,11 +26,7 @@ export default definePluginEntry({
             cliPath: ctx.cliPath,
             minimal: ctx.minimal,
           },
-          {
-            logger: api.logger,
-            registerUncaughtExceptionHandler,
-            registerUnhandledRejectionHandler,
-          },
+          api.logger,
         );
       },
     });

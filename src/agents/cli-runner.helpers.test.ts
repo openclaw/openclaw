@@ -1,7 +1,7 @@
 /** Tests CLI runner prompt/image/system-prompt helper utilities. */
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { ImageContent } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,7 +21,6 @@ import {
   buildCliArgs,
   prepareCliPromptImagePayload,
   resolveCliRunQueueKey,
-  writeCliSystemPromptFile,
 } from "./cli-runner/helpers.js";
 import * as promptImageUtils from "./embedded-agent-runner/run/images.js";
 import * as toolImages from "./tool-images.js";
@@ -38,6 +37,14 @@ function pngImage(data: string | Buffer): ImageContent {
     data: typeof data === "string" ? data : data.toString("base64"),
     mimeType: "image/png",
   };
+}
+
+const codexImages = { command: "codex", imageArg: "--image", imageMode: "repeat" as const };
+const geminiImages = { command: "gemini", imageArg: "@", imagePathScope: "workspace" as const };
+
+async function writePng(filePath: string, image: Buffer) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, image);
 }
 
 describe("prepareCliPromptImagePayload prompt references", () => {
@@ -72,10 +79,8 @@ describe("prepareCliPromptImagePayload prompt references", () => {
     const imagePath = path.join(workspaceDir, "media", "inbound", "photo.png");
     const siblingImagePath = path.join(siblingWorkspaceDir, "media", "inbound", "photo.png");
     const image = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
-    await fs.mkdir(path.dirname(imagePath), { recursive: true });
-    await fs.mkdir(path.dirname(siblingImagePath), { recursive: true });
-    await fs.writeFile(imagePath, image);
-    await fs.writeFile(siblingImagePath, image);
+    await writePng(imagePath, image);
+    await writePng(siblingImagePath, image);
     const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     const config = {
@@ -148,7 +153,9 @@ describe("prepareCliPromptImagePayload prompt references", () => {
 });
 
 describe("writeCliImages", () => {
-  it("uses stable hashed file paths so repeated image hydration reuses the same path", async () => {
+  it("uses stable hashed file paths without synchronous fsync when rehydrating images", async ({
+    onTestFinished,
+  }) => {
     const image = pngImage("c29tZS1pbWFnZQ==");
     const params = {
       backend: { command: "codex" },
@@ -156,6 +163,8 @@ describe("writeCliImages", () => {
       workspaceDir: imageWorkspace(),
       images: [image],
     };
+    const fsync = vi.spyOn(fsSync, "fsyncSync");
+    onTestFinished(() => fsync.mockRestore());
     const first = await prepareCliPromptImagePayload(params);
     const second = await prepareCliPromptImagePayload(params);
 
@@ -171,6 +180,7 @@ describe("writeCliImages", () => {
       await expect(
         fs.readFile(expectDefined(first.imagePaths?.[0], "first image path test invariant")),
       ).resolves.toEqual(Buffer.from(image.data, "base64"));
+      expect(fsync).not.toHaveBeenCalled();
     } finally {
       await fs.rm(expectDefined(first.imagePaths?.[0], "first image path test invariant"), {
         force: true,
@@ -218,12 +228,7 @@ describe("writeCliImages", () => {
     const explicitImage = pngImage("c29tZS1leHBsaWNpdC1pbWFnZQ==");
 
     const prepared = await prepareCliPromptImagePayload({
-      backend: {
-        command: "gemini",
-        imageArg: "@",
-        imagePathScope: "workspace",
-        input: "arg",
-      },
+      backend: { ...geminiImages, input: "arg" },
       prompt: "What is in this image?",
       workspaceDir: tempDir,
       images: [explicitImage],
@@ -237,11 +242,7 @@ describe("writeCliImages", () => {
     );
 
     const argv = buildCliArgs({
-      backend: {
-        command: "gemini",
-        imageArg: "@",
-        imagePathScope: "workspace",
-      },
+      backend: geminiImages,
       baseArgs: ["--output-format", "json", "--prompt", "{prompt}"],
       modelId: "gemini-3.1-pro-preview",
       promptArg: prepared.prompt,
@@ -259,22 +260,13 @@ describe("writeCliImages", () => {
     const explicitImage = pngImage("c29tZS1leHBsaWNpdC1pbWFnZQ==");
 
     const prepared = await prepareCliPromptImagePayload({
-      backend: {
-        command: "codex",
-        imageArg: "--image",
-        imageMode: "repeat",
-        input: "arg",
-      },
+      backend: { ...codexImages, input: "arg" },
       prompt: `[media attached: ${sourceImage} (image/png)]\n\n<media:image>`,
       workspaceDir: tempDir,
       images: [explicitImage],
     });
     const argv = buildCliArgs({
-      backend: {
-        command: "codex",
-        imageArg: "--image",
-        imageMode: "repeat",
-      },
+      backend: codexImages,
       baseArgs: ["exec", "--json"],
       modelId: "gpt-5.4",
       imagePaths: prepared.imagePaths,
@@ -297,22 +289,15 @@ describe("writeCliImages", () => {
     const offloadedImage = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
     const inlineImage = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
     const historyImage = createSolidPngBuffer(1, 1, { r: 0, g: 255, b: 0 });
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.mkdir(inboundDir, { recursive: true });
-    await fs.writeFile(path.join(inboundDir, mediaId), offloadedImage);
-    await fs.writeFile(historyImagePath, historyImage);
+    await writePng(path.join(inboundDir, mediaId), offloadedImage);
+    await writePng(historyImagePath, historyImage);
     const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     const currentTurn = `compare these\n[media attached: media://inbound/${mediaId}]`;
 
     try {
       const prepared = await prepareCliPromptImagePayload({
-        backend: {
-          command: "codex",
-          imageArg: "--image",
-          imageMode: "repeat",
-          input: "arg",
-        },
+        backend: { ...codexImages, input: "arg" },
         prompt: `[Earlier history: ${historyImagePath}]\n\n[Retry after failure]\n\n${currentTurn}`,
         imagePrompt: currentTurn,
         workspaceDir,
@@ -334,57 +319,21 @@ describe("writeCliImages", () => {
   });
 });
 
-describe("writeCliSystemPromptFile", () => {
-  it("writes stripped system prompts to a private temp file", async () => {
-    const written = await writeCliSystemPromptFile({
-      backend: {
-        command: "codex",
-        systemPromptFileConfigKey: "model_instructions_file",
-      },
-      systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
-    });
-
-    try {
-      expect(written.filePath).toContain("openclaw-cli-system-prompt-");
-      await expect(fs.readFile(written.filePath ?? "", "utf-8")).resolves.toBe(
-        "Stable prefix\nDynamic suffix",
-      );
-    } finally {
-      await written.cleanup();
-    }
-    let err: unknown;
-    try {
-      await fs.access(written.filePath ?? "");
-    } catch (caught) {
-      err = caught;
-    }
-    expect(err).toBeInstanceOf(Error);
-    expect((err as NodeJS.ErrnoException).code).toBe("ENOENT");
-  });
-});
-
-describe("resolveCliRunQueueKey", () => {
-  it("disables serialization when serialize=false", () => {
-    expect(
-      resolveCliRunQueueKey({
-        backendId: "claude-cli",
-        serialize: false,
-        runId: "run-4",
-        workspaceDir: "/tmp/project-a",
-      }),
-    ).toBe("claude-cli:run-4");
-  });
-
-  it("keeps third-party live sessions serialized on their exact owner even when serialize=false", () => {
-    expect(
-      resolveCliRunQueueKey({
-        backendId: "acme-cli",
-        liveSession: "claude-stdio",
-        serialize: false,
-        runId: "run-third-party-live",
-        workspaceDir: "/tmp/project-a",
-        ownerKey: "third-party-owner",
-      }),
-    ).toBe("acme-cli:owner:third-party-owner");
-  });
+it.each([
+  { backendId: "claude-cli", expected: "claude-cli:run-4" },
+  {
+    backendId: "acme-cli",
+    liveSession: "claude-stdio" as const,
+    ownerKey: "third-party-owner",
+    expected: "acme-cli:owner:third-party-owner",
+  },
+])("serializes $backendId only when its live owner requires it", ({ expected, ...backend }) => {
+  expect(
+    resolveCliRunQueueKey({
+      ...backend,
+      serialize: false,
+      runId: "run-4",
+      workspaceDir: "/tmp/project-a",
+    }),
+  ).toBe(expected);
 });

@@ -7,6 +7,7 @@ import type {
   ChannelReadReceiptConfig,
   CommonChannelGroupConfig,
   CommonChannelMessagingConfig,
+  MultiAccountChannelConfig,
 } from "./types.channel-messaging-common.js";
 
 /** Private-API and helper actions the iMessage runtime may expose to agents. */
@@ -100,8 +101,4 @@ export type IMessageAccountConfig = Omit<
   };
 
 /** Top-level iMessage config, with optional account map layered over default account fields. */
-export type IMessageConfig = {
-  accounts?: Record<string, IMessageAccountConfig>;
-  /** Optional default account id when multiple accounts are configured. */
-  defaultAccount?: string;
-} & IMessageAccountConfig;
+export type IMessageConfig = MultiAccountChannelConfig<IMessageAccountConfig>;

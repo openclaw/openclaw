@@ -7,20 +7,22 @@ import Testing
 @MainActor
 enum AppKitTestSupport {
     /// Rendered suites share one process and must initialize AppKit only once.
-    private static let initializedApplication: (application: NSApplication, didSetActivationPolicy: Bool) = {
+    private static let initializedApplication: NSApplication = {
         let application = NSApplication.shared
         let didSetActivationPolicy = application.setActivationPolicy(.accessory)
-        #expect(didSetActivationPolicy)
+        let policy = application.activationPolicy()
+        print("AppKit activation: setter=\(didSetActivationPolicy) policy=\(policy.rawValue)")
+        #expect(policy == .accessory)
         application.finishLaunching()
-        return (application, didSetActivationPolicy)
+        return application
     }()
 
     static var application: NSApplication {
-        self.initializedApplication.application
+        self.initializedApplication
     }
 
-    static var didSetActivationPolicy: Bool {
-        self.initializedApplication.didSetActivationPolicy
+    static var hasAccessoryActivationPolicy: Bool {
+        self.application.activationPolicy() == .accessory
     }
 
     static func startApplication() async throws {
@@ -58,16 +60,19 @@ enum AppKitTestSupport {
         diagnosticContext: String? = nil) async throws -> [AnyObject]
     {
         let before = diagnosticContext.map { _ in self.accessibilityDiagnosticState(in: root) }
-        // SwiftUI materializes its virtual accessibility children after a real client request.
+        // Prime SwiftUI's virtual children through the stable application role. Other suites can
+        // close windows while this request runs, making child/window attributes unavailable.
         let result = await Task.detached {
             let application = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
-            var windows: CFTypeRef?
-            return AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &windows)
+            var role: CFTypeRef?
+            let error = AXUIElementCopyAttributeValue(application, kAXRoleAttribute as CFString, &role)
+            return (error, role as? String)
         }.value
         let after = diagnosticContext.map { _ in self.accessibilityDiagnosticState(in: root) }
-        try #require(result == .success, diagnosticContext.map {
+        try #require(result.0 == .success, diagnosticContext.map {
             Comment(rawValue: "\($0) before=[\(before ?? "")] after=[\(after ?? "")]")
         })
+        try #require(result.1 == kAXApplicationRole as String)
         var elements: [AnyObject] = []
         var visited = Set<ObjectIdentifier>()
         func visit(_ element: AnyObject) {

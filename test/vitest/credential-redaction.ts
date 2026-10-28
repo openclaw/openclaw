@@ -1,8 +1,23 @@
 import { inspect, stripVTControlCharacters } from "node:util";
+import {
+  redactRegisteredSecretValues,
+  registerSecretValueForRedaction,
+} from "../../src/logging/secret-redaction-registry.ts";
+import { isCredentialEnvName } from "./credential-env-name.ts";
 
-// Hosted logs are public; runner-issued tokens are not GitHub-masked.
 const credentialKey =
   /TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|PRIVATE_KEY|AUTHORIZATION|COOKIE|SESSION/iu;
+
+function isCredentialFieldName(name: string): boolean {
+  return credentialKey.test(name) || isCredentialEnvName(name);
+}
+
+// Hosted logs are public; runner-issued tokens are not GitHub-masked.
+for (const [name, value] of Object.entries(process.env)) {
+  if (value && isCredentialEnvName(name)) {
+    registerSecretValueForRedaction(value);
+  }
+}
 const assignment = /(?<![\w.-])(["']?)([\w.-]+)\1[\t ]*([:=])/gu;
 // A diff hunk can retain the entry's key/value rows while omitting its opening bracket.
 const entryPair =
@@ -158,7 +173,7 @@ function redactEntryPairs(text: string): string {
   for (const match of text.matchAll(entryPair)) {
     if (
       match.index < consumed ||
-      !credentialKey.test(match[2] ?? "") ||
+      !isCredentialFieldName(match[2] ?? "") ||
       quotes.some((quoted) => match.index > quoted.start && match.index < quoted.end)
     ) {
       continue;
@@ -176,9 +191,13 @@ function redactEntryPairs(text: string): string {
 }
 
 export function redactCredentialText(text: string): string {
+  const exactRedacted = redactRegisteredSecretValues(
+    text,
+    (value) => `<redacted len=${value.length}>`,
+  );
   const uncolored = stripVTControlCharacters(text);
-  if (!credentialKey.test(uncolored)) {
-    return text;
+  if (!credentialKey.test(uncolored) && !/KEY|CREDENTIAL|AUTH_JSON/u.test(uncolored)) {
+    return exactRedacted;
   }
   const plain = uncolored;
   const quotes = [...quotedValues(plain)];
@@ -188,7 +207,7 @@ export function redactCredentialText(text: string): string {
     // Embedded strings are redacted after outer fields, without consuming their encoding.
     if (
       match.index < consumed ||
-      !credentialKey.test(match[0]) ||
+      !isCredentialFieldName(match[2] ?? "") ||
       quotes.some((quoted) => match.index > quoted.start && match.index < quoted.end)
     ) {
       continue;
@@ -230,7 +249,10 @@ export function redactCredentialText(text: string): string {
     output += `${plain.slice(consumed, start)}${wrapped ? quote : ""}<redacted len=${length}>${wrapped ? quote : ""}`;
     consumed = end;
   }
-  return redactQuotedContent(redactEntryPairs(output + plain.slice(consumed)));
+  return redactRegisteredSecretValues(
+    redactQuotedContent(redactEntryPairs(output + plain.slice(consumed))),
+    (value) => `<redacted len=${value.length}>`,
+  );
 }
 
 export function redactDiagnostic(value: unknown, seen = new WeakSet<object>()): unknown {
@@ -251,10 +273,10 @@ export function redactDiagnostic(value: unknown, seen = new WeakSet<object>()): 
     }
     const content: unknown = descriptor.value;
     const credential =
-      credentialKey.test(key) ||
+      isCredentialFieldName(key) ||
       (key === "1" &&
         typeof entryKey === "string" &&
-        credentialKey.test(entryKey) &&
+        isCredentialFieldName(entryKey) &&
         typeof content === "string");
     const replacement =
       credential && !(typeof content === "string" && redacted.test(content))

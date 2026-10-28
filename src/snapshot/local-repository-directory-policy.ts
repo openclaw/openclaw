@@ -20,6 +20,7 @@ const MACOS_REPLACEMENT_ACL_PERMISSIONS = new Set([
   "writesecurity",
 ]);
 const WINDOWS_SYNCHRONIZE_RIGHT = 0x100000;
+const WINDOWS_DELETE_SELF_RIGHT = 0x010000;
 // Delete child/self, write DACL/owner, maximum allowed, and generic all.
 const WINDOWS_STAGING_REPLACEMENT_RIGHTS_MASK =
   0x000040 | 0x010000 | 0x040000 | 0x080000 | 0x02000000 | 0x10000000;
@@ -57,6 +58,7 @@ const WINDOWS_KNOWN_FILE_RIGHTS_MASK = WINDOWS_FILE_RIGHTS.reduce(
   (mask, [right]) => mask | right,
   0,
 );
+type WindowsStagingSecurity = Extract<OwnerAndDaclResult, { status: "supported" }>;
 let macosTrustedAclPrincipalsPromise: Promise<ReadonlySet<string>> | undefined;
 
 export function assertDirectory(
@@ -73,17 +75,18 @@ export async function assertDirectoryIdentity(
   directoryPath: string,
   expectedIdentity: FileIdentityStat,
 ): Promise<void> {
-  const currentIdentity = await fs.lstat(directoryPath, {
-    bigint: typeof expectedIdentity.dev === "bigint",
-  });
+  const currentIdentity = await fs.lstat(directoryPath, { bigint: true });
   assertDirectory(currentIdentity, directoryPath, "SQLite staging directory");
   if (!sameFileIdentity(currentIdentity, expectedIdentity)) {
     throw new Error(`SQLite staging directory changed during operation: ${directoryPath}`);
   }
 }
 
-export function assertDirectoryIdentitySync(directoryPath: string, expectedIdentity: Stats): void {
-  const currentIdentity = fsSync.lstatSync(directoryPath);
+export function assertDirectoryIdentitySync(
+  directoryPath: string,
+  expectedIdentity: FileIdentityStat,
+): void {
+  const currentIdentity = fsSync.lstatSync(directoryPath, { bigint: true });
   assertDirectory(currentIdentity, directoryPath, "SQLite staging directory");
   if (!sameFileIdentity(currentIdentity, expectedIdentity)) {
     throw new Error(`SQLite staging directory changed during operation: ${directoryPath}`);
@@ -97,9 +100,7 @@ export async function assertTrustedStagingRoot(
 ): Promise<string> {
   const resolvedRootPath = path.resolve(rootPath);
   const trustedRootPath = await fs.realpath(resolvedRootPath);
-  const rootIdentity = await fs.lstat(trustedRootPath, {
-    bigint: typeof expectedIdentity.dev === "bigint",
-  });
+  const rootIdentity = await fs.lstat(trustedRootPath, { bigint: true });
   assertDirectory(rootIdentity, trustedRootPath, "Private SQLite staging root");
   if (!sameFileIdentity(rootIdentity, expectedIdentity)) {
     throw new Error(`Private SQLite staging root changed during operation: ${resolvedRootPath}`);
@@ -127,10 +128,10 @@ export async function assertTrustedStagingRoot(
 }
 
 export async function assertPrivateStagingDirectory(
-  expectedIdentity: Stats,
+  expectedIdentity: FileIdentityStat,
   directoryPath: string,
 ): Promise<void> {
-  const currentIdentity = await fs.lstat(directoryPath);
+  const currentIdentity = await fs.lstat(directoryPath, { bigint: true });
   assertDirectory(currentIdentity, directoryPath, "Private SQLite staging directory");
   if (!sameFileIdentity(currentIdentity, expectedIdentity)) {
     throw new Error(`Private SQLite staging directory changed during operation: ${directoryPath}`);
@@ -141,7 +142,11 @@ export async function assertPrivateStagingDirectory(
     return;
   }
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-  if (uid === undefined || currentIdentity.uid !== uid || (currentIdentity.mode & 0o077) !== 0) {
+  if (
+    uid === undefined ||
+    Number(currentIdentity.uid) !== uid ||
+    (currentIdentity.mode & 0o077n) !== 0n
+  ) {
     throw new Error(`Private SQLite staging directory permissions are unsafe: ${directoryPath}`);
   }
   if (process.platform === "darwin") {
@@ -324,7 +329,7 @@ async function assertTrustedWindowsStagingPath(rootPath: string): Promise<void> 
 function assertTrustedWindowsAcl(
   pathname: string,
   requirePrivate: boolean,
-  security: Extract<OwnerAndDaclResult, { status: "supported" }>,
+  security: WindowsStagingSecurity,
 ): void {
   const pathRole = requirePrivate ? "repository root" : "ancestor";
   const currentUserSid = security.currentUserSid.toUpperCase();
@@ -340,9 +345,14 @@ function assertTrustedWindowsAcl(
   if (allowedEntries.length === 0) {
     throw new Error(`Unable to verify private Windows ACL for SQLite staging: ${pathname}`);
   }
-  const unsafeMask = requirePrivate
+  let unsafeMask = requirePrivate
     ? ~WINDOWS_SYNCHRONIZE_RIGHT
     : WINDOWS_STAGING_REPLACEMENT_RIGHTS_MASK | ~WINDOWS_KNOWN_FILE_RIGHTS_MASK;
+  if (!requirePrivate && security.isVolumeRoot === true) {
+    // A volume root cannot be deleted or renamed through DELETE-self. Child
+    // deletion, security changes and unknown rights remain unsafe here.
+    unsafeMask &= ~WINDOWS_DELETE_SELF_RIGHT;
+  }
   const unsafeEntry = allowedEntries.find((entry) => {
     const sid = entry.sid.toUpperCase();
     // Ancestor inherit-only grants are evaluated on the private root and its children.

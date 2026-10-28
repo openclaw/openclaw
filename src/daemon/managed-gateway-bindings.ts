@@ -109,12 +109,19 @@ export async function discoverManagedGatewayBindings(
   };
 
   if (options.includeInvoking) {
-    push({ env });
+    const { hasSystemdManager } = await import("./systemd-loaded-unit-inventory.js");
+    // A container without either manager has no invoking native owner to inspect.
+    // Installed definitions are still inventoried below; failed manager reads stay unknown.
+    if (
+      process.platform !== "linux" ||
+      (await hasSystemdManager("user", env)) ||
+      (await hasSystemdManager("system", env))
+    ) {
+      push({ env });
+    }
   }
   try {
-    const { services, errors } = await listManagedOpenClawGatewayServices(env, {
-      requireComplete: true,
-    });
+    const { services, errors } = await listManagedOpenClawGatewayServices(env);
     if (options.requireComplete && errors.length > 0) {
       throw new Error("Managed Gateway inventory could not be completely inspected.");
     }

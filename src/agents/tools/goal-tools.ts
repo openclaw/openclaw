@@ -25,6 +25,8 @@ type GoalToolOptions = {
   config?: OpenClawConfig;
 };
 
+const GetGoalToolSchema = Type.Object({});
+
 const CreateGoalToolSchema = Type.Object({
   objective: Type.String({
     description: "Concrete objective; explicit request only.",
@@ -70,7 +72,7 @@ export function createGetGoalTool(options: GoalToolOptions): AnyAgentTool {
     displaySummary: "Get the current thread goal",
     description:
       "Get the current session goal, including its full objective, status, token usage, and optional budget.",
-    parameters: Type.Object({}),
+    parameters: GetGoalToolSchema,
     execute: async () => {
       const snapshot = await getSessionGoal({
         ...resolveGoalSessionScope(options),

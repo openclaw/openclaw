@@ -62,7 +62,7 @@ Pending command-surface requests do not expire merely with time; they follow the
   [Active computer presence](/nodes/presence) for setup, privacy, timing, and
   troubleshooting.
 - The device pairing record is the durable approved-role contract. Token rotation stays inside that contract; it cannot upgrade a paired node into a role that pairing approval never granted.
-- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/remove/rename`) manages the node's approved command/capability surface on its canonical paired-device record. Device pairing owns both transport authentication and the durable node surface; there is no separate node pairing store.
+- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/remove/rename`) manages the node's approved command/capability surface on its paired-device record. Device pairing owns both transport authentication and the durable node surface; there is no separate node pairing store.
 - `openclaw nodes remove --node <id|name|ip>` revokes the device's `node` role in the paired-device store and disconnects that device's node-role sessions: a mixed-role device keeps its row and only loses the `node` role, while a node-only device row is deleted. `operator.pairing` may remove non-operator node rows on other devices; a device-token caller revoking its own node role on a mixed-role device additionally needs `operator.admin`.
 - Approval scope follows the pending request's declared commands:
   - commandless request: `operator.pairing`
@@ -74,12 +74,18 @@ Headless node hosts report the hardware model on macOS and Linux.
 Connected CLI node hosts and the macOS app report CPU count, load averages,
 memory, and home-volume disk capacity every 60 seconds, starting on connection.
 The Gateway exposes the latest snapshot as `hostStats` in `node.list` and
-`node.describe`. When received, it saves the snapshot on the paired node
-record, so offline nodes keep showing last-known stats with the original
-`updatedAtMs`. Connected nodes use live session stats. `openclaw nodes status`
-and `openclaw nodes describe` show a compact stats summary with a last-known age
-for offline nodes. Windows omits load averages, and unavailable disk capacity is
-omitted. See
+`node.describe`. Connected nodes use live session stats. The first snapshot is
+saved immediately on the paired node record; later snapshots are coalesced until
+five minutes after the last saved snapshot's receipt time. Disconnect and orderly
+Gateway shutdown save the final snapshot. A crash can lose roughly the last five
+minutes of telemetry while reports continue and writes succeed; delayed writes,
+storage failures, or missing reports can leave older stats.
+
+Offline nodes show the saved snapshot with its original `updatedAtMs`, including
+briefly showing the previous saved snapshot while a disconnect write completes.
+`openclaw nodes status` and `openclaw nodes describe` show a compact stats summary
+with a last-known age for offline nodes. Windows omits load averages, and
+unavailable disk capacity is omitted. See
 [Node host stats](/gateway/protocol/presence#node-host-stats) for the wire contract.
 
 ## Version skew and upgrade order

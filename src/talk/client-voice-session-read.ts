@@ -1,5 +1,5 @@
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
@@ -32,12 +32,12 @@ export async function lookupClientVoiceSessions(
 }
 
 /** Read the canonical agent-session id without creating state during provider startup. */
-export function resolveClientVoiceAgentSessionId(params: {
+export async function resolveClientVoiceAgentSessionId(params: {
   agentId: string;
   sessionKey: string;
   storePath?: string;
-}): string | undefined {
-  return loadSessionEntryReadOnly(params)?.sessionId?.trim() || undefined;
+}): Promise<string | undefined> {
+  return (await readSessionEntryReadOnlyInWorker(params))?.sessionId?.trim() || undefined;
 }
 
 /** Resolve the unique open client-owned call for legacy tool-call clients. */

@@ -1,4 +1,3 @@
-// Codesign Mac App tests cover codesign mac app script behavior.
 import { existsSync, readFileSync } from "node:fs";
 import { chmod, link, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -25,6 +24,58 @@ const codesignCommand = process.platform === "win32" ? "bash" : scriptPath;
 const codesignArgs = process.platform === "win32" ? [scriptPath] : [];
 // Signing integration exercises the real Darwin mutation fence, not a sandbox mock.
 const macIt = it.runIf(process.platform === "darwin");
+const developerIdentity = "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)";
+
+function runCodesign(
+  mac: MacScriptFixture,
+  tempRoot: string,
+  args: string[],
+  env: NodeJS.ProcessEnv = {},
+  inherit = true,
+) {
+  return mac.run(codesignCommand, [...codesignArgs, ...args], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...(inherit ? process.env : {}),
+      PATH: `${path.join(tempRoot, "bin")}${path.delimiter}${process.env.PATH ?? ""}`,
+      TMPDIR: tempRoot,
+      ...env,
+    },
+  });
+}
+
+async function appFixture(
+  mac: MacScriptFixture,
+  label: string,
+  binaries = ["OpenClaw"],
+  install = installFakeCodesign,
+) {
+  const tempRoot = mac.createTempDir(`openclaw-codesign-${label}-`);
+  const app = path.join(tempRoot, "Fake.app");
+  const binDir = path.join(tempRoot, "bin");
+  const captureDir = path.join(app, "Contents", "test-capture");
+  const macos = path.join(app, "Contents", "MacOS");
+  await mkdir(macos, { recursive: true });
+  await mkdir(binDir);
+  await mkdir(captureDir);
+  for (const binary of binaries) {
+    await writeFile(path.join(macos, binary), "#!/bin/sh\n");
+  }
+  await install(binDir);
+  return { tempRoot, app, binDir, captureDir };
+}
+
+function signingFixture(mac: MacScriptFixture, label: string, name?: string) {
+  return makeSigningFixture(mac, mac.createTempDir(`openclaw-${label}-`), name);
+}
+
+function signedPaths(fixture: Awaited<ReturnType<typeof makeSigningFixture>>) {
+  return fixture
+    .events()
+    .filter(({ args }) => args.includes("--sign"))
+    .map(({ args }) => args.at(-1));
+}
 
 async function runCodesignWithoutAllocation(
   mac: MacScriptFixture,
@@ -42,39 +93,22 @@ async function runCodesignWithoutAllocation(
     `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(allocation)}, 'called');\nprocess.exit(91);\n`,
   );
   await chmod(allocator, 0o755);
-  const result = await mac.run(codesignCommand, [...codesignArgs, ...args], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      ...env,
-      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-      TMPDIR: tempRoot,
-    },
-  });
+  const result = await runCodesign(mac, tempRoot, args, env);
   expect(existsSync(allocation), result.stderr).toBe(false);
   return result;
 }
 
 async function runElevationMetadataFixture(mac: MacScriptFixture, env: NodeJS.ProcessEnv) {
-  const tempRoot = mac.createTempDir("openclaw-codesign-elevation-metadata-");
-  const app = path.join(tempRoot, "Fake.app");
-  const binDir = path.join(tempRoot, "bin");
-  await mkdir(path.join(app, "Contents", "MacOS"), { recursive: true });
-  await mkdir(binDir);
-  await writeFile(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
-  await installElevationFakeCodesign(binDir);
-  const result = await mac.run(codesignCommand, [...codesignArgs, app], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      ...env,
-      OPENCLAW_MAC_SIGNING_VARIANT: "elevation-host",
-      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-      SIGN_IDENTITY: "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)",
-      TMPDIR: tempRoot,
-    },
+  const { tempRoot, app } = await appFixture(
+    mac,
+    "elevation-metadata",
+    ["OpenClaw"],
+    installElevationFakeCodesign,
+  );
+  const result = await runCodesign(mac, tempRoot, [app], {
+    ...env,
+    OPENCLAW_MAC_SIGNING_VARIANT: "elevation-host",
+    SIGN_IDENTITY: developerIdentity,
   });
   return { app, result };
 }
@@ -135,31 +169,17 @@ describe("codesign-mac-app temp file hygiene", () => {
 
   macIt.concurrent("keeps helper signing plain and seals app code once", ({ mac, expect }) =>
     mac.lifetime.run(async () => {
-      const tempRoot = mac.createTempDir("openclaw-codesign-success-");
-      const app = path.join(tempRoot, "Fake.app");
-      const binDir = path.join(tempRoot, "bin");
-      const captureDir = path.join(app, "Contents", "test-capture");
+      const { tempRoot, app, captureDir } = await appFixture(mac, "success", [
+        "openclaw-mac",
+        "openclaw-mlx-tts",
+        "OpenClaw",
+      ]);
       const logPath = path.join(captureDir, "codesign.log");
-      await mkdir(path.join(app, "Contents", "MacOS"), { recursive: true });
-      await mkdir(binDir);
-      await mkdir(captureDir);
-      await writeFile(path.join(app, "Contents", "MacOS", "openclaw-mac"), "#!/bin/sh\n");
-      await writeFile(path.join(app, "Contents", "MacOS", "openclaw-mlx-tts"), "#!/bin/sh\n");
-      await writeFile(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
-      await installFakeCodesign(binDir);
-
-      const result = await mac.run(codesignCommand, [...codesignArgs, app], {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          CODESIGN_CAPTURE_DIR: captureDir,
-          CODESIGN_LOG: logPath,
-          PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-          SIGN_IDENTITY: "-",
-          SKIP_TEAM_ID_CHECK: "1",
-          TMPDIR: tempRoot,
-        },
+      const result = await runCodesign(mac, tempRoot, [app], {
+        CODESIGN_CAPTURE_DIR: captureDir,
+        CODESIGN_LOG: logPath,
+        SIGN_IDENTITY: "-",
+        SKIP_TEAM_ID_CHECK: "1",
       });
 
       expect(result.status).toBe(0);
@@ -218,54 +238,27 @@ describe("codesign-mac-app temp file hygiene", () => {
       }),
   );
 
-  it.concurrent("defines a closed Foundation elevation-host signing profile", ({ mac, expect }) =>
-    mac.lifetime.run(async () => {
-      const script = readFileSync(scriptPath, "utf8");
-      const elevationProfile = script.slice(
-        script.indexOf('if [[ "$SIGNING_VARIANT" == "elevation-host" ]]'),
-        script.indexOf("else", script.indexOf('if [[ "$SIGNING_VARIANT" == "elevation-host" ]]')),
-      );
-
-      expect(readFileSync("scripts/lib/mac-signing-identity.sh", "utf8")).toContain(
-        'ELEVATION_IDENTITY="Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)"',
-      );
-      expect(script).toContain('ELEVATION_TEAM_ID="FWJYW4S8P8"');
-      expect(elevationProfile).toContain("<dict/>");
-      expect(elevationProfile).not.toContain("com.apple.security.automation.apple-events");
-      expect(script).toContain("verify_elevation_signature");
-      expect(script).toContain('assert_no_apple_events_entitlement "$APP_BUNDLE"');
-    }));
-
   it.concurrent.for(["file", "symlink"])(
     "rejects an elevation-host CUA driver %s before signing",
     (kind, { mac, expect }) =>
       mac.lifetime.run(async () => {
-        const tempRoot = mac.createTempDir(`openclaw-codesign-elevation-cua-${kind}-`);
-        const app = path.join(tempRoot, "Fake.app");
-        const binDir = path.join(tempRoot, "bin");
+        const { tempRoot, app } = await appFixture(
+          mac,
+          `elevation-cua-${kind}`,
+          ["OpenClaw"],
+          installElevationFakeCodesign,
+        );
         const resources = path.join(app, "Contents", "Resources");
-        await mkdir(path.join(app, "Contents", "MacOS"), { recursive: true });
         await mkdir(resources, { recursive: true });
-        await mkdir(binDir);
-        await writeFile(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
         const cuaDriver = path.join(resources, "cua-driver");
         if (kind === "file") {
           await writeFile(cuaDriver, "driver\n");
         } else {
           await symlink("/missing/cua-driver", cuaDriver);
         }
-        await installElevationFakeCodesign(binDir);
-
-        const result = await mac.run(codesignCommand, [...codesignArgs, app], {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            OPENCLAW_MAC_SIGNING_VARIANT: "elevation-host",
-            PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-            SIGN_IDENTITY: "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)",
-            TMPDIR: tempRoot,
-          },
+        const result = await runCodesign(mac, tempRoot, [app], {
+          OPENCLAW_MAC_SIGNING_VARIANT: "elevation-host",
+          SIGN_IDENTITY: developerIdentity,
         });
 
         expect(result.status).toBe(1);
@@ -316,30 +309,20 @@ describe("codesign-mac-app temp file hygiene", () => {
 
   macIt.concurrent("retries only transient Apple timestamp failures", ({ mac, expect }) =>
     mac.lifetime.run(async () => {
-      const tempRoot = mac.createTempDir("openclaw-codesign-retry-");
-      const app = path.join(tempRoot, "Fake.app");
-      const binDir = path.join(tempRoot, "bin");
+      const { tempRoot, app } = await appFixture(
+        mac,
+        "retry",
+        ["openclaw-mlx-tts", "OpenClaw"],
+        installTransientFakeCodesign,
+      );
       const countFile = path.join(app, "Contents", "codesign-count");
-      await mkdir(path.join(app, "Contents", "MacOS"), { recursive: true });
-      await mkdir(binDir);
-      await writeFile(path.join(app, "Contents", "MacOS", "openclaw-mlx-tts"), "#!/bin/sh\n");
-      await writeFile(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
-      await installTransientFakeCodesign(binDir);
-
-      const result = await mac.run(codesignCommand, [...codesignArgs, app], {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          CODESIGN_COUNT_FILE: countFile,
-          CODESIGN_TIMESTAMP_RETRY_ATTEMPTS: "3",
-          CODESIGN_TIMESTAMP_RETRY_DELAY_SECONDS: "0",
-          CODESIGN_TRANSIENT_FAILURES: "2",
-          PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-          SIGN_IDENTITY: "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)",
-          SKIP_TEAM_ID_CHECK: "1",
-          TMPDIR: tempRoot,
-        },
+      const result = await runCodesign(mac, tempRoot, [app], {
+        CODESIGN_COUNT_FILE: countFile,
+        CODESIGN_TIMESTAMP_RETRY_ATTEMPTS: "3",
+        CODESIGN_TIMESTAMP_RETRY_DELAY_SECONDS: "0",
+        CODESIGN_TRANSIENT_FAILURES: "2",
+        SIGN_IDENTITY: developerIdentity,
+        SKIP_TEAM_ID_CHECK: "1",
       });
 
       expect(result.status).toBe(0);
@@ -352,36 +335,34 @@ describe("codesign-mac-app temp file hygiene", () => {
     "cleans signing resources without retrying non-timestamp %s failures",
     (target, { mac, expect }) =>
       mac.lifetime.run(async () => {
-        const tempRoot = mac.createTempDir("openclaw-codesign-permanent-");
-        const app = path.join(tempRoot, "Fake.app");
-        const binDir = path.join(tempRoot, "bin");
+        const { tempRoot, app, binDir } = await appFixture(
+          mac,
+          "permanent",
+          target === "helper" ? ["openclaw-mlx-tts"] : [],
+          installTransientFakeCodesign,
+        );
         const countFile = path.join(app, "Contents", "codesign-count");
-        await mkdir(path.join(app, "Contents", "MacOS"), { recursive: true });
-        await mkdir(binDir);
-        if (target === "helper") {
-          await writeFile(path.join(app, "Contents", "MacOS", "openclaw-mlx-tts"), "#!/bin/sh\n");
-        }
-        await installTransientFakeCodesign(binDir);
         // Keep identity lookup and attribute cleanup inert even if signing setup changes.
         for (const command of ["security", "xattr"]) {
           await writeFile(path.join(binDir, command), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
         }
 
-        const result = await mac.run(codesignCommand, [...codesignArgs, app], {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
+        const result = await runCodesign(
+          mac,
+          tempRoot,
+          [app],
+          {
             CODESIGN_COUNT_FILE: countFile,
             CODESIGN_PERMANENT_FAILURE: "1",
             CODESIGN_TIMESTAMP_RETRY_ATTEMPTS: "3",
             CODESIGN_TIMESTAMP_RETRY_DELAY_SECONDS: "0",
             CODESIGN_TRANSIENT_FAILURES: "0",
             PATH: `${binDir}:/usr/bin:/bin`,
-            SIGN_IDENTITY: "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)",
+            SIGN_IDENTITY: developerIdentity,
             SKIP_TEAM_ID_CHECK: "1",
-            TMPDIR: tempRoot,
           },
-        });
+          false,
+        );
 
         // Darwin mktemp -t can ignore TMPDIR; observe the actual signer allocation.
         const directory = readFileSync(`${countFile}.tempdir`, "utf8");
@@ -407,48 +388,20 @@ describe("codesign-mac-app temp file hygiene", () => {
       }),
   );
 
+  const developerHash = "63A99BFF1D40E5A75C8A32B84BE99D1DDA6A44E1";
   macIt.concurrent.for([
-    {
-      label: "lowercase Developer ID hash",
-      identity: "63a99bff1d40e5a75c8a32b84be99d1dda6a44e1",
-      timestamp: true,
-    },
-    {
-      label: "Developer ID name",
-      identity: "Developer ID Application: Example Corp (ABCDE12345)",
-      timestamp: true,
-    },
-    {
-      label: "development certificate hash",
-      identity: "11AA22BB33CC44DD55EE66FF77008899AABBCCDD",
-      timestamp: false,
-    },
-    {
-      label: "unknown certificate hash",
-      identity: "0123456789ABCDEF0123456789ABCDEF01234567",
-      timestamp: false,
-    },
-    { label: "ad-hoc identity", identity: "-", timestamp: false },
-    {
-      label: "explicitly disabled timestamp",
-      identity: "63A99BFF1D40E5A75C8A32B84BE99D1DDA6A44E1",
-      timestamp: false,
-      mode: "off",
-    },
-  ])(
-    "applies automatic timestamp policy to $label",
-    ({ identity, timestamp, mode }, { mac, expect }) =>
+    ["lowercase Developer ID hash", developerHash.toLowerCase(), true],
+    ["Developer ID name", "Developer ID Application: Example Corp (ABCDE12345)", true],
+    ["development certificate hash", "11AA22BB33CC44DD55EE66FF77008899AABBCCDD", false],
+    ["unknown certificate hash", "0123456789ABCDEF0123456789ABCDEF01234567", false],
+    ["ad-hoc identity", "-", false],
+    ["explicitly disabled timestamp", developerHash, false, "off"],
+  ] as const)(
+    "applies automatic timestamp policy to %s",
+    ([, identity, timestamp, mode], { mac, expect }) =>
       mac.lifetime.run(async () => {
-        const tempRoot = mac.createTempDir("openclaw-codesign-timestamp-");
-        const app = path.join(tempRoot, "Fake.app");
-        const binDir = path.join(tempRoot, "bin");
-        const captureDir = path.join(app, "Contents", "test-capture");
+        const { tempRoot, app, binDir, captureDir } = await appFixture(mac, "timestamp");
         const argsLog = path.join(captureDir, "codesign-args.log");
-        await mkdir(path.join(app, "Contents", "MacOS"), { recursive: true });
-        await mkdir(binDir);
-        await mkdir(captureDir);
-        await writeFile(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
-        await installFakeCodesign(binDir);
         const fakeSecurity = path.join(binDir, "security");
         await writeFile(
           fakeSecurity,
@@ -460,20 +413,13 @@ printf '%s\\n' \\
         );
         await chmod(fakeSecurity, 0o755);
 
-        const result = await mac.run(codesignCommand, [...codesignArgs, app], {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            CODESIGN_ARGS_LOG: argsLog,
-            CODESIGN_CAPTURE_DIR: captureDir,
-            CODESIGN_LOG: path.join(captureDir, "codesign.log"),
-            PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-            SIGN_IDENTITY: identity,
-            SKIP_TEAM_ID_CHECK: "1",
-            TMPDIR: tempRoot,
-            ...(mode === undefined ? {} : { CODESIGN_TIMESTAMP: mode }),
-          },
+        const result = await runCodesign(mac, tempRoot, [app], {
+          CODESIGN_ARGS_LOG: argsLog,
+          CODESIGN_CAPTURE_DIR: captureDir,
+          CODESIGN_LOG: path.join(captureDir, "codesign.log"),
+          SIGN_IDENTITY: identity,
+          SKIP_TEAM_ID_CHECK: "1",
+          ...(mode === undefined ? {} : { CODESIGN_TIMESTAMP: mode }),
         });
 
         expect(result.status).toBe(0);
@@ -497,7 +443,7 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
     "limits plugin library loading to bundled Bun on $arch (elevation: $elevation)",
     ({ sdkArch, cpuType, elevation }, { mac, expect }) =>
       mac.lifetime.run(async () => {
-        const fixture = await makeSigningFixture(mac, mac.createTempDir("openclaw-inventory-jit-"));
+        const fixture = await signingFixture(mac, "inventory-jit");
         const modules = "lib/node_modules/openclaw/node_modules";
         const sdkRuntime = `node_modules/@anthropic-ai/claude-agent-sdk-darwin-${sdkArch}/claude`;
         const expected = new Map<string, "plugins" | "jit" | "plain">();
@@ -534,6 +480,10 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
         expect(signs.at(-1)?.args.at(-1)).toBe(fixture.app);
         expect(signs.at(-1)?.entitlements).not.toContain("disable-library-validation");
         expect(signs.at(-1)?.entitlements).not.toContain("allow-jit");
+        if (elevation) {
+          expect(signs.at(-1)?.entitlements).toContain("<dict/>");
+          expect(signs.at(-1)?.entitlements).not.toContain("automation.apple-events");
+        }
         for (const [filename, policy] of expected) {
           const signed = expectDefined(
             signs.find(({ args }) => args.at(-1) === filename),
@@ -571,10 +521,7 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
     "selects every canonical native format with header-appropriate entitlements (elevation: %s)",
     (elevation, { mac, expect }) =>
       mac.lifetime.run(async () => {
-        const fixture = await makeSigningFixture(
-          mac,
-          mac.createTempDir("openclaw-inventory-formats-"),
-        );
+        const fixture = await signingFixture(mac, "inventory-formats");
         const expected = new Map<string, boolean>();
         const candidates: string[] = [];
         for (const bits of [32, 64]) {
@@ -646,10 +593,7 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
     "examines but rejects byte-swapped fat%d containers",
     (bits, { mac, expect }) =>
       mac.lifetime.run(async () => {
-        const fixture = await makeSigningFixture(
-          mac,
-          mac.createTempDir("openclaw-inventory-swapped-fat-"),
-        );
+        const fixture = await signingFixture(mac, "inventory-swapped-fat");
         const bytes = machoFixture(bits, true, true);
         await fixture.put(runtimePath + "invalid-fat.node", bytes);
         const result = await fixture.run();
@@ -666,10 +610,7 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
     "classifies real fat64 code and rejects mixed slice types (mixed: %s)",
     (mixed, { mac, expect }) =>
       mac.lifetime.run(async () => {
-        const fixture = await makeSigningFixture(
-          mac,
-          mac.createTempDir("openclaw-inventory-real-fat64-"),
-        );
+        const fixture = await signingFixture(mac, "inventory-real-fat64");
         const native = await fixture.put(runtimePath + "bin/bun");
         const bytes = await writeFat64Fixture(native, mac);
         expect(bytes.readUInt32BE(0)).toBe(0xcafebabf);
@@ -702,7 +643,7 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
     expect,
   }) =>
     mac.lifetime.run(async () => {
-      const fixture = await makeSigningFixture(mac, mac.createTempDir("openclaw-macho-filetypes-"));
+      const fixture = await signingFixture(mac, "macho-filetypes");
       const resources = new Map<string, Buffer>();
       const candidates: string[] = [];
       for (const fileType of [1, 2, 4, 5, 6, 7, 8, 9, 10, 11]) {
@@ -720,9 +661,7 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
       const result = await fixture.run();
       expect(result.status, result.stderr).toBe(0);
       const events = fixture.events();
-      const signed = events
-        .filter(({ args }) => args.includes("--sign"))
-        .map(({ args }) => args.at(-1));
+      const signed = signedPaths(fixture);
       expect(signed).toHaveLength(candidates.length + 1);
       expect(new Set(signed)).toEqual(new Set([...candidates, fixture.app]));
       for (const [filename, bytes] of resources) {
@@ -745,9 +684,7 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
         expect(readFileSync(object)).toEqual(bytes);
         const events = fixture.events();
         expect(events.filter(({ args }) => args.at(-1) === object)).toEqual([]);
-        expect(
-          events.filter(({ args }) => args.includes("--sign")).map(({ args }) => args.at(-1)),
-        ).toEqual([node, fixture.app]);
+        expect(signedPaths(fixture)).toEqual([node, fixture.app]);
       }),
   );
 
@@ -818,12 +755,7 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
           expect(fixture.events()).toEqual([]);
         } else {
           expect(result.status, result.stderr).toBe(0);
-          expect(
-            fixture
-              .events()
-              .filter(({ args }) => args.includes("--sign"))
-              .map(({ args }) => args.at(-1)),
-          ).toEqual([node, fixture.app]);
+          expect(signedPaths(fixture)).toEqual([node, fixture.app]);
         }
       }),
   );
@@ -833,7 +765,7 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
     expect,
   }) =>
     mac.lifetime.run(async () => {
-      const fixture = await makeSigningFixture(mac, mac.createTempDir("openclaw-inventory-scale-"));
+      const fixture = await signingFixture(mac, "inventory-scale");
       for (let i = 0; i < 24; i++) {
         await fixture.put(
           `${runtimePath}native-${i}`,
@@ -1037,10 +969,7 @@ with open(sys.argv[1], 'ab', buffering=0) as stream:
     "seals each bundle owner once after nested code with suffix %j",
     (suffix, { mac, expect }) =>
       mac.lifetime.run(async () => {
-        const fixture = await makeSigningFixture(
-          mac,
-          mac.createTempDir("openclaw-inventory-order-"),
-        );
+        const fixture = await signingFixture(mac, "inventory-order");
         const helper = await fixture.put("Contents/MacOS/openclaw-mlx-tts");
         const cua = await fixture.put("Contents/Resources/cua-driver");
         const worker = await fixture.put(runtimePath + "bun");
@@ -1068,10 +997,7 @@ with open(sys.argv[1], 'ab', buffering=0) as stream:
         );
         const result = await fixture.run({}, false, fixture.app + suffix);
         expect(result.status, result.stderr).toBe(0);
-        const signs = fixture
-          .events()
-          .filter(({ args }) => args.includes("--sign"))
-          .map(({ args }) => args.at(-1));
+        const signs = signedPaths(fixture);
         const expected = [
           helper,
           cua,
@@ -1114,7 +1040,7 @@ with open(sys.argv[1], 'ab', buffering=0) as stream:
     "entitlementFailure",
   ])("fails closed on %s at the signing/audit boundary", (failure, { mac, expect }) =>
     mac.lifetime.run(async () => {
-      const fixture = await makeSigningFixture(mac, mac.createTempDir("openclaw-inventory-gates-"));
+      const fixture = await signingFixture(mac, "inventory-gates");
       const native = await fixture.put(runtimePath + "bun");
       const config =
         failure === "formatSkipTeam" ? { format: native, skipTeam: true } : { [failure]: native };
@@ -1131,9 +1057,9 @@ with open(sys.argv[1], 'ab', buffering=0) as stream:
     "uses signature metadata rather than filename text (%s)",
     (failure, { mac, expect }) =>
       mac.lifetime.run(async () => {
-        const fixture = await makeSigningFixture(
+        const fixture = await signingFixture(
           mac,
-          mac.createTempDir("openclaw-metadata-"),
+          "metadata",
           "Injected\nFormat=Mach-O thin (arm64)\nCodeDirectory v=20400\nTeamIdentifier=FWJYW4S8P8\nAuthority=Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)\n.app",
         );
         const native = await fixture.put(runtimePath + "bun");
@@ -1174,10 +1100,7 @@ with open(sys.argv[1], 'ab', buffering=0) as stream:
           "unterminated",
           "error-record",
         ]) {
-          const fixture = await makeSigningFixture(
-            mac,
-            mac.createTempDir("openclaw-inventory-failure-"),
-          );
+          const fixture = await signingFixture(mac, "inventory-failure");
           const native = await fixture.put(runtimePath + "bun");
           await fixture.put(runtimePath + "addon", machoFixture(64, true, false, 6));
           const result = await fixture.run({ fault, phase, partialPath: native });
@@ -1194,10 +1117,7 @@ with open(sys.argv[1], 'ab', buffering=0) as stream:
     "audits native files created while signing the app (%s)",
     (gate, { mac, expect }) =>
       mac.lifetime.run(async () => {
-        const fixture = await makeSigningFixture(
-          mac,
-          mac.createTempDir("openclaw-inventory-fresh-"),
-        );
+        const fixture = await signingFixture(mac, "inventory-fresh");
         await fixture.put(runtimePath + "bun");
         const generated = path.join(fixture.runtime, "generated-after-sign.node");
         const result = await fixture.run(

@@ -5,6 +5,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveCoreToolFacts } from "./tool-catalog.js";
 import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 import { isComputerObservationAction } from "./tools/computer-tool-shared.js";
 
@@ -53,29 +54,6 @@ const MESSAGE_READ_ONLY_ACTIONS = new Set([
   "channel_list",
   "voice_status",
   "event_list",
-]);
-
-const REPLAY_SAFE_TOOL_NAMES = new Set([
-  "agents_list",
-  "conversations_list",
-  "find",
-  "get_goal",
-  "glob",
-  "grep",
-  "view_image",
-  "ls",
-  "memory_get",
-  "pdf",
-  "read",
-  "search",
-  "sessions_history",
-  "sessions_list",
-  "sessions_search",
-  "tool_describe",
-  "tool_search",
-  "web_fetch",
-  "web_search",
-  "x_search",
 ]);
 
 const BROWSER_READ_ONLY_ACTIONS = new Set(["console", "profiles", "snapshot", "status", "tabs"]);
@@ -322,15 +300,18 @@ function isReadOnlyShellTokens(tokens: readonly string[]): boolean {
   return false;
 }
 
-export function isMutatingToolCall(toolName: string, args: unknown): boolean {
+function classifyToolCall(toolName: string, args: unknown): ToolMutationState {
   const normalized = normalizeLowercaseStringOrEmpty(toolName);
   const record = asRecord(args);
   const action = normalizeActionName(record?.action);
   const readOnlyActions = READ_ONLY_TOOL_ACTIONS.get(normalized);
   if (readOnlyActions) {
-    return action == null || !readOnlyActions.has(action);
+    const replaySafe = action != null && readOnlyActions.has(action);
+    return { mutatingAction: !replaySafe, replaySafe };
   }
-
+  const safety = resolveCoreToolFacts(normalized)?.replay;
+  let replaySafe = safety === "both" || safety === "recorded";
+  let mutatingAction = false;
   switch (normalized) {
     case "write":
     case "edit":
@@ -341,72 +322,62 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
     case "conversations_turn":
     case "create_goal":
     case "update_goal":
-      return true;
+      mutatingAction = true;
+      break;
     case "exec":
     case "bash":
-      return !isPlainReadOnlyShellCommand(readShellCommand(record));
+      mutatingAction = !isPlainReadOnlyShellCommand(readShellCommand(record));
+      break;
     case "process":
-      return action != null && PROCESS_MUTATING_ACTIONS.has(action);
+      mutatingAction = action != null && PROCESS_MUTATING_ACTIONS.has(action);
+      replaySafe = action != null && PROCESS_REPLAY_SAFE_ACTIONS.has(action);
+      break;
     case "computer":
-      return !isComputerObservationAction(action, record?.dialogAction);
+      replaySafe = isComputerObservationAction(action, record?.dialogAction);
+      mutatingAction = !replaySafe;
+      break;
     case "subagents":
-      return action === "cancel" || action === "kill" || action === "steer";
+      mutatingAction = action === "cancel" || action === "kill" || action === "steer";
+      replaySafe = action == null || action === "list";
+      break;
     case "session_status":
-      return typeof record?.model === "string" && record.model.trim().length > 0;
+      mutatingAction = typeof record?.model === "string" && record.model.trim().length > 0;
+      replaySafe = !mutatingAction;
+      break;
     case "presence":
-      return action != null && !PRESENCE_REPLAY_SAFE_ACTIONS.has(action);
+      mutatingAction = action != null && !PRESENCE_REPLAY_SAFE_ACTIONS.has(action);
+      replaySafe = !mutatingAction;
+      break;
+    case "browser":
+      replaySafe = action != null && BROWSER_READ_ONLY_ACTIONS.has(action);
+      break;
+    case "skill_workshop":
+      replaySafe = action === "list" || action === "inspect" || action === "read";
+      break;
+    case "transcripts":
+      replaySafe = action === "status";
+      break;
     default: {
-      if (
-        isAutomationsToolName(normalized) ||
-        normalized === "canvas" ||
-        normalized.endsWith("_actions")
-      ) {
-        return action == null || !READ_ONLY_ACTIONS.has(action);
+      if (isAutomationsToolName(normalized) || normalized === "canvas") {
+        replaySafe = action != null && READ_ONLY_ACTIONS.has(action);
+        mutatingAction = !replaySafe;
+      } else if (normalized.endsWith("_actions")) {
+        mutatingAction = action == null || !READ_ONLY_ACTIONS.has(action);
+      } else {
+        mutatingAction = normalized.startsWith("message_") || normalized.includes("send");
       }
-      if (normalized.startsWith("message_") || normalized.includes("send")) {
-        return true;
-      }
-      return false;
     }
   }
+  return { mutatingAction, replaySafe };
+}
+
+export function isMutatingToolCall(toolName: string, args: unknown): boolean {
+  return classifyToolCall(toolName, args).mutatingAction;
 }
 
 /** Return true only for tool calls whose structured contract proves replay safety. */
 export function isReplaySafeToolCall(toolName: string, args: unknown): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(toolName);
-  const record = asRecord(args);
-  const action = normalizeActionName(record?.action);
-  if (REPLAY_SAFE_TOOL_NAMES.has(normalized)) {
-    return true;
-  }
-  const readOnlyActions = READ_ONLY_TOOL_ACTIONS.get(normalized);
-  if (readOnlyActions) {
-    return action != null && readOnlyActions.has(action);
-  }
-  switch (normalized) {
-    case "process":
-      return action != null && PROCESS_REPLAY_SAFE_ACTIONS.has(action);
-    case "subagents":
-      return action == null || action === "list";
-    case "session_status":
-      return !isMutatingToolCall(normalized, args);
-    case "browser":
-      return action != null && BROWSER_READ_ONLY_ACTIONS.has(action);
-    case "computer":
-      return isComputerObservationAction(action, record?.dialogAction);
-    case "skill_workshop":
-      return action === "list" || action === "inspect" || action === "read";
-    case "transcripts":
-      return action === "status";
-    case "presence":
-      return action == null || PRESENCE_REPLAY_SAFE_ACTIONS.has(action);
-    default: {
-      if (isAutomationsToolName(normalized) || normalized === "canvas") {
-        return action != null && READ_ONLY_ACTIONS.has(action);
-      }
-      return false;
-    }
-  }
+  return classifyToolCall(toolName, args).replaySafe;
 }
 
 export function buildToolMutationState(
@@ -414,9 +385,7 @@ export function buildToolMutationState(
   args: unknown,
   options?: { ownerKey?: string },
 ): ToolMutationState {
-  const ownerDeclaredMutation = options?.ownerKey !== undefined;
-  return {
-    mutatingAction: ownerDeclaredMutation || isMutatingToolCall(toolName, args),
-    replaySafe: ownerDeclaredMutation ? false : isReplaySafeToolCall(toolName, args),
-  };
+  return options?.ownerKey !== undefined
+    ? { mutatingAction: true, replaySafe: false }
+    : classifyToolCall(toolName, args);
 }

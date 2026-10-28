@@ -1,49 +1,33 @@
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
+import { requestCliParentTermination } from "../../../cli-parent-lifetime.mjs";
+import { GATEWAY_OWNER_HEARTBEAT_MS } from "../../infra/gateway-lock-payload.js";
 import { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-plane-sentinel.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import type { ManagedCommandProcessAuthority } from "../../infra/update-managed-command-custody.js";
-import type {
-  ManagedHandoffLease,
-  ManagedHandoffParent,
-} from "../../infra/update-managed-service-handoff-lease.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
-import {
-  createChildOwner,
-  type UpdateCommandChildGrant,
-} from "./update-command-executor-children.js";
+import { createChildOwner } from "./update-command-executor-children.js";
 import { resolveUpdateCommandChildBinding } from "./update-command-executor-grant.js";
-import { withUpdateCommandExecutorOperation } from "./update-command-executor-operation.js";
+import {
+  prepareUpdateCommandExecutorTerminal,
+  withUpdateCommandExecutorOperation,
+} from "./update-command-executor-operation.js";
 import {
   admittedAuthorities,
   slotReservations,
   occupiedSlotKey,
   childOwners,
+  terminalPreparations,
 } from "./update-command-executor-state.js";
 import { createUpdateIdentityWarningReporter } from "./update-command-identity-warning.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { createUpdateOperationDeadline } from "./update-operation-deadline.js";
 
-function memoizeSuccessfulLeaseCheck<T>(check: (lease: T) => boolean) {
-  const checked: T[] = [];
-  return (lease: T) => {
-    if (checked.some((previous) => isDeepStrictEqual(previous, lease))) {
-      return true;
-    }
-    if (!check(lease)) {
-      return false;
-    }
-    checked.push(lease);
-    return true;
-  };
-}
-
 /** A delegated executor retains both its original root and immediate spawner.
  * Neither the transported grant nor a lease row without live identity grants effects. */
 export async function withDelegatedUpdateCommandExecutor<T>(
-  grant: UpdateCommandChildGrant,
+  grant: unknown,
   runId: string,
   root: string,
   operation: (
@@ -73,8 +57,13 @@ export async function withDelegatedUpdateCommandExecutor<T>(
       using readConnections = new DisposableStack();
       readConnections.use(store.retainReadConnection());
       let active = true;
-      const isLive = (identity: ManagedHandoffLease["executor"]) =>
-        store.isProcessIdentityCurrent(identity);
+      const parents = [
+        original,
+        parent,
+        spawner,
+        ...(slot ? [slot.parent, slot.spawner, ...(slot.reserver ? [slot.reserver] : [])] : []),
+        ...(retained ? [retained] : []),
+      ];
       const receivers = [
         originalChild,
         child,
@@ -99,30 +88,11 @@ export async function withDelegatedUpdateCommandExecutor<T>(
         if (active || activation.failure) {
           activation.assertCurrent();
         }
-        // Several lineage roles can name the same full lease. Share only this
-        // assertion's successful checks; every later assertion reads live state.
-        const parentIsCurrent = memoizeSuccessfulLeaseCheck(
-          (lease: ManagedHandoffParent) =>
-            store.current(lease) && isLive(lease.helper) && isLive(lease.executor),
-        );
-        const receiverIsCurrent = memoizeSuccessfulLeaseCheck((lease: ManagedHandoffLease) =>
-          store.owns(lease, "executor"),
-        );
         if (
           !active ||
-          !parentIsCurrent(original) ||
-          !parentIsCurrent(parent) ||
-          !parentIsCurrent(spawner) ||
-          !receiverIsCurrent(originalChild) ||
-          !receiverIsCurrent(child) ||
-          (slot &&
-            (!slotChild ||
-              !parentIsCurrent(slot.parent) ||
-              !parentIsCurrent(slot.spawner) ||
-              (slot.reserver && !parentIsCurrent(slot.reserver)) ||
-              !receiverIsCurrent(slotChild))) ||
-          (retained &&
-            (!retainedChild || !parentIsCurrent(retained) || !receiverIsCurrent(retainedChild)))
+          (slot && !slotChild) ||
+          (retained && !retainedChild) ||
+          !store.ownsDelegation(parents, receivers)
         ) {
           throw new UpdateCommandRecoveryPendingError(
             "The update process no longer has permission to continue.",
@@ -182,14 +152,29 @@ export async function withDelegatedUpdateCommandExecutor<T>(
       childOwners.set(fence, (childRoot, childOperation, purpose) =>
         owner.run(childRoot, childOperation, purpose),
       );
+      const processes = new Map(
+        parents.flatMap((lease) =>
+          [lease.helper, lease.executor].map(
+            (identity) => [`${identity.pid}:${identity.startIdentity}`, identity] as const,
+          ),
+        ),
+      );
+      // A stalled await cannot recheck its fence. End orphaned maintenance through
+      // the normal bounded shutdown; peers still wait for this process to exit.
+      const parentWatch = setInterval(() => {
+        for (const identity of processes.values()) {
+          const state = store.inspectProcessIdentity(identity);
+          if (state === "dead" || state === "mismatch") {
+            requestCliParentTermination();
+            break;
+          }
+        }
+      }, GATEWAY_OWNER_HEARTBEAT_MS);
+      parentWatch.unref();
       try {
-        return await withUpdateCommandExecutorOperation(
+        const operationOutcome = await withUpdateCommandExecutorOperation(
           {
             children: owner,
-            assertCurrent: () => {
-              fence.assertCurrent();
-              identityWarnings.flush();
-            },
             operation: () => {
               fence.assertCurrent();
               admittedAuthorities.set(fence, {
@@ -222,12 +207,23 @@ export async function withDelegatedUpdateCommandExecutor<T>(
             },
           },
           "delegated",
+        ).then(
+          (result) => ({ result }),
+          (error: unknown) => ({ error }),
         );
+        const outcome = await prepareUpdateCommandExecutorTerminal(fence, operationOutcome);
+        if ("error" in outcome) {
+          throw outcome.error;
+        }
+        return outcome.result;
       } finally {
+        clearInterval(parentWatch);
+        identityWarnings.flush();
         active = false;
         childOwners.delete(fence);
         slotReservations.delete(fence);
         admittedAuthorities.delete(fence);
+        terminalPreparations.delete(fence);
       }
     }, activation.signal),
   );

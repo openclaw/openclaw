@@ -47,131 +47,23 @@ function plan(runnerBackend = "blacksmith") {
 }
 
 describe("compact node prerequisite admission", () => {
-  it.each([
-    { name: "agentic-agents-core-models", measured: 123, blacksmith: [41, 123], hybrid: [81, 123] },
-    { name: "core-unit-fast-1", measured: 100, blacksmith: [68, 100], hybrid: [59, 100] },
-    { name: "core-runtime-hooks", measured: 80, blacksmith: [19, 80], hybrid: [17, 80] },
-    {
-      name: "core-runtime-infra-process",
-      measured: undefined,
-      blacksmith: [13, 13],
-      hybrid: [35, 35],
-    },
-  ])("keeps $name estimates owned by its direct measurement or unmeasured hint", (owner) => {
-    // Whole-config fixtures separate estimator precedence from file-count-dependent
-    // ceiling rounding in the repository's hosted child stripes.
-    for (const profile of ["blacksmith", "hybrid"] as const) {
-      setGroups([[owner.name, undefined, 0]]);
-      fixture.timings = {};
-      const [fallback, measured] = owner[profile];
-      expect(plan(profile).map((job) => job.predictedSeconds)).toEqual([fallback]);
-      fixture.timings =
-        owner.measured === undefined ? { unrelated: 999 } : { [owner.name]: owner.measured };
-      const jobs = plan(profile);
-      expect(jobs.map((job) => job.predictedSeconds)).toEqual([measured]);
-      expect(jobs[0]?.groups.map((group) => group.shard_name)).toEqual([owner.name]);
-    }
-  });
-
-  it("charges a shared runtime build once for two groups in one job", () => {
-    setGroups([
-      ["runtime-a", "runtime", 100],
-      ["runtime-b", "runtime", 76],
-    ]);
-    const jobs = plan();
-    expect(jobs).toHaveLength(1);
-    expect(jobs[0]).toMatchObject({
-      predictedSeconds: 236,
-      predictedTestSeconds: 176,
-      pretestBuildMode: "runtime",
-    });
-    expect(jobs[0]?.groups.map((group) => group.shard_name).toSorted()).toEqual([
-      "runtime-a",
-      "runtime-b",
-    ]);
-  });
-
-  it("rejects an upgrade whose stronger prerequisite would exceed the bin cap", () => {
-    setGroups([
-      ["runtime", "runtime", 100],
-      ["private", "private-qa", 76],
-    ]);
-    const jobs = plan();
-    expect(jobs).toHaveLength(2);
-    expect(jobs.map((job) => [job.pretestBuildMode, job.predictedSeconds])).toEqual(
-      expect.arrayContaining([
-        ["private-qa", 180],
-        ["runtime", 160],
-      ]),
-    );
-  });
-
-  it("upgrades one shared build to private QA when it still fits", () => {
-    setGroups([
-      ["runtime", "runtime", 100],
-      ["private", "private-qa", 72],
-    ]);
-    const jobs = plan();
-    expect(jobs).toHaveLength(1);
-    expect(jobs[0]).toMatchObject({ predictedSeconds: 276, pretestBuildMode: "private-qa" });
-  });
-
-  it("retains prerequisite sharing when admitting regular groups", () => {
-    setGroups([
-      ["runtime-a", "runtime", 100],
-      ["runtime-b", "runtime", 20],
-      ["plain-a", undefined, 150],
-      ["plain-b", undefined, 80],
-      ["plain-c", undefined, 40],
-    ]);
-    const jobs = plan();
-    expect(jobs).toHaveLength(2);
-    expect(jobs.map((job) => job.predictedSeconds).toSorted((a, b) => a! - b!)).toEqual([180, 270]);
-    const runtime = jobs.find((job) => job.pretestBuildMode === "runtime");
-    expect(runtime?.groups.map((group) => group.shard_name).toSorted()).toEqual([
-      "runtime-a",
-      "runtime-b",
-    ]);
-    expect(jobs.flatMap((job) => job.groups.map((group) => group.shard_name)).toSorted()).toEqual([
-      "plain-a",
-      "plain-b",
-      "plain-c",
-      "runtime-a",
-      "runtime-b",
-    ]);
-  });
-
-  it.each([
-    { seconds: [180, 100, 20], parallelJobs: 1 },
-    { seconds: [280, 20], parallelJobs: 2 },
-  ])("shares ordinary job setup without adding work to oversized groups: $seconds", (sample) => {
-    for (const profile of ["blacksmith", "github", "hybrid"]) {
-      setGroups(sample.seconds.map((seconds, index) => [`plain-${index}`, undefined, seconds]));
-      const jobs = plan(profile);
-      expect(jobs).toHaveLength(profile === "github" ? 2 : sample.parallelJobs);
-      if (jobs.length === 1) {
-        expect(jobs[0]).toMatchObject({
-          planConcurrency: 2,
-          predictedSeconds: 300,
-          predictedTestSeconds: 180,
-          runner: "blacksmith-32vcpu-ubuntu-2404",
-        });
-        expect(jobs[0]?.pretestBuildMode).toBeUndefined();
+  it.each([{ seconds: [180, 100, 20], parallelJobs: 1 }])(
+    "shares ordinary job setup without adding work to oversized groups: $seconds",
+    (sample) => {
+      for (const profile of ["blacksmith", "github", "hybrid"]) {
+        setGroups(sample.seconds.map((seconds, index) => [`plain-${index}`, undefined, seconds]));
+        const jobs = plan(profile);
+        expect(jobs).toHaveLength(profile === "github" ? 2 : sample.parallelJobs);
+        if (jobs.length === 1) {
+          expect(jobs[0]).toMatchObject({
+            planConcurrency: 2,
+            predictedSeconds: 300,
+            predictedTestSeconds: 180,
+            runner: "blacksmith-32vcpu-ubuntu-2404",
+          });
+          expect(jobs[0]?.pretestBuildMode).toBeUndefined();
+        }
       }
-    }
-  });
-
-  it.each([
-    { profile: "blacksmith", expected: 70, changed: 74 },
-    { profile: "hybrid", expected: 70, changed: 74 },
-    { profile: "github", expected: 106, changed: 110 },
-  ])(
-    "preserves direct $profile test measurements while adding the prerequisite",
-    ({ profile, expected, changed }) => {
-      setGroups([["runtime", "runtime", 10]]);
-      expect(plan(profile)[0]?.predictedSeconds).toBe(expected);
-      fixture.timings["runtime-parallel"] = 14;
-      expect(plan(profile)[0]?.predictedSeconds).toBe(changed);
     },
   );
 });

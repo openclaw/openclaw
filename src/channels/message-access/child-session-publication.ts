@@ -1,6 +1,7 @@
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { ChannelRunAuthorizationError } from "./run-authorization-error.js";
 
 const PUBLICATION = Symbol("openclaw.childSessionPublication");
 const runs = new WeakMap<OperationalRunInstanceRef, ChildSessionPublication>();
@@ -9,10 +10,43 @@ const runs = new WeakMap<OperationalRunInstanceRef, ChildSessionPublication>();
 export class ChildSessionPublication {
   #run?: OperationalRunInstanceRef;
   #assertRunCurrent?: () => void;
+  #preparation?: Promise<void>;
   constructor(
     readonly requesterSessionKey: string,
-    private readonly assertSourceCurrent: () => void,
+    private assertSourceCurrent: () => void,
+    private readonly prepareSource?: () => Promise<(() => void) | null>,
   ) {}
+
+  prepare(): Promise<void> {
+    return (this.#preparation ??= this.prepareSourceAuthorization());
+  }
+
+  private async prepareSourceAuthorization(): Promise<void> {
+    try {
+      if (this.#run) {
+        throw new Error("An admitted publication cannot renew its source authority");
+      }
+      if (this.prepareSource) {
+        let assertion: (() => void) | null;
+        try {
+          assertion = await this.prepareSource();
+        } catch (error) {
+          throw new ChannelRunAuthorizationError(error, "unavailable");
+        }
+        if (!assertion) {
+          throw new ChannelRunAuthorizationError(
+            new Error("Channel source authorization was rejected"),
+          );
+        }
+        this.assertSourceCurrent = assertion;
+      }
+      this.assertSourceCurrent();
+    } catch (error) {
+      throw error instanceof ChannelRunAuthorizationError
+        ? error
+        : new ChannelRunAuthorizationError(error);
+    }
+  }
 
   bind(run: OperationalRunInstanceRef, assertRunCurrent: () => void): void {
     if (this.#run && this.#run !== run) {
@@ -63,10 +97,18 @@ export function bindChildSessionPublication(
   context: object,
   requesterSessionKey: string,
   assertCurrent: () => void,
+  prepare?: () => Promise<(() => void) | null>,
 ): void {
   Object.assign(context, {
-    [PUBLICATION]: new ChildSessionPublication(requesterSessionKey, assertCurrent),
+    [PUBLICATION]: new ChildSessionPublication(requesterSessionKey, assertCurrent, prepare),
   });
+}
+
+export async function prepareChildSessionPublication(context: object): Promise<void> {
+  const publication: unknown = Reflect.get(context, PUBLICATION);
+  if (publication instanceof ChildSessionPublication) {
+    await publication.prepare();
+  }
 }
 
 export function copyChildSessionPublication(source: object, destination: object): void {

@@ -1,5 +1,7 @@
+import type { GatewayRestartIntent } from "./restart-intent.js";
 import { readControlPlaneUpdateSentinelMeta } from "./update-control-plane-sentinel.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
+import { waitForHandoffResponse } from "./update-managed-service-handoff-control.js";
 import {
   createManagedHandoffLeaseStore,
   type ManagedHandoffLease,
@@ -13,27 +15,22 @@ export const activeManagedServiceUpdateHandoffs = new Map<
 
 /** A detached helper still shares the system unit's cgroup until it settles. */
 export function waitForSystemServiceUpdateHandoffs(): Promise<void> | undefined {
-  const pending = () =>
-    [...activeManagedServiceUpdateHandoffs.values()].filter(
-      (owner) => owner.operatorRestartWarning && !owner.settled,
-    );
-  let updates = pending();
+  const updates = [...activeManagedServiceUpdateHandoffs.values()].filter(
+    (owner) => owner.operatorRestartWarning && !owner.settled,
+  );
   if (!updates.length) {
     return undefined;
   }
   return (async () => {
-    while (updates.length) {
-      await Promise.all(
-        updates.map(async (owner) => {
-          await owner.flight;
-          await owner.closed;
-          if (!owner.settled) {
-            throw new Error("System-service updater settlement could not be confirmed.");
-          }
-        }),
-      );
-      updates = pending();
-    }
+    await Promise.all(
+      updates.map(async (owner) => {
+        await owner.flight;
+        await owner.closed;
+        if (!owner.settled) {
+          throw new Error("System-service updater settlement could not be confirmed.");
+        }
+      }),
+    );
   })();
 }
 
@@ -93,4 +90,23 @@ export function readManagedServiceUpdateHandoffLease(
     return null;
   }
   return lease;
+}
+
+/** Request one control step from the active helper; a missing or closed helper answers null. */
+export function sendManagedServiceUpdateHandoffCommand(
+  identity: NonNullable<GatewayRestartIntent["successorOwner"]>,
+  command: string,
+): Promise<string | null> {
+  const owner = activeManagedServiceUpdateHandoffs.get(
+    resolveUpdateInstallRoot(identity.installRoot),
+  );
+  const child = owner?.launcher;
+  if (!owner || !child?.stdin || !child.stdout || child.stdin.destroyed) {
+    return Promise.resolve(null);
+  }
+  return waitForHandoffResponse(
+    child,
+    command === "park" ? owner.parentExitTimeoutMs : owner.recoveryTimeoutMs,
+    command,
+  ).catch(() => null);
 }

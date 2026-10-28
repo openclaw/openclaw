@@ -7,12 +7,6 @@ export type NativeHistoryState = {
   canGoForward: boolean;
 };
 
-type NativeEmbedHost = {
-  platform: "ios" | "macos" | "android";
-  formFactor: "phone" | "pad" | "desktop";
-  surface?: "conversation";
-};
-
 type NativeWebChromeWindow = Window & {
   __OPENCLAW_NATIVE_EMBED__?: unknown;
   __OPENCLAW_NATIVE_WEB_CHROME__?: boolean;
@@ -29,7 +23,11 @@ export function isNativeWebChromeHost(): boolean {
   return (window as NativeWebChromeWindow)["__OPENCLAW_NATIVE_WEB_CHROME__"] === true;
 }
 
-export function nativeEmbedHost(): NativeEmbedHost | null {
+export function nativeEmbedHost(): {
+  platform: "ios" | "macos" | "android";
+  formFactor: "phone" | "pad" | "desktop";
+  surface?: "conversation";
+} | null {
   // SAFETY: the host adds this optional document-start value; its shape is validated below.
   const host = (window as NativeWebChromeWindow)["__OPENCLAW_NATIVE_EMBED__"];
   if (!isRecord(host)) {

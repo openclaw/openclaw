@@ -4,6 +4,7 @@ import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-a
 import { UpdateRecoveryRequiredError } from "../../infra/update-run-recovery.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
+import { ExitError } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
@@ -189,6 +190,10 @@ export async function withUpdateCommandRecoveryUnwind(
     failure = mergeWindowsTaskRecoveryFailure(failure, error);
   }
   if (failure) {
+    // Reported exits still unwind recovery above, but are not new update failures.
+    if (failure.error instanceof ExitError) {
+      throw failure.error;
+    }
     if (!recoveryState.ledgerHandoffOwned && !hasDeferredUpdateCommandTerminalResult(run)) {
       if (failure.error instanceof UpdateCommandFailure) {
         completeUpdateCommandRun(failure.error.result, run);

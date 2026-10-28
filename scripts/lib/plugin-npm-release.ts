@@ -21,10 +21,7 @@ import {
 } from "./plugin-publication-collector.ts";
 import { collectReleaseVersionFloorErrors } from "./release-version.mjs";
 
-export {
-  collectPublishablePluginPackageErrors,
-  OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
-} from "./plugin-publication-collector.ts";
+export { collectPublishablePluginPackageErrors } from "./plugin-publication-collector.ts";
 export type { PublishablePluginPackage } from "./plugin-publication-collector.ts";
 
 export type PluginReleaseSelectionMode = "selected" | "all-publishable";

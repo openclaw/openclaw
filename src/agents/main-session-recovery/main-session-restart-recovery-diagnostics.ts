@@ -1,13 +1,17 @@
 import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { getAgentRunLifecycleGeneration } from "../../infra/agent-run-registry.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
+import { mainSessionRecoveryLog } from "./main-session-restart-recovery-shared.js";
 
 export type MainSessionRecoverySkipReason =
   | "stopped"
   | "not_main_session"
+  | "archived"
   | "work_start_blocked"
+  | "work_start_pending"
   | "dispatch_target_unavailable"
   | "live_owner"
   | "already_handled"
@@ -29,6 +33,37 @@ export type MainSessionRecoveryDecision = {
   nextOwner: string;
 };
 
+export function logMainSessionRecoveryDecision(params: {
+  entry: SessionEntry;
+  sessionKey: string;
+  storePath: string;
+  agentId?: string;
+  lifecycleGeneration: string;
+  passId: string;
+  decision: MainSessionRecoveryDecision;
+}): void {
+  const { entry } = params;
+  mainSessionRecoveryLog.info(
+    `main-session restart recovery candidate ${JSON.stringify({
+      boot: params.lifecycleGeneration,
+      pass: params.passId,
+      agentId: params.agentId?.slice(0, 256),
+      storePath: params.storePath.slice(0, 512),
+      sessionKey: params.sessionKey.slice(0, 256),
+      sessionId: entry.sessionId.slice(0, 256),
+      sourceRunId: (entry.restartRecoveryDeliverySourceRunId ?? entry.lifecycleRunId)?.slice(
+        0,
+        256,
+      ),
+      recoveryRunId: entry.restartRecoveryDeliveryRunId?.slice(0, 256),
+      interruptedRunIds: entry.restartRecoveryRuns
+        ?.slice(0, 8)
+        .map(({ runId }) => runId.slice(0, 256)),
+      ...params.decision,
+    })}`,
+  );
+}
+
 export function skippedMainSessionRecoveryDecision(
   reason: MainSessionRecoverySkipReason,
 ): MainSessionRecoveryDecision {
@@ -40,8 +75,12 @@ export function skippedMainSessionRecoveryDecision(
     case "work_start_blocked":
     case "dispatch_target_unavailable":
       return { decision: "blocked", reason, nextOwner: "operator" };
+    case "work_start_pending":
+      return { decision: "deferred", reason, nextOwner: "session-preparation" };
     case "pending_delivery":
       return { decision: "deferred", reason, nextOwner: "outbound-delivery" };
+    case "archived":
+      return { decision: "deferred", reason, nextOwner: "none" };
     case "live_owner":
     case "blocked":
     case "already_handled":
@@ -80,12 +119,8 @@ function currentFailures(): Map<string, string> {
 /** The marker records its outcome; diagnostics never infer successful recovery from a reread. */
 export function recordStartupRecoveryStoreResult(params: {
   target: RestartRecoveryStoreTarget;
-  lifecycleGeneration: string;
   outcome: { ok: true } | { ok: false; error: unknown };
 }): void {
-  if (params.lifecycleGeneration !== getAgentRunLifecycleGeneration()) {
-    return;
-  }
   const pending = currentFailures();
   const key = restartRecoveryStoreTargetKey(params.target);
   if (params.outcome.ok) {

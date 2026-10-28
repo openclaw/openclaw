@@ -13,7 +13,7 @@ import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { formatCrabboxGateCheckSummary } from "../../scripts/pr-lib/crabbox-gate-contract.mjs";
 import { validateCrabboxMergeBypass } from "../../scripts/pr-lib/crabbox-merge-bypass.mjs";
-import { validClawsweeperReviewCommentPages, validReview } from "./pr-review-artifact-fixture.js";
+import { validReview } from "./pr-review-artifact-fixture.js";
 
 const baseSha = "b".repeat(40);
 const headSha = "a".repeat(40);
@@ -406,7 +406,6 @@ function runProtectedShell(
     // Exercise pipe backpressure during trailer parsing without changing authorization.
     mergePreview: "Reviewed fixture body".repeat(longPreview ? 16_384 : 1),
   };
-  const reviewComments = validClawsweeperReviewCommentPages(131091, headSha);
   evidence.membership.role = role;
   evidence.membership.state = state;
   evidence.pullRequest.base.sha = mainSha;
@@ -458,7 +457,6 @@ const apiOut = (data) => out(args.includes("--jq")
   : data);
 const repo = {id:123,nameWithOwner:"openclaw/openclaw",url:"https://github.com/openclaw/openclaw"};
 const repoNodeId = "fixture-repo";
-const reviewComments = ${JSON.stringify(reviewComments)};
 const pr = {id:"fixture-pr",number:131091,url:repo.url+"/pull/131091",state:"OPEN",isDraft:false,
   headRefOid:value.headSha,headRefName:"topic",baseRefName:"main",baseRefOid:value.currentMainSha,
   headRepository:{name:"openclaw",nameWithOwner:repo.nameWithOwner,url:repo.url},headRepositoryOwner:{login:"openclaw"},
@@ -519,7 +517,6 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
     base:{...value.pullRequest.base,repo:{id:repo.id,node_id:repoNodeId,html_url:repo.url,...value.pullRequest.base.repo}},
     head:{...value.pullRequest.head,ref:pr.headRefName,repo:{id:repo.id,name:"openclaw",html_url:repo.url,owner:{login:"openclaw"},...value.pullRequest.head.repo}}});
   else if (endpoint === prefix + "commits?sha=" + value.headSha + "&per_page=1") out([{sha:value.headSha,commit:{author:{name:"Fixture Contributor",email:"fixture@example.com"}},author:{login:"fixture-contributor",type:"User"}}]);
-  else if (endpoint === prefix + "issues/131091/comments?per_page=100") out(reviewComments);
   else if (endpoint === prefix + "commits/" + value.headSha + "/check-runs?filter=latest&per_page=100") out(value.checkRuns.check_runs.map(check => ({check_runs:[check]})));
   else if (endpoint === prefix + "actions/workflows/pr-crabbox-gate-publisher.yml/runs") out({workflow_runs:value.dispatched ? [{...value.publisherRun,html_url:repo.url+"/actions/runs/8001",display_title:"PR Crabbox gate #131091 / "+value.headSha}] : []});
   else if (endpoint === prefix + "actions/runs/8001") out({...value.publisherRun,html_url:repo.url+"/actions/runs/8001"});
@@ -573,6 +570,11 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
       config) [ "$*" = 'config --bool remote.origin.promisor' ] && exit 1; exit 19;;
       remote) [ "$2 $3" = 'get-url origin' ] || exit 19; echo 'https://github.com/openclaw/openclaw.git';;
       merge-tree) echo candidate-tree;;
+      diff) case "$*" in
+        'diff --name-only --no-renames ${headSha}..${headSha}') ;;
+        'diff --name-only --no-renames ${headSha}..${mainSha}'|'diff --name-only --no-renames ${headSha}..${advancedMainSha}') echo fixture-mainline.txt;;
+        *) echo "unexpected fixture git: $*" >&2; exit 19;;
+      esac;;
       rev-parse) case "$2" in
         --absolute-git-dir) printf '%s/.git\\n' "$PWD";;
         --verify) [ "$3" = 'refs/heads/pr-131091^{commit}' ] || exit 19; echo '${headSha}';;
@@ -590,6 +592,7 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
     writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`);
     chmodSync(join(bin, name), 0o755);
   }
+  writeFileSync(join(root, "clock"), "0\n");
   try {
     const result = spawnSync(
       "bash",
@@ -605,7 +608,8 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
           'source "$script_parent_dir/pr-lib/gates.sh"',
           'source "$script_parent_dir/pr-lib/merge.sh"',
           'source "$script_parent_dir/pr-lib/review.sh"',
-          'sleep() { command node "$FIXTURE_PROTECTED_GH" fixture-sleep "$@"; }',
+          'pr_merge_now() { cat "$FIXTURE_CLOCK"; }',
+          'pr_merge_sleep() { local now; read -r now < "$FIXTURE_CLOCK"; printf "%s\\n" "$((now + $1))" > "$FIXTURE_CLOCK"; command node "$FIXTURE_PROTECTED_GH" fixture-sleep "$@"; }',
           command,
         ].join("\n"),
       ],
@@ -624,6 +628,7 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
           FAKE_REQUALIFICATION: requalification,
           FAKE_REVOKE_DURING: revokeDuringRequalification ? requalification : "",
           FIXTURE_PROTECTED_GH: selected,
+          FIXTURE_CLOCK: join(root, "clock"),
           GATES_MODE: "remote_crabbox_aws",
           REMOTE_GATES_PROVIDER: "aws",
           FULL_GATES_HEAD_SHA: headSha,

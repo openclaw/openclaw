@@ -9,11 +9,7 @@ type SnoozePreset = {
 };
 
 export function isSessionSnoozed(row: SnoozeRow, nowMs: number): boolean {
-  return (
-    typeof row.snoozedUntil === "number" &&
-    Number.isFinite(row.snoozedUntil) &&
-    row.snoozedUntil > nowMs
-  );
+  return row.snoozedUntil !== undefined && row.snoozedUntil > nowMs;
 }
 
 export function resolveSessionSnoozePresets(now: Date): ReadonlyArray<SnoozePreset> {

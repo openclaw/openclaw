@@ -50,6 +50,12 @@ Blocking sub-agent runs keep their runtime transcript in the agent's SQLite
 store. By default, OpenClaw removes the temporary sub-agent session rows after
 the run finishes and does not create a JSONL file.
 
+Recall helper transcripts are internal working context and are excluded from
+built-in memory indexing and search. Existing indexed helpers are excluded as
+soon as their session ID, recorded key, or plugin ownership identifies them;
+their stale index records are cleaned up without a forced rebuild. Ordinary
+conversations quoting recall prompts remain eligible for memory search.
+
 Recall helpers for incognito conversations stay in the same private session
 store and are removed after the run. They never export transcript artifacts,
 even when `persistTranscripts` is enabled.

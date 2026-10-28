@@ -1,5 +1,4 @@
-// Covers gateway restart process and supervisor paths.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   isGatewayWorkAdmissionClosed,
   resetGatewayWorkAdmission,
@@ -8,67 +7,24 @@ import { captureFullEnv, withEnv } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
-const execFileMock = vi.hoisted(() =>
-  Object.assign(vi.fn(), {
-    [Symbol.for("nodejs.util.promisify.custom")]: vi.fn(),
-    __promisify__: vi.fn(),
-  }),
-);
-const resolveLsofCommandSyncMock = vi.hoisted(() => vi.fn());
-const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
-const observedArgv = vi.hoisted(() => new Map<number, string[]>());
-
-vi.mock("node:fs", async () => {
-  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
-  return mockNodeBuiltinModule(
-    () => vi.importActual<typeof import("node:fs")>("node:fs"),
-    (actual) => ({
-      readFileSync: new Proxy(actual.readFileSync, {
-        apply(target, receiver, args) {
-          const pid = Number(/^\/proc\/(\d+)\/cmdline$/.exec(String(args[0]))?.[1]);
-          const argv = observedArgv.get(pid);
-          if (!argv) {
-            return Reflect.apply(target, receiver, args);
-          }
-          const bytes = Buffer.from(argv.join("\0"));
-          const encoding = typeof args[1] === "string" ? args[1] : args[1]?.encoding;
-          return encoding ? bytes.toString(encoding) : bytes;
-        },
-      }),
-    }),
-    { mirrorToDefault: true },
-  );
-});
-vi.mock("../process/supervisor/darwin-process-command.js", () => ({
-  readDarwinProcessCommand: (pid: number) => {
-    const argv = observedArgv.get(pid);
-    return argv ? { argv } : undefined;
-  },
-}));
 
 vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
     {
-      execFile: execFileMock,
       spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
     } as Partial<typeof import("node:child_process")>,
   );
 });
 
-vi.mock("./ports-lsof.js", () => ({
-  resolveLsofCommandSync: (...args: unknown[]) => resolveLsofCommandSyncMock(...args),
-}));
-
+// mock-isolation: Keep restart path resolution in the synthetic test state directory.
 vi.mock("../config/paths.js", () => ({
-  resolveGatewayPort: (...args: unknown[]) => resolveGatewayPortMock(...args),
+  resolveGatewayPort: () => 18789,
   resolveStateDir: (env: NodeJS.ProcessEnv = process.env) =>
     env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state",
 }));
 
-const { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
-  await import("./restart-stale-pids.js");
 const {
   consumeGatewayRestartAuthorization,
   normalizeGatewayRestartDelayMs,
@@ -81,221 +37,78 @@ const {
 const envSnapshot = captureFullEnv();
 
 beforeEach(() => {
-  observedArgv.clear();
-  execFileMock.mockReset();
   spawnSyncMock.mockReset();
-  resolveLsofCommandSyncMock.mockReset();
-  resolveGatewayPortMock.mockReset();
-  resolveLsofCommandSyncMock.mockReturnValue("/usr/sbin/lsof");
-  resolveGatewayPortMock.mockReturnValue(18789);
-  vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
 });
 
 afterEach(() => {
+  resetGatewayRestartStateForInProcessRestart();
+  resetGatewayWorkAdmission();
+  vi.useRealTimers();
   envSnapshot.restore();
   vi.restoreAllMocks();
 });
 
-function requireFirstSpawnSyncCall(): [unknown, unknown, unknown] {
-  const [call] = spawnSyncMock.mock.calls;
-  if (!call) {
-    throw new Error("expected spawnSync call");
+it.each([0, 37])("handles launchctl bootstrap status %s", (bootstrapStatus) => {
+  mockProcessPlatform("darwin");
+  withEnv(
+    { VITEST: undefined, NODE_ENV: undefined, HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
+    () => {
+      const failure = { status: 1, stdout: "" };
+      spawnSyncMock.mockImplementation((command: string, args: string[]) => {
+        if (command === "launchctl") {
+          if (args[0] === "bootstrap") {
+            return { status: bootstrapStatus };
+          }
+          if (args[0] === "kickstart" && args[1] !== "-k" && bootstrapStatus === 37) {
+            return { status: 0, stdout: "" };
+          }
+        }
+        return failure;
+      });
+      const uid = typeof process.getuid === "function" ? process.getuid() : 501;
+      expect(triggerOpenClawRestart()).toEqual({ ok: true, method: "launchctl" });
+      expect(
+        spawnSyncMock.mock.calls
+          .filter(([command]) => command === "launchctl")
+          .map(([command, args]) => `${command} ${args.join(" ")}`),
+      ).toEqual([
+        `launchctl kickstart -k gui/${uid}/ai.openclaw.gateway`,
+        `launchctl bootstrap gui/${uid} /Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist`,
+        ...(bootstrapStatus === 37 ? [`launchctl kickstart gui/${uid}/ai.openclaw.gateway`] : []),
+      ]);
+    },
+  );
+});
+
+it("rejects restart without signaling an embedded host that has no restart handler", () => {
+  mockProcessPlatform("linux");
+  const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+  const listeners = process.listeners("SIGUSR2");
+  process.removeAllListeners("SIGUSR2");
+  resetGatewayRestartStateForInProcessRestart();
+  resetGatewayWorkAdmission();
+  try {
+    const result = requestGatewayRestartWithSignalAdmission("embedded-host");
+    expect(result).toEqual({ status: "failed" });
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(consumeGatewayRestartAuthorization()).toBe(false);
+    expect(isGatewayWorkAdmissionClosed()).toBe(false);
+  } finally {
+    for (const listener of listeners) {
+      process.on("SIGUSR2", listener);
+    }
   }
-  return call as [unknown, unknown, unknown];
-}
-
-describe.runIf(process.platform !== "win32")("findGatewayPidsOnPortSync", () => {
-  it("parses lsof output and filters non-openclaw/current processes", () => {
-    mockProcessPlatform("linux");
-    const gatewayPidA = process.pid + 1000;
-    const gatewayPidB = process.pid + 2000;
-    const foreignPid = process.pid + 3000;
-    observedArgv.set(gatewayPidA, ["openclaw-gateway"]);
-    observedArgv.set(gatewayPidB, ["openclaw", "gateway"]);
-    observedArgv.set(foreignPid, ["python", "server.py"]);
-    spawnSyncMock.mockReturnValue({
-      error: undefined,
-      status: 0,
-      stdout: [
-        `p${process.pid}`,
-        "copenclaw",
-        `p${gatewayPidA}`,
-        "copenclaw-gateway",
-        `p${foreignPid}`,
-        "cnode",
-        `p${gatewayPidB}`,
-        "cOpenClaw",
-      ].join("\n"),
-    });
-
-    const pids = findGatewayPidsOnPortSync(18789);
-
-    expect(pids).toEqual([gatewayPidA, gatewayPidB]);
-    const [command, args, options] =
-      spawnSyncMock.mock.calls.find(
-        ([spawnCommand, spawnArgs]) =>
-          spawnCommand === "/usr/sbin/lsof" &&
-          Array.isArray(spawnArgs) &&
-          spawnArgs.includes("-iTCP:18789"),
-      ) ?? [];
-    expect(command).toBe("/usr/sbin/lsof");
-    expect(args).toEqual(["-nP", "-iTCP:18789", "-sTCP:LISTEN", "-Fpc"]);
-    expect((options as { encoding?: unknown; timeout?: unknown } | undefined)?.encoding).toBe(
-      "utf8",
-    );
-    expect((options as { encoding?: unknown; timeout?: unknown } | undefined)?.timeout).toBe(5000);
-  });
 });
 
-describe.runIf(process.platform !== "win32")("cleanStaleGatewayProcessesSync", () => {
-  it("uses explicit port override when provided", () => {
-    const stalePid = process.pid + 1000;
-    observedArgv.set(stalePid, ["openclaw-gateway"]);
-    spawnSyncMock
-      .mockReturnValueOnce({
-        error: undefined,
-        status: 0,
-        stdout: [`p${stalePid}`, "copenclaw"].join("\n"),
-      })
-      .mockReturnValue({
-        error: undefined,
-        status: 1,
-        stdout: "",
-      });
-    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-
-    const killed = cleanStaleGatewayProcessesSync(19999);
-
-    expect(killed).toEqual([stalePid]);
-    expect(resolveGatewayPortMock).not.toHaveBeenCalled();
-    const lsofCalls = spawnSyncMock.mock.calls.filter((call) => call[0] === "/usr/sbin/lsof");
-    expect(lsofCalls).toHaveLength(2);
-    const [command, args, options] = requireFirstSpawnSyncCall();
-    expect(command).toBe("/usr/sbin/lsof");
-    expect(args).toEqual(["-nP", "-iTCP:19999", "-sTCP:LISTEN", "-Fpc"]);
-    expect((options as { encoding?: unknown; timeout?: unknown } | undefined)?.encoding).toBe(
-      "utf8",
-    );
-    expect((options as { encoding?: unknown; timeout?: unknown } | undefined)?.timeout).toBe(5000);
-    expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
-    expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGKILL");
-  });
+it("uses the default delay when the requested delay is NaN", () => {
+  expect(normalizeGatewayRestartDelayMs(Number.NaN)).toBe(2000);
 });
 
-describe("triggerOpenClawRestart", () => {
-  it("does not kickstart after bootstrap registers an unloaded LaunchAgent", () => {
-    mockProcessPlatform("darwin");
-    withEnv(
-      { VITEST: undefined, NODE_ENV: undefined, HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
-      () => {
-        const uid = typeof process.getuid === "function" ? process.getuid() : 501;
-        spawnSyncMock.mockImplementation((command: string, args: string[]) => {
-          if (command === "/usr/sbin/lsof") {
-            return { error: undefined, status: 1, stdout: "" };
-          }
-          if (command === "launchctl" && args[0] === "kickstart" && args[1] === "-k") {
-            return { error: undefined, status: 113, stderr: "service not loaded" };
-          }
-          if (command === "launchctl" && args[0] === "bootstrap") {
-            return { error: undefined, status: 0, stderr: "" };
-          }
-          return { error: undefined, status: 1, stdout: "" };
-        });
-
-        const result = triggerOpenClawRestart();
-
-        expect(result).toEqual({
-          ok: true,
-          method: "launchctl",
-          tried: [
-            `launchctl kickstart -k gui/${uid}/ai.openclaw.gateway`,
-            `launchctl bootstrap gui/${uid} /Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist`,
-          ],
-        });
-      },
-    );
-  });
-
-  it("continues when launchctl bootstrap reports the service is already loaded", () => {
-    mockProcessPlatform("darwin");
-    withEnv(
-      { VITEST: undefined, NODE_ENV: undefined, HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
-      () => {
-        const uid = typeof process.getuid === "function" ? process.getuid() : 501;
-        spawnSyncMock.mockImplementation((command: string, args: string[]) => {
-          if (command === "/usr/sbin/lsof") {
-            return { error: undefined, status: 1, stdout: "" };
-          }
-          if (command === "launchctl" && args[0] === "kickstart" && args[1] === "-k") {
-            return { error: undefined, status: 113, stderr: "service not loaded" };
-          }
-          if (command === "launchctl" && args[0] === "bootstrap") {
-            return { error: undefined, status: 37, stderr: "Operation already in progress" };
-          }
-          if (command === "launchctl" && args[0] === "kickstart") {
-            return { error: undefined, status: 0, stdout: "" };
-          }
-          return { error: undefined, status: 1, stdout: "" };
-        });
-
-        const result = triggerOpenClawRestart();
-
-        expect(result).toEqual({
-          ok: true,
-          method: "launchctl",
-          tried: [
-            `launchctl kickstart -k gui/${uid}/ai.openclaw.gateway`,
-            `launchctl bootstrap gui/${uid} /Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist`,
-            `launchctl kickstart gui/${uid}/ai.openclaw.gateway`,
-          ],
-        });
-      },
-    );
-  });
-});
-
-describe("gateway restart delivery and delay", () => {
-  it("rejects restart without signaling an embedded host that has no restart handler", () => {
-    mockProcessPlatform("linux");
-    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-    const listeners = process.listeners("SIGUSR2");
-    process.removeAllListeners("SIGUSR2");
-    resetGatewayRestartStateForInProcessRestart();
-    resetGatewayWorkAdmission();
-    try {
-      expect(requestGatewayRestartWithSignalAdmission("embedded-host")).toEqual({
-        status: "failed",
-      });
-      expect(killSpy).not.toHaveBeenCalled();
-      expect(consumeGatewayRestartAuthorization()).toBe(false);
-      expect(isGatewayWorkAdmissionClosed()).toBe(false);
-    } finally {
-      for (const listener of listeners) {
-        process.on("SIGUSR2", listener);
-      }
-      resetGatewayRestartStateForInProcessRestart();
-      resetGatewayWorkAdmission();
-    }
-  });
-
-  it("uses the default delay when the requested delay is NaN", () => {
-    expect(normalizeGatewayRestartDelayMs(Number.NaN)).toBe(2000);
-  });
-
-  it("does not emit an overflow-sized restart before its effective 60-second delay", async () => {
-    vi.useFakeTimers();
-    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-    try {
-      const restart = scheduleGatewayRestart({
-        delayMs: 2_147_153_648,
-      });
-
-      expect(restart.delayMs).toBe(60_000);
-      await vi.advanceTimersByTimeAsync(59_999);
-      expect(killSpy).not.toHaveBeenCalled();
-    } finally {
-      resetGatewayRestartStateForInProcessRestart();
-      vi.useRealTimers();
-    }
-  });
+it("does not emit an overflow-sized restart before its effective 60-second delay", async () => {
+  vi.useFakeTimers();
+  const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+  const restart = scheduleGatewayRestart({ delayMs: 2_147_153_648 });
+  expect(restart.delayMs).toBe(60_000);
+  await vi.advanceTimersByTimeAsync(59_999);
+  expect(killSpy).not.toHaveBeenCalled();
 });

@@ -11,7 +11,6 @@ describe("browser screenshot normalization", () => {
 
     const normalized = await normalizeBrowserScreenshot(bigPng, {
       maxSide: 2000,
-      maxBytes: 5 * 1024 * 1024,
     });
 
     expect(normalized.buffer.byteLength).toBeLessThanOrEqual(5 * 1024 * 1024);
@@ -27,7 +26,6 @@ describe("browser screenshot normalization", () => {
 
     const normalized = await normalizeBrowserScreenshot(jpeg, {
       maxSide: 2000,
-      maxBytes: 5 * 1024 * 1024,
     });
 
     expect(normalized.buffer.equals(jpeg)).toBe(true);

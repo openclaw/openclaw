@@ -13,5 +13,5 @@ export type RequiredSessionPlacementAdmission = <T>(
   task: (assertPlacementCurrent: SessionSourceAssertion) => Promise<T>,
   assertCurrent?: SessionSourceAssertion,
   signal?: AbortSignal,
-  preparation?: { waitForReady: false },
+  preparation?: { waitForReady: false; retainDispatch?: () => () => void },
 ) => Promise<T>;

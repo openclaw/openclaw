@@ -15,7 +15,7 @@ OpenClaw GMI Cloud provider plugin.
 ## Distribution
 
 - Package: `@openclaw/gmi-provider`
-- Install route: npm or ClawHub: `clawhub:@openclaw/gmi-provider`
+- Install route: npm or ClawHub: `@openclaw/gmi-provider`
 
 ## Surface
 

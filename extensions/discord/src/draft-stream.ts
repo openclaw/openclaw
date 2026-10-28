@@ -1,12 +1,10 @@
 import { Routes } from "discord-api-types/v10";
 import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  deleteChannelMessage,
-  editChannelMessage,
-  type RequestClient,
-} from "./internal/discord.js";
+import { deleteChannelMessage, editChannelMessage } from "./internal/api.messages.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
+import type { RequestClient } from "./internal/rest.js";
+import { createDiscordRetryRunner } from "./retry.js";
 import { resolveDiscordMessageFlags } from "./send.shared.js";
 
 /** Discord messages cap at 2000 characters. */
@@ -34,6 +32,7 @@ export function createDiscordDraftStream(params: {
   const minInitialChars = params.minInitialChars;
   let channelId = params.channelId;
   const rest = params.rest;
+  const retryDelete = createDiscordRetryRunner({});
   const flags = resolveDiscordMessageFlags({ suppressEmbeds: params.suppressEmbeds });
 
   const streamState = { stopped: false, final: false };
@@ -44,7 +43,6 @@ export function createDiscordDraftStream(params: {
     text,
     complete,
   }: DiscordDraftUpdate): Promise<boolean> => {
-    const generation = lifecycle.generation;
     const targetChannelId = channelId;
     const trimmed = text.trimEnd();
     if (!trimmed) {
@@ -77,9 +75,7 @@ export function createDiscordDraftStream(params: {
         await editChannelMessage(rest, streamMessage.channelId, streamMessage.messageId, {
           body,
         });
-        if (generation === lifecycle.generation) {
-          lastSentText = trimmed;
-        }
+        lastSentText = trimmed;
         return true;
       }
       const replyToMessageId = (
@@ -90,33 +86,22 @@ export function createDiscordDraftStream(params: {
       const messageReference = replyToMessageId
         ? { message_id: replyToMessageId, fail_if_not_exists: false }
         : undefined;
-      return await lifecycle.createMessage(
-        async () => {
-          const sent = (await rest.post(Routes.channelMessages(targetChannelId), {
-            body: {
-              ...body,
-              ...(messageReference ? { message_reference: messageReference } : {}),
-            },
-          })) as { id?: string }; // SAFETY: The create response's ID is checked before use.
-          return typeof sent?.id === "string" && sent.id
-            ? { channelId: targetChannelId, messageId: sent.id }
-            : undefined;
+      const sent = (await rest.post(Routes.channelMessages(targetChannelId), {
+        body: {
+          ...body,
+          ...(messageReference ? { message_reference: messageReference } : {}),
         },
-        (message) => {
-          if (!message) {
-            streamState.stopped = true;
-            params.warn?.("discord stream preview stopped (missing message id from send)");
-            return false;
-          }
-          streamMessage = message;
-          lastSentText = trimmed;
-          return true;
-        },
-      );
-    } catch (err) {
-      if (generation !== lifecycle.generation) {
-        return true;
+      })) as { id?: string }; // SAFETY: The create response's ID is checked before use.
+      if (typeof sent?.id !== "string" || !sent.id) {
+        streamState.stopped = true;
+        params.warn?.("discord stream preview stopped (missing message id from send)");
+        return false;
       }
+      // Draft rotation during an in-flight preview is best effort; final delivery is separate.
+      streamMessage = { channelId: targetChannelId, messageId: sent.id };
+      lastSentText = trimmed;
+      return true;
+    } catch (err) {
       streamState.stopped = true;
       params.warn?.(`discord stream preview failed: ${formatErrorMessage(err)}`);
       return false;
@@ -138,7 +123,8 @@ export function createDiscordDraftStream(params: {
       loop.resetThrottleWindow();
     },
     isValidMessageId: (value): value is DiscordDraftMessage => value !== undefined,
-    deleteMessage: (message) => deleteChannelMessage(rest, message.channelId, message.messageId),
+    deleteMessage: (message) =>
+      retryDelete(() => deleteChannelMessage(rest, message.channelId, message.messageId)),
     warn: params.warn,
     warnPrefix: "discord stream preview cleanup failed",
   });

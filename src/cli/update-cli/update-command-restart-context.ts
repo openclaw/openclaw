@@ -20,9 +20,18 @@ import {
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-revalidation.js";
 
 export async function prepareUpdateRestart(
-  params: UpdateRestartParams & { assertCurrent: () => void },
+  input: UpdateRestartParams & { assertCurrent: () => void },
   restartConfigSnapshot: ConfigFileSnapshot,
 ) {
+  let params = input;
+  const original = params.originalManagedServiceRuntime;
+  if (original && !original.definition.runtimePin && params.preManagedServiceStop) {
+    params = {
+      ...params,
+      result: { ...params.result, root: original.root },
+      preManagedServiceStop: { ...params.preManagedServiceStop, ...original.service },
+    };
+  }
   let refreshGatewayServiceEnv = false;
   let gatewayServiceEnv: NodeJS.ProcessEnv | undefined;
   let gatewayServiceInstallEnv: NodeJS.ProcessEnv | null | undefined;

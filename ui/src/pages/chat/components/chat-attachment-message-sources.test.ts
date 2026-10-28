@@ -1,0 +1,95 @@
+/* @vitest-environment jsdom */
+
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as markdown from "../../../components/markdown.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { MessageGroup } from "./chat-message-group-view.tsx";
+import {
+  createAssistantMessage,
+  createAttachmentBlock,
+  createMessageGroup,
+  createUserMessage,
+} from "./chat-message.test-support.ts";
+
+let view: HTMLDivElement;
+let mounted: ReturnType<typeof mountSolid> | undefined;
+
+beforeEach(() => {
+  mounted = undefined;
+  view = document.body.appendChild(document.createElement("div"));
+  vi.spyOn(markdown, "toSanitizedMarkdownHtml").mockImplementation((value) => value);
+});
+
+afterEach(() => {
+  mounted?.dispose();
+  view.remove();
+  vi.restoreAllMocks();
+});
+
+async function renderMessage(message: unknown, role = "assistant") {
+  const group = createMessageGroup(message, role);
+  mounted = mountSolid(
+    MessageGroup,
+    {
+      group,
+      options: {
+        showReasoning: true,
+        showToolCalls: false,
+        assistantName: "OpenClaw",
+        assistantAvatar: null,
+      },
+    },
+    view,
+  );
+  await vi.dynamicImportSettled();
+}
+
+it("omits attachment anchors for unsafe transcript URLs", async () => {
+  await renderMessage(
+    createAssistantMessage([
+      createAttachmentBlock("javascript:audio()", "audio", "unsafe.mp3", "audio/mpeg"),
+      createAttachmentBlock("data:text/html,video", "video", "unsafe.mp4", "video/mp4"),
+      createAttachmentBlock("vbscript:document", "document", "unsafe.pdf", "application/pdf"),
+    ]),
+  );
+
+  await waitForSolid(() => expect(view.textContent).toContain("unsafe.pdf"));
+  expect(
+    view.querySelector(
+      ".chat-assistant-attachments a, openclaw-chat-audio-player, openclaw-chat-video-player, audio, video, iframe, table",
+    ),
+  ).toBeNull();
+});
+
+it("renders transcript video URLs with encoded extensions as cards", async () => {
+  const mediaUrl = "https://cdn.example/clip%2Emp4?download=1";
+
+  await renderMessage(
+    createUserMessage("", {
+      __openclaw: { media: [{ url: mediaUrl, contentType: "video/mp4" }] },
+    }),
+    "user",
+  );
+
+  await waitForSolid(() =>
+    expect(
+      view.querySelector(".chat-assistant-attachment-card__download")?.getAttribute("href"),
+    ).toBe(mediaUrl),
+  );
+  expect(view.querySelector("video, openclaw-chat-video-player")).toBeNull();
+});
+
+it("deduplicates one SVG represented by structured and persisted media facts", async () => {
+  const source = "https://cdn.example/duplicate.svg";
+  const media = { path: source, contentType: "image/svg+xml", sizeBytes: 300_000 };
+  await renderMessage(
+    createAssistantMessage([{ type: "image_url", image_url: { url: source } }], {
+      __openclaw: { media: [media] },
+    }),
+  );
+
+  await vi.waitFor(() =>
+    expect(view.querySelectorAll(".chat-assistant-attachment-card--compact")).toHaveLength(1),
+  );
+});

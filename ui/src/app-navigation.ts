@@ -1,24 +1,25 @@
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
+import { parseSidebarSessionReference } from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.ts";
 import type { RouteId } from "./app-route-paths.ts";
 import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
 } from "./app/native-device-settings.ts";
-import type { IconName } from "./components/icons.ts";
+import type { IconName } from "./components/icon-data.ts";
 import { t } from "./i18n/index.ts";
 
 export type NavigationRouteId = RouteId;
 
 type NavigationPresentation = readonly [icon: IconName, titleKey: string, subtitleKey: string];
 
-// The sidebar shows a small user-customizable ordered zone; every other nav route
-// lives in the collapsed "More" section. Chat is reachable through the session
-// list and Settings/Docs live in the sidebar footer, so neither is listed here.
+// Pages derives its built-in catalog from these destinations. Personal rail
+// pins reference the catalog without changing its availability. Chat has the
+// Sessions view; Settings/Docs remain in the profile menu.
 // Skills and Skill Workshop are reached from the Plugins workspace, not sidebar items.
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
 // Workboard is plugin-owned and enters the zone through its Control UI descriptor.
 export const SIDEBAR_NAV_ROUTES = [
-  "agents-home",
+  "claws",
   "dashboards",
   "usage",
   "cron",
@@ -43,8 +44,7 @@ export function isSessionsHubRoute(routeId: NavigationRouteId): boolean {
   return routeId === "sessions" || routeId === "worktrees";
 }
 
-export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
-export type PersistedSidebarRoute = SidebarNavRoute;
+export type PersistedSidebarRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
 
 function isPersistedSidebarRoute(value: unknown): value is PersistedSidebarRoute {
   return SIDEBAR_NAV_ROUTES.includes(value as PersistedSidebarRoute);
@@ -53,13 +53,11 @@ function isPersistedSidebarRoute(value: unknown): value is PersistedSidebarRoute
 export type SidebarZoneEntry =
   | { type: "route"; route: PersistedSidebarRoute }
   | { type: "plugin"; key: string }
-  | { type: "session"; key: string };
+  | { type: "session"; key: string; rail?: true }
+  | { type: "person"; profileId: string };
 
-// Keep the highest-value operational destinations visible on first use. Users
-// can still replace this route set through the customize menu.
-export const DEFAULT_SIDEBAR_ENTRIES = (
-  ["agents-home", "dashboards", "systems", "cron", "plugins"] as const
-).map((route) => serializeSidebarEntry({ type: "route", route }));
+// The rail starts clean; only user-added shortcuts occupy the pins region.
+export const DEFAULT_SIDEBAR_ENTRIES: string[] = [];
 
 /**
  * Parse the compact persisted representation used by browser and synced prefs.
@@ -75,8 +73,24 @@ export function parseSidebarEntry(value: unknown): SidebarZoneEntry | null {
     }
     return isPersistedSidebarRoute(route) ? { type: "route", route } : null;
   }
+  if (value.startsWith("person:")) {
+    const profileId = value.slice("person:".length).trim();
+    if (!profileId || /\s/u.test(profileId)) {
+      return null;
+    }
+    for (let index = 0; index < profileId.length; index += 1) {
+      if (profileId.charCodeAt(index) < 32) {
+        return null;
+      }
+    }
+    return { type: "person", profileId };
+  }
+  if (value.startsWith("session-rail:")) {
+    const key = parseSidebarSessionReference(value);
+    return key ? { type: "session", key, rail: true } : null;
+  }
   if (value.startsWith("session:")) {
-    const key = value.slice("session:".length).trim();
+    const key = parseSidebarSessionReference(value);
     return key ? { type: "session", key } : null;
   }
   if (value.startsWith("workboard:")) {
@@ -100,7 +114,24 @@ export function serializeSidebarEntry(entry: SidebarZoneEntry): string {
   if (entry.type === "route") {
     return `route:${entry.route}`;
   }
-  return entry.type === "plugin" ? `plugin:${entry.key}` : `session:${entry.key}`;
+  if (entry.type === "person") {
+    return `person:${entry.profileId}`;
+  }
+  return entry.type === "plugin"
+    ? `plugin:${entry.key}`
+    : `${entry.rail ? "session-rail" : "session"}:${entry.key}`;
+}
+
+/** Personal session pins render in the Sessions list's Pinned section, not the rail. */
+export function personalSessionPinKeys(entries: readonly string[]): Set<string> {
+  const keys = new Set<string>();
+  for (const value of entries) {
+    const entry = parseSidebarEntry(value);
+    if (entry?.type === "session" && !entry.rail) {
+      keys.add(entry.key);
+    }
+  }
+  return keys;
 }
 
 /**
@@ -123,16 +154,6 @@ export function normalizeSidebarEntries(value: unknown): string[] | null {
     }
   }
   return normalized;
-}
-
-export function sidebarMoreRoutes(entries: readonly string[]): SidebarNavRoute[] {
-  const visibleRoutes = new Set(
-    entries.flatMap((entry) => {
-      const parsed = parseSidebarEntry(entry);
-      return parsed?.type === "route" ? [parsed.route] : [];
-    }),
-  );
-  return SIDEBAR_NAV_ROUTES.filter((routeId) => !visibleRoutes.has(routeId));
 }
 
 type SettingsNavigationGroup = {
@@ -286,7 +307,7 @@ function navigationPresentation(icon: IconName, key: string): NavigationPresenta
 
 const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation> = {
   settings: ["settings", "nav.settings", "common.settingsSections"],
-  "agents-home": navigationPresentation("bot", "agentsHome"),
+  claws: navigationPresentation("bot", "claws"),
   agents: navigationPresentation("bot", "agents"),
   activity: navigationPresentation("activity", "activity"),
   meetings: navigationPresentation("book", "meetings"),
@@ -355,35 +376,29 @@ export function navigationIconForRoute(routeId: NavigationRouteId): IconName {
   return NAVIGATION_PRESENTATION[routeId]?.[0] ?? "folder";
 }
 
-export function titleForRoute(routeId: NavigationRouteId): string {
+export function titleForRoute(routeId: NavigationRouteId, translate = t): string {
   const [, titleKey] = NAVIGATION_PRESENTATION[routeId];
-  return t(titleKey);
+  return translate(titleKey);
 }
 
-/** Window/tab title, markers leftmost because tabs truncate from the right.
- * A disconnected Gateway replaces the approval count (a stale queue is not
- * actionable); titles already ending in the brand
- * ("Ask OpenClaw") skip the suffix so it never reads "… OpenClaw — OpenClaw". */
+/** Window/tab title, attention leftmost because tabs truncate from the right.
+ * Titles already ending in the brand skip the suffix to avoid duplication. */
 export function formatDocumentTitle(options: {
   context: string;
   attentionCount?: number;
   brandName?: string;
-  gatewayDisconnected?: boolean;
 }): string {
   const brandName = options.brandName ?? "OpenClaw";
   const base = options.context.endsWith(brandName)
     ? options.context
     : `${options.context} — ${brandName}`;
-  if (options.gatewayDisconnected) {
-    return `(${t("connection.disconnectedTitle")}) ${base}`;
-  }
   if (options.attentionCount && options.attentionCount > 0) {
     return `(${options.attentionCount}) ${base}`;
   }
   return base;
 }
 
-export function subtitleForRoute(routeId: NavigationRouteId): string {
+export function subtitleForRoute(routeId: NavigationRouteId, translate = t): string {
   const subtitleKey = NAVIGATION_PRESENTATION[routeId][2];
-  return t(subtitleKey);
+  return translate(subtitleKey);
 }

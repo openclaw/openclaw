@@ -12,14 +12,14 @@ import {
   formatCommandArgMenuTitle,
   formatFastModeCurrentStatus,
   parseCommandArgs,
-  resolveCommandArgMenu,
+  resolveCommandArgMenuAsync,
   resolveEffectiveAgentRuntime,
   resolveFastModeState,
-  resolveStoredModelOverride,
+  resolveStoredModelOverrideAsync,
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  getSessionEntry,
+  getSessionEntryAsync,
   resolveStorePath,
   type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -38,12 +38,13 @@ type TelegramCommandMenuModelContext = {
   agentRuntime?: string;
   thinkingLevel?: string;
   fastMode?: SessionEntry["fastMode"];
+  sessionEntry?: SessionEntry;
 };
 
-function resolveTelegramCommandMenuModelContext(
+async function resolveTelegramCommandMenuModelContext(
   params: { cfg: OpenClawConfig; agentId: string; sessionKey: string },
   mode: "menu" | "fast" = "menu",
-): TelegramCommandMenuModelContext {
+): Promise<TelegramCommandMenuModelContext> {
   // Fast menus retain configured defaults even if session lookup fails.
   const fastDefault = mode === "fast" ? resolveDefaultModelForAgent(params) : undefined;
   const fallback = fastDefault ? { provider: fastDefault.provider, model: fastDefault.model } : {};
@@ -53,7 +54,7 @@ function resolveTelegramCommandMenuModelContext(
   try {
     const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
     const defaultModel = fastDefault ?? resolveDefaultModelForAgent(params);
-    const entry = getSessionEntry({ storePath, sessionKey: params.sessionKey });
+    const entry = await getSessionEntryAsync({ storePath, sessionKey: params.sessionKey });
     const thinkingLevel = normalizeOptionalString(entry?.thinkingLevel);
     const fastMode = entry?.fastMode;
     let context: TelegramCommandMenuModelContext;
@@ -63,9 +64,9 @@ function resolveTelegramCommandMenuModelContext(
         model: defaultModel.model,
       };
     } else {
-      const override = resolveStoredModelOverride({
+      const override = await resolveStoredModelOverrideAsync({
         sessionEntry: entry,
-        loadSessionEntry: (sessionKey) => getSessionEntry({ storePath, sessionKey }),
+        loadSessionEntry: (sessionKey) => getSessionEntryAsync({ storePath, sessionKey }),
         sessionKey: params.sessionKey,
         defaultProvider: defaultModel.provider,
       });
@@ -73,6 +74,7 @@ function resolveTelegramCommandMenuModelContext(
         return {
           provider: override?.provider ?? defaultModel.provider,
           model: override?.model ?? defaultModel.model,
+          sessionEntry: entry,
         };
       }
       if (override?.model) {
@@ -93,7 +95,7 @@ function resolveTelegramCommandMenuModelContext(
       }
     }
     if (mode === "fast") {
-      return context;
+      return { ...context, sessionEntry: entry };
     }
     return {
       ...context,
@@ -111,68 +113,6 @@ function resolveTelegramCommandMenuModelContext(
   } catch {
     return fallback;
   }
-}
-
-function resolveTelegramFastCommandState(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  sessionKey: string;
-}) {
-  const defaultModel = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
-  const fallback = () =>
-    resolveFastModeState({
-      cfg: params.cfg,
-      provider: defaultModel.provider,
-      model: defaultModel.model,
-      agentId: params.agentId,
-    });
-  if (!params.sessionKey.trim()) {
-    return fallback();
-  }
-  try {
-    const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
-    const entry = getSessionEntry({ storePath, sessionKey: params.sessionKey });
-    const modelContext = resolveTelegramCommandMenuModelContext(params, "fast");
-    return resolveFastModeState({
-      cfg: params.cfg,
-      provider: modelContext.provider ?? defaultModel.provider,
-      model: modelContext.model ?? defaultModel.model,
-      agentId: params.agentId,
-      sessionEntry: entry,
-    });
-  } catch {
-    return fallback();
-  }
-}
-
-async function resolveTelegramThinkMenuCurrentLevel(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  provider?: string;
-  model?: string;
-  agentRuntime?: string;
-  thinkingLevel?: string;
-  catalog: Awaited<ReturnType<typeof loadPreparedModelCatalog>>;
-}): Promise<string> {
-  const explicit = normalizeOptionalString(params.thinkingLevel);
-  if (explicit) {
-    return explicit;
-  }
-  const agentThinkingDefault = normalizeOptionalString(
-    resolveAgentConfig(params.cfg, params.agentId)?.thinkingDefault,
-  );
-  if (agentThinkingDefault) {
-    return agentThinkingDefault;
-  }
-  const defaultModel = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
-  return await resolveThinkingDefaultWithRuntimeCatalog({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    provider: params.provider ?? defaultModel.provider,
-    model: params.model ?? defaultModel.model,
-    agentRuntime: params.agentRuntime,
-    loadModelCatalog: async () => params.catalog,
-  });
 }
 
 export type TelegramBuiltinCommandResult = "handled" | "handled-clear-buttons" | "fall-through";
@@ -209,11 +149,13 @@ export async function executeTelegramBuiltinCommand(
   if (commandDefinition.key === "login") {
     const { executeTelegramLoginCommand } = await import("./bot-native-command-login.js");
     const currentProvider =
-      resolveTelegramCommandMenuModelContext({
-        cfg: dispatch.runtimeCfg,
-        agentId: dispatch.route.agentId,
-        sessionKey: dispatch.targetSessionKey,
-      }).provider ??
+      (
+        await resolveTelegramCommandMenuModelContext({
+          cfg: dispatch.runtimeCfg,
+          agentId: dispatch.route.agentId,
+          sessionKey: dispatch.targetSessionKey,
+        })
+      ).provider ??
       resolveDefaultModelForAgent({
         cfg: dispatch.runtimeCfg,
         agentId: dispatch.route.agentId,
@@ -237,16 +179,11 @@ export async function executeTelegramBuiltinCommand(
     agentId: dispatch.route.agentId,
     sessionKey: menuNeedsModelContext ? dispatch.targetSessionKey : "",
   };
-  const fastCommandState =
-    commandDefinition.key === "fast" && menuNeedsModelContext
-      ? resolveTelegramFastCommandState(menuContextParams)
-      : undefined;
-  const fastMenuModelContext =
-    commandDefinition.key === "fast" && menuNeedsModelContext
-      ? resolveTelegramCommandMenuModelContext(menuContextParams, "fast")
-      : undefined;
   const menuModelContext = menuNeedsModelContext
-    ? (fastMenuModelContext ?? resolveTelegramCommandMenuModelContext(menuContextParams))
+    ? await resolveTelegramCommandMenuModelContext(
+        menuContextParams,
+        commandDefinition.key === "fast" ? "fast" : "menu",
+      )
     : {};
   // Native /think must not wait on provider discovery; persisted rows retain its metadata.
   const menuModelCatalog =
@@ -258,7 +195,7 @@ export async function executeTelegramBuiltinCommand(
           readOnly: true,
         })
       : undefined;
-  const menu = resolveCommandArgMenu({
+  const menu = await resolveCommandArgMenuAsync({
     command: commandDefinition,
     args: commandArgs,
     cfg: dispatch.runtimeCfg,
@@ -271,21 +208,46 @@ export async function executeTelegramBuiltinCommand(
     if (params.shouldSkip?.()) {
       return "handled";
     }
-    const currentThinkingLevel =
-      commandDefinition.key === "think"
-        ? await resolveTelegramThinkMenuCurrentLevel({
-            cfg: dispatch.runtimeCfg,
-            agentId: dispatch.route.agentId,
-            ...menuModelContext,
-            catalog: menuModelCatalog ?? [],
-          })
-        : undefined;
-    const currentFastModeStatus =
-      commandDefinition.key === "fast"
-        ? formatFastModeCurrentStatus(
-            fastCommandState ?? resolveTelegramFastCommandState(menuContextParams),
-          )
-        : undefined;
+    let currentThinkingLevel: string | undefined;
+    if (commandDefinition.key === "think") {
+      const catalog = menuModelCatalog ?? [];
+      currentThinkingLevel = normalizeOptionalString(menuModelContext.thinkingLevel);
+      if (!currentThinkingLevel) {
+        currentThinkingLevel = normalizeOptionalString(
+          resolveAgentConfig(dispatch.runtimeCfg, dispatch.route.agentId)?.thinkingDefault,
+        );
+      }
+      if (!currentThinkingLevel) {
+        const defaultModel = resolveDefaultModelForAgent({
+          cfg: dispatch.runtimeCfg,
+          agentId: dispatch.route.agentId,
+        });
+        currentThinkingLevel = await resolveThinkingDefaultWithRuntimeCatalog({
+          cfg: dispatch.runtimeCfg,
+          agentId: dispatch.route.agentId,
+          provider: menuModelContext.provider ?? defaultModel.provider,
+          model: menuModelContext.model ?? defaultModel.model,
+          agentRuntime: menuModelContext.agentRuntime,
+          loadModelCatalog: async () => catalog,
+        });
+      }
+    }
+    let currentFastModeStatus: string | undefined;
+    if (commandDefinition.key === "fast") {
+      const defaultModel = resolveDefaultModelForAgent({
+        cfg: dispatch.runtimeCfg,
+        agentId: dispatch.route.agentId,
+      });
+      currentFastModeStatus = formatFastModeCurrentStatus(
+        resolveFastModeState({
+          cfg: dispatch.runtimeCfg,
+          provider: menuModelContext.provider ?? defaultModel.provider,
+          model: menuModelContext.model ?? defaultModel.model,
+          agentId: dispatch.route.agentId,
+          sessionEntry: menuModelContext.sessionEntry,
+        }),
+      );
+    }
     let title = formatCommandArgMenuTitle({ command: commandDefinition, menu });
     if (commandDefinition.key === "think" && currentThinkingLevel) {
       title = `Current thinking level: ${currentThinkingLevel}.\n${title}`;
@@ -319,6 +281,11 @@ export async function executeTelegramBuiltinCommand(
           ...dispatch.threadParams,
         }),
     });
+    await dispatch.recordDeliveredReply(
+      prompt,
+      `${title}\n${menu.choices.map((choice) => choice.label).join(", ")}`,
+      "menu",
+    );
     return "handled";
   }
   return "fall-through";

@@ -1,141 +1,97 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
-import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
-import { type PlacementStore, REQUEST } from "./placement-dispatch-test-fixtures.js";
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
-import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { usePlacementStoreFixture } from "./placement-store-fixture.test-support.js";
 
-const tempDirs = useStateDatabaseTempDirs();
+const fixture = usePlacementStoreFixture();
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(clearRuntimeConfigSnapshot);
 
-describe("failed placement Gateway recovery", () => {
-  let database: OpenClawStateDatabase;
-  let placementStore: PlacementStore;
-
-  beforeEach(() => {
-    const root = tempDirs.make("openclaw-gateway-recovery-");
-    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
+function fail(generation: number, recoveryError = "worker disappeared") {
+  return fixture.store.fail({
+    sessionId: REQUEST.sessionId,
+    expectedGeneration: generation,
+    recoveryError,
   });
+}
+const claimLocal = (stage: string) =>
+  fixture.store.claimTurn({
+    ...REQUEST,
+    owner: { kind: "local" },
+    claimId: `${stage}-local-turn`,
+    runId: `${stage}-local-run`,
+  });
+const recoverRequest = (expectedGeneration: number) => ({
+  ...REQUEST,
+  recoverToGateway: { expectedGeneration },
+});
 
-  it.each([false, true])(
-    "prepares the Gateway workspace before local admission only for explicit recovery (recover=%s)",
-    async (recover) => {
-      const prepareGatewayMove = vi.fn(async ({ assertCurrent }: { assertCurrent: () => void }) => {
-        assertCurrent();
-        expect(placementStore.get(REQUEST.sessionId)?.state).toBe("failed");
-        await expect(
-          placementStore.claimTurn({
-            ...REQUEST,
-            owner: { kind: "local" },
-            claimId: "premature-local-turn",
-            runId: "premature-local-run",
-          }),
-        ).rejects.toThrow();
-      });
-      const harness = createHarness(database, placementStore, { prepareGatewayMove });
-      const requested = await placementStore.startDispatch(REQUEST);
-      const failed = await placementStore.fail({
-        sessionId: REQUEST.sessionId,
-        expectedGeneration: requested.generation,
-        recoveryError: "worker disappeared",
-      });
-
-      await expect(
-        harness.service.reclaim({
-          ...REQUEST,
-          ...(recover ? { recoverToGateway: { expectedGeneration: failed.generation } } : {}),
-        }),
-      ).resolves.toMatchObject({ state: "local", recoveryError: null, terminalReason: null });
-
-      expect(prepareGatewayMove).toHaveBeenCalledTimes(recover ? 1 : 0);
-      if (recover) {
-        expect(prepareGatewayMove).toHaveBeenCalledWith(
-          expect.objectContaining({
-            sessionId: REQUEST.sessionId,
-            sessionKey: REQUEST.sessionKey,
-            agentId: REQUEST.agentId,
-            assertCurrent: expect.any(Function),
-          }),
-        );
-      }
-      const localTurn = await placementStore.claimTurn({
-        ...REQUEST,
-        owner: { kind: "local" },
-        claimId: "recovered-local-turn",
-        runId: "recovered-local-run",
-      });
-      await placementStore.releaseTurn(localTurn);
-      expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    "stale source",
-    "pending cleanup",
-    "restore failure",
-    "revoked authorization",
-    "replaced placement",
-  ])("keeps local recovery closed after %s", async (failure) => {
-    let authorized = true;
-    const authorize = () => {
-      if (!authorized) {
-        throw new Error("session participation changed");
-      }
-    };
-    const prepareGatewayMove = vi.fn(async () => {
-      if (failure === "restore failure") {
-        throw new Error("accepted checkpoint unavailable");
-      }
-      if (failure === "revoked authorization") {
-        authorized = false;
-      }
-      if (failure === "replaced placement") {
-        const replacement = await placementStore.startDispatch(REQUEST);
-        await placementStore.fail({
-          sessionId: REQUEST.sessionId,
-          expectedGeneration: replacement.generation,
-          recoveryError: "replacement worker failed",
-        });
-      }
+it.each([false, true])(
+  "prepares the Gateway workspace before local admission only for explicit recovery (recover=%s)",
+  async (recover) => {
+    const { database, store } = fixture;
+    const prepare = vi.fn(async ({ assertCurrent }: { assertCurrent: () => void }) => {
+      assertCurrent();
+      expect(store.get(REQUEST.sessionId)?.state).toBe("failed");
+      await expect(claimLocal("premature")).rejects.toThrow();
     });
-    const harness = createHarness(database, placementStore, { prepareGatewayMove });
-    const requested =
-      failure === "pending cleanup"
-        ? await harness.placements.seedStarting()
-        : await placementStore.startDispatch(REQUEST);
-    const failed = await placementStore.fail({
-      sessionId: REQUEST.sessionId,
-      expectedGeneration: requested.generation,
-      recoveryError: "worker disappeared",
-    });
+    const harness = await createHarness(database, store, { prepareGatewayMove: prepare });
+    const failed = await fail((await store.startDispatch(REQUEST)).generation);
 
     await expect(
-      harness.service.reclaim(
-        {
-          ...REQUEST,
-          recoverToGateway: {
-            expectedGeneration: failed.generation - (failure === "stale source" ? 1 : 0),
-          },
-        },
-        authorize,
-      ),
-    ).rejects.toThrow(
-      failure === "restore failure"
-        ? "accepted checkpoint unavailable"
-        : failure === "revoked authorization"
-          ? "session participation changed"
-          : failure === "pending cleanup"
-            ? "cleanup is still pending"
-            : "changed before Gateway recovery",
-    );
+      harness.service.reclaim(recover ? recoverRequest(failed.generation) : REQUEST),
+    ).resolves.toMatchObject({ state: "local", recoveryError: null, terminalReason: null });
 
-    expect(placementStore.get(REQUEST.sessionId)?.state).toBe("failed");
-    expect(prepareGatewayMove).toHaveBeenCalledTimes(
-      failure === "stale source" || failure === "pending cleanup" ? 0 : 1,
-    );
-    expect(harness.environments.destroy).not.toHaveBeenCalled();
+    expect(prepare).toHaveBeenCalledTimes(Number(recover));
+    await store.releaseTurn(await claimLocal("recovered"));
+    expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  ["stale source", "changed before Gateway recovery", 0],
+  ["pending cleanup", "cleanup is still pending", 0],
+  ["restore failure", "accepted checkpoint unavailable", 1],
+  ["revoked authorization", "session participation changed", 1],
+  ["replaced placement", "changed before Gateway recovery", 1],
+] as const)("keeps local recovery closed after %s", async (failure, error, preparations) => {
+  const { database, store } = fixture;
+  let authorized = true;
+  const authorize = () => {
+    if (!authorized) {
+      throw new Error("session participation changed");
+    }
+  };
+  const prepare = vi.fn(async () => {
+    if (failure === "restore failure") {
+      throw new Error("accepted checkpoint unavailable");
+    }
+    if (failure === "revoked authorization") {
+      authorized = false;
+    }
+    if (failure === "replaced placement") {
+      await fail((await store.startDispatch(REQUEST)).generation, "replacement worker failed");
+    }
   });
+  const harness = await createHarness(database, store, { prepareGatewayMove: prepare });
+  const requested =
+    failure === "pending cleanup"
+      ? await harness.placements.seedStarting()
+      : await store.startDispatch(REQUEST);
+  const failed = await fail(requested.generation);
+
+  await expect(
+    harness.service.reclaim(
+      recoverRequest(failed.generation - (failure === "stale source" ? 1 : 0)),
+      authorize,
+    ),
+  ).rejects.toThrow(error);
+
+  expect(store.get(REQUEST.sessionId)?.state).toBe("failed");
+  expect(prepare).toHaveBeenCalledTimes(preparations);
+  expect(harness.environments.destroy).not.toHaveBeenCalled();
 });

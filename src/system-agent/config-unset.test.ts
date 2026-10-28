@@ -9,7 +9,6 @@ import {
   createTestRuntime,
   useConfigCliIntegrationHarness,
 } from "../cli/config-cli.integration.test-harness.js";
-import * as runtimeSchema from "../config/runtime-schema.js";
 import { executeSystemAgentOperation } from "./operations.js";
 
 const audit = vi.hoisted(() => vi.fn());
@@ -61,16 +60,16 @@ describe("setup config unset", () => {
         }
         const output = createTestRuntime();
         let active = true;
-        const readSchema = runtimeSchema.readBestEffortRuntimeConfigSchema;
-        vi.spyOn(runtimeSchema, "readBestEffortRuntimeConfigSchema").mockImplementation(
-          async () => {
-            const schema = await readSchema();
-            if (expireAuthority) {
-              active = false;
-            }
-            return schema;
-          },
-        );
+        const configCli = await import("../cli/config-cli.js");
+        const runConfigUnset = configCli.runConfigUnset;
+        vi.spyOn(configCli, "runConfigUnset").mockImplementation((params) => {
+          const result = runConfigUnset(params);
+          // Revoke after CLI preparation starts, before its persistence guard runs.
+          if (expireAuthority) {
+            active = false;
+          }
+          return result;
+        });
         const apply = () =>
           executeSystemAgentOperation(directive.operation, output.runtime, {
             approved: true,

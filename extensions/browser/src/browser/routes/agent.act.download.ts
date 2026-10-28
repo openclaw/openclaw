@@ -1,3 +1,4 @@
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureOutputDirectory } from "../output-directories.js";
 import { DEFAULT_DOWNLOAD_DIR } from "../paths.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
@@ -17,7 +18,7 @@ export function registerBrowserAgentActDownloadRoutes(
   const register = createTabRouteRegistrar(app, ctx);
   for (const mode of ["wait", "download"] as const) {
     register(mode === "wait" ? "/wait/download" : "/download", (body, res) => {
-      const out = toStringOrEmpty(body.path);
+      const out = readNonBlankString(body.path) ?? "";
       const ref = toStringOrEmpty(body.ref);
       const currentDocument = mode === "download" && body.currentDocument === true;
       const expectedUrl = typeof body.expectedUrl === "string" ? body.expectedUrl : "";

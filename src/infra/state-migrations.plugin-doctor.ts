@@ -10,15 +10,16 @@ import {
   type PluginDoctorStateMigrationDetection,
   type PluginDoctorStateMigrationInventory,
 } from "../plugins/doctor-contract-registry.js";
+import { sqliteOnlyMigrationNotice } from "../plugins/doctor-migration-applicability.js";
 import { preparePluginDoctorMigrationResources } from "../plugins/doctor-migration-resources.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
-import { prepareOpenClawStateDatabaseSchema } from "../state/openclaw-state-db.js";
 import { formatErrorMessage } from "./errors.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { formatStartupMigrationFailure } from "./state-migrations.messages.js";
 import { createPluginDoctorStateMigrationContext } from "./state-migrations.plugin-doctor-context.js";
 import { autoMigrateLegacyStateDir } from "./state-migrations.state-dir.js";
+import { createStateSchemaMigrationStep } from "./state-migrations.state-schema.js";
 import type {
   DetectedPluginDoctorStateMigrationPlan,
   LegacyStateDetection,
@@ -47,7 +48,7 @@ type PluginDoctorPlanCollection = {
   assertResourceScope: () => void;
 };
 
-function createMigrationInput(
+export function createPluginDoctorStateMigrationInput(
   input: PluginDoctorInput,
   owner: Pick<
     DetectedPluginDoctorStateMigrationPlan,
@@ -152,6 +153,7 @@ export async function collectPluginDoctorStateMigrationPlans(
   const otherPhasePluginIds = new Set<string>();
   const requiredPluginIds = new Set<string>();
   const statelessPluginIds = new Set<string>();
+  const unavailablePluginIds = new Set<string>();
   const collected: PluginDoctorPlanCollection = {
     plans,
     inspectedPluginIds,
@@ -171,6 +173,11 @@ export async function collectPluginDoctorStateMigrationPlans(
       validateDeclarations: params.validateDeclarations,
       onInspectedPlugin: (pluginId) => inspectedPluginIds.add(pluginId),
       onInspectedStatelessPlugin: (pluginId) => statelessPluginIds.add(pluginId),
+      onUnavailablePlugin: (pluginId, error) => {
+        unavailablePluginIds.add(pluginId);
+        requiredPluginIds.add(pluginId);
+        params.warnings?.push(`Plugin ${pluginId} is not prepared: ${error.message}`);
+      },
     });
   } catch (error) {
     if (!(error instanceof PluginDoctorStateMigrationDeclarationError)) {
@@ -203,7 +210,9 @@ export async function collectPluginDoctorStateMigrationPlans(
   if (params.plannedActions) {
     const refusal = validatePluginDoctorPlanOrder({
       actions: entries.map(({ pluginId, migration }) => ({ pluginId, id: migration.id })),
-      plannedActions: params.plannedActions,
+      plannedActions: params.plannedActions.filter(
+        (action) => !unavailablePluginIds.has(action.pluginId),
+      ),
     });
     if (refusal) {
       params.warnings?.push(refusal);
@@ -211,6 +220,14 @@ export async function collectPluginDoctorStateMigrationPlans(
       return collected;
     }
   }
+  entries = entries.filter(({ migration }) => {
+    const notice = sqliteOnlyMigrationNotice(migration, config);
+    if (notice) {
+      collected.notices.push(notice);
+      return false;
+    }
+    return true;
+  });
   if (resolveUpdateRehearsalRoot(env)) {
     const scope = await preparePluginDoctorMigrationResources(allEntries, {
       config,
@@ -219,7 +236,7 @@ export async function collectPluginDoctorStateMigrationPlans(
       warnings: [],
       requireLocalResources: true,
     });
-    collected.notices.push(...scope.notices);
+    collected.notices = [...new Set([...collected.notices, ...scope.notices])];
     collected.assertResourceScope = scope.assertCurrent;
     for (const pluginId of scope.deferredPluginIds) {
       inspectedPluginIds.delete(pluginId);
@@ -232,7 +249,10 @@ export async function collectPluginDoctorStateMigrationPlans(
       params.repairAuthority?.assertCurrent();
       collected.assertResourceScope();
       detected = await entry.migration.detectLegacyState(
-        createMigrationInput(input, entry, params.repairAuthority, undefined, { config, env }),
+        createPluginDoctorStateMigrationInput(input, entry, params.repairAuthority, undefined, {
+          config,
+          env,
+        }),
       );
     } catch (err) {
       inspectedPluginIds.delete(entry.pluginId);
@@ -333,7 +353,12 @@ async function migratePluginDoctorStatePlans(
         repairAuthority?.assertCurrent();
         assertResourceScope?.();
         const result = await plan.migration.migrateLegacyState(
-          createMigrationInput(input, plan, repairAuthority, assertIngressMutationCurrent),
+          createPluginDoctorStateMigrationInput(
+            input,
+            plan,
+            repairAuthority,
+            assertIngressMutationCurrent,
+          ),
         );
         repairAuthority?.assertCurrent();
         changes.push(...result.changes);
@@ -574,6 +599,7 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
   homedir?: () => string;
   log?: MigrationLogger;
   doctorOnlyStateMigrations?: boolean;
+  integrityCheck?: "quick" | "full";
 }): Promise<{
   migrated: boolean;
   skipped: boolean;
@@ -591,10 +617,13 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
   });
   const stateDir = resolveStateDir(env, params.homedir ?? os.homedir);
   const oauthDir = resolveOAuthDir(env, stateDir);
-  const stateSchema = await prepareOpenClawStateDatabaseSchema(
-    { env: { ...env, OPENCLAW_STATE_DIR: stateDir } },
-    params.doctorOnlyStateMigrations === true ? "doctor" : "automatic",
-  );
+  const stateSchema = await createStateSchemaMigrationStep({
+    stateDir,
+    env,
+    integrityCheck: params.integrityCheck,
+    mode: params.doctorOnlyStateMigrations === true ? "doctor" : "automatic",
+    requiredness: "required",
+  }).run();
   const changes = [...stateDirResult.changes, ...stateSchema.changes];
   const warnings = [...stateDirResult.warnings, ...stateSchema.warnings];
   const notices = [...(stateDirResult.notices ?? [])];

@@ -115,6 +115,14 @@ describe("createAssistantVisibleStreamText", () => {
     expect(second.append("\n\nBravo is here")).toEqual({ text: "Bravo is here", delta: "" });
     expect(first.append("!")).toEqual({ text: "Reset!", delta: "!" });
   });
+
+  it("holds an incomplete GLM tool-call prefix and releases literal prose", () => {
+    const stream = createAssistantVisibleStreamText();
+    expect(stream.replace("Visible\n<tool_call>exec").text).toBe("Visible");
+    expect(
+      stream.replace("Use <tool_call>exec<arg_key> literally. Example: `</arg_key>`.").text,
+    ).toBe("Use <tool_call>exec<arg_key> literally. Example: `</arg_key>`.");
+  });
 });
 
 describe("extractThinkingFromTaggedStream", () => {
@@ -157,231 +165,145 @@ describe("extractThinkingFromTaggedStream", () => {
 
 describe("extractEmbeddedAssistantText", () => {
   it.each([
-    {
-      title: "strips Minimax tool invocations with extra attributes",
-      text: `Before<invoke name='Bash' data-foo="bar">\n<parameter name="command">ls</parameter>\n</invoke>\n</minimax:tool_call>After`,
-      expected: "Before\nAfter",
-    },
-    {
-      title: "strips minimax tool_call open and close tags",
-      text: "Start<minimax:tool_call>Inner</minimax:tool_call>End",
-      expected: "StartInnerEnd",
-    },
-    {
-      title: "ignores invoke blocks without minimax markers",
-      text: "Before<invoke>Keep</invoke>After",
-      expected: "Before<invoke>Keep</invoke>After",
-    },
-    {
-      title: "handles multiple invoke blocks in one message",
-      text: `First check.<invoke name="Read">
+    [
+      "strips Minimax tool invocations with extra attributes",
+      `Before<invoke name='Bash' data-foo="bar">\n<parameter name="command">ls</parameter>\n</invoke>\n</minimax:tool_call>After`,
+      "Before\nAfter",
+    ],
+    [
+      "strips minimax tool_call open and close tags",
+      "Start<minimax:tool_call>Inner</minimax:tool_call>End",
+      "StartInnerEnd",
+    ],
+    [
+      "ignores invoke blocks without minimax markers",
+      "Before<invoke>Keep</invoke>After",
+      "Before<invoke>Keep</invoke>After",
+    ],
+    [
+      "handles multiple invoke blocks in one message",
+      `First check.<invoke name="Read">
 <parameter name="path">file1.txt</parameter>
 </invoke>
 </minimax:tool_call>Second check.<invoke name="Bash">
 <parameter name="command">pwd</parameter>
 </invoke>
 </minimax:tool_call>Done.`,
-      expected: "First check.\nSecond check.\nDone.",
-    },
-    {
-      title: "preserves trailing text after downgraded tool call blocks",
-      text: `Intro text.
+      "First check.\nSecond check.\nDone.",
+    ],
+    [
+      "preserves trailing text after downgraded tool call blocks",
+      `Intro text.
 [Tool Call: read (ID: toolu_1)]
 Arguments: {
   "path": "/tmp/file.txt"
 }
 Back to the user.`,
-      expected: "Intro text.\nBack to the user.",
-    },
-  ])("$title", ({ text, expected }) => {
-    const msg = makeAssistantMessage({
-      content: [
-        {
-          type: "text",
-          text,
-        },
-      ],
-    });
-
-    const result = extractEmbeddedAssistantText(msg);
-    expect(result).toBe(expected);
-  });
-
-  it("sanitizes HTTP-ish error text only when stopReason is error", () => {
-    const msg = makeAssistantMessage({
-      stopReason: "error",
-      errorMessage: "500 Internal Server Error",
-      content: [{ type: "text", text: "500 Internal Server Error" }],
-    });
-
-    const result = extractEmbeddedAssistantText(msg);
-    expect(result).toBe("HTTP 500: Internal Server Error");
-  });
-
-  it("preserves response when errorMessage set from background failure (#13935)", () => {
-    const responseText = "Handle payment required errors in your API.";
-    const msg = makeAssistantMessage({
-      errorMessage: "insufficient credits for embedding model",
-      stopReason: "stop",
-      content: [{ type: "text", text: responseText }],
-    });
-
-    const result = extractEmbeddedAssistantText(msg);
-    expect(result).toBe(responseText);
-  });
-
-  it("handles multiple text blocks", () => {
-    const msg = makeAssistantMessage({
-      content: [
-        {
-          type: "text",
-          text: "First block.",
-        },
-        {
-          type: "text",
-          text: `<invoke name="Bash">
+      "Intro text.\nBack to the user.",
+    ],
+    [
+      "sanitizes HTTP-ish error text only when stopReason is error",
+      "500 Internal Server Error",
+      "HTTP 500: Internal Server Error",
+      { stopReason: "error", errorMessage: "500 Internal Server Error" },
+    ],
+    [
+      "preserves response when errorMessage set from background failure (#13935)",
+      "Handle payment required errors in your API.",
+      "Handle payment required errors in your API.",
+      { stopReason: "stop", errorMessage: "insufficient credits for embedding model" },
+    ],
+    [
+      "handles multiple text blocks",
+      [
+        "First block.",
+        `<invoke name="Bash">
 <parameter name="command">ls</parameter>
 </invoke>
 </minimax:tool_call>`,
-        },
-        {
-          type: "text",
-          text: "Third block.",
-        },
+        "Third block.",
       ],
-    });
-
-    const result = extractEmbeddedAssistantText(msg);
-    expect(result).toBe("First block.\nThird block.");
-  });
-
-  it("handles multiple text blocks with tool calls and results", () => {
-    const msg = makeAssistantMessage({
-      content: [
-        {
-          type: "text",
-          text: "Here's what I found:",
-        },
-        {
-          type: "text",
-          text: `[Tool Call: read (ID: toolu_1)]
+      "First block.\nThird block.",
+    ],
+    [
+      "handles multiple text blocks with tool calls and results",
+      [
+        "Here's what I found:",
+        `[Tool Call: read (ID: toolu_1)]
 Arguments: { "path": "/test.txt" }`,
-        },
-        {
-          type: "text",
-          text: `[Tool Result for ID toolu_1]
+        `[Tool Result for ID toolu_1]
 File contents here`,
-        },
-        {
-          type: "text",
-          text: "Done checking.",
-        },
+        "Done checking.",
       ],
-    });
-
-    const result = extractEmbeddedAssistantText(msg);
-    expect(result).toBe("Here's what I found:\nDone checking.");
-  });
-
-  it("strips mixed <tool_call> and <tool_result> XML blocks from assistant text", () => {
-    const msg = makeAssistantMessage({
-      content: [
-        {
-          type: "text",
-          text: [
-            "I will read the file.",
-            '<tool_call>{"name":"read","arguments":{"path":"/tmp/x"}}</tool_call>',
-            '<tool_result>{"output":"hello world"}</tool_result>',
-            "The file contains: hello world",
-          ].join("\n"),
-        },
-      ],
-    });
-
-    expect(extractEmbeddedAssistantText(msg)).toBe(
+      "Here's what I found:\nDone checking.",
+    ],
+    [
+      "strips mixed <tool_call> and <tool_result> XML blocks from assistant text",
+      [
+        "I will read the file.",
+        '<tool_call>{"name":"read","arguments":{"path":"/tmp/x"}}</tool_call>',
+        '<tool_result>{"output":"hello world"}</tool_result>',
+        "The file contains: hello world",
+      ].join("\n"),
       "I will read the file.\n\n\nThe file contains: hello world",
-    );
-  });
+    ],
 
-  it("strips reasoning/thinking tag variants", () => {
-    const cases = [
-      {
-        name: "think tag",
-        text: "<think>El usuario quiere retomar una tarea...</think>Aquí está tu respuesta.",
-        expected: "Aquí está tu respuesta.",
-      },
-      {
-        name: "think tag with attributes",
-        text: `<think reason="deliberate">Hidden</think>Visible`,
-        expected: "Visible",
-      },
-      {
-        name: "unclosed think tag",
-        text: "<think>Pensando sobre el problema...",
-        expected: "Pensando sobre el problema...",
-      },
-      {
-        name: "thinking tag",
-        text: "Before<thinking>internal reasoning</thinking>After",
-        expected: "BeforeAfter",
-      },
-      {
-        name: "antthinking tag",
-        text: "<antthinking>Some reasoning</antthinking>The actual answer.",
-        expected: "The actual answer.",
-      },
-      {
-        name: "antml namespaced thinking tag",
-        text: "<antml:thinking>This shows Robin Waslander DMing maintainers o...</antml:thinking>Actual reply.",
-        expected: "Actual reply.",
-      },
-      {
-        name: "final wrapper",
-        text: "<final>\nAnswer\n</final>",
-        expected: "Answer",
-      },
-      {
-        name: "thought tag",
-        text: "<thought>Internal deliberation</thought>Final response.",
-        expected: "Final response.",
-      },
-      {
-        name: "multiple think blocks",
-        text: "Start<think>first thought</think>Middle<think>second thought</think>End",
-        expected: "StartMiddleEnd",
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      const msg = makeAssistantMessage({
-        content: [{ type: "text", text: testCase.text }],
-      });
-      expect(extractEmbeddedAssistantText(msg), testCase.name).toBe(testCase.expected);
-    }
+    [
+      "think tag",
+      "<think>El usuario quiere retomar una tarea...</think>Aquí está tu respuesta.",
+      "Aquí está tu respuesta.",
+    ],
+    ["think tag with attributes", `<think reason="deliberate">Hidden</think>Visible`, "Visible"],
+    ["unclosed think tag", "<think>Pensando sobre el problema...", "Pensando sobre el problema..."],
+    ["thinking tag", "Before<thinking>internal reasoning</thinking>After", "BeforeAfter"],
+    [
+      "antthinking tag",
+      "<antthinking>Some reasoning</antthinking>The actual answer.",
+      "The actual answer.",
+    ],
+    [
+      "antml namespaced thinking tag",
+      "<antml:thinking>This shows Robin Waslander DMing maintainers o...</antml:thinking>Actual reply.",
+      "Actual reply.",
+    ],
+    ["final wrapper", "<final>\nAnswer\n</final>", "Answer"],
+    ["thought tag", "<thought>Internal deliberation</thought>Final response.", "Final response."],
+    [
+      "multiple think blocks",
+      "Start<think>first thought</think>Middle<think>second thought</think>End",
+      "StartMiddleEnd",
+    ],
+  ] as const)("%s", (...[_name, input, expected, metadata]) => {
+    const texts = typeof input === "string" ? [input] : input;
+    const msg = makeAssistantMessage({
+      ...metadata,
+      content: texts.map((text) => ({ type: "text", text })),
+    });
+    expect(extractEmbeddedAssistantText(msg)).toBe(expected);
   });
 });
 
 describe("formatReasoningMessage", () => {
-  it("returns empty string for whitespace-only input", () => {
-    expect(formatReasoningMessage("   \n  \t  ")).toBe("");
-  });
-
-  it("wraps each line separately for multiline text (Telegram fix)", () => {
-    expect(formatReasoningMessage("Line one\nLine two\nLine three")).toBe(
+  it.each([
+    ["returns empty string for empty input", "", ""],
+    ["returns empty string for whitespace-only input", "   \n  \t  ", ""],
+    [
+      "wraps each line separately for multiline text (Telegram fix)",
+      "Line one\nLine two\nLine three",
       "Thinking\n\n_Line one_\n_Line two_\n_Line three_",
-    );
-  });
-
-  it("preserves empty lines between reasoning text", () => {
-    expect(formatReasoningMessage("First block\n\nSecond block")).toBe(
+    ],
+    [
+      "preserves empty lines between reasoning text",
+      "First block\n\nSecond block",
       "Thinking\n\n_First block_\n\n_Second block_",
-    );
-  });
-
-  it("trims leading/trailing whitespace", () => {
-    expect(formatReasoningMessage("  \n  Reasoning here  \n  ")).toBe(
+    ],
+    [
+      "trims leading/trailing whitespace",
+      "  \n  Reasoning here  \n  ",
       "Thinking\n\n_Reasoning here_",
-    );
+    ],
+  ])("%s", (_name, text, expected) => {
+    expect(formatReasoningMessage(text)).toBe(expected);
   });
 });
 
@@ -441,120 +363,86 @@ describe("extractAssistantVisibleText", () => {
   );
 
   it.each([
-    { name: "plain text", text: "Done." },
-    { name: "indented code", text: "    const value = 1;\n    use(value);" },
-  ])("prefers non-empty final_answer $name over commentary", ({ text }) => {
+    ["prefers non-empty final_answer plain text over commentary", "text", "Done.", "Done.", true],
+    [
+      "prefers non-empty final_answer indented code over commentary",
+      "text",
+      "    const value = 1;\n    use(value);",
+      "    const value = 1;\n    use(value);",
+      true,
+    ],
+    ["does not fall back to commentary when final_answer is empty", "text", "   ", "", true],
+    [
+      "does not fall back to unphased legacy text when an empty final_answer block exists",
+      "text",
+      "   ",
+      "",
+      false,
+    ],
+    [
+      "does not fall back to unphased legacy text when an empty output_text final_answer block exists",
+      "output_text",
+      "   ",
+      "",
+      false,
+    ],
+  ] as const)("%s", (_name, type, text, expected, commentary) => {
     const msg = makeAssistantMessage({
       content: [
+        commentary
+          ? {
+              type: "text",
+              text: "Working...",
+              textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+            }
+          : { type: "text", text: "Legacy answer" },
         {
-          type: "text",
-          text: "Working...",
-          textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
-        },
-        {
-          type: "text",
+          type,
           text,
           textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
         },
       ],
     });
+    expect(extractAssistantVisibleText(msg)).toBe(expected);
+  });
 
+  it.each([
+    [
+      "falls back to legacy unphased text when phased text is absent",
+      [{ type: "text", text: "Legacy answer" }],
+      "Legacy answer",
+    ],
+    [
+      "keeps strict reasoning-tag stripping for legacy string content",
+      "Visible prefix <think>private reasoning tail",
+      "Visible prefix",
+    ],
+  ])("%s", (_name, content, expected) => {
+    expect(extractAssistantVisibleText(makeAssistantMessage({ content }))).toBe(expected);
+  });
+
+  it.each([
+    [
+      "preserves literal reasoning-looking tags in unphased visible text",
+      "Before <think>literal tag text after",
+      { v: 1, id: "item_unphased" },
+      false,
+    ],
+    [
+      "does not pull unphased legacy text into final_answer extraction when phased blocks are present",
+      "Done.",
+      { v: 1, id: "item_final", phase: "final_answer" },
+      true,
+    ],
+  ] as const)("%s", (_name, text, signature, hasPhasedBlocks) => {
+    const msg = makeAssistantMessage({
+      ...(hasPhasedBlocks ? { phase: "final_answer" } : {}),
+      content: [
+        ...(hasPhasedBlocks ? [{ type: "text", text: "Legacy." }] : []),
+        { type: "text", text, textSignature: JSON.stringify(signature) },
+      ],
+    });
     expect(extractAssistantVisibleText(msg)).toBe(text);
-  });
-
-  it("does not fall back to commentary when final_answer is empty", () => {
-    const msg = makeAssistantMessage({
-      content: [
-        {
-          type: "text",
-          text: "Working...",
-          textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
-        },
-        {
-          type: "text",
-          text: "   ",
-          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
-        },
-      ],
-    });
-
-    expect(extractAssistantVisibleText(msg)).toBe("");
-  });
-
-  it("does not fall back to unphased legacy text when an empty final_answer block exists", () => {
-    const msg = makeAssistantMessage({
-      content: [
-        { type: "text", text: "Legacy answer" },
-        {
-          type: "text",
-          text: "   ",
-          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
-        },
-      ],
-    });
-
-    expect(extractAssistantVisibleText(msg)).toBe("");
-  });
-
-  it("does not fall back to unphased legacy text when an empty output_text final_answer block exists", () => {
-    const msg = makeAssistantMessage({
-      content: [
-        { type: "text", text: "Legacy answer" },
-        {
-          type: "output_text",
-          text: "   ",
-          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
-        },
-      ],
-    });
-
-    expect(extractAssistantVisibleText(msg)).toBe("");
-  });
-
-  it("falls back to legacy unphased text when phased text is absent", () => {
-    const msg = makeAssistantMessage({
-      content: [{ type: "text", text: "Legacy answer" }],
-    });
-
-    expect(extractAssistantVisibleText(msg)).toBe("Legacy answer");
-  });
-
-  it("keeps strict reasoning-tag stripping for legacy string content", () => {
-    const msg = makeAssistantMessage({
-      content: "Visible prefix <think>private reasoning tail",
-    });
-
-    expect(extractAssistantVisibleText(msg)).toBe("Visible prefix");
-  });
-
-  it("preserves literal reasoning-looking tags in unphased visible text", () => {
-    const msg = makeAssistantMessage({
-      content: [
-        {
-          type: "text",
-          text: "Before <think>literal tag text after",
-          textSignature: JSON.stringify({ v: 1, id: "item_unphased" }),
-        },
-      ],
-    });
-
-    expect(extractAssistantVisibleText(msg)).toBe("Before <think>literal tag text after");
-  });
-
-  it("does not pull unphased legacy text into final_answer extraction when phased blocks are present", () => {
-    const msg = makeAssistantMessage({
-      phase: "final_answer",
-      content: [
-        { type: "text", text: "Legacy." },
-        {
-          type: "text",
-          text: "Done.",
-          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
-        },
-      ],
-    });
-
-    expect(extractAssistantVisibleText(msg)).toBe("Done.");
   });
 });
 
@@ -590,11 +478,6 @@ describe("promoteThinkingTagsToBlocks", () => {
   });
 });
 
-describe("empty input handling", () => {
-  it("returns empty string", () => {
-    const helpers = [formatReasoningMessage, stripDowngradedToolCallText];
-    for (const helper of helpers) {
-      expect(helper("")).toBe("");
-    }
-  });
+it("strips empty downgraded tool-call text", () => {
+  expect(stripDowngradedToolCallText("")).toBe("");
 });

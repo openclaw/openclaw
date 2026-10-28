@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createApiKeyCredential } from "../auth-profiles/credential-fixtures.test-support.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "../auth-profiles/path-resolve.native.js";
 import type { AgentHarness } from "../harness/types.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -19,8 +19,12 @@ import {
 import { guardRunWorkspaceOwnership } from "./run.workspace-ownership.test-support.js";
 
 let runHarness: Awaited<ReturnType<typeof loadRunOverflowCompactionHarness>>;
+let runtimeConfig: typeof import("../../config/runtime-snapshot.js");
+let replaceSessionEntry: typeof import("../../config/sessions/session-accessor.js").replaceSessionEntry;
 beforeAll(async () => {
   runHarness = await loadRunOverflowCompactionHarness();
+  runtimeConfig = await import("../../config/runtime-snapshot.js");
+  ({ replaceSessionEntry } = await import("../../config/sessions/session-accessor.js"));
 });
 
 const failedProfile = "openai:failed";
@@ -81,13 +85,19 @@ function prepareAuthFailoverRun(
     order: { openai: [failedProfile, backupProfile] },
   });
   mockedResolveAuthProfileOrder.mockReturnValue([failedProfile, backupProfile]);
-  mockedGetApiKeyForModel.mockImplementation(async ({ profileId } = {}) => ({
-    apiKey: profileId === backupProfile ? "backup-api-key" : "failed-api-key",
-    profileId: profileId ?? failedProfile,
-    source: "test",
-    mode: "api-key",
-  }));
-  return runEmbeddedAgent;
+  mockedGetApiKeyForModel.mockImplementation(async (params = {}) => {
+    const { profileId } = params;
+    return {
+      apiKey: profileId === backupProfile ? "backup-api-key" : "failed-api-key",
+      profileId: profileId ?? failedProfile,
+      source: "test",
+      mode: "api-key",
+    };
+  });
+  return (params: Parameters<typeof runEmbeddedAgent>[0]) => {
+    runtimeConfig.setRuntimeConfigSnapshot(params.config ?? {});
+    return runEmbeddedAgent(params);
+  };
 }
 
 describe("native harness auth failover", () => {
@@ -97,6 +107,7 @@ describe("native harness auth failover", () => {
     resetSharedRunIntegrationHarnessMocks();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "harness-auth-failover" });
+    prepareSharedAuthStoreOwnershipForNative(state.env);
     guard = await guardRunWorkspaceOwnership(state);
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "OK" }]);
     mockedRunEmbeddedAttempt.mockResolvedValue(makeAttemptResult({ assistantTexts: ["OK"] }));
@@ -108,6 +119,17 @@ describe("native harness auth failover", () => {
       await state?.cleanup();
     }
   });
+  function createCodexAuthRunParams(): Parameters<typeof runHarness.runEmbeddedAgent>[0] {
+    return {
+      ...createOverflowRunParams(state),
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      agentHarnessId: "codex",
+      authProfileId: failedProfile,
+      authProfileIdSource: "auto",
+    };
+  }
+
   async function createNativeHostRunParams() {
     const params = {
       ...createOverflowRunParams(state),
@@ -119,6 +141,7 @@ describe("native harness auth failover", () => {
       authProfileId: failedProfile,
       authProfileIdSource: "auto" as const,
     };
+    runtimeConfig.setRuntimeConfigSnapshot({});
     await replaceSessionEntry(
       { agentId: "main", sessionKey: params.sessionKey },
       {
@@ -238,7 +261,8 @@ describe("native harness auth failover", () => {
       let modelRef = { provider: "openai", model: "gpt-5.6-luna" };
       const runEmbeddedAgent = prepareAuthFailoverRun(true, { nativeModelRef: () => modelRef });
       const params = await createNativeHostRunParams();
-      mockedGetApiKeyForModel.mockImplementation(async ({ profileId } = {}) => {
+      mockedGetApiKeyForModel.mockImplementation(async (authParams = {}) => {
+        const { profileId } = authParams;
         modelRef = {
           ...modelRef,
           [field]: field === "model" ? "gpt-5.6-sol" : "different-native-provider",
@@ -282,6 +306,29 @@ describe("native harness auth failover", () => {
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
 
+  it.each(["thrown", "returned"])(
+    "does not rotate or mark profiles for a %s local context timeout",
+    async (surface) => {
+      const runEmbeddedAgent = prepareAuthFailoverRun();
+      const { WorkerTaskError } = await import("@openclaw/worker-runtime");
+      const { ContextPreparationTimeoutError } =
+        await import("../failover/local-preparation-error.js");
+      const failure = new ContextPreparationTimeoutError(
+        new WorkerTaskError("worker task timed out", "timeout"),
+      );
+      if (surface === "thrown") {
+        mockedRunEmbeddedAttempt.mockRejectedValueOnce(failure);
+      } else {
+        mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+          makeAttemptResult({ promptError: failure, promptErrorSource: "precheck" }),
+        );
+      }
+      await expect(runEmbeddedAgent(createCodexAuthRunParams())).rejects.toBe(failure);
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+      expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     [
       "CODEX_NODE_EXEC_APPROVAL_EXPIRED",
@@ -301,16 +348,7 @@ describe("native harness auth failover", () => {
     });
     mockedRunEmbeddedAttempt.mockRejectedValueOnce(failure);
 
-    await expect(
-      runEmbeddedAgent({
-        ...createOverflowRunParams(state),
-        provider: "openai",
-        model: "gpt-5.6-sol",
-        agentHarnessId: "codex",
-        authProfileId: failedProfile,
-        authProfileIdSource: "auto",
-      }),
-    ).rejects.toBe(failure);
+    await expect(runEmbeddedAgent(createCodexAuthRunParams())).rejects.toBe(failure);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
     expect(resolveModelFallbackError(failure)).toEqual({ kind: "coordination", error: failure });
@@ -332,16 +370,7 @@ describe("native harness auth failover", () => {
       const failure = new Error(message);
       mockedRunEmbeddedAttempt.mockRejectedValueOnce(failure);
 
-      await expect(
-        runEmbeddedAgent({
-          ...createOverflowRunParams(state),
-          provider: "openai",
-          model: "gpt-5.6-sol",
-          agentHarnessId: "codex",
-          authProfileId: failedProfile,
-          authProfileIdSource: "auto",
-        }),
-      ).rejects.toBe(failure);
+      await expect(runEmbeddedAgent(createCodexAuthRunParams())).rejects.toBe(failure);
       expect(mockedMarkAuthProfileFailure).toHaveBeenCalledWith(
         expect.objectContaining({ profileId: failedProfile, reason: "auth" }),
       );

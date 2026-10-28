@@ -9,15 +9,6 @@ import {
 } from "./openai-responses-transport.js";
 import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 
-const SUPPORTED_TRANSPORT_APIS = new Set<Api>([
-  "openai-responses",
-  "openai-chatgpt-responses",
-  "openai-completions",
-  "azure-openai-responses",
-  "anthropic-messages",
-  "google-generative-ai",
-]);
-
 const SIMPLE_TRANSPORT_API_ALIAS: Record<string, Api> = {
   "openai-completions": "openclaw-openai-completions-transport",
   "anthropic-messages": "openclaw-anthropic-messages-transport",
@@ -60,25 +51,23 @@ function createProviderOwnedGoogleTransportStreamFn(
     : undefined;
 }
 
+const TRANSPORT_STREAM_FACTORIES = new Map<
+  Api,
+  (model: Model, ctx?: ProviderTransportStreamContext) => StreamFn | undefined
+>([
+  ["openai-responses", createOpenAIResponsesTransportStreamFn],
+  ["openai-chatgpt-responses", createOpenAIResponsesTransportStreamFn],
+  ["openai-completions", createOpenAICompletionsTransportStreamFn],
+  ["azure-openai-responses", createAzureOpenAIResponsesTransportStreamFn],
+  ["anthropic-messages", createAnthropicMessagesTransportStreamFn],
+  ["google-generative-ai", createProviderOwnedGoogleTransportStreamFn],
+]);
+
 function createSupportedTransportStreamFn(
   model: Model,
   ctx?: ProviderTransportStreamContext,
 ): StreamFn | undefined {
-  switch (model.api) {
-    case "openai-responses":
-    case "openai-chatgpt-responses":
-      return createOpenAIResponsesTransportStreamFn();
-    case "openai-completions":
-      return createOpenAICompletionsTransportStreamFn();
-    case "azure-openai-responses":
-      return createAzureOpenAIResponsesTransportStreamFn();
-    case "anthropic-messages":
-      return createAnthropicMessagesTransportStreamFn();
-    case "google-generative-ai":
-      return createProviderOwnedGoogleTransportStreamFn(model, ctx);
-    default:
-      return undefined;
-  }
+  return TRANSPORT_STREAM_FACTORIES.get(model.api)?.(model, ctx);
 }
 
 /** Maps public model APIs to the internal transport API id used by simple runtime dispatch. */
@@ -98,12 +87,13 @@ export function createTransportAwareStreamFnForModel(
   if (!getAiTransportHost().requiresManagedTransport(model)) {
     return undefined;
   }
-  if (!SUPPORTED_TRANSPORT_APIS.has(model.api)) {
+  const createStream = TRANSPORT_STREAM_FACTORIES.get(model.api);
+  if (!createStream) {
     throw new Error(
       `Model-provider request.proxy/request.tls/localService is not yet supported for api "${model.api}"`,
     );
   }
-  const streamFn = createSupportedTransportStreamFn(model, ctx);
+  const streamFn = createStream(model, ctx);
   if (!streamFn) {
     throw new Error(`Managed transport stream is unavailable for api "${model.api}"`);
   }

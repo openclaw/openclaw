@@ -1,16 +1,30 @@
 import type { TranslationMap } from "../lib/types.ts";
+import { registerNewSessionRuntimeEnglish } from "./en-new-session-runtime.ts";
 import { en } from "./en.ts";
+
+const runtime = registerNewSessionRuntimeEnglish.catalog.newSession;
 
 // Session setup messages load with their consumers instead of every UI startup.
 const enNewSessionSetup = {
   newSession: {
     openClawWorker: "OpenClaw worker",
+    deviceFolder: "Existing folder on device",
+    deviceFolderDescription:
+      "Work in place on the selected device. Files are not copied to the Gateway.",
+    deviceFolderPath: "Absolute path on device",
+    deviceFolderPathPlaceholder: "/path/to/existing/folder",
+    deviceFolderUnavailable:
+      "This device cannot use an existing folder right now. Check its connection and session-hosting support, or choose another workspace.",
+    deviceFolderRuntimeUnsupported:
+      "Existing device folders require a worker-turn runtime. Choose a compatible model/runtime or another workspace; your folder path is kept.",
+    deviceFolderPathRequired:
+      "Enter an absolute path to an existing folder on the selected device.",
+    deviceFolderAttachmentsUnsupported:
+      "Existing device folders cannot receive attachments. Remove them, or choose another workspace.",
     requiredWorkerHint: "Say what you’d like to work on.",
     requiredWorker: "Worker",
-    requiredWorkerUnavailable:
-      "The required worker is unavailable. Ask an administrator to check the worker profile, then retry.",
-    requiredWorkerChanged:
-      "The required worker policy changed. Start a new session; this saved message has not been sent.",
+    requiredWorkerUnavailable: runtime.requiredWorkerUnavailable,
+    requiredWorkerChanged: runtime.requiredWorkerChanged,
     title: en.newSession.title,
     hint: en.newSession.hint,
     environments: "Environments",
@@ -22,20 +36,17 @@ const enNewSessionSetup = {
     cloudProfileRuntimeUnsupported:
       "The {runtime} runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
     deviceRuntimeUnsupported: "This runtime does not support paired devices",
-    placementStartFailed: "The session was created, but startup needs attention: {error}",
+    placementStartFailed: runtime.placementStartFailed,
     placementCreateFailed: "Couldn't prepare session recovery. Your draft has been kept.",
-    placementStillStarting:
-      "Worker setup is still in progress. Retry to check the existing worker; your message has not been sent.",
-    placementCompletionUnconfirmed:
-      "Could not confirm whether worker setup finished. Retry to check again; your message has not been sent.",
+    placementStillStarting: runtime.placementStillStarting,
+    placementCompletionUnconfirmed: runtime.placementCompletionUnconfirmed,
     placementReloadBlocked: en.newSession.placementReloadBlocked,
-    placementCancelled:
-      "Session setup was interrupted and the temporary session was cleaned up. Your prompt is kept here.",
+    placementCancelled: runtime.placementCancelled,
     discardUnsavedAndReload: en.newSession.discardUnsavedAndReload,
     yourDevices: "Your devices",
     autoDeviceSub: "Least-busy device",
     autoDeviceSubEligible: "First eligible device",
-    cloud: "Cloud",
+    cloud: runtime.cloud,
     hosted: "Hosted workspaces",
     hostedWorkspace: "Hosted workspace",
     hostedHint:
@@ -49,26 +60,26 @@ const enNewSessionSetup = {
       "Requires the enabled Agents API plugin, a compatible API-key model, and a hosted environment. ChatGPT subscriptions are not supported.",
     machine: "Machine",
     operatingSystem: "Operating system",
-    runsOn: "Runs on {place}",
+    runsOn: runtime.runsOn,
     browse: "Browse folders",
+    browseDevice: "Browse folders on {device}",
     worktree: "Worktree",
     checkingGit: "Checking Git availability…",
+    folderRequiresScope:
+      "Checking Git for this folder requires {scope} access. Ask the person who manages OpenClaw for access.",
+    gitCheckAccessDenied:
+      "You don't have permission to check Git for this folder. Ask the person who manages OpenClaw for access.",
     gitCheckUnavailable: "Couldn't verify Git for this folder. Choose it again to retry.",
-    starting: "Starting…",
+    starting: runtime.starting,
     followUps: "Follow-up messages",
-    followUpCommandsUnavailable: "Commands are available after the session is created.",
-    followUpReloadBlocked:
-      "Finish starting the session or remove its follow-up messages and draft before reloading.",
-    followUpsPaused:
-      "The first message was not sent. Review it before retrying these follow-up messages.",
-    followUpsAdmissionFailed:
-      "Your follow-up messages are held. Retry them after checking browser storage.",
-    createFailed: "Couldn't create the session.",
+    followUpCommandsUnavailable: runtime.followUpCommandsUnavailable,
+    followUpReloadBlocked: runtime.followUpReloadBlocked,
+    followUpsPaused: runtime.followUpsPaused,
+    followUpsAdmissionFailed: runtime.followUpsAdmissionFailed,
+    createFailed: runtime.createFailed,
     checkoutCurrentNote: "Works in the selected folder on its current branch.",
-    preferenceSaveUnconfirmed:
-      "Saving your new-session choices could not be confirmed. Check them before starting a session.",
-    worktreeNameClearUnconfirmed:
-      "Session accepted, but clearing the saved worktree name could not be confirmed. Check Name before starting another worktree.",
+    preferenceSaveUnconfirmed: runtime.preferenceSaveUnconfirmed,
+    worktreeNameClearUnconfirmed: runtime.worktreeNameClearUnconfirmed,
     agent: "Agent",
     agents: "Agents",
     where: "Where",
@@ -124,9 +135,6 @@ const enNewSessionSetup = {
     worktreeBranchNote: "Creates branch {branch} in a separate checkout.",
     worktreeBranchFromTitleNote: "Creates a branch from the session title in a separate checkout.",
     worktreeNameInvalid: "Use lowercase letters, digits, and dashes.",
-    incognito: "Incognito",
-    incognitoDescription:
-      "Keep this session for 24 hours or until the Gateway restarts, whichever comes first",
     draft: "Draft",
     draftDescription: "Keep this session to yourself until you publish it",
     messagePlaceholder: "What should this session work on?",
@@ -165,6 +173,8 @@ const enNewSessionSetup = {
     checkoutCloudFrom: "From {branch}",
     checkoutRepository: "Remote checkout",
     checkoutRepositoryFrom: "Remote checkout from {branch}",
+    checkoutRequiresWorktree: "Use an isolated worktree for this project and agent",
+    checkoutCheckUnavailable: "Checkout unavailable. Select the project again to retry",
     checkoutRemoteLocked: "Devices and cloud run in a worktree",
     local: "Local",
     folderPlaceholder: "Agent workspace",
@@ -191,7 +201,7 @@ const enNewSessionSetup = {
     manageCloudWorkers: "Manage cloud workers",
     persistentEnvironmentHint: "Reusable host",
     disposableEnvironmentHint: "Disposable host",
-    sessionHostingAction: "Session hosting is disabled. Run the following command on the device:",
+    sessionHostingAction: "Session hosting is disabled. Run these commands on the paired device:",
     updateAction: "This device needs an update. Run the following command:",
     reconnectAction: "Then reconnect the device. For a headless device, run:",
     runsOnGateway: "Runs on your gateway",
@@ -210,10 +220,12 @@ const enNewSessionSetup = {
     terminalPlacementUnsupported:
       "Native CLI sessions use a specific host, not OpenClaw worker placement. Reset this draft and choose a native host.",
     terminalNeedsFolder: "Pick a folder before starting in a terminal.",
-    noSessionHosts: "No session hosts are paired. Connect a machine with session hosting enabled.",
+    noSessionHosts:
+      "No devices have session hosting enabled. Connect a machine with session hosting enabled, or enable it on a paired device.",
     deviceUnavailable: "Device unavailable. Reconnect it and try again.",
+    environmentUnavailable: "Unavailable",
     sessionHostingDisabled:
-      "Session hosting is disabled. Run openclaw connect --service --session-host on the device.",
+      "Session hosting is disabled. On the paired device, run openclaw config set nodeHost.workerRuns.enabled true, then openclaw node install --force.",
     deviceCapacityUnavailable:
       "Worker capacity is unavailable. Restart the device session host and try again.",
     deviceNoSlots: "No worker slots are available. Wait for a slot or pick another device.",
@@ -223,7 +235,10 @@ const enNewSessionSetup = {
     connectMachineFailed: "Couldn't create a connection link.",
     connectMachineMissingUrl: "The Gateway did not return a join URL. Update it and try again.",
     connectMachineUnavailable: "Reconnect to the Gateway and try again.",
-    connectMachineTeamHint: "Running it pairs that machine as a device for your team.",
+    connectMachineTeamHint:
+      "Installs a background node service that pairs this machine with your team and can run agent sessions.",
+    connectMachineCommandOnly: "Command access only (no agent sessions)",
+    connectMachineInstalled: "Already have OpenClaw installed? Run:",
     connectMachineSingleUse: "This link is single-use and expires soon.",
     connectMachineSingleUseExpires: "This link is single-use and expires at {time}.",
     connectMachineFreshCode: "Mint fresh code",

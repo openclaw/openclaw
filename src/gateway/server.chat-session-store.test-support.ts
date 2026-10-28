@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import {
   releaseSessionTestDirectories,
@@ -14,28 +14,15 @@ import { resetPersistentGatewaySessionStore } from "./test/persistent-session-st
 export type ChatSessionDirectoryOptions = { fresh?: boolean };
 export type StoredChatSessionEntry = Parameters<typeof writeSessionStore>[0]["entries"][string];
 
-export async function writeStoredMainSession(entry: StoredChatSessionEntry = {}) {
-  await writeSessionStore({
-    entries: {
-      main: {
-        sessionId: "sess-main",
-        updatedAt: Date.now(),
-        ...entry,
-      },
-    },
+export const writeStoredMainSession = (entry: StoredChatSessionEntry = {}) =>
+  writeSessionStore({
+    entries: { main: { sessionId: "sess-main", updatedAt: Date.now(), ...entry } },
   });
-}
 
-export function futureFixtureUpdatedAt(): number {
-  return Date.now() + 60_000;
-}
+export const futureFixtureUpdatedAt = (): number => Date.now() + 60_000;
 
-export async function writeMainSessionStore(sessionId = "sess-main") {
-  await writeStoredMainSession({
-    sessionId,
-    updatedAt: futureFixtureUpdatedAt(),
-  });
-}
+export const writeMainSessionStore = (sessionId = "sess-main") =>
+  writeStoredMainSession({ sessionId, updatedAt: futureFixtureUpdatedAt() });
 
 export async function prepareMainHistoryHarness(params: {
   ws: Parameters<typeof connectOk>[0];
@@ -56,12 +43,8 @@ function createPersistentChatSessionStore() {
     prepare(this: void) {
       directory = directories.make("openclaw-chat-persistent-");
     },
-    directory(this: void) {
-      return directory;
-    },
-    async reset(this: void) {
-      await resetPersistentGatewaySessionStore(directory);
-    },
+    directory: () => directory,
+    reset: () => resetPersistentGatewaySessionStore(directory),
     async dispose(this: void) {
       await releaseSessionTestDirectories(directories.dirs);
       directories.cleanup();
@@ -114,15 +97,10 @@ export function createMainChatSessionStoreFixture(settleGatewayFixture: () => Pr
       try {
         const sessionId = options?.sessionId ?? "sess-main";
         testState.sessionStorePath = path.join(dir, "sessions.json");
-        await writeSessionStore({
-          entries: {
-            main: {
-              sessionId,
-              sessionFile: path.join(dir, `${sessionId}.jsonl`),
-              updatedAt: Date.now(),
-              ...(options?.archivedAt !== undefined ? { archivedAt: options.archivedAt } : {}),
-            },
-          },
+        await writeStoredMainSession({
+          sessionId,
+          sessionFile: path.join(dir, `${sessionId}.jsonl`),
+          ...(options?.archivedAt !== undefined ? { archivedAt: options.archivedAt } : {}),
         });
         return await run(dir);
       } finally {
@@ -141,36 +119,22 @@ export function createMainChatSessionStoreFixture(settleGatewayFixture: () => Pr
 export async function writeMainChatSessionTranscript(
   events: unknown[],
   sessionId = "sess-main",
-  opts?: {
-    agentId?: string;
-    sessionKey?: string;
-  },
+  opts?: { agentId?: string; sessionKey?: string },
 ) {
   const storePath = testState.sessionStorePath;
   if (!storePath) {
     throw new Error("session store path was not initialized");
   }
-  // These fixtures always seed a complete fresh transcript. Replace it in one
-  // transaction so large history cases do not pay one SQLite commit per event.
   const transcriptEvents = events
     .filter((event) => typeof event !== "string" || event.trim())
     .map((event) => (typeof event === "string" ? JSON.parse(event) : event)) as Parameters<
     typeof replaceTranscriptEvents
   >[1];
+  const scope = { agentId: opts?.agentId ?? "main", sessionId, storePath };
   await replaceTranscriptEvents(
-    {
-      agentId: opts?.agentId ?? "main",
-      sessionId,
-      sessionKey: opts?.sessionKey ?? "agent:main:main",
-      storePath,
-    },
+    { ...scope, sessionKey: opts?.sessionKey ?? "agent:main:main" },
     transcriptEvents,
   );
-  // Oversized fixture transcripts take the deferred rebuild path; history
-  // reads need the projection converged before the case under test runs.
-  await waitForSessionTranscriptProjection({
-    agentId: opts?.agentId ?? "main",
-    sessionId,
-    storePath,
-  });
+  // Large transcripts rebuild asynchronously; converge before history reads.
+  await waitForSessionTranscriptProjection(scope);
 }

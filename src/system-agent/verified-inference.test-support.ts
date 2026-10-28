@@ -1,28 +1,30 @@
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginOrigin } from "../plugins/types.js";
+import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-index.js";
+import * as pluginRegistrySnapshot from "../plugins/plugin-registry-snapshot.js";
+import * as pluginArtifactIdentity from "../plugins/plugin-runtime-artifact-identity.js";
+import { createInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 
-type TestPluginRecord = {
-  pluginId: string;
-  origin: PluginOrigin;
-  rootDir: string;
-  manifestPath: string;
-  manifestHash: string;
-  source: string;
-  packageName: string;
-  packageVersion: string;
-  installRecordHash?: string;
-  packageJson: { path: string; hash: string };
-};
+export function mockPluginRegistry(records: InstalledPluginIndexRecord[]) {
+  vi.spyOn(pluginRegistrySnapshot, "loadPluginRegistrySnapshot").mockReturnValue(
+    createInstalledPluginIndex({ plugins: records }),
+  );
+  vi.spyOn(pluginArtifactIdentity, "loadPluginRuntimeArtifactIdentitySources").mockReturnValue(
+    records,
+  );
+}
 
 export function pluginRecord(
   pluginId: string,
-  overrides: Partial<TestPluginRecord> = {},
-): TestPluginRecord {
+  overrides: Partial<InstalledPluginIndexRecord> = {},
+): InstalledPluginIndexRecord {
   const rootDir = `/plugins/${pluginId}`;
   return {
     pluginId,
     origin: "global",
+    enabled: true,
+    startup: { sidecar: false, memory: false, agentHarnesses: [] },
+    compat: [],
     rootDir,
     manifestPath: `${rootDir}/openclaw.plugin.json`,
     manifestHash: `${pluginId}-manifest-v1`,
@@ -32,19 +34,6 @@ export function pluginRecord(
     installRecordHash: `${pluginId}-install-v1`,
     packageJson: { path: `${rootDir}/package.json`, hash: `${pluginId}-package-v1` },
     ...overrides,
-  };
-}
-
-export function pluginArtifactDeps() {
-  return {
-    fingerprintPluginRuntimeArtifact: (record: { pluginId: string }) =>
-      `${record.pluginId}-runtime-v1`,
-  };
-}
-
-export function cliRuntimeArtifactDeps(fingerprint = "claude-cli-artifact-v1") {
-  return {
-    resolveCliRuntimeArtifactFingerprint: vi.fn(async () => fingerprint),
   };
 }
 
@@ -74,7 +63,7 @@ export function profileAuth(profileId: string, apiKey: string) {
 }
 
 export function profileStore(profileId: string, credential: object) {
-  return vi.fn(() => ({ version: 1, profiles: { [profileId]: credential } })) as never;
+  return vi.fn(async () => ({ version: 1, profiles: { [profileId]: credential } })) as never;
 }
 
 export function requireFingerprint(value: string | undefined): string {

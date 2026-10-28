@@ -38,3 +38,15 @@ export function normalizeOpenClawStateSchemaReadError(error: unknown, pathname: 
   }
   return error;
 }
+
+// Preserve typed refusals and cancellation reasons while adding missing startup context.
+export function annotateStartupStateInspectionFailure(
+  failure: unknown,
+  pathname: string,
+  signal?: AbortSignal,
+): unknown {
+  if (!signal?.aborted && failure instanceof Error && !failure.message.includes(pathname)) {
+    failure.message = `OpenClaw state database ${pathname} failed startup inspection: ${failure.message}`;
+  }
+  return failure;
+}

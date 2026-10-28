@@ -1,0 +1,172 @@
+.mcp-connected-apps {
+  width: min(100%, 960px);
+  margin: 0 auto;
+  padding: var(--space-5);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.mcp-connected-apps__header,
+.mcp-connected-apps__toolbar,
+.mcp-connected-apps__grant,
+.mcp-connected-apps__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.mcp-connected-apps h1,
+.mcp-connected-apps h2 {
+  margin: 0;
+  color: var(--text-strong);
+}
+
+.mcp-connected-apps h1 {
+  font-size: 26px;
+}
+
+.mcp-connected-apps h2 {
+  font-size: 18px;
+}
+
+.mcp-connected-apps p,
+.mcp-connected-apps small {
+  line-height: 1.6;
+}
+
+.mcp-connected-apps__hint,
+.mcp-connected-apps small,
+.mcp-connected-apps__details dt {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.mcp-connected-apps__consent,
+.mcp-connected-apps__list {
+  margin: var(--space-4) 0;
+  padding: var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+
+.mcp-connected-apps__consent {
+  border-color: var(--accent);
+}
+
+.mcp-connected-apps__eyebrow {
+  display: block;
+  margin-bottom: var(--space-2);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.mcp-connected-apps__details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-5);
+  margin: var(--space-4) 0;
+}
+
+.mcp-connected-apps__details dd {
+  margin: var(--space-1) 0 0;
+}
+
+.mcp-connected-apps__access {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-4) 0;
+  padding: 0;
+  border: 0;
+}
+
+.mcp-connected-apps__access legend {
+  padding-bottom: var(--space-2);
+  font-weight: 600;
+}
+
+.mcp-connected-apps__choice {
+  display: flex;
+  align-items: start;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+}
+
+.mcp-connected-apps__choice input {
+  margin-top: 4px;
+  accent-color: var(--accent);
+}
+
+.mcp-connected-apps__choice small {
+  display: block;
+  margin-top: var(--space-1);
+}
+
+.mcp-connected-apps__actions {
+  justify-content: end;
+}
+
+.mcp-connected-apps__grant {
+  padding: var(--space-4) 0;
+}
+
+.mcp-connected-apps__grant + .mcp-connected-apps__grant {
+  border-top: 1px solid var(--border);
+}
+
+.mcp-connected-apps__grant p {
+  margin: var(--space-1) 0;
+}
+
+.mcp-connected-apps__error {
+  padding: var(--space-3);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  color: var(--danger);
+}
+
+.mcp-connected-apps__feedback:empty {
+  display: none;
+}
+
+.mcp-connected-apps__dialog {
+  max-height: var(--openclaw-modal-height-limit);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+
+.mcp-connected-apps__code {
+  display: block;
+  padding: var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-strong);
+  font-size: 28px;
+  text-align: center;
+  letter-spacing: 0.08em;
+}
+
+@media (max-width: 560px) {
+  .mcp-connected-apps {
+    padding: var(--space-3);
+  }
+
+  .mcp-connected-apps__header,
+  .mcp-connected-apps__toolbar {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .mcp-connected-apps__consent,
+  .mcp-connected-apps__list {
+    padding: var(--space-3);
+  }
+}

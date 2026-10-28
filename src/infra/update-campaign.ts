@@ -27,7 +27,10 @@ type UpdateCampaignAdoptionResult =
 type UpdateCampaignAnnouncement = {
   target: UpdateCampaignTarget;
   inspect?: Partial<GatewayActiveWorkInspectors>;
-  apply: (context: { forced: boolean }) => Promise<"handoff" | "applied" | "failed">;
+  apply: (context: {
+    forced: boolean;
+    target: UpdateCampaignTarget;
+  }) => Promise<"handoff" | "applied" | "failed">;
   onChange: (campaign: UpdateCampaignState | undefined) => void;
 };
 
@@ -65,6 +68,20 @@ export class UpdateCampaignController {
     }
     if (this.target && !sameTarget(this.target, target)) {
       this.clear();
+    }
+    return true;
+  }
+
+  /** Rearm an existing Git announcement using its owner-held apply policy. */
+  refreshGitTarget(target: Extract<UpdateCampaignTarget, { kind: "git" }>): boolean {
+    if (this.campaign?.state === "applying") {
+      return false;
+    }
+    const announcement = this.announcement;
+    if (announcement?.target.kind === "git") {
+      this.announce({ ...announcement, target });
+    } else {
+      this.reconcileTarget(target);
     }
     return true;
   }
@@ -262,11 +279,14 @@ export class UpdateCampaignController {
           this.clear();
         }
       };
-      void trackAsyncWork(() => announcement.apply({ forced })).then((outcome) => {
-        if (outcome === "failed") {
-          clearIfCurrent();
-        }
-      }, clearIfCurrent);
+      void trackAsyncWork(() => announcement.apply({ forced, target: announcement.target })).then(
+        (outcome) => {
+          if (outcome === "failed") {
+            clearIfCurrent();
+          }
+        },
+        clearIfCurrent,
+      );
     }
   }
 

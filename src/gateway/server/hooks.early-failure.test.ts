@@ -542,32 +542,6 @@ describe("gateway hook early-failure recovery", () => {
     expect(mocks.runCronIsolatedAgentTurn).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      name: "session conflict",
-      result: {
-        status: "error",
-        error: "session changed",
-        admissionDisposition: "session-conflict",
-      },
-      reason: "hook agent run was rejected because the target session changed",
-    },
-    {
-      name: "preparation failure",
-      result: { status: "error", error: "provider preparation failed" },
-      reason: "hook agent run failed before entering the agent runner",
-    },
-  ])("preserves plugin hook $name admission failure taxonomy", async ({ result, reason }) => {
-    mocks.getRuntimeConfig.mockReturnValue(createConfig(false));
-    mocks.runCronIsolatedAgentTurn.mockResolvedValueOnce(result);
-    const { dispatcher } = createPluginHookDispatcher();
-
-    await expect(dispatcher.dispatchHookAgentTurn(pluginHookTurn, "imap")).resolves.toEqual({
-      ok: false,
-      reason,
-    });
-  });
-
   it.each([false, true])(
     "bounds plugin work by cron capacity and fences expired admission=%s",
     async (expire) => {

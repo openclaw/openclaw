@@ -6,11 +6,12 @@ import {
   normalizeOptionalAgentRuntimeId,
 } from "../../agents/agent-runtime-id.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
-import { readSessionRuntimeOwnership } from "../../agents/harness/session-runtime-ownership.js";
+import type { AgentHarnessSessionRuntimeOwnership } from "../../agents/harness/types.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { getPreparedModelRuntimeAuthMaterializations } from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
+import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -45,7 +46,8 @@ export type ChatMetadataProjectionFacts = {
 export type PreparedChatMetadataProjection = Awaited<
   ReturnType<typeof prepareChatMetadataModelProjection>
 > & {
-  agent: ChatMetadataProjectionFacts & Pick<ChatMetadataResult, "commands" | "swarmEnabled">;
+  agent: ChatMetadataProjectionFacts &
+    Pick<ChatMetadataResult, "commands" | "swarmEnabled"> & { revision: string };
 };
 
 export function readPreparedChatMetadata(
@@ -53,6 +55,7 @@ export function readPreparedChatMetadata(
   readParams: ChatMetadataReadParams,
   config: OpenClawConfig,
   acpMeta: SessionAcpMeta | null,
+  runtimeOwnership: AgentHarnessSessionRuntimeOwnership | undefined,
   readAccountSelection?: Awaited<ReturnType<typeof prepareChatAccountSelection>>,
 ): ChatMetadataResult {
   readParams.draftAccountSelection?.assertCurrent();
@@ -69,7 +72,10 @@ export function readPreparedChatMetadata(
       }),
   };
   const projected = metadata.models
-    ? { ...metadata, models: projectSessionModelCatalog(readParams, metadata.models, config) }
+    ? {
+        ...metadata,
+        models: projectSessionModelCatalog(readParams, metadata.models, config, runtimeOwnership),
+      }
     : metadata;
   if (!readParams.sessionKey) {
     return projected;
@@ -124,8 +130,10 @@ export async function prepareChatMetadataModelProjection(params: {
   // Chat metadata must stay on process-published facts. Live discovery belongs to explicit
   // models.list refresh requests so a slow provider cannot delay chat startup.
   const snapshot = params.facts.modelCatalog;
+  // Capture before creating the shared projector; models.list cannot replace its retained config.
+  const config = captureRuntimeConfig(params.facts.owner.config);
   const projectorParams: Parameters<typeof prepareModelCatalogDecisions>[0] = {
-    cfg: params.facts.owner.config,
+    cfg: config,
     agentId: params.facts.agentId,
     snapshot,
     metadataSnapshot: params.facts.owner.metadataSnapshot,
@@ -154,7 +162,7 @@ export async function prepareChatMetadataModelProjection(params: {
       params: { view: "configured", includeDefaultModels: false },
       preloadedCatalog: {
         agentId: params.facts.agentId,
-        config: params.facts.owner.config,
+        config,
         snapshot,
       },
       preloadedOnly: true,
@@ -229,7 +237,7 @@ export function hasSessionCatalogContext(
   );
 }
 
-function resolveRequiredWorkerInferenceProfileId(
+export function resolveRequiredWorkerInferenceProfileId(
   readParams: ChatMetadataReadParams,
   config: OpenClawConfig,
 ): string | undefined {
@@ -250,13 +258,14 @@ function resolveRequiredWorkerInferenceProfileId(
     : undefined;
 }
 
-// Read native ownership after profile projection; never cache this session overlay.
+// Native ownership is prepared for this read after profile projection, never cached by agent.
 export function projectSessionModelCatalog(
   readParams: ChatMetadataReadParams,
   models: ModelChoice[],
   config: OpenClawConfig,
+  ownership: AgentHarnessSessionRuntimeOwnership | undefined,
+  availability: "hidden" | "admitted" = "hidden",
 ): ModelChoice[] {
-  const ownership = readSessionRuntimeOwnership({ ...readParams, config });
   const requiredWorker = resolveRequiredWorkerInferenceProfileId(readParams, config);
   const nativeAuth = ownership?.auth === "native";
   const entry = readParams.sessionEntry;
@@ -293,6 +302,7 @@ export function projectSessionModelCatalog(
       unavailableUntil: _until,
       ...available
     } = model;
-    return available;
+    // Gateway hides host-auth status; requester catalogs need explicit admission evidence.
+    return availability === "admitted" ? { ...available, available: true } : available;
   });
 }

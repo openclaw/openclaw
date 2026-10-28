@@ -261,8 +261,7 @@ struct ConnectionSettingsView: View {
             isInstalling: CLIInstallPrompter.shared.isPrompting,
             installStatus: CLIInstallPrompter.shared.installStatus,
             onInstall: {
-                CLIInstallPrompter.shared.checkAndPromptIfNeeded(
-                    reason: "connection-settings", userInitiated: true)
+                CLIInstallPrompter.shared.checkAndPromptIfNeeded(userInitiated: true)
             },
             onRecheck: self.refreshGatewayStatus)
     }

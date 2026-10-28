@@ -12,7 +12,7 @@ import { root } from "../infra/fs-safe.js";
 import { resolveUserPath, truncateUtf16Safe } from "../utils.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { resolveBootstrapFilesForRun } from "./bootstrap-files.js";
-import { buildBootstrapContextFiles } from "./embedded-agent-helpers.js";
+import { buildBootstrapContextFiles } from "./embedded-agent-helpers/bootstrap.js";
 import { resolveAgentIdentity } from "./identity.js";
 import {
   DEFAULT_IDENTITY_FILENAME,

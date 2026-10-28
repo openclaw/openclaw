@@ -69,6 +69,11 @@
       "import": "./dist/json-schema.mjs",
       "default": "./dist/json-schema.mjs"
     },
+    "./json-schema-validator": {
+      "types": "./dist/json-schema-validator.d.mts",
+      "import": "./dist/json-schema-validator.mjs",
+      "default": "./dist/json-schema-validator.mjs"
+    },
     "./markdown-plain-text": {
       "types": "./dist/markdown-plain-text.d.mts",
       "import": "./dist/markdown-plain-text.mjs",
@@ -119,6 +124,11 @@
       "import": "./dist/string-normalization.mjs",
       "default": "./dist/string-normalization.mjs"
     },
+    "./session-key-comparison": {
+      "types": "./dist/session-key-comparison.d.mts",
+      "import": "./dist/session-key-comparison.mjs",
+      "default": "./dist/session-key-comparison.mjs"
+    },
     "./stable-node-path": {
       "types": "./dist/stable-node-path.d.mts",
       "import": "./dist/stable-node-path.mjs",
@@ -144,7 +154,7 @@
     "build": "node --import ../../scripts/tsx.mjs ../../scripts/build-workspace-package.mts normalization-core"
   },
   "dependencies": {
-    "libphonenumber-js": "1.13.14",
-    "typebox": "1.3.34"
+    "libphonenumber-js": "1.13.15",
+    "typebox": "1.4.2"
   }
 }

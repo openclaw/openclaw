@@ -1,7 +1,6 @@
-import { resolveGatewayRunOptions } from "../cli/gateway-cli/run-options.js";
-import { getGatewayRunRuntimeHooks } from "../cli/gateway-cli/runtime-hooks.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createQuickstartNotePrompter } from "../system-agent/setup-apply.js";
@@ -11,6 +10,7 @@ import {
   resolveOnboardingDashboardTarget,
   runBrowserHatchHandoff,
 } from "./onboard-browser-handoff.js";
+import { startOnboardingGatewayProcess } from "./onboard-gateway-process.js";
 import { resolveLocalControlUiProbeLinks, waitForGatewayReachable } from "./onboard-helpers.js";
 
 /** Start the foreground Gateway with fresh plugin facts after onboarding installs. */
@@ -34,58 +34,73 @@ export async function runQuickstartForegroundGateway(params: {
       modeOverride: "local",
     });
     const authMode = config.gateway?.auth?.mode ?? (credentials.password ? "password" : "token");
-    const { runGatewayCommand } = await import("../cli/gateway-cli/run.js");
-    const gateway = runGatewayCommand(resolveGatewayRunOptions({}), getGatewayRunRuntimeHooks());
-    const stopped = gateway.then(() => null);
-    const reachable = await Promise.race([
-      stopped,
-      waitForGatewayReachable({
-        url: links.wsUrl,
-        token: authMode === "token" ? credentials.token : undefined,
-        password:
-          authMode === "password" || authMode === "trusted-proxy"
-            ? credentials.password
-            : undefined,
-        ...resolveGatewayStartupTiming(),
-      }),
-    ]);
-    if (!reachable) {
-      return;
-    }
-    if (reachable.ok) {
-      // Browser failure must not end the process that now owns the Gateway.
-      const handoff = await Promise.race([
+    const gateway = await startOnboardingGatewayProcess();
+    const readiness = new AbortController();
+    let failed = false;
+    try {
+      const stopped = gateway.wait.then(() => null);
+      const reachable = await Promise.race([
         stopped,
-        runBrowserHatchHandoff({
-          config,
-          prompter: createQuickstartNotePrompter(runtime),
-          suppressTokenOutput: params.suppressTokenOutput,
-          ...(params.agentId ? { agentId: params.agentId } : {}),
-        }).catch(() => ({ handedOff: false })),
+        waitForGatewayReachable({
+          url: links.wsUrl,
+          token: authMode === "token" ? credentials.token : undefined,
+          password:
+            authMode === "password" || authMode === "trusted-proxy"
+              ? credentials.password
+              : undefined,
+          ...resolveGatewayStartupTiming(),
+          signal: readiness.signal,
+        }),
       ]);
-      if (!handoff) {
+      if (!reachable) {
         return;
       }
-      if (!handoff.handedOff) {
-        runtime.log(t("wizard.guided.quickstartBrowserUnavailable"));
+      if (reachable.ok) {
+        // Browser failure must not end the process that now owns the Gateway.
+        const handoff = await Promise.race([
+          stopped,
+          runBrowserHatchHandoff({
+            config,
+            prompter: createQuickstartNotePrompter(runtime),
+            suppressTokenOutput: params.suppressTokenOutput,
+            ...(params.agentId ? { agentId: params.agentId } : {}),
+          }).catch(() => false),
+        ]);
+        if (handoff === null) {
+          return;
+        }
+        if (!handoff) {
+          runtime.log(t("wizard.guided.quickstartBrowserUnavailable"));
+        }
+      } else {
+        runtime.log(t("wizard.guided.quickstartGatewayPending"));
       }
-    } else {
-      runtime.log(t("wizard.guided.quickstartGatewayPending"));
-    }
-    const { url: dashboardUrl, setupOnly } = await resolveOnboardingDashboardTarget(
-      links.httpUrl,
-      config,
-      params.agentId,
-    );
-    runtime.log(t("wizard.guided.quickstartDashboard", { url: dashboardUrl.toString() }));
-    runtime.log(t("wizard.guided.quickstartForeground"));
-    runtime.log(t("wizard.guided.quickstartBackground"));
-    runtime.log(t("wizard.guided.quickstartReopen"));
-    if (setupOnly) {
-      runtime.log(
-        "Use openclaw setup for the setup assistant. Choose a primary model with openclaw onboard before regular agent chat.",
+      const { url: dashboardUrl, setupOnly } = await resolveOnboardingDashboardTarget(
+        links.httpUrl,
+        config,
+        params.agentId,
       );
+      runtime.log(t("wizard.guided.quickstartDashboard", { url: dashboardUrl.toString() }));
+      runtime.log(t("wizard.guided.quickstartForeground"));
+      runtime.log(t("wizard.guided.quickstartBackground"));
+      runtime.log(t("wizard.guided.quickstartReopen"));
+      if (setupOnly) {
+        runtime.log(
+          "Use openclaw setup for the setup assistant. Choose a primary model with openclaw onboard before regular agent chat.",
+        );
+      }
+      await gateway.wait;
+    } catch (error) {
+      failed = true;
+      throw error;
+    } finally {
+      readiness.abort();
+      await gateway.close().catch((error: unknown) => {
+        if (!failed) {
+          throw error;
+        }
+        runtime.error(formatErrorMessage(error));
+      });
     }
-    await gateway;
   });
 }

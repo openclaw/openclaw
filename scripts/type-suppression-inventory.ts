@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import {
   REPO_SCAN_ROOTS,
   REPO_SCAN_SKIPPED_DIR_NAMES,

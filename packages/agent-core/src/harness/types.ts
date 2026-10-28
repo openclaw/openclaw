@@ -101,6 +101,7 @@ export type SessionTreeEntry = SessionTreeEntryBase &
         content: string | (TextContent | ImageContent)[];
         details?: unknown;
         display: boolean;
+        excludeFromContext?: boolean;
       }
     | { type: "label"; targetId: string; label: string | undefined }
     | { type: "session_info"; name?: string }

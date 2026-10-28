@@ -29,7 +29,7 @@ const threadParticipation = createPersistentDedupeCache<MattermostThreadParticip
   persistent: {
     namespace: PERSISTENT_NAMESPACE,
     maxEntries: PERSISTENT_MAX_ENTRIES,
-    openStore: (options) => getOptionalMattermostRuntime()?.state.openKeyedStore(options),
+    openStore: (options) => getOptionalMattermostRuntime()?.state.openKeyedStoreV2(options),
     logError: createPluginStateErrorReporter(
       getOptionalMattermostRuntime,
       "mattermost",
@@ -49,14 +49,11 @@ export async function recordMattermostThreadParticipation(
   accountId: string,
   channelId: string,
   threadRootId: string,
-  opts?: { agentId?: string },
 ): Promise<void> {
   if (!accountId || !channelId || !threadRootId) {
     return;
   }
   await threadParticipation.register(makeKey(accountId, channelId, threadRootId), {
-    // Stored for future per-agent thread routing; current reads only need presence.
-    ...(opts?.agentId ? { agentId: opts.agentId } : {}),
     repliedAt: Date.now(),
   });
 }

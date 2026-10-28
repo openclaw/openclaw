@@ -24,10 +24,15 @@ function toSingleSlashUppercaseFileUrl(filePath: string): string {
   return pathToFileURL(filePath).href.replace(/^file:\/\//u, "FILE:");
 }
 
-async function withTempRoot<T>(run: (root: string) => Promise<T>): Promise<T> {
+async function withTempMedia<T>(
+  name: string,
+  run: (media: { root: string; sourcePath: string; url: string }) => Promise<T>,
+): Promise<T> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-media-url-"));
   try {
-    return await run(root);
+    const sourcePath = path.join(root, "workspace", "Media Folder Ω", name);
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    return await run({ root, sourcePath, url: toSingleSlashUppercaseFileUrl(sourcePath) });
   } finally {
     await cleanupSessionStateForTest({ stateDir: root, rootPath: root });
     await fs.rm(root, { recursive: true, force: true });
@@ -40,42 +45,27 @@ describe.runIf(process.platform === "win32")("Windows local media file URLs", ()
   });
 
   it("resolves single-slash mixed-case file schemes and rejects unsafe file URLs", async () => {
-    await withTempRoot(async (root) => {
-      const sourcePath = path.join(root, "Media Folder Ω", "photo.png");
-
-      expect(resolveLocalMediaPath(toSingleSlashUppercaseFileUrl(sourcePath))).toBe(sourcePath);
+    await withTempMedia("photo.png", async ({ sourcePath, url }) => {
+      expect(resolveLocalMediaPath(url)).toBe(sourcePath);
       expect(resolveLocalMediaPath("FILE://server/share/photo.png")).toBeUndefined();
       expect(resolveLocalMediaPath("FILE:///C:/Media%2Fphoto.png")).toBeUndefined();
     });
   });
 
   it("adds the exact parent root for a single-slash uppercase file URL", async () => {
-    await withTempRoot(async (root) => {
-      const sourcePath = path.join(root, "Media Folder Ω", "photo.png");
-
-      expect(appendLocalMediaParentRoots([], [toSingleSlashUppercaseFileUrl(sourcePath)])).toEqual([
-        path.dirname(sourcePath),
-      ]);
+    await withTempMedia("photo.png", async ({ sourcePath, url }) => {
+      expect(appendLocalMediaParentRoots([], [url])).toEqual([path.dirname(sourcePath)]);
     });
   });
 
   it("probes inbound metadata through a single-slash uppercase file URL", async () => {
-    await withTempRoot(async (root) => {
-      const sourcePath = path.join(root, "Media Folder Ω", "voice.mp3");
-      await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await withTempMedia("voice.mp3", async ({ sourcePath, url }) => {
       await fs.writeFile(sourcePath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
       probeMediaFilesWithinBudget.mockResolvedValueOnce([{ durationMs: 1250 }]);
 
       await expect(
-        toInboundMediaFactsWithMetadata([
-          { path: toSingleSlashUppercaseFileUrl(sourcePath), contentType: "audio/mpeg" },
-        ]),
-      ).resolves.toEqual([
-        expect.objectContaining({
-          path: toSingleSlashUppercaseFileUrl(sourcePath),
-          durationMs: 1250,
-        }),
-      ]);
+        toInboundMediaFactsWithMetadata([{ path: url, contentType: "audio/mpeg" }]),
+      ).resolves.toEqual([expect.objectContaining({ path: url, durationMs: 1250 })]);
       expect(probeMediaFilesWithinBudget).toHaveBeenCalledWith(
         [{ filePath: sourcePath, kind: "audio" }],
         { budgetMs: 3000, concurrency: 2, maxProbes: 8 },
@@ -84,11 +74,9 @@ describe.runIf(process.platform === "win32")("Windows local media file URLs", ()
   });
 
   it("ingests a single-slash uppercase file URL into managed outgoing media", async () => {
-    await withTempRoot(async (root) => {
-      const sourcePath = path.join(root, "workspace", "Media Folder Ω", "photo.png");
-      await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await withTempMedia("photo.png", async ({ root, sourcePath, url }) => {
       await fs.writeFile(sourcePath, createSolidPngBuffer(8, 8, { r: 24, g: 64, b: 128 }));
-      const sourceUrl = new URL(toSingleSlashUppercaseFileUrl(sourcePath));
+      const sourceUrl = new URL(url);
       sourceUrl.searchParams.set("sig", "secret");
       sourceUrl.hash = "preview";
 
@@ -96,12 +84,7 @@ describe.runIf(process.platform === "win32")("Windows local media file URLs", ()
         const blocks = await createManagedOutgoingMediaBlocks({
           stateDir: root,
           sessionKey: "agent:main:main",
-          items: [
-            {
-              url: sourceUrl.href.replace(/^file:/u, "FILE:"),
-              trustedLocal: false,
-            },
-          ],
+          items: [{ url: sourceUrl.href.replace(/^file:/u, "FILE:"), trustedLocal: false }],
           localRoots: [path.join(root, "workspace")],
         });
 

@@ -13,49 +13,49 @@ import {
   requireSessionMutationAccess,
   type SessionActionHost,
 } from "./session-organizer-batch-mutations.ts";
-import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
+import type { SessionOrganizerDependencies } from "./session-organizer.ts";
 
 export type SessionGroupActionHost = SessionActionHost & {
   knownSessionGroups(): string[];
 };
 
 export async function rememberSessionGroup(
-  host: SessionGroupActionHost,
+  deps: SessionGroupActionHost,
   name: string,
   scope: SidebarSessionMutationScope,
 ): Promise<SidebarSessionMutationResult> {
-  const groups = host.knownSessionGroups();
+  const groups = deps.knownSessionGroups();
   if (groups.includes(name)) {
     return "completed";
   }
-  return writeSessionGroup(host, scope, "sessions.groups.put", () =>
+  return writeSessionGroup(deps, scope, "sessions.groups.put", () =>
     scope.sessions.groupsPut([...groups, name]),
   );
 }
 
 export async function renameSessionGroup(
-  host: SessionOrganizerControllerHost,
+  deps: SessionOrganizerDependencies,
   group: string,
   next: string,
   scope: SidebarSessionMutationScope,
 ): Promise<boolean> {
   return (
-    (await writeSessionGroup(host, scope, "sessions.groups.rename", () =>
+    (await writeSessionGroup(deps, scope, "sessions.groups.rename", () =>
       scope.sessions.groupsRename(group, next),
     )) === "completed"
   );
 }
 
 export async function deleteSessionGroup(
-  host: SessionOrganizerControllerHost,
+  deps: SessionOrganizerDependencies,
   group: string,
   scope: SidebarSessionMutationScope,
 ): Promise<boolean> {
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
     return false;
   }
   if (
-    !requireSessionMutationAccess(host, scope, {
+    !requireSessionMutationAccess(deps, scope, {
       method: "sessions.groups.delete",
       requiredScope: "operator.write",
     })
@@ -75,7 +75,7 @@ export async function deleteSessionGroup(
   // Checked ahead of `confirmed`: a retired scope aborts the dialog to `false`
   // too, so without this order the operator's lost intent would look like an
   // ordinary cancel instead of the reconnect that actually dropped it.
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
     showToast({ message: t("sessionsView.deleteGroupStale", { group }) });
     return false;
   }
@@ -84,63 +84,64 @@ export async function deleteSessionGroup(
   }
   try {
     const outcome = await scope.sessions.groupsDelete(group);
-    return outcome === "completed" && host.sessionData.isSessionMutationScopeCurrent(scope);
+    return outcome === "completed" && deps.sessionData.isSessionMutationScopeCurrent(scope);
   } catch (error) {
-    host.sessionData.publishSessionMutationError(scope, error);
+    deps.sessionData.publishSessionMutationError(scope, error);
     return false;
   }
 }
 
 export function updateSessionGroupDefaults(
-  host: SessionOrganizerControllerHost,
+  deps: SessionOrganizerDependencies,
   group: string,
   defaults: { cwd: string | null; worktree: boolean },
   scope: SidebarSessionMutationScope,
 ): Promise<SidebarSessionMutationResult> {
-  return writeSessionGroup(host, scope, "sessions.groups.update", () =>
+  return writeSessionGroup(deps, scope, "sessions.groups.update", () =>
     scope.sessions.groupsUpdate(group, defaults),
   );
 }
 
 async function writeSessionGroup(
-  host: SessionActionHost,
+  deps: SessionActionHost,
   scope: SidebarSessionMutationScope,
   method: "sessions.groups.put" | "sessions.groups.rename" | "sessions.groups.update",
   write: () => Promise<SessionGroupMutationResult>,
 ): Promise<SidebarSessionMutationResult> {
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";
   }
-  if (!requireSessionMutationAccess(host, scope, { method, requiredScope: "operator.write" })) {
+  if (!requireSessionMutationAccess(deps, scope, { method, requiredScope: "operator.write" })) {
     return "failed";
   }
   try {
     const outcome = await write();
     // The catalog and this caller each own a stale signal; neither can confirm the other's write.
-    return outcome === "completed" && host.sessionData.isSessionMutationScopeCurrent(scope)
+    return outcome === "completed" && deps.sessionData.isSessionMutationScopeCurrent(scope)
       ? "completed"
       : "stale";
   } catch (error) {
-    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
       return "stale";
     }
-    host.sessionData.publishSessionMutationError(scope, error);
+    deps.sessionData.publishSessionMutationError(scope, error);
     return "failed";
   }
 }
 
 export async function reorderSidebarSection(
-  host: SessionOrganizerControllerHost,
+  deps: SessionOrganizerDependencies,
   sourceSectionId: string,
   targetSectionId: string,
   position: "before" | "after",
   scope: SidebarSessionMutationScope,
+  notify: () => void,
 ): Promise<void> {
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
   if (
-    !requireSessionMutationAccess(host, scope, {
+    !requireSessionMutationAccess(deps, scope, {
       method: "sessions.groups.put",
       requiredScope: "operator.write",
     })
@@ -150,10 +151,10 @@ export async function reorderSidebarSection(
   try {
     // knownSessionGroups() is the full discovered set (gateway catalog plus
     // row-discovered categories), so normalize only prunes deleted groups.
-    const knownGroups = host.knownSessionGroups();
-    const knownCatalogIds = host.knownSessionCatalogIds();
+    const knownGroups = deps.knownSessionGroups();
+    const knownCatalogIds = deps.knownSessionCatalogIds();
     const next = moveSessionSection(
-      normalizeSessionSectionOrder(host.knownSectionOrder(), knownGroups, knownCatalogIds),
+      normalizeSessionSectionOrder(deps.knownSectionOrder(), knownGroups, knownCatalogIds),
       sourceSectionId,
       targetSectionId,
       position,
@@ -164,11 +165,11 @@ export async function reorderSidebarSection(
     // No capability gate: the gateway serves this UI from its own dist, so a
     // newer UI never talks to an older gateway's closed put schema outside dev.
     await scope.sessions.groupsPut(nextGroups, next);
-    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-      return;
+    if (deps.sessionData.isSessionMutationScopeCurrent(scope)) {
+      // Publish the row move before completion restores its keyboard focus.
+      notify();
     }
-    host.requestUpdate();
   } catch (error) {
-    host.sessionData.publishSessionMutationError(scope, error);
+    deps.sessionData.publishSessionMutationError(scope, error);
   }
 }

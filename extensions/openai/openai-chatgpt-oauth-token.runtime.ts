@@ -1,4 +1,6 @@
 import {
+  createOAuthRefreshResponseError,
+  type OAuthRefreshOutcome,
   resolveOAuthTokenExpiresAt,
   resolveOAuthTokenLifetimeMs,
   throwIfOAuthLoginAborted,
@@ -45,13 +47,9 @@ type TokenFailure = {
   errorType?: string;
   reason?: TokenFailureReason;
   status?: number;
+  oauthRefreshOutcome?: OAuthRefreshOutcome;
 };
 type TokenResult = TokenSuccess | TokenFailure;
-type TokenResponseJson = {
-  access_token?: string;
-  refresh_token?: string;
-  expires_in?: number;
-};
 type TokenRequestOptions = {
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -115,6 +113,15 @@ function buildTokenResponseFailure(params: {
     operation: params.operation,
     summary,
     status: params.response.status,
+    ...(params.operation === "refresh"
+      ? {
+          oauthRefreshOutcome: createOAuthRefreshResponseError(
+            "OpenAI token refresh",
+            params.response.status,
+            body,
+          ).oauthRefreshOutcome,
+        }
+      : {}),
     ...(code ? { code } : {}),
     ...(errorType ? { errorType } : {}),
     ...(reason ? { reason } : {}),
@@ -122,14 +129,22 @@ function buildTokenResponseFailure(params: {
 }
 
 function formatMissingTokenResponseFields(
-  json: TokenResponseJson,
+  json: {
+    access_token?: unknown;
+    refresh_token?: unknown;
+    expires_in?: unknown;
+  },
   existingRefreshToken?: string,
 ): string {
   const missing: string[] = [];
-  if (!json.access_token) {
+  if (!normalizeOptionalString(json.access_token)) {
     missing.push("access_token");
   }
-  if (!json.refresh_token && !existingRefreshToken) {
+  if (
+    !(json.refresh_token === undefined
+      ? existingRefreshToken
+      : normalizeOptionalString(json.refresh_token))
+  ) {
     missing.push("refresh_token");
   }
   if (resolveOAuthTokenLifetimeMs(json.expires_in) === undefined) {
@@ -190,14 +205,34 @@ async function requestOpenAIToken(
               `OpenAI Codex OAuth token response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
             ),
         });
-        return { response, text: new TextDecoder().decode(bytes) };
+        return { response, text: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };
       },
     );
-    return readOpenAITokenResponse(tokenResponse, text, operation, existingRefreshToken);
+    const result = readOpenAITokenResponse(tokenResponse, text, operation, existingRefreshToken);
+    return result.type === "failed" && operation === "refresh"
+      ? {
+          ...result,
+          oauthRefreshOutcome: result.oauthRefreshOutcome ?? {
+            version: 1,
+            phase: "after-token-response",
+            outcome: "unknown",
+            status: tokenResponse.status,
+          },
+        }
+      : result;
   } catch (error) {
     return {
       type: "failed",
       operation,
+      ...(operation === "refresh"
+        ? {
+            oauthRefreshOutcome: {
+              version: 1,
+              phase: "token-response",
+              outcome: "unknown",
+            } as const,
+          }
+        : {}),
       ...(options.signal?.aborted ? { cancelled: true } : {}),
       summary: formatTokenRequestError(operation, error, timeoutMs, options.signal),
     };
@@ -213,9 +248,9 @@ function readOpenAITokenResponse(
   if (!response.ok) {
     return buildTokenResponseFailure({ response, operation, text });
   }
-  let json: TokenResponseJson;
+  let json: unknown;
   try {
-    json = JSON.parse(text) as TokenResponseJson;
+    json = JSON.parse(text);
   } catch {
     return {
       type: "failed",
@@ -230,9 +265,16 @@ function readOpenAITokenResponse(
       summary: `OpenAI Codex token ${operation} failed: expected JSON object response`,
     };
   }
+  if (json.error !== undefined) {
+    return buildTokenResponseFailure({ response, operation, text });
+  }
   const expires = resolveOAuthTokenExpiresAt(json.expires_in);
-  const refreshToken = json.refresh_token || existingRefreshToken;
-  if (!json.access_token || !refreshToken || expires === undefined) {
+  const access = normalizeOptionalString(json.access_token);
+  const refreshToken =
+    json.refresh_token === undefined
+      ? existingRefreshToken
+      : normalizeOptionalString(json.refresh_token);
+  if (!access || !refreshToken || expires === undefined) {
     return {
       type: "failed",
       operation,
@@ -241,7 +283,7 @@ function readOpenAITokenResponse(
   }
   return {
     type: "success",
-    access: json.access_token,
+    access,
     refresh: refreshToken,
     expires,
   };

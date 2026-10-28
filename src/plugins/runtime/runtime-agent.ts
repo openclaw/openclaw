@@ -1,6 +1,13 @@
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveSessionAgentIds,
+} from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import { resolveEmbeddedCliBackendDispatchEligibility } from "../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js";
+import {
+  resolveEmbeddedCliBackendDispatchEligibility,
+  resolveEmbeddedCliBackendDispatchEligibilityAsync,
+} from "../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import {
   buildConfiguredModelCatalog,
@@ -19,25 +26,31 @@ import {
   listSessionEntriesCore as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
-  patchSessionEntryCore as patchAccessorSessionEntry,
-  replaceSessionEntry,
-  type SessionAccessScope,
-  updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
-import {
-  captureExternalSessionCommitGuard,
-  sessionEntryCommitGuardOptions,
-} from "../../config/sessions/session-source-authority.js";
-import { normalizeResolvedMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
+import { captureMemoryExactSessionReader } from "../../config/sessions/session-accessor.memory-exact-read.js";
+import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   getSessionEntryAsync,
   getSessionEntryByIdAsync,
+  toSessionAccessScope,
 } from "../../plugin-sdk/session-store-runtime-internal.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import {
+  listSessionEntriesAsync,
+  withSessionEntriesAsync,
+  patchSessionEntry,
+  prepareSessionEntryPatch,
+  updateSessionStoreEntry,
+  upsertSessionEntry,
+} from "../../plugin-sdk/session-store-runtime.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../../sessions/session-controller.lifecycle.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { warnPluginSdkDeprecation } from "../sdk-deprecation.js";
 import { resolveAgentCatalogCreateTarget } from "./runtime-agent-session-catalog.js";
 import { createRuntimeSessionEntry } from "./runtime-agent-session-create.js";
 import { ensurePluginAgentWorkspace } from "./runtime-agent-workspace.js";
@@ -58,26 +71,21 @@ const loadAgentCommandRuntime = createLazyRuntimeModule(async () => {
   return { command, identity };
 });
 
-function toSessionAccessScope(params: RuntimeSessionStoreReadParams): SessionAccessScope {
-  // Keep plugin runtime parameters aligned with the public SDK wrapper while
-  // avoiding direct exposure of internal accessor-only options.
-  return {
-    sessionKey: params.sessionKey,
-    ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
-    ...(params.env !== undefined ? { env: params.env } : {}),
-    ...(params.hydrateSkillPromptRefs !== undefined
-      ? { hydrateSkillPromptRefs: params.hydrateSkillPromptRefs }
-      : {}),
-    ...(params.readConsistency !== undefined ? { readConsistency: params.readConsistency } : {}),
-    ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
-  };
-}
-
 function getSessionEntry(params: RuntimeSessionStoreReadParams): SessionEntry | undefined {
+  warnPluginSdkDeprecation({
+    family: "session-store",
+    method: "runtime.agent.session.getSessionEntry",
+    replacement: "runtime.agent.session.getSessionEntryAsync",
+  });
   return loadSessionEntryReadOnly(toSessionAccessScope(params));
 }
 
 const listSessionEntries: RuntimeSession["listSessionEntries"] = (params = {}) => {
+  warnPluginSdkDeprecation({
+    family: "session-store",
+    method: "runtime.agent.session.listSessionEntries",
+    replacement: "runtime.agent.session.listSessionEntriesAsync",
+  });
   const listEntries = params.readOnly
     ? listAccessorSessionEntriesReadOnly
     : listAccessorSessionEntries;
@@ -96,105 +104,119 @@ const listSessionEntries: RuntimeSession["listSessionEntries"] = (params = {}) =
   });
 };
 
-const patchSessionEntry: RuntimeSession["patchSessionEntry"] = async (params) => {
-  return await patchAccessorSessionEntry(toSessionAccessScope(params), params.update, {
-    ...sessionEntryCommitGuardOptions(
-      captureExternalSessionCommitGuard(params.assertCommitAllowed),
-    ),
-    fallbackEntry: params.fallbackEntry,
-    maintenanceConfig:
-      params.maintenanceConfig !== undefined
-        ? normalizeResolvedMaintenanceConfigInput(params.maintenanceConfig)
-        : undefined,
-    preserveActivity: params.preserveActivity,
-    replaceEntry: params.replaceEntry,
-  });
-};
-
-const updateSessionStoreEntry: RuntimeSession["updateSessionStoreEntry"] = async (params) => {
-  // Maintainer note: keep the legacy object-parameter API here, but route
-  // mutations through the session accessor boundary.
-  return await updateSessionEntry(
-    {
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-    },
-    params.update,
-    {
-      skipMaintenance: params.skipMaintenance,
-      takeCacheOwnership: params.takeCacheOwnership,
-      requireWriteSuccess: params.requireWriteSuccess,
-    },
-  );
-};
-
-const upsertSessionEntry: RuntimeSession["upsertSessionEntry"] = async (params) => {
-  // Maintainer note: this compatibility helper has full-entry replacement
-  // semantics, so removed fields must not survive as merge leftovers.
-  await replaceSessionEntry(toSessionAccessScope(params), params.entry);
-};
-
 async function runWithSessionWorkAdmission<T>(
   input: { storePath: string; sessionKey: string; signal?: AbortSignal },
   run: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
   const params = { ...input };
-  const source = captureIncognitoSessionSource(params);
-  if (source && !("kind" in source)) {
-    return source.actor.sessions.withSharedState(() => runAdmittedWork());
+  const memory = captureMemoryExactSessionReader(params, () => params.signal?.throwIfAborted());
+  if (memory) {
+    return admit(memory.read(params.sessionKey, "list"), () =>
+      memory.read(params.sessionKey, "list"),
+    );
   }
   return runAdmittedWork();
 
   async function runAdmittedWork(): Promise<T> {
-    const initialEntry = await readSessionEntryReadOnlyInWorker({
-      storePath: params.storePath,
-      sessionKey: params.sessionKey,
-      readConsistency: "latest",
-    });
-    const lifecycleAbortController = new AbortController();
-    const admission = await beginSessionWorkAdmission({
-      scope: params.storePath,
-      identities: [params.sessionKey, initialEntry?.sessionId],
-      signal: params.signal,
-      onInterrupt: () =>
-        lifecycleAbortController.abort(
-          new Error("Agent work interrupted by a session lifecycle change."),
-        ),
-      assertAllowed: () => {
-        source?.admissionSignal?.throwIfAborted();
-        if (source && "kind" in source) {
-          source.assertCurrent();
+    return withSessionEntryReadOnlyInWorker(
+      {
+        storePath: params.storePath,
+        sessionKey: params.sessionKey,
+        readConsistency: "latest",
+      },
+      () => params.signal?.throwIfAborted(),
+      async (read, owner) => {
+        if (!read.ok) {
+          throw read.error;
         }
-        const currentEntry = source
-          ? "kind" in source
-            ? undefined
-            : source.actor.sessions.readSharing(params.sessionKey)?.entry
-          : getSessionEntry({
-              storePath: params.storePath,
-              sessionKey: params.sessionKey,
-              readConsistency: "latest",
-            });
-        const changed = initialEntry
-          ? !currentEntry || currentEntry.sessionId !== initialEntry.sessionId
-          : Boolean(currentEntry);
-        if (changed) {
-          throw session.createSessionWorkStartChangedError(params.sessionKey);
-        }
-        const startError = session.resolveSessionWorkStartError(params.sessionKey, currentEntry);
-        if (startError) {
-          throw new Error(startError);
+        const initialEntry = read.value;
+        const retained = owner.source?.databaseIdentity
+          ? retainPreparedSessionEntryPredicate({
+              databaseIdentity: `file:${owner.source.databaseIdentity}`,
+              sessionKey: owner.scope?.sessionKey ?? params.sessionKey,
+              entry: initialEntry,
+              matches: (before, after) =>
+                before?.sessionId === after?.sessionId &&
+                before?.lifecycleRevision === after?.lifecycleRevision,
+            })
+          : undefined;
+        try {
+          return await admit(initialEntry, () => {
+            owner.assertCurrent();
+            const current = retained?.readCurrent();
+            if (retained && !current) {
+              throw session.createSessionWorkStartChangedError(params.sessionKey);
+            }
+            return current ? current.entry : initialEntry;
+          });
+        } finally {
+          retained?.release();
         }
       },
-    });
+    );
+  }
 
-    try {
-      const signal = params.signal
-        ? AbortSignal.any([params.signal, lifecycleAbortController.signal])
-        : lifecycleAbortController.signal;
-      return await admission.run(async () => await run(signal));
-    } finally {
-      admission.release();
-    }
+  async function admit(
+    initialEntry: SessionEntry | undefined,
+    readCurrentEntry: () => SessionEntry | undefined,
+  ): Promise<T> {
+    const agentId = resolveSessionAgentIds({
+      config: getRuntimeConfig(),
+      sessionKey: params.sessionKey,
+    }).sessionAgentId;
+    const target = captureSessionTarget({
+      storeScope: params.storePath,
+      sessionKey: params.sessionKey,
+      incarnation: initialEntry?.sessionId,
+      agentId,
+    });
+    return await withSessionTurn(
+      {
+        target,
+        sessionKey: params.sessionKey,
+        sessionId: initialEntry?.sessionId,
+        agentId,
+        abortSignal: params.signal,
+      },
+      async (operation, turnSignal) => {
+        const interruption = new AbortController();
+        const signal = AbortSignal.any([turnSignal, interruption.signal]);
+        const effect = await beginSessionEffect({
+          target,
+          operation,
+          agentId,
+          signal,
+          onInterrupt: (reason) =>
+            interruption.abort(
+              reason ?? new Error("Agent work interrupted by a session lifecycle change."),
+            ),
+          assertAllowed: () => {
+            const currentEntry = readCurrentEntry();
+            if (memory) {
+              const changed = initialEntry
+                ? !currentEntry || currentEntry.sessionId !== initialEntry.sessionId
+                : Boolean(currentEntry);
+              if (changed) {
+                throw session.createSessionWorkStartChangedError(params.sessionKey);
+              }
+            }
+            const startError = session.resolveSessionWorkStartError(
+              params.sessionKey,
+              currentEntry,
+            );
+            if (startError) {
+              throw new Error(startError);
+            }
+          },
+        });
+        try {
+          // Nested mutations exclude this callback's own retained effect from drain.
+          return await effect.run(async () => await run(signal));
+        } finally {
+          effect.release();
+        }
+      },
+    );
   }
 }
 
@@ -234,6 +256,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     },
     resolveAgentTimeoutMs,
     resolveCliBackendDispatchEligibility: resolveEmbeddedCliBackendDispatchEligibility,
+    resolveCliBackendDispatchEligibilityAsync: resolveEmbeddedCliBackendDispatchEligibilityAsync,
     ensureAgentWorkspace: ensurePluginAgentWorkspace,
   } satisfies Omit<
     PluginRuntime["agent"],
@@ -270,6 +293,8 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     getSessionEntryAsync,
     getSessionEntryByIdAsync,
     listSessionEntries,
+    listSessionEntriesAsync,
+    withSessionEntriesAsync,
     createSessionEntryListReader: async (
       params: Parameters<RuntimeSession["createSessionEntryListReader"]>[0],
     ) =>
@@ -277,6 +302,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
         await import("../../config/sessions/session-entry-read-runtime.js")
       ).createSessionEntryListReader(params),
     patchSessionEntry,
+    prepareSessionEntryPatch,
     upsertSessionEntry,
     runWithWorkAdmission: runWithSessionWorkAdmission,
     updateSessionStoreEntry,

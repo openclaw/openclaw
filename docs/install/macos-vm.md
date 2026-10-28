@@ -61,7 +61,7 @@ Once you have SSH access to a macOS VM, continue at [Install OpenClaw](#6-instal
 If `~/.local/bin` is not in your PATH:
 
 ```bash
-echo 'export PATH="$PATH:$HOME/.local/bin"' >> ~/.zshrc && source ~/.zshrc
+echo 'export PATH="$PATH:$HOME/.local/bin"' >> "${ZDOTDIR:-$HOME}/.zshrc" && source "${ZDOTDIR:-$HOME}/.zshrc"
 ```
 
 Verify:
@@ -136,7 +136,7 @@ openclaw gateway install
 openclaw gateway status
 ```
 
-If the VM already has [Node 24.16+ or 26.1+](/install/node), you can install the
+If the VM already has [Node 24.22.1+ or 26.12.1+](/install/node), you can install the
 package directly instead. Use the following command on npm 12 or npm 11.16+. On
 npm 11.15 and earlier, omit `--allow-scripts=openclaw`.
 
@@ -236,12 +236,12 @@ For true always-on, consider a dedicated Mac mini or a small VPS. See [VPS hosti
 
 ## Troubleshooting
 
-| Problem                  | Solution                                                                            |
-| ------------------------ | ----------------------------------------------------------------------------------- |
-| Cannot SSH into VM       | Check "Remote Login" is enabled in the VM's System Settings                         |
-| VM IP not showing        | Wait for VM to fully boot, run `lume get openclaw` again                            |
-| Lume command not found   | Add `~/.local/bin` to your PATH                                                     |
-| WhatsApp QR not scanning | Ensure you are logged into the VM (not host) when running `openclaw channels login` |
+| Problem                  | Solution                                                                                |
+| ------------------------ | --------------------------------------------------------------------------------------- |
+| Cannot SSH into VM       | Check "Remote Login" is enabled in the VM's System Settings                             |
+| VM IP not showing        | Wait for VM to fully boot, run `lume get openclaw` again                                |
+| Lume command not found   | Add `~/.local/bin` to your PATH                                                         |
+| WhatsApp QR not scanning | Check that you are logged into the VM (not host) when running `openclaw channels login` |
 
 ## Related docs
 

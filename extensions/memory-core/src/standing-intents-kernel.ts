@@ -1,4 +1,8 @@
-import type { DatabaseSync } from "node:sqlite";
+import {
+  admitStoreSearch,
+  type EngineConnection,
+} from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import { isPostgresSqlConnection } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -18,6 +22,7 @@ import {
   type StandingIntentOperations,
   type StandingIntentRow,
 } from "./standing-intents-model.js";
+import { standingIntentSearchSchema } from "./standing-intents-search.js";
 
 const INTENT_MATCH_CANDIDATE_BATCH_SIZE = 32;
 const INTENT_MATCH_CANDIDATE_LIMIT = 256;
@@ -33,7 +38,28 @@ type StandingIntentMatchDatabase = StandingIntentDatabase & {
   };
 };
 
-export function maintainStandingIntentLifecycle(db: DatabaseSync, nowMs: number): void {
+const lifecycleDeadlines = new WeakMap<
+  EngineConnection,
+  { observedAt: number; nextDueAt: number; hasActiveIntents: boolean }
+>();
+
+export function invalidateStandingIntentLifecycle(db: EngineConnection): void {
+  lifecycleDeadlines.delete(db);
+}
+
+export function getStandingIntentLifecycleDeadline(db: EngineConnection): number | null {
+  return lifecycleDeadlines.get(db)?.nextDueAt ?? null;
+}
+
+export function hasNoActiveStandingIntents(db: EngineConnection): boolean {
+  return lifecycleDeadlines.get(db)?.hasActiveIntents === false;
+}
+
+export function maintainStandingIntentLifecycle(db: EngineConnection, nowMs: number): void {
+  const deadline = lifecycleDeadlines.get(db);
+  if (deadline && nowMs >= deadline.observedAt && nowMs < deadline.nextDueAt) {
+    return;
+  }
   const kysely = getNodeSqliteKysely<StandingIntentDatabase>(db);
   executeSqliteQuerySync(
     db,
@@ -79,19 +105,44 @@ export function maintainStandingIntentLifecycle(db: DatabaseSync, nowMs: number)
         .where("status", "=", "fired"),
     );
   }
+  const expiry = executeSqliteQueryTakeFirstSync(
+    db,
+    kysely
+      .selectFrom("standing_intents")
+      // Binary64 preserves millisecond deadlines without decoding unsafe stored integers.
+      .select((eb) =>
+        eb.fn.min(eb.cast<number>("expires_at", "double precision")).as("next_expiry"),
+      )
+      .where("status", "in", ["pending", "armed", "fired"]),
+  );
+  let nextDueAt = expiry?.next_expiry ?? Infinity;
+  for (const row of fired) {
+    if (row.last_fired_at !== null) {
+      const rearmAt = row.last_fired_at + row.cooldown_seconds * 1_000;
+      if (rearmAt > nowMs) {
+        nextDueAt = Math.min(nextDueAt, rearmAt);
+      }
+    }
+  }
+  lifecycleDeadlines.set(db, {
+    observedAt: nowMs,
+    nextDueAt,
+    hasActiveIntents: expiry?.next_expiry != null,
+  });
 }
 
 export function createStandingIntentInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   row: StandingIntentRow,
 ): StandingIntent {
   const kysely = getNodeSqliteKysely<StandingIntentDatabase>(db);
+  invalidateStandingIntentLifecycle(db);
   executeSqliteQuerySync(db, kysely.insertInto("standing_intents").values(row));
   return rowToIntent(row);
 }
 
 export function listStandingIntentsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: StandingIntentOperations["list"]["input"],
 ): StandingIntent[] {
   const nowMs = params.nowMs ?? Date.now();
@@ -108,10 +159,11 @@ export function listStandingIntentsInDatabase(
 }
 
 export function cancelStandingIntentInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: StandingIntentOperations["cancel"]["input"],
 ): StandingIntent | null {
   const kysely = getNodeSqliteKysely<StandingIntentDatabase>(db);
+  invalidateStandingIntentLifecycle(db);
   const result = executeSqliteQuerySync(
     db,
     kysely
@@ -140,7 +192,7 @@ function triggerMatchesPrompt(row: StandingIntentRow, promptTokens: ReadonlySet<
 }
 
 export function matchStandingIntentsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: StandingIntentMatchInput,
 ): StandingIntent[] {
   const promptTokens = new Set(params.promptTokens);
@@ -149,12 +201,24 @@ export function matchStandingIntentsInDatabase(
   const storedSenderScope = params.senderScope;
   const nowMs = params.nowMs ?? Date.now();
   maintainStandingIntentLifecycle(db, nowMs);
+  // The lifecycle owner invalidates this absence fact on every write and rollback.
+  if (hasNoActiveStandingIntents(db)) {
+    return [];
+  }
   const kysely = getNodeSqliteKysely<StandingIntentMatchDatabase>(db);
-  let candidatesQuery = kysely
-    .selectFrom("standing_intents as intent")
-    .innerJoin("standing_intents_fts as fts", "fts.rowid", "intent.intent_key")
+  const search = admitStoreSearch(db, standingIntentSearchSchema(db));
+  if (!search.fullText) {
+    throw new Error(search.diagnostics.join("; "));
+  }
+  let candidatesQuery = (
+    isPostgresSqlConnection(db)
+      ? kysely.selectFrom("standing_intents as intent")
+      : kysely
+          .selectFrom("standing_intents as intent")
+          .innerJoin("standing_intents_fts as fts", "fts.rowid", "intent.intent_key")
+  )
     .selectAll("intent")
-    .where("fts.trigger_keywords", "match", ftsQuery)
+    .where(search.fullText.match(search.text.intents!, ftsQuery))
     .where("intent.status", "=", "armed")
     .where("intent.creator_sender", "is not", null)
     .where("intent.expires_at", ">", nowMs)
@@ -234,6 +298,7 @@ export function matchStandingIntentsInDatabase(
       if (!standingIntentsFitContext([...fired, firedIntent])) {
         continue;
       }
+      invalidateStandingIntentLifecycle(db);
       executeSqliteQuerySync(
         db,
         kysely

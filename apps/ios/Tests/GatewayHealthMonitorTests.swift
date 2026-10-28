@@ -49,13 +49,11 @@ private final class HealthMonitorFailureLifetime: Sendable {
 
 @MainActor
 struct GatewayHealthMonitorTests {
-    @Test(arguments: [0.0, 60.0], [false, true])
-    func `retiring an in-flight final health check cannot fail its replacement`(
-        timeoutSeconds: Double,
-        replace: Bool) async
+    @Test(arguments: [false, true])
+    func `retiring an in-flight final health check cannot fail its replacement`(replace: Bool) async
     {
         let monitor = GatewayHealthMonitor(
-            config: .init(intervalSeconds: 1, timeoutSeconds: timeoutSeconds, maxFailures: 1),
+            config: .init(intervalSeconds: 1, maxFailures: 1),
             sleep: { _ in Issue.record("A retired monitor must not schedule another check") })
         let retiredCheck = HealthMonitorCheckGate()
         let replacementCheck = HealthMonitorCheckGate()

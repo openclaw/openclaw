@@ -1,21 +1,16 @@
 import { afterEach, vi } from "vitest";
-import type { PrecomputedSubcommandHelpName } from "./precomputed-help-commands.js";
+import type { PrecomputedCommandHelpName } from "./precomputed-help-commands.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
 
 const mocks = vi.hoisted(() => ({
-  outputPrecomputedBrowserHelpText: vi.fn(),
-  outputPrecomputedSecretsHelpText: vi.fn(),
-  outputPrecomputedNodesHelpText: vi.fn(),
-  outputPrecomputedSubcommandHelpText: vi.fn(),
+  outputPrecomputedCommandHelpText: vi.fn(),
   loadRootHelpRenderOptionsForConfigSensitivePlugins: vi.fn(),
 }));
 
-vi.mock("./root-help-metadata.js", () => ({
+vi.mock("./root-help-metadata.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./root-help-metadata.js")>()),
   outputPrecomputedRootHelpText: () => false,
-  outputPrecomputedBrowserHelpText: mocks.outputPrecomputedBrowserHelpText,
-  outputPrecomputedSecretsHelpText: mocks.outputPrecomputedSecretsHelpText,
-  outputPrecomputedNodesHelpText: mocks.outputPrecomputedNodesHelpText,
-  outputPrecomputedSubcommandHelpText: mocks.outputPrecomputedSubcommandHelpText,
+  outputPrecomputedCommandHelpText: mocks.outputPrecomputedCommandHelpText,
 }));
 vi.mock("./root-help-live-config.js", () => ({
   loadRootHelpRenderOptionsForConfigSensitivePlugins:
@@ -28,10 +23,7 @@ export function runWithPrecomputedHelpMocks(
   argv: string[],
   setup: {
     env?: NodeJS.ProcessEnv;
-    outputPrecomputedBrowserHelpText?: () => boolean;
-    outputPrecomputedSecretsHelpText?: () => boolean;
-    outputPrecomputedNodesHelpText?: () => boolean;
-    outputPrecomputedSubcommandHelpText?: (name: PrecomputedSubcommandHelpName) => boolean;
+    outputPrecomputedCommandHelpText?: (name: PrecomputedCommandHelpName) => boolean;
     loadRootHelpRenderOptionsForConfigSensitivePlugins?: (
       env?: NodeJS.ProcessEnv,
     ) => Promise<RootHelpRenderOptions | null>;
@@ -43,10 +35,7 @@ export function runWithPrecomputedHelpMocks(
     }
   }
   for (const name of [
-    "outputPrecomputedBrowserHelpText",
-    "outputPrecomputedSecretsHelpText",
-    "outputPrecomputedNodesHelpText",
-    "outputPrecomputedSubcommandHelpText",
+    "outputPrecomputedCommandHelpText",
     "loadRootHelpRenderOptionsForConfigSensitivePlugins",
   ] as const) {
     mocks[name].mockReset();

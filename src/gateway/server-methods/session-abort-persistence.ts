@@ -12,7 +12,10 @@ export function createSessionAbortPersistence(params: {
   stopReason?: string;
   assertCurrent?: () => void;
 }) {
-  return (owner: Pick<ActiveEmbeddedRunOwner, "runId" | "sessionId" | "startedAtMs">) =>
+  return (
+    owner: Pick<ActiveEmbeddedRunOwner, "runId" | "sessionId" | "startedAtMs">,
+    requireYielded?: true,
+  ) =>
     persistGatewaySessionLifecycleEvent({
       sessionKey: params.sessionKey,
       agentId: params.agentId,
@@ -21,6 +24,7 @@ export function createSessionAbortPersistence(params: {
         assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       },
       expectedWriter: {
+        ...(requireYielded ? { requireYielded } : {}),
         runId: owner.runId,
         sessionId: owner.sessionId,
         lifecycleRevision: params.lifecycleRevision,

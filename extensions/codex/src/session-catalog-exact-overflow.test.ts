@@ -1,54 +1,31 @@
 import { performance } from "node:perf_hooks";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { CodexThread } from "./app-server/protocol.js";
-import type { CodexCatalogState, StoredCodexCatalogEntry } from "./session-catalog-index-state.js";
+import { memoryCatalogState } from "./session-catalog-index.test-support.js";
 import { lookupNodeCodexCatalogRecord } from "./session-catalog-node-lookup.js";
 import { NODE_INVOKE_TIMEOUT_MS } from "./session-catalog-parsing.js";
-import { nativeCatalogFixture } from "./session-catalog-resident.test-support.js";
-import {
-  commandRpcMocks,
-  config,
-  createCodexSessionCatalogControlFactory,
-  createRuntime,
-  pinnedConnectionMocks,
-} from "./session-catalog.test-helpers.js";
+import * as resident from "./session-catalog-resident.test-support.js";
+import * as catalog from "./session-catalog.test-helpers.js";
 
 afterEach(() => vi.restoreAllMocks());
 
 async function remoteFixture(count: number) {
-  const native = nativeCatalogFixture(count);
-  const target = native.rows.at(-1)!;
-  let activeRows: CodexThread[] = native.rows;
-  const stored = new Map<string, StoredCodexCatalogEntry>();
-  const state: CodexCatalogState = {
-    entries: async () => [...stored].map(([key, value]) => ({ key, value, createdAt: 0 })),
-    register: async (key, value) => {
-      stored.set(key, value);
-    },
-    delete: async (key) => stored.delete(key),
-  };
-  const factory = createCodexSessionCatalogControlFactory({
-    getPluginConfig: () => ({
-      supervision: { enabled: true },
-      appServer: {
-        transport: "websocket",
-        url: "wss://exact-overflow.example.test/codex",
-        authToken: "synthetic-exact-token",
-      },
-    }),
-    getRuntimeConfig: () => config,
+  let activeRows: CodexThread[] = resident.nativeCatalogFixture(count).rows;
+  const target = activeRows.at(-1)!;
+  const { values: stored, state } = memoryCatalogState();
+  const factory = resident.remoteCatalogFactory("exact-overflow", {
+    getRuntimeConfig: () => catalog.config,
     openResidentState: () => state,
   });
   const home = (await factory.homesForAgent("main"))[0]!;
   expect(home.localSessionsRoot).toBeUndefined();
   const control = factory.forRequest("main", home);
-  pinnedConnectionMocks.request.mockImplementation(async ({ method, requestParams }) => {
+  catalog.pinnedConnectionMocks.request.mockImplementation(async ({ method, requestParams }) => {
     if (method === "thread/read") {
       return { thread: target };
     }
     if (method === "thread/list") {
-      expect(requestParams.archived).toBe(false);
-      expect(requestParams.cwd).toBe(target.cwd);
+      expect(requestParams).toMatchObject({ archived: false, cwd: target.cwd });
       const offset = Number(requestParams.cursor ?? 0);
       const data = activeRows.slice(offset, offset + Number(requestParams.limit));
       const next = offset + data.length;
@@ -57,105 +34,81 @@ async function remoteFixture(count: number) {
     throw new Error(`Unexpected exact lookup request ${method}`);
   });
   await control.initialize();
-  commandRpcMocks.codexControlRequest.mockClear();
   return {
     control,
     target,
     stored,
-    clearActiveRows: () => {
-      activeRows = [];
-    },
-    restoreActiveRows: () => {
-      activeRows = [target];
+    setActiveRows: (rows: CodexThread[]) => {
+      activeRows = rows;
     },
   };
 }
 
-describe("exact Codex lookup beyond resident retention", () => {
-  it("opens an evicted remote thread after hydrating more than 20,000 rows", async () => {
-    const f = await remoteFixture(20_001);
+it.each(["evicted", "not-member", "archived"])(
+  "checks fresh remote membership for %s rows",
+  async (kind) => {
+    const f = await remoteFixture(kind === "evicted" ? 20_001 : 1);
     const rows = [...f.stored.values()].flatMap((entry) =>
       entry.kind === "row" ? [entry.row] : [],
     );
-    expect(rows).toHaveLength(20_000);
-    expect(rows.some((row) => row.threadId === f.target.id)).toBe(false);
+    expect(rows).toHaveLength(kind === "evicted" ? 20_000 : 1);
+    expect(rows.some((row) => row.threadId === f.target.id)).toBe(kind !== "evicted");
+    if (kind === "not-member") {
+      f.setActiveRows([]);
+    } else if (kind === "archived") {
+      await f.control.archiveThread(f.target.id);
+      f.setActiveRows([f.target]);
+    }
+    const result = expect(f.control.requireEligibleThread(f.target.id));
+    if (kind === "not-member") {
+      await result.rejects.toThrow("eligibility could not be verified");
+    } else {
+      await result.resolves.toMatchObject({ id: f.target.id });
+    }
+    if (kind === "evicted") {
+      expect(
+        catalog.pinnedConnectionMocks.request.mock.calls.map(([request]) => request.method),
+      ).toEqual(expect.arrayContaining(["thread/read", "thread/list"]));
+    }
+  },
+);
 
-    await expect(f.control.requireEligibleThread(f.target.id)).resolves.toMatchObject({
-      id: f.target.id,
-    });
+it("finds a paired-node thread after more than 100 catalog pages", async () => {
+  const record = {
+    threadId: "older-node-thread",
+    status: "notLoaded",
+    source: "cli",
+    archived: false,
+  };
+  let page = 0;
+  const invoke = vi.fn(async () => ({
+    payloadJSON: JSON.stringify({
+      sessions: ++page === 125 ? [record] : [],
+      ...(page < 125 ? { nextCursor: `page-${page}` } : {}),
+    }),
+  }));
+  const { runtime } = catalog.createRuntime({ invoke });
+  await expect(
+    lookupNodeCodexCatalogRecord({
+      agentId: "main",
+      runtime,
+      nodeId: "node",
+      threadId: record.threadId,
+    }),
+  ).resolves.toEqual({ kind: "found", record });
+  expect(invoke).toHaveBeenCalledTimes(125);
+});
 
-    expect(
-      pinnedConnectionMocks.request.mock.calls.some(
-        ([request]) => request.method === "thread/read",
-      ),
-    ).toBe(true);
-    expect(
-      pinnedConnectionMocks.request.mock.calls.some(
-        ([request]) => request.method === "thread/list",
-      ),
-    ).toBe(true);
+it("keeps one node lookup deadline across advancing pages", async () => {
+  let elapsed = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+  const invoke = vi.fn(async () => {
+    elapsed += NODE_INVOKE_TIMEOUT_MS / 2 + 1;
+    return { payloadJSON: JSON.stringify({ sessions: [], nextCursor: String(elapsed) }) };
   });
-
-  it("requires fresh non-archived membership even when a cached thread/read succeeds", async () => {
-    const f = await remoteFixture(1);
-    expect(
-      [...f.stored.values()].some(
-        (entry) => entry.kind === "row" && entry.row.threadId === f.target.id,
-      ),
-    ).toBe(true);
-    f.clearActiveRows();
-    await expect(f.control.requireEligibleThread(f.target.id)).rejects.toThrow(
-      "eligibility could not be verified",
-    );
-  });
-
-  it("uses fresh native membership after a remote resident row was archived", async () => {
-    const f = await remoteFixture(1);
-    await f.control.archiveThread(f.target.id);
-    f.restoreActiveRows();
-    await expect(f.control.requireEligibleThread(f.target.id)).resolves.toMatchObject({
-      id: f.target.id,
-    });
-  });
-
-  it("finds a paired-node thread after more than 100 catalog pages", async () => {
-    const record = {
-      threadId: "older-node-thread",
-      status: "notLoaded",
-      source: "cli",
-      archived: false,
-    };
-    let page = 0;
-    const invoke = vi.fn(async () => ({
-      payloadJSON: JSON.stringify({
-        sessions: ++page === 125 ? [record] : [],
-        ...(page < 125 ? { nextCursor: `page-${page}` } : {}),
-      }),
-    }));
-    const { runtime } = createRuntime({ invoke });
-
-    await expect(
-      lookupNodeCodexCatalogRecord({
-        agentId: "main",
-        runtime,
-        nodeId: "node",
-        threadId: record.threadId,
-      }),
-    ).resolves.toEqual({ kind: "found", record });
-    expect(invoke).toHaveBeenCalledTimes(125);
-  });
-
-  it("keeps one node lookup deadline across advancing pages", async () => {
-    let elapsed = 0;
-    vi.spyOn(performance, "now").mockImplementation(() => elapsed);
-    const invoke = vi.fn(async () => {
-      elapsed += NODE_INVOKE_TIMEOUT_MS / 2 + 1;
-      return { payloadJSON: JSON.stringify({ sessions: [], nextCursor: String(elapsed) }) };
-    });
-    const { runtime } = createRuntime({ invoke });
-    await expect(
-      lookupNodeCodexCatalogRecord({ agentId: "main", runtime, nodeId: "node", threadId: "older" }),
-    ).rejects.toThrow("eligibility could not be verified");
-    expect(invoke).toHaveBeenCalledTimes(2);
-  });
+  const { runtime } = catalog.createRuntime({ invoke });
+  await expect(
+    lookupNodeCodexCatalogRecord({ agentId: "main", runtime, nodeId: "node", threadId: "older" }),
+  ).rejects.toThrow("eligibility could not be verified");
+  expect(invoke).toHaveBeenCalledTimes(2);
 });

@@ -1,4 +1,3 @@
-/** Routed delivery thread classification and id resolution helpers. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveLoadedSessionThreadInfo } from "../../channels/plugins/session-thread-info-loaded.js";

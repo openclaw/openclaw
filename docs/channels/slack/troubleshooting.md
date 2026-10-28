@@ -117,8 +117,8 @@ openclaw pairing list slack
     snapshots, the HTTP account is configured but the current runtime could not
     resolve the SecretRef-backed signing secret.
 
-    A repeated `slack: webhook path ... already registered` log means two HTTP
-    accounts are using the same `webhookPath`; give each account a distinct path.
+    A `plugin: route conflict at ...` log means a webhook path is already owned.
+    Give each HTTP account a distinct `webhookPath` that does not overlap another plugin route.
 
   </Accordion>
 

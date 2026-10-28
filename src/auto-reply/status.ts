@@ -1,4 +1,3 @@
-/** Auto-reply status/help message builders for commands, status, and tool inventory output. */
 import { describeToolForVerbose } from "../agents/tool-description-summary.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy-shared.js";
 import type {

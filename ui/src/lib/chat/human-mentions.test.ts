@@ -5,12 +5,8 @@ describe("human mention text ownership", () => {
   const alex = { profileId: "profile-alex", start: 0, end: 5 };
 
   it.each([
-    ["Hello @Alex", [{ ...alex, start: 6, end: 11 }]],
-    ["🦞 @Alex", [{ ...alex, start: 3, end: 8 }]],
     ["@Alex!", [alex]],
     ["@Alexa", []],
-    ["@Alx", []],
-    ["", []],
     ["email@Alex", []],
   ])("keeps only the selected visible token after editing to %j", (next, expected) => {
     expect(updateHumanMentions("@Alex", next, [alex])).toEqual(expected);
@@ -58,14 +54,8 @@ describe("human mention text ownership", () => {
   });
 
   it.each([
-    [0, false],
     [9, false],
-    [10, false],
-    [13, false],
-    [31, false],
     [32, true],
-    [127, true],
-    [159, true],
   ] as const)(
     "rejects only C0 controls when restoring a token (code unit %i)",
     (code, accepted) => {

@@ -90,6 +90,7 @@ const releaseStateSchema = z.strictObject({
     appcastVerifiedAt: timestamp.optional(),
   }),
   closeout: z.strictObject({
+    websiteRunId: id.optional(),
     publishRunConclusion: z.string().optional(),
     runId: id.optional(),
     verifiedAt: timestamp.optional(),

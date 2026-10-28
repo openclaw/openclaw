@@ -1,10 +1,11 @@
-// Shared types for grouped OpenClaw Claw manifests and read-only add plans.
+import type { PluginOperatorGrants } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import type { AgentConfig } from "../config/types.agents.js";
+import type { PluginAcceptedDeclaredSurface } from "../config/types.plugins.js";
+import type { CronJobCreate } from "../cron/types.js";
 import type {
   CLAW_SCHEMA_VERSION,
   ClawAppliedExtension,
   ClawDiagnostic,
-  ClawExtensionFormat,
   ClawSourceIdentity,
 } from "./manifest-contract.js";
 import type {
@@ -14,13 +15,8 @@ import type {
   ClawPackage,
 } from "./schema.js";
 
-export {
-  CLAW_BOOTSTRAP_FILE_NAMES,
-  CLAW_SCHEMA_VERSION,
-  type ClawAppliedExtension,
-  type ClawDiagnostic,
-  type ClawSourceIdentity,
-} from "./manifest-contract.js";
+export { CLAW_BOOTSTRAP_FILE_NAMES, type ClawDiagnostic } from "./manifest-contract.js";
+export type { ClawSourceIdentity } from "./manifest-contract.js";
 
 export type {
   ClawCronJob,
@@ -35,10 +31,14 @@ export const CLAW_ADD_PLAN_SCHEMA_VERSION = "openclaw.clawAddPlan.v1" as const;
 export const CLAW_INSPECT_RESULT_SCHEMA_VERSION = "openclaw.clawInspect.v1" as const;
 export const CLAW_OUTPUT_STABILITY = "experimental" as const;
 
+type ClawExtensionFormat = ClawOpenClawExtension["format"];
+
 export type ResolvedClawPackage = ClawPackage & {
   integrity: string;
   extension?: ClawAppliedExtension;
 };
+
+export type ClawPluginCapabilityGrantsById = Record<string, PluginOperatorGrants>;
 
 export type ClawPackagePreflightResult = {
   ok: boolean;
@@ -56,6 +56,9 @@ export type ClawPackagePreflightResult = {
   mapped?: string[];
   unavailable?: string[];
   adapterIdentity?: string;
+  declaredCapabilities?: PluginAcceptedDeclaredSurface;
+  capabilityGrants?: PluginOperatorGrants;
+  capabilityGrantsByPluginId?: ClawPluginCapabilityGrantsById;
 };
 
 export type ClawPackagePreflight = (
@@ -93,7 +96,6 @@ export type ClawReadResult =
       clawMarkdownBody?: Buffer;
       packageBootstrap?: ClawWorkspaceSourceSnapshot;
       openClawProfile?: ClawOpenClawProfile;
-      legacyOpenClawProfile?: ClawOpenClawProfile;
       source: ClawSourceIdentity;
       snapshot: ClawSourceSnapshot;
       diagnostics: ClawDiagnostic[];
@@ -112,6 +114,8 @@ export type ClawAddPlanAction = {
   sourceKind?: "clawMarkdownBody";
   digest?: string;
   details?: Record<string, unknown>;
+  automation?: CronJobCreate;
+  scratch?: string;
   blocked: boolean;
   reason?: string;
 };
@@ -125,6 +129,9 @@ export type ClawExtensionPlan = ClawOpenClawExtension & {
   mapped: string[];
   unavailable: string[];
   adapterIdentity?: string;
+  declaredCapabilities?: PluginAcceptedDeclaredSurface;
+  capabilityGrants?: PluginOperatorGrants;
+  capabilityGrantsByPluginId?: ClawPluginCapabilityGrantsById;
   blocked: boolean;
 };
 

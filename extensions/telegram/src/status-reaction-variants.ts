@@ -112,17 +112,11 @@ const STATUS_REACTION_EMOJI_KEYS = Object.keys(
   TELEGRAM_STATUS_REACTION_VARIANTS,
 ) as StatusReactionEmojiKey[]; // SAFETY: The private literal has exactly these keys.
 
-export function resolveTelegramStatusReactionEmojis(params: {
-  initialEmoji: string;
-  overrides?: StatusReactionEmojis;
-}): Required<StatusReactionEmojis> {
-  const { overrides } = params;
-  const queuedFallback = normalizeOptionalString(params.initialEmoji) ?? DEFAULT_EMOJIS.queued;
-  const emojis = { ...DEFAULT_EMOJIS, queued: queuedFallback };
-  for (const key of STATUS_REACTION_EMOJI_KEYS) {
-    emojis[key] = normalizeOptionalString(overrides?.[key]) ?? emojis[key];
-  }
-  return emojis;
+export function resolveTelegramStatusReactionEmojis(
+  initialEmoji: string,
+): Required<StatusReactionEmojis> {
+  const queuedFallback = normalizeOptionalString(initialEmoji) ?? DEFAULT_EMOJIS.queued;
+  return { ...DEFAULT_EMOJIS, queued: queuedFallback };
 }
 
 export function buildTelegramStatusReactionVariants(

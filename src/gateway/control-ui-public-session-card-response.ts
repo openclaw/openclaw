@@ -1,0 +1,99 @@
+import { createHash } from "node:crypto";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
+import type { PublicSessionCardRenderer } from "./control-ui-public-session-card.js";
+import {
+  publicSessionMessageEntry,
+  publicSessionMessageText,
+} from "./control-ui-public-session-message.js";
+import {
+  isPublicSessionShareActive,
+  readPublicSessionShare,
+} from "./control-ui-public-session-read.js";
+import { publicSessionTitle } from "./control-ui-public-session-render.js";
+import type { PublicSessionShareLocator } from "./control-ui-public-session-token.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
+
+/** Uses the document's admission/cache owner to retain the rendered PNG bytes. */
+export async function servePublicSessionCardRepresentation(params: {
+  req: IncomingMessage;
+  res: ServerResponse;
+  config: OpenClawConfig;
+  gate: ControlUiPublicSessionRequestGate;
+  locator: PublicSessionShareLocator;
+  projection: SessionRowProjection;
+  host: string;
+  token: string;
+  card: {
+    render: PublicSessionCardRenderer["render"];
+    fallback: () => Promise<void>;
+    pullRequests?: GatewayRequestContext["controlUiSessionPullRequests"];
+  };
+}): Promise<true> {
+  const { res, config, gate, locator, projection, card } = params;
+  const result = await gate.run({
+    kind: "card",
+    publicationKey: locator.shareId,
+    sessionKey: locator.sessionKey,
+    config,
+    requestKey: JSON.stringify([
+      "card",
+      createHash("sha256").update(params.token).digest("base64url"),
+      params.host,
+    ]),
+    work: async () => {
+      const session = await readPublicSessionShare(config, locator, {
+        projection,
+        card: true,
+        pullRequests: card.pullRequests,
+      });
+      if (!session) {
+        return null;
+      }
+      const quote = session.messages
+        .map((message) => {
+          const entry = publicSessionMessageEntry(message);
+          return entry?.role === "user" ? publicSessionMessageText(entry) : undefined;
+        })
+        .find((text) => text);
+      return card.render({
+        ...session.cardFacts,
+        title: publicSessionTitle(session.title),
+        quote,
+        messageCount: session.totalMessages,
+        host: params.host,
+      });
+    },
+    consume: (representation) =>
+      withReadySessionRows(
+        projection,
+        () => [{ key: locator.sessionKey, agentId: locator.agentId }],
+        () => {
+          if (
+            !representation ||
+            !Buffer.isBuffer(representation.body) ||
+            !isPublicSessionShareActive(config, locator, projection)
+          ) {
+            return "fallback" as const;
+          }
+          if (!representation.isCurrent()) {
+            return false as const;
+          }
+          const body = representation.body;
+          res.statusCode = 200;
+          res.setHeader("Cache-Control", "public, max-age=300");
+          res.setHeader("Content-Type", "image/png");
+          res.setHeader("Content-Length", body.byteLength);
+          res.end(body);
+          return "served" as const;
+        },
+      ),
+  });
+  if (result.kind !== "ok" || result.value === "fallback") {
+    await card.fallback();
+  }
+  return true;
+}

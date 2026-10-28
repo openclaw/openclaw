@@ -4,7 +4,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { capturePluginRegistryLifecycleEpoch } from "../../plugins/registry-lifecycle.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SessionCatalogInstances } from "./session-catalog-entry-snapshot.js";
 import {
   SESSION_CATALOG_LIST_LIFETIME_MS,
@@ -26,12 +26,11 @@ type CatalogListOperation = {
 
 type CatalogListOperations = {
   registrations: CatalogRegistrationSnapshot;
-  epoch: ReturnType<typeof capturePluginRegistryLifecycleEpoch>;
   gatewaySignal?: AbortSignal;
   connectionSignal?: AbortSignal;
   pending: Map<string, CatalogListOperation>;
   providers: Map<string, CatalogListOperation & { release: () => void }>;
-  pages: Map<string, CatalogListEnumeration>;
+  pages: Map<string, { page?: CatalogListEnumeration; error?: SessionCatalog["error"] }>;
   retirement: AbortController;
 };
 
@@ -40,6 +39,17 @@ type CatalogListGeneration = CatalogListOperations & {
 };
 
 const catalogListsByConfig = new WeakMap<OpenClawConfig, CatalogListGeneration>();
+const catalogLog = createSubsystemLogger("gateway/session-catalog");
+
+export function retainSessionCatalogHostStatus(
+  host: SessionCatalog["hosts"][number],
+  previous: SessionCatalog["hosts"][number] | undefined,
+): SessionCatalog["hosts"][number] {
+  if (!previous) {
+    return host;
+  }
+  return host.pending && !host.error && previous.error ? { ...host, error: previous.error } : host;
+}
 
 export function sessionCatalogListKey(params: {
   agentId: string;
@@ -81,7 +91,9 @@ export function resolvePublishedSessionCatalogs(result: CatalogListEnumeration):
         // The final host set owns withdrawal; pending hosts already occupy their final positions.
         return {
           ...catalog,
-          hosts: catalog.hosts.map((host) => published.get(host.hostId) ?? host),
+          hosts: catalog.hosts.map((host) =>
+            retainSessionCatalogHostStatus(published.get(host.hostId) ?? host, host),
+          ),
         };
       })
     : result.catalogs;
@@ -94,19 +106,10 @@ export function getSessionCatalogListOperations(
   client?: GatewayClient | null,
 ): CatalogListOperations {
   let state = catalogListsByConfig.get(config);
-  const epoch = registrations.registry
-    ? capturePluginRegistryLifecycleEpoch(registrations.registry)
-    : undefined;
-  if (
-    !state ||
-    state.registrations !== registrations ||
-    state.epoch !== epoch ||
-    state.gatewaySignal !== gatewaySignal
-  ) {
+  if (!state || state.registrations !== registrations || state.gatewaySignal !== gatewaySignal) {
     state?.retirement.abort();
     state = {
       registrations,
-      epoch,
       gatewaySignal,
       pending: new Map(),
       providers: new Map(),
@@ -125,7 +128,6 @@ export function getSessionCatalogListOperations(
   if (!caller) {
     caller = {
       registrations,
-      epoch,
       gatewaySignal,
       connectionSignal: client.connectionSignal
         ? AbortSignal.any([state.retirement.signal, client.connectionSignal])
@@ -165,56 +167,81 @@ export function retireSessionCatalogLists(config: OpenClawConfig): void {
   operations.pages.clear();
 }
 
-// Pending source promises may outlive delivery. Their reactions retain only
-// this detachable owner, never the aggregate frame or an evicted progress owner.
+// A bounded delivery lifetime owns cache publication, independently of provider settlement.
 function startProviderOperation(
   operations: CatalogListOperations,
   key: string,
   progress: SessionCatalogListLifetime,
   run: () => Promise<CatalogListEnumeration>,
 ): CatalogListOperation & { release: () => void } {
-  let owner: { operations: CatalogListOperations; key: string; signal: AbortSignal } | undefined = {
-    operations,
-    key,
-    signal: AbortSignal.any([
-      operations.retirement.signal,
-      ...(operations.gatewaySignal ? [operations.gatewaySignal] : []),
-      ...(operations.connectionSignal ? [operations.connectionSignal] : []),
-    ]),
-  };
-  const result = run().then((page) => {
-    const current = owner;
-    const catalog = page.catalogs[0]!;
-    if (
-      current &&
-      !current.signal.aborted &&
-      current.operations.providers.get(current.key)?.result === result &&
-      !catalog.error
-    ) {
-      const pages = current.operations.pages;
-      pages.delete(current.key);
-      pages.set(current.key, page);
-      if (pages.size > 128) {
-        pages.delete(pages.keys().next().value!);
-      }
+  const signal = AbortSignal.any([
+    operations.retirement.signal,
+    ...(operations.gatewaySignal ? [operations.gatewaySignal] : []),
+    ...(operations.connectionSignal ? [operations.connectionSignal] : []),
+  ]);
+  let active = true;
+  const result = run().then((enumeration) => {
+    if (!active) {
+      return enumeration;
+    }
+    const error = enumeration.catalogs[0]!.error;
+    const state = enumeration.catalogs[0]!.requiresFreshList
+      ? undefined
+      : operations.pages.get(key);
+    const previous = state?.page;
+    if (error) {
+      catalogLog.warn("session catalog provider refresh failed", {
+        catalogId: enumeration.catalogs[0]!.id,
+        code: error.code,
+      });
+    } else if (state?.error) {
+      catalogLog.info("session catalog provider refresh recovered", {
+        catalogId: enumeration.catalogs[0]!.id,
+      });
+    }
+    if (enumeration.catalogs[0]!.requiresFreshList) {
+      // A source-owned publication cannot be cached for a later receiver request.
+      return enumeration;
+    }
+    const previousCatalogs = previous && resolvePublishedSessionCatalogs(previous);
+    const page = error
+      ? enumeration
+      : {
+          ...enumeration,
+          catalogs: enumeration.catalogs.map((catalog) => ({
+            ...catalog,
+            hosts: catalog.hosts.map((host) =>
+              retainSessionCatalogHostStatus(
+                host,
+                previousCatalogs
+                  ?.find((candidate) => candidate.id === catalog.id)
+                  ?.hosts.find((candidate) => candidate.hostId === host.hostId),
+              ),
+            ),
+          })),
+        };
+    operations.pages.delete(key);
+    operations.pages.set(key, error ? { page: previous, error } : { page });
+    if (operations.pages.size > 128) {
+      operations.pages.delete(operations.pages.keys().next().value!);
     }
     return page;
   });
   const release = () => {
-    clearTimeout(deadline);
-    const current = owner;
-    owner = undefined;
-    current?.signal.removeEventListener("abort", release);
-    if (current?.operations.providers.get(current.key)?.result === result) {
-      current.operations.providers.delete(current.key);
+    if (!active) {
+      return;
     }
+    active = false;
+    clearTimeout(deadline);
+    signal.removeEventListener("abort", release);
+    operations.providers.delete(key);
   };
   const deadline = setTimeout(release, SESSION_CATALOG_LIST_LIFETIME_MS);
   deadline.unref();
   const entry = { progress, result, release };
   operations.providers.set(key, entry);
-  owner.signal.addEventListener("abort", release, { once: true });
-  if (owner.signal.aborted) {
+  signal.addEventListener("abort", release, { once: true });
+  if (signal.aborted) {
     release();
   }
   void result.then(release, release);
@@ -240,36 +267,54 @@ export async function listSessionCatalogWithinBudget(
   if (active.progress !== progress) {
     subscribe(active.progress);
   }
-  const result = await raceWithTimeout(active.result, 1_000, () => undefined, { ref: false });
+  // Prepared pages do not wait for discovery; already-settled refreshes still win the race.
+  const result = await raceWithTimeout(
+    active.result,
+    operations.pages.has(key) ? 0 : 1_000,
+    () => undefined,
+    { ref: false },
+  );
   const catalog = result?.catalogs[0];
   const error = catalog?.error;
-  if (result && !error) {
-    return result;
-  }
-  const cached =
-    retirement.aborted || operations.gatewaySignal?.aborted || operations.connectionSignal?.aborted
+  const state =
+    empty.requiresFreshList ||
+    retirement.aborted ||
+    operations.gatewaySignal?.aborted ||
+    operations.connectionSignal?.aborted
       ? undefined
       : operations.pages.get(key);
-  if (result && !cached) {
-    return result;
-  }
+  const cached = state?.page;
   const previous = (cached && resolvePublishedSessionCatalogs(cached)[0]) ?? empty;
-  return {
-    catalogs: [
-      {
-        ...previous,
-        hosts: result
-          ? previous.hosts
-          : previous.hosts.map((host) =>
-              host.error ? host : Object.assign({}, host, { pending: true }),
-            ),
-        error: {
-          code: result ? "catalog_stale" : "catalog_pending",
-          message: `${cached ? "Showing stale results. " : ""}${error ? `Refresh failed: [${error.code}] ${error.message}` : "Catalog refresh is still pending; retry shortly."}`,
+  const failure = error ?? state?.error;
+  let page: CatalogListEnumeration;
+  if (result && !error) {
+    page = result;
+  } else {
+    page = {
+      catalogs: [
+        {
+          ...previous,
+          ...(!result ? { pending: true } : {}),
+          hosts: result
+            ? previous.hosts
+            : previous.hosts.map((host) =>
+                host.error ? host : Object.assign({}, host, { pending: true }),
+              ),
+          ...(failure
+            ? {
+                error: cached
+                  ? {
+                      code: "catalog_stale",
+                      message: `Showing stale results. Refresh failed: [${failure.code}] ${failure.message}`,
+                    }
+                  : failure,
+              }
+            : {}),
         },
-      },
-    ],
-    // Preserve the original adoption identity; delivery rechecks current authority.
-    instancesByCatalog: cached?.instancesByCatalog ?? new Map([[empty.id, new Map()]]),
-  };
+      ],
+      // Preserve the original adoption identity; delivery rechecks current authority.
+      instancesByCatalog: cached?.instancesByCatalog ?? new Map([[empty.id, new Map()]]),
+    };
+  }
+  return page;
 }

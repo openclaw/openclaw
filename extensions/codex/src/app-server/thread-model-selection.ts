@@ -37,7 +37,7 @@ export function resolveCodexBindingModelProviderFallback(params: {
     : params.bindingModelProvider;
 }
 
-export function resolveCodexAppServerThreadModelSelection(
+export async function resolveCodexAppServerThreadModelSelection(
   params: CodexAppServerAuthProfileLookup & {
     provider: string;
     homeScope?: CodexAppServerHomeScope;
@@ -49,12 +49,12 @@ export function resolveCodexAppServerThreadModelSelection(
       "threadId" | "authProfileId" | "model" | "modelProvider"
     >;
   },
-): { model: string; modelProvider?: string } {
+): Promise<{ model: string; modelProvider?: string }> {
   const authProfileId =
     params.inheritBindingAuthProfile === false
       ? params.authProfileId
       : (params.authProfileId ?? params.binding?.authProfileId);
-  const explicitModelProvider = resolveCodexAppServerModelProvider({
+  const explicitModelProvider = await resolveCodexAppServerModelProvider({
     ...params,
     authProfileId,
   });
@@ -66,7 +66,7 @@ export function resolveCodexAppServerThreadModelSelection(
         bindingModelProvider: params.binding.modelProvider,
       })
     : undefined;
-  return resolveCodexAppServerRequestModelSelection({
+  return await resolveCodexAppServerRequestModelSelection({
     ...params,
     model: params.requestModel ?? params.model,
     modelProvider: explicitModelProvider ?? bindingModelProvider,
@@ -74,13 +74,13 @@ export function resolveCodexAppServerThreadModelSelection(
   });
 }
 
-export function resolveCodexAppServerRequestModelSelection(
+export async function resolveCodexAppServerRequestModelSelection(
   params: CodexAppServerAuthProfileLookup & {
     model: string;
     homeScope?: CodexAppServerHomeScope;
     modelProvider?: string | null;
   },
-): { model: string; modelProvider?: string } {
+): Promise<{ model: string; modelProvider?: string }> {
   const model = params.model.trim();
   const modelProvider = params.modelProvider?.trim();
   if (modelProvider) {
@@ -93,7 +93,7 @@ export function resolveCodexAppServerRequestModelSelection(
     return { model };
   }
   const inferredProvider = model.slice(0, slashIndex);
-  const inferredModelProvider = resolveCodexAppServerModelProvider({
+  const inferredModelProvider = await resolveCodexAppServerModelProvider({
     ...params,
     provider: inferredProvider,
   });
@@ -103,12 +103,12 @@ export function resolveCodexAppServerRequestModelSelection(
   };
 }
 
-export function resolveCodexAppServerModelProvider(
+export async function resolveCodexAppServerModelProvider(
   params: CodexAppServerAuthProfileLookup & {
     provider: string;
     homeScope?: CodexAppServerHomeScope;
   },
-): string | undefined {
+): Promise<string | undefined> {
   const normalized = params.provider.trim();
   const normalizedLower = normalized.toLowerCase();
   if (
@@ -125,7 +125,7 @@ export function resolveCodexAppServerModelProvider(
   }
   if (
     normalizedLower === "openai" &&
-    (params.homeScope === "user" || isCodexAppServerNativeAuthProfile(params))
+    (params.homeScope === "user" || (await isCodexAppServerNativeAuthProfile(params)))
   ) {
     // User-home connections own native auth and provider selection, as do forwarded
     // ChatGPT profiles. Keep that pair together; account/route checks still run

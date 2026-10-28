@@ -19,9 +19,9 @@ import {
 } from "./registry-read.js";
 import { deleteRegistryWorktree, createWorktreeRemovalClaimsGuard } from "./registry.js";
 import { assertExactStateSourceIdentity } from "./removal-git.js";
+import { resolveRepository } from "./repository-paths.js";
 import { captureWorktreeRunEndContext, withWorktreeRunEnd } from "./run-end-lifecycle.js";
 import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
-import { resolveRepository } from "./service-preparation.js";
 import type { ExactStateRetirement } from "./snapshot-exact-state-contract.js";
 import { readExactStateSnapshot } from "./snapshot-exact-state.js";
 import { readExactRestoreReceipt } from "./snapshot-restore-exact.js";

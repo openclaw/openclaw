@@ -10,7 +10,9 @@ import {
 import { getChannelPlugin, getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { SkillCommandSpec } from "../skills/types.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
 import { listChatCommands, listChatCommandsForConfig } from "./commands-registry-list.js";
@@ -229,45 +231,6 @@ export function isActiveRunSafeCommandTurn(params: {
   );
 }
 
-function parsePositionalArgs(definitions: CommandArgDefinition[], raw: string): CommandArgValues {
-  const values: CommandArgValues = {};
-  const tokens = raw.split(/\s+/);
-  for (const [index, definition] of definitions.entries()) {
-    if (index >= tokens.length) {
-      break;
-    }
-    if (definition.captureRemaining) {
-      // CaptureRemaining keeps freeform prompts intact after the fixed leading args.
-      values[definition.name] = tokens.slice(index).join(" ");
-      break;
-    }
-    values[definition.name] = expectDefined(tokens[index], "command argument token");
-  }
-  return values;
-}
-
-function formatPositionalArgs(
-  definitions: CommandArgDefinition[],
-  values: CommandArgValues,
-): string | undefined {
-  const parts: string[] = [];
-  for (const definition of definitions) {
-    const value = values[definition.name];
-    if (value == null) {
-      continue;
-    }
-    const rendered = typeof value === "string" ? value.trim() : String(value);
-    if (!rendered) {
-      continue;
-    }
-    parts.push(rendered);
-    if (definition.captureRemaining) {
-      break;
-    }
-  }
-  return parts.length > 0 ? parts.join(" ") : undefined;
-}
-
 /** Parses raw command arguments according to the command definition. */
 export function parseCommandArgs(
   command: ChatCommandDefinition,
@@ -280,10 +243,20 @@ export function parseCommandArgs(
   if (!command.args || command.argsParsing === "none") {
     return { raw: trimmed };
   }
-  return {
-    raw: trimmed,
-    values: parsePositionalArgs(command.args, trimmed),
-  };
+  const values: CommandArgValues = {};
+  const tokens = trimmed.split(/\s+/);
+  for (const [index, definition] of command.args.entries()) {
+    if (index >= tokens.length) {
+      break;
+    }
+    if (definition.captureRemaining) {
+      // CaptureRemaining keeps freeform prompts intact after the fixed leading args.
+      values[definition.name] = tokens.slice(index).join(" ");
+      break;
+    }
+    values[definition.name] = expectDefined(tokens[index], "command argument token");
+  }
+  return { raw: trimmed, values };
 }
 
 /** Serializes parsed command arguments back into a raw argument string. */
@@ -304,7 +277,23 @@ export function serializeCommandArgs(
   if (command.formatArgs) {
     return command.formatArgs(args.values);
   }
-  return formatPositionalArgs(command.args, args.values);
+  const values = args.values;
+  const parts: string[] = [];
+  for (const definition of command.args) {
+    const value = values[definition.name];
+    if (value == null) {
+      continue;
+    }
+    const rendered = typeof value === "string" ? value.trim() : String(value);
+    if (!rendered) {
+      continue;
+    }
+    parts.push(rendered);
+    if (definition.captureRemaining) {
+      break;
+    }
+  }
+  return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
 /** Builds slash-command text from a command definition and parsed args. */
@@ -369,13 +358,66 @@ export function canResolveCommandArgMenu<
     : args?.values?.[command.argsMenu.arg] == null;
 }
 
-/** Resolves the next argument menu to show for commands with selectable choices. */
-export function resolveCommandArgMenu(
-  params: Omit<CommandArgChoiceContext, "arg"> & {
-    args?: CommandArgs;
-    session?: { agentId: string; sessionKey: string };
-  },
-): { arg: CommandArgDefinition; choices: ResolvedCommandArgChoice[]; title?: string } | null {
+type CommandArgMenuParams = Omit<CommandArgChoiceContext, "arg"> & {
+  args?: CommandArgs;
+  session?: { agentId: string; sessionKey: string };
+};
+
+type ResolvedCommandArgMenu = {
+  arg: CommandArgDefinition;
+  choices: ResolvedCommandArgChoice[];
+  title?: string;
+};
+
+/** @deprecated Use resolveCommandArgMenuAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
+export function resolveCommandArgMenu(params: CommandArgMenuParams): ResolvedCommandArgMenu | null {
+  warnPluginSdkDeprecation({
+    family: "native-command-menu",
+    method: "resolveCommandArgMenu",
+    replacement: "resolveCommandArgMenuAsync",
+  });
+  const menu = resolveCommandArgMenuChoices(params);
+  if (menu && params.command.key === "verbose" && params.cfg && params.session) {
+    const { agentId, sessionKey } = params.session;
+    const entry = loadSessionEntryReadOnly({
+      agentId,
+      storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+      sessionKey,
+    });
+    setVerboseMenuTitle(menu, params.command, params.cfg, agentId, entry?.verboseLevel);
+  }
+  return menu;
+}
+
+/** Resolves menu choices and session-owned status through the asynchronous read owner. */
+export async function resolveCommandArgMenuAsync(
+  params: CommandArgMenuParams,
+): Promise<ResolvedCommandArgMenu | null> {
+  const menu = resolveCommandArgMenuChoices(params);
+  if (menu && params.command.key === "verbose" && params.cfg && params.session) {
+    const { agentId, sessionKey } = params.session;
+    const entry = await readSessionEntryReadOnlyInWorker({
+      agentId,
+      storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+      sessionKey,
+    });
+    setVerboseMenuTitle(menu, params.command, params.cfg, agentId, entry?.verboseLevel);
+  }
+  return menu;
+}
+
+function setVerboseMenuTitle(
+  menu: ResolvedCommandArgMenu,
+  command: ChatCommandDefinition,
+  cfg: OpenClawConfig,
+  agentId: string,
+  level: string | undefined,
+): void {
+  const effectiveLevel = level ?? resolveAgentConfig(cfg, agentId)?.verboseDefault ?? "off";
+  menu.title = `Current verbose level: ${effectiveLevel}.\n${formatCommandArgMenuTitle({ command, menu })}`;
+}
+
+function resolveCommandArgMenuChoices(params: CommandArgMenuParams): ResolvedCommandArgMenu | null {
   if (!canResolveCommandArgMenu(params)) {
     return null;
   }
@@ -404,25 +446,13 @@ export function resolveCommandArgMenu(
   if (choices.length === 0) {
     return null;
   }
-  const menu = { arg, choices, title: argSpec !== "auto" ? argSpec.title : undefined };
-  if (command.key === "verbose" && cfg && params.session) {
-    // Native menus bypass directive dispatch; keep its status tied to the same target session.
-    const { agentId, sessionKey } = params.session;
-    const entry = loadSessionEntryReadOnly({
-      agentId,
-      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
-      sessionKey,
-    });
-    const level = entry?.verboseLevel ?? resolveAgentConfig(cfg, agentId)?.verboseDefault ?? "off";
-    menu.title = `Current verbose level: ${level}.\n${formatCommandArgMenuTitle({ command, menu })}`;
-  }
-  return menu;
+  return { arg, choices, title: argSpec !== "auto" ? argSpec.title : undefined };
 }
 
 /** Formats the prompt title shown before an argument-choice menu. */
 export function formatCommandArgMenuTitle(params: {
   command: ChatCommandDefinition;
-  menu: NonNullable<ReturnType<typeof resolveCommandArgMenu>>;
+  menu: ResolvedCommandArgMenu;
 }): string {
   const { command, menu } = params;
   if (menu.title) {

@@ -3,6 +3,17 @@ import { buildInlineProviderModels } from "./model.inline-provider.js";
 import { makeModel } from "./model.test-harness.js";
 
 describe("buildInlineProviderModels", () => {
+  it("keeps declared video out of the shared runtime input modalities", () => {
+    const result = buildInlineProviderModels({
+      lmstudio: {
+        baseUrl: "http://127.0.0.1:1234/v1",
+        api: "openai-completions",
+        models: [{ ...makeModel("video-model"), input: ["text", "image", "video"] }],
+      },
+    });
+    expect(result[0]?.input).toEqual(["text", "image"]);
+  });
+
   it("inherits the configured Pi transport for models without an API override", () => {
     expect(
       buildInlineProviderModels({

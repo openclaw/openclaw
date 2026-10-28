@@ -5,7 +5,7 @@ import * as convergence from "../../commands/doctor/shared/post-core-plugin-conv
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../plugins/installed-plugin-index-records.js";
 import { loadInstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
@@ -103,7 +103,7 @@ describe("post-core plugin payload degradation", () => {
             });
             expect(result.npm.outcomes.some((outcome) => outcome.status === "error")).toBe(false);
             expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
-            expect(readPersistedInstalledPluginIndexInstallRecords()).toEqual(records);
+            expect(await readPersistedInstalledPluginIndexInstallRecordsAsync()).toEqual(records);
             const selected = withPluginCache(createPluginCache(), () =>
               loadInstalledPluginIndex({ config, installRecords: records, env: process.env }),
             ).plugins.find((plugin) => plugin.pluginId === pluginId);
@@ -388,7 +388,7 @@ describe("failed cohort repair requirement assessment", () => {
                 config: { retained: "authored" },
               });
               expect(result.reason).toBeUndefined();
-              expect(readPersistedInstalledPluginIndexInstallRecords()).toEqual(records);
+              expect(await readPersistedInstalledPluginIndexInstallRecordsAsync()).toEqual(records);
               expect(await fs.readFile(dataPath, "utf8")).toBe("newer data survives");
               expect(result).toMatchObject({
                 status: "warning",

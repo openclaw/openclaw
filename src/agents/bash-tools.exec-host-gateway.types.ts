@@ -9,7 +9,6 @@ import type {
 } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
-/** Full input bundle for gateway-host allowlist and approval processing. */
 export type ProcessGatewayAllowlistParams = ExecHostCommandParams & {
   workdir: string;
   secretEgressBindings?: readonly SecretEgressSentinelBinding[];

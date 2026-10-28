@@ -2,26 +2,24 @@ import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import {
-  downgradeOpenAIFunctionCallReasoningPairs,
-  normalizeOpenAIResponsesToolCallIds,
-} from "../../embedded-agent-helpers/openai.js";
+import { classifyToolUseResultPairing } from "../../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { normalizeOpenAIResponsesToolCallIds } from "../../embedded-agent-helpers/openai.js";
 import {
   mergeConsecutiveUserMessages,
   shouldAllowProviderOwnedThinkingReplay,
-  shouldMergeConsecutiveUserTurns,
+  shouldMergeConsecutiveTurns,
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../../embedded-agent-helpers/turns.js";
 import type { AgentMessage, StreamFn } from "../../runtime/index.js";
 import {
+  collectFollowingToolResults,
   sanitizeToolUseResultPairing,
   sanitizeToolUseResultPairingForModel,
 } from "../../session-transcript-repair.js";
 import { isThinkingLikeBlock } from "../../thinking-block.js";
 import {
   extractToolCallsFromAssistant,
-  extractToolResultIds,
   hasToolCallInput,
   sanitizeToolCallIdsForCloudCodeAssist,
   type ToolCallIdMode,
@@ -60,35 +58,6 @@ function isReplaySafeThinkingTurn(
   return true;
 }
 
-function collectFollowingToolResults(
-  messages: AgentMessage[],
-  index: number,
-): { ids: Set<string>; displaced: boolean } {
-  const ids = new Set<string>();
-  let sawNonToolResult = false;
-  let displaced = false;
-  for (let nextIndex = index + 1; nextIndex < messages.length; nextIndex += 1) {
-    const message = messages[nextIndex];
-    if (!message || typeof message !== "object") {
-      sawNonToolResult = true;
-      continue;
-    }
-    if (message.role === "assistant" && assistantTurnHasReplayToolCall(message)) {
-      break;
-    }
-    if (message.role === "toolResult") {
-      const resultIds = extractToolResultIds(message);
-      for (const id of resultIds) {
-        ids.add(id);
-      }
-      displaced ||= resultIds.length > 0 && sawNonToolResult;
-      continue;
-    }
-    sawNonToolResult = true;
-  }
-  return { ids, displaced };
-}
-
 function resolveReplayToolCallName(
   block: RunnerToolCallBlock,
   rawId: unknown,
@@ -118,7 +87,8 @@ function sanitizeReplayToolCallInputs(
   const out: AgentMessage[] = [];
   const preservedThinkingToolCallIds = new Set<string>();
   const priorToolCallIds = new Set<string>();
-  const isCompleted = createCompletedToolCallPredicate(messages);
+  const pairing = classifyToolUseResultPairing(messages);
+  const isCompleted = createCompletedToolCallPredicate(messages, pairing);
 
   for (const [index, message] of messages.entries()) {
     if (!message) {
@@ -135,7 +105,12 @@ function sanitizeReplayToolCallInputs(
     }
     if (allowProviderOwnedThinkingReplay && isSignedThinkingReplayAssistantSpan(message)) {
       const replaySafeToolCalls = extractToolCallsFromAssistant(message);
-      const followingToolResults = collectFollowingToolResults(messages, index);
+      const followingToolResults = collectFollowingToolResults(
+        messages,
+        index,
+        undefined,
+        assistantTurnHasReplayToolCall,
+      );
       if (
         isReplaySafeThinkingTurn(message.content, allowedToolNames, isCompleted) &&
         replaySafeToolCalls.every(
@@ -198,6 +173,7 @@ function sanitizeReplayToolCallInputs(
   return {
     messages: changed ? out : messages,
     droppedAssistantMessages,
+    pairing: changed ? undefined : pairing,
   };
 }
 
@@ -328,11 +304,6 @@ export function sanitizeReplayToolCallIdsForStream(params: {
   });
 }
 
-export function sanitizeOpenAIResponsesReplayForStream(messages: AgentMessage[]): AgentMessage[] {
-  const repaired = sanitizeToolUseResultPairingForModel(messages, true);
-  return downgradeOpenAIFunctionCallReasoningPairs(normalizeOpenAIResponsesToolCallIds(repaired));
-}
-
 export function wrapStreamFnSanitizeMalformedToolCalls(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
@@ -347,10 +318,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
   provider?: string | null,
 ): StreamFn {
   return (model, context, options) => {
-    const messages = context?.messages;
-    if (!Array.isArray(messages)) {
-      return baseFn(model, context, options);
-    }
+    const messages = context.messages;
     const modelApi = model.api;
     const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
       modelApi,
@@ -372,7 +340,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       modelApi === "azure-openai-responses";
     const replayInputsChanged = sanitized.messages !== messages;
     let nextMessages = isOpenAIResponsesApi
-      ? sanitizeToolUseResultPairingForModel(sanitized.messages, true)
+      ? sanitizeToolUseResultPairingForModel(sanitized.messages, true, sanitized.pairing)
       : replayInputsChanged
         ? sanitizeToolUseResultPairing(sanitized.messages)
         : sanitized.messages;
@@ -390,10 +358,9 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     }
     // Appended Bedrock users need merging without revalidating unchanged signed tools.
     if (nextMessages === messages) {
-      if (modelApi !== "bedrock-converse-stream") {
-        return baseFn(model, context, options);
+      if (modelApi === "bedrock-converse-stream") {
+        nextMessages = mergeConsecutiveUserMessages(nextMessages);
       }
-      nextMessages = mergeConsecutiveUserMessages(nextMessages);
     } else if (
       sanitized.droppedAssistantMessages > 0 ||
       transcriptPolicy?.validateAnthropicTurns ||
@@ -404,9 +371,12 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       }
       if (transcriptPolicy?.validateAnthropicTurns) {
         nextMessages = validateAnthropicTurns(nextMessages, {
-          mergeConsecutiveUserTurns: shouldMergeConsecutiveUserTurns(transcriptPolicy, modelApi),
+          mergeConsecutiveTurns: shouldMergeConsecutiveTurns(transcriptPolicy, modelApi),
         });
       }
+    }
+    if (isOpenAIResponsesApi) {
+      nextMessages = normalizeOpenAIResponsesToolCallIds(nextMessages);
     }
     if (nextMessages === messages) {
       return baseFn(model, context, options);

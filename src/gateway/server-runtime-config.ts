@@ -6,6 +6,8 @@ import type {
   GatewayTailscaleConfig,
 } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isVitestRuntimeEnv } from "../infra/env.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   formatUnsafeGatewayTailscaleNoAuthMessage,
   isUnsafeGatewayTailscaleNoAuth,
@@ -16,9 +18,8 @@ import {
   resolveGatewayAuth,
 } from "./auth.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
-import { warnLegacyOpenClawEnvVars } from "./env-deprecation.js";
 import { commitHookTransformMappingReload } from "./hooks-mapping.js";
-import { resolveHooksConfig } from "./hooks.js";
+import { resolveHooksConfig, UnresolvedHooksTokenError } from "./hooks.js";
 import {
   defaultGatewayBindMode,
   isLoopbackHost,
@@ -40,6 +41,12 @@ type GatewayRuntimeConfig = {
 };
 
 const GATEWAY_EFFECTIVE_CONFIG_CONFLICT_CODE = "GATEWAY_EFFECTIVE_CONFIG_CONFLICT";
+
+// Legacy env warnings are process-wide and intentionally one-shot so normal
+// gateway startup is noisy enough to notice but not spammed by repeated imports.
+const LEGACY_ENV_PREFIXES = ["CLAWDBOT_", "MOLTBOT_"] as const;
+type LegacyEnvPrefix = (typeof LEGACY_ENV_PREFIXES)[number];
+let warned = false;
 
 /**
  * The effective bind/auth/Tailscale combination (after CLI and service overrides are
@@ -136,7 +143,31 @@ export async function resolveGatewayRuntimeConfig(params: {
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;
 }): Promise<GatewayRuntimeConfig> {
-  warnLegacyOpenClawEnvVars();
+  if (!warned && !isVitestRuntimeEnv(process.env)) {
+    const prefixCounts = new Map<LegacyEnvPrefix, number>();
+    for (const key of Object.keys(process.env)) {
+      // Count by prefix only; never print env names or values because some legacy
+      // names may still encode account/provider secrets.
+      const prefix = LEGACY_ENV_PREFIXES.find((candidate) => key.startsWith(candidate));
+      if (prefix) {
+        prefixCounts.set(prefix, (prefixCounts.get(prefix) ?? 0) + 1);
+      }
+    }
+    const legacyVarCount = [...prefixCounts.values()].reduce((total, count) => total + count, 0);
+    if (legacyVarCount > 0) {
+      const detectedPrefixes = LEGACY_ENV_PREFIXES.filter((prefix) => prefixCounts.has(prefix))
+        .map((prefix) => `${prefix}*`)
+        .join(", ");
+      process.emitWarning(
+        [
+          `Legacy ${detectedPrefixes} environment variables were detected (${legacyVarCount} total), but OpenClaw only reads OPENCLAW_* names now.`,
+          "Rename them by replacing the legacy prefix with OPENCLAW_; the old names are ignored.",
+        ].join("\n"),
+        { code: "OPENCLAW_LEGACY_ENV_VARS", type: "DeprecationWarning" },
+      );
+      warned = true;
+    }
+  }
 
   // Tailscale serve/funnel hard-requires loopback.  When bind is not
   // explicitly set, we must resolve Tailscale mode *before* choosing the
@@ -190,7 +221,20 @@ export async function resolveGatewayRuntimeConfig(params: {
     tailscaleMode,
   });
   const authMode: ResolvedGatewayAuth["mode"] = resolvedAuth.mode;
-  const hooksConfig = resolveHooksConfig(params.cfg);
+  let hooksConfig: ReturnType<typeof resolveHooksConfig>;
+  try {
+    hooksConfig = resolveHooksConfig(params.cfg);
+  } catch (err) {
+    // Startup has no previous hooks generation to preserve. Disable only this
+    // ingress; reload still rejects invalid candidates and keeps its active generation.
+    if (!(err instanceof UnresolvedHooksTokenError)) {
+      throw err;
+    }
+    hooksConfig = null;
+    createSubsystemLogger("gateway/hooks").warn(
+      `External hooks disabled at startup: ${err.message}. Gateway startup continues.`,
+    );
+  }
   const runtimeConfig = {
     bindHost,
     controlUiEnabled,

@@ -1,3 +1,4 @@
+import { terminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import {
   isDefaultInstallIdentity,
   resolveConfigPath,
@@ -19,7 +20,7 @@ import {
   ALL_GATEWAY_SECRET_INPUT_PATHS,
   readGatewaySecretInputValue,
 } from "../../gateway/secret-input-paths.js";
-import { readGatewayLastShutdown } from "../../infra/gateway-boot-lifecycle.js";
+import { readGatewayLastShutdownAsync } from "../../infra/gateway-boot-lifecycle.js";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { formatPortDiagnostics } from "../../infra/ports-format.js";
 import { inspectPortConnections } from "../../infra/ports-inspect.js";
@@ -40,11 +41,7 @@ import { resolveGatewayLocalPortOverride } from "../gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { normalizeListenerAddress } from "./shared.js";
 import { readDaemonStatusConfig } from "./status.config.js";
-import {
-  inspectDaemonPortStatuses,
-  resolveGatewayStatusProbeConfig,
-  resolveGatewayStatusSummary,
-} from "./status.gateway.js";
+import { inspectDaemonPortStatuses, resolveGatewayStatusSummary } from "./status.gateway.js";
 import { projectDaemonRuntimeStatus } from "./status.projection.js";
 import { readDaemonServiceStatus } from "./status.service.js";
 import type { GatewayRpcOpts } from "./types.js";
@@ -111,11 +108,10 @@ function hasActiveGatewayExecProbeCredential(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   explicitAuth: { token?: string; password?: string };
-  mode: "local" | "remote";
 }): boolean {
   const cfg = resolveGatewayProbeCredentialConfig({
     cfg: params.cfg,
-    mode: params.mode,
+    mode: "local",
   });
   return ALL_GATEWAY_SECRET_INPUT_PATHS.some((path) => {
     if (
@@ -123,7 +119,7 @@ function hasActiveGatewayExecProbeCredential(params: {
         config: cfg,
         env: params.env,
         explicitAuth: params.explicitAuth,
-        modeOverride: params.mode,
+        modeOverride: "local",
         path,
         // Remote probe config suppresses ambient credentials across auth types.
         // Mirror that owner here so env auth cannot hide a winning exec ref.
@@ -230,7 +226,9 @@ async function gatherDaemonStatusImpl(
   const serviceTargetsProbe = useNativeServiceTargetContext && !hasUrlOverride;
   const shouldInspectLocalGateway = !hasUrlOverride;
   const lastShutdown =
-    opts.deep && shouldInspectLocalGateway ? readGatewayLastShutdown(mergedDaemonEnv) : undefined;
+    opts.deep && shouldInspectLocalGateway
+      ? await readGatewayLastShutdownAsync(mergedDaemonEnv).catch(() => undefined)
+      : undefined;
   let duelingScopesWarning: string | null = null;
   if (opts.deep && serviceTargetsProbe && process.platform === "linux") {
     const { findSystemdGatewayInstallation, formatDuelingScopesWarning } =
@@ -244,9 +242,7 @@ async function gatherDaemonStatusImpl(
     opts.deep === true && shouldInspectLocalGateway
       ? await inspectWindowsGatewayFirewall({
           bind: gateway.bindMode,
-          mode: "quick",
           port: daemonPort,
-          platform: process.platform,
         })
       : undefined;
   const { portStatus, portCliStatus } = await inspectDaemonPortStatuses({
@@ -307,7 +303,6 @@ async function gatherDaemonStatusImpl(
         cfg: daemonCfg,
         env: mergedDaemonEnv,
         explicitAuth,
-        mode: "local",
       });
     if (probeUrlOverride || explicitAuth.token || explicitAuth.password) {
       daemonProbeAuth = explicitAuth;
@@ -343,7 +338,27 @@ async function gatherDaemonStatusImpl(
           localPortOverride,
           token: daemonProbeAuth?.token,
           password: daemonProbeAuth?.password,
-          config: resolveGatewayStatusProbeConfig({ config: daemonCfg, hasUrlOverride }),
+          // Freeze the resolved target and Gateway credentials while preserving
+          // endpoint-scoped transport policy for the existing client selectors.
+          config: {
+            ...daemonCfg,
+            gateway: {
+              ...daemonCfg.gateway,
+              mode: "local",
+              remote: daemonCfg.gateway?.remote
+                ? {
+                    url: daemonCfg.gateway.remote.url,
+                    edgeAuth: daemonCfg.gateway.remote.edgeAuth,
+                    tlsFingerprint: daemonCfg.gateway.remote.tlsFingerprint,
+                  }
+                : undefined,
+              auth:
+                !hasUrlOverride && daemonCfg.gateway?.auth?.mode
+                  ? { mode: daemonCfg.gateway.auth.mode }
+                  : undefined,
+              tls: undefined,
+            },
+          },
           tlsFingerprint: localCertificate?.ok
             ? localCertificate.value.fingerprintSha256
             : undefined,
@@ -381,7 +396,6 @@ async function gatherDaemonStatusImpl(
   if (
     shouldInspectLocalGateway &&
     loaded &&
-    runtime?.status === "running" &&
     portStatus &&
     (portStatus.status !== "busy" || rpc?.ok === false)
   ) {
@@ -506,7 +520,6 @@ async function gatherDaemonStatusImpl(
         ? {
             gatewayHeap: inspectGatewayHeapLimit(
               command.environment?.NODE_OPTIONS,
-              {},
               command.programArguments,
             ),
           }
@@ -600,8 +613,16 @@ export function renderPortDiagnosticsForCli({ port }: DaemonStatus, rpcOk?: bool
   return formatPortDiagnostics({
     port: port.port,
     status: port.status,
-    listeners: port.listeners,
-    hints: port.hints,
+    listeners: port.listeners.map((listener) => ({
+      ...listener,
+      user: listener.user ? terminalText`${listener.user}` : listener.user,
+      command: listener.command ? terminalText`${listener.command}` : listener.command,
+      commandLine: listener.commandLine
+        ? terminalText`${listener.commandLine}`
+        : listener.commandLine,
+      address: listener.address ? terminalText`${listener.address}` : listener.address,
+    })),
+    hints: port.hints.map((hint) => terminalText`${hint}`),
   });
 }
 

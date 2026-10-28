@@ -49,6 +49,11 @@ struct GatewayConnectFailureBackoff {
 }
 
 extension GatewayChannelActor {
+    public func clearConnectFailureBackoff() {
+        self.connectFailureBackoff.reset()
+        self.connectFailureBackoffWaitTask?.cancel()
+    }
+
     nonisolated static func minimumProtocolVersion(role: String, clientMode: String) -> Int {
         // Node RPC frames stayed compatible across v3/v4. Operator chat surfaces require v4.
         if role == "node", clientMode == "node" {
@@ -69,7 +74,13 @@ extension GatewayChannelActor {
             }
             #endif
             let clock = ContinuousClock()
-            if clock.now < deadline { try await clock.sleep(until: deadline) }
+            if clock.now < deadline {
+                #if DEBUG
+                try await self.testRecoverySleep(clock.now.duration(to: deadline))
+                #else
+                try await clock.sleep(until: deadline)
+                #endif
+            }
         }
         self.connectFailureBackoffWaitTask = wait
         defer { self.connectFailureBackoffWaitTask = nil }

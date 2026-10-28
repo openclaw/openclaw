@@ -10,8 +10,10 @@ import {
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
-import { resolveSessionLifecycleTimestampsAsync } from "../../config/sessions/lifecycle-read.js";
-import { hasTerminalMainSessionTranscriptNewerThanRegistrySync } from "../../config/sessions/lifecycle.js";
+import {
+  hasTerminalMainSessionTranscriptNewerThanRegistryAsync,
+  resolveSessionLifecycleTimestampsAsync,
+} from "../../config/sessions/lifecycle-read.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentIdFromSessionKey,
@@ -23,13 +25,15 @@ import {
   resolveSessionResetPolicy,
 } from "../../config/sessions/reset-policy.js";
 import { resolveChannelResetConfig, resolveSessionResetType } from "../../config/sessions/reset.js";
+import type { SessionEntrySummary } from "../../config/sessions/session-accessor.types.js";
 import {
-  listSessionEntriesReadOnly,
-  loadExactSessionEntryReadOnly,
-  type SessionEntrySummary,
-} from "../../config/sessions/session-accessor.js";
-import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
+import {
+  readSessionEntryReadOnlyInWorker,
+  withSessionStoreReaderInWorker,
+} from "../../config/sessions/session-entry-read-runtime.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import {
@@ -54,9 +58,7 @@ import {
   listAgentIds,
   resolveDefaultAgentId,
 } from "../agent-scope.js";
-import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
-import { clearAllCliSessions } from "../cli-session.js";
-import { transitionMainSessionRecovery } from "../main-session-recovery/main-session-recovery-state.js";
+import { clearRotatedSessionMetadata } from "../session-reset-metadata.js";
 
 type SessionResolution = {
   sessionAgentId: string;
@@ -66,6 +68,10 @@ type SessionResolution = {
   storePath: string;
   isNewSession: boolean;
   previousSessionId?: string;
+  automaticReset?: {
+    reason: "idle" | "daily" | "reset";
+    expectedLifecycleRevision?: string;
+  };
   persistedThinking?: ThinkLevel;
   persistedVerbose?: VerboseLevel;
 };
@@ -85,47 +91,6 @@ type SessionRequest = {
   agentId?: string;
 };
 
-export function clearRotatedSessionMetadata(entry: InternalSessionEntry): InternalSessionEntry {
-  const next = {
-    ...entry,
-    sessionFile: undefined,
-    status: undefined,
-    lifecycleRunId: undefined,
-    lastRunId: undefined,
-    startedAt: undefined,
-    endedAt: undefined,
-    runtimeMs: undefined,
-    abortedLastRun: undefined,
-    restartRecoveryForceSafeTools: undefined,
-    restartRecoveryDeliveryContext: undefined,
-    restartRecoveryDeliveryMediaUrls: undefined,
-    restartRecoveryDisableMessageTool: undefined,
-    restartRecoverySuppressTextDelivery: undefined,
-    restartRecoveryDeliveryRequestFingerprint: undefined,
-    restartRecoveryDeliveryRunId: undefined,
-    restartRecoveryDeliverySourceRunId: undefined,
-    restartRecoveryOperatorSource: undefined,
-    restartRecoveryBeforeAgentReplyState: undefined,
-    restartRecoveryDeliveryReceiptState: undefined,
-    restartRecoveryDeliveryToolCallId: undefined,
-    restartRecoveryRequesterAccountId: undefined,
-    restartRecoveryRequesterSenderId: undefined,
-    restartRecoverySameChannelThreadRequired: undefined,
-    restartRecoverySourceIngress: undefined,
-    restartRecoverySourceReplyDeliveryMode: undefined,
-    restartRecoveryTerminalDeliveryEvidence: undefined,
-    restartRecoveryTerminalRunIds: undefined,
-    sessionStartedAt: undefined,
-    sessionDiffBaseline: undefined,
-    sessionDiffBaselineCapture: undefined,
-    lastInteractionAt: undefined,
-    pendingTranscriptRepair: undefined,
-  };
-  transitionMainSessionRecovery(next, { kind: "clear" });
-  clearAllCliSessions(next);
-  return next;
-}
-
 type SessionIdMatchSet = {
   candidates: SessionIdMatchCandidate[];
   ownerConflict: boolean;
@@ -134,7 +99,7 @@ type SessionIdMatchSet = {
 type SessionIdMatchCandidate = {
   sessionKey: string;
   entry: InternalSessionEntry;
-  resolution: Omit<SessionKeyResolution, "sessionEntry">;
+  resolution: Omit<SessionKeyResolution, "sessionEntry"> & { sessionKey: string };
   primary: boolean;
 };
 
@@ -163,15 +128,36 @@ function selectSessionIdMatchCandidate(
     })[0];
 }
 
-function loadCommandSessionEntries(params: {
+async function loadCommandSessionIdMatches(params: {
   agentId?: string;
   storePath: string;
-}): SessionEntrySummary[] {
-  return listSessionEntriesReadOnly({
-    storePath: params.storePath,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    clone: false,
-  });
+  sessionId: string;
+}): Promise<SessionEntrySummary[]> {
+  return withSessionStoreReaderInWorker(
+    params,
+    async ({ reader, database, continuation }) => {
+      // Identity selection must not hydrate every saved prompt and diff in the store.
+      const result = await reader.readExactEntries({
+        selection: { kind: "session-id-or-key", sessionIdOrKey: params.sessionId },
+        projection: "list",
+        env: database.env,
+        continuation,
+      });
+      return result.entries.filter(({ entry }) => entry.sessionId === params.sessionId);
+    },
+    { backing: true, dataOnly: true },
+  );
+}
+
+async function readCommandSessionIdMatch(
+  scope: { agentId?: string; storePath: string; sessionKey: string },
+  sessionId: string,
+): Promise<InternalSessionEntry> {
+  const entry = await readSessionEntryReadOnlyInWorker(scope);
+  if (entry?.sessionId !== sessionId) {
+    throw new Error("Stored session changed while resolving its ID. Retry the request.");
+  }
+  return entry;
 }
 
 export function buildExplicitSessionIdSessionKey(params: {
@@ -181,14 +167,14 @@ export function buildExplicitSessionIdSessionKey(params: {
   return `agent:${normalizeAgentId(params.agentId)}:explicit:${params.sessionId.trim()}`;
 }
 
-function collectSessionIdMatchesForRequest(opts: {
+async function collectSessionIdMatchesForRequest(opts: {
   cfg: OpenClawConfig;
   sessionEntries: SessionEntrySummary[];
   storePath: string;
   storeAgentId?: string;
   sessionId: string;
   searchOtherAgentStores: boolean;
-}): SessionIdMatchSet {
+}): Promise<SessionIdMatchSet> {
   const candidates: SessionIdMatchCandidate[] = [];
   let ownerConflict = false;
   const configuredAgentIds = listAgentIds(opts.cfg).map(normalizeAgentId);
@@ -210,13 +196,10 @@ function collectSessionIdMatchesForRequest(opts: {
     candidateAgentId: string | undefined,
     options?: { primary?: boolean },
   ): void => {
-    // The successful listing already validated a partition's scoped owner; do not inspect it again.
+    // The worker selection already validated a partition's scoped owner.
     const candidateStoreTarget =
       resolveUnsuffixedSqliteTargetFromSessionStorePath(candidateStorePath);
     for (const { sessionKey: candidateKey, entry: candidateEntry } of candidateEntries) {
-      if (candidateEntry?.sessionId !== opts.sessionId) {
-        continue;
-      }
       const normalizedCandidateAgentId = candidateAgentId
         ? normalizeAgentId(candidateAgentId)
         : undefined;
@@ -287,9 +270,10 @@ function collectSessionIdMatchesForRequest(opts: {
     }
     const candidateStorePath = resolveSessionStorePathCore(opts.cfg.session?.store, { agentId });
     addMatches(
-      loadCommandSessionEntries({
+      await loadCommandSessionIdMatches({
         agentId,
         storePath: candidateStorePath,
+        sessionId: opts.sessionId,
       }),
       candidateStorePath,
       agentId,
@@ -304,11 +288,11 @@ function collectSessionIdMatchesForRequest(opts: {
  * This scopes the lookup to the target store without implicitly converting `agentId`
  * into that agent's main session key.
  */
-export function resolveStoredSessionKeyForSessionId(opts: {
+export async function resolveStoredSessionKeyForSessionId(opts: {
   cfg: OpenClawConfig;
   sessionId: string;
   agentId?: string;
-}): SessionKeyResolution {
+}): Promise<SessionKeyResolution> {
   const sessionId = opts.sessionId.trim();
   const requestedAgentId = opts.agentId?.trim() ? normalizeAgentId(opts.agentId) : undefined;
   const persistedStoreOwner = resolvePersistedSessionStoreOwner(opts.cfg);
@@ -323,13 +307,14 @@ export function resolveStoredSessionKeyForSessionId(opts: {
   const storePath = resolveSessionStorePathCore(opts.cfg.session?.store, {
     agentId: storeAgentId,
   });
-  const sessionEntries = loadCommandSessionEntries({
-    storePath,
-    agentId: storeAgentId,
-  });
   if (!sessionId) {
     return { sessionKey: undefined, storePath };
   }
+  const sessionIdMatches = await loadCommandSessionIdMatches({
+    storePath,
+    agentId: storeAgentId,
+    sessionId,
+  });
 
   const resolveMatchedAgentId = (sessionKey: string): string | undefined => {
     const scopedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
@@ -343,7 +328,6 @@ export function resolveStoredSessionKeyForSessionId(opts: {
         ? undefined
         : (requestedAgentId ?? tryResolveLegacyCompatibilityAgentId(opts.cfg));
   };
-  const sessionIdMatches = sessionEntries.filter(({ entry }) => entry.sessionId === sessionId);
   const selectionMatches = requestedAgentId
     ? sessionIdMatches.filter(
         ({ sessionKey }) => resolveMatchedAgentId(sessionKey) === requestedAgentId,
@@ -384,16 +368,17 @@ export function resolveStoredSessionKeyForSessionId(opts: {
   return {
     agentId: resolvedAgentId,
     sessionKey,
-    sessionEntry: structuredClone(
-      selectionMatches.find((match) => match.sessionKey === sessionKey)?.entry,
+    sessionEntry: await readCommandSessionIdMatch(
+      { agentId: resolvedAgentId, storePath, sessionKey },
+      sessionId,
     ),
     storePath,
   };
 }
 
-function resolveSessionKeyForRequestInternal(
+async function resolveSessionKeyForRequestInternal(
   opts: SessionRequest & { createMissingSessionId: boolean; prepareBoundEntry?: boolean },
-): SessionKeyResolution {
+): Promise<SessionKeyResolution> {
   const sessionCfg = opts.cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
@@ -454,12 +439,10 @@ function resolveSessionKeyForRequestInternal(
     ? normalizeAgentId(knownAgentId)
     : requestedSessionId
       ? undefined
-      : normalizeAgentId(
-          resolveDefaultAgentId(opts.cfg, {
-            surface: "agent command session routing",
-            hint: "Pass --agent <id> or an agent-prefixed --session-key.",
-          }),
-        );
+      : resolveDefaultAgentId(opts.cfg, {
+          surface: "agent command session routing",
+          hint: "Pass --agent <id> or an agent-prefixed --session-key.",
+        });
   const storeAgentId = explicitSessionKey
     ? unownedBareSessionKey
       ? sessionIdScanAnchor
@@ -498,17 +481,20 @@ function resolveSessionKeyForRequestInternal(
     !isInternalSessionEffectsKey(storeSessionKey) &&
     !(
       opts.prepareBoundEntry &&
-      captureIncognitoSessionSource({
-        agentId: storeAgentId,
-        storePath,
-        sessionKey: storeSessionKey,
-      })
-    )
-      ? loadExactSessionEntryReadOnly({
+      captureSessionActorStorageOwner(
+        {
           agentId: storeAgentId,
           storePath,
           sessionKey: storeSessionKey,
-        })?.entry
+        },
+        { assertCurrent() {}, authorize() {} },
+      )
+    )
+      ? await readSessionEntryReadOnlyInWorker({
+          agentId: storeAgentId,
+          storePath,
+          sessionKey: storeSessionKey,
+        })
       : undefined;
 
   // If a session id was provided, prefer to re-use its existing entry (by id) even when no key was
@@ -520,9 +506,13 @@ function resolveSessionKeyForRequestInternal(
     (!explicitSessionKey || unownedBareSessionKey) &&
     (!sessionKey || sessionEntry?.sessionId !== requestedSessionId)
   ) {
-    const { candidates, ownerConflict } = collectSessionIdMatchesForRequest({
+    const { candidates, ownerConflict } = await collectSessionIdMatchesForRequest({
       cfg: opts.cfg,
-      sessionEntries: loadCommandSessionEntries({ storePath, agentId: storeAgentId }),
+      sessionEntries: await loadCommandSessionIdMatches({
+        storePath,
+        agentId: storeAgentId,
+        sessionId: requestedSessionId,
+      }),
       storePath,
       storeAgentId,
       sessionId: requestedSessionId,
@@ -535,7 +525,7 @@ function resolveSessionKeyForRequestInternal(
     if (selectedMatch) {
       return {
         ...selectedMatch.resolution,
-        sessionEntry: structuredClone(selectedMatch.entry),
+        sessionEntry: await readCommandSessionIdMatch(selectedMatch.resolution, requestedSessionId),
       };
     }
     if (ownerConflict) {
@@ -575,11 +565,13 @@ export function resolveExistingSessionKeyForRequest(opts: {
   cfg: OpenClawConfig;
   sessionId: string;
   agentId?: string;
-}): SessionKeyResolution {
+}): Promise<SessionKeyResolution> {
   return resolveSessionKeyForRequestInternal({ ...opts, createMissingSessionId: false });
 }
 
-export function resolveSessionKeyForRequestCore(opts: SessionRequest): SessionKeyResolution {
+export function resolveSessionKeyForRequestCore(
+  opts: SessionRequest,
+): Promise<SessionKeyResolution> {
   return resolveSessionKeyForRequestInternal({ ...opts, createMissingSessionId: true });
 }
 
@@ -592,21 +584,25 @@ export async function resolveSession(
     sessionKey,
     sessionEntry: routedEntry,
     storePath,
-  } = resolveSessionKeyForRequestInternal({
+  } = await resolveSessionKeyForRequestInternal({
     ...opts,
     createMissingSessionId: true,
     prepareBoundEntry: true,
   });
   const scope = { agentId: resolvedAgentId, sessionKey: sessionKey ?? "", storePath };
-  const sessionEntry =
-    sessionKey && !isInternalSessionEffectsKey(sessionKey) && captureIncognitoSessionSource(scope)
-      ? await readSessionEntryReadOnlyInWorker(
-          { ...scope, sessionKey: normalizeStoreSessionKey(sessionKey) },
-          () => {
+  const memory =
+    sessionKey && !isInternalSessionEffectsKey(sessionKey)
+      ? captureSessionActorStorageOwner(scope, {
+          assertCurrent() {
             opts.signal?.throwIfAborted();
             opts.assertCurrent?.();
           },
-        )
+          authorize() {},
+        })
+      : undefined;
+  const sessionEntry =
+    memory && sessionKey
+      ? readCapturedSessionActorEntry(memory, normalizeStoreSessionKey(sessionKey))
       : routedEntry;
   const now = Date.now();
 
@@ -633,49 +629,60 @@ export async function resolveSession(
   const requestedSessionId = opts.sessionId?.trim() || undefined;
   const terminalMainTranscriptNewerThanRegistry =
     sessionEntry && !requestedSessionId
-      ? hasTerminalMainSessionTranscriptNewerThanRegistrySync({
+      ? await hasTerminalMainSessionTranscriptNewerThanRegistryAsync({
           entry: sessionEntry,
           sessionScope: sessionCfg?.scope,
           sessionKey,
           agentId: sessionAgentId,
           mainKey: sessionCfg?.mainKey,
           storePath,
+          signal: opts.signal,
         })
       : false;
   const lockedModelSelection = isModelSelectionLocked(sessionEntry);
   const skipImplicitExpiry =
     resetPolicy.configured !== true && hasProviderOwnedSession(sessionEntry);
-  const fresh = sessionEntry
-    ? lockedModelSelection ||
-      (!terminalMainTranscriptNewerThanRegistry &&
-        (skipImplicitExpiry ||
-          evaluateSessionFreshness({
-            updatedAt: sessionEntry.updatedAt,
-            ...(sessionKey
-              ? await resolveSessionLifecycleTimestampsAsync({
-                  entry: sessionEntry,
-                  agentId: sessionAgentId,
-                  sessionKey,
-                  storePath,
-                  signal: opts.signal,
-                })
-              : {}),
-            now,
-            policy: resetPolicy,
-          }).fresh))
-    : false;
+  const freshness =
+    sessionEntry &&
+    !lockedModelSelection &&
+    !terminalMainTranscriptNewerThanRegistry &&
+    !skipImplicitExpiry
+      ? evaluateSessionFreshness({
+          updatedAt: sessionEntry.updatedAt,
+          ...(sessionKey
+            ? await resolveSessionLifecycleTimestampsAsync({
+                entry: sessionEntry,
+                agentId: sessionAgentId,
+                sessionKey,
+                storePath,
+                signal: opts.signal,
+              })
+            : {}),
+          now,
+          policy: resetPolicy,
+        })
+      : undefined;
+  const fresh = Boolean(
+    sessionEntry &&
+    (lockedModelSelection ||
+      (!terminalMainTranscriptNewerThanRegistry && (skipImplicitExpiry || freshness?.fresh))),
+  );
   opts.signal?.throwIfAborted();
   opts.assertCurrent?.();
-  const sessionId =
-    requestedSessionId || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
   const isNewSession = !fresh && !requestedSessionId;
+  const automaticReset: SessionResolution["automaticReset"] =
+    isNewSession && sessionEntry && !terminalMainTranscriptNewerThanRegistry
+      ? {
+          reason: freshness?.staleReason ?? "reset",
+          expectedLifecycleRevision: sessionEntry.lifecycleRevision,
+        }
+      : undefined;
+  const sessionId =
+    requestedSessionId ||
+    (fresh || automaticReset ? sessionEntry?.sessionId : undefined) ||
+    crypto.randomUUID();
   const resolvedSessionEntry =
     isNewSession && sessionEntry ? clearRotatedSessionMetadata(sessionEntry) : sessionEntry;
-
-  clearBootstrapSnapshotOnSessionRollover({
-    sessionKey,
-    previousSessionId: isNewSession ? sessionEntry?.sessionId : undefined,
-  });
 
   // Behavior overrides belong to the logical session, not one transcript id.
   // Carry them across every rollover; explicit `default` directives clear them.
@@ -694,6 +701,7 @@ export async function resolveSession(
     storePath,
     isNewSession,
     previousSessionId: isNewSession ? sessionEntry?.sessionId : undefined,
+    automaticReset,
     persistedThinking,
     persistedVerbose,
   };

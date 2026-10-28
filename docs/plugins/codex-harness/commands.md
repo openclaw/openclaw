@@ -55,10 +55,10 @@ Common forms:
 - `/codex mcp` lists Codex app-server MCP server status.
 - `/codex skills` lists Codex app-server skills.
 - `/codex plugins list` shows configured native plugins; `/codex plugins
-available` discovers Codex marketplace plugins in the bound workspace.
+  available` discovers Codex marketplace plugins in the bound workspace.
 - `/codex plugins install <plugin>@<marketplace>` installs and authorizes one
   discovered plugin. `/codex plugins enable <name>` and `/codex plugins
-disable <name>` update its persisted policy. Mutations require an owner or
+  disable <name>` update its persisted policy. Mutations require an owner or
   `operator.admin` gateway client.
 - `/codex computer-use [status|install]` manages Codex Computer Use.
 - `/codex help` lists the full command tree.
@@ -88,6 +88,14 @@ If an ordinary OpenClaw-managed native thread was deleted, the next turn starts
 a fresh native thread while keeping the selected model and provider. This
 recovery preserves pending manual attachments and native-model-owned threads.
 It does not replay a turn whose native outcome is uncertain.
+
+For a `/codex bind` conversation, an app-server restart can unload the bound
+thread without deleting its history. If Codex rejects the next turn before
+accepting its input, OpenClaw resumes that same thread and submits the message
+once more. It does not create a replacement thread. Deleted history,
+authentication failures, and uncertain turn outcomes stay visible instead of
+triggering automatic replay. If recovery reports unavailable history, rebind
+the conversation and resend the message.
 
 ### Shared Fast mode and Codex fast mode
 

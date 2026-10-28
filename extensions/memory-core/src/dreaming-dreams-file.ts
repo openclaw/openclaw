@@ -2,8 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { replaceManagedMarkdownBlock } from "openclaw/plugin-sdk/memory-host-markdown";
+import { decodeUtf8Input } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { readRegularFile, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { captureMemoryMutationAuthority } from "./memory-mutation-authority.js";
 import { getMemoryWorkspaceMaintenance } from "./memory-workspace-files.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { readStore } from "./short-term-promotion-store.js";
@@ -52,7 +54,10 @@ export async function readDreamsFile(dreamsPath: string, workspaceDir?: string):
     return await files.readDreams(dreamsPath);
   }
   try {
-    return (await readRegularFile({ filePath: dreamsPath })).buffer.toString("utf-8");
+    return decodeUtf8Input(
+      (await readRegularFile({ filePath: dreamsPath })).buffer,
+      `DREAMS.md ${dreamsPath} (preserve the original and convert a copy to UTF-8 before retrying)`,
+    );
   } catch (err) {
     if (isEmptyDreamsReadError(err, extractErrorCode(err))) {
       return "";
@@ -84,19 +89,28 @@ export async function writeDreamsFileAtomic(
   content: string,
   workspaceDir?: string,
 ): Promise<void> {
+  const assertCurrent = captureMemoryMutationAuthority();
+  assertCurrent?.();
   const files = workspaceDir ? getMemoryWorkspaceMaintenance(workspaceDir) : undefined;
   if (files) {
-    return await files.writeDreams(dreamsPath, content);
+    return await files.writeDreams(dreamsPath, content, assertCurrent);
   }
-  await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
+  const directoryPath = path.dirname(dreamsPath);
+  const createdDirectory = await fs.mkdir(directoryPath, { recursive: true });
+  // fs-safe's 0o700 default would chmod an existing workspace, which fails with
+  // EPERM for a gateway user that can write it but not own it. A directory
+  // created here keeps that private default.
+  const dirMode = createdDirectory ? 0o700 : (await fs.stat(directoryPath)).mode & 0o7777;
   await assertSafeDreamsPath(dreamsPath);
   await replaceFileAtomic({
     filePath: dreamsPath,
     content,
+    dirMode,
     mode: 0o600,
     preserveExistingMode: true,
     tempPrefix: `${path.basename(dreamsPath)}.dreams`,
     throwOnCleanupError: true,
+    assertBeforeMutation: assertCurrent,
   });
 }
 
@@ -231,7 +245,12 @@ function normalizeDiaryBlockBody(block: string): string {
 function isOptionalDiaryContextReadError(err: unknown): boolean {
   const code = extractErrorCode(err);
   // Optional prompt context may omit unreadable diaries; updates must preserve the failure.
-  return code === "EACCES" || code === "EPERM" || isEmptyDreamsReadError(err, code);
+  return (
+    code === "EACCES" ||
+    code === "EPERM" ||
+    code === "ERR_INVALID_UTF8" ||
+    isEmptyDreamsReadError(err, code)
+  );
 }
 
 function readDiaryBlocks(existing: string): string[] | null {

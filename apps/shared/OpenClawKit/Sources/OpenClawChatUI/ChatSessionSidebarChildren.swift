@@ -153,7 +153,7 @@ final class ChatSessionSidebarChildren {
             (owner.rows + self.supplementaryRows(owner: owner)).first { model.matchesCurrentSessionKey(
                 incoming: $0.key, agentId: $0.agentId, current: selection.key) }
         let lineageSelection = LineageSelection(identity: selectedID, session: selectedRow)
-        // ui/src/components/session-lineage-controller.ts:302 retires failures on incarnation or parent changes.
+        // ui/src/components/session-lineage.ts retires failures on incarnation or parent changes.
         if self.lineageSelection != lineageSelection {
             self.lineage = [:]
             self.rootID = nil

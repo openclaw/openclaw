@@ -1,15 +1,17 @@
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
-import type { NodePairingGeneration, NodePairingState } from "./device-pairing-core.types.js";
+import type {
+  NodePairingGeneration,
+  NodePairingState,
+  PairedDeviceTokenIdentity,
+} from "./device-pairing-core.types.js";
 import {
   mergeDevicePairingRoles,
   normalizeDevicePairingRole,
 } from "./device-pairing-state.kernel.js";
 import type { DeviceAuthToken, PairedDevice } from "./device-pairing.types.js";
 export type { NodePairingGeneration, NodePairingState } from "./device-pairing-core.types.js";
-
-export type PairedDeviceTokenIdentity = { deviceId: string; key: string };
 
 /** Use the same persisted approval ceiling for token verification and retained authority. */
 export function resolveApprovedDeviceScopeBaseline(device: PairedDevice): string[] | null {
@@ -29,11 +31,12 @@ export function resolveAuthenticatedDeviceTokenIdentity(
   ) {
     return null;
   }
-  const identity = resolvePairedDeviceTokenIdentity(device, authenticated.role);
-  return identity &&
-    isPairedDeviceTokenIdentityCurrent(device, authenticated.role, identity, authenticated.scopes)
-    ? Object.freeze(identity)
-    : null;
+  const identity = resolvePairedDeviceTokenIdentity(
+    device,
+    authenticated.role,
+    authenticated.scopes,
+  );
+  return identity ? Object.freeze(identity) : null;
 }
 
 function listActiveTokenRoles(
@@ -87,9 +90,10 @@ export function hasEffectivePairedDeviceRole(
 }
 
 /** Resolve one exact active role-token generation without exposing its credential. */
-export function resolvePairedDeviceTokenIdentity(
+function resolvePairedDeviceTokenIdentity(
   device: PairedDevice | null,
   role: string,
+  scopes?: readonly string[],
 ): PairedDeviceTokenIdentity | null {
   const normalizedRole = normalizeDevicePairingRole(role);
   if (!device || !normalizedRole || !hasEffectivePairedDeviceRole(device, normalizedRole)) {
@@ -98,6 +102,25 @@ export function resolvePairedDeviceTokenIdentity(
   const token = device.tokens?.[normalizedRole];
   if (!token || token.role !== normalizedRole || token.revokedAtMs) {
     return null;
+  }
+  if (scopes) {
+    const approvedScopes = resolveApprovedDeviceScopeBaseline(device);
+    // The whole token must remain approved, not just this request's scopes.
+    if (
+      approvedScopes === null ||
+      !roleScopesAllow({
+        role: normalizedRole,
+        requestedScopes: token.scopes,
+        allowedScopes: approvedScopes,
+      }) ||
+      !roleScopesAllow({
+        role: normalizedRole,
+        requestedScopes: scopes,
+        allowedScopes: token.scopes,
+      })
+    ) {
+      return null;
+    }
   }
   const key = sha256Hex(
     [
@@ -119,31 +142,8 @@ export function isPairedDeviceTokenIdentityCurrent(
   identity: PairedDeviceTokenIdentity,
   scopes: readonly string[],
 ): boolean {
-  const normalizedRole = normalizeDevicePairingRole(role);
-  const token = normalizedRole ? device?.tokens?.[normalizedRole] : undefined;
-  const current = resolvePairedDeviceTokenIdentity(device, role);
-  if (
-    !device ||
-    !normalizedRole ||
-    !token ||
-    !current ||
-    current.deviceId !== identity.deviceId ||
-    current.key !== identity.key
-  ) {
-    return false;
-  }
-  const approvedScopes = resolveApprovedDeviceScopeBaseline(device);
-  // Match live token verification: the whole token must remain approved, not
-  // merely the scopes this continuation happens to request.
-  return (
-    approvedScopes !== null &&
-    roleScopesAllow({
-      role: normalizedRole,
-      requestedScopes: token.scopes,
-      allowedScopes: approvedScopes,
-    }) &&
-    roleScopesAllow({ role: normalizedRole, requestedScopes: scopes, allowedScopes: token.scopes })
-  );
+  const current = resolvePairedDeviceTokenIdentity(device, role, scopes);
+  return current !== null && current.deviceId === identity.deviceId && current.key === identity.key;
 }
 
 /** Resolve the durable node-owned identity used to admit asynchronous work. */

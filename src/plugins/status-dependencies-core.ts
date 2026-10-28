@@ -235,12 +235,6 @@ export function buildManagedPluginDependencyStatus(params: {
   };
 }
 
-export async function findMissingRequiredPluginDependencies(
-  params: Parameters<typeof buildManagedPluginDependencyStatus>[0],
-): Promise<string[]> {
-  return buildManagedPluginDependencyStatus(params).missing;
-}
-
 export function pluginInstallIncompleteDiagnostic(
   pluginId: string,
   detail: string,

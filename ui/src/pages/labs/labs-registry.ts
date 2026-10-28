@@ -1,47 +1,12 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { t } from "../../i18n/index.ts";
-import { registerLabsEnglish } from "../../i18n/locales/en-labs.ts";
-
-registerLabsEnglish();
-
-/** What a lab row writes at its gate. Most gates are booleans; some are modes. */
-type LabFeatureValue = boolean | string;
-type LabFeatureResetScope = "gate" | "parent" | null;
-
-export type LabFeature = {
-  id: string;
-  title: () => string;
-  description: () => string;
-  docsUrl: string;
-  /** Leaf whose value decides whether the row reads as on. */
-  configPath: readonly [string, ...string[]];
-  /** Explicit writes preserve gates whose on/off values are modes, not booleans. */
-  onValue: LabFeatureValue;
-  offValue: LabFeatureValue;
-  /** Include broader enabled modes so the toggle never narrows an existing choice. */
-  activeValues: readonly LabFeatureValue[];
-  /** Runtime-owned enablement from the parent, including boolean shorthand. */
-  readEnabled: ((raw: unknown) => boolean) | null;
-  /** Sibling writes pin the recommended variant rather than a bare enable's defaults. */
-  enableAlso: Readonly<Record<string, LabFeatureValue>> | null;
-  /** Reset the parent when its presence changes defaults; null retains required gates. */
-  resetScope: LabFeatureResetScope;
-};
-
-type LabFeatureState = {
-  enabled: boolean;
-  defaultEnabled: boolean;
-  overridden: boolean;
-};
-
-const BOOLEAN_GATE = {
-  onValue: true,
-  offValue: false,
-  activeValues: [true],
-  readEnabled: null,
-  enableAlso: null,
-  resetScope: "gate",
-} as const;
+import { t } from "../../lib/reactive/i18n.ts";
+import { CLAWS_LAB_FEATURE } from "./claws-lab-feature.ts";
+import {
+  BOOLEAN_GATE,
+  labFeatureOverridePath,
+  type LabFeature,
+  type LabFeatureDefinition,
+} from "./labs-feature-state.ts";
 
 export const LAB_FEATURES = (
   [
@@ -88,10 +53,24 @@ export const LAB_FEATURES = (
     },
     {
       ...BOOLEAN_GATE,
-      id: "customPluginUi",
-      docsUrl: "https://docs.openclaw.ai/plugins/feature-plugins",
-      configPath: ["gateway", "controlUi", "experimental", "customPlugins"],
+      id: "advisor",
+      docsUrl: "https://docs.openclaw.ai/concepts/experimental-features#advisor",
+      configPath: ["plugins", "entries", "advisor", "enabled"],
+      settingsPluginId: "advisor",
     },
+    {
+      ...BOOLEAN_GATE,
+      id: "composerPredictions",
+      docsUrl: "https://docs.openclaw.ai/web/control-ui/chat#composer-predictions",
+      configPath: ["gateway", "controlUi", "experimental", "composerPredictions", "enabled"],
+    },
+    {
+      ...BOOLEAN_GATE,
+      id: "chatBubbles",
+      docsUrl: "https://docs.openclaw.ai/web/control-ui/chat",
+      configPath: ["gateway", "controlUi", "experimental", "chatBubbles"],
+    },
+    CLAWS_LAB_FEATURE,
     {
       ...BOOLEAN_GATE,
       id: "hostDesktop",
@@ -105,91 +84,13 @@ export const LAB_FEATURES = (
       docsUrl: "https://docs.openclaw.ai/gateway/cloud-workers#desktop-interactive",
       configPath: ["cloudWorkers", "desktop"],
     },
-  ] as const satisfies readonly Omit<LabFeature, "title" | "description">[]
+  ] as const satisfies readonly LabFeatureDefinition[]
 ).map((feature) =>
   Object.assign({}, feature, {
     title: () => t(`labsPage.${feature.id}.title`),
     description: () => t(`labsPage.${feature.id}.description`),
   }),
 );
-
-function recordAtPath(config: Record<string, unknown>, path: readonly string[]): unknown {
-  let current: unknown = config;
-  for (const segment of path) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[segment];
-  }
-  return current;
-}
-
-function readEnabledFromParent(feature: LabFeature, parent: unknown): boolean {
-  const key = feature.configPath.at(-1);
-  if (feature.readEnabled) {
-    return feature.readEnabled(parent);
-  }
-  // Feature gates can accept a boolean or mode shorthand as well as the object
-  // form. A registry path ending in `enabled` must reflect every active shape.
-  if (key === "enabled" && (typeof parent === "boolean" || typeof parent === "string")) {
-    return feature.activeValues.includes(parent);
-  }
-  if (!isRecord(parent) || !key) {
-    return false;
-  }
-  return feature.activeValues.includes(parent[key] as LabFeatureValue);
-}
-
-function labFeatureOverridePath(
-  config: Record<string, unknown>,
-  feature: LabFeature,
-): readonly string[] | null {
-  const parentPath = feature.configPath.slice(0, -1);
-  const key = feature.configPath.at(-1);
-  const parent = recordAtPath(config, parentPath);
-  if (!key) {
-    return null;
-  }
-  if (feature.resetScope === "parent") {
-    return parent === undefined ? null : parentPath;
-  }
-  // Boolean/string shorthands own the parent node rather than an `enabled`
-  // child. Resetting the child would replace the shorthand with an empty object.
-  if (
-    key === "enabled" &&
-    parent !== undefined &&
-    (typeof parent !== "object" || parent === null)
-  ) {
-    return parentPath;
-  }
-  if (isRecord(parent) && Object.hasOwn(parent, key)) {
-    return feature.configPath;
-  }
-  return null;
-}
-
-export function resolveLabFeatureState(
-  config: Record<string, unknown> | null,
-  feature: LabFeature,
-): LabFeatureState {
-  const source = config ?? {};
-  const parentPath = feature.configPath.slice(0, -1);
-  const key = feature.configPath.at(-1);
-  const parent = recordAtPath(source, parentPath);
-  const overridePath = labFeatureOverridePath(source, feature);
-  let defaultParent = parent;
-  if (overridePath?.length === parentPath.length) {
-    defaultParent = undefined;
-  } else if (overridePath && key && isRecord(parent)) {
-    const { [key]: _override, ...defaults } = parent;
-    defaultParent = defaults;
-  }
-  return {
-    enabled: readEnabledFromParent(feature, parent),
-    defaultEnabled: readEnabledFromParent(feature, defaultParent),
-    overridden: overridePath !== null,
-  };
-}
 
 export function labFeatureMergePatch(
   feature: LabFeature,

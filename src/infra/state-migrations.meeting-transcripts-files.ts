@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import type { DatabaseSync } from "node:sqlite";
+import { Readable } from "node:stream";
 import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
@@ -15,6 +16,7 @@ import type { TranscriptsSummary } from "../transcripts/summary.js";
 import { renderTranscriptsMarkdown } from "../transcripts/summary.js";
 import { sha256File, sha256FileSync, sha256Hex } from "./crypto-digest.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { decodeUtf8Chunks, decodeUtf8Input } from "./utf8-input.js";
 
 export const LEGACY_UTTERANCE_INSERT_CHUNK_SIZE = 64;
 const LEGACY_UTTERANCE_STAGE_BATCH_SIZE = 256;
@@ -29,6 +31,11 @@ export type LegacyMeetingTranscriptSnapshot = {
   sourceHash: string;
   sourceSizeBytes: number;
 };
+
+export type LegacyMeetingTranscriptSource = Pick<
+  LegacyMeetingTranscriptSnapshot,
+  "sourceDir" | "sourceHash"
+>;
 
 export function isRecordedCanonicalTranscriptExport(params: {
   sessionDir: string;
@@ -206,8 +213,10 @@ export function disposeLegacyMeetingTranscriptStage(params: {
     params.database?.close();
   } catch (error) {
     warnings.push(
-      `Could not close the meeting transcript migration stage database: ${String(error)}`,
+      `Could not close the meeting transcript migration stage database: ${String(error)}. Left stage files in place${params.databasePath ? ` at ${params.databasePath}` : ""}; remove them only after this process exits.`,
     );
+    // A failed native close can leave the WAL-index mapped.
+    return warnings;
   }
   if (!params.databasePath) {
     return warnings;
@@ -237,7 +246,7 @@ async function stageUtterances(params: {
   if (!(await optionalRegularFile(filePath))) {
     return 0;
   }
-  const stream = createReadStream(filePath, { encoding: "utf8" });
+  const stream = Readable.from(decodeUtf8Chunks(createReadStream(filePath), filePath));
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
   let lineNumber = 0;
   let sequence = 0;
@@ -336,7 +345,10 @@ export async function snapshotLegacyMeetingTranscriptSession(params: {
   if (!beforeSnapshots[0]?.hash) {
     throw new Error(`legacy transcript session is missing metadata.json: ${sourceDir}`);
   }
-  const session = parseSession(JSON.parse(await fs.readFile(metadataPath, "utf8")), metadataPath);
+  const session = parseSession(
+    JSON.parse(decodeUtf8Input(await fs.readFile(metadataPath), metadataPath)),
+    metadataPath,
+  );
   const expectedRelativeDir = legacyTranscriptRelativeDir(session);
   if (path.normalize(params.relativeDir) !== expectedRelativeDir) {
     throw new Error(
@@ -351,10 +363,13 @@ export async function snapshotLegacyMeetingTranscriptSession(params: {
   const hasSummaryJson = await optionalRegularFile(summaryJsonPath);
   const hasSummaryMarkdown = await optionalRegularFile(summaryMarkdownPath);
   const summary = hasSummaryJson
-    ? parseSummary(JSON.parse(await fs.readFile(summaryJsonPath, "utf8")), summaryJsonPath)
+    ? parseSummary(
+        JSON.parse(decodeUtf8Input(await fs.readFile(summaryJsonPath), summaryJsonPath)),
+        summaryJsonPath,
+      )
     : undefined;
   const markdown = hasSummaryMarkdown
-    ? await fs.readFile(summaryMarkdownPath, "utf8")
+    ? decodeUtf8Input(await fs.readFile(summaryMarkdownPath), summaryMarkdownPath)
     : summary
       ? renderTranscriptsMarkdown(summary)
       : undefined;
@@ -528,7 +543,7 @@ export async function archivePartialMeetingTranscriptArtifacts(params: {
 }
 
 export async function rehashLegacyMeetingTranscriptSnapshots(
-  snapshots: LegacyMeetingTranscriptSnapshot[],
+  snapshots: LegacyMeetingTranscriptSource[],
 ): Promise<boolean> {
   for (const snapshot of snapshots) {
     const files = ["metadata.json", "transcript.jsonl", "summary.json", "summary.md"].map(
@@ -545,7 +560,7 @@ export async function rehashLegacyMeetingTranscriptSnapshots(
 
 export async function archiveLegacyMeetingTranscriptSnapshots(params: {
   sourceRoot: string;
-  snapshots: LegacyMeetingTranscriptSnapshot[];
+  snapshots: LegacyMeetingTranscriptSource[];
   expectedRelativeDirs: string[];
   canonicalRelativeDirs: string[];
   archiveRoot: string;
@@ -652,7 +667,12 @@ export async function restoreCanonicalMeetingTranscriptExports(params: {
       await assertCanonicalExportDirectory(params.sourceRoot, destination, "destination");
       const readMetadata = async (directory: string) =>
         parseSession(
-          JSON.parse(await fs.readFile(path.join(directory, "metadata.json"), "utf8")),
+          JSON.parse(
+            decodeUtf8Input(
+              await fs.readFile(path.join(directory, "metadata.json")),
+              path.join(directory, "metadata.json"),
+            ),
+          ),
           path.join(directory, "metadata.json"),
         );
       const [sourceMetadata, destinationMetadata] = await Promise.all([

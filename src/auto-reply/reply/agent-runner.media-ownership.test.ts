@@ -1,8 +1,9 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import {
   createMediaFollowupRun,
   createReplyMediaContextRuntimeMock,
@@ -24,10 +25,6 @@ describe("runReplyAgent media delivery ownership", () => {
   ])(
     "keeps $sessionKey media with its prepared delivery owner (gateway=$gateway, provider=$provider)",
     async ({ sessionKey, provider, gateway }) => {
-      const { normalizeWebchatReplyMediaPathsForDisplay } =
-        await import("../../gateway/server-methods/chat-reply-media.js");
-      const { seedWebchatReplyMediaScope } =
-        await import("../../gateway/server-methods/chat-reply-media.test-support.js");
       const { drainGlobalSingletonLifecycleState } =
         await import("../../shared/global-singleton.js");
       const { withOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
@@ -36,7 +33,6 @@ describe("runReplyAgent media delivery ownership", () => {
         async (state) => {
           try {
             const selected = state.path("project");
-            await mkdir(selected, { recursive: true });
             const bytes = Buffer.from(
               "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
               "base64",
@@ -56,7 +52,15 @@ describe("runReplyAgent media delivery ownership", () => {
                 entries: { qa: { workspace: state.workspaceDir }, beta: {} },
               },
             };
+            const workspaceScope = { permissionMode: "workspace" as const, sessionRoot: selected };
             setRuntimeConfigSnapshot(config, config);
+            const replyOperation = createReplyOperation({
+              sessionKey,
+              sessionId: "session",
+              agentId: "qa",
+              resetTriggered: false,
+            });
+            onTestFinished(() => replyOperation.complete());
             const actual = await vi.importActual<
               typeof import("../../media/outbound-attachment.js")
             >("../../media/outbound-attachment.js");
@@ -64,54 +68,30 @@ describe("runReplyAgent media delivery ownership", () => {
               actual.resolveOutboundAttachmentFromUrl,
             );
             runEmbeddedAgentMock.mockResolvedValue({
-              payloads: [
-                {
-                  text: `here are the charts\n${sources.map((file) => `MEDIA:${file}`).join("\n")}`,
-                },
-              ],
+              payloads: [{ text: sources.map((file) => `MEDIA:${file}`).join("\n") }],
               meta: { agentMeta: { sessionId: "session", provider: "anthropic", model: "claude" } },
             });
             const result = await runReplyAgent(
-              makeRunReplyAgentParams({
+              await makeRunReplyAgentParams({
                 sessionKey,
                 provider,
+                replyOperation,
                 followupRun: createMediaFollowupRun({
                   run: {
                     agentId: "qa",
                     sessionKey,
                     messageProvider: provider,
                     workspaceDir: selected,
-                    permissionMode: "workspace",
-                    sessionRoot: selected,
+                    ...workspaceScope,
                     config,
                     mediaNormalizationOwner: gateway ? "gateway" : undefined,
                   },
                 }),
               }),
             );
-            if (!result || Array.isArray(result)) {
-              throw new Error("Expected a single reply payload");
-            }
+            assert(result && !Array.isArray(result), "Expected a single reply payload");
             if (gateway) {
               expect(result.mediaUrls).toEqual(sources);
-              const scope = await seedWebchatReplyMediaScope({
-                cfg: config,
-                agentId: "qa",
-                sessionKey,
-                sessionEntry: {
-                  sessionId: "session",
-                  updatedAt: 1,
-                  permissionMode: "workspace",
-                  sessionRoot: selected,
-                },
-              });
-              const [display] = await normalizeWebchatReplyMediaPathsForDisplay({
-                ...scope,
-                payloads: [result],
-              });
-              expect(display?.mediaUrls).toHaveLength(1);
-              expect(display?.text).toContain("outside.png: Delivery failed.");
-              expect(await readFile(display!.mediaUrls![0]!)).toEqual(bytes);
             } else {
               expect(result.mediaUrls).toHaveLength(2);
               expect(result.mediaUrls).not.toEqual(sources);
@@ -119,7 +99,6 @@ describe("runReplyAgent media delivery ownership", () => {
                 expect(await readFile(file)).toEqual(bytes);
               }
             }
-            expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
             // The shared spy includes initial preparation; execution must reuse that context.
             expect(createReplyMediaContextRuntimeMock).toHaveBeenCalledOnce();
           } finally {

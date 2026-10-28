@@ -118,6 +118,7 @@ type ForwardRequest = {
   host: string;
   substituted: boolean;
   upstreamTlsAgent: HttpsAgent;
+  upstreamHttpAgent?: HttpsAgent;
   isActive: () => boolean;
   ownResource: <T extends Readable | Writable>(resource: T) => T;
   releaseResponse: () => void;
@@ -158,7 +159,7 @@ function sendSecretEgressRequest(
         path: `${target.pathname}${target.search}`,
         method: forward.request.method,
         headers,
-        agent: secure ? forward.upstreamTlsAgent : false,
+        agent: secure ? forward.upstreamTlsAgent : (forward.upstreamHttpAgent ?? false),
       },
       (upstreamResponse) => {
         forward.ownResource(upstreamResponse);

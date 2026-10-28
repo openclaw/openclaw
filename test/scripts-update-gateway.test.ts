@@ -6,8 +6,18 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stageBundledPluginRuntime } from "../scripts/stage-bundled-plugin-runtime.mts";
+import { resolveRuntimeWorkerUrl } from "../src/infra/runtime-worker-url.js";
+import { toolingMtsEntrypoints } from "./scripts/tooling-mts-runtime.test-support.mts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+// Share the invocation's compiled modules while retaining a real isolated process
+// per update. The artifact probe must borrow the adapter's same lock owner.
+const updateGatewayBuildUrl = resolveRuntimeWorkerUrl(toolingMtsEntrypoints.updateGatewayBuild);
+const artifactPreflightUrl = resolveRuntimeWorkerUrl(
+  toolingMtsEntrypoints.sourceUpdateArtifactPreflight,
+);
+const artifactOwnershipUrl = resolveRuntimeWorkerUrl(toolingMtsEntrypoints.distArtifactOwnership);
+const stageRuntimeUrl = resolveRuntimeWorkerUrl(toolingMtsEntrypoints.stageBundledPluginRuntime);
 let scratch: string;
 let workdir: string;
 let shimDir: string;
@@ -50,6 +60,8 @@ function runUpdater(overrides: Record<string, string> = {}) {
       UPDATE_TEST_LOG: invocationLog,
       UPDATE_TEST_BIN: shimDir,
       UPDATE_TEST_LIVE_ROOT: workdir,
+      TMPDIR: scratch,
+      UPDATE_TEST_PRIVATE_TMPDIR: scratch,
     },
   });
 }
@@ -81,15 +93,28 @@ describe("source updater lifecycle preflight", () => {
     // Git/package-manager commands are controlled by this shell scenario.
     fs.writeFileSync(
       path.join(seed, "scripts/tsx.mjs"),
-      `import ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/tsx.mjs")).href)};\n`,
+      `import ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/tsx.mjs")).href)};
+import fs from "node:fs";
+import path from "node:path";
+import { resolveManagedUpdateLeaseDatabasePath } from ${JSON.stringify(new URL("../src/infra/update-managed-service-handoff-lease.js", updateGatewayBuildUrl).href)};
+const database = resolveManagedUpdateLeaseDatabasePath();
+if (!fs.realpathSync(path.dirname(database)).startsWith(fs.realpathSync(process.env.UPDATE_TEST_PRIVATE_TMPDIR) + path.sep)) throw Error("Non-private handoff database");
+`,
     );
     fs.writeFileSync(
       path.join(seed, "scripts/update-gateway-build.mts"),
-      `import { runUpdateGatewayBuild } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/update-gateway-build.mts")).href)};\nprocess.exitCode = await runUpdateGatewayBuild(...process.argv.slice(2));\n`,
+      `import { runUpdateGatewayBuild } from ${JSON.stringify(updateGatewayBuildUrl.href)};
+process.exitCode = await runUpdateGatewayBuild(...process.argv.slice(2));
+`,
     );
     fs.writeFileSync(
       path.join(seed, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.9.1", packageManager: "pnpm@12.4.0" }),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.9.1",
+        packageManager: "pnpm@12.4.0",
+        openclaw: { updateAdmissionProtocol: 1 },
+      }),
     );
     fs.writeFileSync(
       path.join(seed, ".gitignore"),
@@ -113,7 +138,7 @@ const path = require('node:path');
 const {execFileSync} = require('node:child_process');
 const head = execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim();
 fs.mkdirSync('dist/control-ui', {recursive:true});
-fs.writeFileSync('dist/entry.js', '// synthetic runtime\n');
+fs.writeFileSync('dist/entry.js', 'console.log(' + JSON.stringify(JSON.stringify({protocol:1, verdict:'admit', reasons:[], warnings:[], facts:{candidateVersion:'2026.9.1', installedVersion:'2026.9.1', checks:[]}})) + ');\n');
 fs.writeFileSync('dist/control-ui/index.html', 'ready');
 fs.writeFileSync('dist/build-info.json', JSON.stringify({commit:head,buildId:'fixture-'+head}));
 for (const name of ['.buildstamp','.runtime-postbuildstamp']) fs.writeFileSync(path.join('dist',name),JSON.stringify({head}));
@@ -181,11 +206,82 @@ fs.writeFileSync('dist/marker', process.argv[2] || 'new');
     return { result, original, dependency };
   }
 
+  it.each([
+    "registered",
+    "foreign",
+    "fake",
+    "unregistered",
+    "rerouted",
+    "ordinary-changed",
+  ] as const)("preserves only verified registered nested worktrees (%s)", (kind) => {
+    const nested = path.join(workdir, "operator projects", "unpublished");
+    const repository = kind === "foreign" ? path.join(scratch, "seed") : workdir;
+    git(repository, "worktree", "add", "--detach", nested, "HEAD");
+    const gitFile = path.join(nested, ".git");
+    const originalGitFile = fs.readFileSync(gitFile, "utf8");
+    const admin = originalGitFile.slice("gitdir: ".length).trim();
+    const backlink = fs.readFileSync(path.join(admin, "gitdir"), "utf8");
+    const before = git(nested, "rev-parse", "HEAD");
+    fs.writeFileSync(path.join(nested, "package.json"), "unpublished tracked bytes\n");
+    fs.writeFileSync(path.join(nested, "local.txt"), "unpublished untracked bytes\n");
+    fs.writeFileSync(
+      path.join(workdir, "operator projects/operator-input.txt"),
+      "ordinary input\n",
+    );
+    if (kind === "fake") {
+      fs.writeFileSync(
+        path.join(admin, "gitdir"),
+        path.join(scratch, "not-this-worktree", ".git") + "\n",
+      );
+    } else if (kind === "unregistered") {
+      // An independent nested Git repository is not this checkout's linked worktree.
+      fs.unlinkSync(gitFile);
+      git(nested, "init", "-q");
+    }
+    const observation = path.join(scratch, "candidate-inputs");
+    const { result, original, dependency } = runRefusedSourceUpdate(
+      [
+        'test ! -e "operator projects/unpublished" || exit 41',
+        'cat "operator projects/operator-input.txt" > "$UPDATE_TEST_INPUT_OBSERVATION"',
+        ...(kind === "rerouted"
+          ? ['printf "gitdir: %s\n" "$UPDATE_TEST_OTHER_ADMIN" > "$UPDATE_TEST_NESTED_GIT"']
+          : kind === "ordinary-changed"
+            ? ['echo changed > "$UPDATE_TEST_LIVE_ROOT/operator projects/operator-input.txt"']
+            : []),
+      ],
+      {
+        UPDATE_TEST_INPUT_OBSERVATION: observation,
+        UPDATE_TEST_NESTED_GIT: gitFile,
+        UPDATE_TEST_OTHER_ADMIN: path.join(workdir, ".git"),
+      },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(kind === "registered" ? 23 : 1);
+    expect(calls().includes("stop-refused")).toBe(kind === "registered");
+    expect(calls()).not.toContain("unexpected-restart");
+    expect(calls()).not.toContain("live-install");
+    expect(git(workdir, "rev-parse", "HEAD")).toBe(original);
+    expect(fs.readFileSync(dependency, "utf8")).toBe("original dependency\n");
+    expect(fs.readFileSync(path.join(nested, "package.json"), "utf8")).toBe(
+      "unpublished tracked bytes\n",
+    );
+    expect(fs.readFileSync(path.join(nested, "local.txt"), "utf8")).toBe(
+      "unpublished untracked bytes\n",
+    );
+    if (["registered", "rerouted", "ordinary-changed"].includes(kind)) {
+      expect(fs.readFileSync(observation, "utf8")).toBe("ordinary input\n");
+    }
+    if (kind === "registered") {
+      expect(git(nested, "rev-parse", "HEAD")).toBe(before);
+      expect(fs.readFileSync(gitFile, "utf8")).toBe(originalGitFile);
+      expect(fs.readFileSync(path.join(admin, "gitdir"), "utf8")).toBe(backlink);
+    }
+  });
+
   it("preserves changed live artifacts under inspected custody", () => {
     const seed = path.join(scratch, "seed");
     fs.writeFileSync(
       path.join(seed, "scripts/stage-bundled-plugin-runtime.mts"),
-      `export { prepareBundledPluginRuntime } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/stage-bundled-plugin-runtime.mts")).href)};\n`,
+      `export { prepareBundledPluginRuntime } from ${JSON.stringify(stageRuntimeUrl.href)};\n`,
     );
     git(seed, "add", "scripts/stage-bundled-plugin-runtime.mts");
     commitFixture(seed, "runtime inspector");
@@ -206,8 +302,8 @@ fs.writeFileSync('dist/marker', process.argv[2] || 'new');
       `
 import fs from "node:fs";
 import path from "node:path";
-import { preflightInstalledSourceArtifacts } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/lib/source-update-artifact-preflight.mts")).href)};
-import { withDistArtifactOwnership, resolveDistArtifactLockPath } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/lib/dist-artifact-ownership.mts")).href)};
+import { preflightInstalledSourceArtifacts } from ${JSON.stringify(artifactPreflightUrl.href)};
+import { withDistArtifactOwnership, resolveDistArtifactLockPath } from ${JSON.stringify(artifactOwnershipUrl.href)};
 const owner = path.join(resolveDistArtifactLockPath(process.env.UPDATE_TEST_LIVE_ROOT), "owner.json");
 const original = fs.readFileSync(owner, "utf8");
 await withDistArtifactOwnership(process.cwd(), async () => {
@@ -286,7 +382,7 @@ await withDistArtifactOwnership(process.cwd(), async () => {
 import fs from "node:fs/promises";
 import path from "node:path";
 import {execFileSync} from "node:child_process";
-import {runUpdateGatewayBuild} from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/update-gateway-build.mts")).href)};
+import {runUpdateGatewayBuild} from ${JSON.stringify(updateGatewayBuildUrl.href)};
 const root = await fs.realpath(process.cwd());
 const rename = fs.rename.bind(fs);
 fs.rename = async (source, destination) => {

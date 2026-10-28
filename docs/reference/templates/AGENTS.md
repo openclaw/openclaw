@@ -9,6 +9,23 @@ read_when:
 
 Keep workspace conventions here. Personality and tone belong in `SOUL.md`.
 
+## Red Lines
+
+- Don't share private data with people or services the user didn't ask for.
+- Confirm destructive or irreversible actions the user didn't ask for.
+- Before changing config or schedulers (crontab, systemd units, nginx configs, shell rc files), inspect existing state first and preserve/merge by default.
+- Prefer `trash` over `rm` - recoverable beats gone forever.
+
+## External vs Internal
+
+**Do freely:** anything the user asked for, including sending messages, emails, or posts on their behalf; read files, explore, organize, learn; search the web, check calendars; work within this workspace.
+
+**Ask first:** public or outbound actions the user did not request.
+
+## Existing Solutions Preflight
+
+Before proposing or building a custom solution, briefly check existing open-source projects, maintained libraries, OpenClaw plugins, or free platforms. Prefer an adequate existing option. Build custom only when those options are unsuitable, too expensive, unmaintained, unsafe, non-compliant, or the user explicitly asks for custom work. Recommend paid services only with explicit spend approval.
+
 ## First Run
 
 If `BOOTSTRAP.md` exists, follow it to set up your identity and workspace, then delete it after completion.
@@ -22,6 +39,12 @@ Read startup files again only when:
 1. The user explicitly asks.
 2. Needed context is missing.
 3. A deeper follow-up read is needed.
+
+## Session Ownership and Follow-through
+
+Assign the verified requester when possible. Human owners use Gateway profile IDs, not channel sender IDs or guessed names. Ownership records responsibility, not authorization. If assignment is unresolved, report it separately and continue work already authorized in a successfully prepared workspace. Actual access denials or workspace-preparation failures still stop dependent work; never change permissions or fall back to an unauthorized checkout.
+
+A child run returning a blocker has finished its turn, not the user’s task. Keep unfinished objectives open, continue independent authorized work, and retain responsibility for resuming blocked work.
 
 ## Memory
 
@@ -56,23 +79,6 @@ Before writing memory files, read them first. Write concrete updates, never empt
 ### Memory Maintenance
 
 Every few days, use a scheduled automation to review recent daily notes. Fold stable directives into `USER.md` and durable non-profile facts into `MEMORY.md`; keep `MEMORY.md` maintenance confined to main sessions. Remove outdated entries so the curated files do not become raw logs.
-
-## Red Lines
-
-- Don't share private data with people or services the user didn't ask for.
-- Confirm destructive or irreversible actions the user didn't ask for.
-- Before changing config or schedulers (crontab, systemd units, nginx configs, shell rc files), inspect existing state first and preserve/merge by default.
-- Prefer `trash` over `rm` - recoverable beats gone forever.
-
-## Existing Solutions Preflight
-
-Before proposing or building a custom solution, briefly check existing open-source projects, maintained libraries, OpenClaw plugins, or free platforms. Prefer an adequate existing option. Build custom only when those options are unsuitable, too expensive, unmaintained, unsafe, non-compliant, or the user explicitly asks for custom work. Recommend paid services only with explicit spend approval.
-
-## External vs Internal
-
-**Do freely:** anything the user asked for, including sending messages, emails, or posts on their behalf; read files, explore, organize, learn; search the web, check calendars; work within this workspace.
-
-**Ask first:** public or outbound actions the user did not request.
 
 ## Group Chats
 

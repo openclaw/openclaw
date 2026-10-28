@@ -10,7 +10,7 @@ title: "Install"
 
 ## System requirements
 
-- **Node 24.16+ or 26.1+** - Node 26 is recommended; the installer provisions Node 26 on macOS and Node 24 LTS on Linux when Node is missing (see [Node.js compatibility](/install/node-compatibility)).
+- **Node 24.22.1+ or 26.12.1+** - Node 26 is recommended; the installer provisions Node 26 on macOS and Node 24 LTS on Linux when Node is missing (see [Node.js compatibility](/install/node-compatibility)).
 - **macOS, Linux, or Windows** - Windows users can start with the native Windows Hub app, the PowerShell CLI installer, or a WSL2 Gateway. See [Windows](/platforms/windows).
 - `pnpm` is only needed if you build from source.
 
@@ -18,20 +18,25 @@ title: "Install"
 
 Prefer a normal app download over the CLI? OpenClaw ships desktop companions:
 
-- **Windows**: the [Windows Hub](/platforms/windows#recommended-windows-hub) companion app — a signed installer you download and run like any Windows app, with setup, tray status, chat, and node mode:
+- **Windows (recommended)**: the native [Windows Hub](/platforms/windows#recommended-windows-hub) companion app — a signed installer you download and run like any Windows app, with setup, tray status, chat, and node mode:
   - [OpenClawCompanion-Setup-x64.exe](https://github.com/openclaw/openclaw-windows-node/releases/latest/download/OpenClawCompanion-Setup-x64.exe)
   - [OpenClawCompanion-Setup-arm64.exe](https://github.com/openclaw/openclaw-windows-node/releases/latest/download/OpenClawCompanion-Setup-arm64.exe)
   - All Hub releases: [Windows Hub releases page](https://github.com/openclaw/openclaw-windows-node/releases/latest)
 - **macOS**: the [macOS menu bar app](/platforms/macos) — download the `OpenClaw-<version>.dmg` (preferred) or `.zip` asset from [OpenClaw GitHub releases](https://github.com/openclaw/openclaw/releases), then install and launch **OpenClaw.app**. See the [macOS app page](/platforms/macos) for details, including what to do when the newest release ships no macOS asset.
 
-Both desktop apps can provision a local Gateway during first-run setup, or connect to an existing remote Gateway.
+On Windows, the cross-platform [Tauri desktop app](/platforms/windows#backup-tauri-desktop-app)
+is the backup option. Its `OpenClaw-<version>-windows-x86_64.exe` installer ships
+in regular [OpenClaw releases](https://github.com/openclaw/openclaw/releases)
+and can set up a local Windows Gateway with bundled Bun or connect remotely.
+
+Both native desktop apps can provision a local Gateway during first-run setup, or connect to an existing remote Gateway.
 
 ## Recommended: installer script
 
 The fastest way to install. It detects your OS, installs Node if needed, installs OpenClaw, and launches onboarding.
 
 <Note>
-Windows desktop users can also install the native [Windows Hub](/platforms/windows#recommended-windows-hub) companion app, which includes setup, tray status, chat, node mode, and local MCP mode.
+For Windows desktop setup, we recommend the native [Windows Hub](/platforms/windows#recommended-windows-hub) companion app, which includes setup, tray status, chat, node mode, and local MCP mode.
 </Note>
 
 <Tabs>
@@ -138,7 +143,7 @@ If you already manage Node yourself:
 
     <Note>
     `--trust` allows OpenClaw's package lifecycle scripts for this install. Bun
-    1.4 or newer can also run OpenClaw's CLI, local agent, and Gateway. Node
+    1.4.4 or newer can also run OpenClaw's CLI, local agent, and Gateway. Node
     remains the primary runtime, so the plain `openclaw` executable keeps its
     Node shebang. `bun run --bun` forces the Bun runtime, while
     `--daemon-runtime bun` installs the managed Gateway under Bun.
@@ -162,6 +167,11 @@ openclaw onboard --install-daemon
 
 `pnpm add --global "openclaw@link:$PWD"` links the CLI to this checkout without changing its package files. If pnpm reports that its global bin directory is not on `PATH`, run `pnpm setup`, reopen your shell, and retry.
 
+For a server checkout that only runs OpenClaw, use `pnpm build:runtime` to build
+the JavaScript, plugins, Control UI, and metadata without TypeScript declarations.
+Use `pnpm build` for development or packaging that needs declarations and their
+validation; CI typechecks still apply to runtime-only builds.
+
 Corepack selects the exact pnpm version from `package.json` (currently pnpm 12).
 If Corepack is unavailable, read that version from the checkout and install it explicitly:
 
@@ -174,6 +184,13 @@ The `+` suffix records Corepack's integrity hash and is not part of the npm pack
 Keep npm install scripts and optional dependencies enabled so pnpm can provision its native executable.
 
 Or skip the global install and use `pnpm openclaw ...` from inside the repo. See [Setup](/start/setup) for full development workflows.
+
+### Standalone builds
+
+For application packaging or a deployment without a separate Node or Bun
+installation, build an executable and companion runtime directory from source.
+See [Standalone builds](/install/standalone) for modes, output files, signing,
+and the update boundary.
 
 ### Install from the GitHub main checkout
 

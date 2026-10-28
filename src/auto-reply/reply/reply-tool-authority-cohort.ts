@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { assertSessionEntryCohortScope } from "../../config/sessions/session-entry-cohort-scope.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
@@ -32,21 +33,41 @@ export function captureReplyToolAuthoritySession(
   };
 }
 
-/** Initial selection can supply classification only when one exact durable source won. */
-export function selectReplyToolAuthorityEntry(
-  target: GatewaySessionStoreTargetWithStore,
-  key: string,
+const actorComparisonOptions = { skipPrototype: true };
+
+/** Retain the captured file-backed classification while its published entry remains current. */
+export function retainReplyToolAuthorityClassification(
+  original: CapturedReplyToolAuthoritySession | undefined,
+  entry: SessionEntry | undefined,
+  assertCurrent: () => void,
 ) {
-  const entry = target.store[target.canonicalKey];
-  return entry &&
-    !entry.incognito &&
-    target.canonicalKey === key &&
-    target.storeKeys.length === 1 &&
-    target.storeKeys[0] === key &&
-    target.capturedReadSources?.length === 1 &&
-    typeof target.capturedReadSource?.databaseIdentity === "string"
-    ? entry
-    : undefined;
+  if (!original?.source || typeof original.source.databaseIdentity !== "string") {
+    return undefined;
+  }
+  const predicate = retainPreparedSessionEntryPredicate({
+    databaseIdentity: `file:${original.source.databaseIdentity}`,
+    sessionKey: original.canonicalKey,
+    entry,
+    matches: (before, after) =>
+      before?.sessionId === after?.sessionId &&
+      before?.lifecycleRevision === after?.lifecycleRevision &&
+      before?.sandbox === after?.sandbox &&
+      before?.sandboxMode === after?.sandboxMode &&
+      // Admitted actor data is structural: key order/prototypes do not identify a creator.
+      isDeepStrictEqual(before?.createdActor, after?.createdActor, actorComparisonOptions),
+  });
+  return {
+    release: () => predicate.release(),
+    assertCurrent: () => {
+      assertCurrent();
+      if (!predicate.isCurrent()) {
+        const reason = predicate.canRefresh()
+          ? "entry predicate pending or unknown"
+          : "entry predicate changed or released";
+        throw new Error(`Tool authority classification session changed (${reason})`);
+      }
+    },
+  };
 }
 
 /** Refresh classification on the admitted owner without changing the independent caller plan. */
@@ -57,7 +78,7 @@ export async function withReplyToolAuthorityCohort<T>(params: {
   env: NodeJS.ProcessEnv;
   assertCurrent(): void;
   prepare(): Promise<T>;
-  consume(entry: SessionEntry | undefined): T;
+  consume(entry: SessionEntry | undefined): Promise<T>;
 }): Promise<T> {
   const { reader, original, readPlan } = params;
   reader?.assertCurrent();
@@ -89,7 +110,7 @@ export async function withReplyToolAuthorityCohort<T>(params: {
     sessionKey: original.canonicalKey,
     env: params.env,
   });
-  return reader.withRead(
+  const preparedEntry = await reader.withRead(
     { sessionKeys: [key], snapshotFields: [] },
     assertCurrent,
     (read, assertPrepared) => {
@@ -102,9 +123,10 @@ export async function withReplyToolAuthorityCohort<T>(params: {
       ) {
         throw new Error("Tool authority classification source changed");
       }
-      const value = params.consume(entry);
-      assertPrepared();
-      return value;
+      return entry;
     },
   );
+  const value = await params.consume(preparedEntry);
+  assertCurrent();
+  return value;
 }

@@ -1,22 +1,18 @@
-// Verifies current plugin registry contribution snapshots.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
-import {
-  makeEmptyPluginMetadataOwners,
-  setCurrentPluginMetadataSnapshot,
-} from "./current-plugin-metadata.test-support.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
-import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import * as installedIndex from "./installed-plugin-index.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
+import { makeEmptyPluginMetadataOwners } from "./plugin-metadata-empty.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
+import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import {
   loadPluginManifestRegistryForPluginRegistry,
   listPluginContributionIds,
@@ -24,7 +20,6 @@ import {
   resolveManifestContractPluginIds,
   resolvePluginContributionOwners,
 } from "./plugin-registry-contributions.js";
-import { buildDeclaredProviderOwnerIndex } from "./provider-owner-index.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -34,76 +29,41 @@ afterEach(() => {
   clearPluginMetadataLifecycleCaches();
 });
 
-function createPluginRecord(id: string, enabled: boolean): InstalledPluginIndex["plugins"][number] {
-  return {
-    pluginId: id,
-    manifestPath: `/plugins/${id}/openclaw.plugin.json`,
-    manifestHash: id,
-    rootDir: `/plugins/${id}`,
-    origin: "global",
-    enabled,
-    startup: {
-      sidecar: false,
-      memory: false,
-      agentHarnesses: [],
-    },
-    compat: [],
-  } as unknown as InstalledPluginIndex["plugins"][number];
-}
-
-function createManifest(id: string): PluginManifestRecord {
-  return {
-    id,
-    origin: "global",
-    providers: [],
-    channels: [],
-    channelConfigs: {},
-    cliBackends: [],
-    contracts: { webSearchProviders: [`${id}-search`] },
-  } as unknown as PluginManifestRecord;
-}
-
-function createSnapshot(params: {
-  config: OpenClawConfig;
-  workspaceDir: string;
-  registryDiagnostics?: PluginMetadataSnapshot["registryDiagnostics"];
-}): PluginMetadataSnapshot {
-  const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
-  const index: InstalledPluginIndex = {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash,
-    generatedAtMs: 0,
-    installRecords: {},
-    plugins: [createPluginRecord("enabled", true), createPluginRecord("disabled", false)],
-    diagnostics: [],
+function publishSnapshot(config: OpenClawConfig = {}) {
+  const params = {
+    config,
+    env: { HOME: "/tmp/openclaw-test-home", OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+    workspaceDir: "/workspace",
   };
-  const plugins = [createManifest("enabled"), createManifest("disabled")];
-  return {
+  const policyHash = resolveInstalledPluginIndexPolicyHash(config);
+  const snapshot = createPluginMetadataSnapshotFixture({
+    plugins: ["enabled", "disabled"].map((id) => ({
+      id,
+      origin: "global",
+      rootDir: `/plugins/${id}`,
+      channelConfigs: {},
+      contracts: { webSearchProviders: [`${id}-search`] },
+    })),
+  });
+  snapshot.index.policyHash = policyHash;
+  for (const plugin of snapshot.index.plugins) {
+    plugin.enabled = plugin.pluginId === "enabled";
+    delete plugin.enabledByDefault;
+  }
+  const published: PluginMetadataSnapshot = {
+    ...snapshot,
     policyHash,
     workspaceDir: params.workspaceDir,
     configFingerprint: "",
-    index,
-    registryIndex: index,
-    registryDiagnostics: params.registryDiagnostics ?? [],
-    manifestRegistry: { plugins, diagnostics: [] },
-    plugins,
-    diagnostics: [],
-    byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
     normalizePluginId: (pluginId: string) => pluginId,
-    declaredProviderOwners: buildDeclaredProviderOwnerIndex(plugins),
     owners: makeEmptyPluginMetadataOwners(),
-    metrics: {
-      registrySnapshotMs: 0,
-      manifestRegistryMs: 0,
-      ownerMapsMs: 0,
-      totalMs: 0,
-      indexPluginCount: index.plugins.length,
-      manifestPluginCount: plugins.length,
-    },
   };
+  setCurrentPluginMetadataSnapshot(published, params);
+  return { ...params, snapshot: published };
+}
+
+function manifestIds(params: Parameters<typeof loadPluginManifestRegistryForPluginRegistry>[0]) {
+  return loadPluginManifestRegistryForPluginRegistry(params).plugins.map((plugin) => plugin.id);
 }
 
 describe("loadPluginManifestRegistryForPluginRegistry current snapshot", () => {
@@ -131,9 +91,7 @@ describe("loadPluginManifestRegistryForPluginRegistry current snapshot", () => {
     ]);
     const derive = vi.spyOn(installedIndex, "loadInstalledPluginIndexWithDiscovery");
 
-    expect(
-      loadPluginManifestRegistryForPluginRegistry(params).plugins.map((plugin) => plugin.id),
-    ).toEqual([fixture.pluginId]);
+    expect(manifestIds(params)).toEqual([fixture.pluginId]);
     expect(listPluginContributionIds({ ...params, contribution: "channels" })).toEqual([
       fixture.channelId,
     ]);
@@ -157,9 +115,7 @@ describe("loadPluginManifestRegistryForPluginRegistry current snapshot", () => {
     expect(derive).toHaveBeenCalledOnce();
 
     clearPluginMetadataLifecycleCaches();
-    expect(
-      loadPluginManifestRegistryForPluginRegistry(params).plugins.map((plugin) => plugin.id),
-    ).toEqual([fixture.pluginId]);
+    expect(manifestIds(params)).toEqual([fixture.pluginId]);
     expect(listPluginContributionIds({ ...params, contribution: "channels" })).toEqual([
       fixture.channelId,
     ]);
@@ -168,14 +124,7 @@ describe("loadPluginManifestRegistryForPluginRegistry current snapshot", () => {
   });
 
   it("reuses an allowlisted published snapshot for configless manifest reads", () => {
-    const config: OpenClawConfig = { plugins: { allow: ["enabled"] } };
-    const env = {
-      HOME: "/tmp/openclaw-test-home",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    };
-    const workspaceDir = "/workspace";
-    const snapshot = createSnapshot({ config, workspaceDir });
-    setCurrentPluginMetadataSnapshot(snapshot, { config, env, workspaceDir });
+    const { env, snapshot } = publishSnapshot({ plugins: { allow: ["enabled"] } });
     const readDirectory = vi.spyOn(fs, "readdirSync");
     const readFile = vi.spyOn(fs, "readFileSync");
 
@@ -184,101 +133,46 @@ describe("loadPluginManifestRegistryForPluginRegistry current snapshot", () => {
     expect(readFile).not.toHaveBeenCalled();
   });
 
-  it("projects supplied contract manifests without dropping disabled owners", () => {
-    const config: OpenClawConfig = { plugins: { allow: ["enabled"] } };
-    const env = {
-      HOME: "/tmp/openclaw-test-home",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    };
-    const workspaceDir = "/workspace";
-    const snapshot = createSnapshot({ config, workspaceDir });
-    setCurrentPluginMetadataSnapshot(snapshot, { config, env, workspaceDir });
-    const readDirectory = vi.spyOn(fs, "readdirSync");
-    const readFile = vi.spyOn(fs, "readFileSync");
-
-    expect(
-      resolveManifestContractPluginIds({
-        contract: "webSearchProviders",
-        config,
-        env,
-        workspaceDir,
-      }),
-    ).toEqual(["disabled", "enabled"]);
-    expect(
-      resolveManifestContractOwnerPluginId({
-        contract: "webSearchProviders",
-        value: " DISABLED-SEARCH ",
-        config,
-        env,
-        workspaceDir,
-      }),
-    ).toBe("disabled");
-    expect(
-      resolveManifestContractPluginIds({
-        contract: "webSearchProviders",
-        config: { plugins: { allow: ["incompatible-policy"] } },
-        env,
-        manifestRecords: snapshot.plugins,
-        onlyPluginIds: ["disabled"],
-      }),
-    ).toEqual(["disabled"]);
-    expect(
-      resolveManifestContractOwnerPluginId({
-        contract: "webSearchProviders",
-        value: "disabled-search",
-        config: { plugins: { allow: ["incompatible-policy"] } },
-        env,
-        manifestRecords: snapshot.plugins,
-      }),
-    ).toBe("disabled");
-    expect(readDirectory).not.toHaveBeenCalled();
-    expect(readFile).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    "projects contract manifests without dropping disabled owners (supplied: %s)",
+    (supplied) => {
+      const { snapshot, ...params } = publishSnapshot({ plugins: { allow: ["enabled"] } });
+      const readDirectory = vi.spyOn(fs, "readdirSync");
+      const readFile = vi.spyOn(fs, "readFileSync");
+      const source = supplied
+        ? {
+            contract: "webSearchProviders" as const,
+            env: params.env,
+            config: { plugins: { allow: ["incompatible-policy"] } },
+            manifestRecords: snapshot.plugins,
+          }
+        : { ...params, contract: "webSearchProviders" as const };
+      expect(
+        resolveManifestContractPluginIds({
+          ...source,
+          ...(supplied ? { onlyPluginIds: ["disabled"] } : {}),
+        }),
+      ).toEqual(supplied ? ["disabled"] : ["disabled", "enabled"]);
+      expect(
+        resolveManifestContractOwnerPluginId({
+          ...source,
+          value: supplied ? "disabled-search" : " DISABLED-SEARCH ",
+        }),
+      ).toBe("disabled");
+      expect(readDirectory).not.toHaveBeenCalled();
+      expect(readFile).not.toHaveBeenCalled();
+    },
+  );
 
   it("reuses compatible current manifest metadata", () => {
-    const config: OpenClawConfig = {};
-    const env = {
-      HOME: "/tmp/openclaw-test-home",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    };
-    const workspaceDir = "/workspace";
-    setCurrentPluginMetadataSnapshot(createSnapshot({ config, workspaceDir }), {
-      config,
-      env,
-      workspaceDir,
-    });
-
-    expect(
-      loadPluginManifestRegistryForPluginRegistry({ config, env, workspaceDir }).plugins.map(
-        (plugin) => plugin.id,
-      ),
-    ).toEqual(["enabled"]);
-    expect(
-      loadPluginManifestRegistryForPluginRegistry({
-        config,
-        env,
-        workspaceDir,
-        includeDisabled: true,
-      }).plugins.map((plugin) => plugin.id),
-    ).toEqual(["enabled", "disabled"]);
-    expect(
-      loadPluginManifestRegistryForPluginRegistry({
-        config,
-        env,
-        workspaceDir,
-        includeDisabled: true,
-        pluginIds: [],
-      }).plugins.map((plugin) => plugin.id),
-    ).toEqual([]);
-    expect(
-      loadPluginManifestRegistryForPluginRegistry({
-        config,
-        env,
-        workspaceDir,
-        includeDisabled: true,
-        pluginIds: ["disabled"],
-      }).plugins.map((plugin) => plugin.id),
-    ).toEqual(["disabled"]);
+    const { config, env, workspaceDir } = publishSnapshot();
+    const params = { config, env, workspaceDir };
+    expect(manifestIds(params)).toEqual(["enabled"]);
+    expect(manifestIds({ ...params, includeDisabled: true })).toEqual(["enabled", "disabled"]);
+    expect(manifestIds({ ...params, includeDisabled: true, pluginIds: [] })).toEqual([]);
+    expect(manifestIds({ ...params, includeDisabled: true, pluginIds: ["disabled"] })).toEqual([
+      "disabled",
+    ]);
     expect(loadPluginManifestRegistryForPluginRegistry({ config, env }).plugins).toEqual([]);
   });
 });

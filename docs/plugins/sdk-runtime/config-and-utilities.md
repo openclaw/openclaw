@@ -14,7 +14,7 @@ How plugin code reads the runtime config snapshot, persists config writes, and r
 
 Prefer config that was already passed into the active call path, for example `api.config` during registration or a `cfg` argument on channel/provider callbacks. This keeps one process snapshot flowing through the work instead of reparsing config on hot paths.
 
-Use `api.runtime.config.current()` only when a long-lived handler needs the current process snapshot and no config was passed to that function. The returned value is readonly; clone or use a mutation helper before editing.
+Use `api.runtime.config.current()` only when a long-lived handler needs the current process snapshot and no config was passed to that function. The returned value is readonly. Use `api.runtime.config.current({ clone: true })` when a downstream API needs an independent mutable copy; the copy retains resolved-secret metadata. Persist edits through the mutation helpers below.
 
 Tool factories receive `ctx.runtimeConfig` plus `ctx.getRuntimeConfig()`. Use the getter inside a long-lived tool's `execute` callback when config can change after the tool definition was created.
 
@@ -36,6 +36,14 @@ Use `current()`, a passed-in `cfg`, `mutateConfigFile(...)`, or
 `replaceConfigFile(...)` for runtime config access and writes.
 
 For direct SDK imports, use `config-contracts` for types, `runtime-config-snapshot` for current process snapshots, and `config-mutation` for writes. The broad `openclaw/plugin-sdk/config-runtime` compatibility barrel has been removed. Read entry-scoped values from `api.pluginConfig`; use a supplied tool context only for its runtime-wide config snapshot, and keep plugin-specific merging at that boundary. Bundled plugin tests should mock these focused subpaths directly.
+
+Use `createPluginConfigParser(pluginId, parse)` from `openclaw/plugin-sdk/plugin-config-runtime`
+when a pure plugin-config parser runs repeatedly. It shares a frozen parsed result
+for the current published config revision or a deeply frozen input snapshot.
+Publish config changes through the host; mutating a published object alone does not invalidate it.
+Republishing config invalidates live results, including same-object updates;
+standalone mutable inputs are parsed on every call. The parser must return an owned
+JSON value without mutating its input. Errors propagate unchanged and are not cached.
 
 When using the direct `config-mutation` import to replace a source snapshot, pass
 the edited config as `sourceConfig` to `replaceConfigFile`, retaining its `snapshot`,
@@ -72,6 +80,43 @@ retain restart behavior under a broader no-op prefix.
 
 ## Reusable runtime utilities
 
+### Runtime execution profile
+
+`getRuntimeExecutionProfile()` from `openclaw/plugin-sdk/runtime-env` returns
+`dynamic-execution` for Node/Bun installations and JIT/bytecode standalone hosts,
+or `embedded-aot` for an AOT standalone. The artifact owns this process-stable
+fact; it is not a user setting or an authorization grant.
+
+AOT hosts allow fetched CJS/TypeScript plugins, Node Code Mode, and QA expressions.
+The code supplied after compilation runs interpreted while plugins share the
+host's compiled SDK. Use `noteRuntimeDynamicExecution("plugins")` (or
+`"code-mode"` / `"qa"`) to emit the owner's one-time performance notice. Runtime
+and setup loading already report fetched plugin execution; do not log another
+warning per plugin or call.
+
+At an execution boundary, propagate
+`annotateRuntimeExecutionError(error, "Your feature name")`. It preserves ordinary
+errors and adds actionable guidance to actual code-generation restrictions or
+unavailable AOT modules. An AOT profile alone is never a reason to reject code.
+A strict code-generation ban still prevents disk/VM loading; use a build without
+that flag. A missing late module must be installed through the disk loader or
+included in a rebuilt artifact.
+
+Keep fixed programs as normal source functions, runtime schemas in codegen-free
+validators, and syntax checks in parsers. Declare worker/child entries and runtime
+dependencies; CJS/TS loading does not qualify every transitive host API or worker.
+Metadata discovery still does not execute plugin code. See
+[Runtime execution profiles](/concepts/runtime-profiles).
+
+### Process and network utilities
+
+`runInDetachedAsyncContext` from `openclaw/plugin-sdk/concurrency-runtime` starts
+work in the host's context-free async root. Use it at an independently admitted
+service request boundary when a long-lived listener can retain its startup
+caller's settled work scope or binding lease. Keep the service's lifetime,
+request authentication, and current source authority checks explicit; detaching
+does not grant authority or make an expired caller capability usable again.
+
 For libraries that accept a Node HTTP agent, use `createNodeProxyAgent` from
 `openclaw/plugin-sdk/fetch-runtime`. With `mode: "env"`, supply `targetUrl` for
 a fixed destination, or omit it when the library selects destinations itself
@@ -104,6 +149,18 @@ session reservation or temporary output, await `withCommandProcessScope` from th
 same subpath around execution before releasing those resources. The scope joins
 late startup and process cleanup; uncertain cleanup remains an error.
 
+For plugin-owned long-lived children, use `spawnOomScoreAdjusted` from the same
+subpath with native `spawn` options. On Linux it raises the child's
+`oom_score_adj` to `1000` immediately after native spawn so memory pressure
+preferentially kills the child. This preserves custom `argv0`, the environment,
+and native launch errors. There is a brief window before the score write;
+descendants created in that window can retain the inherited score. The Gateway's
+score is never changed. `OPENCLAW_CHILD_OOM_SCORE_ADJ=0` disables the policy,
+including for sanitized child environments; an explicit child value overrides the parent.
+Explicit `shell` launches remain caller-owned. Lower-level users of
+`prepareOomScoreAdjustedSpawn` must call its optional `afterSpawn(child.pid)`
+immediately after spawning to apply the custom-`argv0` adjustment.
+
 `reapOrphanedProcesses` from the same subpath supports recovery of plugin-owned
 macOS process trees after their original host dies. Supply the exact managed
 executable and an argument predicate for its configured instance; also supply
@@ -112,7 +169,7 @@ same-user, launchd-adopted roots, retains native birth identities and matching
 descendants, and joins bounded TERM-to-KILL cleanup. It never signals a process
 group or discovers new descendants after the root exits. Call it during managed
 service preparation, before health-based reuse, and leave externally managed
-endpoints outside that path. Unknown identities fail closed on supported hosts;
+endpoints outside that path. Unknown identities are rejected on supported hosts;
 hosts without native birth-identity support and other platforms leave existing
 processes untouched. PID 1 can itself be a live owner on Linux.
 
@@ -135,6 +192,38 @@ for the terminal's exit before releasing its backend resources.
 
 Sandbox command adapters retain the sandbox owner's per-stream output bound,
 `SANDBOX_COMMAND_MAX_BUFFER_BYTES`, from `openclaw/plugin-sdk/sandbox`.
+
+Bundled plugin worker and child entries use
+`createPluginRuntimeProcessEntrypoint(name, import.meta.url)` from
+`openclaw/plugin-sdk/process-runtime`, then `resolveRuntimeWorkerUrl(entry)`.
+The host's runtime-process manifest owns these cataloged targets, including their
+source and installed package paths; package `openclaw.build.workerEntries`
+metadata must agree with that manifest. Keep each worker in an explicit entry
+module rather than starting its host module again or passing source with
+`eval: true`.
+
+`resolvePackageRuntimeProcessEntrypointUrl(name, packageRoot)` resolves a declared
+host entry inside a selected OpenClaw package. It prefers its built entry,
+including an entry embedded in a standalone executable, and falls back to the
+source entry in a checkout. A package missing both entries is rejected. Pass the
+result to `resolveRuntimeWorkerArgv` to retain the host's Node/Bun loader policy.
+Managed MCP bridges use this owner for their stdio entrypoints.
+
+Dependency-owned child programs use
+`resolveRuntimeDependencyEntrypointUrl(name, import.meta.url)` from the same
+subpath. The host manifest owns their package specifiers; resolution retains the
+calling package's dependency tree and npm's standalone sidecar. These disk
+programs retain their external-runtime contract; declaring one does not embed
+its dependency graph into the standalone executable. Resolution selects the
+program without changing the selected runtime's execution capabilities. Copied
+plugin program assets use `resolvePluginRuntimeProcessAssetUrl(name, packageRoot)`
+and keep their package `staticAssets` declaration aligned with the runtime
+manifest. Exact embedded module membership takes precedence over loose disk
+candidates.
+
+Third-party plugins retain the explicit descriptor contract of
+`resolveRuntimeWorkerUrl`; loading new plugin code is a separate runtime boundary
+from declaring entries embedded in a standalone executable.
 
 `WorkerTaskPool` from `openclaw/plugin-sdk/process-runtime` retains workers and
 unconsumed inputs when termination fails. Retry `close()` on that same pool;
@@ -174,11 +263,13 @@ out of order, so owners requiring serial completion must use a serial class.
 This policy adds no operator configuration or storage migration.
 
 Pools can set `burstIdleTimeoutMs` to retire workers beyond their first usable slot
-sooner than `idleTimeoutMs`. Retiring these surplus workers does not extend the
-first worker's adaptive warm window. Image processing uses at most two workers
+sooner than `idleTimeoutMs`. If demand returns within five minutes of a surplus
+idle retirement, one replacement can remain idle for three times `burstIdleTimeoutMs`.
+It still retires after that idle window, without extending the first worker's
+adaptive warm window. Image processing uses at most two workers
 under shared compute admission and retires surplus capacity after five idle
-seconds. Control UI file reads use their own bounded two-worker pool so shared
-compute contention cannot block asset reads.
+seconds, or fifteen seconds for a recurring burst. Control UI file reads use their
+own bounded two-worker pool so shared compute contention cannot block asset reads.
 
 `prepareWorker()` can return `temporaryDirectory` for disposable scratch files
 and an optional asynchronous `releaseResources()` callback for producer-owned
@@ -236,6 +327,12 @@ whole-card text fallbacks that must retain labels clipped by native limits. This
 shares core outbound rendering's fallback-text policy and removes the portable
 presentation fields after rendering. The callback may be synchronous or async.
 
+Before retaining a failure in a cache, owner field, or terminal abort signal, call
+`materializeErrorStack(error)` from `openclaw/plugin-sdk/error-runtime`. It formats
+lazy stacks throughout the nested error graph so captured frames can release
+request data, while preserving error identity, messages, codes, and causes.
+Formatting is best effort for immutable errors and custom stack accessors.
+
 Use `attachErrorDiagnostic(error, text)` from `openclaw/plugin-sdk/error-runtime`
 to attach supplemental operator diagnostics to a thrown error without changing
 its identity, message, or failure classification. Mask opaque credentials first;
@@ -258,13 +355,20 @@ Model-picker integrations use two focused runtime subpaths. Import the typed
 `openclaw/plugin-sdk/interactive-runtime`. Import
 `applySessionModelSelection(...)` and its result types from
 `openclaw/plugin-sdk/model-session-runtime`; this is the live-session mutation
-seam, including its authoritative conflict check and post-commit effects. The
+interface, including its authoritative conflict check and post-commit effects. The
 lower-level `applyModelOverrideToSessionEntry(...)` helper is not a picker
 persistence API.
 
+Model selection preserves the saved thinking preference; execution clamps it to
+the selected model's supported levels. `thinkingRemap` is no longer emitted in
+the selection result. Its optional type remains deprecated until the next SDK
+major version. Session rows expose the saved request as `thinkingLevel`.
+`sessions.patch` returns that preference in `entry.thinkingLevel` and the
+execution level in `resolved.thinkingLevel`.
+
 Use `applyModelOverrideWithAuthProfileCompatibility(...)` only as the direct
 persistence fallback when a channel callback cannot enter the full live-session
-transaction and already owns an atomic canonical session-entry patch. Pass the
+transaction and already owns an atomic stored session-entry patch. Pass the
 active config, resolved agent directory, entry, effective provider before the
 change, and validated selection. The helper mutates that entry only: it keeps a
 pinned auth profile when its recorded credential provider or configured alias is
@@ -273,11 +377,18 @@ The caller still owns model allowlist validation, atomic persistence,
 `markLiveSwitchPending`, and any post-commit effects. Prefer
 `applySessionModelSelection(...)` whenever the full transaction is available.
 
+In an async session-entry patch, prepare an existing auth pin with
+`await prepareAuthProfileProvider({ agentDir, profileId })` from the same subpath
+and pass its result as `recordedProvider`. This reuses the runtime snapshot or
+reads persisted credentials through the auth owner. Pass the result even when
+its `provider` is `undefined`: it records completed preparation and prevents a
+synchronous fallback lookup. Skip preparation when the entry has no auth pin.
+
 Model-picker actions carry only bounded snapshot and catalog tokens. Channel
 actor identity, source-message binding, and serialized callback data stay in
 the channel's private authenticated envelope. Channel codecs opt into resolving
 these actions with `{ modelPicker: true }`; channels without a picker
-capability continue to fail closed instead of treating the action as an opaque
+capability continue to reject the action instead of treating it as an opaque
 callback.
 
 Use inbound `botLoopProtection` facts for bot-authored inbound messages. Core applies the shared in-memory sliding-window guard before session record and dispatch, without tying the policy to one channel. The guard tracks `(scopeId, conversationId, participant pair)` keys, counts both directions of a pair together, applies a cooldown once the window budget is exceeded, and prunes inactive entries opportunistically. Retryable transports should also supply a stable `eventId`; replaying an accepted event while it remains in the active window does not consume another budget slot. Suppressed events add no retained event-identity state.
@@ -393,6 +504,41 @@ their payload for the listener. `include` and `exclude` apply to every event;
 the optional `includeTrusted` list further restricts only events marked trusted
 by the dispatcher. Omitting it preserves existing behavior, and an empty list
 accepts only untrusted events that pass `include`/`exclude`. Event payload fields
-cannot override the dispatcher's trust metadata. Accepted events retain their
-individual frozen copies; this filter does not change diagnostic collection or
-queue behavior.
+cannot override the dispatcher's trust metadata. Accepted plain event payloads
+share one frozen snapshot across listeners in a dispatch. Plain private listener
+data also shares a frozen snapshot among interested trusted listeners, with
+listener-specific host attribution in a frozen shallow copy. Payloads with mutable
+opaque values (such as Maps or Dates) retain individual copies. Absent private data
+uses a shared frozen empty payload, including for
+OTel listeners without host-plugin attribution. Listener mutations remain isolated
+from other listeners and producers; filtering does not change diagnostic collection
+or queue behavior.
+
+## Darwin process inspection
+
+Use `openclaw/plugin-sdk/process-runtime` for macOS process observations.
+This is a breaking Plugin SDK change: `DarwinProcess.uid` is replaced by
+`owner: "same" | "different" | "unknown"`. Replace comparisons such as
+`row.uid === process.getuid()` with `row.owner === "same"`; unknown ownership
+does not authorize cleanup.
+Core cleanup and plugins share this owner. `readDarwinProcessSnapshot(deadline, pids?)`
+returns PID, parent PID, process group, state, ownership (`same`, `different`, or
+`unknown` relative to the observer), and an opaque `startedAt`
+identity. Omitting `pids` requests all start identities and can fail for other users.
+Prefer `readDarwinProcessTree(deadline, roots)` for containment: it reads complete
+process topology, then start identities only for the roots, their descendants,
+and the observer. An inaccessible relevant process still fails inspection. Start identities preserve the
+normalized UTC `ps lstart` format across Node and Bun so retained registrations
+remain comparable after runtime switches. They have second granularity; use a
+command fingerprint when authorizing cleanup of a retained PID.
+`readDarwinProcessCommandLine(pid, deadline)` returns joined arguments and never reads
+process environment values. Deadlines use `performance.now()` milliseconds.
+
+Node and Bun use the pinned proc-safe native census and argument reader, so neither
+operation executes `ps`, including inside macOS Seatbelt sandboxes. Unreadable
+topology fails the census; unrelated unreadable birth identities do not prevent
+inspection of a selected tree. There is no fallback from failed native inspection to `ps`.
+A missing PID is omitted, while `DarwinProcessInspectionError.reason` distinguishes
+`permission`, `deadline`, and `unavailable`; its `code` is respectively `EPERM`,
+`ETIMEDOUT`, or `EIO`. Callers must not treat these errors as
+proof that a process or integration is absent.

@@ -22,16 +22,14 @@ function clearRetry(host: WorkboardHost): void {
   }
 }
 
-function scheduleRetry(host: WorkboardHost, generation: number): void {
+function scheduleRetry(host: WorkboardHost): void {
   const runtime = getWorkboardRuntime(host);
   if (runtime.liveRefreshRetryTimer) {
     return;
   }
   runtime.liveRefreshRetryTimer = setTimeout(() => {
     delete runtime.liveRefreshRetryTimer;
-    if ((runtime.liveRefreshGeneration ?? 0) === generation) {
-      void runPendingRefresh(host);
-    }
+    void runPendingRefresh(host);
   }, WORKBOARD_LIVE_REFRESH_RETRY_MS);
 }
 
@@ -40,9 +38,8 @@ async function runPendingRefresh(host: WorkboardHost): Promise<void> {
   if (runtime.liveRefreshPromise) {
     return await runtime.liveRefreshPromise;
   }
-  const generation = runtime.liveRefreshGeneration ?? 0;
   const promise = (async () => {
-    while (runtime.liveRefreshPending && (runtime.liveRefreshGeneration ?? 0) === generation) {
+    while (runtime.liveRefreshPending) {
       const entry = runtime.liveRefreshEntry;
       const state = getWorkboardState(host);
       if (
@@ -54,29 +51,20 @@ async function runPendingRefresh(host: WorkboardHost): Promise<void> {
         return;
       }
       runtime.liveRefreshPending = false;
-      const targetEpoch = runtime.liveChangeEpoch;
-      const targetRevision = runtime.liveHighestSeenRevision ?? 0;
       const refreshed = await (entry.refresh?.() ??
         refreshWorkboard({
           host,
           client: entry.client,
-          requestUpdate: entry.requestUpdate,
           source: "live",
         }));
-      if ((runtime.liveRefreshGeneration ?? 0) !== generation) {
+      if (!runtime.liveRefreshEntry) {
         return;
       }
       if (!refreshed) {
         runtime.liveRefreshPending = true;
-        scheduleRetry(host, generation);
+        scheduleRetry(host);
         return;
       }
-      if (runtime.liveChangeEpoch === targetEpoch) {
-        runtime.liveAppliedRevision = Math.max(runtime.liveAppliedRevision ?? 0, targetRevision);
-      }
-      runtime.liveRefreshPending =
-        runtime.liveChangeEpoch !== targetEpoch ||
-        (runtime.liveHighestSeenRevision ?? 0) > (runtime.liveAppliedRevision ?? 0);
     }
   })();
   runtime.liveRefreshPromise = promise;
@@ -112,7 +100,6 @@ export function configureWorkboardLiveRefresh(
   );
   runtime.liveRefreshEntry = {
     client: params.client,
-    requestUpdate: params.requestUpdate,
     refresh: params.refresh,
     shouldDefer: params.shouldDefer,
   };
@@ -131,15 +118,11 @@ export function handleWorkboardChanged(host: WorkboardHost, payload: unknown): b
   if (!runtime.liveRefreshEntry?.refresh && hasCurrentWorkboardCards(host, payload)) {
     return false;
   }
-  if (runtime.liveChangeEpoch !== change.epoch) {
-    runtime.liveChangeEpoch = change.epoch;
-    runtime.liveHighestSeenRevision = change.revision;
-    runtime.liveAppliedRevision = 0;
-  } else if (change.revision <= (runtime.liveHighestSeenRevision ?? 0)) {
+  const previous = runtime.liveLastChange;
+  if (previous?.epoch === change.epoch && change.revision <= previous.revision) {
     return false;
-  } else {
-    runtime.liveHighestSeenRevision = change.revision;
   }
+  runtime.liveLastChange = change;
   runtime.liveRefreshPending = true;
   clearRetry(host);
   void runPendingRefresh(host);

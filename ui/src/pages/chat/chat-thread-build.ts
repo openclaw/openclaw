@@ -1,7 +1,10 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readNodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
+import { readModelFallbackNotice } from "../../../../src/shared/model-fallback-notice.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
+import { t } from "../../i18n/index.ts";
 import {
   type ChatGuardianNotice,
   type ChatItem,
@@ -16,12 +19,14 @@ import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
 } from "../../lib/chat/heartbeat-display.ts";
+import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import {
   canvasPreviewsMatch,
   normalizeRoleForGrouping,
 } from "../../lib/chat/message-normalizer.ts";
-import type { CanvasToolPreview } from "../../lib/chat/tool-cards.ts";
+import { pluginInlineViewItems } from "../../lib/chat/plugin-inline-views.ts";
+import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import {
   buildCompactionDividerItem,
   buildGuardianNoticeItem,
@@ -32,12 +37,22 @@ import {
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
+import { activeChatReasoning } from "./chat-reasoning.ts";
+import { projectRunFailureStreaks } from "./chat-run-failure-streaks.ts";
 import {
-  hasSessionsYieldCall,
+  hasHandoffToolCall,
   pendingSessionsYield,
   projectSessionsYieldItems,
 } from "./chat-sessions-yield.ts";
-import { projectChatSystemNotice } from "./chat-system-notice.ts";
+import {
+  createSubmittedModelNoticeProjector,
+  projectChatSystemNotice,
+} from "./chat-system-notice.ts";
+import {
+  canvasAssistantItemKey,
+  collectCanvasTurns,
+  reconcileLiveCanvasPreviews,
+} from "./chat-thread-canvas.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import {
   placeChatInputs,
@@ -91,12 +106,15 @@ export type BuildChatItemsProps = ChatInputPlacementProps & {
   guardianNotices?: ChatGuardianNotice[];
   streamSegments: ChatStreamSegment[];
   reasoning?: ChatReasoning | null;
+  showReasoning?: boolean;
   stream: string | null;
   streamStartedAt: number | null;
   showToolCalls: boolean;
   persistCommentary?: boolean;
   /** True while the agent is visibly working (isChatRunWorking). */
   runWorking?: boolean;
+  /** The answer is visible or the runtime only owns background settlement. */
+  runFinalizing?: boolean;
   /** True while the current session has an abortable live run. */
   runActive?: boolean;
   /** Set while a run that handed off is idle and its subagents are still running. */
@@ -110,20 +128,12 @@ export type BuildChatItemsProps = ChatInputPlacementProps & {
   replyLocalPerson?: string;
 };
 
-function canvasAssistantItemKey(
-  message: unknown,
-  source: Parameters<typeof canvasPreviewBaseIdentity>[1],
-  fallback: string,
-): string {
-  const identity = canvasPreviewBaseIdentity(message, source);
-  return identity ? `canvas:${identity}` : `${fallback}:canvas`;
-}
-
 export function buildChatItems(
   props: BuildChatItemsProps,
   inputOrder: ChatInputOrderState = { keys: [] },
 ): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
+  const inlineInvocations = new Set<string>();
   const tools = props.toolMessages.filter(
     (message): message is Record<string, unknown> => asRecord(message) !== null,
   );
@@ -140,6 +150,7 @@ export function buildChatItems(
   });
   const queuedSends = props.queue ?? [];
   const segments = props.streamSegments;
+  const activeReasoning = activeChatReasoning(props.reasoning);
   let progress: ReturnType<typeof resolveWorkingProgress> | null = null;
   const resolveProgress = () => {
     if (progress) {
@@ -176,49 +187,66 @@ export function buildChatItems(
   );
   const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());
   const hiddenHistoryKeys = new Set<string>();
-  const persistedCanvasIdentities = new Set<string>();
-  const normalizedHistory = history.map(safeNormalizeMessage);
-  const historyItems = buildMessageItems(history);
-  let canvasTurn: {
-    previews: { preview: CanvasToolPreview; item: (typeof historyItems)[number] }[];
-    lastMatchingAssistantIndex: number;
-  } = {
-    previews: [],
-    lastMatchingAssistantIndex: -1,
-  };
-  // Rows in one turn share these facts so a tool result can see the assistant
-  // projection that follows it, without consuming a view from another turn.
-  const canvasTurns = historyItems.map((item, index) => {
-    const message = normalizedHistory[index];
-    const role = message && normalizeRoleForGrouping(message.role);
-    if (role === "user" || role === "system") {
-      canvasTurn = { previews: [], lastMatchingAssistantIndex: -1 };
-    }
+  const hideSearchMiss = (item: Extract<ChatItem, { kind: "message" }>) => {
     if (
-      role === "assistant" &&
-      message &&
-      (!searchFiltering ||
-        messageMatchesSearchQuery(history[index], props.searchQuery ?? "", props.messageRecovery))
+      searchFiltering &&
+      !messageMatchesSearchQuery(item.message, props.searchQuery ?? "", props.messageRecovery)
     ) {
-      canvasTurn.lastMatchingAssistantIndex = index;
-      canvasTurn.previews.push(
-        ...message.content.flatMap((block) =>
-          block.type === "canvas" ? [{ preview: block.preview, item }] : [],
-        ),
-      );
+      hiddenHistoryKeys.add(item.key);
     }
-    return canvasTurn;
-  });
+  };
+  const canvasIdentities = new Set<string>();
+  const normalizedHistory = history.map(safeNormalizeMessage);
+  const permissionInMessage = (message: unknown) =>
+    extractToolCardsCached(message).some((card) =>
+      readNodePermissionRequest(asRecord(card.details)?.permissionMissing),
+    );
+  const historyItems = buildMessageItems(history);
+  const canvasTurns = collectCanvasTurns(
+    historyItems,
+    normalizedHistory,
+    (message) =>
+      !searchFiltering ||
+      messageMatchesSearchQuery(message, props.searchQuery ?? "", props.messageRecovery),
+  );
   const compaction = props.compactionStatus;
   const compactionKey = compaction
     ? `divider:compaction:live:${compaction.runId}:${compaction.itemId ?? "manual"}`
     : undefined;
   let hasPersistedCompaction = false;
+  const projectSubmittedModel = createSubmittedModelNoticeProjector();
   for (const [i, item] of historyItems.entries()) {
     const msg = item.message;
     const itemKey = item.key;
     const raw = asRecord(msg) ?? {};
     const marker = asRecord(raw["__openclaw"]);
+    const modelNotice = projectSubmittedModel(item);
+    if (modelNotice) {
+      items.push(modelNotice);
+    }
+    const fallback = readModelFallbackNotice(msg);
+    if (fallback) {
+      items.push({
+        kind: "divider",
+        key: `divider:model-fallback:${itemKey}`,
+        systemEvent: "info",
+        label: t(
+          fallback.phase === "restored"
+            ? "chat.composer.modelRestoredEvent"
+            : "chat.composer.modelFallbackEvent",
+          { from: fallback.fromModel, to: fallback.toModel },
+        ),
+        ...(fallback.reason
+          ? {
+              description: t("chat.composer.fallbackReason", {
+                reason: fallback.reason.replace(/_/g, " "),
+              }),
+            }
+          : {}),
+        timestamp: rawMessageTimestamp(msg) ?? Date.now(),
+      });
+      continue;
+    }
     if (marker?.kind === "compaction" || isContextCompactionMessage(msg)) {
       const matchesLive = compaction != null && matchesCompactionOperation(msg, compaction);
       const divider = buildCompactionDividerItem(
@@ -252,12 +280,18 @@ export function buildChatItems(
       continue;
     }
 
+    for (const inline of pluginInlineViewItems(item, inlineInvocations)) {
+      hideSearchMiss(inline);
+      items.push(inline);
+    }
     const isToolResult = normalized.role.toLowerCase() === "toolresult";
     const persistedCanvasSource = isToolResult ? extractChatMessagePreview(msg) : null;
+    let duplicatePersistedCanvas = false;
     if (persistedCanvasSource) {
       const identity = canvasPreviewBaseIdentity(msg, persistedCanvasSource);
       if (identity) {
-        persistedCanvasIdentities.add(identity);
+        duplicatePersistedCanvas = canvasIdentities.has(identity);
+        canvasIdentities.add(identity);
       }
     }
     const matchingCanvas =
@@ -276,6 +310,7 @@ export function buildChatItems(
     }
     const renderPersistedPreview =
       persistedCanvasSource != null &&
+      !duplicatePersistedCanvas &&
       !matchingCanvas &&
       (!searchFiltering || canvasTurns[i]!.lastMatchingAssistantIndex > i);
     if (persistedCanvasSource && renderPersistedPreview) {
@@ -289,18 +324,17 @@ export function buildChatItems(
       });
     }
 
-    if (!props.showToolCalls && isToolResult && !hasSessionsYieldCall(msg)) {
+    if (
+      !props.showToolCalls &&
+      isToolResult &&
+      !(raw.role === "assistant" && extractTextCached(msg)?.trim()) &&
+      !hasHandoffToolCall(msg) &&
+      !permissionInMessage(msg)
+    ) {
       continue;
     }
 
-    const searchQuery = props.searchQuery ?? "";
-    if (
-      props.searchOpen &&
-      searchQuery.trim() &&
-      !messageMatchesSearchQuery(msg, searchQuery, props.messageRecovery)
-    ) {
-      hiddenHistoryKeys.add(itemKey);
-    }
+    hideSearchMiss(item);
     if (
       !hasRenderableNormalizedMessage(msg, normalized) &&
       normalized.role.toLowerCase() !== "assistant"
@@ -350,8 +384,11 @@ export function buildChatItems(
       continue;
     }
     const baseIdentity = canvasPreviewBaseIdentity(projection.item.message, preview);
-    if (baseIdentity && persistedCanvasIdentities.has(baseIdentity)) {
-      continue;
+    if (baseIdentity) {
+      if (canvasIdentities.has(baseIdentity)) {
+        continue;
+      }
+      canvasIdentities.add(baseIdentity);
     }
     const canvasBounds = boundToPendingInputs(
       resolveRunBounds(
@@ -403,9 +440,7 @@ export function buildChatItems(
       message: createCanvasAssistantMessage(preview, timestamp),
     });
   }
-  items = items.filter(
-    (item) => item.kind !== "message" || hasRenderableNormalizedMessage(item.message),
-  );
+  items = reconcileLiveCanvasPreviews(items, hiddenHistoryKeys, hiddenKeys);
   const projections: ChatProjection[] = [];
   if (compaction && compactionKey && !hasPersistedCompaction) {
     const timestamp = compaction.startedAt ?? compaction.completedAt ?? Date.now();
@@ -436,28 +471,52 @@ export function buildChatItems(
   ): TurnInsertionBounds | undefined =>
     boundToPendingInputs(resolveRunBounds(projectionRunBounds, runId, afterUserSendId));
   if (!searchFiltering) {
+    const recordedPermissions = new Set(
+      props.guardianNotices?.some((notice) => notice.permissionMissing)
+        ? [...props.messages, ...props.toolMessages].flatMap((message) =>
+            extractToolCardsCached(message).flatMap((card) => {
+              const request = readNodePermissionRequest(asRecord(card.details)?.permissionMissing);
+              return request ? [JSON.stringify(request)] : [];
+            }),
+          )
+        : [],
+    );
     if (props.archiveNotice) {
       projections.push({ item: props.archiveNotice });
     }
     for (const notice of props.guardianNotices ?? []) {
+      if (
+        notice.permissionMissing &&
+        recordedPermissions.has(JSON.stringify(notice.permissionMissing))
+      ) {
+        continue;
+      }
       projections.push({
         item: buildGuardianNoticeItem(notice),
         bounds: resolveProjectionBounds(notice.runId),
       });
     }
   }
-  const appendStreamSegment = (segment: ChatStreamSegment, key: string, text: string) => {
+  const appendStreamSegment = (
+    segment: Pick<ChatStreamSegment, "ts" | "runId" | "afterUserSendId">,
+    key: string,
+    text: string,
+    thinking?: string,
+    beforeKey?: string,
+  ) => {
+    const bounds = resolveProjectionBounds(segment.runId, segment.afterUserSendId);
     projections.push({
       item: {
         kind: "stream",
         key,
         text,
+        ...(thinking ? { thinking } : {}),
         startedAt: segment.ts,
         isStreaming: false,
         ...optionalRunIdentity(segment.runId),
         ...optionalBoundaryIdentity(segment.runId),
       },
-      bounds: resolveProjectionBounds(segment.runId, segment.afterUserSendId),
+      bounds: beforeKey ? { ...bounds, beforeKey } : bounds,
     });
   };
   let previousAccumulatedStreamText: string | null = null;
@@ -486,7 +545,12 @@ export function buildChatItems(
       }
     }
     const tool = toolItems[i];
-    if (tool && (props.showToolCalls || hasSessionsYieldCall(tool.projection.item.message))) {
+    if (
+      tool &&
+      (props.showToolCalls ||
+        hasHandoffToolCall(tool.projection.item.message) ||
+        permissionInMessage(tool.projection.item.message))
+    ) {
       tool.projection.bounds = resolveProjectionBounds(
         tool.runId,
         normalizeOptionalString(tool.projection.item.message.openclawToolStreamAfterSendId),
@@ -521,12 +585,65 @@ export function buildChatItems(
     });
   }
 
+  const visibleText = trimAccumulatedStreamPrefix(
+    sanitizeStreamText(props.stream ?? ""),
+    accumulatedStreamText(segments, sanitizeStreamText),
+  );
+  if (props.reasoning) {
+    const { runId } = props.reasoning;
+    for (const reasoning of props.reasoning.items) {
+      if (
+        reasoning === activeReasoning ||
+        !reasoning.text ||
+        (props.showReasoning && reasoning.receipt?.persisted)
+      ) {
+        continue;
+      }
+      const receipt = reasoning.receipt;
+      // Provider timestamps may precede the first token. The receipt keeps
+      // a stream-mode preview before its exact durable tool/answer row.
+      const persisted = receipt?.persisted
+        ? historyItems.find(({ message }) => {
+            const identity = readChatThreadMessageIdentity(message);
+            return (
+              identity?.role === "assistant" &&
+              !identity.isImported &&
+              identity.id === receipt.messageId &&
+              identity.runId === receipt.runId
+            );
+          })
+        : undefined;
+      appendStreamSegment(
+        { runId, ts: reasoning.startedAt },
+        `reasoning:${runId}:${reasoning.itemId}`,
+        "",
+        reasoning.text,
+        persisted?.key,
+      );
+    }
+  }
+
   // Unowned projections keep their user-turn floor despite clock skew;
   // identified live tools stay in the canonical invocation's interval.
   applyPersistedToolInvocationBounds(
     items,
     toolItems.map((tool) => tool.projection),
   );
+  for (const tool of toolItems) {
+    for (const item of pluginInlineViewItems(tool.projection.item, inlineInvocations)) {
+      hideSearchMiss(item);
+      projections.push({
+        ...tool.projection,
+        bounds:
+          tool.projection.bounds ??
+          resolveProjectionBounds(
+            tool.runId,
+            normalizeOptionalString(tool.projection.item.message.openclawToolStreamAfterSendId),
+          ),
+        item,
+      });
+    }
+  }
   insertChatItemsByTimestamp(items, projections);
 
   // The active claw is telemetry, not a placeholder: it stays through visible
@@ -537,6 +654,7 @@ export function buildChatItems(
   // catches up.
   const hasEmptyLiveStream = props.stream !== null && props.stream.trim().length === 0;
   const showWorkingIndicator =
+    !props.runFinalizing &&
     (!compaction || compaction.phase === "complete") &&
     ((props.runWorking === true && !initialHistoryLoad) ||
       hasEmptyLiveStream ||
@@ -564,31 +682,26 @@ export function buildChatItems(
       items.push(item);
     }
   };
-  if (props.stream !== null || props.reasoning) {
-    const text = sanitizeStreamText(props.stream ?? "");
-    const prefix = accumulatedStreamText(segments, sanitizeStreamText);
-    const visibleText = trimAccumulatedStreamPrefix(text, prefix);
-    if (
-      props.reasoning ||
-      (visibleText.length > 0 && !stripHeartbeatTokenForDisplay(visibleText).shouldSkip)
-    ) {
-      const liveProgress = resolveProgress();
-      const liveRunId = props.runId ?? props.reasoning?.runId ?? liveProgress.runId;
-      const liveStreamItem: ChatItem = {
-        kind: "stream",
-        key: liveProgress.key,
-        text: visibleText,
-        thinking: props.reasoning?.text,
-        startedAt: timestampAfterVisibleItems(
-          items,
-          props.streamStartedAt ?? props.reasoning?.startedAt ?? Date.now(),
-        ),
-        isStreaming: true,
-        ...optionalRunIdentity(liveRunId),
-        ...optionalBoundaryIdentity(liveRunId),
-      };
-      appendActiveRunItem(liveStreamItem);
-    }
+  if (
+    activeReasoning ||
+    (visibleText.length > 0 && !stripHeartbeatTokenForDisplay(visibleText).shouldSkip)
+  ) {
+    const liveProgress = resolveProgress();
+    const liveRunId = props.runId ?? props.reasoning?.runId ?? liveProgress.runId;
+    // Unsaved answer text follows accepted steers at the run's live tail.
+    appendActiveRunItem({
+      kind: "stream",
+      key: liveProgress.key,
+      text: visibleText,
+      thinking: activeReasoning?.text,
+      startedAt: timestampAfterVisibleItems(
+        items,
+        props.streamStartedAt ?? activeReasoning?.startedAt ?? Date.now(),
+      ),
+      isStreaming: true,
+      ...optionalRunIdentity(liveRunId),
+      ...optionalBoundaryIdentity(liveRunId),
+    });
   }
   if (showWorkingIndicator) {
     const workingProgress = resolveProgress();
@@ -620,10 +733,13 @@ export function buildChatItems(
       : undefined;
   const projectYields = (source: ChatItem[], complete?: ChatItem[]) =>
     projectSessionsYieldItems(source, props.showToolCalls, complete);
+  // Keep real user boundaries even when search hides their rows.
+  items = projectRunFailureStreaks(items);
   const complete = hidden ? projectYields(coalesceToolActivityMessages(items)) : undefined;
-  return groupMessages(projectYields(coalesceToolActivityMessages(items, hidden), complete), {
-    items: complete,
-    people: props.replyPeople,
-    localPerson: props.replyLocalPerson,
-  });
+  return groupMessages(
+    projectYields(coalesceToolActivityMessages(items, hidden), complete),
+    { items: complete, people: props.replyPeople, localPerson: props.replyLocalPerson },
+    props.showReasoning ? props.reasoning : undefined,
+    props.showReasoning,
+  );
 }

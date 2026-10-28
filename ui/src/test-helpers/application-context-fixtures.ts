@@ -1,3 +1,4 @@
+import { registerListener } from "../../../src/shared/listeners.ts";
 import type { GatewayEventFrame, GatewayEventListener } from "../api/gateway.ts";
 import type {
   ApplicationContext,
@@ -39,8 +40,10 @@ export function normalizeApplicationContext(value: ApplicationContext): Applicat
   return value;
 }
 
-export function createApplicationGateway(
-  initial: ApplicationGatewaySnapshot = {
+export function createApplicationGatewaySnapshot(
+  overrides: Partial<ApplicationGatewaySnapshot> = {},
+): ApplicationGatewaySnapshot {
+  return {
     client: null,
     phase: "stopped",
     offlineStable: false,
@@ -50,7 +53,12 @@ export function createApplicationGateway(
     sessionKey: "",
     lastError: null,
     lastErrorCode: null,
-  },
+    ...overrides,
+  };
+}
+
+export function createApplicationGateway(
+  initial: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot(),
 ) {
   let snapshot = initial;
   const listeners = new Set<(value: ApplicationGatewaySnapshot) => void>();
@@ -62,27 +70,37 @@ export function createApplicationGateway(
       return snapshot;
     },
     connect: () => undefined,
-    subscribe(listener: (value: ApplicationGatewaySnapshot) => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    subscribeEvents(listener: GatewayEventListener) {
-      eventListeners.add(listener);
-      return () => eventListeners.delete(listener);
-    },
+    subscribe: (listener: (value: ApplicationGatewaySnapshot) => void) =>
+      registerListener(listeners, listener),
+    subscribeEvents: (listener: GatewayEventListener) => registerListener(eventListeners, listener),
   } as unknown as ApplicationGateway;
   return {
     gateway,
-    publishEvent: (event: GatewayEventFrame) => {
-      for (const listener of eventListeners) {
-        listener(event);
-      }
-    },
-    publish(next: ApplicationGatewaySnapshot) {
+    publishEvent: (event: GatewayEventFrame) =>
+      Array.from(eventListeners).forEach((listener) => listener(event)),
+    publish(this: void, next: ApplicationGatewaySnapshot) {
       snapshot = next;
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
+      listeners.forEach((listener) => listener(snapshot));
     },
+  };
+}
+
+export function createNavigationPreferencesFixture(): ApplicationContext["navigation"] {
+  let snapshot: ApplicationContext["navigation"]["snapshot"] = {
+    navCollapsed: false,
+    navWidth: 258,
+    sidebarEntries: [],
+    pinnedAgentIds: [],
+  };
+  const listeners = new Set<(next: typeof snapshot) => void>();
+  return {
+    get snapshot() {
+      return snapshot;
+    },
+    update(patch) {
+      snapshot = { ...snapshot, ...patch };
+      listeners.forEach((listener) => listener(snapshot));
+    },
+    subscribe: (listener) => registerListener(listeners, listener),
   };
 }

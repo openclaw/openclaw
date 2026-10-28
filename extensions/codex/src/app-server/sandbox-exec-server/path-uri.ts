@@ -1,4 +1,3 @@
-/** Converts Codex PathUri protocol values into sandbox-backend path strings. */
 import { fileURLToPath } from "node:url";
 
 const WINDOWS_DRIVE_PATH_RE = /^\/[A-Za-z]:(?:\/|$)/u;

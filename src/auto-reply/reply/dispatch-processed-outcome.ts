@@ -1,7 +1,7 @@
 // Channel-internal seam carrying a dispatch's terminal processed outcome to the turn kernel.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import type { DispatchProcessedOutcome } from "./dispatch-from-config.audit.js";
+import type { DispatchProcessedOutcome } from "./dispatch-from-config.types.js";
 
 export type DispatchProcessedNote = {
   outcome: DispatchProcessedOutcome;

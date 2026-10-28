@@ -3,11 +3,10 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contra
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.js";
 import {
   normalizeLifecycleTarget,
-  readSessionIdentitySnapshot,
   resolveLifecyclePrimaryEntry,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
+import { readTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import type {
   RestartTombstoneRecoveryInput,
   RestartTombstoneRecoveryResult,
@@ -67,8 +66,8 @@ export function recoverRestartTombstoneInDatabase(
     return {
       result: {
         status: "existing",
-        sourceEntry: structuredClone(source),
-        successorEntry: structuredClone(linked),
+        sourceEntry: source,
+        successorEntry: linked,
         successorKey: recoveredSessionKey,
       },
     };
@@ -81,8 +80,11 @@ export function recoverRestartTombstoneInDatabase(
     return { result: { status: "conflict", reason: "target-exists" } };
   }
 
-  const sourceEvents = loadTranscriptEventsFromDatabase(database, source.sessionId);
-  const header = findSessionTranscriptHeader(sourceEvents);
+  const header = readTranscriptEventsFromDatabase(
+    database,
+    source.sessionId,
+    findSessionTranscriptHeader,
+  );
   if (!header) {
     return { result: { status: "conflict", reason: "transcript-missing" } };
   }
@@ -93,25 +95,31 @@ export function recoverRestartTombstoneInDatabase(
     sessionId: source.sessionId,
     sessionKey: normalizeStoreSessionKey(sourceTarget.canonicalKey),
   });
-  appendTranscriptEventsInTransaction(
-    database,
-    {
-      ...resolved,
-      sessionId: successorSessionId,
-      sessionKey: normalizeStoreSessionKey(successorTarget.canonicalKey),
-    },
-    [
+  readTranscriptEventsFromDatabase(database, source.sessionId, (sourceEvents) =>
+    appendTranscriptEventsInTransaction(
+      database,
       {
-        ...createSessionTranscriptHeader({
-          cwd: typeof header.cwd === "string" ? header.cwd : undefined,
-          sessionId: successorSessionId,
-          version: header.version ?? MIN_READABLE_SESSION_VERSION,
-        }),
-        parentSession,
+        ...resolved,
+        sessionId: successorSessionId,
+        sessionKey: normalizeStoreSessionKey(successorTarget.canonicalKey),
       },
-      ...sourceEvents.filter((event) => !(isRecord(event) && event.type === "session")),
-    ],
-    { scheduleProjectionReconcile: false },
+      (function* () {
+        yield {
+          ...createSessionTranscriptHeader({
+            cwd: typeof header.cwd === "string" ? header.cwd : undefined,
+            sessionId: successorSessionId,
+            version: header.version ?? MIN_READABLE_SESSION_VERSION,
+          }),
+          parentSession,
+        };
+        for (const event of sourceEvents) {
+          if (!(isRecord(event) && event.type === "session")) {
+            yield event;
+          }
+        }
+      })(),
+      { scheduleProjectionReconcile: false },
+    ),
   );
 
   const now = Date.now();
@@ -139,26 +147,30 @@ export function recoverRestartTombstoneInDatabase(
   };
   delete nextSource.pinnedAt;
 
-  const identityKeys = [sourceTarget.canonicalKey, successorTarget.canonicalKey];
-  const previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
-  writeSessionEntry(database, successorTarget.canonicalKey, params.successorEntry);
-  writeSessionEntry(database, sourceTarget.canonicalKey, nextSource, {
-    previousEntry: source,
+  const successor = writeSessionEntry(
+    database,
+    successorTarget.canonicalKey,
+    params.successorEntry,
+    { canonicalPreviousEntry: null },
+  );
+  const writtenSource = writeSessionEntry(database, sourceTarget.canonicalKey, nextSource, {
+    canonicalPreviousEntry: source,
   });
-  const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
-  const result: RestartTombstoneRecoveryResult = {
-    status: "created",
-    sourceEntry: structuredClone(nextSource),
-    successorEntry: structuredClone(params.successorEntry),
-    successorKey: successorTarget.canonicalKey,
-  };
   return {
-    result,
+    result: {
+      status: "created",
+      sourceEntry: nextSource,
+      successorEntry: params.successorEntry,
+      successorKey: successorTarget.canonicalKey,
+    },
     publication: prepareSessionEntryReplacementPublication(
       {
         pendingArchiveRecovery: false,
-        previous: previousIdentity,
-        current: currentIdentity,
+        previous: new Map([[sourceTarget.canonicalKey, source]]),
+        current: new Map([
+          [successorTarget.canonicalKey, successor],
+          [sourceTarget.canonicalKey, writtenSource],
+        ]),
         maintenancePlans: [],
         membershipInvalidatedKeys: [],
       },

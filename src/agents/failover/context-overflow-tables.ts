@@ -1,5 +1,5 @@
-import { matchesContextOverflowMessage } from "@openclaw/ai/internal/runtime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { matchesContextOverflowMessage } from "../../../packages/ai/src/utils/overflow.js";
 import { isProviderRequestSizeCeilingError, isRateLimitErrorMessage } from "./message-patterns.js";
 
 const PROVIDER_CONTEXT_OVERFLOW_SIGNAL_RE =

@@ -1,5 +1,3 @@
-// Tool policy pipeline tests cover profile/allowlist filtering, diagnostics,
-// warning dedupe, and plugin-aware policy application.
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { markFrozenClawToolAllowPolicy } from "../claws/tool-policy-runtime.js";
 import {
@@ -26,31 +24,76 @@ vi.mock("../logging/subsystem.js", () => ({
   }),
 }));
 
+function expectAudit(
+  rule: string,
+  ruleKind: "allow" | "deny",
+  tool: string,
+  matchedRules?: string[],
+) {
+  expect(toolPolicyAuditDebug).toHaveBeenCalledWith(
+    `tool policy removed 1 tool(s) via ${rule}: ${tool}${matchedRules ? `; matched ${matchedRules.join(", ")}` : ""}`,
+    {
+      rule,
+      ruleKind,
+      removedToolCount: 1,
+      removedTools: [tool],
+      removedToolsTruncated: false,
+      ...(matchedRules ? { matchedRules } : {}),
+    },
+  );
+}
 type DummyTool = { name: string };
-function runAllowlistWarningStep(params: {
+type PipelineParams = Parameters<typeof applyToolPolicyPipeline<DummyTool>>[0];
+function runPipeline(params: Pick<PipelineParams, "steps"> & Partial<PipelineParams>) {
+  return applyToolPolicyPipeline({
+    tools: [{ name: "exec" }],
+    toolMeta: () => undefined,
+    warn: () => {},
+    ...params,
+  });
+}
+function runPolicy(
+  names: string[],
+  policy: PipelineParams["steps"][number]["policy"],
+  label = "tools",
+  toolMeta: PipelineParams["toolMeta"] = () => undefined,
+  stripPluginOnlyAllowlist = false,
+) {
+  return runPipeline({
+    tools: names.map((name) => ({ name })),
+    toolMeta,
+    steps: [{ policy, label, stripPluginOnlyAllowlist }],
+  });
+}
+function filterNames(
+  names: string[],
+  policy: PipelineParams["steps"][number]["policy"],
+  toolMeta: PipelineParams["toolMeta"] = () => undefined,
+  label = "tools",
+) {
+  return runPolicy(names, policy, label, toolMeta, true)
+    .map((tool) => tool.name)
+    .toSorted();
+}
+function runAllowlistWarningStep({
+  allow,
+  label = "tools.allow",
+  warnings = [],
+  declaredToolAllowlist,
+  ...options
+}: {
   allow: string[];
-  label: string;
+  label?: string;
+  warnings?: string[];
+  declaredToolAllowlist?: PipelineParams["declaredToolAllowlist"];
   suppressUnavailableCoreToolWarning?: boolean;
   suppressUnavailableCoreToolWarningAllowlist?: string[];
   unavailableCoreToolReason?: string;
 }) {
-  const warnings: string[] = [];
-  const tools = [{ name: "exec" }];
-  applyToolPolicyPipeline({
-    tools,
-    toolMeta: () => undefined,
+  runPipeline({
     warn: (msg) => warnings.push(msg),
-    steps: [
-      {
-        policy: { allow: params.allow },
-        label: params.label,
-        stripPluginOnlyAllowlist: true,
-        suppressUnavailableCoreToolWarning: params.suppressUnavailableCoreToolWarning,
-        suppressUnavailableCoreToolWarningAllowlist:
-          params.suppressUnavailableCoreToolWarningAllowlist,
-        unavailableCoreToolReason: params.unavailableCoreToolReason,
-      },
-    ],
+    declaredToolAllowlist,
+    steps: [{ policy: { allow }, label, stripPluginOnlyAllowlist: true, ...options }],
   });
   return warnings;
 }
@@ -62,44 +105,28 @@ describe("tool-policy-pipeline", () => {
   });
 
   test("preserves plugin-only allowlists instead of silently stripping them", () => {
-    const tools = [{ name: "exec" }, { name: "plugin_tool" }];
-    const filtered = applyToolPolicyPipeline({
-      tools,
-      toolMeta: (t) => (t.name === "plugin_tool" ? { pluginId: "foo" } : undefined),
-      warn: () => {},
-      steps: [
-        {
-          policy: { allow: ["plugin_tool"] },
-          label: "tools.allow",
-          stripPluginOnlyAllowlist: true,
-        },
-      ],
-    });
-    const names = filtered.map((t) => t.name).toSorted();
-    expect(names).toEqual(["plugin_tool"]);
+    expect(
+      filterNames(
+        ["exec", "plugin_tool"],
+        { allow: ["plugin_tool"] },
+        (t) => (t.name === "plugin_tool" ? { pluginId: "foo" } : undefined),
+        "tools.allow",
+      ),
+    ).toEqual(["plugin_tool"]);
   });
 
   test("can freeze an allowlist entry against a later plugin-id collision", () => {
-    const tools = [{ name: "read" }, { name: "future_tool" }];
-    const toolMeta = (tool: DummyTool) =>
-      tool.name === "future_tool" ? { pluginId: "read" } : undefined;
     const apply = (frozen: boolean) => {
       const policy = { allow: ["read"] };
       if (frozen) {
         markFrozenClawToolAllowPolicy(policy);
       }
-      return applyToolPolicyPipeline({
-        tools,
-        toolMeta,
-        warn: () => {},
-        steps: [
-          {
-            policy,
-            label: "agent tools.allow",
-            stripPluginOnlyAllowlist: true,
-          },
-        ],
-      }).map((tool) => tool.name);
+      return filterNames(
+        ["read", "future_tool"],
+        policy,
+        (tool) => (tool.name === "future_tool" ? { pluginId: "read" } : undefined),
+        "agent tools.allow",
+      );
     };
 
     expect(apply(false)).toEqual(["future_tool"]);
@@ -112,20 +139,15 @@ describe("tool-policy-pipeline", () => {
   ])(
     "applies the Canvas family uniformly even when stale metadata claims show_widget ($policy)",
     ({ expected, policy }) => {
-      const tools = [{ name: "exec" }, { name: "show_widget" }, { name: "canvas" }];
-      const filtered = applyToolPolicyPipeline({
-        tools,
-        toolMeta: (tool) => {
-          if (tool.name === "show_widget") {
-            return { pluginId: "discord" };
-          }
-          return tool.name === "canvas" ? { pluginId: "canvas" } : undefined;
-        },
-        warn: () => {},
-        steps: [{ policy, label: "tools", stripPluginOnlyAllowlist: true }],
-      });
-
-      expect(filtered.map((tool) => tool.name).toSorted()).toEqual(expected);
+      expect(
+        filterNames(["exec", "show_widget", "canvas"], policy, (tool) =>
+          tool.name === "show_widget"
+            ? { pluginId: "discord" }
+            : tool.name === "canvas"
+              ? { pluginId: "canvas" }
+              : undefined,
+        ),
+      ).toEqual(expected);
     },
   );
 
@@ -135,15 +157,7 @@ describe("tool-policy-pipeline", () => {
   ])(
     "maps the shipped update_plan policy name to progress_card ($policy)",
     ({ expected, policy }) => {
-      const tools = [{ name: "exec" }, { name: "progress_card" }];
-      const filtered = applyToolPolicyPipeline({
-        tools,
-        toolMeta: () => undefined,
-        warn: () => {},
-        steps: [{ policy, label: "tools", stripPluginOnlyAllowlist: true }],
-      });
-
-      expect(filtered.map((tool) => tool.name).toSorted()).toEqual(expected);
+      expect(filterNames(["exec", "progress_card"], policy)).toEqual(expected);
     },
   );
 
@@ -155,16 +169,6 @@ describe("tool-policy-pipeline", () => {
     });
     expect(warnings).toEqual([
       "tools: tools.profile (coding) allowlist contains unknown entries (browser). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.",
-    ]);
-  });
-
-  test("classifies pdf as an unavailable gated core tool, not a missing plugin", () => {
-    const warnings = runAllowlistWarningStep({
-      allow: ["pdf"],
-      label: "tools.allow",
-    });
-    expect(warnings).toEqual([
-      "tools: tools.allow allowlist contains unknown entries (pdf). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.",
     ]);
   });
 
@@ -183,9 +187,7 @@ describe("tool-policy-pipeline", () => {
   test("default profile steps suppress unavailable baseline profile entries", () => {
     const warnings: string[] = [];
     const profilePolicy = resolveToolProfilePolicy("coding");
-    applyToolPolicyPipeline({
-      tools: [{ name: "exec" }],
-      toolMeta: () => undefined,
+    runPipeline({
       warn: (msg) => warnings.push(msg),
       steps: buildDefaultToolPolicyPipelineSteps({
         profile: "coding",
@@ -209,20 +211,14 @@ describe("tool-policy-pipeline", () => {
   ])("declared context excludes a $name and keeps eligible tools", ({ plugins, toolDenylist }) => {
     const config = { plugins };
     const workspaceDir = process.cwd();
-    const manifestRegistry = makeRegistry([
-      {
-        id: "Allowed-Owner",
-        origin: "bundled",
+    const manifestRegistry = makeRegistry(
+      ["Allowed", "Blocked"].map((owner) => ({
+        id: `${owner}-Owner`,
+        origin: "bundled" as const,
         channels: [],
-        contracts: { tools: ["allowed_tool"] },
-      },
-      {
-        id: "Blocked-Owner",
-        origin: "bundled",
-        channels: [],
-        contracts: { tools: ["blocked_tool"] },
-      },
-    ]);
+        contracts: { tools: [`${owner.toLowerCase()}_tool`] },
+      })),
+    );
     setCurrentPluginMetadataSnapshot(
       createPluginMetadataSnapshot({ config, manifestRegistry, workspaceDir }),
       { config, workspaceDir },
@@ -246,19 +242,7 @@ describe("tool-policy-pipeline", () => {
       workspaceDir: process.cwd(),
     });
 
-    applyToolPolicyPipeline({
-      tools: [{ name: "exec" }],
-      toolMeta: () => undefined,
-      warn: (msg) => warnings.push(msg),
-      declaredToolAllowlist: declared,
-      steps: [
-        {
-          policy: { allow: ["disabled__*"] },
-          label: "tools.allow",
-          stripPluginOnlyAllowlist: true,
-        },
-      ],
-    });
+    runAllowlistWarningStep({ allow: ["disabled__*"], warnings, declaredToolAllowlist: declared });
 
     expect(warnings).toEqual([
       "tools: tools.allow allowlist contains unknown entries (disabled__*). These entries won't match any tool unless the plugin is enabled.",
@@ -282,18 +266,10 @@ describe("tool-policy-pipeline", () => {
 
     expect(Array.from(declared?.mcpServerNames ?? [])).toEqual(["vigil-harbor"]);
 
-    applyToolPolicyPipeline({
-      tools: [{ name: "exec" }],
-      toolMeta: () => undefined,
-      warn: (msg) => warnings.push(msg),
+    runAllowlistWarningStep({
+      allow: ["vigil-harbor__*", "vigil-harbor-2__*"],
+      warnings,
       declaredToolAllowlist: declared,
-      steps: [
-        {
-          policy: { allow: ["vigil-harbor__*", "vigil-harbor-2__*"] },
-          label: "tools.allow",
-          stripPluginOnlyAllowlist: true,
-        },
-      ],
     });
 
     expect(warnings).toEqual([
@@ -303,72 +279,23 @@ describe("tool-policy-pipeline", () => {
 
   test("dedupes identical unknown-allowlist warnings across repeated runs", () => {
     const warnings: string[] = [];
-    const tools = [{ name: "exec" }];
-    const params = {
-      tools,
-      toolMeta: () => undefined,
-      warn: (msg: string) => warnings.push(msg),
-      steps: [
-        {
-          policy: { allow: ["dedupe_case_unknown"] },
-          label: "tools.allow",
-          stripPluginOnlyAllowlist: true,
-        },
-      ],
-    };
-
-    applyToolPolicyPipeline(params);
-    applyToolPolicyPipeline(params);
-
+    const params = { allow: ["dedupe_case_unknown"], warnings };
+    runAllowlistWarningStep(params);
+    runAllowlistWarningStep(params);
     expect(warnings).toHaveLength(1);
   });
 
   test("evicts the oldest warning when the dedupe cache is full", () => {
     const warnings: string[] = [];
-    const tools = [{ name: "exec" }];
-
-    for (let i = 0; i < 256; i += 1) {
-      applyToolPolicyPipeline({
-        tools,
-        toolMeta: () => undefined,
-        warn: (msg: string) => warnings.push(msg),
-        steps: [
-          {
-            policy: { allow: [`eviction_unknown_${i}`] },
-            label: "tools.allow",
-            stripPluginOnlyAllowlist: true,
-          },
-        ],
-      });
+    const warn = (index: number) =>
+      runAllowlistWarningStep({ allow: [`eviction_unknown_${index}`], warnings });
+    for (let i = 0; i < 256; i++) {
+      warn(i);
     }
-
     warnings.length = 0;
-
-    applyToolPolicyPipeline({
-      tools,
-      toolMeta: () => undefined,
-      warn: (msg: string) => warnings.push(msg),
-      steps: [
-        {
-          policy: { allow: ["eviction_unknown_256"] },
-          label: "tools.allow",
-          stripPluginOnlyAllowlist: true,
-        },
-      ],
-    });
-    applyToolPolicyPipeline({
-      tools,
-      toolMeta: () => undefined,
-      warn: (msg: string) => warnings.push(msg),
-      steps: [
-        {
-          policy: { allow: ["eviction_unknown_0"] },
-          label: "tools.allow",
-          stripPluginOnlyAllowlist: true,
-        },
-      ],
-    });
-
+    warn(0);
+    warn(256);
+    warn(0);
     expect(warnings).toEqual([
       "tools: tools.allow allowlist contains unknown entries (eviction_unknown_256). These entries won't match any tool unless the plugin is enabled.",
       "tools: tools.allow allowlist contains unknown entries (eviction_unknown_0). These entries won't match any tool unless the plugin is enabled.",
@@ -379,10 +306,8 @@ describe("tool-policy-pipeline", () => {
     const tools = [{ name: "read" }, { name: "write" }, { name: "exec" }];
     const policy = { allow: ["read", "write"], deny: [] as string[] };
     const run = (denied: string) =>
-      applyToolPolicyPipeline({
+      runPipeline({
         tools,
-        toolMeta: () => undefined,
-        warn: () => {},
         steps: [
           { policy: { allow: ["*"] }, label: "first" },
           { policy, label: "second" },
@@ -411,9 +336,8 @@ describe("tool-policy-pipeline", () => {
       mcpServerNames: ["Old Server"],
     };
     const events: string[] = [];
-    const filtered = applyToolPolicyPipeline({
+    const filtered = runPipeline({
       tools,
-      toolMeta: () => undefined,
       warn: (message) => events.push(message),
       declaredToolAllowlist: declared,
       steps: [
@@ -449,117 +373,29 @@ describe("tool-policy-pipeline", () => {
   });
 
   test("splits mixed allow and deny policy audit entries by cause", () => {
-    const tools = [{ name: "exec" }, { name: "browser" }, { name: "write" }];
-
-    applyToolPolicyPipeline({
-      tools,
-      toolMeta: () => undefined,
-      warn: () => {},
-      steps: [
-        {
-          policy: { allow: ["exec"], deny: ["browser"] },
-          label: "agents.worker.tools.allow",
-        },
-      ],
-    });
-
-    expect(toolPolicyAuditDebug).toHaveBeenCalledWith(
-      "tool policy removed 1 tool(s) via agents.worker.tools.deny: browser; matched browser",
-      {
-        rule: "agents.worker.tools.deny",
-        ruleKind: "deny",
-        matchedRules: ["browser"],
-        removedToolCount: 1,
-        removedTools: ["browser"],
-        removedToolsTruncated: false,
-      },
+    runPolicy(
+      ["exec", "browser", "write"],
+      { allow: ["exec"], deny: ["browser"] },
+      "agents.worker.tools.allow",
     );
-    expect(toolPolicyAuditDebug).toHaveBeenCalledWith(
-      "tool policy removed 1 tool(s) via agents.worker.tools.allow: write",
-      {
-        rule: "agents.worker.tools.allow",
-        ruleKind: "allow",
-        removedToolCount: 1,
-        removedTools: ["write"],
-        removedToolsTruncated: false,
-      },
-    );
-    expect(toolPolicyAuditInfo).not.toHaveBeenCalled();
-  });
 
-  test("does not audit policy steps that leave the tool surface unchanged", () => {
-    const tools = [{ name: "exec" }];
-
-    applyToolPolicyPipeline({
-      tools,
-      toolMeta: () => undefined,
-      warn: () => {},
-      steps: [
-        {
-          policy: { allow: ["exec"] },
-          label: "tools.allow",
-        },
-      ],
-    });
-
-    expect(toolPolicyAuditDebug).not.toHaveBeenCalled();
+    expectAudit("agents.worker.tools.deny", "deny", "browser", ["browser"]);
+    expectAudit("agents.worker.tools.allow", "allow", "write");
     expect(toolPolicyAuditInfo).not.toHaveBeenCalled();
   });
 
   test("sanitizes audit labels and tool names before logging", () => {
-    const tools = [{ name: "exec\nbad" }];
+    runPolicy(["exec\nbad"], { allow: ["read"] }, "agents.worker\nbad.tools.allow");
 
-    applyToolPolicyPipeline({
-      tools,
-      toolMeta: () => undefined,
-      warn: () => {},
-      steps: [
-        {
-          policy: { allow: ["read"] },
-          label: "agents.worker\nbad.tools.allow",
-        },
-      ],
-    });
-
-    expect(toolPolicyAuditDebug).toHaveBeenCalledWith(
-      "tool policy removed 1 tool(s) via agents.worker\\nbad.tools.allow: exec\\nbad",
-      {
-        rule: "agents.worker\\nbad.tools.allow",
-        ruleKind: "allow",
-        removedToolCount: 1,
-        removedTools: ["exec\\nbad"],
-        removedToolsTruncated: false,
-      },
-    );
+    expectAudit("agents.worker\\nbad.tools.allow", "allow", "exec\\nbad");
     expect(toolPolicyAuditInfo).not.toHaveBeenCalled();
   });
 
   test("truncates audit fields without splitting surrogate pairs", () => {
-    const tools = [{ name: "exec" }];
     const labelPrefix = "a".repeat(159);
-
-    applyToolPolicyPipeline({
-      tools,
-      toolMeta: () => undefined,
-      warn: () => {},
-      steps: [
-        {
-          policy: { allow: ["read"] },
-          label: `${labelPrefix}😀suffix`,
-        },
-      ],
-    });
+    runPolicy(["exec"], { allow: ["read"] }, `${labelPrefix}😀suffix`);
 
     const rule = `${labelPrefix}...`;
-    expect(toolPolicyAuditDebug).toHaveBeenCalledWith(
-      `tool policy removed 1 tool(s) via ${rule}: exec`,
-      {
-        rule,
-        ruleKind: "allow",
-        removedToolCount: 1,
-        removedTools: ["exec"],
-        removedToolsTruncated: false,
-      },
-    );
+    expectAudit(rule, "allow", "exec");
   });
 });

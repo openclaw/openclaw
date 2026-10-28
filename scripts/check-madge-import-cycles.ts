@@ -3,7 +3,8 @@ import { ChildProcess } from "node:child_process";
 import { channel } from "node:diagnostics_channel";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
+import { serverFS } from "typescript/fs";
 import {
   collectSourceFiles,
   collectStronglyConnectedComponents,
@@ -16,6 +17,7 @@ import {
 } from "./lib/native-typescript.mts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const children = channel("child_process");
 const scanRoots = ["src", "extensions", "ui"] as const;
 const sourceExtensions = [".ts", ".tsx"] as const;
 const ignoredPathPartPattern =
@@ -58,7 +60,6 @@ async function createImportGraph(files: readonly string[]): Promise<Map<string, 
   const executable = resolveInstalledNativeTypeScriptCompiler().executable;
   const observed: ChildProcess[] = [];
   const compilers: { child: ChildProcess; closed: Promise<void> }[] = [];
-  const children = channel("child_process");
   const observeCompiler = (message: unknown) => {
     if (
       message &&
@@ -77,8 +78,14 @@ async function createImportGraph(files: readonly string[]): Promise<Map<string, 
         cwd: repoRoot,
         configFileName,
         fs: {
-          readFile: (file) => (file === configFileName ? readConfig() : undefined),
-          fileExists: (file) => (file === configFileName ? true : undefined),
+          directoryExists: serverFS.useOS,
+          getAccessibleEntries: serverFS.useOS,
+          realpath: serverFS.useOS,
+          stat: serverFS.useOS,
+          writeFile: serverFS.useOS,
+          removeFile: serverFS.useOS,
+          readFile: (file) => (file === configFileName ? readConfig() : serverFS.useOS),
+          fileExists: (file) => (file === configFileName ? true : serverFS.useOS),
         },
       });
     } finally {

@@ -1,12 +1,14 @@
 import { parseLocalSchemaRefPointer } from "@openclaw/normalization-core/json-schema";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
+import { walkSchemaValue } from "./schema-walk.js";
 import {
-  evaluateSchemaWalk,
-  walkSchemaArray,
-  walkSchemaValue,
-  type SchemaWalk,
-} from "./schema-walk.js";
+  MAX_TOOL_SCHEMA_DEPTH,
+  inheritToolSchemaTruncation,
+  reportToolSchemaTruncation,
+  truncateToolSchemaDepth,
+} from "./tool-schema-depth.js";
+import { extendSchemaDefs, type SchemaDefs } from "./tool-schema-refs.js";
 
 // Keywords that Cloud Code Assist API rejects (not compliant with their JSON Schema subset)
 export const GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
@@ -55,24 +57,6 @@ function copySchemaMeta(
     }
   }
   return to;
-}
-
-// Google requires enum entries as strings even when the declared schema type is numeric or
-// boolean. Keep the type intact so tool argument generation and runtime validation still agree.
-function cleanGeminiEnumValues(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const values = value
-    .filter(
-      (entry) =>
-        typeof entry === "string" ||
-        typeof entry === "boolean" ||
-        (typeof entry === "number" && Number.isFinite(entry)),
-    )
-    .map(String);
-  const unique = [...new Set(values)];
-  return unique.length > 0 ? unique : undefined;
 }
 
 function tryFlattenLiteralAnyOf(variants: unknown[]): { type: string; enum: unknown[] } | null {
@@ -129,28 +113,6 @@ function isNullSchema(variant: unknown): boolean {
   );
 }
 
-type SchemaDefs = Map<string, unknown>;
-
-function extendSchemaDefs(
-  defs: SchemaDefs | undefined,
-  schema: Record<string, unknown>,
-): SchemaDefs | undefined {
-  const defsEntry = isRecord(schema.$defs) ? schema.$defs : undefined;
-  const legacyDefsEntry = isRecord(schema.definitions) ? schema.definitions : undefined;
-
-  if (!defsEntry && !legacyDefsEntry) {
-    return defs;
-  }
-
-  const next = new Map(defs);
-  for (const entry of [defsEntry, legacyDefsEntry]) {
-    for (const [key, value] of Object.entries(entry ?? {})) {
-      next.set(key, value);
-    }
-  }
-  return next;
-}
-
 function tryResolveLocalRef(ref: string, defs: SchemaDefs | undefined): unknown {
   if (!defs) {
     return undefined;
@@ -160,37 +122,7 @@ function tryResolveLocalRef(ref: string, defs: SchemaDefs | undefined): unknown 
   if (tokens?.length !== 2 || (table !== "$defs" && table !== "definitions") || !name) {
     return undefined;
   }
-  return defs.get(name);
-}
-
-function simplifyUnionVariants(params: { obj: Record<string, unknown>; variants: unknown[] }):
-  | {
-      kind: "simplified";
-      value: unknown;
-    }
-  | {
-      kind: "variants";
-      value: unknown[];
-    } {
-  const { obj, variants } = params;
-
-  const nonNullVariants = variants.filter((variant) => !isNullSchema(variant));
-  const stripped = nonNullVariants.length !== variants.length;
-
-  const flattened = tryFlattenLiteralAnyOf(nonNullVariants);
-  if (flattened) {
-    return { kind: "simplified", value: copySchemaMeta(obj, flattened) };
-  }
-
-  if (stripped && nonNullVariants.length === 1) {
-    const lone = nonNullVariants[0];
-    return {
-      kind: "simplified",
-      value: isRecord(lone) ? copySchemaMeta(obj, { ...lone }) : lone,
-    };
-  }
-
-  return { kind: "variants", value: stripped ? nonNullVariants : variants };
+  return defs[table].get(name);
 }
 
 // Gemini rejects object schemas whose `required` entries do not exist in `properties`.
@@ -220,16 +152,21 @@ function sanitizeRequiredFields(schema: Record<string, unknown>): Record<string,
   return schema;
 }
 
-function* cleanSchemaForGeminiWithDefs(
+function cleanSchemaForGeminiWithDefs(
   schema: unknown,
   defs: SchemaDefs | undefined,
   refStack: Set<string> | undefined,
-  ancestors: Set<object>,
-): SchemaWalk {
-  return yield walkSchemaValue(schema, ancestors, function* (obj) {
+  budget: { truncated: boolean },
+  depth = 0,
+): unknown {
+  if (depth > MAX_TOOL_SCHEMA_DEPTH) {
+    budget.truncated = true;
+    return {};
+  }
+  return walkSchemaValue(schema, (obj) => {
     const nextDefs = extendSchemaDefs(defs, obj);
     const visit = (value: unknown) =>
-      cleanSchemaForGeminiWithDefs(value, nextDefs, refStack, ancestors);
+      cleanSchemaForGeminiWithDefs(value, nextDefs, refStack, budget, depth + 1);
 
     const refValue = typeof obj.$ref === "string" ? obj.$ref : undefined;
     if (refValue) {
@@ -242,12 +179,12 @@ function* cleanSchemaForGeminiWithDefs(
         const nextRefStack = new Set(refStack);
         nextRefStack.add(refValue);
 
-        // Reference strings own expansion cycles; raw descent starts a new segment.
-        const cleaned = yield cleanSchemaForGeminiWithDefs(
+        const cleaned = cleanSchemaForGeminiWithDefs(
           resolved,
           nextDefs,
           nextRefStack,
-          new Set<object>(),
+          budget,
+          depth + 1,
         );
         if (!cleaned || typeof cleaned !== "object" || Array.isArray(cleaned)) {
           return cleaned;
@@ -263,19 +200,23 @@ function* cleanSchemaForGeminiWithDefs(
     for (const key of ["anyOf", "oneOf"] as const) {
       const variants = obj[key];
       if (Array.isArray(variants)) {
-        const cleaned: unknown[] = [];
-        yield walkSchemaArray(variants, visit, cleaned);
-        unions[key] = cleaned;
+        unions[key] = variants.map(visit);
       }
     }
     for (const key of ["anyOf", "oneOf"] as const) {
       const variants = unions[key];
       if (variants) {
-        const simplified = simplifyUnionVariants({ obj, variants });
-        if (simplified.kind === "simplified") {
-          return simplified.value;
+        const nonNullVariants = variants.filter((variant) => !isNullSchema(variant));
+        const stripped = nonNullVariants.length !== variants.length;
+        const flattened = tryFlattenLiteralAnyOf(nonNullVariants);
+        if (flattened) {
+          return copySchemaMeta(obj, flattened);
         }
-        unions[key] = simplified.value;
+        if (stripped && nonNullVariants.length === 1) {
+          const lone = nonNullVariants[0];
+          return isRecord(lone) ? copySchemaMeta(obj, { ...lone }) : lone;
+        }
+        unions[key] = stripped ? nonNullVariants : variants;
       }
     }
 
@@ -287,9 +228,21 @@ function* cleanSchemaForGeminiWithDefs(
       }
 
       if (key === "const" || key === "enum") {
-        const enumValues = cleanGeminiEnumValues(key === "const" ? [value] : value);
-        if (enumValues) {
-          cleaned.enum = enumValues;
+        // Google requires string enum entries without changing the declared schema type.
+        const enumInput = key === "const" ? [value] : value;
+        if (Array.isArray(enumInput)) {
+          const values = enumInput
+            .filter(
+              (entry) =>
+                typeof entry === "string" ||
+                typeof entry === "boolean" ||
+                (typeof entry === "number" && Number.isFinite(entry)),
+            )
+            .map(String);
+          const unique = [...new Set(values)];
+          if (unique.length > 0) {
+            cleaned.enum = unique;
+          }
         }
         continue;
       }
@@ -302,13 +255,12 @@ function* cleanSchemaForGeminiWithDefs(
       if (key === "type" && (unions.anyOf || unions.oneOf)) {
         continue;
       }
-      if (
-        key === "type" &&
-        Array.isArray(value) &&
-        value.every((entry) => typeof entry === "string")
-      ) {
-        const types = value.filter((entry) => entry !== "null");
-        cleaned.type = types.length === 1 ? types[0] : types;
+      if (key === "type" && isStringArray(value)) {
+        // Gemini needs one type; use the same representative choice as union flattening.
+        const type = value.find((entry) => entry !== "null");
+        if (type) {
+          cleaned.type = type;
+        }
         continue;
       }
 
@@ -316,7 +268,7 @@ function* cleanSchemaForGeminiWithDefs(
         if (value && typeof value === "object" && !Array.isArray(value)) {
           const entries = Object.entries(value as Record<string, unknown>);
           for (const entry of entries) {
-            entry[1] = yield visit(entry[1]);
+            entry[1] = visit(entry[1]);
           }
           cleaned[key] = Object.fromEntries(entries);
         } else {
@@ -324,9 +276,9 @@ function* cleanSchemaForGeminiWithDefs(
           cleaned[key] = {};
         }
       } else if ((key === "items" || key === "allOf") && Array.isArray(value)) {
-        cleaned[key] = yield walkSchemaArray(value, visit);
+        cleaned[key] = value.map(visit);
       } else if (key === "items" && value && typeof value === "object") {
-        cleaned[key] = yield visit(value);
+        cleaned[key] = visit(value);
       } else if ((key === "anyOf" || key === "oneOf") && Array.isArray(value)) {
         cleaned[key] = unions[key];
       } else {
@@ -349,7 +301,7 @@ function* cleanSchemaForGeminiWithDefs(
 
 /**
  * Last-resort flattening for anyOf/oneOf arrays that could not be simplified
- * by `simplifyUnionVariants`. Picks a representative type so the schema is
+ * by the initial union pass. Picks a representative type so the schema is
  * accepted by Google's restricted JSON Schema validation.
  */
 function flattenUnionFallback(
@@ -370,8 +322,17 @@ function flattenUnionFallback(
   return copySchemaMeta(obj, merged);
 }
 
-export function cleanSchemaForGemini(schema: unknown): TSchema {
-  return evaluateSchemaWalk(
-    cleanSchemaForGeminiWithDefs(schema, undefined, undefined, new Set<object>()),
+export function cleanSchemaForGemini(schema: unknown, toolName?: string): TSchema {
+  const budget = { truncated: false };
+  const boundedSchema = truncateToolSchemaDepth(schema, toolName);
+  const normalized = cleanSchemaForGeminiWithDefs(
+    boundedSchema,
+    undefined,
+    undefined,
+    budget,
   ) as TSchema;
+  if (budget.truncated) {
+    reportToolSchemaTruncation(schema, toolName);
+  }
+  return inheritToolSchemaTruncation(boundedSchema, normalized, budget.truncated);
 }

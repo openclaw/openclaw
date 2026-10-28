@@ -96,6 +96,9 @@ export function createRuntimeHealthStore<T extends RuntimeHealthRecordEnvelope>(
         }
         return [...byGroup.values()];
       } catch {
+        console.warn(
+          `[runtime-health] Persisted quarantine inventory is unavailable for ${options.namespace}; health warnings may be incomplete. Run openclaw doctor to inspect state storage.`,
+        );
         return [];
       }
     },

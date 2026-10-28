@@ -10,6 +10,19 @@ title: "Devices"
 
 Manage device pairing requests and device-scoped tokens.
 
+## Doctor pairing findings
+
+A pending first-time request or a request for more access is an operator decision,
+not proof that existing access failed. Run `openclaw devices list`, compare the
+requested roles and scopes with the approved access, and approve the exact request
+only if you recognize it. Reject an unrecognized request.
+
+An existing device with a missing approved scope baseline, missing role token,
+changed identity, or stale cached token needs repair. Follow Doctor's specific
+command. For a missing scope baseline, inspect the device, reconnect it to request
+its intended access, then approve the current request after reviewing those scopes.
+Do not grant administrator access just to silence a diagnostic.
+
 ## Common options
 
 - `--url <url>`: Gateway WebSocket URL (defaults to `gateway.remote.url` when configured)
@@ -75,14 +88,27 @@ openclaw devices reject <requestId>
 ### `openclaw devices join-code`
 
 Mint a single-use node onboarding URL with administrator access to the
-Gateway. Paste the printed `npx openclaw connect <url>` command on the machine
-to enroll. This join URL is not a mobile app setup code; for Android/iOS use
-[`openclaw qr`](/cli/qr) instead.
+Gateway. Paste the printed `npx -y openclaw@<gateway-version> connect <url> --service --session-host`
+command on the machine to enroll it as a background service that can run agent
+sessions. Use only trusted shared infrastructure; for a command-only node,
+omit `--session-host`. This join URL is not a mobile app setup code; for
+Android/iOS use [`openclaw qr`](/cli/qr) instead.
 
 ```bash
 openclaw devices join-code
 openclaw devices join-code --json
 ```
+
+The npm version comes from the Gateway that minted the URL, not the invoking
+CLI. Source checkouts and unpublished versions use a matching npm channel tag
+when it resolves, otherwise unpinned `openclaw`, with a matching-build note.
+Registry checks take at most two seconds.
+
+Already have OpenClaw installed? Run: `openclaw connect <join-url> --service --session-host`.
+
+JSON preserves `joinUrl` and `command` (the default service/session-host command),
+and adds `serviceCommand` (command-only node service), `installedCommand` (uses
+the existing installation), and optional `versionNote` (matching-build guidance).
 
 Join-code creation and redemption are core Gateway operations; no pairing
 plugin needs to be enabled. The URL must be reachable from the joining machine.

@@ -16,7 +16,7 @@ plugins](/plugins/sdk-channel-plugins) guide.
 
 If your platform stores extra scope inside conversation ids, keep that parsing
 in the plugin with `messaging.resolveSessionConversation(...)`. That is the
-canonical hook for mapping `rawId` to the base conversation id, optional
+primary hook for mapping `rawId` to the base conversation id, optional
 thread id, explicit `baseConversationId`, and any
 `parentConversationCandidates`. When you return `parentConversationCandidates`,
 order them from the narrowest parent to the broadest/base conversation.
@@ -25,7 +25,7 @@ order them from the narrowest parent to the broadest/base conversation.
 compatibility fallback for plugins that only need parent fallbacks on top of
 the generic/raw id. If both hooks exist, core uses
 `resolveSessionConversation(...).parentConversationCandidates` first and only
-falls back to `resolveParentConversationCandidates(...)` when the canonical
+falls back to `resolveParentConversationCandidates(...)` when the primary
 hook omits them.
 
 Bundled plugins that need the same parsing before the channel registry boots
@@ -48,15 +48,17 @@ relaxing destination requirements for other outbound callers.
 
 ## Conversation route ownership
 
-Implement `messaging.resolveConversationRouteOwner(...)` when generic route
+Implement `messaging.prepareConversationRouteOwnersAsync(...)` when generic route
 matching cannot reproduce the channel's configured and runtime binding rules.
-The resolver receives the current config, account, and recorded conversation
-identity, including a delivery `target` when it differs from the routing peer.
-It must reuse the same precedence and provider identity grammar as inbound
-routing.
+Preparation receives an array of current config, account, and recorded
+conversation identities, including a delivery `target` when it differs from the
+routing peer. Await `inspectBindings(refs)` to prepare binding facts in workers,
+then return one synchronous resolver per input. Invoke the returned binding reader
+inside each resolver so committed changes invalidate ownership before an effect.
+Use the same precedence and provider identity grammar as inbound routing.
 
-Ownership inspection is synchronous and read-only. Do not refresh binding
-liveness, perform network requests, or infer missing provider facts. Return:
+Resolvers are read-only. Do not refresh binding liveness, perform network
+requests, or infer missing provider facts. Return:
 
 - `{ kind: "agent", agentId }` for an agent-owned route.
 - `{ kind: "plugin", pluginId, fallbackAgentId }` for a plugin-owned runtime
@@ -71,17 +73,21 @@ liveness, perform network requests, or infer missing provider facts. Return:
 
 Keep temporary unavailability distinct from `null`: an adapter restart is not
 proof that a previously bound conversation is unowned.
-Use `inspectConversationBinding(...)` and its `ConversationBindingInspection`
+Use `inspectConversationBindingAsync(...)` and its `ConversationBindingInspection`
 result from `openclaw/plugin-sdk/conversation-binding-inspection-runtime` for this
-available/unavailable distinction. This public inspection helper is synchronous,
-read-only, and does not refresh binding liveness.
+available/unavailable distinction outside route preparation. This public inspection
+helper is read-only and does not refresh binding liveness. The synchronous
+`inspectConversationBinding` and `resolveConversationRouteOwner` APIs remain
+deprecated compatibility while plugins migrate to async preparation. The
+unreleased synchronous `prepareConversationRouteOwners` hook has been removed; see
+[binding migration](/plugins/sdk-migration/how-to-migrate#await-plugin-state-and-conversation-bindings).
 
 ## Account-scoped conversation binding support
 
 Set `conversationBindings.supportsCurrentConversationBinding` when the channel
 supports generic current-conversation bindings. `createChatChannelPlugin(...)`
 sets this static capability to `true` by default. Channels whose monitor owns a custom binding
-adapter must also set `bindingStore: "adapter"`; core then fails closed while
+adapter must also set `bindingStore: "adapter"`; core then blocks binding operations while
 that adapter is unavailable instead of reading or writing generic binding rows.
 Older `createManager`-only plugins retain the same adapter-owned behavior.
 

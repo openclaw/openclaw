@@ -27,10 +27,38 @@ export function isExactAttachedEnvironment(
     environment.environmentId === placement.environmentId &&
     environment.state === "attached" &&
     environment.destroyRequestedAtMs === null &&
+    isWorkerEnvironmentAttachedTo(environment, placement),
+  );
+}
+
+export function isWorkerEnvironmentAttachedTo<
+  Environment extends Pick<WorkerEnvironmentRecord, "state" | "ownerEpoch"> & {
+    attachedSessionIds: readonly string[];
+  },
+>(
+  environment: Environment | undefined,
+  placement: Pick<WorkerSessionPlacementRecord, "sessionId" | "activeOwnerEpoch">,
+): environment is Environment {
+  return (
+    environment?.state === "attached" &&
     environment.ownerEpoch === placement.activeOwnerEpoch &&
     environment.attachedSessionIds.length === 1 &&
-    environment.attachedSessionIds[0] === placement.sessionId,
+    environment.attachedSessionIds[0] === placement.sessionId
   );
+}
+
+export function assertWorkerSandboxEnvironment(
+  environment: WorkerEnvironmentRecord | undefined,
+  placement: Pick<WorkerSessionPlacementRecord, "sessionId" | "activeOwnerEpoch" | "environmentId">,
+  sandbox: { backendId: string; placementNodeId?: string },
+): void {
+  if (
+    !isWorkerEnvironmentAttachedTo(environment, placement) ||
+    environment.environmentId !== placement.environmentId ||
+    (sandbox.backendId === "node" && environment.nodeDeviceId !== sandbox.placementNodeId)
+  ) {
+    throw new Error("Remote-exec environment changed while preparing its sandbox");
+  }
 }
 
 export function isCurrentActiveWorkerEnvironment(

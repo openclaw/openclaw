@@ -4,15 +4,16 @@ import { mkdir, mkdtemp } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import qrcode from "qrcode";
-import { createServer, type Plugin, type ViteDevServer } from "vite";
+import { createServer, mergeConfig, type Plugin, type ViteDevServer } from "vite";
 import type {
+  ArtifactSummary,
   Question,
+  SessionsDiffResult,
   SystemAgentChatHistoryResult,
   SystemChangesListResult,
   UserProfile,
 } from "../packages/gateway-protocol/src/index.js";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
-import { createSolidControlUiBuildPlugin } from "../src/cli/plugins-build-solid.js";
 import { applySharedChannelFieldHelp } from "../src/config/schema.channel-field-help.js";
 import { buildBaseHints } from "../src/config/schema.hints.js";
 import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
@@ -21,9 +22,7 @@ import {
   controlUiPluginAssetPrefix,
   controlUiPluginAssetRoot,
 } from "../src/gateway/control-ui-plugin-assets-contract.js";
-import { buildUpdateRestartSentinelPayload } from "../src/infra/update-restart-sentinel-payload.js";
 import type { UpdateRunResult } from "../src/infra/update-runner-types.js";
-import { buildPluginLoaderAliasMap } from "../src/plugins/sdk-alias.js";
 import { sessionActivityTimestamp } from "../src/shared/session-activity-timestamp.js";
 import { buildNewAgentWelcome } from "../src/system-agent/new-agent-welcome.js";
 import type {
@@ -49,7 +48,7 @@ import { workboardUi } from "../ui/src/test-helpers/control-ui-workboard-fixture
 import { buildWorkboardMocks } from "../ui/src/test-helpers/control-ui-workboard-fixtures.ts";
 import { installWorkboardBoardMock } from "../ui/src/test-helpers/control-ui-workboard-mocks.ts";
 import { createOfflineDeviceNode } from "../ui/src/test-helpers/devices-fixtures.ts";
-import {
+import controlUiViteConfig, {
   resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
@@ -67,6 +66,7 @@ import {
 } from "./control-ui-mock-channels.ts";
 import { buildCronMocks } from "./control-ui-mock-cron.ts";
 import { createStandaloneMockIsolationPlugins } from "./control-ui-mock-isolation.ts";
+import { mentionMockInitScript } from "./control-ui-mock-mentions.ts";
 import {
   buildPluginCatalogMock,
   buildPluginDiscoveryCategoriesMock,
@@ -75,6 +75,15 @@ import {
   pluginLifecycleMockInitScript,
 } from "./control-ui-mock-plugins.ts";
 import { createControlUiPreviewInitScript } from "./control-ui-mock-preview.ts";
+import {
+  createSessionDesignPortalFixturePlugin,
+  createSessionDesignDesktopFixturePlugin,
+  createSessionDesignFileFixturePlugin,
+  createSessionDesignScenario,
+  sessionDesignInitScript,
+  startSessionDesignSandbox,
+  type SessionDesignSandbox,
+} from "./control-ui-mock-session-design.ts";
 import { skillLibraryMockInitScript } from "./control-ui-mock-skill-library.ts";
 import { skillWorkshopMockInitScript } from "./control-ui-mock-skill-workshop.js";
 import { buildProfileUsageMocks } from "./control-ui-mock-usage.ts";
@@ -88,8 +97,11 @@ const FIXTURES = [
   "code-fences",
   "dashboards",
   "goal",
+  "header-idle",
+  "header-waiting",
   "plugins-dense",
   "reactions",
+  "session-design",
   "sidebar-roster",
   "startup-pending",
   "swarm",
@@ -122,6 +134,12 @@ const MOCK_ACTOR_MIRA: SessionActorFixture = {
 };
 // Rows carry explicit owners the way the gateway projects createdActor fallbacks.
 const MOCK_SESSION_OWNERS: readonly SessionActorFixture[] = [MOCK_ACTOR_PETER, MOCK_ACTOR_MIRA];
+const MOCK_PROFILE_PARTICIPANTS = {
+  mira: { identity: { type: "profile", id: "profile-mira" }, label: "Mira" },
+  riley: { identity: { type: "profile", id: "profile-riley" }, label: "Riley" },
+  sam: { identity: { type: "profile", id: "profile-sam" }, label: "Sam" },
+  lee: { identity: { type: "profile", id: "profile-lee" }, label: "Lee" },
+} as const;
 const MOCK_AVATAR_PROFILES = [
   { id: "profile-avatar-normal", name: "Mira", fill: "#5d7fc5", label: "Normal profile image" },
   {
@@ -153,7 +171,10 @@ type UpdateFixture = {
   statusResponse: unknown;
 };
 
-function buildUpdateFixture(fixture: CliOptions["fixture"], nowMs: number): UpdateFixture | null {
+async function buildUpdateFixture(
+  fixture: CliOptions["fixture"],
+  nowMs: number,
+): Promise<UpdateFixture | null> {
   if (
     fixture !== "update-available" &&
     fixture !== "update-blocked" &&
@@ -291,6 +312,8 @@ function buildUpdateFixture(fixture: CliOptions["fixture"], nowMs: number): Upda
     ],
     durationMs: 11_640,
   };
+  const { buildUpdateRestartSentinelPayload } =
+    await import("../src/infra/update-restart-sentinel-payload.js");
   return {
     available,
     schedule,
@@ -321,8 +344,6 @@ const boardFixtureHtml = `<!doctype html>
         const mode = mediaQuery.matches ? "light" : "dark";
         document.documentElement.dataset.theme = mode;
         document.documentElement.dataset.themeMode = mode;
-        document.documentElement.classList.toggle("wa-light", mode === "light");
-        document.documentElement.classList.toggle("wa-dark", mode === "dark");
         document.documentElement.style.colorScheme = mode;
       };
       applyTheme();
@@ -347,7 +368,7 @@ const boardFixtureHtml = `<!doctype html>
   </head>
   <body>
     <div id="app"></div>
-    <script type="module" src="/src/test-helpers/board-fixture.ts"></script>
+    <script type="module" src="/src/test-helpers/board-fixture.tsx"></script>
   </body>
 </html>`;
 
@@ -544,12 +565,12 @@ function buildActivitySessionRows(baseTime: number) {
 
 // Model Providers settings fixtures: auth state plus live plan/quota/billing
 // snapshots so the /settings/model-providers page renders fully in the mock.
-function buildSessionDiffMock() {
+function buildSessionDiffMock(): SessionsDiffResult {
   const appPatch = [
-    "diff --git a/src/app.ts b/src/app.ts",
+    "diff --git a/ui/src/ui/views/chat.ts b/ui/src/ui/views/chat.ts",
     "index 1111111..2222222 100644",
-    "--- a/src/app.ts",
-    "+++ b/src/app.ts",
+    "--- a/ui/src/ui/views/chat.ts",
+    "+++ b/ui/src/ui/views/chat.ts",
     "@@ -12,4 +12,5 @@ export function bootstrap() {",
     "   const config = readSettings();",
     "-  const client = createClient(config);",
@@ -575,12 +596,12 @@ function buildSessionDiffMock() {
   ].join("\n");
   return {
     sessionKey: "main",
-    root: "/tmp/openclaw-mock-checkout",
+    root: "/mock/workspace",
     branch: "feature/session-diff-panel",
     baseRef: "main",
     files: [
       {
-        path: "src/app.ts",
+        path: "ui/src/ui/views/chat.ts",
         status: "modified",
         additions: 3,
         deletions: 2,
@@ -1403,7 +1424,8 @@ function syntheticAvatar(color: "coral" | "green"): string {
 async function createChatPickerScenario(
   fixture?: CliOptions["fixture"],
 ): Promise<ControlUiMockGatewayScenario> {
-  const baseTime = Date.parse("2026-05-22T09:00:00.000Z");
+  const baseTime =
+    fixture === "session-design" ? Date.now() : Date.parse("2026-05-22T09:00:00.000Z");
   const rosterTime = Date.now();
   const rosterAgents = [
     {
@@ -1563,8 +1585,8 @@ async function createChatPickerScenario(
   ];
   const sessionFiles = sessionFileFixtures.map(({ content: _content, ...file }) => file);
   const sessionWorkspaceRoot = "/mock/workspace";
-  const sessionFileCase = <T extends { path: string }>(file: T) => ({
-    match: { sessionKey: "agent:main:main", path: file.path },
+  const sessionFileCase = <T extends { path: string }>(file: T, requestPath = file.path) => ({
+    match: { sessionKey: "agent:main:main", path: requestPath },
     response: { file, root: sessionWorkspaceRoot, sessionKey: "agent:main:main" },
   });
   const sessionFileListCase = <T extends Record<string, unknown>>(
@@ -1614,13 +1636,21 @@ async function createChatPickerScenario(
       path: "",
     }),
   ];
-  const sessionFileGetCases = sessionFileFixtures.map((file) =>
-    sessionFileCase({
+  const sessionFileGetCases = sessionFileFixtures.flatMap((file) => {
+    const previewFile = {
       ...file,
+      workspacePath: file.path,
+      previewKind: "text",
+      contentEncoding: "utf8",
       // Fake CAS token so the file panel offers edit mode against the mock.
       hash: mockFileHash(file.content),
-    }),
-  );
+    };
+    // Session rows use relative paths; workspace browser rows request absolute paths.
+    return [
+      sessionFileCase(previewFile),
+      sessionFileCase(previewFile, `${sessionWorkspaceRoot}/${file.path}`),
+    ];
+  });
   const sessionFileSetCases = sessionFiles.map((file) =>
     sessionFileCase({
       ...file,
@@ -1642,7 +1672,7 @@ async function createChatPickerScenario(
   <path d="M232 246c-45 28-91 35-142 23M408 246c45 28 91 35 142 23" fill="none" stroke="#e14b47" stroke-width="16" stroke-linecap="round"/>
   <text x="320" y="326" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="24" fill="#f6f7f9">openclaw session artifact</text>
 </svg>`;
-  const lobsterArtifact = {
+  const lobsterArtifact: ArtifactSummary = {
     id: "artifact-openclaw-lobster",
     type: "image",
     title: "openclaw-lobster-preview.svg",
@@ -1806,29 +1836,35 @@ async function createChatPickerScenario(
     tokenBudget: 300_000,
     continuationTurns: 3,
   };
-  const rosterSessions = rosterAgents.flatMap((agent, index) => [
-    sessionRow(`agent:${agent.id}:main`, agent.name, rosterTime - (index + 1) * 720_000, {
-      agentId: agent.id,
-      isMain: true,
-      lastMessagePreview: agent.preview,
-    }),
-    ...agent.sessionLabels.map((label, sessionIndex) => {
-      const working = agent.id === "forge" && sessionIndex === 0;
-      return sessionRow(
-        `agent:${agent.id}:sample-${sessionIndex + 1}`,
-        label,
-        rosterTime - (index + 1) * 60_000 - sessionIndex * 5_000,
-        {
-          agentId: agent.id,
-          pinned: sessionIndex === 0,
-          lastMessagePreview: agent.preview,
-          unread: agent.id === "scout" && sessionIndex === 1,
-          hasActiveRun: working,
-          ...(working ? { activeRunIds: ["mock-forge-dashboard"], status: "running" } : {}),
+  const rosterSessions: NonNullable<ControlUiMockGatewayScenario["sessions"]> =
+    rosterAgents.flatMap((agent, index) => [
+      sessionRow(`agent:${agent.id}:main`, agent.name, rosterTime - (index + 1) * 720_000, {
+        agentId: agent.id,
+        isMain: true,
+        lastMessagePreview: agent.preview,
+        // The agent roster subtitle reads the last assistant message, not the generic preview.
+        lastAssistantMessage: {
+          text: agent.preview,
+          timestamp: rosterTime - (index + 1) * 720_000,
         },
-      );
-    }),
-  ]);
+      }),
+      ...agent.sessionLabels.map((label, sessionIndex) => {
+        const working = agent.id === "forge" && sessionIndex === 0;
+        return sessionRow(
+          `agent:${agent.id}:sample-${sessionIndex + 1}`,
+          label,
+          rosterTime - (index + 1) * 60_000 - sessionIndex * 5_000,
+          {
+            agentId: agent.id,
+            pinned: sessionIndex === 0,
+            lastMessagePreview: agent.preview,
+            unread: agent.id === "scout" && sessionIndex === 1,
+            hasActiveRun: working,
+            ...(working ? { activeRunIds: ["mock-forge-dashboard"], status: "running" } : {}),
+          },
+        );
+      }),
+    ]);
   if (fixture === "sidebar-roster") {
     rosterSessions.push(
       sessionRow("agent:forge:subagent:layout", "Check sidebar layout", rosterTime - 20_000, {
@@ -1953,7 +1989,7 @@ async function createChatPickerScenario(
       hasActiveRun: true,
       owner: { actor: MOCK_ACTOR_PETER },
       participantCount: 1,
-      participants: [{ identity: { type: "profile", id: "profile-mira" }, label: "Mira" }],
+      participants: [MOCK_PROFILE_PARTICIPANTS.mira],
       status: "running",
     }),
     sessionRow("agent:main:release-notes", "Release notes review", baseTime - 83_000, {
@@ -1962,10 +1998,7 @@ async function createChatPickerScenario(
       hasActiveRun: true,
       owner: { actor: MOCK_ACTOR_MIRA },
       participantCount: 2,
-      participants: [
-        { identity: { type: "profile", id: "profile-riley" }, label: "Riley" },
-        { identity: { type: "profile", id: "profile-sam" }, label: "Sam" },
-      ],
+      participants: [MOCK_PROFILE_PARTICIPANTS.riley, MOCK_PROFILE_PARTICIPANTS.sam],
       status: "running",
     }),
     sessionRow("agent:main:work-openclaw", "OpenClaw work checkout", baseTime - 85_000, {
@@ -1975,10 +2008,10 @@ async function createChatPickerScenario(
       owner: { actor: MOCK_ACTOR_PETER },
       participantCount: 4,
       participants: [
-        { identity: { type: "profile", id: "profile-mira" }, label: "Mira" },
-        { identity: { type: "profile", id: "profile-riley" }, label: "Riley" },
-        { identity: { type: "profile", id: "profile-sam" }, label: "Sam" },
-        { identity: { type: "profile", id: "profile-lee" }, label: "Lee" },
+        MOCK_PROFILE_PARTICIPANTS.mira,
+        MOCK_PROFILE_PARTICIPANTS.riley,
+        MOCK_PROFILE_PARTICIPANTS.sam,
+        MOCK_PROFILE_PARTICIPANTS.lee,
       ],
       observerDigest: {
         headline: "Done: fixed the flaky retry-window test",
@@ -2070,12 +2103,13 @@ async function createChatPickerScenario(
   const profileUsage = buildProfileUsageMocks(Date.now());
   const modelProviders = buildModelProviderMocks(Date.now());
   const richAttention = fixture === "approval";
-  const cronMocks = buildCronMocks(Date.now(), {
+  const cronMocks = buildCronMocks(fixture === "session-design" ? baseTime : Date.now(), {
     richAttention,
     ...(fixture === "sidebar-roster" ? { secondAgentId: "forge" } : {}),
+    ...(fixture === "session-design" ? { sessionKey: "agent:main:main" } : {}),
   });
   const updateFixtureNow = Date.now();
-  const updateFixture = buildUpdateFixture(fixture, updateFixtureNow);
+  const updateFixture = await buildUpdateFixture(fixture, updateFixtureNow);
   const updateSchedule = updateFixture?.schedule ?? null;
   const heldUpdateSchedule: UpdateScheduleState | null = updateSchedule?.campaign
     ? {
@@ -2260,6 +2294,7 @@ async function createChatPickerScenario(
       "config.patch",
       "config.schema",
       "cron.add",
+      "cron.get",
       "cron.list",
       "cron.remove",
       "cron.run",
@@ -2290,11 +2325,16 @@ async function createChatPickerScenario(
       "sessions.groups.rename",
       "sessions.patch",
       "sessions.patchMany",
+      "sessions.processes.list",
+      "sessions.processes.stop",
       "sessions.search",
       "session.reactions.list",
       "session.reactions.set",
+      ...(fixture === "reactions" ? ["users.mentionable"] : []),
+      "skills.workshop.applyDraft",
       "skills.workshop.archive",
       "skills.workshop.changes",
+      "skills.workshop.discardDraft",
       "skills.workshop.list",
       "skills.workshop.read",
       "skills.workshop.restore",
@@ -2316,7 +2356,6 @@ async function createChatPickerScenario(
       ...(fixture === "workboard" || fixture === "workboard-states"
         ? [
             "board.get",
-            "cron.get",
             "workboard.boards.list",
             "workboard.boards.upsert",
             "workboard.cards.list",
@@ -2570,6 +2609,8 @@ async function createChatPickerScenario(
           },
         })),
       },
+      // Systems requests backup status on open; an empty status keeps its panel renderable.
+      "backup.status": { targets: [], schedules: [], locations: [] },
       "environments.list": {
         environments: [
           {
@@ -3321,7 +3362,107 @@ async function createChatPickerScenario(
       "users.background.remove",
     ];
   }
-  return scenario;
+  if (fixture === "header-idle" || fixture === "header-waiting") {
+    const now = Date.UTC(2026, 9, 10, 12);
+    const waiting = fixture === "header-waiting";
+    const parent = sessionRow("agent:main:main", "Review the release checklist", now, {
+      sessionId: "header-parent",
+      status: "done",
+      hasActiveRun: false,
+      hasActiveSubagentRun: waiting,
+      activeRunIds: [],
+      startedAt: now - 180_000,
+      endedAt: now - 120_000,
+      sharingRole: "owner",
+      visibility: "shared",
+      childSessions: waiting ? ["agent:main:subagent:header-review"] : [],
+    });
+    const child = sessionRow("agent:main:subagent:header-review", "Review documentation", now, {
+      sessionId: "header-child",
+      classification: "subagent",
+      spawnedBy: parent.key,
+      parentSessionKey: parent.key,
+      status: "running",
+      hasActiveRun: true,
+      activeRunIds: ["header-child-run"],
+      startedAt: now - 120_000,
+      observerDigest: {
+        runId: "header-child-run",
+        headline: "Checking examples and migration notes",
+        health: "on-track",
+        revision: 1,
+        updatedAt: now,
+      },
+    });
+    const messages = [
+      {
+        role: "user",
+        content: "Review the release checklist and ask a subagent to check the documentation.",
+        timestamp: now - 180_000,
+      },
+      {
+        role: "assistant",
+        content: waiting
+          ? "The documentation review is underway. I will combine the findings when it finishes."
+          : "The release checklist is ready for review.",
+        timestamp: now - 150_000,
+        __openclaw: { id: "header-answer", seq: 2, runId: "header-parent-run" },
+      },
+      ...(waiting
+        ? [
+            {
+              role: "assistant",
+              content: [
+                { type: "toolCall", id: "header-yield", name: "sessions_yield", arguments: {} },
+              ],
+              timestamp: now - 120_000,
+              __openclaw: { id: "header-yield-call", seq: 3, runId: "header-parent-run" },
+            },
+            {
+              role: "toolResult",
+              toolCallId: "header-yield",
+              toolName: "sessions_yield",
+              content: [{ type: "text", text: '{"status":"yielded"}' }],
+              timestamp: now - 120_000,
+              __openclaw: { id: "header-yield-result", seq: 4, runId: "header-parent-run" },
+            },
+          ]
+        : []),
+    ];
+    scenario.featureMethods = [
+      ...(scenario.featureMethods ?? []),
+      "session.visibility.set",
+      "session.members.listEvidence",
+    ];
+    scenario.sessionKey = parent.key;
+    scenario.sessions = waiting ? [parent, child] : [parent];
+    scenario.historyMessages = messages;
+    scenario.sessionTranscripts = {
+      [parent.key]: { messages, inFlightRun: null },
+      [child.key]: {
+        messages: [
+          {
+            role: "assistant",
+            content: "Checking examples and migration notes",
+            timestamp: now - 1_000,
+          },
+        ],
+        inFlightRun: { runId: "header-child-run", startedAt: now - 120_000 },
+      },
+    };
+    scenario.repeatingSessionEvents = { events: [] };
+    scenario.sessionGroups = [];
+    delete scenario.methodResponses?.["sessions.list"];
+  }
+  return fixture === "session-design"
+    ? createSessionDesignScenario(
+        scenario,
+        baseTime,
+        sessionFileFixtures,
+        buildSessionDiffMock(),
+        lobsterArtifact,
+      )
+    : scenario;
 }
 
 function escapeScriptContent(script: string): string {
@@ -3331,9 +3472,20 @@ function escapeScriptContent(script: string): string {
 async function createMockGatewayPlugin(
   scenario: ControlUiMockGatewayScenario,
   fixture?: CliOptions["fixture"],
+  sandbox?: SessionDesignSandbox,
 ): Promise<Plugin> {
+  const mockScenario =
+    fixture === "session-design"
+      ? {
+          ...scenario,
+          webSocketPassthroughPrefixes: [
+            ...(scenario.webSocketPassthroughPrefixes ?? []),
+            "__SESSION_DESIGN_BROWSER_RFB_PREFIX__",
+          ],
+        }
+      : scenario;
   const prepared = await prepareControlUiMockGatewayScenario(
-    fixture === "workboard-states" ? { ...scenario, nativePlugins: [] } : scenario,
+    fixture === "workboard-states" ? { ...mockScenario, nativePlugins: [] } : mockScenario,
   );
   if (fixture === "workboard-states") {
     const { assets, catalog } = await buildWorkboardStatesAssets();
@@ -3356,17 +3508,43 @@ async function createMockGatewayPlugin(
       },
     };
   }
-  const initScript = escapeScriptContent(createControlUiMockGatewayInitScript(prepared.scenario));
+  let gatewayInit = createControlUiMockGatewayInitScript(prepared.scenario);
+  if (fixture === "session-design") {
+    // Bind this harness option in the browser, where a forwarded host/port and TLS are known.
+    // Replace a controlled JSON literal, not the harness implementation or a global socket owner.
+    gatewayInit = gatewayInit.replace(
+      JSON.stringify("__SESSION_DESIGN_BROWSER_RFB_PREFIX__"),
+      'new URL("/__fixtures/session-design/desktop?", window.location.origin).href.replace(/^http/, "ws")',
+    );
+  }
+  const initScript = escapeScriptContent(gatewayInit);
   const sameOriginGatewayScript = escapeScriptContent(createControlUiMockSameOriginGatewayScript());
   const newAgentWelcome = await buildNewAgentWelcome({
     engine: { noteAssistantMessage: () => {} },
   });
+  // The mock session owner resolves "main" to the scenario's normalized mainSessionKey.
+  const processSessionKey = prepared.scenario.sessionKey?.trim() || "main";
   const statefulInitScript = escapeScriptContent(
-    createControlUiPreviewInitScript(newAgentWelcome) +
+    createControlUiPreviewInitScript(newAgentWelcome, processSessionKey) +
+      mentionMockInitScript(
+        prepared.scenario,
+        fixture === "session-design"
+          ? [MOCK_PROFILE_PARTICIPANTS.mira, MOCK_PROFILE_PARTICIPANTS.riley]
+          : Object.values(MOCK_PROFILE_PARTICIPANTS),
+      ) +
       skillLibraryMockInitScript(prepared.scenario.models) +
       pluginLifecycleMockInitScript() +
       skillWorkshopMockInitScript(Date.now()) +
-      approvalMockInitScript(fixture === "approval") +
+      approvalMockInitScript(
+        fixture === "approval",
+        fixture === "session-design" ? { cwd: "/mock/workspace-export" } : {},
+      ) +
+      (fixture === "session-design"
+        ? sessionDesignInitScript(
+            prepared.scenario,
+            expectDefined(sandbox, "Session design sandbox"),
+          )
+        : "") +
       (fixture === "backgrounds" ? backgroundMockInitScript() : "") +
       (fixture === "workboard" || fixture === "workboard-states"
         ? `(() => { const __name = (target) => target; (${installWorkboardBoardMock.toString()})(${JSON.stringify(buildWorkboardMocks(Date.now(), MOCK_ACTOR_PETER, fixture === "workboard-states"))}); })();`
@@ -3396,8 +3574,6 @@ async function createMockGatewayPlugin(
           root.dataset.theme = mode;
           root.dataset.themeMode = mode;
           root.dataset.themeResolved = mode;
-          root.classList.toggle("wa-light", mode === "light");
-          root.classList.toggle("wa-dark", mode === "dark");
           root.style.colorScheme = mode;
           syncControlUiSystemChrome();
           for (const button of control.querySelectorAll("button")) {
@@ -3503,10 +3679,29 @@ async function createMockGatewayPlugin(
 }
 
 async function buildWorkboardStatesAssets() {
-  const { build } = await import("esbuild");
+  const [{ build }, { createSolidControlUiBuildPlugin }, { buildPluginLoaderAliasMap }] =
+    await Promise.all([
+      import("esbuild"),
+      import("../src/cli/plugins-build-solid.js"),
+      import("../src/plugins/sdk-alias.js"),
+    ]);
   const rootDir = path.join(repoRoot, "extensions/workboard");
   const entry = path.join(rootDir, "browser/index.ts");
-  let transformed = false;
+  const cardRenderer = fs.realpathSync(path.join(rootDir, "browser/pages/workboard/view-card.tsx"));
+  const fixtureProjections = fileURLToPath(
+    new URL("./control-ui-workboard-state-projections.ts", import.meta.url),
+  );
+  const projections = new Map([
+    [
+      "../../lib/workboard/lifecycle.ts",
+      { source: "lifecycle.ts", name: "getWorkboardLifecycle", fixture: "getFixtureLifecycle" },
+    ],
+    [
+      "../../lib/workboard/card-alerts.ts",
+      { source: "card-alerts.ts", name: "getCardAlerts", fixture: "getFixtureAlerts" },
+    ],
+  ]);
+  const reached = new Set<string>();
   const result = await build({
     absWorkingDir: rootDir,
     entryPoints: { index: entry },
@@ -3524,33 +3719,37 @@ async function buildWorkboardStatesAssets() {
     },
     alias: buildPluginLoaderAliasMap(entry, process.argv[1], import.meta.url, "src"),
     plugins: [
-      createSolidControlUiBuildPlugin(uiRoot),
+      createSolidControlUiBuildPlugin(rootDir),
       {
         name: "workboard-state-projections",
         setup(builder) {
-          builder.onLoad(
-            { filter: /[/\\]pages[/\\]workboard[/\\]view-card\.ts$/ },
-            async ({ path: sourcePath }) => {
-              const source = await fs.promises.readFile(sourcePath, "utf8");
-              const lifecycleImport =
-                /\bgetWorkboardLifecycle,(?=[\s\S]*?from "\.\.\/\.\.\/lib\/workboard\/index\.ts")/g;
-              const alertImport =
-                /\bgetCardAlerts,(?=[\s\S]*?from "\.\.\/\.\.\/lib\/workboard\/card-alerts\.ts")/g;
-              if (
-                [...source.matchAll(lifecycleImport)].length !== 1 ||
-                [...source.matchAll(alertImport)].length !== 1
-              ) {
-                throw new Error(
-                  "Workboard state fixture import seam changed; update its exact import transform.",
-                );
+          builder.onResolve(
+            {
+              filter: /^\.\.\/\.\.\/lib\/workboard\/(?:lifecycle|card-alerts)\.ts$/,
+              namespace: "file",
+            },
+            ({ path: specifier, importer }) => {
+              if (importer !== cardRenderer) {
+                return undefined;
               }
-              transformed = true;
+              reached.add(specifier);
+              return { path: specifier, namespace: "workboard-state-projections" };
+            },
+          );
+          builder.onLoad(
+            { filter: /.*/, namespace: "workboard-state-projections" },
+            ({ path: specifier }) => {
+              const projection = projections.get(specifier);
+              if (!projection) {
+                throw new Error(`Unknown Workboard fixture projection: ${specifier}`);
+              }
               return {
                 loader: "ts",
-                resolveDir: path.dirname(sourcePath),
-                contents:
-                  source.replace(lifecycleImport, "").replace(alertImport, "") +
-                  `\nimport { getFixtureLifecycle as getWorkboardLifecycle, getFixtureAlerts as getCardAlerts } from ${JSON.stringify(fileURLToPath(new URL("./control-ui-workboard-state-projections.ts", import.meta.url)))};\n`,
+                resolveDir: rootDir,
+                contents: [
+                  `export * from ${JSON.stringify(path.join(rootDir, "browser/lib/workboard", projection.source))};`,
+                  `export { ${projection.fixture} as ${projection.name} } from ${JSON.stringify(fixtureProjections)};`,
+                ].join("\n"),
               };
             },
           );
@@ -3558,8 +3757,8 @@ async function buildWorkboardStatesAssets() {
       },
     ],
   });
-  if (!transformed) {
-    throw new Error("Workboard state fixture did not reach the real card renderer.");
+  if (reached.size !== projections.size) {
+    throw new Error("Workboard state fixture did not reach both real card renderer projections.");
   }
   const revision = createHash("sha256");
   for (const file of result.outputFiles) {
@@ -3653,55 +3852,94 @@ const cacheDir = await mkdtemp(path.join(cacheRoot, "server-"));
 // The process owns this cache, so its exit hook is the single cleanup path.
 process.once("exit", () => rmSync(cacheDir, { recursive: true, force: true }));
 let server: ViteDevServer | undefined;
+let sessionDesignSandbox: Awaited<ReturnType<typeof startSessionDesignSandbox>> | undefined;
 try {
-  server = await createServer({
-    base: "/",
-    cacheDir,
-    clearScreen: false,
-    configFile: path.join(uiRoot, "vite.config.ts"),
-    define: {
-      "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify({
-        version: "2026.7.10",
-        commit: "0123456789abcdef0123456789abcdef01234567",
-        commitAt: "2026-07-10T11:22:33.000Z",
-        builtAt: "2026-07-10T12:34:56.000Z",
-        branch: null,
-        dirty: null,
-        release: false,
-        buildId: scenario.serverBuildId,
+  if (options.fixture === "session-design") {
+    sessionDesignSandbox = await startSessionDesignSandbox();
+  }
+  server = await createServer(
+    mergeConfig(
+      controlUiViteConfig({
+        command: "serve",
+        buildInfo: {
+          version: "2026.7.10",
+          commit: "0123456789abcdef0123456789abcdef01234567",
+          commitAt: "2026-07-10T11:22:33.000Z",
+          builtAt: "2026-07-10T12:34:56.000Z",
+          branch: null,
+          dirty: null,
+          release: false,
+          buildId: expectDefined(scenario.serverBuildId, "Control UI mock build ID"),
+        },
       }),
-    },
-    logLevel: "error",
-    optimizeDeps: {
-      ...(options.fixture === "board"
-        ? { entries: [path.join(uiRoot, "src", "test-helpers", "board-fixture.ts")] }
-        : {}),
-      include: ["diff", "lit/directives/repeat.js"],
-    },
-    plugins: [
-      ...createStandaloneMockIsolationPlugins(),
-      await createMockGatewayPlugin(scenario, options.fixture),
-      createBoardFixturePlugin(),
-      ...(options.fixture === "attachments" ? [createChatAttachmentFixturePlugin()] : []),
-    ],
-    publicDir: path.join(uiRoot, "public"),
-    resolve: {
-      alias: [
-        ...resolveExternalPackageAliasesForVite(),
-        ...resolveSourcePackageAliasesForVite(),
-        ...resolveTsconfigPathAliasesForVite(),
-      ],
-    },
-    root: uiRoot,
-    server: {
-      allowedHosts: options.allowedHosts,
-      host: options.host,
-      port: options.port,
-      strictPort: true,
-    },
-  });
+      {
+        base: "/",
+        cacheDir,
+        clearScreen: false,
+        configFile: false,
+        logLevel: "error",
+        optimizeDeps: {
+          ...(options.fixture === "board"
+            ? { entries: [path.join(uiRoot, "src", "test-helpers", "board-fixture.tsx")] }
+            : {}),
+          include: ["diff"],
+        },
+        plugins: [
+          ...createStandaloneMockIsolationPlugins(
+            sessionDesignSandbox
+              ? {
+                  sandboxUrl: new URL(
+                    sessionDesignSandbox.descriptor.sandboxUrl,
+                    sessionDesignSandbox.descriptor.sandboxOrigin,
+                  ).href,
+                  allowDesktopPopup: true,
+                }
+              : undefined,
+          ),
+          await createMockGatewayPlugin(
+            scenario,
+            options.fixture,
+            sessionDesignSandbox?.descriptor,
+          ),
+          createBoardFixturePlugin(),
+          ...(options.fixture === "session-design"
+            ? [
+                createSessionDesignPortalFixturePlugin(),
+                createSessionDesignDesktopFixturePlugin(),
+                createSessionDesignFileFixturePlugin(scenario),
+              ]
+            : []),
+          ...(options.fixture === "attachments" ? [createChatAttachmentFixturePlugin()] : []),
+        ],
+        publicDir: path.join(uiRoot, "public"),
+        resolve: {
+          alias: [
+            ...resolveExternalPackageAliasesForVite(),
+            ...resolveSourcePackageAliasesForVite(),
+            ...resolveTsconfigPathAliasesForVite(),
+          ],
+        },
+        root: uiRoot,
+        server: {
+          allowedHosts: options.allowedHosts,
+          host: options.host,
+          port: options.port,
+          strictPort: true,
+        },
+      },
+    ),
+  );
 
+  // Vite can exit from its signal handler; close the auxiliary listener with its HTTP owner too.
+  server.httpServer?.once("close", () => {
+    void sessionDesignSandbox?.close();
+  });
   await server.listen();
+  if (sessionDesignSandbox) {
+    console.log(
+      `[control-ui-mock] sandbox (forward this port unchanged): ${JSON.stringify(sessionDesignSandbox.descriptor)}`,
+    );
+  }
   console.log(
     `[control-ui-mock] ${resolveServerUrl(server, options.host, controlUiSessionPath(scenario.sessionKey ?? "agent:main:main"))}`,
   );
@@ -3711,4 +3949,5 @@ try {
   await waitForShutdown();
 } finally {
   await server?.close();
+  await sessionDesignSandbox?.close();
 }

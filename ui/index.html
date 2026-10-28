@@ -9,18 +9,73 @@
     <title>OpenClaw Control</title>
     <meta name="color-scheme" content="dark light" />
     <!-- These mirror the claw theme's --bg tokens for first paint; runtime theme application keeps them synchronized. -->
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#faf9f7" />
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1015" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
-    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
-    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
+    <meta
+      id="openclaw-theme-color-light"
+      name="theme-color"
+      media="(prefers-color-scheme: light)"
+      content="#f4f4f4"
+    />
+    <meta
+      id="openclaw-theme-color-dark"
+      name="theme-color"
+      media="(prefers-color-scheme: dark)"
+      content="#111318"
+    />
+    <link id="openclaw-favicon-svg" rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link
+      id="openclaw-favicon-png"
+      rel="icon"
+      type="image/png"
+      sizes="32x32"
+      href="/favicon-32.png"
+    />
+    <link
+      id="openclaw-apple-touch-icon"
+      rel="apple-touch-icon"
+      sizes="180x180"
+      href="/apple-touch-icon.png"
+    />
+    <link
+      id="openclaw-manifest"
+      rel="manifest"
+      href="/manifest.webmanifest"
+      crossorigin="use-credentials"
+    />
     <script data-cfasync="false">
       // Configure Zod before module evaluation so its JIT probe cannot violate strict CSP.
       globalThis.__zod_globalConfig ??= {};
       globalThis.__zod_globalConfig.jitless = true;
 
       (function () {
+        // The critical frame can paint while the entry stylesheet downloads.
+        // Activate it before the app mounts, including when module loading stalls.
+        function activateBootStyles(event) {
+          var link = event.target;
+          if (link.id !== "openclaw-boot-styles") return;
+          link.media = "all";
+          document.removeEventListener("load", activateBootStyles, true);
+          document.removeEventListener("error", activateBootStyles, true);
+        }
+        document.addEventListener("load", activateBootStyles, true);
+        document.addEventListener("error", activateBootStyles, true);
+        var bootBase =
+          document.documentElement.getAttribute("data-openclaw-control-ui-base-path") || "";
+        var bootPath = location.pathname.slice(bootBase.length) || "/";
+        // Keep this data-free route selection in sync with ConnectingSplash.
+        var bootRoute = /^\/new\/?$/.test(bootPath)
+          ? "new"
+          : /^\/(?:settings\/)?sessions\/?$/.test(bootPath)
+            ? "sessions"
+            : /^\/(?:automations|cron)\/?$/.test(bootPath)
+              ? "cron"
+              : /^\/settings(?:\/|$)/.test(bootPath)
+                ? "settings"
+                : /^\/chat(?:\/|$)/.test(bootPath) &&
+                    !new URLSearchParams(location.search).has("catalog")
+                  ? "chat"
+                  : "other";
+        document.documentElement.setAttribute("data-openclaw-boot-route", bootRoute);
+        document.documentElement.toggleAttribute("data-openclaw-boot-chat", bootRoute === "chat");
         var THEMES = {
           claw: 1,
           knot: 1,
@@ -53,6 +108,12 @@
             }
           }
           var s = raw ? JSON.parse(raw) : null;
+          if (s && typeof s.navWidth === "number" && s.navWidth >= 240 && s.navWidth <= 400) {
+            document.documentElement.style.setProperty(
+              "--openclaw-boot-nav-width",
+              s.navWidth + "px",
+            );
+          }
           var t = s && s.theme;
           var m = s && s.themeMode;
           if (typeof t !== "string") t = "";
@@ -119,93 +180,93 @@
       }
 
       html {
-        background: #0e1015;
+        background: #111318;
         color-scheme: dark;
       }
 
       html[data-theme-mode="light"] {
-        background: #faf9f7;
+        background: #f4f4f4;
         color-scheme: light;
       }
 
       html[data-theme="openknot"] {
-        background: #080808;
+        background: #0c0c0c;
       }
 
       html[data-theme="openknot-light"] {
-        background: #f9f9fb;
+        background: #f0f0f3;
       }
 
       html[data-theme="dash"] {
-        background: #1a1210;
+        background: #1e1613;
       }
 
       html[data-theme="dash-light"] {
-        background: #f7f2ec;
+        background: #e8e2dc;
       }
 
       html[data-theme="absolutely"] {
-        background: #1c1c1a;
+        background: #1f1f1e;
       }
 
       html[data-theme="absolutely-light"] {
-        background: #faf9f5;
+        background: #f3f2f1;
       }
 
       html[data-theme="tide"] {
-        background: #10151b;
+        background: #14191f;
       }
 
       html[data-theme="tide-light"] {
-        background: #f7f9fb;
+        background: #edeff1;
       }
 
       html[data-theme="beacon"] {
-        background: #000000;
+        background: #050505;
       }
 
       html[data-theme="beacon-light"] {
-        background: #ffffff;
+        background: #f3f3f3;
       }
 
       html[data-theme="phosphor"] {
-        background: #0a0f0a;
+        background: #0e130e;
       }
 
       html[data-theme="phosphor-light"] {
-        background: #f4f7f4;
+        background: #edf0ed;
       }
 
       html[data-theme="crt"] {
-        background: #090a09;
+        background: #0d0e0d;
       }
 
       html[data-theme="crt-light"] {
-        background: #f5f5f4;
+        background: #f0f0f0;
       }
 
       html[data-theme="manuscript"] {
-        background: #211e18;
+        background: #25221b;
       }
 
       html[data-theme="manuscript-light"] {
-        background: #f6f1e4;
+        background: #edece6;
       }
 
       html[data-theme="rose"] {
-        background: #191724;
+        background: #1d1b28;
       }
 
       html[data-theme="rose-light"] {
-        background: #faf4ed;
+        background: #edeae7;
       }
 
       html[data-theme="miami"] {
-        background: #140f1e;
+        background: #181322;
       }
 
       html[data-theme="miami-light"] {
-        background: #f7f3f6;
+        background: #f2eef1;
       }
 
       body {
@@ -215,8 +276,638 @@
         color-scheme: inherit;
       }
 
+      /* Critical loading layout lives here so HTML and the Solid fallback share
+         one geometry owner before either the entry stylesheet or JS arrives. */
+      openclaw-app {
+        display: block;
+        box-sizing: border-box;
+        height: var(--shell-canvas-height, 100dvh);
+        padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+          env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+      }
+
+      /* Connection and route loading share the document's static placeholder paint. */
+      .connect-splash--skeleton,
+      .content--workbench .lazy-view-state--route {
+        --boot-ink: var(--text, #bcbcc0);
+        --boot-line: color-mix(in srgb, var(--boot-ink) 10%, transparent);
+        --boot-content-bg: #0e1015;
+      }
+
+      .content--workbench .lazy-view-state--route {
+        position: relative;
+        background: var(--bg-content, var(--boot-content-bg));
+        container-type: inline-size;
+        min-height: 0;
+      }
+
+      .connect-splash.connect-splash--skeleton {
+        position: relative;
+        display: flex;
+        align-items: stretch;
+        box-sizing: border-box;
+        height: 100vh;
+        height: var(
+          --shell-content-height,
+          calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px))
+        );
+        overflow: hidden;
+        background: var(--bg, inherit);
+        opacity: 1;
+        animation: none;
+      }
+
+      html[data-theme-mode="light"]
+        :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route) {
+        --boot-ink: var(--text, #353535);
+        --boot-content-bg: #f8f8f8;
+      }
+
+      .connect-splash__layout {
+        display: grid;
+        grid-template-columns: calc(var(--openclaw-boot-nav-width, 258px) + 52px) minmax(0, 1fr);
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+      }
+
+      .connect-splash__main {
+        position: relative;
+        container-type: inline-size;
+        min-width: 0;
+        height: 100%;
+        background: var(--bg-content, var(--boot-content-bg));
+      }
+
+      .connect-splash__sidebar {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+        box-sizing: border-box;
+        padding: 16px 20px 16px 72px;
+        border-inline-end: 1px solid var(--boot-line);
+      }
+
+      .connect-splash__sidebar::before {
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 51px;
+        border-inline-end: 1px solid var(--boot-line);
+        content: "";
+      }
+
+      .connect-splash__new-session {
+        height: 32px;
+        margin: 8px 0;
+      }
+
+      .connect-splash__sidebar > .skeleton-line:nth-child(even) {
+        width: 65%;
+      }
+
+      :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route) .skeleton {
+        position: relative;
+        overflow: hidden;
+        border-radius: 6px;
+        background: color-mix(in srgb, var(--boot-ink) 8%, transparent);
+      }
+
+      /* Static placeholders do not animate or hold compositor layers during boot. */
+      :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route) .skeleton::after {
+        content: none;
+      }
+
+      :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route) .skeleton-line {
+        height: 14px;
+      }
+
+      :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+        .skeleton-line--medium {
+        width: 65%;
+      }
+
+      :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+        .skeleton-line--long {
+        width: 85%;
+      }
+
+      .lazy-view-state--route > .connect-splash__status {
+        display: none;
+      }
+
+      :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+        .connect-splash__status {
+        display: block;
+        position: absolute;
+        inset: auto 18px 50px;
+        margin: 0;
+        color: var(--boot-ink);
+        font:
+          14px/20px system-ui,
+          sans-serif;
+        letter-spacing: normal;
+        -webkit-font-smoothing: auto;
+        text-align: center;
+      }
+
+      :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+        .loading-skeleton {
+        box-sizing: border-box;
+        gap: 0;
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        height: 100%;
+        min-width: 0;
+        min-height: 0;
+        padding: 0 18px 14px;
+      }
+
+      :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+        .loading-skeleton__header {
+        box-sizing: border-box;
+        display: flex;
+        flex: none;
+        align-items: center;
+        gap: 14px;
+        height: 44px;
+        margin-inline: -18px;
+        padding-inline: 12px;
+        padding-bottom: 0;
+        border-bottom: 1px solid var(--boot-line, var(--border));
+      }
+
+      :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+        .loading-skeleton__avatar {
+        flex: none;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+      }
+
+      :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+        .loading-skeleton__title {
+        width: 140px;
+      }
+
+      :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+        .loading-skeleton__messages {
+        display: flex;
+        flex: 1;
+        flex-direction: column;
+        gap: 48px;
+        width: min(100%, 48rem);
+        margin: 28px auto 0;
+      }
+
+      :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+        .loading-skeleton__message {
+        display: grid;
+        gap: 14px;
+        width: 85%;
+      }
+
+      :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+        .loading-skeleton__message--user {
+        align-self: flex-end;
+        width: 48%;
+      }
+
+      :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+        .loading-skeleton__composer {
+        box-sizing: border-box;
+        flex: none;
+        width: min(100%, 48rem);
+        height: 92px;
+        margin: 8px auto 0;
+        border: 1px solid var(--boot-line, var(--border));
+        border-radius: 20px;
+      }
+
+      @media (min-width: 769px) {
+        html[data-openclaw-boot-chat] #openclaw-boot-shell .loading-skeleton__composer,
+        .connect-splash[data-chat] .loading-skeleton__composer,
+        .content--workbench .lazy-view-state--route .loading-skeleton__composer {
+          /* Match composer-surface: one editor line, five vertical insets,
+             the send control, the footer margin, and both surface borders. */
+          height: max(
+            var(--chat-composer-min-height, 88px),
+            calc(
+              var(--chat-composer-editor-line, calc(var(--control-ui-text-md, 14px) * 1.5)) +
+                var(--chat-composer-editor-inset-block, 6px) * 5 +
+                var(--chat-composer-send-size, 32px) + 4px + 2px
+            )
+          );
+        }
+      }
+
+      /* Use the same skeleton nodes before and after Solid takes over. New
+         Session starts with its welcome and draft, never a chat transcript. */
+      :is(
+          html[data-openclaw-boot-route="new"] #openclaw-boot-shell,
+          .connect-splash[data-route="new"]
+        )
+        .loading-skeleton {
+        padding-top: calc(clamp(44px, 5vh, 52px) + clamp(20px, 4vh, 40px));
+        padding-inline: 36px;
+      }
+
+      :is(
+          html[data-openclaw-boot-route="new"] #openclaw-boot-shell,
+          .connect-splash[data-route="new"]
+        )
+        .loading-skeleton__header {
+        flex-direction: column;
+        gap: 12px;
+        height: auto;
+        margin: 0;
+        padding: 0;
+        border: 0;
+      }
+
+      :is(
+          html[data-openclaw-boot-route="new"] #openclaw-boot-shell,
+          .connect-splash[data-route="new"]
+        )
+        .loading-skeleton__header
+        .loading-skeleton__avatar {
+        width: 96px;
+        height: 96px;
+      }
+
+      :is(
+          html[data-openclaw-boot-route="new"] #openclaw-boot-shell,
+          .connect-splash[data-route="new"]
+        )
+        .loading-skeleton__title {
+        width: 160px;
+        height: 30px;
+      }
+
+      :is(
+          html[data-openclaw-boot-route="new"] #openclaw-boot-shell,
+          .connect-splash[data-route="new"]
+        )
+        .loading-skeleton__messages {
+        flex: none;
+        gap: 0;
+        margin-top: 6px;
+      }
+
+      :is(
+          html[data-openclaw-boot-route="new"] #openclaw-boot-shell,
+          .connect-splash[data-route="new"]
+        )
+        .loading-skeleton__message--user {
+        align-self: center;
+        width: 100%;
+        justify-items: center;
+        gap: 44px;
+      }
+
+      :is(
+          html[data-openclaw-boot-route="new"] #openclaw-boot-shell,
+          .connect-splash[data-route="new"]
+        )
+        .loading-skeleton__message--user
+        > :first-child {
+        width: min(100%, 280px);
+        height: 20px;
+      }
+
+      :is(
+          html[data-openclaw-boot-route="new"] #openclaw-boot-shell,
+          .connect-splash[data-route="new"]
+        )
+        .loading-skeleton__message--user
+        > :last-child {
+        width: 100%;
+        height: 32px;
+      }
+
+      :is(
+          html[data-openclaw-boot-route="new"] #openclaw-boot-shell,
+          .connect-splash[data-route="new"]
+        )
+        .loading-skeleton__message:not(.loading-skeleton__message--user) {
+        display: none;
+      }
+
+      :is(
+          html[data-openclaw-boot-route="new"] #openclaw-boot-shell,
+          .connect-splash[data-route="new"]
+        )
+        .loading-skeleton__composer {
+        height: 144px;
+        border-radius: 12px;
+      }
+
+      /* Settings owns a narrower sidebar; list routes retain the normal
+         rail. No route below starts with a transcript or a chat composer. */
+      :is(
+          html[data-openclaw-boot-route="settings"] #openclaw-boot-shell,
+          .connect-splash[data-route="settings"]
+        )
+        .connect-splash__layout {
+        grid-template-columns: 288px minmax(0, 1fr);
+      }
+
+      :is(
+          html[data-openclaw-boot-route="settings"] #openclaw-boot-shell,
+          .connect-splash[data-route="settings"]
+        )
+        .connect-splash__sidebar {
+        padding-inline-start: 20px;
+      }
+
+      :is(
+          html[data-openclaw-boot-route="settings"] #openclaw-boot-shell,
+          .connect-splash[data-route="settings"]
+        )
+        .connect-splash__sidebar::before {
+        display: none;
+      }
+
+      :is(
+          html[data-openclaw-boot-route="settings"] #openclaw-boot-shell,
+          .connect-splash[data-route="settings"],
+          html[data-openclaw-boot-route="sessions"] #openclaw-boot-shell,
+          .connect-splash[data-route="sessions"],
+          html[data-openclaw-boot-route="cron"] #openclaw-boot-shell,
+          .connect-splash[data-route="cron"]
+        )
+        .loading-skeleton {
+        padding: 6px 20px 32px;
+      }
+
+      :is(
+          html[data-openclaw-boot-route="settings"] #openclaw-boot-shell,
+          .connect-splash[data-route="settings"],
+          html[data-openclaw-boot-route="sessions"] #openclaw-boot-shell,
+          .connect-splash[data-route="sessions"],
+          html[data-openclaw-boot-route="cron"] #openclaw-boot-shell,
+          .connect-splash[data-route="cron"]
+        )
+        .loading-skeleton__header {
+        width: min(100%, 1120px);
+        height: 40px;
+        justify-content: center;
+        margin: 0 auto;
+        padding: 0;
+        border: 0;
+      }
+
+      :is(
+          html[data-openclaw-boot-route="settings"] #openclaw-boot-shell,
+          .connect-splash[data-route="settings"],
+          html[data-openclaw-boot-route="sessions"] #openclaw-boot-shell,
+          .connect-splash[data-route="sessions"],
+          html[data-openclaw-boot-route="cron"] #openclaw-boot-shell,
+          .connect-splash[data-route="cron"]
+        )
+        .loading-skeleton__header
+        .loading-skeleton__avatar,
+      :is(
+          html[data-openclaw-boot-route="settings"] #openclaw-boot-shell,
+          .connect-splash[data-route="settings"],
+          html[data-openclaw-boot-route="sessions"] #openclaw-boot-shell,
+          .connect-splash[data-route="sessions"],
+          html[data-openclaw-boot-route="cron"] #openclaw-boot-shell,
+          .connect-splash[data-route="cron"]
+        )
+        .loading-skeleton__message
+        .loading-skeleton__avatar,
+      :is(
+          html[data-openclaw-boot-route="settings"] #openclaw-boot-shell,
+          .connect-splash[data-route="settings"],
+          html[data-openclaw-boot-route="sessions"] #openclaw-boot-shell,
+          .connect-splash[data-route="sessions"],
+          html[data-openclaw-boot-route="cron"] #openclaw-boot-shell,
+          .connect-splash[data-route="cron"]
+        )
+        .loading-skeleton__composer {
+        display: none;
+      }
+
+      :is(
+          html[data-openclaw-boot-route="settings"] #openclaw-boot-shell,
+          .connect-splash[data-route="settings"],
+          html[data-openclaw-boot-route="sessions"] #openclaw-boot-shell,
+          .connect-splash[data-route="sessions"],
+          html[data-openclaw-boot-route="cron"] #openclaw-boot-shell,
+          .connect-splash[data-route="cron"]
+        )
+        .loading-skeleton__title {
+        height: 26px;
+        width: 180px;
+      }
+
+      :is(
+          html[data-openclaw-boot-route="settings"] #openclaw-boot-shell,
+          .connect-splash[data-route="settings"],
+          html[data-openclaw-boot-route="sessions"] #openclaw-boot-shell,
+          .connect-splash[data-route="sessions"],
+          html[data-openclaw-boot-route="cron"] #openclaw-boot-shell,
+          .connect-splash[data-route="cron"]
+        )
+        .loading-skeleton__messages {
+        flex: none;
+        gap: 24px;
+        width: min(100%, 1120px);
+        margin-top: 32px;
+      }
+
+      :is(
+          html[data-openclaw-boot-route="settings"] #openclaw-boot-shell,
+          .connect-splash[data-route="settings"],
+          html[data-openclaw-boot-route="sessions"] #openclaw-boot-shell,
+          .connect-splash[data-route="sessions"],
+          html[data-openclaw-boot-route="cron"] #openclaw-boot-shell,
+          .connect-splash[data-route="cron"]
+        )
+        .loading-skeleton__message {
+        width: 100%;
+        gap: 24px;
+      }
+
+      :is(
+          html[data-openclaw-boot-route="settings"] #openclaw-boot-shell,
+          .connect-splash[data-route="settings"],
+          html[data-openclaw-boot-route="sessions"] #openclaw-boot-shell,
+          .connect-splash[data-route="sessions"],
+          html[data-openclaw-boot-route="cron"] #openclaw-boot-shell,
+          .connect-splash[data-route="cron"]
+        )
+        .loading-skeleton__message--user {
+        align-self: stretch;
+      }
+
+      :is(
+          html[data-openclaw-boot-route="settings"] #openclaw-boot-shell,
+          .connect-splash[data-route="settings"]
+        )
+        .loading-skeleton {
+        padding: 44px clamp(28px, 5vw, 72px) 32px;
+      }
+
+      :is(
+          html[data-openclaw-boot-route="settings"] #openclaw-boot-shell,
+          .connect-splash[data-route="settings"]
+        )
+        .loading-skeleton__header {
+        justify-content: flex-start;
+      }
+
+      /* Chat Details automatically reserves 300px plus its 13px inset in a
+         frame at least 1200px wide. Match that first painted destination. */
+      @container (min-width: 1200px) {
+        html[data-openclaw-boot-chat] #openclaw-boot-shell .loading-skeleton,
+        .connect-splash[data-chat] .loading-skeleton,
+        .content--workbench .lazy-view-state--route .loading-skeleton {
+          padding-inline-end: 331px;
+        }
+
+        html[data-openclaw-boot-chat] #openclaw-boot-shell .loading-skeleton__header,
+        .connect-splash[data-chat] .loading-skeleton__header,
+        .content--workbench .lazy-view-state--route .loading-skeleton__header {
+          margin-inline-end: -331px;
+        }
+
+        html[data-openclaw-boot-chat] #openclaw-boot-shell .connect-splash__status,
+        .connect-splash[data-chat] .connect-splash__status,
+        .content--workbench .lazy-view-state--route .connect-splash__status {
+          inset-inline-end: 331px;
+        }
+      }
+
+      @media (max-width: 900px),
+        (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+        .connect-splash__layout {
+          grid-template-columns: minmax(0, 1fr);
+        }
+
+        :is(
+            html[data-openclaw-boot-route="settings"] #openclaw-boot-shell,
+            .connect-splash[data-route="settings"]
+          )
+          .connect-splash__layout {
+          grid-template-columns: minmax(0, 1fr);
+        }
+
+        .connect-splash__sidebar {
+          display: none;
+        }
+
+        :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+          .connect-splash__status {
+          inset-inline-start: 18px;
+        }
+      }
+
+      @media (max-width: 768px) {
+        :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+          .loading-skeleton {
+          padding: 0 16px 10px;
+        }
+
+        :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+          .loading-skeleton__header {
+          height: 58px;
+          margin-inline: -16px;
+        }
+
+        :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+          .loading-skeleton__composer {
+          height: 52px;
+          border-radius: 22px;
+        }
+
+        :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+          .connect-splash__status {
+          bottom: 26px;
+        }
+      }
+
+      @media (max-width: 768px),
+        (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+        :is(
+            html[data-openclaw-boot-route="new"] #openclaw-boot-shell,
+            .connect-splash[data-route="new"]
+          )
+          .loading-skeleton {
+          justify-content: center;
+          padding: 76px 18px 24px;
+        }
+
+        :is(
+            html[data-openclaw-boot-route="new"] #openclaw-boot-shell,
+            .connect-splash[data-route="new"]
+          )
+          .loading-skeleton__header
+          .loading-skeleton__avatar {
+          width: 56px;
+          height: 56px;
+        }
+
+        :is(
+            html[data-openclaw-boot-route="new"] #openclaw-boot-shell,
+            .connect-splash[data-route="new"]
+          )
+          .loading-skeleton__title {
+          height: 24px;
+        }
+
+        :is(
+            html[data-openclaw-boot-route="new"] #openclaw-boot-shell,
+            .connect-splash[data-route="new"]
+          )
+          .loading-skeleton__message--user {
+          gap: 24px;
+        }
+      }
+
+      @media (max-width: 768px) and (max-height: 500px),
+        (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+        :is(
+            html[data-openclaw-boot-route="new"] #openclaw-boot-shell,
+            .connect-splash[data-route="new"]
+          )
+          .loading-skeleton {
+          padding-top: 64px;
+        }
+
+        :is(
+            html[data-openclaw-boot-route="new"] #openclaw-boot-shell,
+            .connect-splash[data-route="new"]
+          )
+          .loading-skeleton__header {
+          flex-direction: row;
+          justify-content: center;
+        }
+
+        :is(
+            html[data-openclaw-boot-route="new"] #openclaw-boot-shell,
+            .connect-splash[data-route="new"]
+          )
+          .loading-skeleton__header
+          .loading-skeleton__avatar {
+          width: 36px;
+          height: 36px;
+        }
+
+        :is(
+            html[data-openclaw-boot-route="new"] #openclaw-boot-shell,
+            .connect-splash[data-route="new"]
+          )
+          .loading-skeleton__message--user
+          > :first-child {
+          display: none;
+        }
+      }
+
       body.openclaw-mount-fallback-active {
-        --mount-fallback-bg: var(--bg, #0e1015);
+        --mount-fallback-bg: var(--bg, #111318);
         --mount-fallback-card: var(--card, #161920);
         --mount-fallback-text: var(--text-strong, #f4f4f5);
         --mount-fallback-muted: var(--muted, #8b8b94);
@@ -365,7 +1056,7 @@
       }
 
       html[data-theme-mode="light"] body.openclaw-mount-fallback-active {
-        --mount-fallback-bg: var(--bg, #faf9f7);
+        --mount-fallback-bg: var(--bg, #f4f4f4);
         --mount-fallback-card: var(--card, #ffffff);
         --mount-fallback-text: var(--text-strong, #18181b);
         --mount-fallback-muted: var(--muted, #64646e);
@@ -391,7 +1082,50 @@
     </style>
   </head>
   <body>
-    <openclaw-app></openclaw-app>
+    <openclaw-app>
+      <!-- Solid replaces this public, data-free frame in its first commit. -->
+      <main
+        id="openclaw-boot-shell"
+        class="connect-splash connect-splash--skeleton"
+        role="status"
+        aria-label="Loading"
+      >
+        <div class="connect-splash__layout" aria-hidden="true">
+          <aside class="connect-splash__sidebar">
+            <div class="skeleton loading-skeleton__avatar"></div>
+            <div class="skeleton connect-splash__new-session"></div>
+            <div class="skeleton skeleton-line"></div>
+            <div class="skeleton skeleton-line"></div>
+            <div class="skeleton skeleton-line"></div>
+            <div class="skeleton skeleton-line"></div>
+            <div class="skeleton skeleton-line"></div>
+            <div class="skeleton skeleton-line"></div>
+          </aside>
+          <div class="connect-splash__main">
+            <div class="loading-skeleton" aria-hidden="true">
+              <div class="loading-skeleton__header">
+                <div class="skeleton loading-skeleton__avatar"></div>
+                <div class="skeleton skeleton-line loading-skeleton__title"></div>
+              </div>
+              <div class="loading-skeleton__messages">
+                <div class="loading-skeleton__message loading-skeleton__message--user">
+                  <div class="skeleton skeleton-line"></div>
+                  <div class="skeleton skeleton-line skeleton-line--medium"></div>
+                </div>
+                <div class="loading-skeleton__message">
+                  <div class="skeleton loading-skeleton__avatar"></div>
+                  <div class="skeleton skeleton-line"></div>
+                  <div class="skeleton skeleton-line skeleton-line--long"></div>
+                  <div class="skeleton skeleton-line skeleton-line--medium"></div>
+                </div>
+              </div>
+              <div class="skeleton loading-skeleton__composer"></div>
+            </div>
+            <span class="connect-splash__status">Loading…</span>
+          </div>
+        </div>
+      </main>
+    </openclaw-app>
     <section
       id="openclaw-mount-fallback"
       class="mount-fallback"
@@ -448,11 +1182,11 @@
         var wait = document.getElementById("openclaw-mount-wait");
         var rawDelay = Number(fallback.getAttribute("data-openclaw-mount-timeout-ms"));
         var delay = Number.isFinite(rawDelay) && rawDelay > 0 ? rawDelay : 12000;
-        var maxRecoveryAttempts = 6;
+        var maxRecoveryNavigations = 3;
         var timer;
         var recoveryTimer;
         var recoveryAttempt = 0;
-        var recoveryNavigation = false;
+        var recoveryNavigation = 0;
         var bootSettled = false;
         var documentLoaded = document.readyState === "complete";
         var recoveryController;
@@ -470,9 +1204,16 @@
 
         try {
           var initialUrl = new URL(window.location.href);
-          recoveryNavigation = initialUrl.searchParams.has("openclaw_mount_recovery");
-          if (recoveryNavigation) {
+          var recoveryMarker = initialUrl.searchParams.get("openclaw_mount_recovery");
+          // Runtime reloads pass a timestamp cache buster; count it as the first recovery navigation.
+          if (recoveryMarker !== null) {
+            var count = Number(recoveryMarker);
+            recoveryNavigation =
+              Number.isInteger(count) && count >= 1 && count <= maxRecoveryNavigations ? count : 1;
+          }
+          if (recoveryNavigation || initialUrl.searchParams.has("openclaw_http_auth")) {
             initialUrl.searchParams.delete("openclaw_mount_recovery");
+            initialUrl.searchParams.delete("openclaw_http_auth");
             window.history.replaceState(null, "", initialUrl.href);
           }
         } catch (e) {}
@@ -494,59 +1235,31 @@
 
         function scheduleRecovery() {
           window.clearTimeout(recoveryTimer);
-          if (bootSettled || recoveryAttempt >= maxRecoveryAttempts) return;
-          var retryDelay = Math.min(delay, 1000 * Math.pow(2, recoveryAttempt));
+          if (bootSettled) return;
+          var retryDelay = Math.min(15000, 1000 * Math.pow(2, Math.min(recoveryAttempt - 1, 4)));
           recoveryTimer = window.setTimeout(retryCurrentDocument, retryDelay);
         }
 
         function finishRecoveryAttempt() {
           recoveryController = undefined;
           if (bootSettled) return;
-          if (recoveryAttempt >= maxRecoveryAttempts) {
-            setSummary(
-              "The gateway is still unavailable. Try again, then check the troubleshooting guide if the problem persists.",
-            );
-            return;
-          }
           setSummary(
             "The gateway is not reachable yet. OpenClaw will keep retrying while it restarts.",
           );
           scheduleRecovery();
         }
 
-        function unregisterServiceWorkers() {
-          if (!navigator.serviceWorker?.getRegistrations) return;
-          // Recovery must not depend on a possibly broken worker. Navigations bypass it,
-          // so a reload can self-heal after the registrations are removed.
-          void navigator.serviceWorker
-            .getRegistrations()
-            .then(function (registrations) {
-              return Promise.all(
-                registrations.map(function (registration) {
-                  return registration.unregister();
-                }),
-              );
-            })
-            .catch(function () {});
-        }
-
         function retryCurrentDocument() {
-          if (
-            bootSettled ||
-            recoveryController ||
-            recoveryAttempt >= maxRecoveryAttempts ||
-            typeof window.fetch !== "function"
-          )
-            return;
+          if (bootSettled || recoveryController || typeof window.fetch !== "function") return;
           var documentUrl = new URL(window.location.href);
-          if (recoveryNavigation) {
+          if (recoveryNavigation >= maxRecoveryNavigations) {
             setSummary(
               "A fresh page still could not start the Control UI. Try again, then check the troubleshooting guide if the problem persists.",
             );
             return;
           }
           recoveryAttempt += 1;
-          documentUrl.searchParams.set("openclaw_mount_recovery", String(Date.now()));
+          documentUrl.searchParams.set("openclaw_mount_recovery", String(recoveryNavigation + 1));
           var controller = new AbortController();
           recoveryController = controller;
           var requestTimer = window.setTimeout(function () {
@@ -565,7 +1278,7 @@
             })
             .catch(function () {
               if (recoveryController !== controller) return;
-              unregisterServiceWorkers();
+              // Network failure says nothing about worker health. Keep offline recovery.
               finishRecoveryAttempt();
             })
             .finally(function () {
@@ -603,13 +1316,26 @@
 
         armFallbackTimer();
 
-        // Deferred module graphs settle before DOMContentLoaded. A slow download
-        // is not a failed bootstrap: replacing the document would cancel it.
+        // The nonblocking entry sheet can outlive DOMContentLoaded. A slow
+        // download is not a failed bootstrap: recovery would cancel it.
         document.addEventListener(
           "DOMContentLoaded",
           function () {
-            documentLoaded = true;
-            if (!fallback.hidden) showFallback();
+            var styles = document.getElementById("openclaw-boot-styles");
+            function finishDocumentLoad() {
+              if (styles) {
+                styles.removeEventListener("load", finishDocumentLoad);
+                styles.removeEventListener("error", finishDocumentLoad);
+              }
+              documentLoaded = true;
+              if (!bootSettled) armFallbackTimer();
+            }
+            if (styles && styles.media === "print") {
+              styles.addEventListener("load", finishDocumentLoad, { once: true });
+              styles.addEventListener("error", finishDocumentLoad, { once: true });
+            } else {
+              finishDocumentLoad();
+            }
           },
           { once: true },
         );
@@ -647,7 +1373,6 @@
         if (retry) {
           retry.addEventListener("click", function () {
             cancelRecovery();
-            unregisterServiceWorkers();
             window.location.reload();
           });
         }

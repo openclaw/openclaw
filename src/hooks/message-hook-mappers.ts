@@ -125,11 +125,7 @@ function deriveInboundMessageHookContextBase(
   const mediaUrls = compact(media.map((fact) => fact.url ?? fact.path));
   const mediaTypes = compact(media.map((fact) => fact.contentType ?? fact.kind));
   const firstMedia = media[0];
-  const hasLocation =
-    typeof ctx.LocationLat === "number" &&
-    Number.isFinite(ctx.LocationLat) &&
-    typeof ctx.LocationLon === "number" &&
-    Number.isFinite(ctx.LocationLon);
+  const hasLocation = Number.isFinite(ctx.LocationLat) && Number.isFinite(ctx.LocationLon);
   const locationSource: NonNullable<PluginHookInboundClaimEvent["location"]>["source"] =
     ctx.LocationSource === "pin" || ctx.LocationSource === "place" || ctx.LocationSource === "live"
       ? ctx.LocationSource
@@ -143,10 +139,7 @@ function deriveInboundMessageHookContextBase(
     body: ctx.Body,
     bodyForAgent: ctx.BodyForAgent,
     transcript: ctx.Transcript,
-    timestamp:
-      typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp)
-        ? ctx.Timestamp
-        : undefined,
+    timestamp: Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined,
     channelId,
     accountId: ctx.AccountId,
     conversationId,
@@ -195,8 +188,7 @@ function deriveInboundMessageHookContextBase(
             ...(ctx.LocationAddress ? { address: ctx.LocationAddress } : {}),
             ...(locationSource ? { source: locationSource } : {}),
             ...(typeof ctx.LocationIsLive === "boolean" ? { isLive: ctx.LocationIsLive } : {}),
-            ...(typeof ctx.LocationLivePeriodSeconds === "number" &&
-            Number.isFinite(ctx.LocationLivePeriodSeconds)
+            ...(Number.isFinite(ctx.LocationLivePeriodSeconds)
               ? { livePeriodSeconds: ctx.LocationLivePeriodSeconds }
               : {}),
             ...(ctx.LocationCaption ? { caption: ctx.LocationCaption } : {}),
@@ -211,12 +203,10 @@ function deriveInboundMessageHookContextBase(
             ...(normalizeOptionalString(ctx.MessageSidFull ?? ctx.MessageSid)
               ? { messageId: normalizeOptionalString(ctx.MessageSidFull ?? ctx.MessageSid) }
               : {}),
-            ...(typeof ctx.ProviderMessageTimestamp === "number" &&
-            Number.isFinite(ctx.ProviderMessageTimestamp)
+            ...(Number.isFinite(ctx.ProviderMessageTimestamp)
               ? { messageTimestamp: ctx.ProviderMessageTimestamp }
               : {}),
-            ...(typeof ctx.ProviderEditTimestamp === "number" &&
-            Number.isFinite(ctx.ProviderEditTimestamp)
+            ...(Number.isFinite(ctx.ProviderEditTimestamp)
               ? { editedTimestamp: ctx.ProviderEditTimestamp }
               : {}),
           },

@@ -4,13 +4,12 @@ import {
   iterateSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
-import type {
-  OpenClawAgentDatabase,
-  OpenClawAgentDatabaseOptions,
-} from "../../state/openclaw-agent-db.js";
+import type { SessionColdBatchInput } from "./session-accessor.sqlite-archive-types.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
@@ -19,19 +18,10 @@ import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { collectSessionAdmissionReferences } from "./session-history-eviction-candidates.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 
-export type SessionColdBatchInput = {
-  databaseOptions: OpenClawAgentDatabaseOptions & { path: string };
-  admissionIdentities: string[];
-  liveSessionKeys: string[];
-  cooledSessionIds: string[];
-  beforeMs: number;
-  maxTranscripts: number;
-  maxBytes: number;
-};
 export function selectSessionColdBatch(input: SessionColdBatchInput) {
   return withOpenClawAgentDatabaseReadOnly(
     (database) =>
-      runSqliteDeferredTransactionSync(
+      runSqliteReadSnapshotSync(
         database.db,
         () => {
           const db = getNodeSqliteKysely<DB>(database.db);
@@ -107,7 +97,10 @@ export function selectSessionColdBatch(input: SessionColdBatchInput) {
               : [];
           });
           let freePages = 0;
-          if (plans.length + externalizations.length === 0) {
+          if (
+            plans.length + externalizations.length === 0 &&
+            !isPostgresSqlConnection(database.db)
+          ) {
             freePages = Number(
               // sqlite-allow-raw -- Physical maintenance is needed only when SQLite owns free pages.
               database.db.prepare("PRAGMA freelist_count").get()?.freelist_count ?? 0,
@@ -134,11 +127,27 @@ export function readSessionAdmissionProtectionKeys(
   const db = getNodeSqliteKysely<DB>(database.db);
   for (const row of iterateSqliteQuerySync(
     database.db,
-    db.selectFrom("session_nodes").select(["session_key", "current_session_id", "entry_json"]),
+    db
+      .selectFrom("session_nodes")
+      .select(["session_key", "current_session_id"])
+      .select((eb) =>
+        eb
+          .case()
+          .when(eb.and([eb("entry_valid", "=", 1), eb("has_optional_references", "=", 0)]))
+          .then(null)
+          .else(eb.ref("entry_json"))
+          .end()
+          .as("entry_json"),
+      ),
   )) {
-    const entry = parseSessionEntryJson(row);
+    // Admitted rows without optional references need only their canonical current ID.
+    const entry =
+      row.entry_json === null
+        ? null
+        : parseSessionEntryJson({ ...row, entry_json: row.entry_json });
     if (
       selected.has(row.current_session_id) ||
+      (row.entry_json === null && selected.has(row.current_session_id.trim())) ||
       (entry && collectSessionStateIdsForEntry(entry).some((id) => selected.has(id)))
     ) {
       keys.add(normalizeStoreSessionKey(row.session_key));

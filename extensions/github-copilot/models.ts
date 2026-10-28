@@ -27,10 +27,6 @@ export const PROVIDER_ID = "github-copilot";
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 8192;
 
-function isCopilotCodexModelId(modelId: string): boolean {
-  return /(?:^|[-_.])codex(?:$|[-_.])/.test(modelId);
-}
-
 export function resolveCopilotForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
 ): ProviderRuntimeModel | undefined {
@@ -49,7 +45,7 @@ export function resolveCopilotForwardCompatModel(
   // Unknown configured IDs remain usable; Copilot enforces account availability.
   const reasoning = staticOverride
     ? (staticOverride.reasoning ?? false)
-    : /^o[13](\b|$)/.test(lowerModelId) || isCopilotCodexModelId(lowerModelId);
+    : /^o[13](\b|$)/.test(lowerModelId) || /(?:^|[-_.])codex(?:$|[-_.])/.test(lowerModelId);
   const compat = staticOverride?.compat ?? resolveCopilotModelCompat(trimmedModelId);
   return normalizeModelCompat({
     id: trimmedModelId,
@@ -61,7 +57,10 @@ export function resolveCopilotForwardCompatModel(
     // image payloads for text-only models rather than failing silently.
     input: staticOverride?.input ?? ["text", "image"],
     cost: staticOverride?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    ...(staticOverride?.family ? { family: staticOverride.family } : {}),
     contextWindow: staticOverride?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+    // Only the unknown-model estimate is replaceable; curated static sizing stays authoritative.
+    ...(staticOverride?.contextWindow === undefined ? { contextWindowSource: "synthetic" } : {}),
     ...(staticOverride?.contextTokens !== undefined
       ? { contextTokens: staticOverride.contextTokens }
       : {}),
@@ -84,7 +83,7 @@ type CopilotApiModelEntry = {
   policy?: {
     state?: string;
   };
-  supported_endpoints?: string[];
+  supported_endpoints?: unknown;
   capabilities?: {
     type?: string;
     limits?: {
@@ -152,8 +151,8 @@ function compareCopilotStarterCandidates(
     return categoryDelta;
   }
   const contextDelta =
-    (right.contextWindow ?? DEFAULT_CONTEXT_WINDOW) -
-    (left.contextWindow ?? DEFAULT_CONTEXT_WINDOW);
+    (right.contextWindow ?? Math.max(right.contextTokens ?? 0, DEFAULT_CONTEXT_WINDOW)) -
+    (left.contextWindow ?? Math.max(left.contextTokens ?? 0, DEFAULT_CONTEXT_WINDOW));
   if (contextDelta !== 0) {
     return contextDelta;
   }
@@ -182,30 +181,56 @@ type CopilotCatalogModel = Omit<ModelDefinitionConfig, "input"> & {
   input: ProviderRuntimeModel["input"];
 };
 
-const COPILOT_LISTED_ENDPOINT_APIS = [
-  ["/v1/messages", "anthropic-messages"],
-  ["/responses", "openai-responses"],
-  ["/chat/completions", "openai-completions"],
-] as const;
+const COPILOT_TRANSPORT_ENDPOINTS = {
+  "anthropic-messages": "/messages",
+  "openai-completions": "/chat/completions",
+  "openai-responses": "/responses",
+} as const;
 
-// Keep the family transport when the account lists its endpoint; otherwise use
-// an endpoint the account does list (e.g. Chat Completions-only models).
-function resolveCopilotListedApi(
+function resolveCopilotApi(
   entry: CopilotApiModelEntry,
-  modelId: string,
-): "anthropic-messages" | "openai-completions" | "openai-responses" {
+): ReturnType<typeof resolveCopilotTransportApi> {
   const preferred =
     entry.vendor?.toLowerCase() === "anthropic"
       ? "anthropic-messages"
-      : resolveCopilotTransportApi(modelId);
-  const endpoints = entry.supported_endpoints;
-  if (!Array.isArray(endpoints)) {
-    return preferred;
-  }
-  const listed = COPILOT_LISTED_ENDPOINT_APIS.filter(([endpoint]) =>
-    endpoints.includes(endpoint),
-  ).map(([, api]) => api);
-  return listed.includes(preferred) ? preferred : (listed[0] ?? preferred);
+      : resolveCopilotTransportApi(entry.id ?? "");
+  const endpoints = new Set(
+    Array.isArray(entry.supported_endpoints)
+      ? entry.supported_endpoints
+          .filter((endpoint): endpoint is string => typeof endpoint === "string")
+          .map((endpoint) =>
+            endpoint
+              .trim()
+              .replace(/^\/v1(?=\/)/, "")
+              .replace(/\/+$/, ""),
+          )
+      : [],
+  );
+  // Account discovery owns supported transports; naming is only a preference or missing-data fallback.
+  return (
+    ([preferred, "openai-responses", "openai-completions", "anthropic-messages"] as const).find(
+      (api) => endpoints.has(COPILOT_TRANSPORT_ENDPOINTS[api]),
+    ) ?? preferred
+  );
+}
+
+// Copilot `/models` vendor labels for the developers OpenClaw catalogs. Azure OpenAI
+// serves OpenAI's models. Other labels leave the family to the manifest row, or unknown.
+const COPILOT_VENDOR_FAMILIES = new Map([
+  ["anthropic", "anthropic"],
+  ["azure openai", "openai"],
+  ["google", "google"],
+  ["moonshot ai", "moonshot"],
+  ["openai", "openai"],
+  ["xai", "xai"],
+]);
+
+function resolveCopilotModelFamily(entry: CopilotApiModelEntry, id: string): string | undefined {
+  const vendor = normalizeOptionalLowercaseString(entry.vendor);
+  return (
+    (vendor ? COPILOT_VENDOR_FAMILIES.get(vendor) : undefined) ??
+    resolveStaticCopilotModelOverride(id)?.family
+  );
 }
 
 function mergeCopilotCompat(
@@ -253,11 +278,11 @@ function mapCopilotApiModelToDefinition(
   const supportsVision = supports?.vision === true;
   const input: CopilotCatalogModel["input"] = supportsVision ? ["text", "image"] : ["text"];
 
-  const contextWindow =
-    asPositiveSafeInteger(limits?.max_context_window_tokens) ?? DEFAULT_CONTEXT_WINDOW;
+  const nativeContextWindow = asPositiveSafeInteger(limits?.max_context_window_tokens);
+  // Catalogs retain provider facts; runtime construction supplies an estimate for omissions.
   const contextTokens = asPositiveSafeInteger(limits?.max_prompt_tokens);
   const maxTokens = asPositiveSafeInteger(limits?.max_output_tokens) ?? DEFAULT_MAX_TOKENS;
-  const api = resolveCopilotListedApi(entry, id);
+  const api = resolveCopilotApi(entry);
   const compat = mergeCopilotCompat(resolveCopilotModelCompat(id, api), supports?.reasoning_effort);
   // Copilot lists effort levels instead of Anthropic's capability tree. Only
   // adaptive-thinking Claude models offer xhigh, so a listed Claude id that
@@ -274,15 +299,17 @@ function mapCopilotApiModelToDefinition(
         }
       : undefined;
   const thinkingLevelMap = resolveCopilotThinkingLevelMap(id, compat, api, params);
+  const family = resolveCopilotModelFamily(entry, id);
 
   const definition: CopilotCatalogModel = {
     id,
     name: entry.name?.trim() || id,
+    ...(family ? { family } : {}),
     api,
     reasoning,
     input,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow,
+    ...(nativeContextWindow !== undefined ? { contextWindow: nativeContextWindow } : {}),
     ...(contextTokens !== undefined ? { contextTokens } : {}),
     maxTokens,
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
@@ -307,16 +334,6 @@ function asCopilotApiModelEntry(value: unknown): CopilotApiModelEntry {
   return value as CopilotApiModelEntry;
 }
 
-type FetchCopilotModelCatalogParams = {
-  /** GitHub source token accepted by the account's Copilot API endpoint. */
-  copilotApiToken: string;
-  /** Resolved baseUrl from the same token-exchange response. */
-  baseUrl: string;
-  headers?: Record<string, string>;
-  /** Optional AbortSignal; defaults to a 10s timeout. */
-  signal?: AbortSignal;
-};
-
 /**
  * Fetch the live Copilot model catalog from `${baseUrl}/models` and project it
  * into `ModelDefinitionConfig[]`. Used by the plugin's discovery hook so the
@@ -326,9 +343,13 @@ type FetchCopilotModelCatalogParams = {
  * Filters out non-chat objects (embeddings, routers) and internal router ids.
  * Failures propagate so the catalog owner can publish a truthful outcome.
  */
-export async function fetchCopilotModelCatalog(
-  params: FetchCopilotModelCatalogParams,
-): Promise<CopilotCatalogModel[]> {
+export async function fetchCopilotModelCatalog(params: {
+  /** GitHub source token accepted by the account's Copilot API endpoint. */
+  copilotApiToken: string;
+  /** Resolved baseUrl from the same token-exchange response. */
+  baseUrl: string;
+  headers?: Record<string, string>;
+}): Promise<CopilotCatalogModel[]> {
   const trimmedBase = params.baseUrl.replace(/\/+$/, "");
   if (!trimmedBase) {
     throw new Error("fetchCopilotModelCatalog: baseUrl required");
@@ -337,16 +358,14 @@ export async function fetchCopilotModelCatalog(
     throw new Error("fetchCopilotModelCatalog: copilotApiToken required");
   }
   const url = `${trimmedBase}/models`;
-  const controller = params.signal ? undefined : new AbortController();
-  const timeoutId = controller
-    ? setTimeout(() => controller.abort(), COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS)
-    : undefined;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS);
   let release: (() => Promise<void>) | undefined;
   try {
     const guarded = await fetchWithSsrFGuard({
       url,
       policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(trimmedBase),
-      signal: params.signal ?? controller?.signal,
+      signal: controller.signal,
       init: {
         method: "GET",
         headers: {
@@ -377,9 +396,7 @@ export async function fetchCopilotModelCatalog(
     }
     return out;
   } finally {
-    if (timeoutId !== undefined) {
-      clearTimeout(timeoutId);
-    }
+    clearTimeout(timeoutId);
     await release?.();
   }
 }

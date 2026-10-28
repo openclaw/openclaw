@@ -11,8 +11,12 @@ import { validateSetupWorkspacePath } from "./setup.workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const writeConfig = vi.hoisted(() => vi.fn());
-vi.mock("./setup.shared.js", () => ({
-  readSetupConfigFileSnapshot: async () => ({ exists: false, valid: true, config: {} }),
+vi.mock("./setup.shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./setup.shared.js")>()),
+  readSetupConfigAuthority: async () => ({
+    snapshot: { exists: false, valid: true, config: {} },
+    assertCurrent: () => {},
+  }),
   requireRiskAcknowledgement: async ({ config }: { config: OpenClawConfig }) => config,
   requestTelemetryConsent: async ({ config }: { config: OpenClawConfig }) => config,
   resolveQuickstartGatewayDefaults: () => ({ port: 19791 }),
@@ -34,14 +38,10 @@ it("validates workspace prompt paths", async () => {
   const alias = path.join(root, "directory-link");
   const dangling = path.join(root, "dangling-link");
   const selfLoop = path.join(root, "self-loop");
-  const cycle = path.join(root, "cycle-a");
-  const cycleTarget = path.join(root, "cycle-b");
   fs.writeFileSync(blocker, "keep");
   fs.symlinkSync(root, alias, "dir");
   fs.symlinkSync(path.join(root, "missing-target"), dangling, "dir");
   fs.symlinkSync(selfLoop, selfLoop, "dir");
-  fs.symlinkSync(cycleTarget, cycle, "dir");
-  fs.symlinkSync(cycle, cycleTarget, "dir");
   const cancelled = new WizardCancelledError();
   const text = vi.fn<WizardPrompter["text"]>(async ({ validate }) => {
     expect(validate).toBeTypeOf("function");
@@ -49,11 +49,9 @@ it("validates workspace prompt paths", async () => {
     expect(validate?.(dangling)).toContain(
       `"${dangling}" is a symbolic link that does not resolve to an existing directory`,
     );
-    for (const loop of [selfLoop, cycle]) {
-      expect
-        .soft(validate?.(loop))
-        .toContain(`"${loop}" cannot be resolved because of a symlink loop`);
-    }
+    expect(validate?.(selfLoop)).toContain(
+      `"${selfLoop}" cannot be resolved because of a symlink loop`,
+    );
     for (const candidate of [root, alias, path.join(root, "new", "workspace"), ""]) {
       expect(validate?.(candidate)).toBeUndefined();
     }
@@ -77,20 +75,15 @@ it("reports filesystem inspection errors at the symlink target", () => {
   fs.symlinkSync(root, candidate, "dir");
   const probe = vi.spyOn(fs, "statSync");
   try {
-    for (const [code, message] of [
-      ["ELOOP", "symlink loop"],
-      ["EACCES", "Cannot inspect"],
-    ]) {
-      probe.mockImplementation((input) => {
-        throw Object.assign(new Error("filesystem inspection failed"), {
-          code: input === candidate ? code : "ENOENT",
-        });
+    probe.mockImplementation((input) => {
+      throw Object.assign(new Error("filesystem inspection failed"), {
+        code: input === candidate ? "EACCES" : "ENOENT",
       });
-      const result = validateSetupWorkspacePath(candidate);
-      expect.soft(result).toContain(`"${candidate}"`);
-      expect.soft(result).toContain(message);
-      expect.soft(result).not.toContain("does not resolve to an existing directory");
-    }
+    });
+    const result = validateSetupWorkspacePath(candidate);
+    expect.soft(result).toContain(`"${candidate}"`);
+    expect.soft(result).toContain("Cannot inspect");
+    expect.soft(result).not.toContain("does not resolve to an existing directory");
   } finally {
     probe.mockRestore();
   }

@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 
 const CLAW_SECONDARY_REFERENCE_TABLES = [
@@ -7,7 +7,7 @@ const CLAW_SECONDARY_REFERENCE_TABLES = [
   "claw_cron_refs",
 ] as const;
 
-export function readClawSecondaryReferenceTables(db: DatabaseSync, agentId: string): string[] {
+export function readClawSecondaryReferenceTables(db: EngineConnection, agentId: string): string[] {
   return CLAW_SECONDARY_REFERENCE_TABLES.filter((table) => {
     if (!tableExists(db, table)) {
       return false;

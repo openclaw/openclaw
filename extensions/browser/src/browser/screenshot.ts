@@ -1,9 +1,7 @@
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   buildImageResizeSideGrid,
   getImageMetadata,
   IMAGE_REDUCE_QUALITY_STEPS,
-  isImageProcessorUnavailableError,
   resizeToJpeg,
 } from "openclaw/plugin-sdk/media-runtime";
 
@@ -14,7 +12,6 @@ export async function normalizeBrowserScreenshot(
   buffer: Buffer,
   opts?: {
     maxSide?: number;
-    maxBytes?: number;
   },
 ): Promise<{
   buffer: Buffer;
@@ -22,7 +19,7 @@ export async function normalizeBrowserScreenshot(
   sourceDimensions: { width: number; height: number } | null;
 }> {
   const maxSide = Math.max(1, Math.round(opts?.maxSide ?? DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE));
-  const maxBytes = Math.max(1, Math.round(opts?.maxBytes ?? DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES));
+  const maxBytes = DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES;
 
   const meta = await getImageMetadata(buffer);
   const width = meta?.width ?? 0;
@@ -39,20 +36,12 @@ export async function normalizeBrowserScreenshot(
   let smallestSize: number | undefined;
   for (const side of sideGrid) {
     for (const quality of IMAGE_REDUCE_QUALITY_STEPS) {
-      let out: Buffer;
-      try {
-        out = await resizeToJpeg({
-          buffer,
-          maxSide: side,
-          quality,
-          withoutEnlargement: true,
-        });
-      } catch (err) {
-        if (isImageProcessorUnavailableError(err)) {
-          throw toErrorObject(err, "Non-Error thrown");
-        }
-        throw err;
-      }
+      const out = await resizeToJpeg({
+        buffer,
+        maxSide: side,
+        quality,
+        withoutEnlargement: true,
+      });
 
       smallestSize = Math.min(smallestSize ?? Infinity, out.byteLength);
 

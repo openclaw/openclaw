@@ -1,8 +1,8 @@
 import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
-import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import { createLazyChannelApprovalNativeRuntimeAdapterAsync } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import {
-  createChannelApproverDmTargetResolver,
-  createChannelNativeOriginTargetResolver,
+  createChannelApproverDmTargetResolverAsync,
+  createChannelNativeOriginTargetResolverAsync,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import type {
   ExecApprovalRequest,
@@ -52,7 +52,7 @@ function resolveTurnSourceTelegramOriginTarget(
   };
 }
 
-const resolveTelegramOriginTarget = createChannelNativeOriginTargetResolver({
+const resolveTelegramOriginTarget = createChannelNativeOriginTargetResolverAsync({
   channel: "telegram",
   shouldHandleRequest: shouldHandleTelegramExecApprovalRequest,
   resolveTurnSourceTarget: resolveTurnSourceTelegramOriginTarget,
@@ -62,7 +62,7 @@ const resolveTelegramOriginTarget = createChannelNativeOriginTargetResolver({
   }),
 });
 
-const resolveTelegramApproverDmTargets = createChannelApproverDmTargetResolver({
+const resolveTelegramApproverDmTargets = createChannelApproverDmTargetResolverAsync({
   shouldHandleRequest: shouldHandleTelegramExecApprovalRequest,
   resolveApprovers: getTelegramExecApprovalApprovers,
   mapApprover: (approver) => ({ to: approver }),
@@ -100,7 +100,7 @@ export const telegramApprovalCapability: ChannelApprovalCapability = {
     resolveOriginTarget: resolveTelegramOriginTarget,
     resolveApproverDmTargets: resolveTelegramApproverDmTargets,
     notifyOriginWhenDmOnly: true,
-    nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
+    nativeRuntimeAsync: createLazyChannelApprovalNativeRuntimeAdapterAsync({
       capabilityBoundary: true,
       eventKinds: ["exec", "plugin", "system-agent"],
       isConfigured: isTelegramExecApprovalClientEnabled,

@@ -396,6 +396,7 @@ export function createGitHubApi(token, options = {}) {
     "x-github-api-version": "2022-11-28",
   };
   const request = async (path, requestOptions = {}) => {
+    const { retryServerErrors = true, ...fetchOptions } = requestOptions;
     const method = (requestOptions.method ?? "GET").toUpperCase();
     if (method === "GET" || method === "HEAD") {
       await options.beforeRead?.(path);
@@ -415,7 +416,7 @@ export function createGitHubApi(token, options = {}) {
         let response;
         try {
           response = await fetchImpl(`https://api.github.com${path}`, {
-            ...requestOptions,
+            ...fetchOptions,
             signal: requestSignal,
             headers: { ...baseHeaders, ...requestOptions.headers },
           });
@@ -454,6 +455,7 @@ export function createGitHubApi(token, options = {}) {
         if (!response.ok) {
           if (
             (method === "GET" || method === "HEAD") &&
+            retryServerErrors &&
             githubApiRetryStatuses.has(response.status) &&
             attempt < retryDelaysMs.length
           ) {

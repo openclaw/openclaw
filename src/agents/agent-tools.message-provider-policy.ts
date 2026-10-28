@@ -1,5 +1,4 @@
 /**
- * Message-provider tool filtering.
  * Channels can restrict tool names after runtime assembly when the active
  * transport cannot safely render or execute a class of tools.
  */

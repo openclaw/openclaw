@@ -68,12 +68,14 @@ export async function listProjectRegistry(
 ): Promise<ProjectRegistryRecord[]> {
   const context = captureOpenClawStateWorkerContext(options);
   const workspaces = listWorkspaceProjects(cfg);
-  const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
-  const stored = await executeOpenClawStateWorker(context, {
-    type: "projects.list",
-    input: undefined,
-  });
-  return [...workspaces, ...stored].toSorted(compareProjects);
+  const { executeExistingOpenClawStateRead } =
+    await import("../state/openclaw-state-db-readonly.js");
+  const stored = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "projects.list", input: undefined },
+    { context, current: true },
+  );
+  return [...workspaces, ...(stored?.projects ?? [])].toSorted(compareProjects);
 }
 
 export function resolveWorkspaceProject(
@@ -116,6 +118,7 @@ type ProjectRegistrySelection = {
       assertCheckoutCurrent: () => void;
       signal: AbortSignal;
     }) => T | Promise<T>,
+    acquisition?: { waitMs?: number },
   ) => Promise<T>;
   withRollback: <T>(run: (assertCurrent: () => void) => Promise<T>) => Promise<T>;
 };
@@ -153,7 +156,7 @@ export async function selectStoredProjectRegistry(
           );
         },
       ),
-    withCurrent: async (run) => {
+    withCurrent: async (run, acquisitionOptions) => {
       const acquisition = new AbortController();
       const abortAcquisition = () => acquisition.abort(signal?.reason);
       signal?.addEventListener("abort", abortAcquisition, { once: true });
@@ -163,7 +166,12 @@ export async function selectStoredProjectRegistry(
       try {
         return await withProjectCheckoutLifecycle(
           repoRoot,
-          { path: context.admission.databasePath, env, signal: acquisition.signal },
+          {
+            path: context.admission.databasePath,
+            env,
+            signal: acquisition.signal,
+            waitMs: acquisitionOptions?.waitMs,
+          },
           async (lease) => {
             // Cancellation stops new effects; checkout custody also owns their rollback.
             signal?.removeEventListener("abort", abortAcquisition);

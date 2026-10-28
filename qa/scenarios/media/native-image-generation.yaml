@@ -16,6 +16,7 @@ scenario:
     - Persisted history records exactly one successful generation action, independently of status queries.
     - Tool output returns a saved MEDIA path and the file exists.
     - The generated-media completion produces exactly one outbound channel delivery containing the saved PNG bytes.
+    - A distinct completion turn persists and delivers one matching text reply after the host sends the image.
   docsRefs:
     - docs/tools/image-generation.md
     - docs/providers/openai.md
@@ -154,10 +155,13 @@ flow:
         - set: completedGenerations
           value:
             expr: >-
-              generationCalls.filter((call) => imageToolMessages.some((message, messageIndex) =>
-                messageIndex > call.messageIndex && message.role === 'toolResult'
-                && message.toolName === 'image_generate' && message.toolCallId === call.callId
-                && message.isError === false))
+              generationCalls.flatMap((call) => {
+                const result = imageToolMessages.find((message, messageIndex) =>
+                  messageIndex > call.messageIndex && message.role === 'toolResult'
+                  && message.toolName === 'image_generate' && message.toolCallId === call.callId
+                  && message.isError === false);
+                return result ? [{ ...call, result }] : [];
+              })
         - set: outboundMessages
           value:
             expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator')"
@@ -185,14 +189,36 @@ flow:
         - set: persistedReply
           value:
             expr: "(await qaImport('openclaw/plugin-sdk/channel-outbound')).createOutboundPayloadPlan(persistedDeliveryPayloads ?? [])[0]?.parts.text"
+        - set: generationTaskId
+          value:
+            expr: >-
+              extractGatewayMessageText(completedGenerations[0]?.result ?? {})
+                .match(/^Background task started for image generation \(([^)\r\n]+)\)\./)?.[1]
+        - set: completionTranscript
+          value:
+            expr: >-
+              (imageHistory.messages ?? []).filter((message) =>
+                  message.role === 'assistant' && typeof generationTaskId === 'string'
+                  && typeof message.__openclaw?.runId === 'string'
+                  && message.__openclaw.runId.startsWith(`image_generate:${generationTaskId}:ok:agent-loop`))
+                  .map((message) => ({ runId: message.__openclaw.runId, text: extractGatewayMessageText(message) }))
+                  .findLast((message) => message.text.trim().length > 0)
+        - set: completionReplies
+          value:
+            expr: >-
+              outboundMessages.slice(outboundMessages.findIndex((message) => message.id === mediaDeliveries[0].id) + 1)
+                .filter((message) => !message.deleted && !message.attachments?.length
+                  && typeof message.text === 'string' && message.text.trim().length > 0)
         - assert:
             expr: >-
               completedGenerations.length === 1
               && typeof generatedImageTranscript.finalText === 'string'
               && generatedImageTranscript.finalText.trim().length > 0
-              && persistedReply === mediaDeliveries[0].text
+              && completionTranscript?.text === generatedImageTranscript.finalText
+              && completionReplies.length === 1
+              && persistedReply === completionReplies[0].text
             message:
-              expr: "`generated image completion was not persisted to the requester session: ${JSON.stringify({ completedGenerations: completedGenerations.length, persistedReply, deliveredReply: mediaDeliveries[0].text })}`"
+              expr: "`generated image completion was not persisted to the requester session: ${JSON.stringify({ completedGenerations: completedGenerations.length, generationTaskId, completionRunId: completionTranscript?.runId, persistedReply, deliveredReplies: completionReplies.map((message) => message.text) })}`"
         - set: imageSearchDiscoveryDetails
           value: tool_search discovery not required for this runtime
         - if:
@@ -216,4 +242,4 @@ flow:
                   expr: >-
                     `image_generate tool_search discovery
                     ${formatToolSearchDiscoveryReceipt('happy', imageSearchDiscovery)}`
-      detailsExpr: "`${outbound.text}\\n${imageSearchDiscoveryDetails}\\nIMAGE_PATH:${generatedPath}`"
+      detailsExpr: "`${completionReplies[0].text}\\n${imageSearchDiscoveryDetails}\\nIMAGE_PATH:${generatedPath}`"

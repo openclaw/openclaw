@@ -1,5 +1,7 @@
+import type { inspectConversationBinding } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   PluginConversationBinding,
   PluginConversationBindingResolvedEvent,
@@ -21,11 +23,19 @@ import {
 } from "./conversation-binding-data.js";
 import type { resumeCodexCliSessionOnNode } from "./node-cli-sessions.js";
 
+const loadSandboxGuard = createLazyRuntimeModule(() => import("./app-server/sandbox-guard.js"));
+const loadBindingInspection = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/conversation-binding-inspection-runtime"),
+);
+const loadConversationBinding = createLazyRuntimeModule(() => import("./conversation-binding.js"));
+const loadThreadOwnership = createLazyRuntimeModule(
+  () => import("./app-server/thread-ownership.js"),
+);
+
 type CodexConversationRunOptions = {
   bindingStore: CodexAppServerBindingStore;
   pluginConfig?: unknown;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
-  timeoutMs?: number;
   resumeCodexCliSessionOnNode?: (
     params: Omit<Parameters<typeof resumeCodexCliSessionOnNode>[0], "runtime">,
   ) => ReturnType<typeof resumeCodexCliSessionOnNode>;
@@ -38,20 +48,15 @@ const getNodeConversationState = defineCodexBuildState(
 
 function isCurrentPublicBinding(
   binding: PluginConversationBinding,
-  service: ReturnType<
-    typeof import("openclaw/plugin-sdk/conversation-binding-runtime").getSessionBindingService
-  >,
+  inspect: typeof inspectConversationBinding,
 ): boolean {
-  return (
-    service.resolveByConversation({
-      channel: binding.channel,
-      accountId: binding.accountId,
-      conversationId: binding.conversationId,
-      ...(binding.parentConversationId
-        ? { parentConversationId: binding.parentConversationId }
-        : {}),
-    })?.bindingId === binding.bindingId
-  );
+  const inspection = inspect({
+    channel: binding.channel,
+    accountId: binding.accountId,
+    conversationId: binding.conversationId,
+    ...(binding.parentConversationId ? { parentConversationId: binding.parentConversationId } : {}),
+  });
+  return inspection.status === "available" && inspection.binding?.bindingId === binding.bindingId;
 }
 
 export async function handleCodexConversationInboundClaim(
@@ -80,22 +85,24 @@ export async function handleCodexConversationInboundClaim(
       const text = await getNodeConversationState().queue.enqueue(
         `${data.nodeId}:${data.sessionId}`,
         async () => {
-          const { resolveCodexNativeSandboxBlock } = await import("./app-server/sandbox-guard.js");
-          const blocked = resolveCodexNativeSandboxBlock({
+          const { prepareCodexNativeSandboxBlock } = await loadSandboxGuard();
+          const sandbox = await prepareCodexNativeSandboxBlock({
             config: options.config,
             sessionKey,
             surface: "Codex CLI node conversation binding",
           });
-          if (blocked) {
-            return blocked;
+          using cleanup = { [Symbol.dispose]: sandbox.release };
+          void cleanup;
+          if (sandbox.block) {
+            return sandbox.block;
           }
           const resume = options.resumeCodexCliSessionOnNode;
           if (!resume) {
             return "Codex CLI node binding is unavailable because Gateway node runtime is not attached.";
           }
-          const { getSessionBindingService } =
-            await import("openclaw/plugin-sdk/conversation-binding-runtime");
-          if (!isCurrentPublicBinding(publicBinding, getSessionBindingService())) {
+          const { inspectConversationBinding } = await loadBindingInspection();
+          await sandbox.assertCurrent();
+          if (!isCurrentPublicBinding(publicBinding, inspectConversationBinding)) {
             return "This Codex conversation was detached or changed before its message could run.";
           }
           const resumed = await resume({
@@ -105,7 +112,6 @@ export async function handleCodexConversationInboundClaim(
             sessionKey,
             prompt,
             cwd: data.cwd,
-            timeoutMs: options.timeoutMs,
           });
           return resumed.text.trim() || "Codex completed without a text reply.";
         },
@@ -113,16 +119,18 @@ export async function handleCodexConversationInboundClaim(
       return { handled: true, reply: { text } };
     }
     const identity = { kind: "conversation" as const, bindingId: data.bindingId };
-    // Capture and reserve before any import yields: retirement must not overtake
+    // Start the read and reserve before yielding: retirement must not overtake
     // an already-arrived message, even when the execution module is still cold.
-    const expected = options.bindingStore.read(identity);
+    const pendingExpected = options.bindingStore.readAsync(identity);
+    // The queue may wait behind retirement; observe early rejection until its callback joins it.
+    void pendingExpected.catch(() => {});
     const result = await withCodexConversationThreadActivity(data.bindingId, async () => {
-      const { getSessionBindingService } =
-        await import("openclaw/plugin-sdk/conversation-binding-runtime");
-      const { runBoundTurnWithMissingThreadRecovery } = await import("./conversation-binding.js");
-      const current = options.bindingStore.read(identity);
+      const expected = await pendingExpected;
+      const { runBoundTurnWithMissingThreadRecovery } = await loadConversationBinding();
+      const { inspectConversationBinding } = await loadBindingInspection();
+      const current = await options.bindingStore.readAsync(identity);
       if (
-        !isCurrentPublicBinding(publicBinding, getSessionBindingService()) ||
+        !isCurrentPublicBinding(publicBinding, inspectConversationBinding) ||
         (expected &&
           (!current ||
             current.threadId !== expected.threadId ||
@@ -145,7 +153,6 @@ export async function handleCodexConversationInboundClaim(
           data.source?.sessionKey ?? (data.legacyBinding ? sessionKey : undefined),
         ),
         pluginConfig: options.pluginConfig,
-        timeoutMs: options.timeoutMs,
       });
     });
     return { handled: true, reply: result };
@@ -172,12 +179,11 @@ export async function handleCodexConversationBindingResolved(
     return;
   }
   const identity = { kind: "conversation" as const, bindingId: data.bindingId };
-  const binding = options.bindingStore.read(identity);
+  const binding = await options.bindingStore.readAsync(identity);
   assertCodexBindingMayBeReplaced(binding, "clearing a denied conversation binding");
   if (binding && (!data.start?.id || binding.conversationStartId === data.start.id)) {
     await withCodexConversationThreadActivity(identity.bindingId, async () => {
-      const { retireCodexConversationThreadBinding } =
-        await import("./app-server/thread-ownership.js");
+      const { retireCodexConversationThreadBinding } = await loadThreadOwnership();
       return retireCodexConversationThreadBinding({
         bindingStore: options.bindingStore,
         identity,

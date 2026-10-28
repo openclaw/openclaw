@@ -3,7 +3,6 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { measureGatewayCloseStep } from "./restart-trace.js";
 import type { GatewayCloseOptions } from "./server-public.js";
 
-/** Record a shutdown warning once. */
 export function recordGatewayShutdownWarning(warnings: string[], name: string): void {
   if (!warnings.includes(name)) {
     warnings.push(name);
@@ -27,13 +26,48 @@ type GatewayShutdownStep = {
   required?: true;
 };
 
-/** Collect owner failures, but never release dependencies beyond a failed required join. */
-async function runGatewayShutdownSteps(params: {
-  steps: readonly GatewayShutdownStep[];
+/** Startup failure and public close share the same ordered dependency joins. */
+export async function runGatewayCloseSteps(params: {
+  owner: {
+    connectionWork: { drain: () => Promise<void> };
+    stopConnectionDependentSidecars: GatewayShutdownStep["run"];
+    stopRegisteredGatewayLifetimeSidecars: GatewayShutdownStep["run"];
+    stopRegisteredPostReadySidecars: GatewayShutdownStep["run"];
+    runClosePrelude: GatewayShutdownStep["run"];
+    sealAndJoinRegisteredSidecarStops: GatewayShutdownStep["run"];
+  };
+  close: GatewayShutdownStep["run"];
+  disposeTerminalSessions?: GatewayShutdownStep["run"];
+  runStopHooks?: GatewayShutdownStep["run"];
   onError: (message: string) => void;
 }): Promise<void> {
+  const { owner } = params;
+  const steps: GatewayShutdownStep[] = [
+    {
+      name: "connection-dependent sidecars",
+      run: owner.stopConnectionDependentSidecars,
+      required: true,
+    },
+    { name: "received connection work", run: () => owner.connectionWork.drain(), required: true },
+    ...(params.disposeTerminalSessions
+      ? [{ name: "terminal sessions", run: params.disposeTerminalSessions }]
+      : []),
+    { name: "gateway lifetime sidecars", run: owner.stopRegisteredGatewayLifetimeSidecars },
+    { name: "post-ready sidecars", run: owner.stopRegisteredPostReadySidecars },
+    ...(params.runStopHooks
+      ? [{ name: "gateway_stop plugin hooks", run: params.runStopHooks }]
+      : []),
+    { name: "gateway close prelude", run: owner.runClosePrelude },
+    {
+      name: "late sidecar cleanup",
+      run: owner.sealAndJoinRegisteredSidecarStops,
+      required: true,
+    },
+    { name: "gateway close", run: params.close },
+  ];
+  // Collect owner failures, but never release dependencies beyond a failed required join.
   const errors: Error[] = [];
-  for (const step of params.steps) {
+  for (const step of steps) {
     try {
       // Trace consumers parse one phase token; keep the human label for errors.
       const phase = `shutdown.${step.name.replace(/\s+/gu, "-")}`;
@@ -50,50 +84,6 @@ async function runGatewayShutdownSteps(params: {
   if (errors.length > 0) {
     throw new AggregateError(errors, "Gateway shutdown did not complete cleanly");
   }
-}
-
-/** Startup failure and public close share the same ordered dependency joins. */
-export function runGatewayCloseSteps(params: {
-  owner: {
-    connectionWork: { drain: () => Promise<void> };
-    stopConnectionDependentSidecars: GatewayShutdownStep["run"];
-    stopRegisteredGatewayLifetimeSidecars: GatewayShutdownStep["run"];
-    stopRegisteredPostReadySidecars: GatewayShutdownStep["run"];
-    runClosePrelude: GatewayShutdownStep["run"];
-    sealAndJoinRegisteredSidecarStops: GatewayShutdownStep["run"];
-  };
-  close: GatewayShutdownStep["run"];
-  disposeTerminalSessions?: GatewayShutdownStep["run"];
-  runStopHooks?: GatewayShutdownStep["run"];
-  onError: (message: string) => void;
-}): Promise<void> {
-  const { owner } = params;
-  return runGatewayShutdownSteps({
-    steps: [
-      {
-        name: "connection-dependent sidecars",
-        run: owner.stopConnectionDependentSidecars,
-        required: true,
-      },
-      { name: "received connection work", run: () => owner.connectionWork.drain(), required: true },
-      ...(params.disposeTerminalSessions
-        ? [{ name: "terminal sessions", run: params.disposeTerminalSessions }]
-        : []),
-      { name: "gateway lifetime sidecars", run: owner.stopRegisteredGatewayLifetimeSidecars },
-      { name: "post-ready sidecars", run: owner.stopRegisteredPostReadySidecars },
-      ...(params.runStopHooks
-        ? [{ name: "gateway_stop plugin hooks", run: params.runStopHooks }]
-        : []),
-      { name: "gateway close prelude", run: owner.runClosePrelude },
-      {
-        name: "late sidecar cleanup",
-        run: owner.sealAndJoinRegisteredSidecarStops,
-        required: true,
-      },
-      { name: "gateway close", run: params.close },
-    ],
-    onError: params.onError,
-  });
 }
 
 /** Failed acquisition retains its owner when native cleanup cannot finish. */

@@ -10,6 +10,7 @@ import {
   readFileWindowFully,
   root as openSafeFilesystemRoot,
 } from "openclaw/plugin-sdk/file-access-runtime";
+import { floorPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
 import { resolveProjectionPromptBudgetTokens } from "./context-engine-projection.js";
 import { isJsonObject, type JsonValue } from "./protocol.js";
@@ -40,11 +41,8 @@ type CodexAppServerRolloutFile = {
 };
 
 function parseCodexAppServerByteLimit(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return Math.floor(value);
-  }
   if (typeof value !== "string") {
-    return undefined;
+    return floorPositiveFiniteNumber(value);
   }
   const match = value.trim().match(/^(\d+(?:\.\d+)?)\s*([a-z]+)?$/i);
   if (!match) {
@@ -142,6 +140,8 @@ async function listCodexAppServerRolloutFilesForThread(
 type CodexAppServerRolloutTokenSnapshot = {
   totalTokens?: number;
   modelContextWindow?: number;
+  // A turn started after the latest window was reported and never reported its own.
+  windowSupersededByNewerTurn?: boolean;
 };
 
 async function readCodexAppServerRolloutTokenSnapshot(
@@ -164,6 +164,10 @@ async function readCodexAppServerRolloutTokenSnapshot(
         return false;
       }
       snapshot ??= {};
+      // A newer turn without a window must not borrow an earlier model's observation.
+      if (snapshot.modelContextWindow === undefined && lineSnapshot.windowSupersededByNewerTurn) {
+        snapshot.windowSupersededByNewerTurn = true;
+      }
       snapshot.totalTokens ??= lineSnapshot.totalTokens;
       snapshot.modelContextWindow ??= lineSnapshot.modelContextWindow;
       return snapshot.totalTokens !== undefined && snapshot.modelContextWindow !== undefined;
@@ -219,6 +223,9 @@ function readCodexAppServerRolloutTokenSnapshotLine(
   }
   try {
     const parsed = JSON.parse(line) as JsonValue;
+    if (isJsonObject(parsed) && parsed.type === "turn_context") {
+      return { windowSupersededByNewerTurn: true };
+    }
     const payload = isJsonObject(parsed) ? parsed.payload : undefined;
     const info =
       isJsonObject(payload) && payload.type === "token_count" && isJsonObject(payload.info)
@@ -235,10 +242,7 @@ function readCodexAppServerRolloutTokenSnapshotLine(
     const value = usage?.total_tokens ?? usage?.totalTokens;
     const totalTokens = typeof value === "number" && Number.isFinite(value) ? value : undefined;
     const windowValue = info.model_context_window ?? info.modelContextWindow;
-    const modelContextWindow =
-      typeof windowValue === "number" && Number.isFinite(windowValue) && windowValue > 0
-        ? Math.floor(windowValue)
-        : undefined;
+    const modelContextWindow = floorPositiveFiniteNumber(windowValue);
     return totalTokens !== undefined || modelContextWindow !== undefined
       ? { totalTokens, modelContextWindow }
       : undefined;
@@ -252,12 +256,7 @@ function resolveCodexAppServerNativeThreadTokenFuse(params: {
   reserveTokens: number;
   projectedTurnTokens?: number;
 }): number {
-  const projectedTurnTokens =
-    typeof params.projectedTurnTokens === "number" &&
-    Number.isFinite(params.projectedTurnTokens) &&
-    params.projectedTurnTokens > 0
-      ? Math.floor(params.projectedTurnTokens)
-      : 0;
+  const projectedTurnTokens = params.projectedTurnTokens ?? 0;
   const contextWindow =
     params.modelContextWindow ?? CODEX_APP_SERVER_NATIVE_THREAD_FALLBACK_MAX_TOKENS;
   const promptBudget = resolveProjectionPromptBudgetTokens({
@@ -323,17 +322,7 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
     maxBytes !== undefined &&
     params.contextEngineActive === true &&
     binding.contextEngine?.projection?.mode === "thread_bootstrap";
-  if (shouldDeferByteGuard) {
-    embeddedAgentLog.debug(
-      "codex app-server deferring native transcript byte guard for context-engine thread bootstrap",
-      {
-        threadId: binding.threadId,
-        engineId: binding.contextEngine?.engineId,
-        epoch: binding.contextEngine?.projection?.epoch,
-        fingerprint: binding.contextEngine?.projection?.fingerprint,
-      },
-    );
-  } else if (maxBytes !== undefined) {
+  if (!shouldDeferByteGuard && maxBytes !== undefined) {
     const oversizedFiles = rolloutFiles.filter((file) => file.bytes >= maxBytes);
     if (oversizedFiles.length > 0) {
       await Promise.all(
@@ -395,6 +384,9 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
   }
   return {
     binding,
-    ...(nativeModelContextWindow ? { startupContextTokens: nativeModelContextWindow } : {}),
+    ...(nativeModelContextWindow &&
+    !nativeTokenSnapshots.some((snapshot) => snapshot?.windowSupersededByNewerTurn)
+      ? { startupContextTokens: nativeModelContextWindow }
+      : {}),
   };
 }

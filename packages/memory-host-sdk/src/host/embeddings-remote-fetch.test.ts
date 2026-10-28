@@ -1,4 +1,3 @@
-// Memory Host SDK tests cover embeddings remote fetch behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { debugEmbeddingsLog } from "./embeddings-debug.js";
 import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
@@ -32,6 +31,7 @@ function respond(body: string, status = 200, headers?: Record<string, string>): 
         status,
         headers: { "content-length": String(responseBytes), ...headers },
       }),
+      params.init?.headers,
     ),
   );
   return responseBytes;
@@ -39,6 +39,18 @@ function respond(body: string, status = 200, headers?: Record<string, string>): 
 
 function respondJson(payload: unknown): number {
   return respond(JSON.stringify(payload));
+}
+
+function vector(embedding: unknown = [0.1], index?: unknown) {
+  return { embedding, ...(index !== undefined ? { index } : {}) };
+}
+
+function expectMetadata(...shapes: Record<string, unknown>[]) {
+  expect(debugMock.mock.calls.map(([, meta]) => meta)).toEqual(
+    expect.arrayContaining(
+      shapes.map((shape) => expect.objectContaining({ context: ERROR_PREFIX, ...shape })),
+    ),
+  );
 }
 
 function fetchEmbeddings(
@@ -81,9 +93,7 @@ describe("fetchRemoteEmbeddingVectors", () => {
   });
 
   it("preserves positional vectors with differing dimensions", async () => {
-    respondJson({
-      data: [{ embedding: [0.1, 0.2] }, { embedding: [0.4] }, { embedding: [0.3] }],
-    });
+    respondJson({ data: [vector([0.1, 0.2]), vector([0.4]), vector([0.3])] });
 
     await expect(fetchEmbeddings(["one", "two", "three"])).resolves.toEqual([
       [0.1, 0.2],
@@ -108,66 +118,56 @@ describe("fetchRemoteEmbeddingVectors", () => {
     );
   });
 
-  it("returns indexed response vectors in their original request order", async () => {
-    respondJson({
-      data: [
-        { index: 1, embedding: [0.2] },
-        { index: 0, embedding: [0.1] },
-      ],
+  it("promotes the Azure version header before sending embeddings", async () => {
+    respondJson({ data: [{ embedding: [0.1] }] });
+    await fetchRemoteEmbeddingVectors({
+      ...REQUEST,
+      url: "https://example.openai.azure.com/embeddings",
+      headers: { "api-version": "2024-10-21" },
+      body: { input: ["one"] },
     });
+    expect(remoteHttpMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://example.openai.azure.com/embeddings?api-version=2024-10-21",
+        init: expect.objectContaining({ headers: {} }),
+      }),
+    );
+  });
+
+  it("returns indexed response vectors in their original request order", async () => {
+    respondJson({ data: [vector([0.2], 1), vector([0.1], 0)] });
 
     await expect(fetchEmbeddings()).resolves.toEqual([[0.1], [0.2]]);
   });
 
   it.each([
-    { name: "non-object response", payload: [], reason: "missing data array" },
-    { name: "missing data", payload: {}, reason: "missing data array" },
-    {
-      name: "empty data",
-      payload: { data: [] },
-      reason: "empty data array; expected 2 vectors",
-    },
-    {
-      name: "wrong vector count",
-      payload: { data: [{ embedding: [0.1] }] },
-      reason: "expected 2 vectors, got 1",
-    },
-    {
-      name: "missing embedding array",
-      payload: { data: [{ embedding: [0.1] }, {}] },
-      reason: "missing embedding array at position 1",
-    },
-    {
-      name: "empty embedding",
-      payload: { data: [{ embedding: [0.1] }, { embedding: [] }] },
-      reason: "empty embedding at position 1",
-    },
-    {
-      name: "missing later index",
-      payload: { data: [{ index: 0, embedding: [0.1] }, { embedding: [0.2] }] },
-      reason: "missing index at position 1 (mixed indexed and positional entries)",
-    },
-    {
-      name: "missing first index",
-      payload: { data: [{ embedding: [0.1] }, { index: 1, embedding: [0.2] }] },
-      reason: "missing index at position 0 (mixed indexed and positional entries)",
-    },
-    {
-      name: "duplicate index",
-      payload: {
-        data: [
-          { index: 0, embedding: [0.1] },
-          { index: 0, embedding: [0.2] },
-        ],
-      },
-      reason: "duplicate index 0 at position 1",
-    },
-    {
-      name: "non-numeric coordinate",
-      payload: { data: [{ embedding: [0.1] }, { embedding: ["coordinate-private-marker"] }] },
-      reason: "non-numeric coordinate at position 1, coordinate 0",
-    },
-  ])("identifies $name without exposing response contents", async ({ payload, reason }) => {
+    ["non-object response", [], "missing data array"],
+    ["missing data", {}, "missing data array"],
+    ["empty data", { data: [] }, "empty data array; expected 2 vectors"],
+    ["wrong vector count", { data: [vector()] }, "expected 2 vectors, got 1"],
+    ["missing embedding array", { data: [vector(), {}] }, "missing embedding array at position 1"],
+    ["empty embedding", { data: [vector(), vector([])] }, "empty embedding at position 1"],
+    [
+      "missing later index",
+      { data: [vector([0.1], 0), vector([0.2])] },
+      "missing index at position 1 (mixed indexed and positional entries)",
+    ],
+    [
+      "missing first index",
+      { data: [vector(), vector([0.2], 1)] },
+      "missing index at position 0 (mixed indexed and positional entries)",
+    ],
+    [
+      "duplicate index",
+      { data: [vector([0.1], 0), vector([0.2], 0)] },
+      "duplicate index 0 at position 1",
+    ],
+    [
+      "non-numeric coordinate",
+      { data: [vector(), vector(["coordinate-private-marker"])] },
+      "non-numeric coordinate at position 1, coordinate 0",
+    ],
+  ])("identifies %s without exposing response contents", async (_name, payload, reason) => {
     respondJson(payload);
 
     await expect(fetchEmbeddings()).rejects.toMatchObject({
@@ -184,12 +184,7 @@ describe("fetchRemoteEmbeddingVectors", () => {
     { name: "non-numeric", index: "index-private-marker" },
     { name: "null", index: null },
   ])("identifies a $name index without exposing its value", async ({ index }) => {
-    respondJson({
-      data: [
-        { index: 0, embedding: [0.1] },
-        { index, embedding: [0.2] },
-      ],
-    });
+    respondJson({ data: [vector([0.1], 0), vector([0.2], index)] });
 
     await expect(fetchEmbeddings()).rejects.toThrow(
       `${ERROR_PREFIX}: invalid index at position 1; expected an integer in [0, 1]`,
@@ -212,22 +207,14 @@ describe("fetchRemoteEmbeddingVectors", () => {
   });
 
   it("accepts response-sized vectors when request input is not an array", async () => {
-    respondJson({
-      data: [
-        { index: 1, embedding: [0.2] },
-        { index: 0, embedding: [0.1] },
-      ],
-    });
+    respondJson({ data: [vector([0.2], 1), vector([0.1], 0)] });
 
     await expect(fetchEmbeddings("query")).resolves.toEqual([[0.1], [0.2]]);
   });
 
   it("logs only request and response shape metadata", async () => {
     const responseBytes = respondJson({
-      data: [
-        { index: 0, embedding: [0.1, 0.2] },
-        { index: 1, embedding: [0.3, 0.4] },
-      ],
+      data: [vector([0.1, 0.2], 0), vector([0.3, 0.4], 1)],
       provider_private: "response-private-marker",
     });
 
@@ -238,18 +225,10 @@ describe("fetchRemoteEmbeddingVectors", () => {
       [0.3, 0.4],
     ]);
 
-    const metadata = debugMock.mock.calls.map(([, meta]) => meta);
-    expect(metadata).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ context: ERROR_PREFIX, inputCount: 2 }),
-        expect.objectContaining({ context: ERROR_PREFIX, status: 200, responseBytes }),
-        expect.objectContaining({
-          context: ERROR_PREFIX,
-          vectorCount: 2,
-          firstVectorDimensions: 2,
-          firstIndexType: "number",
-        }),
-      ]),
+    expectMetadata(
+      { inputCount: 2 },
+      { status: 200, responseBytes },
+      { vectorCount: 2, firstVectorDimensions: 2, firstIndexType: "number" },
     );
     const allowedKeys = new Set([
       "context",
@@ -260,7 +239,7 @@ describe("fetchRemoteEmbeddingVectors", () => {
       "firstVectorDimensions",
       "firstIndexType",
     ]);
-    for (const meta of metadata) {
+    for (const [, meta] of debugMock.mock.calls) {
       expect(Object.keys(meta ?? {}).filter((key) => !allowedKeys.has(key))).toEqual([]);
     }
     const logs = JSON.stringify(debugMock.mock.calls);
@@ -281,11 +260,7 @@ describe("fetchRemoteEmbeddingVectors", () => {
       message: `${ERROR_PREFIX}: malformed JSON response`,
       embeddingErrorMessage: "embedding fetch failed: malformed JSON response",
     });
-    expect(debugMock.mock.calls.map(([, meta]) => meta)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ context: ERROR_PREFIX, status: 200, responseBytes }),
-      ]),
-    );
+    expectMetadata({ status: 200, responseBytes });
   });
 
   it("preserves provider error details, retry metadata, and credential redaction", async () => {
@@ -309,11 +284,7 @@ describe("fetchRemoteEmbeddingVectors", () => {
     });
     expect(String(error)).not.toContain(AUTH_TOKEN);
     expect(JSON.stringify(error)).not.toContain(AUTH_TOKEN);
-    expect(debugMock.mock.calls.map(([, meta]) => meta)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ context: ERROR_PREFIX, status: 429, responseBytes }),
-      ]),
-    );
+    expectMetadata({ status: 429, responseBytes });
     expect(JSON.stringify(debugMock.mock.calls)).not.toContain(AUTH_TOKEN);
   });
 });

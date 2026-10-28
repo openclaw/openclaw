@@ -1,6 +1,6 @@
-# syntax=docker/dockerfile:1.27.1
+# syntax=docker/dockerfile:1.28.0@sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b
 
-ARG BASE_IMAGE=openclaw-sandbox:bookworm-slim
+ARG BASE_IMAGE=openclaw-sandbox:trixie-slim
 FROM ${BASE_IMAGE}
 
 USER root
@@ -23,13 +23,13 @@ ENV HOMEBREW_CELLAR=${BREW_INSTALL_DIR}/Cellar
 ENV HOMEBREW_REPOSITORY=${BREW_INSTALL_DIR}/Homebrew
 ENV PATH=${BUN_INSTALL_DIR}/bin:${BREW_INSTALL_DIR}/bin:${BREW_INSTALL_DIR}/sbin:${PATH}
 
-RUN --mount=type=cache,id=openclaw-sandbox-common-apt-cache,target=/var/cache/apt,sharing=locked \
-  --mount=type=cache,id=openclaw-sandbox-common-apt-lists,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=openclaw-sandbox-common-trixie-apt-cache,target=/var/cache/apt,sharing=locked \
+  --mount=type=cache,id=openclaw-sandbox-common-trixie-apt-lists,target=/var/lib/apt,sharing=locked \
   apt-get update \
   && apt-get install -y --no-install-recommends ${PACKAGES}
 
-RUN --mount=type=cache,id=openclaw-sandbox-common-apt-cache,target=/var/cache/apt,sharing=locked \
-  --mount=type=cache,id=openclaw-sandbox-common-apt-lists,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=openclaw-sandbox-common-trixie-apt-cache,target=/var/cache/apt,sharing=locked \
+  --mount=type=cache,id=openclaw-sandbox-common-trixie-apt-lists,target=/var/lib/apt,sharing=locked \
   if [ "${INSTALL_NODE}" = "1" ]; then \
     apt-get update; \
     apt-get install -y --no-install-recommends ca-certificates curl; \

@@ -42,13 +42,6 @@ type WhatsAppApprovalReactionTarget = ApprovalReactionTargetRecord & {
   approvalKind: ChannelApprovalKind;
 };
 
-type WhatsAppApprovalReactionEvent = {
-  remoteJids: string[];
-  messageId: string;
-  actorJid: string;
-  reactionKey: string;
-};
-
 type ResolvedWhatsAppApprovalReactionTarget = WhatsAppApprovalReactionResolution & {
   remoteJid: string;
 };
@@ -65,7 +58,7 @@ const whatsappApprovalReactionTargets =
     namespace: PERSISTENT_NAMESPACE,
     maxEntries: PERSISTENT_MAX_ENTRIES,
     defaultTtlMs: DEFAULT_REACTION_TARGET_TTL_MS,
-    openStore: (storeParams) => getOptionalWhatsAppRuntime()?.state.openKeyedStore(storeParams),
+    openStore: (storeParams) => getOptionalWhatsAppRuntime()?.state.openKeyedStoreV2(storeParams),
     logPersistentError: reportPersistentApprovalReactionError,
     readPersistedTarget: readApprovalReactionTargetRecord,
   });
@@ -288,48 +281,17 @@ export async function resolveWhatsAppApprovalReactionTargetWithPersistence(param
     : null;
 }
 
-async function resolveWhatsAppApprovalReactionTargetFromCandidates(params: {
+export async function maybeResolveWhatsAppApprovalReaction(params: {
+  cfg: OpenClawConfig;
   accountId: string;
-  observedRemoteJids: readonly string[];
-  messageId: string;
-  reactionKey: string;
-  resolveReactionTargetJids?: (jid: string) => Promise<readonly string[]>;
-  logVerboseMessage?: (message: string) => void;
-}): Promise<ResolvedWhatsAppApprovalReactionTarget | null> {
-  const candidateRemoteJids: string[] = [];
-  for (const observedRemoteJid of params.observedRemoteJids) {
-    candidateRemoteJids.push(observedRemoteJid);
-    try {
-      candidateRemoteJids.push(
-        ...((await params.resolveReactionTargetJids?.(observedRemoteJid)) ?? []),
-      );
-    } catch (error) {
-      params.logVerboseMessage?.(
-        `whatsapp: approval reaction target JID mapping failed for ${observedRemoteJid}: ${String(error)}`,
-      );
-    }
-  }
-
-  for (const remoteJid of normalizeUniqueTrimmedStringList(candidateRemoteJids)) {
-    const target = await resolveWhatsAppApprovalReactionTargetWithPersistence({
-      accountId: params.accountId,
-      remoteJid,
-      messageId: params.messageId,
-      reactionKey: params.reactionKey,
-    });
-    if (target) {
-      return { ...target, remoteJid };
-    }
-  }
-  return null;
-}
-
-function readWhatsAppApprovalReactionEvent(params: {
   msg: WAMessage;
   selfJid?: string | null;
   selfLid?: string | null;
-}): WhatsAppApprovalReactionEvent | null {
-  const msg = params.msg;
+  resolveInboundJid: (jid: string | null | undefined) => Promise<string | null>;
+  resolveReactionTargetJids?: (jid: string) => Promise<readonly string[]>;
+  logVerboseMessage?: (message: string) => void;
+}): Promise<boolean> {
+  const { msg, selfJid, selfLid } = params;
   const reaction = msg.message?.reactionMessage;
   const reactionKey = reaction?.text?.trim() ?? "";
   const messageId = reaction?.key?.id?.trim() ?? "";
@@ -340,51 +302,43 @@ function readWhatsAppApprovalReactionEvent(params: {
   const actorJid =
     msg.key?.participant?.trim() ||
     (msg.key?.fromMe
-      ? (params.selfLid?.trim() ?? params.selfJid?.trim() ?? "")
+      ? (selfLid?.trim() ?? selfJid?.trim() ?? "")
       : (msg.key?.remoteJid?.trim() ?? ""));
   if (!reactionKey || !messageId || remoteJids.length === 0 || !actorJid) {
-    return null;
-  }
-  return {
-    remoteJids,
-    messageId,
-    actorJid,
-    reactionKey,
-  };
-}
-
-export async function maybeResolveWhatsAppApprovalReaction(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  msg: WAMessage;
-  gatewayUrl?: string;
-  selfJid?: string | null;
-  selfLid?: string | null;
-  resolveInboundJid: (jid: string | null | undefined) => Promise<string | null>;
-  resolveReactionTargetJids?: (jid: string) => Promise<readonly string[]>;
-  logVerboseMessage?: (message: string) => void;
-}): Promise<boolean> {
-  const event = readWhatsAppApprovalReactionEvent({
-    msg: params.msg,
-    selfJid: params.selfJid,
-    selfLid: params.selfLid,
-  });
-  if (!event) {
     return false;
   }
-  const target = await resolveWhatsAppApprovalReactionTargetFromCandidates({
-    accountId: params.accountId,
-    observedRemoteJids: event.remoteJids,
-    messageId: event.messageId,
-    reactionKey: event.reactionKey,
-    resolveReactionTargetJids: params.resolveReactionTargetJids,
-    logVerboseMessage: params.logVerboseMessage,
-  });
+  const { accountId, resolveReactionTargetJids, logVerboseMessage } = params;
+  const candidateRemoteJids: string[] = [];
+  for (const observedRemoteJid of remoteJids) {
+    candidateRemoteJids.push(observedRemoteJid);
+    try {
+      candidateRemoteJids.push(...((await resolveReactionTargetJids?.(observedRemoteJid)) ?? []));
+    } catch (error) {
+      logVerboseMessage?.(
+        `whatsapp: approval reaction target JID mapping failed for ${observedRemoteJid}: ${String(error)}`,
+      );
+    }
+  }
+
+  let matchedTarget: ResolvedWhatsAppApprovalReactionTarget | null = null;
+  for (const remoteJid of normalizeUniqueTrimmedStringList(candidateRemoteJids)) {
+    const candidateTarget = await resolveWhatsAppApprovalReactionTargetWithPersistence({
+      accountId,
+      remoteJid,
+      messageId,
+      reactionKey,
+    });
+    if (candidateTarget) {
+      matchedTarget = { ...candidateTarget, remoteJid };
+      break;
+    }
+  }
+  const target = matchedTarget;
   if (!target) {
     return false;
   }
 
-  const actorId = await params.resolveInboundJid(event.actorJid);
+  const actorId = await params.resolveInboundJid(actorJid);
   if (!actorId) {
     params.logVerboseMessage?.(
       `whatsapp: approval reaction ignored for ${target.approvalId}; missing actor identity`,
@@ -401,7 +355,6 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
       channel: "whatsapp",
       accountId: params.accountId,
       senderId: actorId,
-      gatewayUrl: params.gatewayUrl,
     },
     approvers: getWhatsAppApprovalApprovers({ cfg: params.cfg, accountId: params.accountId }),
     authorizeActorAction: (input) => whatsappApprovalAuth.authorizeActorAction(input),
@@ -411,7 +364,7 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
       unregisterWhatsAppApprovalReactionTarget({
         accountId: params.accountId,
         remoteJid: target.remoteJid,
-        messageId: event.messageId,
+        messageId,
       }),
     onResolved: (result) => {
       const canonicalDecision =
@@ -425,8 +378,4 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
     logVerboseMessage: params.logVerboseMessage,
   });
   return true;
-}
-
-export function clearWhatsAppApprovalReactionTargetsForTest(): void {
-  whatsappApprovalReactionTargets.clearForTest();
 }

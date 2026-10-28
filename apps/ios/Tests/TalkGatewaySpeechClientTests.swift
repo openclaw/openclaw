@@ -4,6 +4,10 @@ import OpenClawProtocol
 import Testing
 @testable import OpenClaw
 
+extension TalkBufferedAudioPlaying {
+    func setLevelHandler(_: (@MainActor (Double?) -> Void)?) {}
+}
+
 @MainActor
 private final class RecordingGatewaySpeechSynthesizer: TalkGatewaySpeechSynthesizing {
     let audio: TalkGatewaySpeechAudio

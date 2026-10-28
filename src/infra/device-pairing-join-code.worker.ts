@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { ensureDevicePairingJoinCodeSchema } from "../state/openclaw-state-db-schema-additive.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -6,12 +5,13 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { deferSqlitePostCommitPublication } from "./sqlite-post-commit.js";
 
 type JoinCodeDatabase = Pick<OpenClawStateKyselyDatabase, "device_pairing_join_codes">;
-const initializedDatabases = new WeakSet<DatabaseSync>();
+const initializedDatabases = new WeakSet<EngineConnection>();
 
-function joinCodeDatabase(db: DatabaseSync) {
+function joinCodeDatabase(db: EngineConnection) {
   if (!initializedDatabases.has(db)) {
     ensureDevicePairingJoinCodeSchema(db);
     // A refused commit also rolls back first-use DDL.
@@ -21,7 +21,7 @@ function joinCodeDatabase(db: DatabaseSync) {
 }
 
 export function registerDevicePairingJoinCodeInWorker(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: { shortcode: string; payloadJson: string; createdAtMs: number; expiresAtMs: number },
 ): void {
   const kysely = joinCodeDatabase(db);
@@ -41,7 +41,7 @@ export function registerDevicePairingJoinCodeInWorker(
 }
 
 export function redeemDevicePairingJoinCodeInWorker(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: { shortcode: string },
 ) {
   const nowMs = Date.now();
@@ -53,13 +53,9 @@ export function redeemDevicePairingJoinCodeInWorker(
   const row = executeSqliteQueryTakeFirstSync(
     db,
     kysely
-      .selectFrom("device_pairing_join_codes")
-      .select(["payload_json", "expires_at_ms"])
-      .where("shortcode", "=", input.shortcode),
-  );
-  executeSqliteQuerySync(
-    db,
-    kysely.deleteFrom("device_pairing_join_codes").where("shortcode", "=", input.shortcode),
+      .deleteFrom("device_pairing_join_codes")
+      .where("shortcode", "=", input.shortcode)
+      .returning(["payload_json", "expires_at_ms"]),
   );
   // Malformed rows must still be burned before their result is discarded.
   if (!row || typeof row.payload_json !== "string" || typeof row.expires_at_ms !== "number") {

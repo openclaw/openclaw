@@ -2,16 +2,13 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   DEEPSEEK_DSML_MARKERS,
   DEEPSEEK_DSML_MARKER_PATTERN,
+  DEEPSEEK_DSML_TOOL_OPEN_TOKENS,
   findEarliestDsmlToken,
   longestDsmlTokenPrefixSuffixLength,
 } from "./deepseek-dsml-grammar.js";
 import { measureUtf8AppendBytes } from "./openai-transport-shared.js";
 import type { RecoveredTextToolCall, TextToolCallRecoveryPart } from "./text-tool-call-recovery.js";
 
-const DEEPSEEK_DSML_TOOL_KINDS = ["tool_calls", "tool_call", "function_calls"] as const;
-const DEEPSEEK_DSML_TOOL_OPEN_TOKENS = DEEPSEEK_DSML_MARKERS.flatMap((marker) =>
-  DEEPSEEK_DSML_TOOL_KINDS.map((kind) => `<${marker}${kind}>`),
-);
 const DEEPSEEK_DSML_INVOKE_OPEN_PREFIXES = DEEPSEEK_DSML_MARKERS.map(
   (marker) => `<${marker}invoke`,
 );
@@ -190,7 +187,7 @@ function parseDeepSeekDsmlToolCallBlock(body: string): RecoveredTextToolCall[] {
       kind: "toolCall",
       name: invokeName,
       arguments: parsedArguments,
-      partialArgs: JSON.stringify(parsedArguments),
+      partialJson: JSON.stringify(parsedArguments),
     });
   }
   return toolCalls;

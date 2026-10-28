@@ -1,18 +1,50 @@
 import type { Page } from "playwright";
 import { expect } from "vitest";
+import { composerStore } from "./config-composer-fixtures.test-support.ts";
 
 export async function verifyDurableComposerFences(page: Page) {
-  const storeHandle = await page.evaluateHandle<
-    typeof import("../lib/chat/composer-draft-store.runtime.ts")
-  >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
+  const storeHandle = await composerStore(page);
   const persistenceHandle = await page.evaluateHandle<
     typeof import("../pages/new-session/draft-persistence.ts")
   >('import("/src/pages/new-session/draft-persistence.ts")');
   const chatPersistenceHandle = await page.evaluateHandle<
     typeof import("../pages/chat/durable-composer-persistence.ts")
   >('import("/src/pages/chat/durable-composer-persistence.ts")');
+  const databaseHandle = await page.evaluateHandle<
+    typeof import("../lib/chat/control-ui-database.runtime.ts")
+  >('import("/src/lib/chat/control-ui-database.runtime.ts")');
   const result = await page.evaluate(
-    async ({ draftStore, newSession, chatPersistence }) => {
+    async ({ draftStore, newSession, chatPersistence, databaseApi }) => {
+      type DraftState = ReturnType<
+        ConstructorParameters<typeof newSession.NewSessionDraftPersistence>[0]
+      >;
+      const draftState = (message = ""): DraftState => ({
+        message,
+        attachments: [],
+        incognito: false,
+      });
+      const write = (
+        scope: Parameters<typeof draftStore.write>[0],
+        revision: number,
+        text: string,
+        options: Parameters<typeof draftStore.write>[2],
+      ) => draftStore.write(scope, { revision, text, attachments: [] }, options);
+      const draftText = (read: Awaited<ReturnType<typeof draftStore.read>>) =>
+        read.status === "found" ? read.draft.text : null;
+      const activate = (
+        scope: Parameters<typeof draftStore.read>[0],
+        state: DraftState,
+        select = false,
+      ) => {
+        const persistence = new newSession.NewSessionDraftPersistence(
+          () => state,
+          (message, attachments) => Object.assign(state, { message, attachments }),
+          () => undefined,
+        );
+        persistence.setOwner(scope.gatewayOwner, scope.recoveryScope);
+        persistence[select ? "selectRoute" : "activateRoute"](scope.scopeKey);
+        return persistence;
+      };
       const waitFor = async (predicate: () => Promise<boolean>) => {
         for (let attempt = 0; attempt < 100; attempt += 1) {
           if (await predicate()) {
@@ -24,145 +56,104 @@ export async function verifyDurableComposerFences(page: Page) {
         }
         throw new Error("durable draft state did not settle");
       };
-      const owner = { gatewayOwner: "test-gateway", recoveryScope: "test-credential" };
-      const scope = (scopeKey: string) => ({ ...owner, scopeKey });
+      const scope = (scopeKey: string, owner = "test") => ({
+        gatewayOwner: owner + "-gateway",
+        recoveryScope: owner + "-credential",
+        scopeKey,
+      });
+      const statuses = (...records: { status: string }[]) => records.map((record) => record.status);
+      const waitForText = (key: Parameters<typeof draftStore.read>[0], text: () => string) =>
+        waitFor(async () => draftText(await draftStore.read(key)) === text());
+      const loadDraft = async (...seed: Parameters<typeof draftStore.seed>) => {
+        await draftStore.seed(...seed);
+        const state = draftState();
+        const persistence = activate(seed[0], state);
+        await waitFor(async () => state.message === seed[1]);
+        return { state, persistence };
+      };
       const staleScope = scope("stale");
-      const initial = await draftStore.writeDurableComposerDraft(
-        staleScope,
-        { revision: 10, text: "newer draft", attachments: [] },
-        { expectedRevision: 0, writeId: "initial" },
-      );
-      const fenced = await draftStore.retireDurableComposerDraft(staleScope, 0, 10);
-      const retired = await draftStore.retireDurableComposerDraft(staleScope, 20);
-      const stale = await draftStore.writeDurableComposerDraft(
-        staleScope,
-        { revision: 15, text: "stale draft", attachments: [] },
-        { expectedRevision: 10, writeId: "stale" },
-      );
-      const retiredRead = await draftStore.readDurableComposerDraft(staleScope);
+      const initial = await draftStore.seed(staleScope, "newer draft", 10, "initial");
+      const fenced = await draftStore.retire(staleScope, 0, 10);
+      const retired = await draftStore.retire(staleScope, 20);
+      const stale = await write(staleScope, 15, "stale draft", {
+        expectedRevision: 10,
+        writeId: "stale",
+      });
+      const retiredRead = await draftStore.read(staleScope);
 
       const isolationScope = scope("isolation");
-      await draftStore.writeDurableComposerDraft(
-        isolationScope,
-        { revision: 25, text: "credential-private", attachments: [] },
-        { expectedRevision: 0, writeId: "isolation" },
-      );
-      const wrongCredential = await draftStore.readDurableComposerDraft({
+      await draftStore.seed(isolationScope, "credential-private", 25, "isolation");
+      const wrongCredential = await draftStore.read({
         ...isolationScope,
         recoveryScope: "other-credential",
       });
-      const wrongGateway = await draftStore.readDurableComposerDraft({
+      const wrongGateway = await draftStore.read({
         ...isolationScope,
         gatewayOwner: "other-gateway",
       });
 
       const lineageScope = scope("write-lineage");
-      await draftStore.writeDurableComposerDraft(
-        lineageScope,
-        { revision: 26, text: "first writer", attachments: [] },
-        { expectedRevision: 0, writeId: "first-writer" },
-      );
-      const wrongLineage = await draftStore.writeDurableComposerDraft(
-        lineageScope,
-        { revision: 27, text: "unrelated writer", attachments: [] },
-        {
-          expectedRevision: 26,
-          expectedWriteId: "different-writer",
-          writeId: "unrelated-writer",
-        },
-      );
-      const matchingLineage = await draftStore.writeDurableComposerDraft(
-        lineageScope,
-        { revision: 28, text: "matching writer", attachments: [] },
-        {
-          expectedRevision: 26,
-          expectedWriteId: "first-writer",
-          writeId: "matching-writer",
-        },
-      );
-      const localLineage = await draftStore.writeDurableComposerDraft(
-        lineageScope,
-        { revision: 29, text: "local successor", attachments: [] },
-        {
-          expectedRevision: 0,
-          expectedWriteIds: ["matching-writer"],
-          writeId: "local-successor",
-        },
-      );
-      const lineageRead = await draftStore.readDurableComposerDraft(lineageScope);
-      const missingPredecessor = await draftStore.writeDurableComposerDraft(
-        scope("missing-predecessor"),
-        { revision: 90, text: "must conflict", attachments: [] },
-        { expectedRevision: 89, writeId: "missing-predecessor" },
-      );
+      await draftStore.seed(lineageScope, "first writer", 26, "first-writer");
+      const wrongLineage = await write(lineageScope, 27, "unrelated writer", {
+        expectedRevision: 26,
+        expectedWriteId: "different-writer",
+        writeId: "unrelated-writer",
+      });
+      const matchingLineage = await write(lineageScope, 28, "matching writer", {
+        expectedRevision: 26,
+        expectedWriteId: "first-writer",
+        writeId: "matching-writer",
+      });
+      const localLineage = await write(lineageScope, 29, "local successor", {
+        expectedRevision: 0,
+        expectedWriteIds: ["matching-writer"],
+        writeId: "local-successor",
+      });
+      const lineageRead = await draftStore.read(lineageScope);
+      const missingPredecessor = await write(scope("missing-predecessor"), 90, "must conflict", {
+        expectedRevision: 89,
+        writeId: "missing-predecessor",
+      });
 
       const tooLargeBlob = new Blob([new Uint8Array(25 * 1024 * 1024 + 1)]);
+      const oversizedAttachments = [{ blob: tooLargeBlob, mimeType: "application/octet-stream" }];
+      const mentions = [{ profileId: "profile-alex", start: 0, end: 5 }];
       const oversizedScope = scope("oversized");
-      const oversized = await draftStore.writeDurableComposerDraft(
+      const oversized = await draftStore.write(
         oversizedScope,
         {
           revision: 30,
           text: "@Alex oversized",
-          mentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
-          attachments: [
-            {
-              blob: tooLargeBlob,
-              mimeType: "application/octet-stream",
-            },
-          ],
+          mentions,
+          attachments: oversizedAttachments,
         },
         { expectedRevision: 0, writeId: "oversized" },
       );
-      const oversizedRead = await draftStore.readDurableComposerDraft(oversizedScope);
-      const oversizedState = {
-        message: "",
-        mentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
-        attachments: [] as import("../lib/chat/chat-types.ts").ChatAttachment[],
-        incognito: false,
-      };
-      const oversizedPersistence = new newSession.NewSessionDraftPersistence(
-        () => oversizedState,
-        (message, attachments) => {
-          oversizedState.message = message;
-          oversizedState.attachments = attachments;
-        },
-        () => undefined,
-      );
-      oversizedPersistence.setOwner(oversizedScope.gatewayOwner, oversizedScope.recoveryScope);
-      oversizedPersistence.activateRoute(oversizedScope.scopeKey);
+      const oversizedRead = await draftStore.read(oversizedScope);
+      const oversizedState = { ...draftState(), mentions };
+      const oversizedPersistence = activate(oversizedScope, oversizedState);
       await waitFor(async () => oversizedState.message === "@Alex oversized");
       // The live composer retains the payload even though storage kept only text.
-      oversizedState.attachments = await chatPersistence.hydrateDurableComposerAttachments([
-        { blob: tooLargeBlob, mimeType: "application/octet-stream" },
-      ]);
+      oversizedState.attachments =
+        await chatPersistence.hydrateDurableComposerAttachments(oversizedAttachments);
       const oversizedSubmission = oversizedPersistence.captureSubmission();
       oversizedPersistence.disconnect();
       await oversizedPersistence.clearSubmittedDraft(oversizedSubmission);
-      const oversizedCleared = await draftStore.readDurableComposerDraft(oversizedScope);
+      const oversizedCleared = await draftStore.read(oversizedScope);
 
       const oversizeConflictScope = scope("oversized-conflict");
-      await draftStore.writeDurableComposerDraft(
+      await draftStore.seed(oversizeConflictScope, "newer record", 50, "newer-record");
+      const oversizeConflict = await draftStore.seed(
         oversizeConflictScope,
-        { revision: 50, text: "newer record", attachments: [] },
-        { expectedRevision: 0, writeId: "newer-record" },
+        "stale oversized record",
+        49,
+        "stale-oversized",
+        oversizedAttachments,
       );
-      const oversizeConflict = await draftStore.writeDurableComposerDraft(
-        oversizeConflictScope,
-        {
-          revision: 49,
-          text: "stale oversized record",
-          attachments: [{ blob: tooLargeBlob, mimeType: "application/octet-stream" }],
-        },
-        { expectedRevision: 0, writeId: "stale-oversized" },
-      );
-      const oversizeConflictRead = await draftStore.readDurableComposerDraft(oversizeConflictScope);
+      const oversizeConflictRead = await draftStore.read(oversizeConflictScope);
 
       const missingPayloadScope = scope("missing-payload-conflict");
-      await draftStore.writeDurableComposerDraft(
-        missingPayloadScope,
-        { revision: 60, text: "newer attachment draft", attachments: [] },
-        { expectedRevision: 0, writeId: "newer-attachment-draft" },
-      );
+      await draftStore.seed(missingPayloadScope, "newer attachment", 60, "newer-attachment");
       let missingPayloadErrors = 0;
       let missingPayloadConflicts = 0;
       const missingPayloadPersistence = new chatPersistence.DurableChatComposerPersistence(
@@ -181,271 +172,118 @@ export async function verifyDurableComposerFences(page: Page) {
         storedAttachments: null,
         writeId: "stale-missing-payload",
       });
-      const missingPayloadRead = await draftStore.readDurableComposerDraft(missingPayloadScope);
+      const missingPayloadRead = await draftStore.read(missingPayloadScope);
 
-      type DraftState = {
-        message: string;
-        attachments: import("../lib/chat/chat-types.ts").ChatAttachment[];
-        incognito: boolean;
-      };
-      const incognitoScope = {
-        gatewayOwner: "incognito-gateway",
-        recoveryScope: "incognito-credential",
-        scopeKey: "incognito-route",
-      };
-      const incognitoState: DraftState = {
-        message: "normal before incognito",
-        attachments: [],
-        incognito: false,
-      };
+      const incognitoScope = scope("incognito-route", "incognito");
+      const incognitoState = draftState("before incognito");
       const realNow = Date.now;
       const frozenNow = realNow();
       Date.now = () => frozenNow;
-      await draftStore.retireDurableComposerDraft(
-        { ...incognitoScope, scopeKey: "fence-seed" },
-        frozenNow + 1_000,
-      );
-      const incognitoPersistence = new newSession.NewSessionDraftPersistence(
-        () => incognitoState,
-        (message, attachments) => {
-          incognitoState.message = message;
-          incognitoState.attachments = attachments;
-        },
-        () => undefined,
-      );
-      incognitoPersistence.setOwner(incognitoScope.gatewayOwner, incognitoScope.recoveryScope);
-      incognitoPersistence.selectRoute(incognitoScope.scopeKey);
+      await draftStore.retire({ ...incognitoScope, scopeKey: "fence-seed" }, frozenNow + 1_000);
+      const incognitoPersistence = activate(incognitoScope, incognitoState, true);
       incognitoPersistence.noteUserMutation();
-      await waitFor(async () => {
-        const read = await draftStore.readDurableComposerDraft(incognitoScope);
-        return read.status === "found" && read.draft.text === "normal before incognito";
-      });
+      await waitForText(incognitoScope, () => "before incognito");
       incognitoState.incognito = true;
       await incognitoPersistence.setIncognito(true);
       await waitFor(async () => {
-        const read = await draftStore.readDurableComposerDraft(incognitoScope);
+        const read = await draftStore.read(incognitoScope);
         return read.status === "not-found" && read.revision !== undefined;
       });
       incognitoState.incognito = false;
       await incognitoPersistence.setIncognito(false);
-      const incognitoAfterToggle = await draftStore.readDurableComposerDraft(incognitoScope);
+      const incognitoAfterToggle = await draftStore.read(incognitoScope);
       const incognitoRetainedMessage = incognitoState.message;
       if (incognitoRetainedMessage) {
-        incognitoState.message = "normal after incognito";
+        incognitoState.message = "after incognito";
         incognitoPersistence.noteUserMutation();
-        await waitFor(async () => {
-          const read = await draftStore.readDurableComposerDraft(incognitoScope);
-          return read.status === "found" && read.draft.text === incognitoState.message;
-        });
+        await waitForText(incognitoScope, () => incognitoState.message);
       }
-      const incognitoRead = await draftStore.readDurableComposerDraft(incognitoScope);
+      const incognitoRead = await draftStore.read(incognitoScope);
       Date.now = realNow;
 
-      const clearScope = {
-        gatewayOwner: "clear-gateway",
-        recoveryScope: "clear-credential",
-        scopeKey: "clear-route",
-      };
-      await draftStore.writeDurableComposerDraft(
-        clearScope,
-        { revision: 70, text: "submitted draft", attachments: [] },
-        { expectedRevision: 0, writeId: "submitted-draft" },
-      );
-      const clearState: DraftState = { message: "", attachments: [], incognito: false };
-      const clearPersistence = new newSession.NewSessionDraftPersistence(
-        () => clearState,
-        (message, attachments) => {
-          clearState.message = message;
-          clearState.attachments = attachments;
-        },
-        () => undefined,
-      );
-      clearPersistence.setOwner(clearScope.gatewayOwner, clearScope.recoveryScope);
-      clearPersistence.activateRoute(clearScope.scopeKey);
-      await waitFor(async () => clearState.message === "submitted draft");
-      clearState.message = "submitted draft after a conflict";
-      clearPersistence.noteUserMutation();
-      await draftStore.writeDurableComposerDraft(
-        clearScope,
-        { revision: 71, text: "concurrent other-tab write", attachments: [] },
-        { expectedRevision: 70, writeId: "concurrent-writer" },
-      );
-      const submittedDraft = clearPersistence.captureSubmission();
-      await waitFor(async () => {
-        const read = await draftStore.readDurableComposerDraft(clearScope);
-        return read.status === "found" && read.draft.text === clearState.message;
+      const clearScope = scope("clear-route", "clear");
+      const clear = await loadDraft(clearScope, "submitted draft", 70, "submitted-draft");
+      clear.state.message = "conflicted submission";
+      clear.persistence.noteUserMutation();
+      await write(clearScope, 71, "other tab write", {
+        expectedRevision: 70,
+        writeId: "concurrent-writer",
       });
-      clearPersistence.disconnect();
-      clearPersistence.selectRoute("another-route");
-      clearState.message = "new route draft";
-      await clearPersistence.clearSubmittedDraft(submittedDraft);
-      const clearRead = await draftStore.readDurableComposerDraft(clearScope);
+      const submittedDraft = clear.persistence.captureSubmission();
+      await waitForText(clearScope, () => clear.state.message);
+      clear.persistence.disconnect();
+      clear.persistence.selectRoute("another-route");
+      clear.state.message = "new route draft";
+      await clear.persistence.clearSubmittedDraft(submittedDraft);
+      const clearRead = await draftStore.read(clearScope);
 
-      const staleClearScope = {
-        gatewayOwner: "stale-clear-gateway",
-        recoveryScope: "stale-clear-credential",
-        scopeKey: "stale-clear-route",
-      };
-      await draftStore.writeDurableComposerDraft(
-        staleClearScope,
-        { revision: 80, text: "submitted stale draft", attachments: [] },
-        { expectedRevision: 0, writeId: "submitted-stale-draft" },
-      );
-      const staleClearState: DraftState = {
-        message: "",
-        attachments: [],
-        incognito: false,
-      };
-      const staleClearPersistence = new newSession.NewSessionDraftPersistence(
-        () => staleClearState,
-        (message, attachments) => {
-          staleClearState.message = message;
-          staleClearState.attachments = attachments;
-        },
-        () => undefined,
-      );
-      staleClearPersistence.setOwner(staleClearScope.gatewayOwner, staleClearScope.recoveryScope);
-      staleClearPersistence.activateRoute(staleClearScope.scopeKey);
-      await waitFor(async () => staleClearState.message === "submitted stale draft");
-      await draftStore.writeDurableComposerDraft(
-        staleClearScope,
-        { revision: 81, text: "newer other-tab draft", attachments: [] },
-        { expectedRevision: 80, writeId: "newer-other-tab-draft" },
-      );
-      await staleClearPersistence.clearSubmittedDraft(staleClearPersistence.captureSubmission());
-      const staleClearRead = await draftStore.readDurableComposerDraft(staleClearScope);
-
-      const resetLineageScope = {
-        gatewayOwner: "reset-lineage-gateway",
-        recoveryScope: "reset-lineage-credential",
-        scopeKey: "reset-lineage-route",
-      };
-      await draftStore.writeDurableComposerDraft(
-        resetLineageScope,
-        { revision: 90, text: "cached predecessor", attachments: [] },
-        { expectedRevision: 0, writeId: "cached-predecessor" },
-      );
-      const resetLineageState: DraftState = {
-        message: "",
-        attachments: [],
-        incognito: false,
-      };
-      const resetLineagePersistence = new newSession.NewSessionDraftPersistence(
-        () => resetLineageState,
-        (message, attachments) => {
-          resetLineageState.message = message;
-          resetLineageState.attachments = attachments;
-        },
-        () => undefined,
-      );
-      resetLineagePersistence.setOwner(
-        resetLineageScope.gatewayOwner,
-        resetLineageScope.recoveryScope,
-      );
-      resetLineagePersistence.activateRoute(resetLineageScope.scopeKey);
-      await waitFor(async () => resetLineageState.message === "cached predecessor");
-      const databaseRequest = indexedDB.open("openclaw-control-ui");
-      const database = await new Promise<IDBDatabase>((resolve, reject) => {
-        databaseRequest.addEventListener("success", () => resolve(databaseRequest.result), {
-          once: true,
-        });
-        databaseRequest.addEventListener(
-          "error",
-          () => reject(databaseRequest.error ?? new Error("IndexedDB open failed")),
-          { once: true },
-        );
+      const staleClearScope = scope("stale-clear-route", "stale-clear");
+      const staleClear = await loadDraft(staleClearScope, "stale", 80, "stale-submission");
+      await write(staleClearScope, 81, "newer tab draft", {
+        expectedRevision: 80,
+        writeId: "newer-tab",
       });
+      await staleClear.persistence.clearSubmittedDraft(staleClear.persistence.captureSubmission());
+      const staleClearRead = await draftStore.read(staleClearScope);
+
+      const resetLineageScope = scope("reset-lineage-route", "reset-lineage");
+      const resetLineage = await loadDraft(resetLineageScope, "cached", 90, "cached");
+      const database = await databaseApi.requestResult(indexedDB.open("openclaw-control-ui"));
       const deleteTransaction = database.transaction("composerDrafts", "readwrite");
       deleteTransaction
         .objectStore("composerDrafts")
-        .delete(
-          JSON.stringify([
-            resetLineageScope.gatewayOwner,
-            resetLineageScope.recoveryScope,
-            resetLineageScope.scopeKey,
-          ]),
-        );
-      await new Promise<void>((resolve, reject) => {
-        deleteTransaction.addEventListener("complete", () => resolve(), { once: true });
-        deleteTransaction.addEventListener(
-          "error",
-          () => reject(deleteTransaction.error ?? new Error("IndexedDB delete failed")),
-          { once: true },
-        );
-      });
+        .delete(chatPersistence.durableComposerScopeIdentity(resetLineageScope));
+      await databaseApi.transactionComplete(deleteTransaction);
       database.close();
-      resetLineageState.message = "draft after authoritative deletion";
-      resetLineagePersistence.noteUserMutation();
-      await waitFor(async () => {
-        const read = await draftStore.readDurableComposerDraft(resetLineageScope);
-        return read.status === "found" && read.draft.text === resetLineageState.message;
-      });
-      const resetLineageRead = await draftStore.readDurableComposerDraft(resetLineageScope);
+      resetLineage.state.message = "after deletion";
+      resetLineage.persistence.noteUserMutation();
+      await waitForText(resetLineageScope, () => resetLineage.state.message);
+      const resetLineageRead = await draftStore.read(resetLineageScope);
 
       const originalNow = Date.now;
       let now = originalNow();
       const expiringScope = scope("expiring");
-      await draftStore.writeDurableComposerDraft(
-        expiringScope,
-        { revision: 40, text: "expired", attachments: [] },
-        { expectedRevision: 0, writeId: "expiring" },
-      );
+      await draftStore.seed(expiringScope, "expired", 40, "expiring");
       Date.now = () => now + 8 * 24 * 60 * 60 * 1_000;
-      const expiredRead = await draftStore.readDurableComposerDraft(expiringScope);
+      const expiredRead = await draftStore.read(expiringScope);
 
       Date.now = () => ++now;
       const retainedScopes = Array.from({ length: 21 }, (_, index) => scope(`active-${index}`));
       for (const [index, activeScope] of retainedScopes.entries()) {
-        await draftStore.writeDurableComposerDraft(
-          activeScope,
-          { revision: 100 + index, text: `draft ${index}`, attachments: [] },
-          { expectedRevision: 0, writeId: `active-${index}` },
-        );
+        await draftStore.seed(activeScope, `draft ${index}`, 100 + index, `active-${index}`);
       }
       const retained = await Promise.all(
-        retainedScopes.map((activeScope) => draftStore.readDurableComposerDraft(activeScope)),
+        retainedScopes.map((activeScope) => draftStore.read(activeScope)),
       );
       Date.now = originalNow;
       return {
-        initial: initial.status,
-        fenced: fenced.status,
-        retired: retired.status,
-        stale: stale.status,
-        retiredRead: retiredRead.status,
-        wrongCredential: wrongCredential.status,
-        wrongGateway: wrongGateway.status,
-        wrongLineage: wrongLineage.status,
-        matchingLineage: matchingLineage.status,
-        localLineage: localLineage.status,
-        lineageText: lineageRead.status === "found" ? lineageRead.draft.text : null,
-        missingPredecessor: missingPredecessor.status,
-        oversized: oversized.status,
-        oversizedRead: oversizedRead.status,
-        oversizedCleared: oversizedCleared.status,
-        oversizedText: oversizedRead.status === "found" ? oversizedRead.draft.text : null,
-        oversizedMentions: oversizedRead.status === "found" ? oversizedRead.draft.mentions : null,
-        oversizedAttachmentCount:
-          oversizedRead.status === "found" ? oversizedRead.draft.attachments.length : null,
-        oversizeConflict: oversizeConflict.status,
-        oversizeConflictRead: oversizeConflictRead.status,
-        oversizeConflictText:
-          oversizeConflictRead.status === "found" ? oversizeConflictRead.draft.text : null,
-        missingPayloadErrors,
-        missingPayloadConflicts,
-        missingPayloadRead: missingPayloadRead.status,
-        missingPayloadText:
-          missingPayloadRead.status === "found" ? missingPayloadRead.draft.text : null,
-        incognitoRetainedMessage,
-        incognitoAfterToggle: incognitoAfterToggle.status,
-        incognitoMessage: incognitoState.message,
-        incognitoRead: incognitoRead.status,
-        incognitoText: incognitoRead.status === "found" ? incognitoRead.draft.text : null,
-        clearRead: clearRead.status,
-        staleClearRead: staleClearRead.status,
-        staleClearText: staleClearRead.status === "found" ? staleClearRead.draft.text : null,
-        resetLineageRead: resetLineageRead.status,
-        resetLineageText: resetLineageRead.status === "found" ? resetLineageRead.draft.text : null,
-        expiredRead: expiredRead.status,
+        fences: statuses(initial, fenced, retired, stale, retiredRead),
+        isolation: statuses(wrongCredential, wrongGateway),
+        lineage: statuses(wrongLineage, matchingLineage, localLineage, missingPredecessor),
+        lineageText: draftText(lineageRead),
+        oversized: statuses(oversized, oversizedRead, oversizedCleared),
+        oversizedDraft:
+          oversizedRead.status === "found"
+            ? [
+                oversizedRead.draft.text,
+                oversizedRead.draft.mentions,
+                oversizedRead.draft.attachments.length,
+              ]
+            : null,
+        oversizeConflict: statuses(oversizeConflict, oversizeConflictRead),
+        oversizeConflictText: draftText(oversizeConflictRead),
+        missingPayload: [missingPayloadErrors, missingPayloadConflicts, missingPayloadRead.status],
+        missingPayloadText: draftText(missingPayloadRead),
+        incognito: statuses(incognitoAfterToggle, incognitoRead),
+        incognitoMessages: [
+          incognitoRetainedMessage,
+          incognitoState.message,
+          draftText(incognitoRead),
+        ],
+        clear: clearRead.status,
+        staleClear: [staleClearRead.status, draftText(staleClearRead)],
+        resetLineage: [resetLineageRead.status, draftText(resetLineageRead)],
+        expired: expiredRead.status,
         active: retained.filter((entry) => entry.status === "found").length,
       };
     },
@@ -453,46 +291,27 @@ export async function verifyDurableComposerFences(page: Page) {
       draftStore: storeHandle,
       newSession: persistenceHandle,
       chatPersistence: chatPersistenceHandle,
+      databaseApi: databaseHandle,
     },
   );
 
   expect(result).toEqual({
-    initial: "persisted",
-    fenced: "conflict",
-    retired: "persisted",
-    stale: "conflict",
-    retiredRead: "not-found",
-    wrongCredential: "not-found",
-    wrongGateway: "not-found",
-    wrongLineage: "conflict",
-    matchingLineage: "persisted",
-    localLineage: "persisted",
+    fences: ["persisted", "conflict", "persisted", "conflict", "not-found"],
+    isolation: ["not-found", "not-found"],
+    lineage: ["conflict", "persisted", "persisted", "conflict"],
     lineageText: "local successor",
-    missingPredecessor: "conflict",
-    oversized: "payload-too-large",
-    oversizedRead: "found",
-    oversizedCleared: "not-found",
-    oversizedText: "@Alex oversized",
-    oversizedMentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
-    oversizedAttachmentCount: 0,
-    oversizeConflict: "conflict",
-    oversizeConflictRead: "found",
+    oversized: ["payload-too-large", "found", "not-found"],
+    oversizedDraft: ["@Alex oversized", [{ profileId: "profile-alex", start: 0, end: 5 }], 0],
+    oversizeConflict: ["conflict", "found"],
     oversizeConflictText: "newer record",
-    missingPayloadErrors: 1,
-    missingPayloadConflicts: 1,
-    missingPayloadRead: "found",
-    missingPayloadText: "newer attachment draft",
-    incognitoRetainedMessage: "normal before incognito",
-    incognitoAfterToggle: "not-found",
-    incognitoMessage: "normal after incognito",
-    incognitoRead: "found",
-    incognitoText: "normal after incognito",
-    clearRead: "not-found",
-    staleClearRead: "found",
-    staleClearText: "newer other-tab draft",
-    resetLineageRead: "found",
-    resetLineageText: "draft after authoritative deletion",
-    expiredRead: "not-found",
+    missingPayload: [1, 1, "found"],
+    missingPayloadText: "newer attachment",
+    incognito: ["not-found", "found"],
+    incognitoMessages: ["before incognito", "after incognito", "after incognito"],
+    clear: "not-found",
+    staleClear: ["found", "newer tab draft"],
+    resetLineage: ["found", "after deletion"],
+    expired: "not-found",
     active: 20,
   });
 }

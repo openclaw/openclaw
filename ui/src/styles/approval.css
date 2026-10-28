@@ -41,10 +41,6 @@
   box-shadow: var(--shadow-xl);
 }
 
-.approval-page__card--severity-info {
-  --approval-page-accent: var(--border);
-}
-
 .approval-page__card--severity-warning {
   --approval-page-accent: var(--warn);
 }

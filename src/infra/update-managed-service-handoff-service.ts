@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { formatInstallationTargetCommand } from "../cli/installation-target-format.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { UpdatePreMutationError } from "../cli/update-cli/shared.js";
@@ -73,8 +74,13 @@ export async function admitSystemdUpdate(
     await fs.access(installRoot, fs.constants.W_OK | fs.constants.X_OK);
   } catch (cause) {
     const { uid } = await fs.stat(installRoot);
+    const invocation = resolveOpenClawCliInvocation({
+      entryPath: path.join(installRoot, "openclaw.mjs"),
+      execArgv: [],
+      args: ["update", "--yes", "--no-restart"],
+    });
     const updateCommand = formatInstallationTargetCommand(
-      [process.execPath, path.join(installRoot, "openclaw.mjs"), "update", "--yes", "--no-restart"],
+      [invocation.command, ...invocation.args],
       resolveInstallationTarget(env),
       { env },
     );

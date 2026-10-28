@@ -1,16 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   loadTranscriptEventsSync,
-  replaceTranscriptEvents,
   readActiveTranscriptEntryAnchor,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { MAX_VISIBLE_MESSAGE_MAX_MESSAGES } from "../../config/sessions/session-accessor.sqlite-visible-cursor.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import { createSessionTranscriptHeader } from "../../config/sessions/transcript-header.js";
@@ -104,6 +108,8 @@ async function withAdmittedInput(
   }) => Promise<void>,
 ) {
   await withOpenClawTestState({ label: "memory-checkpoint" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    onTestFinished(() => clearRuntimeConfigSnapshot());
     const scope = {
       agentId: "main",
       sessionId: "foreground-session",
@@ -207,26 +213,6 @@ it("isolates a required checkpoint while preserving compacted admitted input", a
   });
 });
 
-it("does not use an admission after the source transcript changes", async () => {
-  await withAdmittedInput(false, async ({ scope, workspaceDir, admission }) => {
-    const current = SessionManager.open(scope);
-    current.branch(admission.effectiveParentId!);
-    current.appendLeafControl({
-      targetId: current.getLeafId(),
-      appendParentId: current.getAppendParentId(),
-    });
-    await waitForSessionTranscriptProjection(scope);
-    await expect(
-      prepareMemoryFlushSession({
-        admission,
-        source: scope,
-        runId: "stale-helper",
-        workspaceDir,
-      }),
-    ).rejects.toThrow(/admission|visible/i);
-  });
-});
-
 it("does not acquire a checkpoint after caller cancellation", async () => {
   await withAdmittedInput(false, async ({ scope, workspaceDir, admission }) => {
     const before = loadTranscriptEventsSync(scope);
@@ -268,6 +254,8 @@ it("preserves empty transcript header handling during detached acquisition", asy
 
 it("rejects a partial bounded checkpoint instead of silently starting with less history", async () => {
   await withOpenClawTestState({ label: "bounded-memory-checkpoint" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    onTestFinished(() => clearRuntimeConfigSnapshot());
     const scope = {
       agentId: "main",
       sessionId: "bounded-checkpoint",

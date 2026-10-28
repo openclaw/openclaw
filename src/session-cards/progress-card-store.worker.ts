@@ -1,15 +1,11 @@
 import type { Result } from "@openclaw/normalization-core/result";
-import {
-  assertTransactionUsable,
-  runSqliteWorkerTransactionSync,
-} from "../infra/sqlite-transaction.js";
+import { runSqliteWorkerTransactionSync } from "../infra/sqlite-transaction.js";
+import { bindSqliteWorkerDatabase } from "../infra/sqlite-worker-binding.js";
 import { isSqliteWorkerError, type SqliteWorkerBackend } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerDatabaseContext } from "../infra/sqlite-worker-database-context.js";
+import { encodeSqliteWorkerDomainError } from "../infra/sqlite-worker-domain-error.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
-import {
-  encodeOpenClawStateWorkerError,
-  type OpenClawStateWorkerErrorPayload,
-} from "../state/openclaw-state-worker-error.js";
+import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
 import {
   prepareSessionProgressCardWrite,
   writePreparedSessionProgressCard,
@@ -25,13 +21,13 @@ export type ProgressCardWorkerOperations = {
   };
 };
 
-/** Borrows the canonical agent writer connection; reset and incognito share its row kernel. */
+/** Borrows the canonical agent writer connection; reset shares its row kernel. */
 export function bindSqliteWorkerBackend(
   _input: undefined,
   context: SqliteWorkerDatabaseContext,
 ): SqliteWorkerBackend<ProgressCardWorkerOperations> {
   const db = context.database;
-  return {
+  return bindSqliteWorkerDatabase<ProgressCardWorkerOperations>(db, {
     execute(command) {
       const input = prepareSessionProgressCardWrite(command.input);
       try {
@@ -50,24 +46,8 @@ export function bindSqliteWorkerBackend(
         if (isSqliteWorkerError(error, "closed")) {
           throw error;
         }
-        // An uncertain native outcome stays with the broker and never becomes a replayable refusal.
-        assertTransactionUsable(db);
-        if (!db.isOpen || db.isTransaction) {
-          throw error;
-        }
-        const failure = encodeOpenClawStateWorkerError(error, { includeOrdinary: true });
-        if (!failure) {
-          throw error;
-        }
-        return { ok: false, error: failure };
+        return { ok: false, error: encodeSqliteWorkerDomainError(db, error) };
       }
     },
-    assertSettled() {
-      assertTransactionUsable(db);
-      if (db.isTransaction) {
-        throw new Error("Progress-card transaction did not settle");
-      }
-    },
-    close() {},
-  };
+  });
 }

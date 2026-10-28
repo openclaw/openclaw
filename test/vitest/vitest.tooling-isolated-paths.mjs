@@ -1,9 +1,12 @@
 // Tooling tests that need fresh module or process state instead of shared workers.
 export const toolingIsolatedTestFiles = [
+  // Personal account authority uses the host-owned shared-state broker.
+  "test/codex-account-usage.integration.test.ts",
   // Shipped updater composition belongs to the manual/full-release tooling tier.
   "src/cli/update-cli/update-command-legacy-finalize.test.ts",
   // Sibling threads can fork and retain this fixture's listener sockets until exec.
   "test/helpers/openclaw-test-instance.acquisition.test.ts",
+  "test/ollama-linklocal.transport.integration.test.ts",
   "test/plugins/bundled-provider-auth-literal-parity.test.ts",
   "test/plugins/bundled-provider-auth-literal-parity.2.test.ts",
   "test/plugins/bundled-provider-auth-literal-parity.3.test.ts",
@@ -15,6 +18,7 @@ export const toolingIsolatedTestFiles = [
   "test/scripts/openclaw-e2e-instance.test.ts",
   "test/scripts/test-projects-build-admission.test.ts",
   "test/scripts/vitest-fork-shutdown.test.ts",
+  "test/scripts/vitest-runner-outcome.test.ts",
 ];
 
 const toolingIsolatedTestFileSet = new Set(toolingIsolatedTestFiles);

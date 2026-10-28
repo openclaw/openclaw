@@ -3,7 +3,7 @@ import type { AgentCommandOpts } from "./command/types.js";
 
 export type AgentCommandExecutionIdentitySpawnFacts = Pick<
   ExecutionIdentityAdmissionFacts,
-  "applicableGrants" | "assurance" | "ingress" | "invoker"
+  "applicableGrants" | "assurance" | "ingress" | "invoker" | "representedSubject"
 > & {
   spawnAdmission: string;
 };

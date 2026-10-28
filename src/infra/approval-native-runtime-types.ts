@@ -1,4 +1,3 @@
-// Defines native approval runtime delivery transport contracts.
 import type { ChannelApprovalNativePlannedTarget } from "./approval-native-delivery.js";
 import type { ChannelApprovalKind } from "./approval-types.js";
 

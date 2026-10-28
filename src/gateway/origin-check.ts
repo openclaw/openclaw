@@ -1,12 +1,14 @@
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeLowercaseStringSet } from "../shared/normalized-string-set.js";
 import { getHeader } from "./http-header-value.js";
+import {
+  getRemoteControlUiIngressContext,
+  hasCurrentRemoteControlUiIngress,
+} from "./ingress-attribution.js";
 import {
   isLocalDirectRequest,
   isLoopbackHost,
@@ -14,7 +16,10 @@ import {
   normalizeHostHeader,
   resolveHostName,
 } from "./net.js";
-import type { GatewayWsBrowserOrigin } from "./server/client-identity-types.js";
+import type {
+  GatewayWsBrowserOrigin,
+  RemoteControlUiIngressContext,
+} from "./server/client-identity-types.js";
 
 export function checkGatewayWsBrowserOrigin(origin: GatewayWsBrowserOrigin, cfg: OpenClawConfig) {
   return checkBrowserOrigin({
@@ -38,6 +43,7 @@ export type BrowserOriginPolicy = {
   fetchSite?: string;
   allowedOrigins?: string[];
   allowHostHeaderOriginFallback?: boolean;
+  remoteControlUiIngress?: RemoteControlUiIngressContext;
 };
 
 /** Gather the canonical Gateway browser-origin policy inputs for one HTTP request. */
@@ -46,6 +52,7 @@ export function resolveBrowserOriginPolicy(params: {
   cfg?: OpenClawConfig;
 }): BrowserOriginPolicy {
   return {
+    remoteControlUiIngress: getRemoteControlUiIngressContext(params.req),
     requestHost: getHeader(params.req, "host"),
     origin: getHeader(params.req, "origin"),
     fetchSite: getHeader(params.req, "sec-fetch-site"),
@@ -106,17 +113,20 @@ export function checkBrowserOrigin(params: {
   allowedOrigins?: string[];
   allowHostHeaderOriginFallback?: boolean;
   isLocalClient?: boolean;
+  remoteControlUiIngress?: RemoteControlUiIngressContext;
 }): OriginCheckResult {
+  if (params.remoteControlUiIngress) {
+    return hasCurrentRemoteControlUiIngress(params.remoteControlUiIngress) &&
+      params.origin === params.remoteControlUiIngress.publicOrigin
+      ? { ok: true, matchedBy: "allowlist" }
+      : { ok: false, reason: "remote Control UI origin missing, stale, or not an exact match" };
+  }
   const parsedOrigin = parseOrigin(params.origin);
   if (!parsedOrigin) {
     return { ok: false, reason: "origin missing or invalid" };
   }
 
-  const allowlist = new Set(
-    (params.allowedOrigins ?? [])
-      .map((value) => normalizeOptionalLowercaseString(value))
-      .filter(Boolean),
-  );
+  const allowlist = normalizeLowercaseStringSet((params.allowedOrigins ?? []).values());
   if (allowlist.has("*") || allowlist.has(parsedOrigin.origin)) {
     return { ok: true, matchedBy: "allowlist" };
   }

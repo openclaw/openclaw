@@ -75,7 +75,6 @@ export function registerWorkerInferenceEnvironmentTests(
       resolveProvider: (id) => (id === "device" ? runtime.provider : undefined),
       prepareInstallation,
       bootstrapWorker,
-      executeInference: vi.fn(),
     });
     try {
       const context = { ...mockContext(service), getRuntimeConfig: () => config };

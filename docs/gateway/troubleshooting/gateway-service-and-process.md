@@ -252,7 +252,7 @@ Choose the capture backend indicated by `kernel.core_pattern`:
   ```
 
   `core_pattern` is host-wide: this replaces capture for other processes too.
-  Ensure the directory is writable by the Gateway service user and accessible
+  Check that the directory is writable by the Gateway service user and accessible
   inside any service filesystem sandbox. Restore the previous pattern after
   capture. This temporary `sysctl` setting does not survive reboot.
 

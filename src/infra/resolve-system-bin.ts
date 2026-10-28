@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pruneMapToMaxSize } from "./map-size.js";
+import { canAccessSync } from "./path-existence.js";
 import { getWindowsInstallRoots, getWindowsProgramFilesRoots } from "./windows-install-roots.js";
 
 /** Standard trust appends local-admin/package-manager paths after strict system paths. */
@@ -25,15 +26,6 @@ const resolvedCacheStandard = new Map<string, string>();
 function cacheResolvedSystemBin(cache: Map<string, string>, name: string, candidate: string): void {
   cache.set(name, candidate);
   pruneMapToMaxSize(cache, RESOLVED_BIN_CACHE_LIMIT);
-}
-
-function isExecutable(filePath: string): boolean {
-  try {
-    fs.accessSync(filePath, process.platform === "win32" ? fs.constants.R_OK : fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function collectWindowsProgramFilesToolDirs(programFilesRoot: string): string[] {
@@ -156,7 +148,7 @@ export function resolveSystemBin(
         ? WIN_PATHEXT.map((ext) => path.win32.join(dir, name + ext))
         : [path.join(dir, name)];
     for (const candidate of candidates) {
-      if (isExecutable(candidate)) {
+      if (canAccessSync(candidate, isWin ? fs.constants.R_OK : fs.constants.X_OK)) {
         if (!hasExtra) {
           cacheResolvedSystemBin(cache, name, candidate);
         }

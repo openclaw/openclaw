@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import fs from "node:fs";
 import path from "node:path";
+import { readDirectoryEntriesSync } from "openclaw/plugin-sdk/path-existence-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const CHROME_VERSION_RE = /\b(\d+)(?:\.\d+){1,3}\b/g;
@@ -103,14 +103,10 @@ function readWindowsBrowserVersion(executablePath: string): string | null {
 
   // Standard Chromium installers also keep a versioned child directory. Only
   // trust that layout when it is unambiguous; updates may leave two builds.
-  try {
-    const versionDirs = fs
-      .readdirSync(path.win32.dirname(executablePath), { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && WINDOWS_VERSION_DIR_RE.test(entry.name));
-    return versionDirs.length === 1 ? (versionDirs[0]?.name ?? null) : null;
-  } catch {
-    return null;
-  }
+  const versionDirs = readDirectoryEntriesSync(path.win32.dirname(executablePath)).filter(
+    (entry) => entry.isDirectory() && WINDOWS_VERSION_DIR_RE.test(entry.name),
+  );
+  return versionDirs.length === 1 ? (versionDirs[0]?.name ?? null) : null;
 }
 
 function resolveMacAppBundlePath(executablePath: string): string | null {

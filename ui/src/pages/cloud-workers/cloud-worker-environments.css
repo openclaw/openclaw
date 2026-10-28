@@ -1,0 +1,159 @@
+.cloud-environments {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) minmax(0, 2fr);
+  gap: 24px;
+  align-items: start;
+}
+.cloud-environments__list {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.cloud-environments__row {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  text-align: start;
+  padding: 14px 16px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  overflow-wrap: anywhere;
+}
+.cloud-environments__row:hover {
+  background: var(--bg-hover);
+}
+.cloud-environments__row--selected {
+  background: var(--bg-accent);
+  border-color: var(--border);
+}
+.cloud-environments__status {
+  color: var(--muted);
+  font-size: 13px;
+}
+.cloud-environments__sheet {
+  min-width: 0;
+  display: grid;
+  gap: 20px;
+}
+.cloud-environments__header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.cloud-environments__header h2 {
+  margin: 0;
+  font-size: 18px;
+  overflow-wrap: anywhere;
+}
+.cloud-environments__actions,
+.cloud-environments__recovery,
+.cloud-environments__machine {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cloud-environments__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.cloud-environments__advanced {
+  margin-top: 24px;
+}
+.cloud-environments__advanced > summary {
+  padding: 16px 0;
+  font-weight: 600;
+}
+@media (max-width: 900px) {
+  .cloud-environments {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .cloud-environments__row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+}
+@media (max-width: 560px) {
+  .cloud-environments__row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .cloud-environments__header {
+    flex-wrap: wrap;
+  }
+}
+
+.cloud-environments__steps {
+  display: grid;
+  gap: 8px;
+  padding: 0;
+  margin: 0 16px 16px;
+  list-style: none;
+}
+.cloud-environments__step {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.cloud-environments__step--longest {
+  color: var(--text);
+  font-weight: 600;
+}
+.cloud-environments__output {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 240px;
+  overflow: auto;
+  font-size: 12px;
+}
+
+.cloud-environments__facts,
+.cloud-environments__source,
+.cloud-environments__machine,
+.cloud-environments__recovery {
+  padding: 14px 16px;
+}
+.cloud-environments__source {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.cloud-environments__machine {
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+.cloud-environments__refresh .settings-row {
+  flex-direction: row;
+  align-items: center;
+}
+.cloud-environments__refresh .settings-row__control {
+  flex: 0 0 auto;
+  width: auto;
+}
+.cloud-environments__refresh .settings-row__control > .settings-input {
+  width: 8rem;
+}
+.cloud-environments__refresh .settings-row__control > .settings-select {
+  width: auto;
+}
+
+.cloud-environments__snapshot + .cloud-environments__snapshot {
+  border-top: 1px solid var(--border);
+}
+.cloud-environments__snapshot-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-right: 16px;
+}
+.cloud-environments__machine > span:first-child {
+  white-space: pre-wrap;
+  word-spacing: 0.15em;
+}

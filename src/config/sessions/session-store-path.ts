@@ -6,7 +6,7 @@ import {
   publishSystemEventStoreResolver,
 } from "../../infra/system-event-ownership.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { getRuntimeConfig } from "../io.js";
+import { readRuntimeConfig as getRuntimeConfig } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   resolveExplicitSessionStorePathForScope,

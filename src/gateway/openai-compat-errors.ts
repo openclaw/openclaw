@@ -1,10 +1,10 @@
-// OpenAI-compatible error helpers.
-// Converts OpenClaw failover/sampling errors to OpenAI-style HTTP responses.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentStreamParams } from "../agents/command/shared-types.js";
 import { describeFailoverError, resolveFailoverStatus } from "../agents/failover-error.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
+import { TLS_CERTIFICATE_ERROR_USER_TEXT } from "../agents/failover/user-copy.js";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
+import { SessionWorkStartError } from "../config/sessions/session-work-start.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 
 export type OpenAiCompatError = {
@@ -35,8 +35,16 @@ const ERROR_TYPE_BY_REASON = {
   unknown: undefined,
 } satisfies Record<FailoverReason, string | undefined>;
 
-/** Converts a provider failover error into an OpenAI-compatible error envelope. */
 export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | undefined {
+  if (err instanceof SessionWorkStartError && err.reason === "archived") {
+    return {
+      status: 409,
+      error: {
+        message: "Session is archived. Restore it in the Control UI before retrying.",
+        type: "invalid_request_error",
+      },
+    };
+  }
   if (err instanceof ToolAuthorizationError) {
     return { status: 403, error: { message: err.message, type: "permission_error" } };
   }
@@ -51,7 +59,9 @@ export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | unde
   }
   let status = described.status ?? resolveFailoverStatus(reason) ?? 500;
   let message: string;
-  if (reason === "server_error" || reason === "timeout") {
+  if (reason === "tls_certificate") {
+    message = TLS_CERTIFICATE_ERROR_USER_TEXT;
+  } else if (reason === "server_error" || reason === "timeout") {
     status =
       described.status && described.status >= 400 && described.status < 500
         ? described.status

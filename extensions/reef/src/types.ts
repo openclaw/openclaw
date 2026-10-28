@@ -1,6 +1,6 @@
 import type { Envelope, GuardAdapter, IdentityKeyPair, SignedReceipt } from "../protocol/index.js";
 import type { ReefChannelConfig } from "./config-schema.js";
-import type { ReefAutonomy, ReefPeerIdentity, ReefPeerTrust } from "./friend-types.js";
+import type { ReefAutonomy, ReefPeerIdentity } from "./friend-types.js";
 
 export interface ReefKeys extends IdentityKeyPair {
   auditKey: string;
@@ -52,14 +52,6 @@ export interface ReefIngressMessage {
   autonomy: ReefAutonomy;
 }
 
-export interface ReefOutboundDeliveryPreparation {
-  readonly trust: ReefPeerTrust;
-  assertCurrent(): void;
-  record(
-    binding: { bodyHash: string; textHash?: string; recipient: ReefPeerIdentity },
-    options?: { resendDisabled?: true },
-  ): Promise<void>;
-}
 export interface ReefRejectionRecovery {
   assertCurrent(): void;
   loadState(): Promise<ReefRejectionNoticeState | undefined>;
@@ -67,7 +59,6 @@ export interface ReefRejectionRecovery {
     state: ReefRejectionNoticeState,
   ): Promise<{ kind: "reserved" } | { kind: "existing"; state: ReefRejectionNoticeState }>;
   complete(state: ReefRejectionNoticeState): Promise<boolean>;
-  prepareOutboundDelivery(id: string): Promise<ReefOutboundDeliveryPreparation | undefined>;
 }
 
 export interface ReefDeliveryRejection {

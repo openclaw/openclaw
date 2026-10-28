@@ -1,147 +1,138 @@
-// Covers bounded TUI run ownership and transcript persistence coordination.
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { makeTuiState } from "./tui-event-test-support.js";
 import { createTuiRunIdTracker, TuiSessionRunCoordinator } from "./tui-session-run-coordinator.js";
 import type { ChatEvent, TuiHistoryLoadResult, TuiStateAccess } from "./tui-types.js";
-
-const completedHistory = {
-  loaded: true,
-  runOutcome: { state: "completed" },
-} as const;
+const completedHistory = { loaded: true, runOutcome: { state: "completed" } } as const;
 const activeHistory = (runId: string): TuiHistoryLoadResult => ({
   loaded: true,
   runOutcome: { state: "active", runId },
 });
-
-function makeState(overrides?: Partial<TuiStateAccess>): TuiStateAccess {
-  return {
-    agentDefaultId: "main",
-    sessionMainKey: "agent:main:main",
-    sessionScope: "global",
-    agents: [],
-    currentAgentId: "main",
-    currentSessionKey: "agent:main:main",
-    currentSessionId: "session-main",
-    activeChatRunId: null,
-    pendingSubmit: null,
-    historyLoaded: true,
-    sessionInfo: {},
-    initialSessionApplied: true,
-    isConnected: true,
-    autoMessageSent: false,
-    toolsExpanded: false,
-    showThinking: false,
-    connectionStatus: "connected",
-    activityStatus: "idle",
-    statusTimeout: null,
-    lastCtrlCAt: 0,
-    ...overrides,
-  };
-}
-
 function createCoordinator(overrides?: {
   state?: Partial<TuiStateAccess>;
   loadHistory?: () => Promise<TuiHistoryLoadResult>;
 }) {
-  const state = makeState(overrides?.state);
-  const loadHistory = vi.fn<() => Promise<TuiHistoryLoadResult>>(
-    overrides?.loadHistory ??
-      (async () => ({
-        ...completedHistory,
-      })),
-  );
-  const finalizeHistoryOwnedRun = vi.fn();
-  const replayHistoryRunEvent = vi.fn<(event: ChatEvent) => void>();
-  const restoreTerminalError = vi.fn<(message: string) => void>();
-  const requestRender = vi.fn<(force?: boolean) => void>();
-  const coordinator = new TuiSessionRunCoordinator({
-    state,
-    loadHistory,
-    restoreTerminalError,
-    requestRender,
-    finalizeHistoryOwnedRun,
-    replayHistoryRunEvent,
+  const state = makeTuiState({
+    currentSessionId: "session-main",
+    sessionInfo: {},
+    ...overrides?.state,
   });
-
-  return {
-    coordinator,
+  const context = {
     state,
-    loadHistory,
-    finalizeHistoryOwnedRun,
-    replayHistoryRunEvent,
-    restoreTerminalError,
-    requestRender,
+    loadHistory: vi.fn(overrides?.loadHistory ?? (async () => ({ ...completedHistory }))),
+    restoreTerminalError: vi.fn<(message: string) => void>(),
+    requestRender: vi.fn<(force?: boolean) => void>(),
+    finalizeHistoryOwnedRun: vi.fn(),
+    replayHistoryRunEvent: vi.fn<(event: ChatEvent) => void>(),
   };
+  return { coordinator: new TuiSessionRunCoordinator(context), ...context };
 }
-
-describe("createTuiRunIdTracker", () => {
-  it("bounds FIFO membership and supports explicit cleanup", () => {
-    const tracker = createTuiRunIdTracker();
-    tracker.note("");
-    for (let index = 0; index <= 200; index += 1) {
-      tracker.note(`run-${index}`);
-    }
-
-    expect(tracker.has("")).toBe(false);
-    expect(tracker.has("run-0")).toBe(false);
-    expect(tracker.has("run-200")).toBe(true);
-    tracker.forget("run-200");
-    expect(tracker.has("run-200")).toBe(false);
-    tracker.clear();
-    expect(tracker.has("run-100")).toBe(false);
+function createControlledCoordinator() {
+  let pending = createDeferred<TuiHistoryLoadResult>();
+  const harness = createCoordinator({
+    loadHistory: () => {
+      pending = createDeferred<TuiHistoryLoadResult>();
+      return pending.promise;
+    },
   });
+  return { ...harness, resolveHistory: (result: TuiHistoryLoadResult) => pending.resolve(result) };
+}
+function expectFinalized(
+  finalize: ReturnType<typeof createCoordinator>["finalizeHistoryOwnedRun"],
+  runId: string,
+) {
+  expect(finalize).toHaveBeenCalledWith({
+    runId,
+    result: completedHistory,
+    previouslyDisplayed: false,
+  });
+}
+it("bounds run ID tracker FIFO membership and supports explicit cleanup", () => {
+  const tracker = createTuiRunIdTracker();
+  tracker.note("");
+  for (let index = 0; index < 200; index += 1) {
+    tracker.note(`run-${index}`);
+  }
+  tracker.note("run-0");
+  tracker.note("run-200");
+  expect(tracker.has("")).toBe(false);
+  expect(tracker.has("run-0")).toBe(false);
+  expect(tracker.has("run-200")).toBe(true);
+  tracker.forget("run-200");
+  expect(tracker.has("run-200")).toBe(false);
+  tracker.clear();
+  expect(tracker.has("run-100")).toBe(false);
 });
-
 describe("TuiSessionRunCoordinator", () => {
+  it.each([
+    "finalizedRuns",
+    "finalizedRunsWithDisplay",
+    "persistedTerminalRunIds",
+    "completedRuns",
+    "postFinalizingRuns",
+  ] as const)("bounds %s membership without refreshing duplicate IDs", (field) => {
+    const { coordinator } = createCoordinator();
+    const note = (runId: string) => {
+      if (field === "persistedTerminalRunIds") {
+        coordinator.notePersistedRun(runId);
+      } else if (field === "postFinalizingRuns") {
+        coordinator.notePostFinalizingRun(runId);
+      } else if (field === "completedRuns") {
+        coordinator.noteCompletedRun(runId);
+      } else {
+        coordinator.noteFinalizedRun(runId, { displayedFinal: true });
+      }
+    };
+    for (let index = 0; index < 200; index += 1) {
+      note(`run-${index}`);
+    }
+    note("run-0");
+    expect(coordinator[field].size).toBe(200);
+    note("run-200");
+    expect(coordinator[field].size).toBe(150);
+    expect(coordinator[field].has("run-0")).toBe(false);
+    expect(coordinator[field].has("run-200")).toBe(true);
+    coordinator.clear();
+    expect(coordinator[field].size).toBe(0);
+  });
   it("keeps the active session run while pruning hundreds of abandoned runs", () => {
     const { coordinator, state } = createCoordinator({
       state: { activeChatRunId: "run-live" },
     });
     coordinator.noteSessionRun("run-live");
-
     for (let index = 0; index < 1_000; index += 1) {
       coordinator.noteSessionRun(`run-orphan-${index}`);
     }
-
     expect(state.activeChatRunId).toBe("run-live");
     expect(coordinator.sessionRuns.has("run-live")).toBe(true);
     expect(coordinator.sessionRuns.size).toBeLessThanOrEqual(200);
     expect(coordinator.sessionRuns.has("run-orphan-0")).toBe(false);
   });
-
   it("promotes a lifecycle-confirmed run instead of newer orphan deltas", () => {
     const { coordinator } = createCoordinator();
     coordinator.noteSessionRun("run-confirmed", { protectStream: true });
-
     for (let index = 0; index < 500; index += 1) {
       coordinator.noteSessionRun(`run-orphan-${index}`);
     }
-
     expect(coordinator.resolveMostRecentPromotableRun()).toBe("run-confirmed");
     coordinator.dropSessionRun("run-confirmed");
     expect(coordinator.resolveMostRecentPromotableRun()).toBeUndefined();
     expect(coordinator.isRetiredOrphanRun("run-orphan-499")).toBe(true);
-
     coordinator.noteSessionRun("run-orphan-499");
     expect(coordinator.sessionRuns.has("run-orphan-499")).toBe(false);
-
     coordinator.noteSessionRun("run-orphan-0");
     coordinator.noteSessionRun("run-never-seen");
     expect(coordinator.sessionRuns.has("run-orphan-0")).toBe(false);
     expect(coordinator.sessionRuns.has("run-never-seen")).toBe(false);
-
     coordinator.noteSessionRun("run-orphan-499", { protectStream: true });
     expect(coordinator.sessionRuns.has("run-orphan-499")).toBe(true);
     expect(coordinator.isRetiredOrphanRun("run-orphan-499")).toBe(false);
-
     coordinator.noteSessionRun("run-orphan-after-reactivation");
     expect(coordinator.sessionRuns.has("run-orphan-after-reactivation")).toBe(false);
-
     coordinator.clear();
     coordinator.noteSessionRun("run-after-session-reset");
     expect(coordinator.sessionRuns.has("run-after-session-reset")).toBe(true);
   });
-
   it("keeps an accepted submit eligible for activity promotion", () => {
     const { coordinator } = createCoordinator({
       state: {
@@ -150,10 +141,8 @@ describe("TuiSessionRunCoordinator", () => {
     });
     coordinator.noteSessionRun("run-pending");
     coordinator.noteSessionRun("run-orphan");
-
     expect(coordinator.resolveMostRecentPromotableRun()).toBe("run-pending");
   });
-
   it.each(["sending", "accepted"] as const)(
     "retires only unchanged history observations and preserves a %s submit",
     (phase) => {
@@ -173,7 +162,6 @@ describe("TuiSessionRunCoordinator", () => {
         coordinator.noteSessionRun("run-reobserved", { protectStream: true });
         coordinator.noteSessionRun("run-new");
         reconcile([]);
-
         expect([...coordinator.sessionRuns.keys()]).toEqual([
           "run-reobserved",
           "run-visible",
@@ -187,7 +175,6 @@ describe("TuiSessionRunCoordinator", () => {
       }
     },
   );
-
   it("does not let an old session history retire a reset session's run", () => {
     const { coordinator } = createCoordinator();
     coordinator.noteSessionRun("run-reused", { protectStream: true });
@@ -197,40 +184,30 @@ describe("TuiSessionRunCoordinator", () => {
     reconcile([]);
     expect(coordinator.resolveMostRecentPromotableRun()).toBe("run-reused");
   });
-
   it("serializes queued reloads and replays a gated terminal event", async () => {
-    let resolveHistory: ((result: TuiHistoryLoadResult) => void) | undefined;
-    const { coordinator, loadHistory, finalizeHistoryOwnedRun, replayHistoryRunEvent } =
-      createCoordinator({
-        loadHistory: () =>
-          new Promise<TuiHistoryLoadResult>((resolve) => {
-            resolveHistory = resolve;
-          }),
-      });
+    const {
+      coordinator,
+      loadHistory,
+      finalizeHistoryOwnedRun,
+      replayHistoryRunEvent,
+      resolveHistory,
+    } = createControlledCoordinator();
     const deferredEvent: ChatEvent = {
       runId: "run-first",
       sessionKey: "agent:main:main",
       state: "final",
       message: { content: [{ type: "text", text: "persisted reply" }] },
     };
-
     void coordinator.queueHistoryReload(["run-first"], ["run-first"]);
     coordinator.deferHistoryRunEvent(deferredEvent);
     void coordinator.queueHistoryReload();
     expect(loadHistory).toHaveBeenCalledTimes(1);
-
-    resolveHistory?.(completedHistory);
+    resolveHistory(completedHistory);
     await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(2));
-    expect(finalizeHistoryOwnedRun).toHaveBeenCalledWith({
-      runId: "run-first",
-      result: completedHistory,
-      previouslyDisplayed: false,
-    });
+    expectFinalized(finalizeHistoryOwnedRun, "run-first");
     expect(replayHistoryRunEvent).toHaveBeenCalledWith(deferredEvent);
-
-    resolveHistory?.(completedHistory);
+    resolveHistory(completedHistory);
   });
-
   it.each([false, true])("awaits the complete history drain across a reset: %s", async (reset) => {
     const first = createDeferred<TuiHistoryLoadResult>();
     const second = createDeferred<TuiHistoryLoadResult>();
@@ -248,7 +225,6 @@ describe("TuiSessionRunCoordinator", () => {
     const secondDrain = coordinator.queueHistoryReload();
     void secondDrain.then(settled);
     expect(loadHistory).toHaveBeenCalledTimes(1);
-
     first.resolve(completedHistory);
     await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(2));
     expect(settled).not.toHaveBeenCalled();
@@ -256,39 +232,24 @@ describe("TuiSessionRunCoordinator", () => {
     await expect(Promise.all([firstDrain, secondDrain])).resolves.toEqual([!reset, true]);
     expect(settled).toHaveBeenCalledTimes(2);
   });
-
   it("does not finalize a gap-recovery run when authoritative history fails", async () => {
     const { coordinator, loadHistory, finalizeHistoryOwnedRun } = createCoordinator({
       loadHistory: async () => {
         throw new Error("history temporarily unavailable");
       },
     });
-
     coordinator.queueGapHistoryReload(["run-gap"]);
-
     await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(coordinator.isHistoryReloadingRun("run-gap")).toBe(false));
     expect(finalizeHistoryOwnedRun).not.toHaveBeenCalled();
   });
-
   it("reconciles every tracked run after a Gateway event gap", async () => {
     const { coordinator, finalizeHistoryOwnedRun } = createCoordinator();
-
     coordinator.queueGapHistoryReload(["run-first", "run-second"]);
-
     await vi.waitFor(() => expect(finalizeHistoryOwnedRun).toHaveBeenCalledTimes(2));
-    expect(finalizeHistoryOwnedRun).toHaveBeenCalledWith({
-      runId: "run-first",
-      result: completedHistory,
-      previouslyDisplayed: false,
-    });
-    expect(finalizeHistoryOwnedRun).toHaveBeenCalledWith({
-      runId: "run-second",
-      result: completedHistory,
-      previouslyDisplayed: false,
-    });
+    expectFinalized(finalizeHistoryOwnedRun, "run-first");
+    expectFinalized(finalizeHistoryOwnedRun, "run-second");
   });
-
   it.each([
     { membership: "exact", activeRunIds: ["run-first", "run-second"] },
     { membership: "unknown", activeRunIds: undefined },
@@ -299,13 +260,10 @@ describe("TuiSessionRunCoordinator", () => {
         ...(activeRunIds ? { activeRunIds } : {}),
       }),
     });
-
     coordinator.queueGapHistoryReload(["run-first", "run-second"]);
-
     await vi.waitFor(() => expect(coordinator.isHistoryReloadingRun("run-first")).toBe(false));
     expect(finalizeHistoryOwnedRun).not.toHaveBeenCalled();
   });
-
   it.each([
     { tracked: true, observation: "delta" },
     { tracked: false, observation: "delta" },
@@ -314,13 +272,8 @@ describe("TuiSessionRunCoordinator", () => {
   ])(
     "preserves newer $observation without finalizing older history (tracked=$tracked)",
     async ({ tracked, observation }) => {
-      let resolveHistory: ((result: TuiHistoryLoadResult) => void) | undefined;
-      const { coordinator, finalizeHistoryOwnedRun, replayHistoryRunEvent } = createCoordinator({
-        loadHistory: () =>
-          new Promise((resolve) => {
-            resolveHistory = resolve;
-          }),
-      });
+      const { coordinator, finalizeHistoryOwnedRun, replayHistoryRunEvent, resolveHistory } =
+        createControlledCoordinator();
       if (tracked) {
         coordinator.noteSessionRun("run-live", { protectStream: true });
       }
@@ -342,8 +295,7 @@ describe("TuiSessionRunCoordinator", () => {
       if (tracked) {
         expect(coordinator.sessionRuns.has("run-live")).toBe(true);
       }
-      resolveHistory?.(completedHistory);
-
+      resolveHistory(completedHistory);
       await vi.waitFor(() => expect(coordinator.isHistoryReloadingRun("run-live")).toBe(false));
       if (observation === "delta") {
         expect(replayHistoryRunEvent).toHaveBeenCalledWith(delta);
@@ -351,15 +303,9 @@ describe("TuiSessionRunCoordinator", () => {
       expect(finalizeHistoryOwnedRun).not.toHaveBeenCalled();
     },
   );
-
   it("allows a later queued history to supersede a delta from the previous reload", async () => {
-    let resolveHistory: ((result: TuiHistoryLoadResult) => void) | undefined;
-    const { coordinator, loadHistory, finalizeHistoryOwnedRun } = createCoordinator({
-      loadHistory: () =>
-        new Promise((resolve) => {
-          resolveHistory = resolve;
-        }),
-    });
+    const { coordinator, loadHistory, finalizeHistoryOwnedRun, resolveHistory } =
+      createControlledCoordinator();
     coordinator.queueGapHistoryReload(["run-live"]);
     coordinator.queueGapHistoryReload(["run-live"]);
     coordinator.deferHistoryRunEvent({
@@ -369,58 +315,37 @@ describe("TuiSessionRunCoordinator", () => {
       state: "delta",
       message: { role: "assistant", content: "before the next snapshot" },
     });
-    resolveHistory?.(completedHistory);
+    resolveHistory(completedHistory);
     await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(2));
     expect(finalizeHistoryOwnedRun).not.toHaveBeenCalled();
-    resolveHistory?.(completedHistory);
+    resolveHistory(completedHistory);
     await vi.waitFor(() => expect(finalizeHistoryOwnedRun).toHaveBeenCalledTimes(1));
   });
-
   it.each([
     { firstHistory: "still streaming", inFlightRunId: "run-gap" },
     { firstHistory: "already completed", inFlightRunId: null },
   ])(
     "defers overlapping gap finalization when the older history is $firstHistory",
     async ({ inFlightRunId }) => {
-      let resolveHistory: ((result: TuiHistoryLoadResult) => void) | undefined;
-      const { coordinator, loadHistory, finalizeHistoryOwnedRun } = createCoordinator({
-        loadHistory: () =>
-          new Promise<TuiHistoryLoadResult>((resolve) => {
-            resolveHistory = resolve;
-          }),
-      });
-
+      const { coordinator, loadHistory, finalizeHistoryOwnedRun, resolveHistory } =
+        createControlledCoordinator();
       coordinator.queueGapHistoryReload(["run-gap"]);
       coordinator.queueGapHistoryReload(["run-gap"]);
       expect(loadHistory).toHaveBeenCalledTimes(1);
-
-      resolveHistory?.(inFlightRunId ? activeHistory(inFlightRunId) : completedHistory);
+      resolveHistory(inFlightRunId ? activeHistory(inFlightRunId) : completedHistory);
       await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(2));
       expect(finalizeHistoryOwnedRun).not.toHaveBeenCalled();
-
-      resolveHistory?.(completedHistory);
+      resolveHistory(completedHistory);
       await vi.waitFor(() => expect(finalizeHistoryOwnedRun).toHaveBeenCalledTimes(1));
-      expect(finalizeHistoryOwnedRun).toHaveBeenCalledWith({
-        runId: "run-gap",
-        result: completedHistory,
-        previouslyDisplayed: false,
-      });
+      expectFinalized(finalizeHistoryOwnedRun, "run-gap");
     },
   );
-
   it("discards a stale in-flight reload when the selected session resets", async () => {
-    let resolveHistory: ((result: TuiHistoryLoadResult) => void) | undefined;
-    const { coordinator, finalizeHistoryOwnedRun, replayHistoryRunEvent } = createCoordinator({
-      loadHistory: () =>
-        new Promise<TuiHistoryLoadResult>((resolve) => {
-          resolveHistory = resolve;
-        }),
-    });
-
+    const { coordinator, finalizeHistoryOwnedRun, replayHistoryRunEvent, resolveHistory } =
+      createControlledCoordinator();
     void coordinator.queueHistoryReload(["run-stale"], ["run-stale"]);
     coordinator.clear();
-    resolveHistory?.(completedHistory);
-
+    resolveHistory(completedHistory);
     await vi.waitFor(() => {
       expect(finalizeHistoryOwnedRun).not.toHaveBeenCalled();
       expect(replayHistoryRunEvent).not.toHaveBeenCalled();

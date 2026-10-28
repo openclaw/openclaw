@@ -1,3 +1,4 @@
+import { normalizeOptionalTrimmedStringRecord } from "openclaw/plugin-sdk/collection-input-runtime";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
   isKnownEnvApiKeyMarker,
@@ -9,7 +10,7 @@ import {
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
   LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
@@ -44,22 +45,6 @@ export function buildLmstudioAuthHeaders(
     headers["Content-Type"] = "application/json";
   }
   return Object.keys(headers).length > 0 ? headers : undefined;
-}
-
-export function sanitizeLmstudioStringHeaders(
-  headers: unknown,
-): Record<string, string> | undefined {
-  if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
-    return undefined;
-  }
-  const next: Record<string, string> = {};
-  for (const [headerName, headerValue] of Object.entries(headers)) {
-    const normalized = normalizeOptionalString(headerValue);
-    if (normalized) {
-      next[headerName] = normalized;
-    }
-  }
-  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 function shouldSuppressResolvedRuntimeApiKeyForHeaderAuth(
@@ -131,13 +116,13 @@ export async function resolveLmstudioProviderHeaders(params: {
   headers?: unknown;
   path?: string;
 }): Promise<Record<string, string> | undefined> {
-  const headerInputs = params.headers;
-  if (!headerInputs || typeof headerInputs !== "object" || Array.isArray(headerInputs)) {
+  const headerInputs = asOptionalRecord(params.headers);
+  if (!headerInputs) {
     return undefined;
   }
 
   if (!params.config) {
-    return sanitizeLmstudioStringHeaders(headerInputs);
+    return normalizeOptionalTrimmedStringRecord(headerInputs);
   }
 
   const pathPrefix = params.path ?? "models.providers.lmstudio.headers";

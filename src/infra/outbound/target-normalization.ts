@@ -7,18 +7,7 @@ import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-l
 import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelDirectoryEntryKind, ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getActivePluginChannelRegistryVersion } from "../../plugins/runtime.js";
 import { captureChannelReadAuthority } from "../../shared/channel-read-authority.js";
-
-type TargetNormalizer = ((raw: string) => string | undefined) | undefined;
-type TargetNormalizerCacheEntry = {
-  version: number;
-  normalizer: TargetNormalizer;
-};
-
-const targetNormalizerCacheByChannelId = new Map<string, TargetNormalizerCacheEntry>();
-const preparedPluginSignatureIds = new WeakMap<ChannelPlugin, number>();
-let nextPreparedPluginSignatureId = 1;
 
 function resolveChannelPluginForTargetRead(channelId: ChannelId): ChannelPlugin | undefined {
   return getLoadedChannelPluginForRead(channelId) ?? getChannelPlugin(channelId);
@@ -67,28 +56,6 @@ export function resolveReservedTargetLiteral(params: {
     : undefined;
 }
 
-function resolveTargetNormalizer(
-  channelId: ChannelId,
-  preparedPlugin?: ChannelPlugin,
-): TargetNormalizer {
-  if (preparedPlugin) {
-    return preparedPlugin.messaging?.normalizeTarget;
-  }
-  const version = getActivePluginChannelRegistryVersion();
-  const cached = targetNormalizerCacheByChannelId.get(channelId);
-  if (cached && cached.version === version) {
-    return cached.normalizer;
-  }
-  // Plugin channel metadata is process-stable between registry version bumps.
-  const plugin = resolveChannelPluginForTargetRead(channelId);
-  const normalizer = plugin?.messaging?.normalizeTarget;
-  targetNormalizerCacheByChannelId.set(channelId, {
-    version,
-    normalizer,
-  });
-  return normalizer;
-}
-
 export function normalizeTargetForProvider(
   provider: string,
   raw = "",
@@ -99,7 +66,9 @@ export function normalizeTargetForProvider(
     return undefined;
   }
   const providerId = normalizeOptionalLowercaseString(provider);
-  const normalizer = providerId ? resolveTargetNormalizer(providerId, plugin) : undefined;
+  const normalizer = providerId
+    ? (plugin ?? resolveChannelPluginForTargetRead(providerId))?.messaging?.normalizeTarget
+    : undefined;
   return normalizeOptionalString(normalizer?.(raw) ?? fallback);
 }
 
@@ -196,36 +165,4 @@ export async function maybeResolvePluginMessagingTarget(params: {
     source: resolved.source ?? "normalized",
     resolutionSource: "plugin",
   };
-}
-
-export function buildTargetResolverSignature(
-  channel: ChannelId,
-  preparedPlugin?: ChannelPlugin,
-): string {
-  const plugin = preparedPlugin ?? resolveChannelPluginForTargetRead(channel);
-  let registryScope = "pinned";
-  if (preparedPlugin) {
-    let id = preparedPluginSignatureIds.get(preparedPlugin);
-    if (!id) {
-      id = nextPreparedPluginSignatureId++;
-      preparedPluginSignatureIds.set(preparedPlugin, id);
-    }
-    registryScope = `prepared:${id}`;
-  }
-  const resolver = plugin?.messaging?.targetResolver;
-  const hint = resolver?.hint ?? "";
-  const reserved = (resolver?.reservedLiterals ?? [])
-    .map(normalizeOptionalLowercaseString)
-    .filter((literal): literal is string => Boolean(literal))
-    .toSorted()
-    .join(",");
-  const looksLike = resolver?.looksLikeId;
-  // Function source is only a cheap invalidation hint; resolver behavior still belongs to the plugin.
-  const source = looksLike ? looksLike.toString() : "";
-  const value = `${registryScope}|${hint}|${reserved}|${source}`;
-  let hash = 5381;
-  for (let i = 0; i < value.length; i += 1) {
-    hash = ((hash << 5) + hash) ^ value.charCodeAt(i);
-  }
-  return (hash >>> 0).toString(36);
 }

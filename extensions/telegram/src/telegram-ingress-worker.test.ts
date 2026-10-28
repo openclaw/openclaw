@@ -1,48 +1,39 @@
-import type { EventEmitter } from "node:events";
+import { existsSync } from "node:fs";
+import type { WorkerOptions } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const workerHarness = vi.hoisted(() => ({
-  instances: [] as unknown[],
-}));
-
-vi.mock("node:worker_threads", async () => {
-  const { EventEmitter } = await vi.importActual<typeof import("node:events")>("node:events");
-  const actual = await vi.importActual<typeof import("node:worker_threads")>("node:worker_threads");
-  return {
-    ...actual,
-    Worker: class extends EventEmitter {
-      postMessage = vi.fn();
-      terminate = vi.fn(async () => 1);
-
-      constructor() {
-        super();
-        workerHarness.instances.push(this);
-      }
-    },
-  };
+const workerHarness = await vi.hoisted(async () => {
+  const { EventEmitter } = await import("node:events");
+  const instances: MockWorker[] = [];
+  class MockWorker extends EventEmitter {
+    postMessage = vi.fn();
+    terminate = vi.fn(async () => 1);
+    constructor(
+      public url: URL,
+      public options: WorkerOptions,
+    ) {
+      super();
+      instances.push(this);
+    }
+  }
+  return { instances, MockWorker };
 });
+
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
+  Worker: workerHarness.MockWorker,
+}));
 
 import { createTelegramIngressWorker } from "./telegram-ingress-worker.js";
 
-type FakeWorker = EventEmitter & {
-  postMessage: ReturnType<typeof vi.fn>;
-  terminate: ReturnType<typeof vi.fn<() => Promise<number>>>;
-};
-
-function createWorker(): {
-  handle: ReturnType<typeof createTelegramIngressWorker>;
-  worker: FakeWorker;
-} {
+function createWorker() {
+  vi.useFakeTimers();
   const handle = createTelegramIngressWorker({
     token: "123456:test",
     accountId: "default",
     initialUpdateId: null,
   });
-  const worker = workerHarness.instances.at(-1) as FakeWorker | undefined;
-  if (!worker) {
-    throw new Error("expected Telegram ingress worker");
-  }
-  return { handle, worker };
+  return { handle, worker: workerHarness.instances.at(-1)! };
 }
 
 describe("stopTelegramIngressWorker", () => {
@@ -51,31 +42,37 @@ describe("stopTelegramIngressWorker", () => {
     workerHarness.instances.length = 0;
   });
 
-  it("preserves cooperative worker shutdown", async () => {
-    vi.useFakeTimers();
+  it("starts from an existing source entry with runtime-appropriate TypeScript support", () => {
     const { handle, worker } = createWorker();
 
-    const stopping = handle.stop();
-    worker.emit("exit", 0);
-    await stopping;
-    await vi.advanceTimersByTimeAsync(2_000);
-
-    expect(worker.postMessage).toHaveBeenCalledWith({ type: "stop" }, []);
-    expect(worker.terminate).not.toHaveBeenCalled();
+    expect(existsSync(worker.url)).toBe(true);
+    expect(worker.options.execArgv).toEqual(
+      process.versions.bun ? ["--no-install"] : ["--import", expect.stringContaining("tsx")],
+    );
+    const onMessage = vi.fn();
+    const message = { type: "spooled", updateId: 42, queued: 1 };
+    handle.onMessage = onMessage;
+    worker.emit("message", message);
+    expect(onMessage).toHaveBeenCalledExactlyOnceWith(message);
+    handle.onMessage = undefined;
+    worker.emit("message", message);
+    expect(onMessage).toHaveBeenCalledOnce();
   });
 
-  it("terminates a non-cooperative worker inside the channel stop budget", async () => {
-    vi.useFakeTimers();
+  it.each([true, false])("stops within budget (cooperative=%s)", async (cooperative) => {
     const { handle, worker } = createWorker();
-
     const stopping = handle.stop();
-    await vi.advanceTimersByTimeAsync(1_999);
-    expect(worker.terminate).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1);
-    await stopping;
-
+    if (cooperative) {
+      worker.emit("exit", 0);
+      await stopping;
+      await vi.advanceTimersByTimeAsync(2_000);
+    } else {
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(worker.terminate).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await stopping;
+    }
     expect(worker.postMessage).toHaveBeenCalledWith({ type: "stop" }, []);
-    expect(worker.terminate).toHaveBeenCalledOnce();
+    expect(worker.terminate).toHaveBeenCalledTimes(cooperative ? 0 : 1);
   });
 });

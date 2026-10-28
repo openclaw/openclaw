@@ -145,7 +145,7 @@ export async function runMatrixQaE2eeCliSelfVerificationScenario(
           "owner SAS for CLI self-verification",
           "requireSas",
         );
-        const sasArtifact = assertMatrixQaCliSasMatches({
+        assertMatrixQaCliSasMatches({
           cliSas,
           owner: ownerSas,
         });
@@ -206,12 +206,6 @@ export async function runMatrixQaE2eeCliSelfVerificationScenario(
           );
         }
         return {
-          artifacts: {
-            completedVerificationIds: [cliVerificationId, completedOwner.id],
-            currentDeviceId: status.deviceId ?? cliDevice.deviceId,
-            ...(cliSas.kind === "emoji" ? { sasEmoji: sasArtifact } : {}),
-            secondaryDeviceId: cliDevice.deviceId,
-          },
           details: [
             "Matrix CLI self-verification established full Matrix identity trust through interactive openclaw matrix verify self",
             "cli secret config cleaned after run: yes",

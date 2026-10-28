@@ -33,8 +33,9 @@ Prepare the complete history manifest and substantive version-matched release
 notes before freezing the product-complete commit and its target context as the
 **Code SHA/ref**. Package source preflight requires a matching release section;
 an empty placeholder is not preparation. If the notes are final, this commit
-can also be the **Release SHA**. The candidate C owns qualification Q=C; select
-independently trusted admission/publication tooling P, then run:
+can also be the **Release SHA**. The candidate C owns test qualification Q=C;
+select independently trusted P for admission, aggregate validation, and
+publication, then run:
 
 ```bash
 PUBLISHER_SHA="<recorded-full-trusted-main-ancestor-sha>"
@@ -53,7 +54,7 @@ This example selects normal final-release publication. Select `npmDistTag=beta`
 for a beta, or `route=prepared` when the intended consumer is the prepared release
 button. Core publication requires `all-publishable` plugins. Plugin-only normal
 publication can set `publishOpenclawNpm=false`, `pluginPublishScope=selected`,
-and explicit canonical package names in `plugins`.
+and explicit official package names in `plugins`.
 
 Every fresh run requires an explicit `validation_purpose`. `publish` verifies
 complete committed source metadata before projecting the requested publication
@@ -241,9 +242,9 @@ authenticate its bytes against that original upload and digest, and re-upload
 the unchanged plan and admission for the current attempt. GitHub removes prior
 parent artifacts on a full rerun, so retain the cache and original job logs.
 If the cache is unavailable, an accessible plan artifact can supply the same
-authenticated bytes. Missing or invalid evidence fails closed; retries never
+authenticated bytes. Missing or invalid evidence blocks release approval; retries never
 rebuild the plan, recollect registry observations, or redispatch tests.
-Release Decision also repeats canonical reuse-chain validation before a reused
+Release Decision also repeats the shared reuse-chain validation before a reused
 run can pass. The sealed target SHA, evidence SHA, policy, changed-path set,
 selected run, root run, source manifest, trusted tooling identity, and child
 tuple must all still match.

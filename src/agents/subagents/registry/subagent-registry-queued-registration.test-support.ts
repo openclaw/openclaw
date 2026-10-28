@@ -6,12 +6,14 @@ import type {
 } from "../../../infra/sqlite-worker-operation-admission.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { closeSwarmScheduler } from "../swarm/swarm-scheduler.js";
-import { testing as schedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
+import { observeSwarmSchedulerWork } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
+import { createSubagentRegistryListener } from "./subagent-registry-listener.js";
+import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
 import {
   mutateSubagentRuns,
   restoreSubagentRunsFromDisk,
 } from "./subagent-registry-persistence.js";
+import { createSubagentManagerTestOptions } from "./subagent-registry-queued-recovery.test-support.js";
 import type { RegisterSubagentRunParams } from "./subagent-registry-run-launch-record.js";
 import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
@@ -19,6 +21,7 @@ import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixtur
 import type { SubagentRegistrationScope, SubagentRunRecord } from "./subagent-registry.types.js";
 
 function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecord>()) {
+  const schedulerWork = observeSwarmSchedulerWork();
   const pending: Promise<unknown>[] = [];
   const track = <T>(work: T | Promise<T>): Promise<T> => {
     const promise = Promise.resolve(work);
@@ -85,33 +88,24 @@ function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecor
       );
     });
   const options = {
-    runs,
-    getRunsForChildSession: (key) =>
-      [...runs.values()].filter((row) => row.childSessionKey === key),
-    resumedRuns: new Set<object>(),
-    acquireTerminalCompletionLock: async () => () => {},
-    callGateway: async () => {
+    ...createSubagentManagerTestOptions(runs, async () => {
       throw new Error("Unexpected collector wait");
-    },
-    getRuntimeConfig: () => ({}),
+    }),
     ensureListener: vi.fn(),
     startSweeper: vi.fn(),
     stopSweeper: vi.fn(),
     resumeSubagentRun: vi.fn(),
     clearPendingLifecycleError: vi.fn(),
     clearPendingLifecycleTimeout: vi.fn(),
-    resolveSubagentWaitTimeoutMs: () => 100,
     scheduleSweep: vi.fn(),
-    resolveSubagentSessionCompletion: async () => null,
-    resolveSubagentSessionStartedAt: async () => undefined,
-    notifyContextEngineSubagentEnded: async () => {},
     completeCleanupBookkeeping: vi.fn(async () => {}),
-    completeSubagentRun: async () => {},
   } satisfies SubagentManagerOptions;
   const manager = createSubagentRunManager(options);
   const registration: RegisterSubagentRunParams = {
     runId: "queued-original",
     childSessionKey: "agent:main:subagent:synthetic",
+    childAgentId: "main",
+    sessionEntry: { sessionId: "synthetic-session" },
     requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "main",
     task: "synthetic queued work",
@@ -120,6 +114,7 @@ function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecor
     collect: true,
     queued: true,
     queuedLaunch: {
+      requesterRecovery: {},
       request: { sessionKey: "agent:main:subagent:synthetic" },
       timeoutMs: 100,
       schedulerGroupKey: "group",
@@ -129,6 +124,20 @@ function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecor
   let scope: SubagentRegistrationScope | undefined;
   return {
     runs,
+    createListener: (
+      overrides: Partial<Omit<Parameters<typeof createSubagentRegistryListener>[0], "runs">> = {},
+    ) =>
+      createSubagentRegistryListener({
+        runs,
+        pendingLifecycle:
+          overrides.pendingLifecycle ??
+          createPendingLifecycleScheduler({ runs, completeInBackground: vi.fn() }),
+        resumeRequesterSettleWake: vi.fn(),
+        adoptPausedSubagentRunIntoSuccessor: async () => false,
+        refreshFrozenResultFromSession: async () => {},
+        completeSubagentRunWithRecovery: async () => {},
+        ...overrides,
+      }),
     options,
     manager,
     registration,
@@ -198,11 +207,10 @@ function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecor
         hold.gate.resolve();
       }
       await Promise.allSettled(pending);
-      await closeSwarmScheduler();
+      await schedulerWork.close();
       worker.mockRestore();
       await restoreSubagentRunsFromDisk({ runs });
       runs.clear();
-      schedulerTesting.reset();
     },
   };
 }

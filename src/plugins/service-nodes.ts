@@ -81,7 +81,6 @@ export function createPluginServiceNodeInvoker(options: {
   ) => {
     const { assertCurrent } = authority;
     const signal = streamSignal ?? authority.signal;
-    assertCurrent();
     // Service creation must not eagerly load the Gateway dispatch graph.
     const [{ dispatchGatewayRequestInProcess }, { createSyntheticPluginRuntimeClient }] =
       await Promise.all([

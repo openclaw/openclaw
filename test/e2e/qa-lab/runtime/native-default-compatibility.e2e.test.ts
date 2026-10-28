@@ -1,10 +1,16 @@
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { createDeferred } from "../../../helpers/promise.js";
 import { runQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import {
+  closeNativeProvider,
+  createNativeProvider,
+  listenNativeProvider,
+  nativeModel,
+  writeNativeCompletion,
+} from "./native-provider-proof-fixture.js";
 import {
   createSkillLibraryWireInstance,
   SKILL_LIBRARY_ALICE,
@@ -21,27 +27,20 @@ it(
     const instances: Awaited<ReturnType<typeof createSkillLibraryWireInstance>>[] = [];
     const clients: SkillLibraryWireClient[] = [];
     const providerErrors: unknown[] = [];
-    const requests: Array<{ gateway: number; user: string; model: string; continuation: boolean }> =
-      [];
+    let requestCount = 0;
     let target = 1;
     let entered = 0;
     let gate = createDeferred();
-    const credential = (gateway: number, user: string) =>
-      ["synthetic-compat", gateway, user].join("-");
-    const instruction = (gateway: number, user: string) =>
-      ["COMPAT_SKILL", gateway, user].join("_");
+    const credential = (gateway: number, user: string) => `synthetic-compat-${gateway}-${user}`;
+    const instruction = (gateway: number, user: string) => `COMPAT_SKILL_${gateway}_${user}`;
     const servers = [0, 1].map((gateway) =>
-      createServer((request, response) => {
-        void (async () => {
+      createNativeProvider(
+        async (request, response, rawBody) => {
           if (request.url !== "/v1/chat/completions") {
             response.writeHead(404).end();
             return;
           }
-          const chunks: Buffer[] = [];
-          for await (const chunk of request) {
-            chunks.push(Buffer.from(chunk));
-          }
-          const body = JSON.parse(Buffer.concat(chunks).toString()) as {
+          const body = JSON.parse(rawBody) as {
             model: string;
             messages: Array<{ role: string; content?: unknown }>;
             tools?: Array<{ function?: { name: string } }>;
@@ -50,12 +49,7 @@ it(
           expect(["alice", "bob"]).toContain(user);
           expect(request.headers.authorization).toBe("Bearer " + credential(gateway, user));
           const toolMessage = body.messages.findLast((message) => message.role === "tool");
-          requests.push({
-            gateway,
-            user,
-            model: body.model,
-            continuation: Boolean(toolMessage),
-          });
+          requestCount++;
           let delta: Record<string, unknown>;
           let finish: string;
           if (!toolMessage) {
@@ -98,65 +92,29 @@ it(
             delta = { role: "assistant", content: instruction(gateway, user) + "_OK" };
             finish = "stop";
           }
-          response.writeHead(200, { "content-type": "text/event-stream" });
-          for (const [part, finishReason] of [
-            [delta, null],
-            [{}, finish],
-          ]) {
-            response.write(
-              "data: " +
-                JSON.stringify({
-                  id: "compat-response",
-                  object: "chat.completion.chunk",
-                  created: 1,
-                  model: body.model,
-                  choices: [{ index: 0, delta: part, finish_reason: finishReason }],
-                }) +
-                "\n\n",
-            );
-          }
-          response.end("data: [DONE]\n\n");
-        })().catch((error: unknown) => {
+          writeNativeCompletion(response, "compat-response", body.model, delta, finish);
+        },
+        (error, response) => {
           providerErrors.push(error);
           response.writeHead(500).end("fixture contract failed");
           gate.resolve();
-        });
-      }),
+        },
+      ),
     );
     await runQaGatewayFixture(
       async () => {
         for (const [gateway, server] of servers.entries()) {
-          await new Promise<void>((resolve, reject) => {
-            server.once("error", reject);
-            server.listen(0, "127.0.0.1", resolve);
-          });
-          const address = server.address();
-          if (!address || typeof address === "string") {
-            throw new Error("provider listener unavailable");
-          }
+          const baseUrl = await listenNativeProvider(server);
           const instance = await createSkillLibraryWireInstance();
           instances.push(instance);
           // Drop inherited credentials; retain only fixture state and OS launch inputs.
           const allowed = new Set([
             ...Object.keys(instance.state.envVars),
-            "PATH",
-            "Path",
-            "SystemRoot",
-            "SYSTEMROOT",
-            "WINDIR",
-            "ComSpec",
-            "COMSPEC",
-            "PATHEXT",
-            "TMPDIR",
-            "TMP",
-            "TEMP",
-            "LANG",
-            "LC_ALL",
-            "OPENCLAW_BUILD_PRIVATE_QA",
-            "OPENCLAW_SKIP_GMAIL_WATCHER",
-            "OPENCLAW_SKIP_CRON",
-            "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-            "OPENCLAW_SKIP_CANVAS_HOST",
+            ...(
+              "PATH Path SystemRoot SYSTEMROOT WINDIR ComSpec COMSPEC PATHEXT TMPDIR TMP TEMP LANG LC_ALL " +
+              "OPENCLAW_BUILD_PRIVATE_QA OPENCLAW_SKIP_GMAIL_WATCHER OPENCLAW_SKIP_CRON " +
+              "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER OPENCLAW_SKIP_CANVAS_HOST"
+            ).split(" "),
           ]);
           for (const key of Object.keys(instance.env)) {
             if (!allowed.has(key)) {
@@ -175,17 +133,11 @@ it(
             mode: "replace",
             providers: {
               "mock-openai": {
-                baseUrl: "http://127.0.0.1:" + address.port + "/v1",
+                baseUrl,
                 api: "openai-completions",
-                models: ["alice", "bob"].map((user) => ({
-                  id: "compat-" + user,
-                  name: user,
-                  reasoning: false,
-                  input: ["text"],
-                  contextWindow: 32768,
-                  maxTokens: 1024,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                })),
+                models: ["alice", "bob"].map((user) =>
+                  nativeModel("compat-" + user, { name: user }),
+                ),
               },
             },
           };
@@ -206,13 +158,7 @@ it(
             await fs.mkdir(path.join(workspace, "skills/guide"), { recursive: true });
             await fs.writeFile(
               path.join(workspace, "skills/guide/SKILL.md"),
-              [
-                "---",
-                "name: guide",
-                "description: owned fixture",
-                "---",
-                instruction(gateway, user),
-              ].join("\n"),
+              `---\nname: guide\ndescription: owned fixture\n---\n${instruction(gateway, user)}`,
             );
             config.agents.entries![user] = {
               workspace,
@@ -291,7 +237,7 @@ it(
           target = indices.length;
           entered = 0;
           gate = createDeferred();
-          const startCount = requests.length;
+          const startCount = requestCount;
           await Promise.all(
             indices.map(async (index) => {
               const owner = connections[index]!;
@@ -344,12 +290,7 @@ it(
             }),
           );
           expect(providerErrors).toEqual([]);
-          expect(requests.slice(startCount)).toHaveLength(indices.length * 2);
-          console.log("compatibility matrix cell", {
-            gateways: new Set(indices.map((index) => connections[index]!.gateway)).size,
-            usersPerGateway: phase === 1 || phase === 3 ? 2 : 1,
-            turns: indices.length,
-          });
+          expect(requestCount - startCount).toBe(indices.length * 2);
         }
         const alice = connections[0]!;
         await alice.client.close();
@@ -371,15 +312,7 @@ it(
         await Promise.all(instances.map((instance) => instance.cleanup()));
       },
       async () => {
-        await Promise.all(
-          servers.map(
-            (server) =>
-              new Promise<void>((resolve, reject) => {
-                server.closeAllConnections();
-                server.close((error) => (error ? reject(error) : resolve()));
-              }),
-          ),
-        );
+        await Promise.all(servers.map(closeNativeProvider));
       },
     );
   },

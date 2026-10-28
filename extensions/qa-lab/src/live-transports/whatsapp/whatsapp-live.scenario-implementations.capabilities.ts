@@ -29,7 +29,6 @@ function createWhatsAppOutboundPollScenario(
 ): WhatsAppQaScenarioImplementation {
   const group = target === "group";
   return createWhatsAppMessageScenario({
-    posture: "direct-gateway",
     ...(group ? { requiresGroupJid: true } : {}),
     marker: `WHATSAPP_QA_${group ? "GROUP_" : ""}OUTBOUND_POLL`,
     buildRun: (token) => {
@@ -61,7 +60,6 @@ function createWhatsAppOutboundPollScenario(
 
 export const whatsappCapabilityScenarios = {
   whatsappQaOutboundDocumentPreservesFilenameScenario: createWhatsAppMessageScenario({
-    posture: "direct-gateway",
     marker: "WHATSAPP_QA_DOCUMENT_FILE",
     buildRun: (token) => ({
       afterReply: async (_reply, context) => {
@@ -91,7 +89,6 @@ export const whatsappCapabilityScenarios = {
   }),
 
   whatsappQaOutboundSendSerializationScenario: createWhatsAppMessageScenario({
-    posture: "direct-gateway",
     marker: "WHATSAPP_QA_SERIAL_SEND",
     buildRun: (token) => {
       const markers = Array.from({ length: 5 }, (_, index) => `${token}_${index + 1}`);
@@ -123,7 +120,6 @@ export const whatsappCapabilityScenarios = {
   whatsappQaOutboundPollScenario: createWhatsAppOutboundPollScenario("dm"),
 
   whatsappQaGroupOutboundMediaScenario: createWhatsAppMessageScenario({
-    posture: "direct-gateway",
     requiresGroupJid: true,
     marker: "WHATSAPP_QA_GROUP_OUTBOUND_MEDIA",
     buildRun: (token) => ({
@@ -135,7 +131,6 @@ export const whatsappCapabilityScenarios = {
   }),
 
   whatsappQaGroupOutboundAudioScenario: createWhatsAppMessageScenario({
-    posture: "direct-gateway",
     requiresGroupJid: true,
     marker: "WHATSAPP_QA_GROUP_OUTBOUND_AUDIO",
     buildRun: (token) => ({
@@ -160,7 +155,6 @@ export const whatsappCapabilityScenarios = {
   whatsappQaGroupOutboundPollScenario: createWhatsAppOutboundPollScenario("group"),
 
   whatsappQaMessageActionsScenario: createWhatsAppMessageScenario({
-    posture: "direct-gateway",
     configOverrides: {
       actions: true,
     },
@@ -207,7 +201,6 @@ export const whatsappCapabilityScenarios = {
   }),
 
   whatsappQaInboundStructuredMessagesScenario: createWhatsAppMessageScenario({
-    posture: "user-path",
     marker: "WHATSAPP_QA_STRUCTURED",
     buildRun: (token) => {
       const locationToken = `${token}_LOCATION`;
@@ -266,7 +259,6 @@ export const whatsappCapabilityScenarios = {
   }),
 
   whatsappQaGroupAudioGatingScenario: {
-    posture: "user-path",
     configOverrides: {
       audioPreflight: true,
     },

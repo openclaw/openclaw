@@ -4,8 +4,6 @@ import { TerminalStates, type CallId, type CallRecord } from "../types.js";
 import type { CallEndResult, CallManagerContext } from "./context.js";
 import { resolveVoiceCallSecondsTimerDelayMs } from "./timer-delays.js";
 
-// Max-duration and transcript-waiter timers for active voice calls.
-
 type TimerContext = Pick<
   CallManagerContext,
   | "activeCalls"

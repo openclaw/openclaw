@@ -93,7 +93,7 @@ export async function sendTypingTelegram(
         );
         return { ok: true };
       },
-      (err) => isRecoverableTelegramNetworkError(err, { context: "action" }),
+      isRecoverableTelegramNetworkError,
       "internal",
     );
   } finally {
@@ -138,7 +138,7 @@ export async function reactMessageTelegram(
       }
       return { ok: true };
     },
-    (err) => isRecoverableTelegramNetworkError(err, { context: "react" }),
+    isRecoverableTelegramNetworkError,
   );
 }
 
@@ -169,10 +169,9 @@ export async function deleteMessageTelegram(
           warning: `Message ${messageId} was not deleted: ${detail}`,
         };
       }
-      logVerbose(`[telegram] Deleted message ${messageId} from chat ${chatId}`);
       return { ok: true };
     },
-    (err) => isRecoverableTelegramNetworkError(err, { context: "delete" }),
+    isRecoverableTelegramNetworkError,
   );
 }
 
@@ -193,7 +192,6 @@ export async function pinMessageTelegram(
           }),
         "pinChatMessage",
       );
-      logVerbose(`[telegram] Pinned message ${messageId} in chat ${chatId}`);
       return { ok: true, messageId: String(messageId), chatId };
     },
   );
@@ -210,9 +208,6 @@ export async function unpinMessageTelegram(
     opts,
     async ({ api, chatId, messageId, request }) => {
       await request(() => api.unpinChatMessage(chatId, messageId), "unpinChatMessage");
-      logVerbose(
-        `[telegram] Unpinned ${messageId != null ? `message ${messageId}` : "active message"} in chat ${chatId}`,
-      );
       return {
         ok: true,
         chatId,

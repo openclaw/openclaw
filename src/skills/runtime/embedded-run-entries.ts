@@ -12,7 +12,6 @@ import {
   type SkillEntry,
   type SkillSnapshot,
 } from "../types.js";
-import { getSkillsSourceVersion } from "./refresh-state.js";
 import { resolveSkillSnapshotExecutionFileHost } from "./skill-snapshot-provenance.js";
 
 export async function resolveEmbeddedRunSkillEntries(params: {
@@ -77,34 +76,28 @@ export async function resolveEmbeddedRunSkillEntries(params: {
         : {}),
       ...(params.workspaceOnly === true ? { workspaceOnly: true } : {}),
     };
-    for (;;) {
-      preparation.assertCurrent();
-      const sourceVersion = getSkillsSourceVersion(skillRoots.agentWorkspaceDir, options);
-      const workspaceEntries = await prepareWorkspaceSkills(
-        skillRoots.agentWorkspaceDir,
-        options,
-        params.assertCurrent,
-      );
-      preparation.assertCurrent();
-      const libraryEntries = preparation.libraryContext
-        ? await prepareSkillLibrarySelection(
-            preparation.librarySelections,
-            { env: preparation.libraryContext.environment },
-            preparation.assertCurrent,
-          )
-        : undefined;
-      preparation.assertCurrent();
-      if (cachedSkillEntries) {
-        return cachedSkillEntries;
-      }
-      if (getSkillsSourceVersion(skillRoots.agentWorkspaceDir, options) !== sourceVersion) {
-        continue;
-      }
-      cachedSkillEntries = libraryEntries
-        ? [...workspaceEntries, ...libraryEntries]
-        : workspaceEntries;
+    preparation.assertCurrent();
+    const workspaceEntries = await prepareWorkspaceSkills(
+      skillRoots.agentWorkspaceDir,
+      options,
+      params.assertCurrent,
+    );
+    preparation.assertCurrent();
+    const libraryEntries = preparation.libraryContext
+      ? await prepareSkillLibrarySelection(
+          preparation.librarySelections,
+          { env: preparation.libraryContext.environment },
+          preparation.assertCurrent,
+        )
+      : undefined;
+    preparation.assertCurrent();
+    if (cachedSkillEntries) {
       return cachedSkillEntries;
     }
+    cachedSkillEntries = libraryEntries
+      ? [...workspaceEntries, ...libraryEntries]
+      : workspaceEntries;
+    return cachedSkillEntries;
   };
   return {
     shouldLoadSkillEntries,

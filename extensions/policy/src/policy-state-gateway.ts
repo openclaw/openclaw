@@ -205,7 +205,7 @@ function isEffectiveGatewayUrlAllowlistEntry(value: unknown): boolean {
 }
 
 function isGatewayNonLoopbackBind(value: string): boolean {
-  return value === "auto" || value === "lan" || value === "custom" || value === "tailnet";
+  return value === "auto" || value === "lan" || value === "tailnet";
 }
 
 function isRuntimeNonLoopbackCustomBindHost(value: string): boolean {

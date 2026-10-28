@@ -81,8 +81,8 @@ export function createModifiedMemoryFlushPlan(overrides: Partial<FileFlushPlan>)
 }
 
 export type ModelFallbackParams = {
-  provider?: string;
-  model?: string;
+  provider: string;
+  model: string;
   abortSignal?: AbortSignal;
   agentId?: string;
   sessionId?: string;
@@ -107,14 +107,31 @@ export type ModelFallbackParams = {
   ) => Promise<EmbeddedAgentRunResult>;
 };
 
+export function modelRoutingProvenance(
+  requestedProvider: string,
+  requestedModel: string,
+  stage: ModelFallbackAttemptProvenance["stage"] = "initial",
+): ModelFallbackAttemptProvenance {
+  return { requestedProvider, requestedModel, stage };
+}
+
+export async function runSelectedMemoryModel({ provider, model, run }: ModelFallbackParams) {
+  return {
+    result: await run(provider, model, {
+      modelRoutingProvenance: modelRoutingProvenance(provider, model),
+    }),
+    provider,
+    model,
+    attempts: [],
+  };
+}
+
 export function createMemoryRunEntryMockImplementation(deps: {
   runWithModelFallback: (params: ModelFallbackParams) => Promise<unknown>;
   ensureSelectedAgentHarnessPlugin: typeof ensureSelectedAgentHarnessPlugin;
 }) {
   return async (params: Parameters<typeof runEmbeddedAgentEntry<EmbeddedAgentRunResult>>[0]) => {
-    const assistantErrorTranscript = createAssistantErrorTranscript({
-      runId: params.identity.runId,
-    });
+    const assistantErrorTranscript = createAssistantErrorTranscript();
     const fallbackResult = (await deps.runWithModelFallback({
       ...params.selection,
       ...params.identity,

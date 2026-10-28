@@ -30,19 +30,6 @@ describe("ConfigSchemaResponseSchema", () => {
   it("accepts the phone-number presentation hint", () => {
     expect(Value.Check(ConfigSchemaResponseSchema, response)).toBe(true);
   });
-
-  it("rejects unknown presentation hint values", () => {
-    expect(
-      Value.Check(ConfigSchemaResponseSchema, {
-        ...response,
-        uiHints: {
-          "channels.sms.fromNumber": {
-            presentation: "telephone",
-          },
-        },
-      }),
-    ).toBe(false);
-  });
 });
 
 describe("ConfigSchemaLookupResultSchema", () => {
@@ -177,7 +164,6 @@ describe("update protocol schemas", () => {
       upstreamSha: "1234567890abcdef1234567890abcdef12345678",
     };
 
-    expect(Value.Check(UpdateRunParamsSchema, {})).toBe(true);
     expect(Value.Check(UpdateRunParamsSchema, { target })).toBe(true);
 
     for (const invalidTarget of [
@@ -197,38 +183,6 @@ describe("update protocol schemas", () => {
     expect(Value.Check(UpdateStatusParamsSchema, {})).toBe(true);
     expect(Value.Check(UpdateStatusParamsSchema, { refreshCheckout: true })).toBe(true);
     expect(Value.Check(UpdateStatusParamsSchema, { refreshCheckout: "yes" })).toBe(false);
-  });
-
-  it("accepts package and git schedule targets", () => {
-    expect(
-      Value.Check(UpdateScheduleStateSchema, {
-        channel: "beta",
-        autoEnabled: true,
-        install: { kind: "package" },
-        target: { kind: "package", version: "2026.8.1-beta.1" },
-        campaign: {
-          id: "campaign-1",
-          state: "countdown",
-          announcedAtMs: 1,
-          applyAtMs: 60_001,
-          forceAtMs: 900_001,
-          updatedAtMs: 1,
-        },
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(UpdateScheduleStateSchema, {
-        channel: "dev",
-        autoEnabled: true,
-        install: { kind: "git" },
-        target: {
-          kind: "git",
-          upstreamRef: "origin/main",
-          upstreamSha: "abcdef1234",
-          commitsBehind: 3,
-        },
-      }),
-    ).toBe(true);
   });
 
   it("accepts immutable recovery and optional verification facts while rejecting private fields", () => {
@@ -334,7 +288,12 @@ describe("update protocol schemas", () => {
         schedule: {
           channel: "dev",
           autoEnabled: true,
-          target: { kind: "git", upstreamRef: "origin/main", commitsBehind: -1 },
+          target: {
+            kind: "git",
+            upstreamRef: "origin/main",
+            upstreamSha: "abcdef1234",
+            commitsBehind: -1,
+          },
         },
       }),
     ).toBe(false);

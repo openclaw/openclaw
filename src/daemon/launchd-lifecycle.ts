@@ -1,4 +1,3 @@
-/** LaunchAgent bootstrap recovery plus start and restart lifecycle controls. */
 import { spawnSync } from "node:child_process";
 import { formatPortDiagnostics } from "../infra/ports-format.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
@@ -65,24 +64,11 @@ function readLaunchAgentPidForCleanupSync(serviceTarget: string): number {
   return pid;
 }
 
-type LaunchAgentBootstrapRepairResult =
-  | { ok: true; status: "repaired" | "already-loaded" }
-  | {
-      ok: false;
-      status: "bootstrap-failed" | "kickstart-failed";
-      detail?: string;
-    }
-  | {
-      ok: false;
-      status: "system-launchdaemon-conflict" | "system-launchdaemon-unverifiable";
-      detail: string;
-    }
-  | { ok: false; status: "gui-session-unavailable"; detail: string; domain: string };
-
 export async function repairLaunchAgentBootstrap(args: {
+  deadline?: GatewayServiceControlArgs["deadline"];
   env?: Record<string, string | undefined>;
   warn?: (message: string) => void;
-}): Promise<LaunchAgentBootstrapRepairResult> {
+}) {
   const env = args.env ?? (process.env as Record<string, string | undefined>);
   const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(env);
@@ -95,11 +81,11 @@ export async function repairLaunchAgentBootstrap(args: {
       throw error;
     }
     return {
-      ok: false,
+      ok: false as const,
       status:
         error.ownership.status === "unverifiable"
-          ? "system-launchdaemon-unverifiable"
-          : "system-launchdaemon-conflict",
+          ? ("system-launchdaemon-unverifiable" as const)
+          : ("system-launchdaemon-conflict" as const),
       detail: error.message,
     };
   }
@@ -107,35 +93,72 @@ export async function repairLaunchAgentBootstrap(args: {
   // env file before the plist becomes world-readable for launchd.
   const warn = args.warn ?? ((message: string) => console.warn(formatLine("Warning", message)));
   await rewriteLaunchAgentPlistForRestart({ env, label, plistPath, warn });
-  await execLaunchctl(["enable", serviceTarget]);
-  const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
-  if (boot.code === 0) {
-    return { ok: true, status: "repaired" };
-  }
-  const detail = (boot.stderr || boot.stdout).trim();
-  if (isUnsupportedGuiDomain(detail)) {
-    return { ok: false, status: "gui-session-unavailable", detail, domain };
-  }
-  if (!isLaunchctlAlreadyLoaded(boot)) {
-    return { ok: false, status: "bootstrap-failed", detail: detail || undefined };
+  try {
+    const bootstrap = await bootstrapLaunchAgentOrThrow({
+      domain,
+      serviceTarget,
+      plistPath,
+      actionHint: "openclaw gateway start",
+      deadline: args.deadline,
+    });
+    if (bootstrap === "bootstrapped") {
+      return { ok: true as const, status: "repaired" as const };
+    }
+  } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    const boot = error instanceof Error ? error.cause : undefined;
+    if (
+      !boot ||
+      typeof boot !== "object" ||
+      !("stderr" in boot) ||
+      typeof boot.stderr !== "string" ||
+      !("stdout" in boot) ||
+      typeof boot.stdout !== "string" ||
+      !("code" in boot) ||
+      typeof boot.code !== "number" ||
+      !("termination" in boot)
+    ) {
+      throw error;
+    }
+    const detail = (boot.stderr || boot.stdout).trim();
+    if (isUnsupportedGuiDomain(detail)) {
+      return { ok: false as const, status: "gui-session-unavailable" as const, detail, domain };
+    }
+    if (
+      boot.termination !== "exit" ||
+      !isLaunchctlAlreadyLoaded({
+        code: boot.code,
+        termination: "exit",
+        stderr: boot.stderr,
+        stdout: boot.stdout,
+      })
+    ) {
+      return {
+        ok: false as const,
+        status: "bootstrap-failed" as const,
+        detail: detail || undefined,
+      };
+    }
   }
 
   // Service is already bootstrapped. Only kickstart if it is not actively running —
   // kickstarting a healthy running service causes unnecessary session disconnects.
-  const runtime = await readLaunchAgentRuntime(env);
+  const runtime = await readLaunchAgentRuntime(env, { timeoutMs: args.deadline?.remainingMs() });
   if (runtime.status === "running") {
-    return { ok: true, status: "already-loaded" };
+    return { ok: true as const, status: "already-loaded" as const };
   }
 
-  const kick = await execLaunchctl(["kickstart", serviceTarget]);
+  const kick = await execLaunchctl(["kickstart", serviceTarget], args.deadline);
   if (kick.code !== 0) {
     return {
-      ok: false,
-      status: "kickstart-failed",
+      ok: false as const,
+      status: "kickstart-failed" as const,
       detail: (kick.stderr || kick.stdout).trim() || undefined,
     };
   }
-  return { ok: true, status: "already-loaded" };
+  return { ok: true as const, status: "already-loaded" as const };
 }
 type LaunchAgentRestoreResult = { loaded: true } | { loaded: false; detail: string };
 
@@ -161,9 +184,10 @@ async function ensureLaunchAgentLoadedAfterFailure(params: {
   assertCurrent?: () => void;
   retryPendingTeardown?: boolean;
   preserveAutoStart?: boolean;
+  deadline?: GatewayServiceControlArgs["deadline"];
 }): Promise<LaunchAgentRestoreResult> {
   params.assertCurrent?.();
-  const probe = await execLaunchctl(["print", params.serviceTarget]);
+  const probe = await execLaunchctl(["print", params.serviceTarget], params.deadline);
   params.assertCurrent?.();
   if (probe.code === 0) {
     return { loaded: true };
@@ -210,13 +234,14 @@ async function needsLaunchAgentBootstrap(
   kickstart: Awaited<ReturnType<typeof execLaunchctl>>,
   serviceTarget: string,
   assertCurrent?: () => void,
+  deadline?: GatewayServiceControlArgs["deadline"],
 ): Promise<boolean> {
   if (kickstart.code === 0 || isLaunchctlNotLoaded(kickstart)) {
     return kickstart.code !== 0;
   }
   // Empty or generic kickstart output cannot establish whether the job exists.
   assertCurrent?.();
-  const observed = await probeLaunchAgentState(serviceTarget);
+  const observed = await probeLaunchAgentState(serviceTarget, deadline?.remainingMs());
   assertCurrent?.();
   return observed.state === "not-loaded";
 }
@@ -225,7 +250,8 @@ async function prepareLaunchAgentActivation(
   args: GatewayServiceControlArgs,
   action: "start" | "restart",
 ) {
-  const { assertCurrent, preserveAutoStart, preserveDefinition, onRestartAttempted } = args;
+  const { assertCurrent, preserveAutoStart, preserveDefinition, onRestartAttempted, deadline } =
+    args;
   const serviceEnv = args.env ?? (process.env as GatewayServiceEnv);
   const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(serviceEnv);
@@ -241,6 +267,7 @@ async function prepareLaunchAgentActivation(
     assertCurrent,
     preserveAutoStart,
     retryPendingTeardown: preserveDefinition,
+    deadline,
   };
   const load = (options: { skipEnable?: boolean; retryPendingTeardown?: boolean } = {}) =>
     bootstrapLaunchAgentOrThrow({
@@ -259,7 +286,7 @@ async function prepareLaunchAgentActivation(
         return false;
       }
       assertCurrent?.();
-      const result = await execLaunchctl(["enable", serviceTarget]);
+      const result = await execLaunchctl(["enable", serviceTarget], deadline);
       if (result.code === 0) {
         reportMutation("enable");
       }
@@ -271,23 +298,22 @@ async function prepareLaunchAgentActivation(
       if (action === "restart") {
         onRestartAttempted?.();
       }
-      let start = await execLaunchctl([
-        "kickstart",
-        ...(action === "restart" ? ["-k"] : []),
-        serviceTarget,
-      ]);
+      let start = await execLaunchctl(
+        ["kickstart", ...(action === "restart" ? ["-k"] : []), serviceTarget],
+        deadline,
+      );
       if (action === "restart" && start.code === 0) {
         reportMutation("kickstart");
         return;
       }
-      if (await needsLaunchAgentBootstrap(start, serviceTarget, assertCurrent)) {
+      if (await needsLaunchAgentBootstrap(start, serviceTarget, assertCurrent, deadline)) {
         await load({ skipEnable });
         // Loading only registers demand-only jobs. Without -k, an auto-started job stays running.
         if (action === "restart" && !preserveDefinition) {
           return;
         }
         assertCurrent?.();
-        start = await execLaunchctl(["kickstart", serviceTarget]);
+        start = await execLaunchctl(["kickstart", serviceTarget], deadline);
       }
       if (start.code !== 0) {
         throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
@@ -349,7 +375,9 @@ export async function restartLaunchAgent(
         probeHosts,
       }).catch(() => null);
       if (diagnostics?.status === "busy") {
-        const runtime = await readLaunchAgentRuntime(serviceEnv);
+        const runtime = await readLaunchAgentRuntime(serviceEnv, {
+          timeoutMs: params.deadline?.remainingMs(),
+        });
         const managedPid = runtime.pid;
         // Only the current supervised PID may keep the port busy before a
         // disruptive restart. Re-read after cleanup to close over a concurrent
@@ -396,6 +424,9 @@ export async function restartLaunchAgent(
     if (!handoff.ok) {
       throw new Error(`launchd restart handoff failed: ${handoff.error}`);
     }
+    if (!(await handoff.value)) {
+      throw new Error("launchd restart handoff failed: helper failed to spawn");
+    }
     reportMutation(plistReloadNeeded ? "handoff-reload" : "handoff-kickstart");
     writeLaunchAgentActionLine(stdout, "Scheduled LaunchAgent restart", serviceTarget);
     return { outcome: "scheduled" };
@@ -407,7 +438,7 @@ export async function restartLaunchAgent(
 
     if (plistReloadNeeded) {
       assertCurrent?.();
-      const bootout = await execLaunchctl(["bootout", serviceTarget]);
+      const bootout = await execLaunchctl(["bootout", serviceTarget], params.deadline);
       if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
         throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
       }

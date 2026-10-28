@@ -48,7 +48,12 @@ export function createChatAttachmentHandoff(
   let disposed = false;
   let activeReview: { key: string; controller: AbortController } | undefined;
 
-  const handoffAttachments = (handoff: PendingChatAttachmentHandoff) => {
+  const handoffAttachments = (
+    handoff: Pick<
+      Parameters<ApplicationChatAttachmentHandoff["prepare"]>[0],
+      "attachments" | "fallbacks"
+    >,
+  ) => {
     const byId = new Map(handoff.attachments.map((attachment) => [attachment.id, attachment]));
     for (const fallback of Object.values(handoff.fallbacks)) {
       for (const attachment of fallback.attachments) {
@@ -100,6 +105,7 @@ export function createChatAttachmentHandoff(
       }
     }
   };
+  // Retire private draft leases on connection changes, even while their panes are unmounted.
   const stopGateway = gateway.subscribe(retirePrivateOwners);
   const privateEntry = () => {
     retirePrivateOwners();
@@ -215,18 +221,11 @@ export function createChatAttachmentHandoff(
         releaseHandoff(previous);
         return;
       }
-      const retainedIds = new Set(attachments.map((attachment) => attachment.id));
-      for (const fallback of Object.values(fallbacks)) {
-        for (const attachment of fallback.attachments) {
-          retainedIds.add(attachment.id);
-        }
-      }
+      const handoff = { attachments, fallbacks };
+      const retainedIds = new Set(handoffAttachments(handoff).map((attachment) => attachment.id));
       releaseHandoff(previous, retainedIds);
       if (!owner || disposed) {
-        releaseChatAttachmentPayloads(attachments);
-        for (const fallback of Object.values(fallbacks)) {
-          releaseChatAttachmentPayloads(fallback.attachments);
-        }
+        releaseChatAttachmentPayloads(handoffAttachments(handoff));
         return;
       }
       pending.set(key, {

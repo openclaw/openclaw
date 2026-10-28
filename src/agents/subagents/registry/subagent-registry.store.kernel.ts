@@ -1,78 +1,23 @@
-import type { DatabaseSync } from "node:sqlite";
-import { toUSVString } from "node:util";
-import {
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-  sqliteStringSet,
-} from "../../../infra/kysely-sync.js";
-import { parseSqliteTableDefinition } from "../../../infra/sqlite-schema-contract-assembly.js";
-import {
-  getAdmittedSqliteSchemaFacts,
-  type SqliteSchemaFacts,
-} from "../../../infra/sqlite-schema-facts.js";
-import type { SessionStateNotice } from "../../../sessions/session-state-events.kernel.js";
-import type { SessionStateWorkerOperations } from "../../../sessions/session-state-events.worker-contract.js";
+import { getPostgresPhysicalFacts } from "../../../infra/database-engine/physical-facts.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../../infra/sql-connection.js";
+import { getAdmittedSqliteSchemaFacts } from "../../../infra/sqlite-schema-facts.js";
 import type { OpenClawStateDatabase } from "../../../state/openclaw-state-db-contract.js";
-import { ensureColumn } from "../../../state/openclaw-state-db-schema-helpers.js";
+import { ensureColumn, readTableColumns } from "../../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
-import { subagentRunRowVersion, type SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
+import type { SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
 
 type SubagentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs">;
 // Eight bound columns per row keep each statement within 1,024 parameters.
 const MAX_SUBAGENT_UPSERT_ROWS = 128;
 
-export type SubagentRegistryWrite = {
-  writeId: string;
-  values: readonly SubagentRunSqliteRow[];
-  deleteRunIds: readonly string[];
-  versions: readonly { runId: string; version: string | null }[];
-  terminalEvents?: readonly Pick<
-    SessionStateWorkerOperations["sessionState.record"]["input"],
-    "event" | "now" | "acpControl" | "sessionEntryCurrentSource"
-  >[];
-};
-
-export type SubagentRegistryWriteReceipt =
-  | { writeId: string; conflictRunIds: string[] }
-  | { writeId: string; versions: Map<string, string | null>; notices: SessionStateNotice[] };
-
-/** Check every admitted row before any row or companion effect is changed. */
-export function conflictingSubagentRunVersions(
-  database: OpenClawStateDatabase,
-  versions: SubagentRegistryWrite["versions"],
-): string[] {
-  if (versions.length === 0) {
-    return [];
-  }
-  const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    stateDb
-      .selectFrom("subagent_runs")
-      .selectAll()
-      .where("run_id", "in", sqliteStringSet(versions.map(({ runId }) => runId))),
-  ).rows;
-  const current = new Map(rows.map((row) => [row.run_id, subagentRunRowVersion(row)]));
-  return versions.flatMap(({ runId, version }) =>
-    (current.get(toUSVString(runId)) ?? null) === version ? [] : [runId],
-  );
-}
-
-const parentStoreSchemas = new WeakMap<SqliteSchemaFacts, boolean>();
-
-export function hasParentStoreColumns(db: DatabaseSync): boolean {
-  const schema = getAdmittedSqliteSchemaFacts(db);
+export function hasParentStoreColumns(db: EngineConnection): boolean {
+  const schema = getPostgresPhysicalFacts(db) ?? getAdmittedSqliteSchemaFacts(db);
   if (!schema) {
     throw new Error("Subagent rows require admitted schema facts");
   }
-  let present = parentStoreSchemas.get(schema);
-  if (present === undefined) {
-    const table = schema.tableSql.get("subagent_runs");
-    const columns = table ? parseSqliteTableDefinition(table, "subagent_runs").columns : undefined;
-    present = Boolean(columns?.has("requester_store_path") && columns.has("controller_store_path"));
-    parentStoreSchemas.set(schema, present);
-  }
-  return present;
+  const columns = readTableColumns(db, "subagent_runs");
+  return columns.has("requester_store_path") && columns.has("controller_store_path");
 }
 
 /** Applies selected row changes inside the caller's transaction. */

@@ -92,6 +92,7 @@ export function materializeDeclarationPackages(root: string, unified: boolean) {
   );
   for (const name of [
     "typescript",
+    "tsrs",
     "tsdown",
     ...(unified ? ["@types/node", "apache-arrow"] : []),
   ]) {

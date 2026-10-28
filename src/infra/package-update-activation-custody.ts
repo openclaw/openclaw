@@ -3,7 +3,8 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
-import { formatErrorMessage, hasErrnoCode } from "./errors.js";
+import { ignoreMissingPath } from "./errno.js";
+import { formatErrorMessage } from "./errors.js";
 import {
   packageActivationIdentity,
   resolvePackageActivationHelper,
@@ -17,10 +18,7 @@ export function packageActivationIdentityOrAbsent(file: string, directory: boole
   try {
     return packageActivationIdentity(file, directory);
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return null;
-    }
-    throw error;
+    return ignoreMissingPath(error) ?? null;
   }
 }
 
@@ -189,6 +187,8 @@ export function settlePackageActivationCustody(params: {
   record: PackageActivationRecord;
   settlement: Extract<NonNullable<PackageActivationRecord["intent"]>, { settled: boolean }>;
   assertCurrent: () => void;
+  // Once durably closed, archival may move the custody paths verified before close.
+  assertArchiveCurrent?: () => void;
   onSettled?: () => void;
 }) {
   const { anchor, journal, settlement, assertCurrent } = params;
@@ -199,7 +199,12 @@ export function settlePackageActivationCustody(params: {
     assertCurrent,
   );
   params.onSettled?.();
-  const warning = archivePackageActivationCustody(anchor, journal, record, assertCurrent);
+  const warning = archivePackageActivationCustody(
+    anchor,
+    journal,
+    record,
+    params.assertArchiveCurrent ?? assertCurrent,
+  );
   return {
     record,
     warning: `${settlement.detail ?? settlement.kind}. ${warning ?? `Preserved at ${anchor}.superseded-${record.descriptor.operationId}`}`,

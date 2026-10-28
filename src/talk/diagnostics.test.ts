@@ -1,11 +1,12 @@
 // Talk diagnostics tests cover realtime voice diagnostic event output.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { nextEventLoopTurn } from "../../test/helpers/promise.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
-import { recordTalkDiagnosticEvent } from "./diagnostics.js";
+import { recordTalkObservabilityEvent } from "./observability.js";
 import { createTalkEventSequencer } from "./talk-events.js";
 
 describe("talk diagnostics", () => {
@@ -35,14 +36,15 @@ describe("talk diagnostics", () => {
       turnId: "turn-1",
       payload: {
         byteLength: 320,
+        durationMs: -1,
+        latencyMs: 0,
+        elapsedMs: 42,
         text: "private transcript should not export",
       },
     });
 
-    recordTalkDiagnosticEvent(talkEvent);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    recordTalkObservabilityEvent(talkEvent);
+    await nextEventLoopTurn();
 
     expect(diagnostics).toHaveLength(1);
     const [diagnostic] = diagnostics;
@@ -73,7 +75,7 @@ describe("talk diagnostics", () => {
         brain: "agent-consult",
         provider: "openai",
         final: undefined,
-        durationMs: undefined,
+        durationMs: 0,
         byteLength: 320,
       },
     });

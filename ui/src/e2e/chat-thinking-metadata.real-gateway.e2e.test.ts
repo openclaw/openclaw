@@ -1,19 +1,57 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "../../../test/helpers/openclaw-test-instance.ts";
+import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import type { ModelCatalogResult, SessionsListResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
+import {
+  connectChatGateway,
+  createChatGatewayInstance,
+  gatewayChatUrl,
+} from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const sessionKey = "agent:main:thinking-status";
 const harnessOnlyThinkingLevels = [{ id: "ultra", label: "ultra" }];
+const pageOptions = {
+  locale: "en-US",
+  serviceWorkers: "block" as const,
+  viewport: { width: 1280, height: 900 },
+};
+
+let client: Awaited<ReturnType<typeof connectChatGateway>>;
+const call = <T = Record<string, unknown>>(method: string, params: Record<string, unknown>) =>
+  client.request<T>(method, params);
+
+async function enterChat(page: Page, url: URL) {
+  await page.goto(url.href);
+  await enterControlUiSession(page);
+  await waitForControlUiGatewayReady(page);
+  const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+  await composer.waitFor({ state: "visible" });
+  return composer;
+}
+
+async function completeThinkCommand(composer: ReturnType<Page["getByRole"]>, page: Page) {
+  await composer.fill("/think");
+  await composer.press("Tab");
+  await expect.poll(() => composer.inputValue()).toBe("/think ");
+  await page.locator(".slash-menu[role='listbox']").waitFor({ state: "visible" });
+  await composer.press("Escape");
+}
+
+async function expectSendEnabled(page: Page) {
+  await expect
+    .poll(() =>
+      page
+        .locator("openclaw-chat-pane.chat-pane-cache__pane--visible .chat-send-btn--send")
+        .isEnabled(),
+    )
+    .toBe(true);
+}
 
 async function expectUnselectedUltraChoice(page: Page, currentValue: "" | "off") {
   const control = page.locator('[data-chat-thinking-select="true"]');
@@ -31,50 +69,41 @@ let instance: OpenClawTestInstance;
 const suite = createControlUiE2eSuite({
   name: "Model picker public thinking metadata",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      client = await connectChatGateway(instance, signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+  },
   async startServer() {
-    instance = await createOpenClawTestInstance({
+    instance = await createChatGatewayInstance({
       name: "thinking-metadata",
-      env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
-      config: {
-        gateway: { controlUi: { enabled: true } },
-        cron: { enabled: false },
-        agents: {
-          ownership: "explicit",
-          defaults: {
-            model: "thinking-fixture/no-effort",
-            modelPolicy: { allow: ["thinking-fixture/*"] },
-          },
-          entries: { main: { identity: { name: "Thinking controls" } } },
-        },
-        models: {
-          catalogRefresh: { enabled: false },
-          providers: {
-            "thinking-fixture": {
-              api: "openai-completions",
-              apiKey: "synthetic-unused-key",
-              baseUrl: "http://127.0.0.1:9/v1",
-              models: [
-                { id: "with-effort", name: "With effort", reasoning: true },
-                {
-                  id: "no-effort",
-                  name: "No effort",
-                  reasoning: true,
-                  thinkingLevelMap: {
-                    off: null,
-                    minimal: null,
-                    low: null,
-                    medium: null,
-                    high: null,
-                    xhigh: null,
-                    max: null,
-                  },
-                },
-              ],
-            },
+      provider: "thinking-fixture",
+      identity: "Thinking controls",
+      model: "no-effort",
+      agents: { ownership: "explicit" },
+      api: "openai-completions",
+      apiKey: "synthetic-unused-key",
+      baseUrl: "http://127.0.0.1:9/v1",
+      models: [
+        { id: "with-effort", name: "With effort", reasoning: true },
+        {
+          id: "no-effort",
+          name: "No effort",
+          reasoning: true,
+          thinkingLevelMap: {
+            off: null,
+            minimal: null,
+            low: null,
+            medium: null,
+            high: null,
+            xhigh: null,
+            max: null,
           },
         },
-        plugins: { allow: [] },
-      },
+      ],
     });
     try {
       await instance.startGateway();
@@ -89,344 +118,211 @@ const suite = createControlUiE2eSuite({
 suite.define(() => {
   it("retains saved Off through a real model change to a profile without native thinking choices", async () => {
     const key = "agent:main:thinking-saved-off";
-    const commands: unknown[] = [];
     const frames: Array<{ direction: "sent" | "received"; frame: Record<string, unknown> }> = [];
-    const observations: Record<string, unknown> = {};
-    const call = async (method: string, params: Record<string, unknown>) => {
-      const result = await instance.cli([
-        "gateway",
-        "call",
-        method,
-        "--json",
-        "--params",
-        JSON.stringify(params),
-      ]);
-      commands.push({ method, params, ...result });
-      expect(result.code, result.stderr).toBe(0);
-      return result.stdout;
-    };
-    try {
-      await call("sessions.create", {
-        key,
-        agentId: "main",
-        label: "Saved thinking override",
-        model: "with-effort",
-      });
-      await call("sessions.patch", { key, thinkingLevel: "off" });
-      const before: SessionsListResult = JSON.parse(
-        await call("sessions.list", { agentId: "main", limit: 50 }),
-      );
-      const beforeRow = before.sessions.find((row) => row.key === key);
-      expect(beforeRow).toMatchObject({
-        sessionId: expect.any(String),
-        modelProvider: "thinking-fixture",
-        model: "with-effort",
-        thinkingLevel: "off",
-      });
-      expect(beforeRow?.thinkingLevels?.some((level) => level.id === "high")).toBe(true);
-      observations.before = before;
-      observations.agents = JSON.parse(await call("agents.list", {}));
-      const handoff = await instance.cli(["dashboard", "--json"]);
-      expect(handoff.code, handoff.stderr).toBe(0);
-      const { browserUrl }: { browserUrl: string } = JSON.parse(handoff.stdout);
-      const url = new URL(browserUrl);
-      url.pathname = "/chat/main/thinking-saved-off";
-      url.search = "";
-      await suite.withPage(
-        { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
-        async ({ page }) => {
-          page.on("websocket", (socket) => {
-            const recordFrame = (direction: "sent" | "received", payload: string | Buffer) => {
-              const frame: Record<string, unknown> = JSON.parse(payload.toString());
-              // Authentication is outside this observation; retain all subsequent product frames.
-              if (
-                !(frame.type === "req" && frame.method === "connect") &&
-                frame.event !== "connect.challenge" &&
-                !(isRecord(frame.payload) && frame.payload.type === "hello-ok")
-              ) {
-                frames.push({ direction, frame });
-              }
-            };
-            socket.on("framesent", ({ payload }) => recordFrame("sent", payload));
-            socket.on("framereceived", ({ payload }) => recordFrame("received", payload));
-          });
-          await page.goto(url.href);
-          await enterControlUiSession(page);
-          await waitForControlUiGatewayReady(page);
-          const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
-          await composer.waitFor({ state: "visible" });
-          await composer.fill("/model thinking-fixture/no-effort");
-          await expect
-            .poll(() =>
-              page
-                .locator("openclaw-chat-pane.chat-pane-cache__pane--visible .chat-send-btn--send")
-                .isEnabled(),
-            )
-            .toBe(true);
-          await composer.press("Enter");
-          await expect
-            .poll(async () => {
-              const listed: SessionsListResult = JSON.parse(
-                await call("sessions.list", { agentId: "main", limit: 50 }),
-              );
-              observations.after = listed;
-              return listed.sessions.find((row) => row.key === key);
-            })
-            .toMatchObject({
-              modelProvider: "thinking-fixture",
-              model: "no-effort",
-              thinkingLevel: "off",
-              thinkingLevels: harnessOnlyThinkingLevels,
-            });
-          await composer.fill("/think");
-          await composer.press("Tab");
-          await expect.poll(() => composer.inputValue()).toBe("/think ");
-          await page.locator(".slash-menu[role='listbox']").waitFor({ state: "visible" });
-          await composer.press("Escape");
-          await composer.press("Enter");
-          await expect
-            .poll(async () => {
-              observations.statusText = await page.getByRole("log").textContent();
-              return observations.statusText;
-            })
-            .toContain("Current thinking level: off.");
-          expect(observations.statusText).toContain("Options: default, ultra.");
-          expect(await page.locator('[data-chat-thinking-slider="true"]').count()).toBe(0);
-          await expectUnselectedUltraChoice(page, "off");
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "saved-off-empty-profile.png"),
-          });
-          await composer.fill("/think high");
-          await composer.press("Enter");
-          await expect
-            .poll(async () => {
-              observations.refusalText = await page.getByRole("log").textContent();
-              return observations.refusalText;
-            })
-            .toContain('Unsupported thinking level "high" for this model.');
-          const after: SessionsListResult = JSON.parse(
-            await call("sessions.list", { agentId: "main", limit: 50 }),
-          );
-          expect(after.sessions.find((row) => row.key === key)).toMatchObject({
-            modelProvider: "thinking-fixture",
-            model: "no-effort",
-            thinkingLevel: "off",
-            thinkingLevels: harnessOnlyThinkingLevels,
-          });
-          expect(after.sessions.find((row) => row.key === key)?.thinkingDefault).toBeUndefined();
-          observations.final = after;
-          const requests = frames
-            .filter(({ direction }) => direction === "sent")
-            .map(({ frame }) => frame);
-          expect(requests.some((frame) => frame.method === "chat.send")).toBe(false);
-          expect(
-            requests
-              .filter((frame) => frame.method === "sessions.patch")
-              .map((frame) => frame.params),
-          ).toEqual([
-            {
-              key,
-              expectedSessionId: beforeRow?.sessionId,
-              model: "thinking-fixture/no-effort",
-            },
-          ]);
-          const changes = frames
-            .filter(
-              ({ frame }) =>
-                frame.event === "sessions.changed" &&
-                isRecord(frame.payload) &&
-                frame.payload.sessionKey === key,
-            )
-            .map(({ frame }) => frame.payload)
-            .filter(isRecord);
-          expect(changes.length).toBeGreaterThan(0);
-          for (const change of changes) {
-            if (change.model !== undefined || change.modelProvider !== undefined) {
-              expect(typeof change.model).toBe("string");
-              expect(change.modelProvider).toBe("thinking-fixture");
-            }
+    await call("sessions.create", {
+      key,
+      agentId: "main",
+      label: "Saved thinking override",
+      model: "with-effort",
+    });
+    await call("sessions.patch", { key, thinkingLevel: "off" });
+    const before = await call<SessionsListResult>("sessions.list", { agentId: "main", limit: 50 });
+    const beforeRow = before.sessions.find((row) => row.key === key);
+    expect(beforeRow).toMatchObject({
+      sessionId: expect.any(String),
+      modelProvider: "thinking-fixture",
+      model: "with-effort",
+      thinkingLevel: "off",
+    });
+    expect(beforeRow?.thinkingLevels?.some((level) => level.id === "high")).toBe(true);
+    const url = await gatewayChatUrl(instance, "thinking-saved-off");
+    await suite.withPage(pageOptions, async ({ page }) => {
+      page.on("websocket", (socket) => {
+        const recordFrame = (direction: "sent" | "received", payload: string | Buffer) => {
+          const frame: Record<string, unknown> = JSON.parse(payload.toString());
+          // Authentication is outside this observation; retain all subsequent product frames.
+          if (
+            !(frame.type === "req" && frame.method === "connect") &&
+            frame.event !== "connect.challenge" &&
+            !(isRecord(frame.payload) && frame.payload.type === "hello-ok")
+          ) {
+            frames.push({ direction, frame });
           }
+        };
+        socket.on("framesent", ({ payload }) => recordFrame("sent", payload));
+        socket.on("framereceived", ({ payload }) => recordFrame("received", payload));
+      });
+      const composer = await enterChat(page, url);
+      await composer.fill("/model thinking-fixture/no-effort");
+      await expectSendEnabled(page);
+      await composer.press("Enter");
+      await expect
+        .poll(async () => {
+          const listed = await call<SessionsListResult>("sessions.list", {
+            agentId: "main",
+            limit: 50,
+          });
+          return listed.sessions.find((row) => row.key === key);
+        })
+        .toMatchObject({
+          modelProvider: "thinking-fixture",
+          model: "no-effort",
+          thinkingLevel: "off",
+          thinkingLevels: harnessOnlyThinkingLevels,
+        });
+      await completeThinkCommand(composer, page);
+      await composer.press("Enter");
+      await expect
+        .poll(() => page.getByRole("log").textContent())
+        .toContain("Current thinking level: off.");
+      expect(await page.getByRole("log").textContent()).toContain("Options: default, ultra.");
+      expect(await page.locator('[data-chat-thinking-slider="true"]').count()).toBe(0);
+      await expectUnselectedUltraChoice(page, "off");
+      if (captureUiProof) {
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "saved-off-empty-profile.png"),
+        });
+      }
+      await composer.fill("/think high");
+      await composer.press("Enter");
+      await expect
+        .poll(() => page.getByRole("log").textContent())
+        .toContain('Unsupported thinking level "high" for this model.');
+      const after = await call<SessionsListResult>("sessions.list", { agentId: "main", limit: 50 });
+      expect(after.sessions.find((row) => row.key === key)).toMatchObject({
+        modelProvider: "thinking-fixture",
+        model: "no-effort",
+        thinkingLevel: "off",
+        thinkingLevels: harnessOnlyThinkingLevels,
+      });
+      expect(after.sessions.find((row) => row.key === key)?.thinkingDefault).toBeUndefined();
+      const requests = frames
+        .filter(({ direction }) => direction === "sent")
+        .map(({ frame }) => frame);
+      expect(requests.some((frame) => frame.method === "chat.send")).toBe(false);
+      expect(
+        requests.filter((frame) => frame.method === "sessions.patch").map((frame) => frame.params),
+      ).toEqual([
+        {
+          key,
+          expectedSessionId: beforeRow?.sessionId,
+          model: "thinking-fixture/no-effort",
         },
-      );
-    } finally {
-      const serialized = JSON.stringify({ commands, frames, observations }, null, 2)
-        .replaceAll(instance.gatewayToken, "[synthetic token]")
-        .replaceAll(instance.hookToken, "[synthetic token]")
-        .replaceAll(instance.homeDir, "[fixture home]")
-        .replaceAll(instance.stateDir, "[fixture state]")
-        .replaceAll(process.cwd(), "[source checkout]");
-      await fs.writeFile(path.join(suite.artifactDir, "saved-off-public.json"), serialized);
-    }
+      ]);
+      const changes = frames
+        .filter(
+          ({ frame }) =>
+            frame.event === "sessions.changed" &&
+            isRecord(frame.payload) &&
+            frame.payload.sessionKey === key,
+        )
+        .map(({ frame }) => frame.payload)
+        .filter(isRecord);
+      expect(changes.length).toBeGreaterThan(0);
+      for (const change of changes) {
+        if (change.model !== undefined || change.modelProvider !== undefined) {
+          expect(typeof change.model).toBe("string");
+          expect(change.modelProvider).toBe("thinking-fixture");
+        }
+      }
+    });
   }, 120_000);
 
   it("offers only harness Ultra without advertising a default or changing the session", async () => {
-    const commands: unknown[] = [];
-    const call = async (method: string, params: Record<string, unknown>) => {
-      const result = await instance.cli([
-        "gateway",
-        "call",
-        method,
-        "--json",
-        "--params",
-        JSON.stringify(params),
-      ]);
-      commands.push({ method, params, ...result });
-      expect(result.code, result.stderr).toBe(0);
-      return result.stdout;
-    };
     const browserMethods: string[] = [];
-    let text: string | null | undefined;
-    let stage = "create session";
-    let lastPageText: string | null | undefined;
-    const browserErrors: string[] = [];
-    let tableOptions: Array<string | null> | undefined;
-    let draftModel: string | null | undefined;
-    try {
-      await call("sessions.create", {
-        key: sessionKey,
-        agentId: "main",
-        label: "Thinking status",
-        model: "thinking-fixture/no-effort",
-      });
-      const catalog: ModelCatalogResult = JSON.parse(
-        await call("models.list", { agentId: "main", view: "configured" }),
-      );
-      const model = catalog.models.find((entry) => entry.id === "no-effort");
-      expect(model?.thinkingLevels).toEqual(harnessOnlyThinkingLevels);
-      expect(model?.thinkingDefault).toBeUndefined();
+    await call("sessions.create", {
+      key: sessionKey,
+      agentId: "main",
+      label: "Thinking status",
+      model: "thinking-fixture/no-effort",
+    });
+    const catalog = await call<ModelCatalogResult>("models.list", {
+      agentId: "main",
+      view: "configured",
+    });
+    const model = catalog.models.find((entry) => entry.id === "no-effort");
+    expect(model?.thinkingLevels).toEqual(harnessOnlyThinkingLevels);
+    expect(model?.thinkingDefault).toBeUndefined();
 
-      const before: SessionsListResult = JSON.parse(
-        await call("sessions.list", { agentId: "main", limit: 50 }),
-      );
-      const row = before.sessions.find((entry) => entry.key === sessionKey);
-      expect(row?.thinkingLevels).toEqual(harnessOnlyThinkingLevels);
-      expect(row?.thinkingDefault).toBeUndefined();
-      expect(before.defaults.thinkingLevels).toEqual(harnessOnlyThinkingLevels);
-      expect(before.defaults.thinkingDefault).toBeUndefined();
+    const before = await call<SessionsListResult>("sessions.list", { agentId: "main", limit: 50 });
+    const row = before.sessions.find((entry) => entry.key === sessionKey);
+    expect(row?.thinkingLevels).toEqual(harnessOnlyThinkingLevels);
+    expect(row?.thinkingDefault).toBeUndefined();
+    expect(before.defaults.thinkingLevels).toEqual(harnessOnlyThinkingLevels);
+    expect(before.defaults.thinkingDefault).toBeUndefined();
 
-      const handoff = await instance.cli(["dashboard", "--json"]);
-      expect(handoff.code, handoff.stderr).toBe(0);
-      const { browserUrl }: { browserUrl: string } = JSON.parse(handoff.stdout);
-      const url = new URL(browserUrl);
-      url.pathname = "/chat/main/thinking-status";
-      url.search = "";
-      await suite.withPage(
-        { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
-        async ({ page }) => {
-          page.on("pageerror", (error) => browserErrors.push(error.message));
-          try {
-            stage = "open Chat";
-            page.on("websocket", (socket) => {
-              socket.on("framesent", ({ payload }) => {
-                const frame: { type: string; method?: string } = JSON.parse(payload.toString());
-                if (frame.type === "req" && frame.method) {
-                  browserMethods.push(frame.method);
-                }
-              });
-            });
-            await page.goto(url.href);
-            await enterControlUiSession(page);
-            await waitForControlUiGatewayReady(page);
-            const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
-            await composer.waitFor({ state: "visible" });
-            await composer.fill("/think");
-            await composer.press("Tab");
-            await expect.poll(() => composer.inputValue()).toBe("/think ");
-            await page.locator(".slash-menu[role='listbox']").waitFor({ state: "visible" });
-            await composer.press("Escape");
-            await expect
-              .poll(() =>
-                page
-                  .locator("openclaw-chat-pane.chat-pane-cache__pane--visible .chat-send-btn--send")
-                  .isEnabled(),
-              )
-              .toBe(true);
-            await composer.press("Enter");
-            try {
-              await expect
-                .poll(
-                  async () => {
-                    text = await page.getByRole("log").textContent();
-                    return text;
-                  },
-                  { timeout: 30_000 },
-                )
-                .toContain("Current thinking level: Unknown.");
-              expect(text).toContain("Options: default, ultra.");
-            } finally {
-              await page.screenshot({ path: path.join(suite.artifactDir, "thinking-status.png") });
+    const url = await gatewayChatUrl(instance, "thinking-status");
+    await suite.withPage(pageOptions, async ({ page }) => {
+      try {
+        page.on("websocket", (socket) => {
+          socket.on("framesent", ({ payload }) => {
+            const frame: { type: string; method?: string } = JSON.parse(payload.toString());
+            if (frame.type === "req" && frame.method) {
+              browserMethods.push(frame.method);
             }
-            expect(await composer.inputValue()).toBe("");
-            expect(await page.getByRole("slider").count()).toBe(0);
-            await expectUnselectedUltraChoice(page, "");
-
-            stage = "open Sessions";
-            await page.goto(new URL("/sessions", url).href);
-            await waitForControlUiGatewayReady(page);
-            const session = page.getByRole("row").filter({ hasText: "Thinking status" });
-            await session.waitFor({ state: "visible" });
-            await session.press("Enter");
-            const thinking = page.locator(".session-details-row select").first();
-            await thinking.waitFor({ state: "visible" });
-            tableOptions = await thinking
-              .locator("option")
-              .evaluateAll((options) => options.map((option) => option.getAttribute("value")));
-            expect(tableOptions).toEqual(["", "ultra"]);
-            expect(await thinking.inputValue()).toBe("");
-            await thinking.locator("..").screenshot({
-              path: path.join(suite.artifactDir, "session-thinking.png"),
-            });
-
-            stage = "open New conversation";
-            await page.getByRole("link", { name: "New conversation", exact: true }).first().click();
-            await page.waitForURL((current) => current.pathname === "/new");
-            await waitForControlUiGatewayReady(page);
-            const modelControl = page.locator("[data-chat-model-select='true']");
-            await expect.poll(() => modelControl.textContent()).toContain("No effort");
-            draftModel = await modelControl.textContent();
-            expect(await page.locator("[data-chat-thinking-slider='true']").count()).toBe(0);
-            await expectUnselectedUltraChoice(page, "");
-            await page.locator(".chat-controls__model-settings").screenshot({
-              path: path.join(suite.artifactDir, "draft-thinking.png"),
-            });
-          } finally {
-            lastPageText = await page.locator("body").textContent();
-            await page.screenshot({ path: path.join(suite.artifactDir, "last-page.png") });
+          });
+        });
+        const composer = await enterChat(page, url);
+        await completeThinkCommand(composer, page);
+        await expectSendEnabled(page);
+        await composer.press("Enter");
+        try {
+          await expect
+            .poll(() => page.getByRole("log").textContent(), { timeout: 30_000 })
+            .toContain("Current thinking level: Unknown.");
+          expect(await page.getByRole("log").textContent()).toContain("Options: default, ultra.");
+        } finally {
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(suite.artifactDir, "thinking-status.png") });
           }
-        },
-      );
-      stage = "session readback";
-      const after: SessionsListResult = JSON.parse(
-        await call("sessions.list", { agentId: "main", limit: 50 }),
-      );
-      const afterRow = after.sessions.find((entry) => entry.key === sessionKey);
-      expect(afterRow?.model).toBe(row?.model);
-      expect(afterRow?.modelProvider).toBe(row?.modelProvider);
-      expect(afterRow?.thinkingLevel).toBe(row?.thinkingLevel);
-      expect(afterRow?.thinkingDefault).toBeUndefined();
-      expect(browserMethods).not.toContain("chat.send");
-      expect(browserMethods).not.toContain("sessions.patch");
-    } finally {
-      const serialized = JSON.stringify(
-        {
-          commands,
-          browserMethods,
-          browserErrors,
-          stage,
-          lastPageText,
-          text,
-          tableOptions,
-          draftModel,
-        },
-        null,
-        2,
-      )
-        .replaceAll(instance.gatewayToken, "[synthetic token]")
-        .replaceAll(instance.hookToken, "[synthetic token]")
-        .replaceAll(instance.homeDir, "[fixture home]")
-        .replaceAll(instance.stateDir, "[fixture state]")
-        .replaceAll(process.cwd(), "[source checkout]");
-      await fs.writeFile(path.join(suite.artifactDir, "thinking-status.json"), serialized);
-    }
+        }
+        expect(await composer.inputValue()).toBe("");
+        expect(await page.getByRole("slider").count()).toBe(0);
+        await expectUnselectedUltraChoice(page, "");
+
+        await page.goto(new URL("/sessions", url).href);
+        await waitForControlUiGatewayReady(page);
+        const session = page.getByRole("row").filter({ hasText: "Thinking status" });
+        await session.waitFor({ state: "visible" });
+        await session.press("Enter");
+        const thinking = page.locator(".session-details-row select").first();
+        await thinking.waitFor({ state: "visible" });
+        const tableOptions = await thinking
+          .locator("option")
+          .evaluateAll((options) => options.map((option) => option.getAttribute("value")));
+        expect(tableOptions).toEqual(["", "ultra"]);
+        expect(await thinking.inputValue()).toBe("");
+        if (captureUiProof) {
+          await thinking.locator("..").screenshot({
+            path: path.join(suite.artifactDir, "session-thinking.png"),
+          });
+        }
+
+        await page.getByRole("link", { name: "New conversation", exact: true }).first().click();
+        await page.waitForURL((current) => current.pathname === "/new");
+        await waitForControlUiGatewayReady(page);
+        const modelControl = page.locator("[data-chat-model-select='true']");
+        await expect.poll(() => modelControl.textContent()).toContain("No effort");
+        expect(await page.locator("[data-chat-thinking-slider='true']").count()).toBe(0);
+        await expectUnselectedUltraChoice(page, "");
+        if (captureUiProof) {
+          await page.locator(".chat-controls__model-settings").screenshot({
+            path: path.join(suite.artifactDir, "draft-thinking.png"),
+          });
+        }
+      } finally {
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(suite.artifactDir, "last-page.png") });
+        }
+      }
+    });
+    const after = await call<SessionsListResult>("sessions.list", { agentId: "main", limit: 50 });
+    const afterRow = after.sessions.find((entry) => entry.key === sessionKey);
+    expect(afterRow?.model).toBe(row?.model);
+    expect(afterRow?.modelProvider).toBe(row?.modelProvider);
+    expect(afterRow?.thinkingLevel).toBe(row?.thinkingLevel);
+    expect(afterRow?.thinkingDefault).toBeUndefined();
+    expect(browserMethods).not.toContain("chat.send");
+    expect(browserMethods).not.toContain("sessions.patch");
   }, 120_000);
 });

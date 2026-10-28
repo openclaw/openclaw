@@ -80,9 +80,7 @@ export function pageTargetInfo(page: Page): Promise<PageTargetInfo | null> {
   const pending = readPageTargetInfo(page);
   targetInfoReads.set(page, pending);
   const evict = () => {
-    if (targetInfoReads.get(page) === pending) {
-      targetInfoReads.delete(page);
-    }
+    targetInfoReads.delete(page);
   };
   void pending.then(evict, evict);
   return pending;

@@ -1,11 +1,16 @@
 import { isDeepStrictEqual } from "node:util";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "../../../../packages/agent-core/src/types.js";
+import { prepareForeignLiveSessionPendingInputEntries } from "../../../config/sessions/session-accessor.pending-inputs.js";
 import type { SessionTranscriptWriteScope } from "../../../config/sessions/session-accessor.sqlite-contract.js";
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.types.js";
+import { runWithSessionActorStorage } from "../../../config/sessions/session-actor-storage-binding.js";
 import { readSessionTranscriptAnchorsAsync } from "../../../config/sessions/session-transcript-anchor-read.js";
+import { SessionTranscriptReadFenceError } from "../../../config/sessions/session-transcript-read-fence-error.js";
 import { resolveSessionTranscriptReadFence } from "../../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "../../../config/sessions/session-transcript-read-source.js";
 import type { TranscriptEntryAnchor } from "../../../config/sessions/transcript-entry-anchor.js";
+import { sameSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   getOwnedSessionTranscriptInitialWriter,
@@ -14,25 +19,35 @@ import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
 } from "../../../config/sessions/transcript-write-context.js";
-import type { DatabaseFileIdentity } from "../../../infra/sqlite-worker-identity.js";
+import {
+  isSessionWorkStartInvalidatedError,
+  SessionWorkStartChangedError,
+} from "../../../config/sessions/work-start-error.js";
 import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../../sessions/user-turn-transcript.types.js";
 import {
+  isOpenClawDeliveryMirrorAssistantMessage,
+  SKILL_WORKSHOP_CHANGE_NOTICE_KIND,
+} from "../../../shared/transcript-only-openclaw-assistant.js";
+import {
   AGENT_RUN_RESTART_ABORT_ERROR,
   AGENT_RUN_RESTART_ABORT_ERROR_CODE,
 } from "../../run-termination.js";
+import type { AgentSession } from "../../sessions/index.js";
 import { sessionManagerReloadTranscriptCohort } from "../../sessions/session-manager-core.js";
 import {
   sessionManagerPrepareCurrentTurnReplay,
   type CurrentTurnReplaySelection,
 } from "../../sessions/session-manager-current-turn.js";
+import { withSessionManagerMemoryActor } from "../../sessions/session-manager-incognito-scope.js";
 import { prepareSessionManagerHydration } from "../../sessions/session-manager-incognito.js";
 import type { SessionEntry } from "../../sessions/session-manager-types.js";
 import type {
   PreparedSessionTranscriptReload,
+  SessionManagerPersistenceTarget,
   SessionManagerTranscriptCohort,
 } from "../../sessions/session-manager-view-types.js";
 import type { SessionManager } from "../../sessions/session-manager.js";
@@ -55,19 +70,32 @@ function isInterruptedTurnEntry(entry: SessionEntry, runId: string): boolean {
   if (message.role === "custom") {
     return readNestedToolActivity(message)?.details.runId === runId;
   }
+  const delivery = isOpenClawDeliveryMirrorAssistantMessage(message)
+    ? asOptionalRecord(Reflect.get(message, "openclawDeliveryMirror"))
+    : undefined;
+  // Background Workshop notices do not complete the foreground user turn.
+  if (delivery?.kind === SKILL_WORKSHOP_CHANGE_NOTICE_KIND) {
+    return true;
+  }
   if (Reflect.get(message, "__openclaw")?.runId !== runId) {
     return false;
   }
   if (message.role !== "assistant") {
     return message.role === "toolResult";
   }
+  if (isOpenClawDeliveryMirrorAssistantMessage(message)) {
+    // Only explicit same-run progress can cross this boundary; final or unmarked
+    // mirrors still close the turn, even if more tool activity followed them.
+    return delivery?.kind === "message-tool-source-reply" && delivery.final === false;
+  }
   return (
     message.stopReason === "toolUse" ||
-    (message.stopReason === "aborted" &&
-      (message.errorCode !== undefined
-        ? message.errorCode === AGENT_RUN_RESTART_ABORT_ERROR_CODE
-        : message.errorMessage === AGENT_RUN_RESTART_ABORT_ERROR) &&
-      message.content.every((part) => part.type === "text" && part.text === ""))
+    ((message.stopReason === "aborted" || message.stopReason === "error") &&
+      (message.errorCode === AGENT_RUN_RESTART_ABORT_ERROR_CODE ||
+        (message.stopReason === "aborted" &&
+          message.errorCode === undefined &&
+          message.errorMessage === AGENT_RUN_RESTART_ABORT_ERROR &&
+          message.content.every((part) => part.type === "text" && part.text === ""))))
   );
 }
 
@@ -156,7 +184,6 @@ export function prepareInitialPersistedUserTurnCohort(params: {
     },
   };
   let initial: InitialPersistedUserTurn | undefined;
-  let messagePresence: boolean | undefined;
   return {
     selection,
     consume(
@@ -166,8 +193,6 @@ export function prepareInitialPersistedUserTurnCohort(params: {
     ) {
       assertOwned();
       owner.assertCurrent();
-      messagePresence =
-        prepared.kind === "bounded" ? prepared.transcript?.messagePresence : undefined;
       const selected = selectCurrentUserTurnFromCohort({
         sessionManager,
         message,
@@ -185,7 +210,6 @@ export function prepareInitialPersistedUserTurnCohort(params: {
       }
     },
     readInitial: () => initial,
-    readMessagePresence: () => messagePresence,
   };
 }
 
@@ -211,44 +235,38 @@ export async function preparePersistedCurrentUserTurn(params: {
     signal: params.signal,
     manager: sessionManager,
   });
-  let originalSource: { storePath: string; identity?: DatabaseFileIdentity } | undefined;
   const assertCurrent = () => {
     assertOwned();
     reader.assertCurrent();
   };
   const binding = reader.incognitoBinding;
-  const incognito = binding && {
-    actor: binding.actor,
-    authority: { assertCurrent },
-    target: { sessionKey: scope.sessionKey, sessionId: scope.sessionId },
-  };
   const withSource = <T>(
     signal: AbortSignal | undefined,
     operation: (target: typeof scope, assertSource: () => void) => Promise<T>,
   ): Promise<T> => {
     assertCurrent();
-    const native = () => operation(scope, assertCurrent);
     return binding
-      ? binding.actor.sessions.withSharedState(native)
+      ? withSessionManagerMemoryActor(binding, false, async (selected) => {
+          if (!selected) {
+            throw new Error("Persisted user turn memory session is closed");
+          }
+          return runWithSessionActorStorage(
+            {
+              actor: selected.actor,
+              authority: selected.authority,
+              agentId: selected.database.agentId,
+              path: selected.database.path,
+            },
+            () => operation(scope, assertCurrent),
+          );
+        })
       : withSessionTranscriptReadSource(
           scope,
-          native,
-          ({ scope: captured, expectedIdentity, assertCurrent: assertSource }) => {
-            originalSource ??= { storePath: captured.storePath, identity: expectedIdentity };
-            if (
-              captured.storePath !== originalSource.storePath ||
-              expectedIdentity?.key !== originalSource.identity?.key ||
-              expectedIdentity?.birthtime !== originalSource.identity?.birthtime
-            ) {
-              throw new Error(
-                "Persisted user turn changed its database owner before replay admission",
-              );
-            }
-            return operation(
+          ({ scope: captured, assertCurrent: assertSource }) =>
+            operation(
               { ...scope, agentId: captured.agentId, storePath: captured.storePath },
               assertSource,
-            );
-          },
+            ),
           signal,
         );
   };
@@ -287,18 +305,21 @@ export async function preparePersistedCurrentUserTurn(params: {
           throw new SessionTranscriptWriterClaimReboundError();
         }
         if (prepared && !facts.contextValidated) {
-          throw new Error("Persisted user turn changed before replay admission");
+          throw new SessionWorkStartChangedError(
+            "Persisted user turn changed before replay admission. Retry the turn.",
+          );
         }
         // Consume under the reader's writer FIFO and native mutation witness.
         const anchor = facts.anchors[0];
         consume(prepared && anchor ? { ...prepared, anchor } : undefined);
         accepted = true;
       },
-      incognito,
     );
     assertCurrent();
     if (!accepted) {
-      throw new Error("Persisted user turn changed before replay admission");
+      throw new SessionWorkStartChangedError(
+        "Persisted user turn changed before replay admission. Retry the turn.",
+      );
     }
   };
   const readCurrentTurn = (
@@ -396,7 +417,9 @@ export async function preparePersistedCurrentUserTurn(params: {
         prepared.anchor.entryId !== initial.entryId ||
         prepared.anchor.generation !== initial.generation
       ) {
-        throw new Error("Persisted user turn changed before replay admission");
+        throw new SessionWorkStartChangedError(
+          "Persisted user turn changed before replay admission. Retry the turn.",
+        );
       }
       if (onAdmitted) {
         if (!pending) {
@@ -407,23 +430,23 @@ export async function preparePersistedCurrentUserTurn(params: {
       }
     };
     assertCurrent();
-    const selected = getOwnedSessionTranscriptReader(scope);
-    if (selected) {
-      selected.assertCurrent();
-      // Prompt preparation needs no detached witness. Read at the synchronous core-entry boundary.
-      return async (onAdmitted) => {
-        await readCurrentTurn(replaySignal, (prepared) => accept(prepared, onAdmitted));
-      };
-    }
-    const current = await readCurrentTurn(replaySignal, (prepared) => {
-      accept(prepared);
-    });
     return async (onAdmitted) => {
-      await withSource(replaySignal, (target, assertSource) =>
-        validate(target, assertSource, current, replaySignal, (prepared) => {
-          accept(prepared, onAdmitted);
-        }),
-      );
+      const consume = () =>
+        readCurrentTurn(replaySignal, (prepared) => accept(prepared, onAdmitted));
+      try {
+        await consume();
+      } catch (error) {
+        if (
+          !pending ||
+          (!isSessionWorkStartInvalidatedError(error) &&
+            !(error instanceof SessionTranscriptReadFenceError))
+        ) {
+          throw error;
+        }
+        // An append may invalidate selection before admission. Refresh once;
+        // the original user anchor, generation, and live authority must still match.
+        await consume();
+      }
     };
   };
 }
@@ -468,4 +491,83 @@ export function reconcilePrePersistedCurrentUserTurn(params: {
     durableTurnMatches ||
     params.currentUserTurnMessage?.excludeFromContext === true
   );
+}
+
+type ForeignPendingUserTurns = {
+  ownsEntry: (entryId: string) => boolean;
+  omitInput: (messages: AgentMessage[]) => AgentMessage[];
+};
+
+type ForeignPendingUserTurnSession = {
+  agent: { state: { messages: AgentMessage[] } };
+  subscribe: AgentSession["subscribe"];
+};
+
+function readUserIdempotencyKey(message: AgentMessage): string | undefined {
+  return message.role === "user" &&
+    "idempotencyKey" in message &&
+    typeof message.idempotencyKey === "string"
+    ? message.idempotencyKey
+    : undefined;
+}
+
+/** Resolve physical ownership before append admission, then sample live custody at preparation. */
+export async function prepareForeignPendingUserTurns(
+  sessionManager: { getSessionTarget: () => SessionManagerPersistenceTarget | undefined },
+  signal?: AbortSignal,
+): Promise<
+  | ((
+      activeSession: ForeignPendingUserTurnSession,
+      currentUserIdempotencyKey: string | undefined,
+    ) => ForeignPendingUserTurns | undefined)
+  | undefined
+> {
+  const target = sessionManager.getSessionTarget();
+  if (!target) {
+    return undefined;
+  }
+  const assertOwned = captureOwnedTranscriptWriteAssertion(target);
+  const assertPrepared = () => {
+    signal?.throwIfAborted();
+    assertOwned();
+    if (!sameSessionTranscriptTargetBinding(target, sessionManager.getSessionTarget())) {
+      throw new Error("Session manager target changed during live input preparation");
+    }
+  };
+  assertPrepared();
+  const readEntries = await prepareForeignLiveSessionPendingInputEntries(target, signal);
+  assertPrepared();
+  const entries = new Map<string, string>();
+  const adopted = new Set<string>();
+  let observing = false;
+  return (activeSession, currentUserIdempotencyKey) => {
+    assertPrepared();
+    // Preserve the first sample through transcript reload even if a source finishes meanwhile.
+    for (const [id, key] of readEntries()) {
+      entries.set(id, key);
+    }
+    if (!entries.size) {
+      return undefined;
+    }
+    if (!observing) {
+      observing = true;
+      // Steering can accept a sampled input after preparation. Once this attempt
+      // commits it, the input is its own and later model calls must keep it.
+      activeSession.subscribe((event) => {
+        const key =
+          event.type === "message_end" ? readUserIdempotencyKey(event.message) : undefined;
+        if (key) {
+          adopted.add(key);
+        }
+      });
+    }
+    const keys = new Set([...entries.values()].filter((key) => key !== currentUserIdempotencyKey));
+    const omitInput = (messages: AgentMessage[]) =>
+      messages.filter((message) => {
+        const key = readUserIdempotencyKey(message);
+        return !key || !keys.has(key) || adopted.has(key);
+      });
+    activeSession.agent.state.messages = omitInput(activeSession.agent.state.messages);
+    return { ownsEntry: (entryId) => entries.has(entryId), omitInput };
+  };
 }

@@ -9,6 +9,7 @@ import type {
   McpToolCatalogDiagnostic,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
+import { acquireNativeMcpServer, nativeMcpRuntimeBindings } from "./native-mcp-runtime.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 
 async function loadCurrentCatalog(part: SessionMcpRuntime): Promise<McpToolCatalog> {
@@ -29,7 +30,7 @@ async function loadCurrentCatalog(part: SessionMcpRuntime): Promise<McpToolCatal
 }
 
 /** Safe names are precomputed from the full declared set, so no re-suffix is needed. */
-export function mergeMcpToolCatalogs(catalogs: readonly McpToolCatalog[]): McpToolCatalog {
+function mergeMcpToolCatalogs(catalogs: readonly McpToolCatalog[]): McpToolCatalog {
   const servers: Record<string, McpServerCatalog> = {};
   const tools: McpCatalogTool[] = [];
   const policyTools: McpCatalogTool[] = [];
@@ -115,30 +116,22 @@ export function createCombinedSessionMcpRuntime(params: {
       return catalogInFlight;
     }
     const inFlight = (async () => {
-      let loaded: Array<{ catalog: McpToolCatalog; cached: boolean } | undefined> = [];
-      // Replay once when a completed catalog invalidates while siblings await I/O.
-      // A child returning an uncached result already exhausted its own replay budget.
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const { results, firstError, hasError } = await runTasksWithConcurrency({
-          tasks: parts.map((part, index) => async () => {
-            const previous = loaded[index];
-            if (previous && (!previous.cached || part.retiredCatalog || part.peekCatalog())) {
-              return previous;
-            }
-            const catalog = await loadCurrentCatalog(part);
-            return { catalog, cached: part.peekCatalog() !== null };
-          }),
-          limit: 6,
-          errorMode: "continue",
-        });
-        if (hasError) {
-          throw firstError;
-        }
-        loaded = results;
+      // Notifications crossing sibling discovery take effect on the next catalog read.
+      const {
+        results: loaded,
+        firstError,
+        hasError,
+      } = await runTasksWithConcurrency({
+        tasks: parts.map((part) => () => loadCurrentCatalog(part)),
+        limit: 6,
+        errorMode: "continue",
+      });
+      if (hasError) {
+        throw firstError;
       }
       // An owner can retire after its discovery finishes while a sibling still awaits I/O.
       const catalogs = parts.map(
-        (part, index) => part.retiredCatalog ?? part.peekCatalog() ?? loaded[index]!.catalog,
+        (part, index) => part.retiredCatalog ?? part.peekCatalog() ?? loaded[index]!,
       );
       if (
         cachedCatalog &&
@@ -160,9 +153,7 @@ export function createCombinedSessionMcpRuntime(params: {
     try {
       return await inFlight;
     } finally {
-      if (catalogInFlight === inFlight) {
-        catalogInFlight = undefined;
-      }
+      catalogInFlight = undefined;
     }
   };
 
@@ -181,7 +172,7 @@ export function createCombinedSessionMcpRuntime(params: {
     throw new Error(`bundle-mcp server "${serverName}" is not connected`);
   };
 
-  return {
+  const runtime: SessionMcpRuntime = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
@@ -196,7 +187,7 @@ export function createCombinedSessionMcpRuntime(params: {
     mcpAppsEnabled: parts.some((part) => part.mcpAppsEnabled === true),
     createdAt: Math.min(Date.now(), ...parts.map((part) => part.createdAt)),
     get lastUsedAt() {
-      return lastUsedAt;
+      return Math.max(lastUsedAt, ...parts.map((part) => part.lastUsedAt));
     },
     get activeLeases() {
       return Math.max(
@@ -316,4 +307,17 @@ export function createCombinedSessionMcpRuntime(params: {
       }
     },
   };
+  nativeMcpRuntimeBindings.set(runtime, {
+    hasServer: (name) => parts.some((part) => nativeMcpRuntimeBindings.get(part)?.hasServer(name)),
+    async acquire(name, context) {
+      const owner =
+        serverOwner.get(name) ??
+        parts.find((part) => nativeMcpRuntimeBindings.get(part)?.hasServer(name));
+      if (!owner) {
+        throw new Error(`MCP server "${name}" has no projection owner`);
+      }
+      return acquireNativeMcpServer(owner, name, context);
+    },
+  });
+  return runtime;
 }

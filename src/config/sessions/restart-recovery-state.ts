@@ -11,7 +11,10 @@ import {
   normalizeDeliveryContext,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
-import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
+import {
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 import type {
   HarnessCompletionRecovery,
   RestartRecoveryTerminalDeliveryEvidence,
@@ -44,20 +47,46 @@ export function recordLifecycleFence(
 }
 
 export function isMainRestartRecoveryCandidate(
-  entry: { spawnDepth?: unknown; subagentRole?: unknown },
+  entry: {
+    spawnDepth?: unknown;
+    subagentRole?: unknown;
+    mainRestartRecovery?: unknown;
+    restartRecoverySourceIngress?: unknown;
+    restartRecoveryDeliverySourceRunId?: unknown;
+  },
   sessionKey: string,
 ): boolean {
-  if (typeof entry.spawnDepth === "number" && entry.spawnDepth > 0) {
-    return false;
-  }
-  if (entry.subagentRole != null) {
-    return false;
-  }
-  return (
-    !isSubagentSessionKey(sessionKey) &&
+  // An admitted requester wake continues the existing session, even when that
+  // session is a child. Its saved input and receipt belong to session recovery.
+  const requesterSettle =
+    entry.restartRecoverySourceIngress === "internal" &&
+    typeof entry.restartRecoveryDeliverySourceRunId === "string" &&
+    entry.restartRecoveryDeliverySourceRunId.startsWith("announce:requester-settle:");
+  return Boolean(
     !isCronSessionKey(sessionKey) &&
-    !isAcpSessionKey(sessionKey)
+    !isAcpSessionKey(sessionKey) &&
+    (entry.mainRestartRecovery ||
+      requesterSettle ||
+      (!(typeof entry.spawnDepth === "number" && entry.spawnDepth > 0) &&
+        entry.subagentRole == null &&
+        !isSubagentSessionKey(sessionKey))),
   );
+}
+
+/** A final intent can acknowledge only its admitted source on the same captured route. */
+export function getRestartRecoveryPendingFinalSourceRunId(
+  entry: SessionEntry,
+  context: DeliveryContext | undefined,
+): string | undefined {
+  const sourceRunId = normalizeRunId(entry.restartRecoveryDeliverySourceRunId);
+  const original = normalizeDeliveryContext(entry.restartRecoveryDeliveryContext);
+  return normalizeRunId(entry.restartRecoveryDeliveryRunId) &&
+    sourceRunId &&
+    original?.channel &&
+    original.to &&
+    isDeepStrictEqual(original, normalizeDeliveryContext(context))
+    ? sourceRunId
+    : undefined;
 }
 
 type RestartRecoveryChannelAuthority = {
@@ -150,6 +179,18 @@ function normalizeTerminalDeliveryEvidenceResult(
     return undefined;
   }
   const captured = record.captured === true ? (true as const) : undefined;
+  const rawMeta = asOptionalObjectRecord(record.meta);
+  const meta: RestartRecoveryTerminalDeliveryEvidenceResult["meta"] = {
+    ...(asOptionalObjectRecord(rawMeta?.terminalReply)?.disposition === "silent"
+      ? { terminalReply: { disposition: "silent" as const } }
+      : {}),
+    ...(rawMeta?.yielded === true ? { yielded: true as const } : {}),
+    ...(rawMeta?.continuationPending === true ? { continuationPending: true as const } : {}),
+    ...(rawMeta?.aborted === true ? { aborted: true as const } : {}),
+    ...(rawMeta?.error === true ? { error: true as const } : {}),
+  };
+  const requesterContinuationSettled =
+    record.requesterContinuationSettled === true ? (true as const) : undefined;
   const rawPayloads = Array.isArray(record.payloads) ? record.payloads : undefined;
   const payloads: RestartRecoveryTerminalDeliveryEvidenceResult["payloads"] = rawPayloads
     ? rawPayloads.slice(0, 64).map((payload) => {
@@ -201,10 +242,12 @@ function normalizeTerminalDeliveryEvidenceResult(
         ) {
           return [];
         }
+        const reason = normalizeRunId(outcome.reason)?.slice(0, 256);
         return [
           {
             index: outcome.index,
             status: outcomeStatus,
+            ...(reason ? { reason } : {}),
             ...(typeof outcome.sentBeforeError === "boolean"
               ? { sentBeforeError: outcome.sentBeforeError }
               : {}),
@@ -213,6 +256,7 @@ function normalizeTerminalDeliveryEvidenceResult(
       })
     : undefined;
   const errorMessage = normalizeRunId(rawStatus?.errorMessage);
+  const reason = normalizeRunId(rawStatus?.reason)?.slice(0, 256);
   const deliveryStatus: RestartRecoveryTerminalDeliveryEvidenceResult["deliveryStatus"] = status
     ? {
         status,
@@ -222,6 +266,7 @@ function normalizeTerminalDeliveryEvidenceResult(
           ? { resultCount: rawStatus.resultCount }
           : {}),
         ...(errorMessage ? { errorMessage } : {}),
+        ...(reason ? { reason } : {}),
         ...(payloadOutcomes?.length ? { payloadOutcomes } : {}),
       }
     : undefined;
@@ -271,6 +316,8 @@ function normalizeTerminalDeliveryEvidenceResult(
     record.restartUnsafeSideEffectsDetected === true ? (true as const) : undefined;
   if (
     !captured &&
+    Object.keys(meta).length === 0 &&
+    !requesterContinuationSettled &&
     !payloads?.length &&
     !payloadsTruncated &&
     !deliveryStatus &&
@@ -283,6 +330,8 @@ function normalizeTerminalDeliveryEvidenceResult(
   }
   return {
     ...(captured ? { captured } : {}),
+    ...(Object.keys(meta).length ? { meta } : {}),
+    ...(requesterContinuationSettled ? { requesterContinuationSettled } : {}),
     ...(payloads?.length ? { payloads } : {}),
     ...(payloadsTruncated ? { payloadsTruncated } : {}),
     ...(deliveryStatus ? { deliveryStatus } : {}),
@@ -312,7 +361,12 @@ function normalizeRestartRecoveryTerminalDeliveryEvidence(
       continue;
     }
     const previousIndex = evidence.findIndex((entry) => entry.runId === runId);
+    // Queue receipts are immutable facts. Later terminal cleanup can carry an
+    // older capture, but cannot erase a send or reassign it to another route.
     if (previousIndex >= 0) {
+      if (evidence[previousIndex]?.durableFinalReceipt) {
+        continue;
+      }
       evidence.splice(previousIndex, 1);
     }
     const transcriptRunId = normalizeRunId(item.transcriptRunId);
@@ -337,8 +391,14 @@ function normalizeRestartRecoveryTerminalDeliveryEvidence(
       runId,
       ...result,
       ...(transcriptRunId ? { transcriptRunId } : {}),
-      ...(harnessCompletion?.sourceRunId === runId ? { harnessCompletion, deliveryContext } : {}),
-      ...(harnessCompletion?.sourceRunId === runId && intentId && deliveryId && platformMessageId
+      ...(harnessCompletion?.sourceRunId === runId ? { harnessCompletion } : {}),
+      ...(deliveryContext ? { deliveryContext } : {}),
+      ...((item.harnessCompletion === undefined || harnessCompletion?.sourceRunId === runId) &&
+      deliveryContext?.channel &&
+      deliveryContext.to &&
+      intentId &&
+      deliveryId &&
+      platformMessageId
         ? { durableFinalReceipt: { intentId, deliveryId, platformMessageId } }
         : {}),
     });
@@ -453,6 +513,12 @@ export function normalizeRestartRecoveryEntryFields(
       : undefined,
   );
   assign(
+    "restartRecoverySourceMessageChannel",
+    entry.restartRecoverySourceMessageChannel === null
+      ? null
+      : normalizeMessageChannel(entry.restartRecoverySourceMessageChannel),
+  );
+  assign(
     "restartRecoverySourceReplyDeliveryMode",
     entry.restartRecoverySourceReplyDeliveryMode === "automatic" ||
       entry.restartRecoverySourceReplyDeliveryMode === "message_tool_only"
@@ -553,6 +619,54 @@ export function hasMainSessionRecoveryClaim(entry: InternalSessionEntry | undefi
   );
 }
 
+export function hasOrphanedMainSessionWork(
+  entry: InternalSessionEntry,
+  sessionKey: string,
+): boolean {
+  const settledInterruption =
+    entry.abortedLastRun === false &&
+    !entry.lifecycleRunId &&
+    !entry.activeWriterRunId &&
+    entry.lastRunId !== undefined &&
+    hasRestartRecoveryTerminalRun(entry, entry.lastRunId);
+  return (
+    entry.archivedAt === undefined &&
+    !isCronSessionKey(sessionKey) &&
+    !isAcpSessionKey(sessionKey) &&
+    (isMainRestartRecoveryCandidate(entry, sessionKey) ||
+      ((entry.abortedLastRun === true || entry.status === "interrupted") &&
+        Boolean(
+          entry.lifecycleRunId || entry.lastRunId || entry.restartRecoveryDeliverySourceRunId,
+        ))) &&
+    (hasMainSessionRecoveryClaim(entry) ||
+      entry.abortedLastRun === true ||
+      (entry.status === "interrupted" && !settledInterruption))
+  );
+}
+
+/** A new turn may retire an aborted claim only when restart recovery will not resume it. */
+export function canReplaceAbortedRestartRecoveryClaim(
+  entry: SessionEntry,
+  sessionKey: string,
+  admissionRunId: string | undefined,
+): boolean {
+  const activeClaimRunId = normalizeRunId(entry.restartRecoveryDeliveryRunId);
+  return Boolean(
+    admissionRunId &&
+    activeClaimRunId &&
+    admissionRunId !== activeClaimRunId &&
+    entry.abortedLastRun === true &&
+    (entry.status === undefined || entry.status === "interrupted") &&
+    entry.pendingFinalDelivery === undefined &&
+    entry.restartRecoveryBeforeAgentReplyState === undefined &&
+    entry.restartRecoveryDeliveryReceiptState === undefined &&
+    // Session recovery resumes its claims before new input. Other lifecycle owners
+    // must be able to replace an interrupted claim when admitting a new turn.
+    (entry.restartRecoverySourceIngress === "control-ui" ||
+      !isMainRestartRecoveryCandidate(entry, sessionKey)),
+  );
+}
+
 /** Matches durable source ownership regardless of the surrounding run status. */
 export function hasRestartRecoverySourceClaim(
   entry: SessionEntry | null | undefined,
@@ -617,11 +731,13 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
     restartRecoveryDeliveryRunId: undefined,
     restartRecoveryDeliverySourceRunId: undefined,
     restartRecoveryOperatorSource: undefined,
+    restartRecoveryRequesterSource: undefined,
     restartRecoveryHarnessCompletion: undefined,
     restartRecoveryRequesterAccountId: undefined,
     restartRecoveryRequesterSenderId: undefined,
     restartRecoverySameChannelThreadRequired: undefined,
     restartRecoverySourceIngress: undefined,
+    restartRecoverySourceMessageChannel: undefined,
     restartRecoverySourceReplyDeliveryMode: undefined,
     restartRecoveryForceSafeTools: undefined,
     ...(terminalDeliveryEvidence

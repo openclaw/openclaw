@@ -2,9 +2,25 @@ import type {
   AgentHarnessSideQuestionParamsV2,
   EmbeddedRunAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { requireCodexSupervisionModelSelection } from "./binding-connection.js";
+import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import type { CodexEffectiveSessionPermissionPolicy } from "./session-permission-policy.js";
 
-/** Side runs inherit the native binding's model without carrying outer model metadata. */
+export function resolveSideQuestionNativeModelSelection(
+  binding: Pick<
+    CodexAppServerThreadBinding,
+    "connectionScope" | "preserveNativeModel" | "model" | "modelProvider"
+  >,
+) {
+  const { model, modelProvider } = binding;
+  return binding.connectionScope === "supervision"
+    ? requireCodexSupervisionModelSelection(binding)
+    : binding.preserveNativeModel && model && modelProvider
+      ? { model, modelProvider }
+      : undefined;
+}
+
+/** Keep prepared metadata only when it belongs to the native binding's model. */
 export function applySideQuestionModelSelection(
   params: AgentHarnessSideQuestionParamsV2,
   selection: { model: string; modelProvider: string } | undefined,
@@ -14,16 +30,20 @@ export function applySideQuestionModelSelection(
         ...params,
         provider: selection.modelProvider,
         model: selection.model,
-        runtimeModel: {
-          id: selection.model,
-          name: selection.model,
-          provider: selection.modelProvider,
-          api: "openai-chatgpt-responses",
-          reasoning: true,
-          input: ["text", "image"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          // SAFETY: native side runs consume binding capabilities, not generic model token limits.
-        } as NonNullable<AgentHarnessSideQuestionParamsV2["runtimeModel"]>,
+        runtimeModel:
+          params.runtimeModel?.id === selection.model &&
+          params.runtimeModel.provider === selection.modelProvider
+            ? params.runtimeModel
+            : ({
+                id: selection.model,
+                name: selection.model,
+                provider: selection.modelProvider,
+                api: "openai-chatgpt-responses",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                // SAFETY: native side runs consume binding capabilities, not generic model token limits.
+              } as NonNullable<AgentHarnessSideQuestionParamsV2["runtimeModel"]>),
       }
     : params;
 }
@@ -99,6 +119,7 @@ export function buildSideRunAttemptParams(
     authProfileStore: params.preparedRuntimeAuth.authProfileStore,
     modelRegistry: params.preparedRuntimeAuth.modelRegistry,
     preparedModelRuntime: params.preparedModelRuntime,
+    preparedWebSearchPolicy: params.preparedWebSearchPolicy,
     ...(params.preparedRuntimeAuth.resolvedApiKey
       ? { resolvedApiKey: params.preparedRuntimeAuth.resolvedApiKey }
       : {}),

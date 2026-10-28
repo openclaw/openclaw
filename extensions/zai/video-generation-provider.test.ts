@@ -3,14 +3,11 @@ import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
-import type {
-  VideoGenerationProvider,
-  VideoGenerationRequest,
-} from "openclaw/plugin-sdk/video-generation";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import type * as Video from "openclaw/plugin-sdk/video-generation";
+import { afterEach, beforeAll, expect, it, vi } from "vitest";
 
 const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
-let provider: VideoGenerationProvider;
+let provider: Video.VideoGenerationProvider;
 
 beforeAll(async () => {
   const { default: plugin } = await import("./index.js");
@@ -21,15 +18,15 @@ beforeAll(async () => {
   provider = registered;
 });
 installProviderHttpMockCleanup();
+afterEach(() => vi.useRealTimers());
+const videoUrl = "https://example.com/video.mp4";
+const imageUrl = "https://example.com/frame.jpg";
+const imageDataUrl = "data:image/png;base64,cG5nLWJ5dGVz";
+const image = (buffer: Buffer, mimeType = "image/png") => ({ buffer, mimeType });
+const requestDefaults = { provider: "zai", model: "cogvideox-3", prompt: "cube", cfg: {} };
 
-function generateVideo(request: Partial<VideoGenerationRequest> = {}) {
-  return provider.generateVideo({
-    provider: "zai",
-    model: "cogvideox-3",
-    prompt: "A blue cube sliding across a studio floor",
-    cfg: {},
-    ...request,
-  });
+function generateVideo(request: Partial<Video.VideoGenerationRequest> = {}) {
+  return provider.generateVideo({ ...requestDefaults, ...request });
 }
 
 function mockSubmit() {
@@ -41,156 +38,92 @@ function mockSubmit() {
   return release;
 }
 
-function mockSuccess() {
+it.each([
+  [undefined, "https://api.z.ai/api/paas/v4"],
+  ["https://open.bigmodel.cn/api/coding/paas/v4/", "https://open.bigmodel.cn/api/paas/v4"],
+  ["https://api.z.ai/api/coding/paas/v4", "https://api.z.ai/api/paas/v4"],
+  ["https://proxy.example/zai/", "https://proxy.example/zai"],
+])("Z.AI generates and downloads video from %s via %s", async (configured, baseUrl) => {
+  const processing = configured === undefined;
+  const remote = configured === "https://proxy.example/zai/";
+  vi.useFakeTimers();
+  const release = mockSubmit();
+  if (processing) {
+    fetchWithTimeoutMock.mockResolvedValueOnce(Response.json({ task_status: "PROCESSING" }));
+  }
   fetchWithTimeoutMock
     .mockResolvedValueOnce(
-      Response.json({
-        task_status: "SUCCESS",
-        video_result: [
-          {
-            url: "https://example.com/video.mp4",
-            cover_image_url: "https://example.com/cover.jpg",
-          },
-        ],
-      }),
+      Response.json({ task_status: "SUCCESS", video_result: [{ url: videoUrl }] }),
     )
     .mockResolvedValueOnce(new Response("mp4-bytes", { headers: { "content-type": "video/mp4" } }));
-}
-
-describe("Z.AI video generation", () => {
-  it("submits CogVideoX fields, waits for SUCCESS, and downloads the video", async () => {
-    vi.useFakeTimers();
-    try {
-      const release = mockSubmit();
-      fetchWithTimeoutMock.mockResolvedValueOnce(Response.json({ task_status: "PROCESSING" }));
-      mockSuccess();
-      const pending = generateVideo({
-        durationSeconds: 9,
-        size: "1900x1069",
-        audio: true,
-        providerOptions: { quality: "quality", fps: 60 },
-      });
-      await vi.advanceTimersByTimeAsync(5_000);
-      const result = await pending;
-      expect(postJsonRequestMock).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          url: "https://api.z.ai/api/paas/v4/videos/generations",
-          headers: expect.any(Headers),
-          body: {
-            model: "cogvideox-3",
-            prompt: "A blue cube sliding across a studio floor",
-            duration: 10,
-            size: "1920x1080",
-            with_audio: true,
-            quality: "quality",
-            fps: 60,
-          },
-        }),
-      );
-      expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
-        2,
-        "https://api.z.ai/api/paas/v4/async-result/task-1",
-        expect.objectContaining({ method: "GET" }),
-        expect.any(Number),
-        fetch,
-      );
-      expect(release).toHaveBeenCalledOnce();
-      expect(result).toMatchObject({
+  const pending = generateVideo({
+    cfg: processing ? {} : { models: { providers: { zai: { baseUrl: configured, models: [] } } } },
+    durationSeconds: processing ? 10 : remote ? undefined : 5,
+    size: processing ? "1900x1069" : undefined,
+    audio: processing ? true : undefined,
+    providerOptions: processing ? { quality: "quality", fps: 60 } : undefined,
+    aspectRatio: !processing && !remote ? "9:16" : undefined,
+    inputImages: processing
+      ? undefined
+      : [remote ? { url: imageUrl } : image(Buffer.from("png-bytes"))],
+  });
+  await vi.advanceTimersByTimeAsync(processing ? 5_000 : 0);
+  expect(await pending).toMatchObject({
+    model: "cogvideox-3",
+    videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+    metadata: { taskId: "task-1", status: "SUCCESS" },
+  });
+  expect(postJsonRequestMock).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      url: `${baseUrl}/videos/generations`,
+      headers: expect.any(Headers),
+      body: {
         model: "cogvideox-3",
-        videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
-        metadata: { taskId: "task-1", status: "SUCCESS" },
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it.each([
-    ["https://open.bigmodel.cn/api/coding/paas/v4/", "https://open.bigmodel.cn/api/paas/v4"],
-    ["https://api.z.ai/api/coding/paas/v4", "https://api.z.ai/api/paas/v4"],
-    ["https://proxy.example/zai/", "https://proxy.example/zai"],
-  ])("reuses %s for regional image-to-video", async (baseUrl, videoBaseUrl) => {
-    mockSubmit();
-    mockSuccess();
-    const remoteImage = baseUrl === "https://proxy.example/zai/";
-    const image = remoteImage
-      ? { url: "https://example.com/frame.jpg" }
-      : { buffer: Buffer.from("png-bytes"), mimeType: "image/png" };
-    await generateVideo({
-      cfg: { models: { providers: { zai: { baseUrl, models: [] } } } },
-      ...(remoteImage ? {} : { durationSeconds: 6, aspectRatio: "9:16" }),
-      inputImages: [image],
-    });
-    expect(postJsonRequestMock).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        url: `${videoBaseUrl}/videos/generations`,
-        body: expect.objectContaining({
-          image_url: remoteImage
-            ? "https://example.com/frame.jpg"
-            : "data:image/png;base64,cG5nLWJ5dGVz",
-          duration: 5,
-          size: remoteImage ? "1280x720" : "720x1280",
-          with_audio: false,
-        }),
-      }),
-    );
-    expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
-      1,
-      `${videoBaseUrl}/async-result/task-1`,
-      expect.objectContaining({
-        method: "GET",
-        headers: new Headers({
-          Authorization: "Bearer provider-key",
-          "Content-Type": "application/json",
-        }),
-      }),
-      expect.any(Number),
-      fetch,
-    );
-  });
-
-  it.each([
-    {
-      request: {
-        inputImages: [{ url: "https://example.com/1.png" }, { url: "https://example.com/2.png" }],
+        prompt: "cube",
+        duration: processing ? 10 : 5,
+        size: processing ? "1920x1080" : remote ? "1280x720" : "720x1280",
+        with_audio: processing,
+        quality: processing ? "quality" : "speed",
+        fps: processing ? 60 : 30,
+        ...(processing ? {} : { image_url: remote ? imageUrl : imageDataUrl }),
       },
-      error: "at most one input image",
-    },
-    {
-      request: { inputVideos: [{ url: "https://example.com/input.mp4" }] },
-      error: "does not support video or audio reference",
-    },
-    {
-      request: { inputImages: [{ buffer: Buffer.from("gif"), mimeType: "image/gif" }] },
-      error: "PNG or JPEG",
-    },
-    {
-      request: {
-        inputImages: [{ buffer: Buffer.alloc(5 * 1024 * 1024 + 1), mimeType: "image/png" }],
-      },
-      error: "no larger than 5 MB",
-    },
-    { request: { providerOptions: { fps: 24 } }, error: "fps must be 30 or 60" },
-    { request: { providerOptions: { quality: "draft" } }, error: "quality must be" },
-  ])("rejects unsupported input before submission: $error", async ({ request, error }) => {
-    await expect(generateVideo(request)).rejects.toThrow(error);
-    expect(postJsonRequestMock).not.toHaveBeenCalled();
-  });
+    }),
+  );
+  expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
+    processing ? 2 : 1,
+    `${baseUrl}/async-result/task-1`,
+    expect.objectContaining({
+      method: "GET",
+      headers: new Headers({
+        Authorization: "Bearer provider-key",
+        "Content-Type": "application/json",
+      }),
+    }),
+    expect.any(Number),
+    fetch,
+  );
+  expect(release).toHaveBeenCalledOnce();
+});
 
-  it.each([
-    {
-      payload: { task_status: "FAIL", error: { message: "Generation rejected" } },
-      error: "Generation rejected",
-    },
-    {
-      payload: { task_status: "SUCCESS", video_result: [] },
-      error: "completed without a video URL",
-    },
-    { payload: {}, error: "missing or unknown task_status" },
-  ])("reports unusable task results: $error", async ({ payload, error }) => {
-    mockSubmit();
-    fetchWithTimeoutMock.mockResolvedValueOnce(Response.json(payload));
-    await expect(generateVideo()).rejects.toThrow(error);
-    expect(fetchWithTimeoutMock).toHaveBeenCalledOnce();
-  });
+it.each<[string, Partial<Video.VideoGenerationRequest>]>([
+  ["at most one input image", { inputImages: [{ url: imageUrl }, { url: imageUrl }] }],
+  ["does not support video or audio reference", { inputVideos: [{ url: videoUrl }] }],
+  ["PNG or JPEG", { inputImages: [image(Buffer.from("gif"), "image/gif")] }],
+  ["no larger than 5 MB", { inputImages: [image(Buffer.alloc(5 * 1024 * 1024 + 1))] }],
+  ["fps must be 30 or 60", { providerOptions: { fps: 24 } }],
+  ["quality must be", { providerOptions: { quality: "draft" } }],
+])("Z.AI rejects unsupported input before submission: %s", async (error, request) => {
+  await expect(generateVideo(request)).rejects.toThrow(error);
+  expect(postJsonRequestMock).not.toHaveBeenCalled();
+});
+
+it.each<[string, Record<string, unknown>]>([
+  ["Generation rejected", { task_status: "FAIL", error: { message: "Generation rejected" } }],
+  ["completed without a video URL", { task_status: "SUCCESS", video_result: [] }],
+  ["missing or unknown task_status", {}],
+])("Z.AI reports unusable task results: %s", async (error, payload) => {
+  mockSubmit();
+  fetchWithTimeoutMock.mockResolvedValueOnce(Response.json(payload));
+  await expect(generateVideo()).rejects.toThrow(error);
+  expect(fetchWithTimeoutMock).toHaveBeenCalledOnce();
 });

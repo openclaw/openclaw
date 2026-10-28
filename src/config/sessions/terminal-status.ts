@@ -1,4 +1,7 @@
-import { buildRestartRecoveryClaimCleanupPatch } from "./restart-recovery-state.js";
+import {
+  buildRestartRecoveryClaimCleanupPatch,
+  hasMainSessionRecoveryClaim,
+} from "./restart-recovery-state.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 /** Returns true for terminal statuses that a later visible turn may recover in place. */
@@ -10,8 +13,11 @@ export function isRecoverableTerminalSessionStatus(
 
 /** Clears stale terminal lifecycle fields before reusing a recoverable session entry. */
 export function recoverTerminalSessionEntryForVisibleTurn(entry: SessionEntry): SessionEntry {
-  if (entry.restartRecoveryHarnessCompletion) {
-    // A failed completion still owns its source; recover it before a later user turn.
+  if (
+    entry.restartRecoveryHarnessCompletion ||
+    (entry.abortedLastRun === true && hasMainSessionRecoveryClaim(entry))
+  ) {
+    // Interrupted work still owns its source; recover it before a later user turn.
     return { ...entry, abortedLastRun: true };
   }
   return {
@@ -24,6 +30,7 @@ export function recoverTerminalSessionEntryForVisibleTurn(entry: SessionEntry): 
     endedAt: undefined,
     runtimeMs: undefined,
     lastRunError: undefined,
+    suppressErrorNotice: undefined,
     abortedLastRun: undefined,
   };
 }

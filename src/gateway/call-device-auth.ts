@@ -32,6 +32,8 @@ export type GatewayCallDeviceAuthOptions = Pick<
   requireLocalBackendSharedAuth?: boolean;
   /** Reuse local auth-none authority without opening device storage for ordinary CLI RPCs. */
   allowLocalBackendAuthNone?: boolean;
+  /** CLI storage selection is lazy until authentication needs a local identity. */
+  beforeDeviceIdentityLoad?: () => Promise<void>;
 };
 
 export class GatewayCredentialsRequiredError extends Error {
@@ -169,6 +171,9 @@ export async function resolveGatewayCallDeviceAuth(params: {
     throw new GatewayLocalBackendSharedAuthUnavailableError(
       "local backend shared auth requires a loopback gateway with token/password credentials or auth mode none",
     );
+  }
+  if (opts.deviceIdentity === undefined && !omitDeviceIdentity) {
+    await opts.beforeDeviceIdentityLoad?.();
   }
   const deviceIdentity =
     opts.deviceIdentity === undefined

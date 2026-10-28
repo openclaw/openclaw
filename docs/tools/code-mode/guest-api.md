@@ -53,6 +53,11 @@ provide local byte conversion, not filesystem, module, or network access.
 Returned values still use the JSON-only bridge; emit decoded text or an array of
 byte values rather than a binary attachment.
 
+Module loading is unavailable. Direct `import()` and `require()` calls are
+rejected before execution. In the Node executor, dynamic imports constructed
+through `eval` or `Function` reject with the same module-access guidance and
+can be caught inside the cell. Uncaught rejections fail the owning cell.
+
 `console.log`, `console.info`, `console.warn`, `console.error`, and
 `console.debug` emit diagnostic text through the same ordered output channel as
 `text` and `json`, not through host logs. They return `undefined`;
@@ -83,8 +88,8 @@ executor and remain bounded by the Code Mode execution and continuation limits.
 applies to interactive Code Mode and headless automation scripts.
 
 Every effective non-MCP tool is also installed as an async global function.
-The model-visible `exec` description includes a bounded, deterministic subset
-of final callable names, compact input hints, and trusted declared output hints.
+The run's Code Mode prompt includes a small set of final callable names
+selected by fixed rules, along with compact input hints and trusted declared output hints.
 Descriptions remain deferred so adversarial catalog prose cannot steer the
 model. When that index omits a tool, call `catalog.search(...)`; its results are
 callable functions.
@@ -218,7 +223,9 @@ command defines its own payload; check the result before composing it. `nodes.ge
 name and returns a handle with `id`, `name`, and `invoke(command, params?)`.
 Invocation uses the normal `nodes` tool path, so pairing, command policy, scopes,
 approvals, timeouts, hooks, and telemetry are unchanged. A handle includes
-`listDir(path)` only when the node advertises `fs.listDir`. It does not include
+`listDir(path)` only when the node advertises `fs.listDir`, and that listing
+omits files: use the normal shell `exec` tool with a node host for complete
+directory contents. It does not include
 `exec`: the generic nodes surface reserves `system.run` for the normal shell
 `exec` tool with a node host.
 
@@ -270,6 +277,12 @@ with `TypeError`. Values use the normal bridge JSON normalization. Each
 serialized value may use at most 256 KiB of encoded JSON, and all stored values
 together may use at most 1 MiB. Exceeding either limit rejects with `RangeError`
 and leaves the store unchanged. `await store(key, undefined)` deletes a key.
+Catch a capacity error by `error instanceof RangeError` or
+`error.code === "store_range"`, then store a summary or smaller value. If the
+total is full, delete unneeded keys before retrying the write. For larger data
+needed only in this reply, use `results.save(value)` instead. An uncaught
+capacity error reports `invalid_input`; it does not automatically replay the
+cell or commit that cell's pending writes.
 `await load(key)` returns `undefined` when missing and otherwise returns a
 detached copy; editing that copy does not change the saved value.
 
@@ -293,7 +306,7 @@ an available session manager. Read `API.read("results.d.ts")` for the contract.
 
 For text file pages, `read(...)` returns file text in `content`; filename-resolution
 and pagination notices stay in the human-readable tool display, not the structured
-file data. Existing file redaction still applies. Check `kind` before parsing:
+file data. File text, including `.env` content, is not secret-masked. Check `kind` before parsing:
 `"truncated"` means more data is available at `continuation`. Read that next page
 with the same path and the returned `offset`, optional `cursor`, and optional
 `limit`. Join line continuations with `"\n"`; append cursor continuations directly.

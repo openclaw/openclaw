@@ -17,7 +17,10 @@ import { pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 import { readPublicationArtifactArchive, sha256Digest } from "./lib/actions-artifact-archive.mjs";
 import { compareAscii } from "./lib/canonical-json.mjs";
-import { fetchNpmRegistryPackumentWithRetry } from "./lib/npm-publish-plan.mjs";
+import {
+  fetchNpmRegistryPackumentWithRetry,
+  parsePublicationCliValues,
+} from "./lib/npm-publish-plan.mjs";
 
 const MANIFEST_FILENAME = "npm-placeholder-manifest.json";
 const MANIFEST_SCHEMA = "openclaw.npm-placeholder-publication/v1";
@@ -730,20 +733,7 @@ function parseCliArgs(argv) {
   if (!["create", "verify-artifact", "publish"].includes(command)) {
     throw new Error("Usage: npm-placeholder-publication.mjs <create|verify-artifact|publish> ...");
   }
-  const values = {};
-  for (let index = 0; index < rest.length; index += 2) {
-    const key = rest[index];
-    const value = rest[index + 1];
-    if (!key?.startsWith("--") || value === undefined || value.startsWith("--")) {
-      throw new Error(`Invalid ${command} argument near ${key ?? "<missing>"}.`);
-    }
-    const name = key.slice(2).replace(/-([a-z])/gu, (_, letter) => letter.toUpperCase());
-    if (values[name] !== undefined) {
-      throw new Error(`Duplicate ${command} option: ${key}`);
-    }
-    values[name] = value;
-  }
-  return { command, values };
+  return { command, values: parsePublicationCliValues(command, rest) };
 }
 
 function appendGithubOutput(path, values) {

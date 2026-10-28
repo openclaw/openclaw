@@ -432,6 +432,9 @@ if (isDirectPostinstallInvocation()) {
       await preflightUpdatePackageLifecycle();
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error));
+      if (error?.code === "update-schema-bump-unfenced") {
+        console.error(`[${error.code}]`);
+      }
       process.exitCode = 1;
       admitted = false;
     }

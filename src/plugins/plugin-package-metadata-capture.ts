@@ -13,9 +13,11 @@ import {
   retainLoadedPluginSourceCapture,
   retainPluginSourceCaptureInstance,
 } from "./plugin-source-capture-directory.js";
-import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
+import {
+  mkdtempPluginCaptureSync,
+  PLUGIN_SOURCE_CAPTURE_PREFIX,
+} from "./plugin-source-capture-path.js";
 import { isPluginSourceEntry } from "./plugin-source-file.js";
-import { verifyPluginSourceInputs, type PluginSourceInput } from "./plugin-source-verification.js";
 
 export type PluginDependencyResolution = { root: string; lookupDirectory: string };
 
@@ -89,14 +91,15 @@ export function createPluginDependencyLookup(
     if (specifier.startsWith("#") || (manifest?.exports != null && manifest.name === name)) {
       return "package-map";
     }
-    if (!prepared.has(name)) {
-      const dependency = resolve(name, importer);
-      if (dependency) {
-        capture(name, dependency);
-      }
-      prepared.set(name, dependency !== undefined);
+    if (prepared.has(name)) {
+      return prepared.get(name);
     }
-    return prepared.get(name);
+    const dependency = resolve(name, importer);
+    if (dependency) {
+      capture(name, dependency);
+    }
+    prepared.set(name, dependency !== undefined);
+    return dependency !== undefined;
   };
 }
 
@@ -153,22 +156,34 @@ export function createPluginNativeDependencyScopes(
   };
 }
 
+type PluginDependencyPlan = {
+  manifest: Record<string, unknown>;
+  names: readonly string[];
+};
+
+function createPluginDependencyPlan(manifest: Record<string, unknown>): PluginDependencyPlan {
+  return { manifest, names: [...pluginDependencyNames(manifest)].toSorted() };
+}
+
 export function capturePluginDependencies(params: {
   root: string;
   manifestFile?: string;
+  plan?: PluginDependencyPlan;
   /** Nested manifests nobody selected (benchmarks, examples) keep their declarations optional. */
   incidental?: boolean;
   references: ReadonlyMap<string, ReadonlySet<string>>;
   resolve: ReturnType<typeof createPluginDependencyResolver>;
   capture: (name: string, dependency: PluginDependencyResolution) => void;
 }) {
-  const manifest: {
-    dependencies?: Record<string, string>;
-    optionalDependencies?: Record<string, string>;
-    peerDependencies?: Record<string, string>;
-  } = params.manifestFile ? JSON.parse(fs.readFileSync(params.manifestFile, "utf8")) : {};
+  // Native namespace inspection supplies a fresh file; immutable captures supply their owner plan.
+  const plan =
+    params.plan ??
+    (params.manifestFile
+      ? createPluginDependencyPlan(JSON.parse(fs.readFileSync(params.manifestFile, "utf8")))
+      : undefined);
+  const manifest = plan?.manifest;
   const dependencies = [
-    ...[...pluginDependencyNames(manifest)].toSorted().map((name) => ({
+    ...(plan?.names ?? []).map((name) => ({
       name,
       importer: path.join(params.root, "package.json"),
     })),
@@ -184,10 +199,10 @@ export function capturePluginDependencies(params: {
     const dependency = params.resolve(name, importer);
     if (!dependency) {
       if (
-        !params.manifestFile ||
+        !plan ||
         params.incidental ||
-        name in (manifest.optionalDependencies ?? {}) ||
-        name in (manifest.peerDependencies ?? {})
+        name in (asOptionalRecord(manifest?.optionalDependencies) ?? {}) ||
+        name in (asOptionalRecord(manifest?.peerDependencies) ?? {})
       ) {
         continue;
       }
@@ -197,7 +212,6 @@ export function capturePluginDependencies(params: {
     }
     params.capture(name, dependency);
   }
-  return manifest;
 }
 
 export function resolvePluginModulePackageRoot(filename: string): string {
@@ -221,7 +235,6 @@ export function capturePluginPackageMetadata(
   copy: (source: string, target: string) => void,
   isRetainedReference?: (source: string, real: string) => boolean,
   resolveSource?: (source: string) => { path: string; boundary: string } | undefined,
-  recordFileProbe?: (source: string) => void,
 ) {
   const manifest = path.join(destination, "package.json");
   copy(path.join(root, "package.json"), manifest);
@@ -252,9 +265,6 @@ export function capturePluginPackageMetadata(
       const prepared = resolveSource?.(filename);
       const input = prepared?.path ?? filename;
       const insideRoot = isPathInside(root, filename);
-      if (insideRoot) {
-        recordFileProbe?.(filename);
-      }
       if (insideRoot && fs.statSync(input, { throwIfNoEntry: false })?.isFile()) {
         const real = fs.realpathSync(input);
         if (
@@ -295,87 +305,6 @@ function* pluginPackageTargets(value: unknown): Generator<string> {
       yield* pluginPackageTargets(target);
     }
   }
-}
-
-/** Package '*' substitutes one subpath everywhere; only its declared fixed prefix is walked. */
-function visitPluginPackageTargetFiles(params: {
-  metadata: string;
-  boundary: string;
-  target: string;
-  wildcard: boolean;
-  visit: (filename: string) => void;
-  isRetainedReference?: (source: string, real: string) => boolean;
-  resolveSource?: (source: string) => { path: string; boundary: string } | undefined;
-}): void {
-  if (!params.target.startsWith("./")) {
-    return;
-  }
-  const marker = randomUUID();
-  let filename: string;
-  try {
-    filename = fileURLToPath(
-      new URL(
-        params.wildcard ? params.target.replaceAll("*", marker) : params.target,
-        pathToFileURL(params.metadata),
-      ),
-    );
-  } catch {
-    // Native selection owns invalid URL/target errors; unused branches remain inert.
-    return;
-  }
-  if (!isPathInside(params.boundary, filename)) {
-    return;
-  }
-  const parts = filename.split(marker);
-  const matcher =
-    parts.length > 1
-      ? new RegExp(
-          `^${escapeRegExp(parts[0]!)}([\\s\\S]*)${parts.slice(1).map(escapeRegExp).join("\\1")}$`,
-          "i",
-        )
-      : undefined;
-  const ancestors = new Set<string>();
-  const visit = (source: string) => {
-    if (
-      path
-        .relative(params.boundary, source)
-        .split(path.sep)
-        .some((name) => name === ".git" || name === "node_modules")
-    ) {
-      return;
-    }
-    const prepared = params.resolveSource?.(source);
-    const input = prepared?.path ?? source;
-    const stat = fs.statSync(input, { throwIfNoEntry: false });
-    if (!stat) {
-      return;
-    }
-    const real = fs.realpathSync(input);
-    if (
-      !isPathInside(prepared?.boundary ?? params.boundary, real) &&
-      !(stat.isFile() && params.isRetainedReference?.(source, real))
-    ) {
-      return;
-    }
-    if (stat.isDirectory()) {
-      if (!matcher) {
-        return;
-      }
-      if (ancestors.has(real)) {
-        throw new Error(`Plugin source contains a directory cycle: ${source}`);
-      }
-      ancestors.add(real);
-      for (const name of fs.readdirSync(input).filter(isPluginSourceEntry).toSorted()) {
-        visit(path.join(source, name));
-      }
-      ancestors.delete(real);
-    } else if (stat.isFile()) {
-      if (!matcher || matcher.test(source)) {
-        params.visit(source);
-      }
-    }
-  };
-  visit(matcher ? path.dirname(parts[0]! + "_") : filename);
 }
 
 type PluginPackageCaptureState = "metadata" | "entry" | "body" | { error: unknown };
@@ -451,9 +380,19 @@ export function createPluginPackageMetadataCapture(params: {
     string,
     {
       manifest?: Record<string, unknown> | null;
+      dependencyPlan?: PluginDependencyPlan;
       prepareAliases(manifest: Record<string, unknown>): void;
     }
   >();
+  const getManifest = (metadata: string) => {
+    const scope = metadataScopes.get(metadata)!;
+    const manifest =
+      asOptionalRecord(scope.manifest) ??
+      asOptionalRecord(JSON.parse(fs.readFileSync(metadata, "utf8"))) ??
+      {};
+    scope.manifest = manifest;
+    return manifest;
+  };
   const pendingScopes = new Set<string>();
   const prepareNativeScopes = () => {
     for (const metadata of pendingScopes) {
@@ -495,22 +434,84 @@ export function createPluginPackageMetadataCapture(params: {
       ];
       for (const [key, value] of declarations) {
         for (const target of pluginPackageTargets(value)) {
-          visitPluginPackageTargetFiles({
-            metadata: sourceMetadata,
-            boundary: owner.sourceRoot,
-            target,
-            wildcard: key.includes("*"),
-            isRetainedReference: params.isRetainedReference,
-            resolveSource: params.resolveSource,
-            visit(filename) {
-              owner.captureTarget(
-                path.join(
-                  path.dirname(metadata),
-                  path.relative(path.dirname(sourceMetadata), filename),
-                ),
-              );
-            },
-          });
+          const boundary = owner.sourceRoot;
+          const wildcard = key.includes("*");
+          const { isRetainedReference, resolveSource } = params;
+          // Package '*' substitutes one subpath everywhere; only its fixed prefix is walked.
+          if (!target.startsWith("./")) {
+            continue;
+          }
+          const marker = randomUUID();
+          let filename: string;
+          try {
+            filename = fileURLToPath(
+              new URL(
+                wildcard ? target.replaceAll("*", marker) : target,
+                pathToFileURL(sourceMetadata),
+              ),
+            );
+          } catch {
+            // Native selection owns invalid URL/target errors; unused branches remain inert.
+            continue;
+          }
+          if (!isPathInside(boundary, filename)) {
+            continue;
+          }
+          const parts = filename.split(marker);
+          const matcher =
+            parts.length > 1
+              ? new RegExp(
+                  `^${escapeRegExp(parts[0]!)}([\\s\\S]*)${parts.slice(1).map(escapeRegExp).join("\\1")}$`,
+                  "i",
+                )
+              : undefined;
+          const ancestors = new Set<string>();
+          const visit = (source: string) => {
+            if (
+              path
+                .relative(boundary, source)
+                .split(path.sep)
+                .some((name) => name === ".git" || name === "node_modules")
+            ) {
+              return;
+            }
+            const prepared = resolveSource?.(source);
+            const input = prepared?.path ?? source;
+            const stat = fs.statSync(input, { throwIfNoEntry: false });
+            if (!stat) {
+              return;
+            }
+            const real = fs.realpathSync(input);
+            if (
+              !isPathInside(prepared?.boundary ?? boundary, real) &&
+              !(stat.isFile() && isRetainedReference?.(source, real))
+            ) {
+              return;
+            }
+            if (stat.isDirectory()) {
+              if (!matcher) {
+                return;
+              }
+              if (ancestors.has(real)) {
+                throw new Error(`Plugin source contains a directory cycle: ${source}`);
+              }
+              ancestors.add(real);
+              for (const name of fs.readdirSync(input).filter(isPluginSourceEntry).toSorted()) {
+                visit(path.join(source, name));
+              }
+              ancestors.delete(real);
+            } else if (stat.isFile()) {
+              if (!matcher || matcher.test(source)) {
+                owner.captureTarget(
+                  path.join(
+                    path.dirname(metadata),
+                    path.relative(path.dirname(sourceMetadata), source),
+                  ),
+                );
+              }
+            }
+          };
+          visit(matcher ? path.dirname(parts[0]! + "_") : filename);
         }
       }
     }
@@ -535,6 +536,10 @@ export function createPluginPackageMetadataCapture(params: {
     setManifest(metadata: string, manifest: Record<string, unknown> | null | undefined) {
       metadataScopes.get(metadata)!.manifest = manifest;
     },
+    dependencyPlan(metadata: string): PluginDependencyPlan {
+      const scope = metadataScopes.get(metadata)!;
+      return (scope.dependencyPlan ??= createPluginDependencyPlan(getManifest(metadata)));
+    },
     get pending() {
       return pendingScopes.size > 0;
     },
@@ -552,14 +557,12 @@ export function createPluginPackageMetadataCapture(params: {
       boundary,
       copy,
       hasSource,
-      recordMissingMetadata,
     }: {
       root: string;
       destination: string;
       boundary: string;
       copy: (source: string, target: string) => void;
       hasSource: (source: string) => boolean;
-      recordMissingMetadata?: (source: string) => void;
     }) {
       type PackageScope = {
         source: string;
@@ -580,11 +583,7 @@ export function createPluginPackageMetadataCapture(params: {
           scope = () => {
             if (!parsed) {
               const metadata = metadataScopes.get(target)!;
-              const data =
-                asOptionalRecord(metadata.manifest) ??
-                asOptionalRecord(JSON.parse(fs.readFileSync(target, "utf8"))) ??
-                {};
-              metadata.manifest = data;
+              const data = getManifest(target);
               metadata.prepareAliases(data);
               parsed = {
                 source,
@@ -594,11 +593,11 @@ export function createPluginPackageMetadataCapture(params: {
             }
             return parsed;
           };
-        } else {
-          recordMissingMetadata?.(source);
-          if (scopeDirectory !== boundary && isPathInside(boundary, path.dirname(scopeDirectory))) {
-            scope = captureScopeMetadata(path.dirname(scopeDirectory));
-          }
+        } else if (
+          scopeDirectory !== boundary &&
+          isPathInside(boundary, path.dirname(scopeDirectory))
+        ) {
+          scope = captureScopeMetadata(path.dirname(scopeDirectory));
         }
         capturedScopes.set(scopeDirectory, scope);
         return scope;
@@ -635,9 +634,10 @@ export function createPluginSourceCapture() {
   try {
     created =
       override !== undefined
-        ? fs.mkdtempSync(path.join(override.directory, PLUGIN_SOURCE_CAPTURE_PREFIX))
+        ? mkdtempPluginCaptureSync(path.join(override.directory, PLUGIN_SOURCE_CAPTURE_PREFIX))
         : instance!.createDirectory();
-    directory = fs.realpathSync(created);
+    // Copies admit only targets already in native spelling (Windows 8.3 names expanded).
+    directory = fs.realpathSync.native(created);
     fs.chmodSync(directory, 0o700);
   } catch (error) {
     const cleanupErrors: unknown[] = [];
@@ -662,8 +662,6 @@ export function createPluginSourceCapture() {
     }
     throw error;
   }
-  const inputs = new Map<string, PluginSourceInput>();
-  const pendingInputs = new Set<string>();
   const additions = new Set<string>();
   const captureFailures = new Map<string, unknown>();
   let disposed = false;
@@ -673,7 +671,6 @@ export function createPluginSourceCapture() {
     }
     try {
       const value = capture();
-      verifyPluginSourceInputs(inputs, pendingInputs);
       return { value, additions: [...additions] };
     } catch (error) {
       // Another specifier must not admit files from an incomplete capture transaction.
@@ -682,7 +679,6 @@ export function createPluginSourceCapture() {
       }
       throw error;
     } finally {
-      pendingInputs.clear();
       additions.clear();
     }
   };
@@ -705,8 +701,6 @@ export function createPluginSourceCapture() {
     captureFailures.clear();
   };
   return {
-    inputs,
-    pendingInputs,
     additions,
     capture: acquire,
     assertModuleAvailable,

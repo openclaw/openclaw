@@ -1,13 +1,20 @@
 /** Transcript-backed prompt projection state cached by an embedded session lifecycle. */
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
+import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
+import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { Message } from "../../llm/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { gateAgentToolExecution } from "../agent-tool-availability.js";
+import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
 import { getOpenClawSystemUpdateKind } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
+import { shareSystemPromptPrefix } from "../sessions/system-prompt-pool.js";
+import type { AnyAgentTool } from "../tools/common.js";
 import {
   prepareCacheTtlCheckpoint,
   serializeCacheTtlToolResultProjections,
@@ -22,8 +29,6 @@ type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
 export type ToolResultPromptProjectionState = CacheTtlProjectionInput & {
   /** Null means an uncertain append requires a checkpoint, including for empty state. */
   cacheTtlCheckpoint?: CacheTtlCheckpoint | null;
-  /** Every baseline publication, including an empty-branch restore, invalidates pending writes. */
-  cacheTtlRevision?: number;
 };
 
 type EmbeddedSessionPromptState = {
@@ -32,7 +37,9 @@ type EmbeddedSessionPromptState = {
   systemPrompt?: SystemPromptSeries;
   pendingSystemPrompt?: SystemPromptSeries;
   systemPromptRouteKey?: string;
-  prunedImageMessages?: Set<string>;
+  historyBoundary?: { count: number; id: string | null };
+  toolSurface?: ToolSurface;
+  pendingToolSurface?: ToolSurface;
   removedRuntimeContextKeys?: Set<string>;
   runtimeContextCarrierPositions?: number[];
 };
@@ -47,22 +54,210 @@ type SystemPromptSeries = {
   restart: boolean;
 };
 
+const SYSTEM_PROMPT_ROUTE_PARTS = [
+  "provider",
+  "model",
+  "api",
+  "baseUrl",
+  "inHistorySystemUpdates",
+  "personalProfile",
+] as const;
+type SystemPromptRoutePart = (typeof SYSTEM_PROMPT_ROUTE_PARTS)[number];
+type SystemPromptRestartReason =
+  | "new"
+  | "history"
+  | "model-change"
+  | `route:${SystemPromptRoutePart}`;
+export type SystemPromptSeriesStatus = "pinned" | `restarted:${SystemPromptRestartReason}`;
+
+/** One owner for the series key layout; saved checkpoints compare these exact bytes. */
+export function buildSystemPromptRouteKey(
+  route: Record<SystemPromptRoutePart, string | boolean | undefined>,
+): string {
+  return JSON.stringify(SYSTEM_PROMPT_ROUTE_PARTS.map((part) => route[part]));
+}
+
+export function parseSystemPromptRouteKey(
+  routeKey: unknown,
+): Partial<Record<SystemPromptRoutePart, unknown>> | undefined {
+  if (typeof routeKey !== "string") {
+    return undefined;
+  }
+  let parts: unknown;
+  try {
+    parts = JSON.parse(routeKey);
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(parts)) {
+    return undefined;
+  }
+  const route: Partial<Record<SystemPromptRoutePart, unknown>> = {};
+  SYSTEM_PROMPT_ROUTE_PARTS.forEach((part, index) => {
+    route[part] = parts[index];
+  });
+  return route;
+}
+
+function changedPromptRoutePart(previous: unknown, current: string): SystemPromptRestartReason {
+  const before = parseSystemPromptRouteKey(previous);
+  const after = parseSystemPromptRouteKey(current);
+  const part =
+    before && after
+      ? SYSTEM_PROMPT_ROUTE_PARTS.find((name) => before[name] !== after[name])
+      : undefined;
+  return part ? `route:${part}` : "new";
+}
+
+type ToolDefinition = Pick<AnyAgentTool, "name" | "description" | "parameters">;
+type ToolSurface = {
+  routeKey: string;
+  historyId: string | null;
+  /** Digest of the tool policy config; a policy change starts a new pin. */
+  toolPolicy: string;
+  tools: ToolDefinition[];
+};
+
+function describeTool(tool: AnyAgentTool): ToolDefinition {
+  return { name: tool.name, description: tool.description, parameters: tool.parameters };
+}
+
+function resolvePromptHistoryId(params: {
+  state: EmbeddedSessionPromptState;
+  entries: SessionEntry[];
+  historyBoundaryCount?: number;
+}): string | null {
+  // Bounded reloads can omit a compaction's payload without changing history.
+  // The manager's boundary count, not its visible window, invalidates this run's fact.
+  const previous = params.state.historyBoundary;
+  if (previous && previous.count === params.historyBoundaryCount) {
+    return previous.id;
+  }
+  const id =
+    params.entries.findLast((entry) => entry.type === "compaction" || entry.type === "reset")?.id ??
+    null;
+  if (params.historyBoundaryCount !== undefined) {
+    params.state.historyBoundary = { count: params.historyBoundaryCount, id };
+  }
+  return id;
+}
+
+function sameToolParameters(left: unknown, right: unknown): boolean {
+  if (left === right) {
+    return true;
+  }
+  const a = getPublishedRuntimeToolInputSchema(left);
+  const b = getPublishedRuntimeToolInputSchema(right);
+  // Restored transcript pins have no publication fact; derive only their side.
+  return a || b
+    ? (a?.canonicalFingerprint ?? sha256Hex(stableStringify(left))) ===
+        (b?.canonicalFingerprint ?? sha256Hex(stableStringify(right)))
+    : stableStringify(left) === stableStringify(right);
+}
+
+/**
+ * The session pins every tool definition it has sent, so a turn that builds fewer
+ * tools keeps the provider prefix: retained definitions refuse their calls. New or
+ * changed definitions extend the pin once and are written with the next checkpoint.
+ */
+export function prepareSessionToolSurface(params: {
+  state: EmbeddedSessionPromptState;
+  routeKey: string;
+  toolPolicy: string;
+  entries: SessionEntry[];
+  historyBoundaryCount?: number;
+  tools: AnyAgentTool[];
+}): AnyAgentTool[] {
+  const historyId = resolvePromptHistoryId(params);
+  const restored = (): ToolSurface | undefined => {
+    const markerIndex = params.entries.findLastIndex(
+      (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
+    );
+    const entry = params.entries[markerIndex];
+    const data = entry?.type === "custom" ? entry.data : undefined;
+    return isRecord(data) &&
+      Array.isArray(data.tools) &&
+      data.routeKey === params.routeKey &&
+      data.historyId === historyId &&
+      data.toolPolicy === params.toolPolicy &&
+      !params.entries.slice(markerIndex + 1).some((later) => later.type === "model_change")
+      ? {
+          routeKey: params.routeKey,
+          historyId,
+          toolPolicy: params.toolPolicy,
+          // SAFETY: only this module writes `tools`, as ToolDefinition entries matched to this route and policy.
+          tools: data.tools as ToolDefinition[],
+        }
+      : undefined;
+  };
+  const candidate = params.state.pendingToolSurface ?? params.state.toolSurface ?? restored();
+  const known =
+    candidate?.routeKey === params.routeKey &&
+    candidate.historyId === historyId &&
+    candidate.toolPolicy === params.toolPolicy
+      ? candidate
+      : undefined;
+  // A restored pin rides along with later combined checkpoints.
+  params.state.toolSurface = params.state.pendingToolSurface ? params.state.toolSurface : known;
+  const pinned = new Map(known?.tools.map((tool) => [tool.name, tool]));
+  // Sibling guidance in a description follows the tools a turn built; the pin keeps
+  // the session's wording while the parameters match.
+  let changed = !known;
+  const tools = params.tools.map((tool) => {
+    const pin = pinned.get(tool.name);
+    // Computer discovery supplies live execution facts, not a new session definition.
+    if (pin && tool.name === "computer") {
+      return copyAgentToolMetadata(tool, { ...tool, ...pin });
+    }
+    if (changed && pin?.description === tool.description) {
+      return tool;
+    }
+    const sameParameters = pin && sameToolParameters(pin.parameters, tool.parameters);
+    changed ||= !sameParameters;
+    return sameParameters && pin.description !== tool.description
+      ? copyAgentToolMetadata(tool, { ...tool, description: pin.description })
+      : tool;
+  });
+  const built = new Set(tools.map((tool) => tool.name));
+  const retained = [...pinned.values()].filter((tool) => !built.has(tool.name));
+  if (changed) {
+    const current = tools.map(describeTool);
+    params.state.pendingToolSurface = {
+      routeKey: params.routeKey,
+      historyId,
+      toolPolicy: params.toolPolicy,
+      // oxlint-disable-next-line unicorn/no-array-sort -- The combined definitions array is private.
+      tools: [...current, ...retained].sort((a, b) => a.name.localeCompare(b.name)),
+    };
+  }
+  return [
+    ...tools,
+    ...retained.map((tool) =>
+      gateAgentToolExecution(
+        { ...tool, label: tool.name, execute: async () => ({ content: [], details: {} }) },
+        `${tool.name} is not available in this turn. Do not retry ${tool.name}.`,
+      ),
+    ),
+  ];
+}
+
 /** Unsent preparation belongs to its attempt; an incapable route rebuilds the full prompt. */
 export function beginSessionSystemPrompt(params: {
   state: EmbeddedSessionPromptState;
   routeKey: string;
   enabled: boolean;
-  entries: SessionEntry[];
+  getEntries: () => SessionEntry[];
 }): boolean {
   params.state.pendingSystemPrompt = undefined;
+  params.state.historyBoundary = undefined;
   if (params.enabled) {
     return false;
   }
   params.state.systemPrompt = undefined;
   params.state.systemPromptRouteKey = params.routeKey;
-  const previous = params.entries.findLast(
-    (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
-  );
+  const previous = params
+    .getEntries()
+    .findLast((entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt");
   return (
     previous?.type === "custom" &&
     isRecord(previous.data) &&
@@ -103,17 +298,17 @@ export function prepareSessionSystemPrompt(params: {
   routeKey: string;
   systemPrompt: string;
   entries: SessionEntry[];
+  historyBoundaryCount?: number;
 }) {
-  const { permissionNotice, systemPrompt: renderedPrefix } = extractAttemptPermissionNotice(
-    params.systemPrompt,
-  );
-  const historyId =
-    params.entries.findLast((entry) => entry.type === "compaction" || entry.type === "reset")?.id ??
-    null;
+  const { permissionNotice, systemPrompt } = extractAttemptPermissionNotice(params.systemPrompt);
+  const renderedPrefix = shareSystemPromptPrefix(systemPrompt);
+  const historyId = resolvePromptHistoryId(params);
   const markerIndex = params.entries.findLastIndex(
     (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
   );
   const afterCheckpoint = params.entries.slice(markerIndex + 1);
+  const checkpoint = params.entries[markerIndex];
+  const data = checkpoint?.type === "custom" ? checkpoint.data : undefined;
   const orphanedUpdate =
     !params.state.pendingSystemPrompt &&
     afterCheckpoint.some((entry) => getOpenClawSystemUpdateKind(entry) === "prompt-update");
@@ -122,13 +317,12 @@ export function prepareSessionSystemPrompt(params: {
     params.state.systemPrompt = undefined;
   }
   let series = params.state.pendingSystemPrompt ?? params.state.systemPrompt;
+  const previous = series ?? (isRecord(data) && typeof data.prefix === "string" ? data : undefined);
   if (
     !series &&
     !orphanedUpdate &&
     (!params.state.systemPromptRouteKey || params.state.systemPromptRouteKey === params.routeKey)
   ) {
-    const entry = params.entries[markerIndex];
-    const data = entry?.type === "custom" ? entry.data : undefined;
     if (
       isRecord(data) &&
       typeof data.prefix === "string" &&
@@ -139,9 +333,9 @@ export function prepareSessionSystemPrompt(params: {
       !afterCheckpoint.some((later) => later.type === "model_change")
     ) {
       series = {
-        prefix: data.prefix,
+        prefix: shareSystemPromptPrefix(data.prefix),
         hash: data.hash,
-        renderedPrefix: data.renderedPrefix,
+        renderedPrefix: shareSystemPromptPrefix(data.renderedPrefix),
         routeKey: params.routeKey,
         historyId,
         permissionNotice:
@@ -152,6 +346,15 @@ export function prepareSessionSystemPrompt(params: {
     }
   }
   const restart = !series || series.routeKey !== params.routeKey || series.historyId !== historyId;
+  const seriesStatus: SystemPromptSeriesStatus = !restart
+    ? "pinned"
+    : !previous
+      ? "restarted:new"
+      : previous.historyId !== historyId
+        ? "restarted:history"
+        : afterCheckpoint.some((later) => later.type === "model_change")
+          ? "restarted:model-change"
+          : `restarted:${changedPromptRoutePart(previous.routeKey, params.routeKey)}`;
   const sections =
     !restart && series && series.renderedPrefix !== renderedPrefix
       ? promptDelta(
@@ -173,6 +376,8 @@ export function prepareSessionSystemPrompt(params: {
         restart: true,
       }
     : { ...series!, renderedPrefix, permissionNotice, restart: false };
+  // Admission callbacks need the series, not the transcript used to restore it.
+  const { state, routeKey } = params;
   let committed = false;
   return {
     systemPrompt: next.prefix,
@@ -186,14 +391,15 @@ export function prepareSessionSystemPrompt(params: {
         )
       : undefined,
     restart,
+    seriesStatus,
     commit: (restartRecorded = false) => {
       if (committed) {
         return;
       }
       committed = true;
       // An early restart marker already retired old overrides; keep this turn's new operators.
-      params.state.pendingSystemPrompt = restartRecorded ? { ...next, restart: false } : next;
-      params.state.systemPromptRouteKey = params.routeKey;
+      state.pendingSystemPrompt = restartRecorded ? { ...next, restart: false } : next;
+      state.systemPromptRouteKey = routeKey;
     },
   };
 }
@@ -219,7 +425,14 @@ export async function persistSessionSystemPrompt(
     return;
   }
   const previous = state.systemPrompt;
+  // A pin belongs to one route and history; compaction or a route change retires it.
+  const candidate = state.pendingToolSurface ?? state.toolSurface;
+  const toolSurface =
+    candidate?.routeKey === snapshot.routeKey && candidate.historyId === snapshot.historyId
+      ? candidate
+      : undefined;
   if (
+    state.pendingToolSurface ||
     snapshot.restart ||
     !previous ||
     snapshot.prefix !== previous.prefix ||
@@ -229,15 +442,37 @@ export async function persistSessionSystemPrompt(
     snapshot.permissionNotice !== previous.permissionNotice
   ) {
     try {
-      await appendEntry("openclaw.system-prompt", snapshot);
+      await appendEntry(
+        "openclaw.system-prompt",
+        toolSurface
+          ? { ...snapshot, toolPolicy: toolSurface.toolPolicy, tools: toolSurface.tools }
+          : snapshot,
+      );
     } catch (error) {
       // Rejection can follow a durable commit; keep pending work, but distrust the cached checkpoint.
       state.systemPrompt = undefined;
+      state.toolSurface = undefined;
       throw error;
     }
   }
   state.systemPrompt = { ...snapshot, restart: false };
   state.pendingSystemPrompt = undefined;
+  state.toolSurface = toolSurface;
+  state.pendingToolSurface = undefined;
+}
+
+/** Routes without the prompt series checkpoint the tool pin alone. */
+export async function persistSessionToolSurface(
+  state: EmbeddedSessionPromptState,
+  appendEntry: (customType: string, data: unknown) => unknown,
+): Promise<void> {
+  const surface = state.pendingToolSurface;
+  if (!surface) {
+    return;
+  }
+  await appendEntry("openclaw.system-prompt", surface);
+  state.toolSurface = surface;
+  state.pendingToolSurface = undefined;
 }
 
 const MAX_SESSION_PROMPT_STATES = 64;
@@ -261,9 +496,7 @@ export function createToolResultPromptProjectionState(
     ambiguousBaseKeys: new Set(source?.ambiguousBaseKeys),
     sourceHashByKey: new Map(source?.sourceHashByKey),
     restoredCacheTtl: new Map(source?.restoredCacheTtl),
-    ...(source
-      ? { cacheTtlCheckpoint: source.cacheTtlCheckpoint, cacheTtlRevision: source.cacheTtlRevision }
-      : {}),
+    ...(source ? { cacheTtlCheckpoint: source.cacheTtlCheckpoint } : {}),
   };
 }
 
@@ -279,15 +512,17 @@ export function recordToolResultPromptProjection(
     cacheTtl,
     content: cacheTtl
       ? message.content
-      : message.content.flatMap((block) =>
-          isRecord(block) && block.type === "text" && typeof block.text === "string"
-            ? [{ type: "text" as const, text: block.text }]
-            : [],
+      : freezeJsonSnapshot(
+          message.content.flatMap((block) =>
+            isRecord(block) && block.type === "text" && typeof block.text === "string"
+              ? [{ type: "text" as const, text: block.text }]
+              : [],
+          ),
         ),
   });
 }
 
-export function getEmbeddedSessionPromptState(sessionId: string): EmbeddedSessionPromptState {
+function getEmbeddedSessionPromptState(sessionId: string): EmbeddedSessionPromptState {
   const existing = sessionPromptStates.get(sessionId);
   const current: EmbeddedSessionPromptState = existing ?? {
     activeAttempts: 0,
@@ -355,7 +590,6 @@ export async function persistToolResultProjections(
 ): Promise<void> {
   const snapshot = serializeCacheTtlToolResultProjections(state);
   const previous = state.cacheTtlCheckpoint;
-  const revision = state.cacheTtlRevision ?? 0;
   if (
     previous === undefined &&
     !cacheTouch &&
@@ -375,11 +609,7 @@ export async function persistToolResultProjections(
     committedCheckpoint = checkpoint;
   } finally {
     // Rejection can follow a durable commit; the next write must re-establish the full base.
-    // A branch restore during the write owns its new baseline.
-    if ((state.cacheTtlRevision ?? 0) === revision) {
-      state.cacheTtlCheckpoint = committedCheckpoint;
-      state.cacheTtlRevision = revision + 1;
-    }
+    state.cacheTtlCheckpoint = committedCheckpoint;
   }
 }
 

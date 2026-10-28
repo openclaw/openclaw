@@ -8,8 +8,8 @@ import {
   isRenderablePayload,
   isReplyPayloadTerminalContent,
   setReplyPayloadMetadata,
+  shouldKeepPayloadDuringSilentTurn,
 } from "../reply-payload.js";
-import { isSilentReplyPayloadText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { BlockReplyContext, ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import { deliverBlockReply } from "./block-reply-delivery.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -20,8 +20,6 @@ import {
   shouldRetryReplyDispatch,
 } from "./reply-dispatch-outcome.js";
 import type { TypingSignaler } from "./typing-mode.js";
-
-type ReplyDirectiveParseMode = "always" | "auto" | "never";
 
 export type DirectBlockDelivery = Awaited<ReturnType<typeof deliverBlockReply>> & {
   payload: ReplyPayload;
@@ -47,30 +45,24 @@ export async function resolveReplyFailureVisibility(
 export function normalizeReplyPayloadDirectives(params: {
   payload: ReplyPayload;
   currentMessageId?: string;
-  silentToken?: string;
   trimLeadingWhitespace?: boolean;
-  parseMode?: ReplyDirectiveParseMode;
+  parseMode?: "always" | "auto";
   extractMarkdownImages?: boolean;
-  extractMediaDirectives?: boolean;
-}): { payload: ReplyPayload; isSilent: boolean } {
+}): { payload: ReplyPayload } {
   const parseMode = params.parseMode ?? "always";
-  const silentToken = params.silentToken ?? SILENT_REPLY_TOKEN;
   const sourceText = params.payload.text ?? "";
 
   const shouldParse =
     parseMode === "always" ||
     (parseMode === "auto" &&
       (sourceText.includes("[[") ||
-        (params.extractMediaDirectives !== false && /media:/i.test(sourceText)) ||
-        (params.extractMarkdownImages === true && /!\[[^\]]*]\(/.test(sourceText)) ||
-        sourceText.includes(silentToken)));
+        /media:/i.test(sourceText) ||
+        (params.extractMarkdownImages === true && /!\[[^\]]*]\(/.test(sourceText))));
 
   const parsed = shouldParse
     ? parseReplyDirectives(sourceText, {
         currentMessageId: params.currentMessageId,
-        silentToken,
         extractMarkdownImages: params.extractMarkdownImages,
-        extractMediaDirectives: params.extractMediaDirectives,
       })
     : undefined;
 
@@ -96,7 +88,6 @@ export function normalizeReplyPayloadDirectives(params: {
       }),
       parsed?.mediaFailures,
     ),
-    isSilent: parsed?.isSilent ?? false,
   };
 }
 
@@ -110,6 +101,7 @@ export function createBlockReplyDeliveryHandler(params: {
   typingSignals: TypingSignaler;
   reasoningPayloadsEnabled?: boolean;
   commentaryPayloadsEnabled?: boolean;
+  silentExpected?: boolean;
   blockStreamingEnabled: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
   directBlockDeliveries: DirectBlockDelivery[];
@@ -149,16 +141,14 @@ export function createBlockReplyDeliveryHandler(params: {
     // Suppressed display lanes must not enter delivery bookkeeping: callers use
     // that evidence to decide whether an otherwise empty turn needs a fallback.
     if (
+      (params.silentExpected && !shouldKeepPayloadDuringSilentTurn(payload)) ||
       (payload.isReasoning === true && params.reasoningPayloadsEnabled !== true) ||
       (payload.isCommentary === true && params.commentaryPayloadsEnabled !== true)
     ) {
       return;
     }
     const { text, skip } = params.normalizeStreamingText(payload);
-    const isSilent =
-      getReplyPayloadMetadata(payload)?.silentReply === true ||
-      isSilentReplyText(payload.text, SILENT_REPLY_TOKEN) ||
-      (skip && isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN));
+    const isSilent = getReplyPayloadMetadata(payload)?.silentReply === true;
     if (
       skip &&
       !hasOutboundReplyContent({ ...payload, text: undefined }) &&

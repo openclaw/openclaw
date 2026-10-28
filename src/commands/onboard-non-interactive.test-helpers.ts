@@ -1,20 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, vi } from "vitest";
+import { expect } from "vitest";
 import { listAgentEntries, resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
-// Non-interactive onboarding test helpers build runtime stubs that throw instead of exiting.
 import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 
-type RuntimeLike = Pick<RuntimeEnv, "log" | "error" | "exit">;
-
-type NonInteractiveRuntime = {
-  log: RuntimeLike["log"];
-  error: RuntimeLike["error"];
-  exit: RuntimeLike["exit"];
-};
+type NonInteractiveRuntime = Pick<RuntimeEnv, "log" | "error" | "exit">;
 
 export type WaitForGatewayReachableMock =
   | ((params: {
@@ -27,16 +20,6 @@ export type WaitForGatewayReachableMock =
   | undefined;
 
 type RunNonInteractiveSetup = typeof import("./onboard-non-interactive.js").runNonInteractiveSetup;
-
-type MockWithCalls<TArgs extends unknown[]> = {
-  mock: {
-    calls: TArgs[];
-  };
-};
-
-export type OnboardEnsureWorkspaceOptions = {
-  skipBootstrap?: boolean;
-};
 
 export type OnboardGatewayHealthCall = {
   password?: string;
@@ -57,27 +40,20 @@ export function createThrowingRuntime(): NonInteractiveRuntime {
 
 export function createOnboardJsonCaptureRuntime() {
   let capturedJson = "";
+  const format = (value: unknown) =>
+    typeof value === "string"
+      ? value
+      : value instanceof Error
+        ? value.message
+        : (JSON.stringify(value) ?? "");
   const runtimeWithCapture: RuntimeEnv = {
-    log: (...args: unknown[]) => {
-      const firstArg = args[0];
-      capturedJson =
-        typeof firstArg === "string"
-          ? firstArg
-          : firstArg instanceof Error
-            ? firstArg.message
-            : (JSON.stringify(firstArg) ?? "");
+    log: (value: unknown) => {
+      capturedJson = format(value);
     },
-    error: (...args: unknown[]) => {
-      const firstArg = args[0];
-      const capturedError =
-        typeof firstArg === "string"
-          ? firstArg
-          : firstArg instanceof Error
-            ? firstArg.message
-            : (JSON.stringify(firstArg) ?? "");
-      throw new Error(capturedError);
+    error: (value: unknown) => {
+      throw new Error(format(value));
     },
-    exit: (_code: number) => {
+    exit: () => {
       throw new Error("exit should not be reached after runtime.error");
     },
   };
@@ -89,7 +65,7 @@ export function createOnboardJsonCaptureRuntime() {
 }
 
 export function readOnboardFirstMockCall(mock: unknown, label: string): unknown[] {
-  const calls = (mock as MockWithCalls<unknown[]>).mock.calls;
+  const calls = (mock as { mock: { calls: unknown[][] } }).mock.calls;
   const call = calls[0];
   if (!call) {
     throw new Error(`Expected ${label} to be called`);
@@ -117,10 +93,11 @@ export function createOnboardTestConfigStore() {
   }
 
   function readSnapshot(): ConfigFileSnapshot {
-    const config = configStore.get(resolveConfigPath()) ?? {};
-    const exists = configStore.has(resolveConfigPath());
+    const configPath = resolveConfigPath();
+    const config = configStore.get(configPath) ?? {};
+    const exists = configStore.has(configPath);
     return createConfigFileSnapshot({
-      path: resolveConfigPath(),
+      path: configPath,
       exists,
       raw: exists ? `${JSON.stringify(config, null, 2)}\n` : null,
       parsed: config,
@@ -161,23 +138,24 @@ export function createOnboardStateDirHarness(getTempHome: () => string | undefin
 }
 
 export function prepareOnboardGatewayTestEnv() {
-  const snapshot = captureEnv([
-    "HOME",
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_CONFIG_PATH",
+  const skipKeys = [
     "OPENCLAW_SKIP_CHANNELS",
     "OPENCLAW_SKIP_GMAIL_WATCHER",
     "OPENCLAW_SKIP_CRON",
     "OPENCLAW_SKIP_CANVAS_HOST",
     "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
+  ];
+  const snapshot = captureEnv([
+    "HOME",
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_CONFIG_PATH",
+    ...skipKeys,
     "OPENCLAW_GATEWAY_TOKEN",
     "OPENCLAW_GATEWAY_PASSWORD",
   ]);
-  setTestEnvValue("OPENCLAW_SKIP_CHANNELS", "1");
-  setTestEnvValue("OPENCLAW_SKIP_GMAIL_WATCHER", "1");
-  setTestEnvValue("OPENCLAW_SKIP_CRON", "1");
-  setTestEnvValue("OPENCLAW_SKIP_CANVAS_HOST", "1");
-  setTestEnvValue("OPENCLAW_SKIP_BROWSER_CONTROL_SERVER", "1");
+  for (const key of skipKeys) {
+    setTestEnvValue(key, "1");
+  }
   deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
   deleteTestEnvValue("OPENCLAW_GATEWAY_PASSWORD");
   return snapshot;
@@ -196,14 +174,6 @@ export function createOnboardLocalDaemonOptions(stateDir: string) {
   };
 }
 
-export async function runOnboardLocalDaemonSetup(params: {
-  runSetup: RunNonInteractiveSetup;
-  stateDir: string;
-  runtime: RuntimeEnv;
-}) {
-  await params.runSetup(createOnboardLocalDaemonOptions(params.stateDir), params.runtime);
-}
-
 export async function expectOnboardLocalJsonSetupFailure(params: {
   runSetup: RunNonInteractiveSetup;
   stateDir: string;
@@ -211,40 +181,10 @@ export async function expectOnboardLocalJsonSetupFailure(params: {
 }) {
   await expect(
     params.runSetup(
-      {
-        ...createOnboardLocalDaemonOptions(params.stateDir),
-        json: true,
-      },
+      { ...createOnboardLocalDaemonOptions(params.stateDir), json: true },
       params.runtime,
     ),
   ).rejects.toThrow("exit should not be reached after runtime.error");
-}
-
-export function createOnboardGatewayTimeoutCapture() {
-  let capturedDeadlineMs: number | undefined;
-  let capturedProbeTimeoutMs: number | undefined;
-  const mock = vi.fn(
-    async (params: {
-      url: string;
-      token?: string;
-      password?: string;
-      deadlineMs?: number;
-      probeTimeoutMs?: number;
-    }) => {
-      capturedDeadlineMs = params.deadlineMs;
-      capturedProbeTimeoutMs = params.probeTimeoutMs;
-      return { ok: true };
-    },
-  );
-  return {
-    mock,
-    get deadlineMs() {
-      return capturedDeadlineMs;
-    },
-    get probeTimeoutMs() {
-      return capturedProbeTimeoutMs;
-    },
-  };
 }
 
 export async function mockOnboardingAgent(params: {
@@ -252,24 +192,19 @@ export async function mockOnboardingAgent(params: {
   baseConfig?: OpenClawConfig;
   workspace: string;
 }) {
-  if (listAgentEntries(params.config).length > 0) {
-    return {
-      config: params.config,
-      configBase: params.baseConfig ?? params.config,
-      agentId: resolveAmbientOwnerAgentId(params.config),
-      bootstrapPending: false,
-    };
-  }
+  const bootstrapPending = listAgentEntries(params.config).length === 0;
   return {
     configBase: params.baseConfig ?? params.config,
-    config: {
-      ...params.config,
-      agents: {
-        ...params.config.agents,
-        entries: { main: { name: "main", workspace: params.workspace } },
-      },
-    },
-    agentId: "main",
-    bootstrapPending: true,
+    config: bootstrapPending
+      ? {
+          ...params.config,
+          agents: {
+            ...params.config.agents,
+            entries: { main: { name: "main", workspace: params.workspace } },
+          },
+        }
+      : params.config,
+    agentId: bootstrapPending ? "main" : resolveAmbientOwnerAgentId(params.config),
+    bootstrapPending,
   };
 }

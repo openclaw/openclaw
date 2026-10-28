@@ -135,7 +135,8 @@ user through the session's normal visible-reply mode: automatic final reply
 delivery when configured, or `message(action="send")` when the session requires
 the message tool. If the requester session is inactive or its active wake
 fails, and some generated media is still missing from the completion reply,
-OpenClaw sends an idempotent direct fallback with only the missing media. Media
+OpenClaw sends a direct fallback with only the missing media, without duplicate
+sends on retries. Media
 already delivered by the completion reply is not posted again.
 
 If completion delivery cannot be confirmed and the original session still exists,

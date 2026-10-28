@@ -1,4 +1,15 @@
-import type { RealtimeVoiceAgentConsultRunner } from "../../talk/provider-types.js";
+import type {
+  ReplyToolAuthorityOverlay,
+  SessionControllerInput,
+} from "../../sessions/session-controller.contracts.js";
+import type { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
+import type {
+  RealtimeVoiceAgentConsultRunner,
+  RealtimeVoiceGatewayControl,
+} from "../../talk/provider-types.js";
+import type { GatewayRequestContext } from "../server-methods/shared-types.js";
+import type { TalkRunCancelContext } from "./realtime-run-control.js";
+import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
 export type TalkRequesterFinalBinding = {
   append: (text: string) => boolean;
@@ -10,7 +21,7 @@ export type TalkAgentConsultRequest = Parameters<RealtimeVoiceAgentConsultRunner
 
 export type TalkAgentConsultSource = "tool-call" | "native-delegation";
 
-export type TalkAgentConsultLifecycleMethods = {
+type TalkAgentConsultLifecycleMethods = {
   adoptCompletionClaims?: () => void;
   claimAppend?: () => boolean;
   claimFailureAppend?: () => boolean;
@@ -18,7 +29,7 @@ export type TalkAgentConsultLifecycleMethods = {
   steer?: RealtimeVoiceAgentConsultRunner;
 };
 
-export type LifecycleBoundTalkAgentConsult = ((
+type LifecycleBoundTalkAgentConsult = ((
   args: unknown,
   signal: AbortSignal,
   ready?: () => Promise<void>,
@@ -33,4 +44,56 @@ export type ReusableTalkAgentConsult = (
   signal: AbortSignal,
   assertCurrent?: () => void,
   source?: TalkAgentConsultSource,
+  /** Mailbox input reserved when the tool call arrived; the run adopts it. */
+  sourceInput?: SessionControllerInput,
 ) => Promise<{ text: string }>;
+
+type GatewayTalkAgentConsultRunner = (
+  request: TalkAgentConsultRequest,
+) => ReturnType<RealtimeVoiceAgentConsultRunner>;
+
+export type GatewayControlOwner = {
+  readonly signal: AbortSignal;
+  adoptProvider: (closeProvider: () => Promise<void>) => Promise<void>;
+  activate: () => void;
+  assertOpen: () => void;
+  close: (options?: {
+    preserveLogicalSession?: boolean;
+    preserveRuns?: boolean;
+    skipProvider?: boolean;
+  }) => Promise<void>;
+  connId: string;
+  control: RealtimeVoiceGatewayControl & Required<Pick<RealtimeVoiceGatewayControl, "bindControl">>;
+  runAgentConsult: GatewayTalkAgentConsultRunner & TalkAgentConsultLifecycleMethods;
+  sendSpeech: (text: string) => void;
+  sessionTarget: PreparedTalkSessionTarget;
+  voiceSessionId: string;
+};
+
+export type GatewayControlCommands = Parameters<
+  NonNullable<RealtimeVoiceGatewayControl["bindControl"]>
+>[0];
+
+export type TalkClientGatewayControlOptions = {
+  voiceSessionId: string;
+  providerId?: string;
+  supportsToolCalls?: boolean;
+  controlSource?: "delegation" | "transcript";
+  sessionTarget: PreparedTalkSessionTarget;
+  connId: string;
+  context: Pick<GatewayRequestContext, "broadcastToConnIds" | "logGateway" | "inputRecovery"> &
+    TalkRunCancelContext;
+  assertConnectionOpen?: () => void;
+  runToolAgentConsult: ReusableTalkAgentConsult;
+  runAgentConsult: LifecycleBoundTalkAgentConsult;
+  appendTranscript: (entry: {
+    entryId: string;
+    role: "user" | "assistant";
+    text: string;
+  }) => Promise<void>;
+  flushTranscript: () => Promise<void>;
+  closeLogicalSession: () => Promise<void>;
+  withCloseSettlement?: (run: () => Promise<void>) => Promise<void>;
+  controlAgentRun?: typeof controlRealtimeVoiceAgentRun;
+  getToolAuthorityOverlay?: (source?: "reply" | "attempt") => ReplyToolAuthorityOverlay;
+};

@@ -1,10 +1,12 @@
+import "./agent.snapshot-mocks.test-support.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserRouteContext } from "../server-context.js";
+import { expectResponse, expectResponseContaining, runRoute } from "./agent-route.test-support.js";
 import {
   captureBrowserOperationTarget,
   resolveOperationTargetOutcome,
 } from "./agent.snapshot-target.js";
-import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
+import { createBrowserRouteApp } from "./test-helpers.js";
 import type { BrowserRequest } from "./types.js";
 
 const tabLookup = vi.hoisted(() => vi.fn());
@@ -16,6 +18,7 @@ const routeState = vi.hoisted(() => ({
       name: "openclaw",
       cdpUrl: "http://127.0.0.1:18800",
       cdpIsLoopback: true,
+      headless: false,
     },
     ensureTabAvailable: vi.fn(async () => ({
       targetId: "7",
@@ -26,7 +29,8 @@ const routeState = vi.hoisted(() => ({
   },
 }));
 
-const cdpMocks = vi.hoisted(() => ({
+const cdp = vi.hoisted(() => ({
+  captureScreenshot: vi.fn(),
   getDocumentIdentitiesViaCdp: vi.fn<
     (_opts?: unknown) => Promise<{ mainFrame?: string; frameTree?: string }>
   >(async () => ({ mainFrame: "cdp:test-document", frameTree: "cdp:test-tree" })),
@@ -36,32 +40,44 @@ const cdpMocks = vi.hoisted(() => ({
   snapshotRoleViaCdp: vi.fn(async (_opts: unknown) => ({
     snapshot: '- link "private" [ref=e1]',
     refs: { e1: { role: "link", name: "private" } },
-    stats: { lines: 1, chars: 25, refs: 1, interactive: 1 },
   })),
 }));
 
-const pwState = vi.hoisted(() => ({
+const playwright = vi.hoisted(() => ({
   module: null as null | Record<string, ReturnType<typeof vi.fn>>,
 }));
 
-const navigationGuardMocks = vi.hoisted(() => ({
+const browserRuntime = vi.hoisted(() => ({
+  profiles: new Map<
+    string,
+    {
+      running: { headless?: boolean; headlessSource?: string } | null;
+      externalBrowserMode?: { browserWebSocketUrl: string; headless: Promise<boolean | undefined> };
+    }
+  >(),
+}));
+const pwMocks = vi.hoisted(() => ({
+  screenshot: false,
+  connected: false,
+  hasCachedPlaywrightBrowserConnection: vi.fn(() => pwMocks.connected),
+  takeScreenshotViaPlaywright: vi.fn(async () => ({ buffer: Buffer.from("owned screenshot") })),
+}));
+
+const navigation = vi.hoisted(() => ({
   assertBrowserNavigationAllowed: vi.fn(async () => {}),
-  assertBrowserNavigationResultAllowed: vi.fn(async (): Promise<void> => {
-    throw new Error("browser navigation blocked by policy");
-  }),
+  assertBrowserNavigationResultAllowed: vi.fn(async (): Promise<void> => {}),
   withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => (ssrfPolicy ? { ssrfPolicy } : {})),
 }));
 
+// mock-isolation: Supply this suite's synthetic Playwright module without process-wide browser state.
 vi.mock("../pw-ai-module.js", () => ({
-  getPwAiModule: vi.fn(async () => pwState.module),
-  getLoadedPwAiModule: () => null,
+  getPwAiModule: vi.fn(async () => playwright.module),
+  getLoadedPwAiModule: () => (pwMocks.screenshot ? pwMocks : null),
 }));
 
+// mock-isolation: Keep managed snapshot capture in the synthetic CDP fixture, not a live browser.
 vi.mock("../cdp.js", () => ({
-  captureScreenshot: vi.fn(),
-  getDocumentIdentitiesViaCdp: cdpMocks.getDocumentIdentitiesViaCdp,
-  snapshotAria: cdpMocks.snapshotAria,
-  snapshotRoleViaCdp: cdpMocks.snapshotRoleViaCdp,
+  ...cdp,
 }));
 
 vi.mock("../chrome-mcp.js", () => ({
@@ -71,28 +87,10 @@ vi.mock("../chrome-mcp.js", () => ({
   takeChromeMcpSnapshot: vi.fn(),
 }));
 
-vi.mock("../navigation-guard.js", () => ({
-  assertBrowserNavigationAllowed: navigationGuardMocks.assertBrowserNavigationAllowed,
-  assertBrowserNavigationResultAllowed: navigationGuardMocks.assertBrowserNavigationResultAllowed,
-  withBrowserNavigationPolicy: navigationGuardMocks.withBrowserNavigationPolicy,
-}));
+// mock-isolation: Observe navigation policy checks without resolving or connecting fixture URLs.
+vi.mock("../navigation-guard.js", () => navigation);
 
-vi.mock("../screenshot.js", () => ({
-  DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES: 128,
-  DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE: 64,
-  normalizeBrowserScreenshot: vi.fn(async (buffer: Buffer) => ({
-    buffer,
-    sourceDimensions: null,
-    contentType: "image/png",
-  })),
-}));
-
-vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
-  ensureMediaDir: vi.fn(async () => {}),
-  saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/fake.png" })),
-}));
-
+// mock-isolation: Supply synthetic profile and tab ownership without starting a browser service.
 vi.mock("./agent.shared.js", () => ({
   browserNavigationPolicyForProfile: vi.fn(() => ({
     ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
@@ -105,89 +103,95 @@ vi.mock("./agent.shared.js", () => ({
     },
   ),
   readBody: vi.fn((req: BrowserRequest) => req.body ?? {}),
-  requirePwAi: vi.fn(async () => null),
+  requirePwAi: vi.fn(async () => (pwMocks.screenshot ? pwMocks : null)),
   resolveProfileContext: vi.fn(() => routeState.profileCtx),
   withPlaywrightRouteContext: vi.fn(),
-  withRouteTabContext: vi.fn(),
+  withRouteTabContext: vi.fn(
+    async (params: {
+      run: (ctx: {
+        profileCtx: typeof routeState.profileCtx;
+        tab: { targetId: string; url: string; wsUrl: string; wsLookup: typeof tabLookup };
+        cdpUrl: string;
+      }) => Promise<void>;
+    }) =>
+      await params.run({
+        profileCtx: routeState.profileCtx,
+        tab: {
+          targetId: "tab-1",
+          url: "https://example.com",
+          wsUrl: "ws://127.0.0.1:18800/devtools/page/tab-1",
+          wsLookup: tabLookup,
+        },
+        cdpUrl: "http://127.0.0.1:18800",
+      }),
+  ),
 }));
 
 const { registerBrowserAgentSnapshotRoutes } = await import("./agent.snapshot.js");
 
-function getSnapshotGetHandler(
-  state = {
-    resolved: {
-      actionTimeoutMs: 60_000,
-      extraArgs: [],
-      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-    },
-  },
-) {
+const target = { cdpUrl: "http://127.0.0.1:18800", targetId: "7" };
+const blocked = "browser navigation blocked by policy";
+const changed = "Frame changed while its browser snapshot was being captured; retry.";
+const roleQuery = { format: "ai", interactive: "true" };
+const snapshotState = () => ({
+  resolved: { ssrfPolicy: { dangerouslyAllowPrivateNetwork: false } },
+});
+const dialogState = (pending: { id: string; message: string }[] = []) => ({
+  dialogs: { pending, recent: [] },
+});
+
+function snapshotRoute(state = snapshotState()) {
   const { app, getHandlers } = createBrowserRouteApp();
   registerBrowserAgentSnapshotRoutes(app, { state: () => state } as never);
-  const handler = getHandlers.get("/snapshot");
-  expect(handler).toBeTypeOf("function");
-  return handler;
+  return getHandlers.get("/snapshot");
 }
 
-async function snapshot(query: BrowserRequest["query"]) {
-  const response = createBrowserRouteResponse();
-  await getSnapshotGetHandler()!({ params: {}, query }, response.res);
-  return response;
+async function snapshot(query: BrowserRequest["query"], handler = snapshotRoute()) {
+  return await runRoute(handler, { query });
 }
 
 function createPwModule(overrides: Record<string, ReturnType<typeof vi.fn>> = {}) {
-  return {
+  const module = {
     getDocumentIdentitiesViaPlaywright: vi.fn(async () => ({
       mainFrame: "pw:test-document",
       frameTree: "pw:test-tree",
     })),
-    getObservedBrowserStateViaPlaywright: vi.fn(async () => ({
-      dialogs: { pending: [], recent: [] },
-    })),
+    getObservedBrowserStateViaPlaywright: vi.fn(async () => dialogState()),
     snapshotRoleViaPlaywright: vi.fn(async () => ({
       snapshot: '- button "Playwright" [ref=e1]',
       refs: { e1: { role: "button", name: "Playwright" } },
-      stats: { lines: 1, chars: 32, refs: 1, interactive: 1 },
     })),
     storeSnapshotRefsViaPlaywright: vi.fn(async () => {}),
     ...overrides,
   };
+  playwright.module = module;
+  return module;
 }
 
 describe("local-managed browser snapshot routes", () => {
   beforeEach(() => {
-    routeState.profileCtx.ensureTabAvailable.mockClear();
-    cdpMocks.getDocumentIdentitiesViaCdp
-      .mockReset()
-      .mockResolvedValue({ mainFrame: "cdp:test-document", frameTree: "cdp:test-tree" });
-    cdpMocks.snapshotAria.mockClear();
-    cdpMocks.snapshotRoleViaCdp.mockReset().mockResolvedValue({
-      snapshot: '- link "private" [ref=e1]',
-      refs: { e1: { role: "link", name: "private" } },
-      stats: { lines: 1, chars: 25, refs: 1, interactive: 1 },
-    });
-    pwState.module = null;
-    tabLookup.mockClear();
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockClear();
-    navigationGuardMocks.withBrowserNavigationPolicy.mockClear();
+    vi.clearAllMocks();
+    pwMocks.screenshot = false;
+    cdp.getDocumentIdentitiesViaCdp.mockReset();
+    cdp.snapshotRoleViaCdp.mockReset();
+    playwright.module = null;
+    navigation.assertBrowserNavigationResultAllowed.mockReset().mockResolvedValue(undefined);
   });
 
   it("blocks AI CDP role snapshots when the current tab violates browser navigation policy", async () => {
-    const response = await snapshot({ format: "ai", interactive: "true" });
+    navigation.assertBrowserNavigationResultAllowed.mockRejectedValueOnce(new Error(blocked));
+    const response = await snapshot(roleQuery);
 
-    expect(response.statusCode).toBe(400);
-    expect(response.body).toEqual({ error: "browser navigation blocked by policy" });
-    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
+    expectResponse(response, { error: blocked }, 400);
+    expect(navigation.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
       url: "http://127.0.0.1:8080/admin",
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
     });
-    expect(cdpMocks.snapshotRoleViaCdp).not.toHaveBeenCalled();
+    expect(cdp.snapshotRoleViaCdp).not.toHaveBeenCalled();
   });
 
   it("uses CDP first for unscoped managed role snapshots and publishes its refs", async () => {
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
     const pw = createPwModule();
-    pwState.module = pw;
     const response = await snapshot({
       format: "ai",
       maxChars: 123,
@@ -195,10 +199,9 @@ describe("local-managed browser snapshot routes", () => {
       timeoutMs: 3_000_000_000,
     });
 
-    expect(response.statusCode).toBe(200);
-    expect(response.body).toMatchObject({ snapshot: expect.stringContaining("private") });
+    expectResponseContaining(response, { snapshot: expect.stringContaining("private") });
     expect(pw.snapshotRoleViaPlaywright).not.toHaveBeenCalled();
-    expect(cdpMocks.snapshotRoleViaCdp).toHaveBeenCalledWith(
+    expect(cdp.snapshotRoleViaCdp).toHaveBeenCalledWith(
       expect.objectContaining({
         recurseIframes: false,
         maxChars: 123,
@@ -207,8 +210,7 @@ describe("local-managed browser snapshot routes", () => {
       }),
     );
     expect(pw.storeSnapshotRefsViaPlaywright).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18800",
-      targetId: "7",
+      ...target,
       expectedDocumentIdentity: "pw:test-document",
       refs: { e1: { role: "link", name: "private" } },
       signal: expect.any(AbortSignal),
@@ -216,29 +218,16 @@ describe("local-managed browser snapshot routes", () => {
     });
   });
 
-  it("falls back to Playwright once when the CDP-first snapshot fails early", async () => {
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
-    cdpMocks.snapshotRoleViaCdp.mockRejectedValueOnce(new Error("cdp unavailable"));
+  it.each(["CDP fallback", "ARIA-first"])("uses Playwright for %s", async (mode) => {
+    const fallback = mode === "CDP fallback";
+    if (fallback) {
+      cdp.snapshotRoleViaCdp.mockRejectedValueOnce(new Error("cdp unavailable"));
+    }
     const pw = createPwModule();
-    pwState.module = pw;
-    const response = await snapshot({ format: "ai", interactive: "true" });
-
-    expect(response.statusCode).toBe(200);
-    expect(response.body).toMatchObject({ snapshot: expect.stringContaining("Playwright") });
-    expect(cdpMocks.snapshotRoleViaCdp).toHaveBeenCalledTimes(1);
+    const response = await snapshot({ ...roleQuery, ...(fallback ? {} : { refs: "aria" }) });
+    expectResponseContaining(response, { snapshot: expect.stringContaining("Playwright") });
     expect(pw.snapshotRoleViaPlaywright).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps aria refs on Playwright-first role snapshots", async () => {
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
-    const pw = createPwModule();
-    pwState.module = pw;
-    const response = await snapshot({ format: "ai", interactive: "true", refs: "aria" });
-
-    expect(response.statusCode).toBe(200);
-    expect(response.body).toMatchObject({ snapshot: expect.stringContaining("Playwright") });
-    expect(pw.snapshotRoleViaPlaywright).toHaveBeenCalledTimes(1);
-    expect(cdpMocks.snapshotRoleViaCdp).not.toHaveBeenCalled();
+    expect(cdp.snapshotRoleViaCdp).toHaveBeenCalledTimes(fallback ? 1 : 0);
   });
 
   it.each([
@@ -246,25 +235,26 @@ describe("local-managed browser snapshot routes", () => {
     ["recursive CDP", false, { format: "ai" }, true],
     ["main-frame ARIA", true, { format: "aria" }, false],
     ["scoped frame with a changing sibling", true, { format: "ai", frame: "#selected" }, false],
+    ["changed main-frame loader", false, roleQuery, true],
   ])(
     "validates only captured documents for %s snapshots",
-    async (_label, playwright, query, reject) => {
-      navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
+    async (_label, usePlaywright, query, reject) => {
       const identities = vi
         .fn()
         .mockResolvedValueOnce({ mainFrame: "main", frameTree: "before-child-navigation" })
-        .mockResolvedValue({ mainFrame: "main", frameTree: "after-child-navigation" });
-      if (playwright) {
-        pwState.module = createPwModule({ getDocumentIdentitiesViaPlaywright: identities });
+        .mockResolvedValue({
+          mainFrame: _label === "changed main-frame loader" ? "changed" : "main",
+          frameTree: "after-child-navigation",
+        });
+      if (usePlaywright) {
+        createPwModule({ getDocumentIdentitiesViaPlaywright: identities });
       } else {
-        cdpMocks.getDocumentIdentitiesViaCdp.mockImplementation(identities);
+        cdp.getDocumentIdentitiesViaCdp.mockImplementation(identities);
       }
       const response = await snapshot(query);
       expect(response.statusCode).toBe(reject ? 400 : 200);
       if (reject) {
-        expect(response.body).toEqual({
-          error: "Frame changed while its browser snapshot was being captured; retry.",
-        });
+        expect(response.body).toEqual({ error: changed });
       }
     },
   );
@@ -277,15 +267,12 @@ describe("local-managed browser snapshot routes", () => {
     ],
     ["an explicit zero cap", { maxChars: "0" }, {}],
   ])("forwards %s to Playwright AI snapshots", async (_name, query, expected) => {
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
-    const snapshotRoleViaPlaywright = vi.fn(async () => ({ snapshot: "Playwright" }));
-    pwState.module = createPwModule({ snapshotRoleViaPlaywright });
+    const { snapshotRoleViaPlaywright } = createPwModule();
     const response = await snapshot(query);
 
     expect(response.statusCode).toBe(200);
     expect(snapshotRoleViaPlaywright).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18800",
-      targetId: "7",
+      ...target,
       refsMode: "aria",
       signal: expect.any(AbortSignal),
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
@@ -297,28 +284,14 @@ describe("local-managed browser snapshot routes", () => {
   });
 
   it("surfaces pending dialog state without reading the blocked page", async () => {
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
-    const snapshotRoleViaPlaywright = vi.fn(async () => ({ snapshot: "Playwright" }));
-    pwState.module = createPwModule({
-      getObservedBrowserStateViaPlaywright: vi.fn(async () => ({
-        dialogs: {
-          pending: [
-            {
-              id: "d1",
-              type: "confirm",
-              message: "Continue?",
-              openedAt: "2026-05-17T12:00:00.000Z",
-            },
-          ],
-          recent: [],
-        },
-      })),
-      snapshotRoleViaPlaywright,
+    const { snapshotRoleViaPlaywright } = createPwModule({
+      getObservedBrowserStateViaPlaywright: vi.fn(async () =>
+        dialogState([{ id: "d1", message: "Continue?" }]),
+      ),
     });
     const response = await snapshot({ format: "ai" });
 
-    expect(response.statusCode).toBe(200);
-    expect(response.body).toMatchObject({
+    expectResponseContaining(response, {
       blockedByDialog: true,
       snapshot: "",
       browserState: {
@@ -328,118 +301,136 @@ describe("local-managed browser snapshot routes", () => {
     expect(snapshotRoleViaPlaywright).not.toHaveBeenCalled();
   });
 
-  it("rejects a snapshot when the main-frame loader changes during capture", async () => {
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValueOnce(undefined);
-    cdpMocks.getDocumentIdentitiesViaCdp
-      .mockResolvedValueOnce({ mainFrame: "cdp:before", frameTree: "cdp:tree-before" })
-      .mockResolvedValueOnce({ mainFrame: "cdp:after", frameTree: "cdp:tree-after" });
-    const response = await snapshot({ format: "ai", interactive: "true" });
-
-    expect(response.statusCode).toBe(400);
-    expect(response.body).toEqual({
-      error: "Frame changed while its browser snapshot was being captured; retry.",
-    });
-  });
-
   it("disables deltas when no stable document identity is available", async () => {
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
-    cdpMocks.getDocumentIdentitiesViaCdp.mockResolvedValue({});
-    const handler = getSnapshotGetHandler();
-    const first = createBrowserRouteResponse();
-    const second = createBrowserRouteResponse();
-
-    await handler?.({ params: {}, query: { format: "ai", interactive: "true" } }, first.res);
-    await handler?.({ params: {}, query: { format: "ai", interactive: "true" } }, second.res);
-
-    const calls = cdpMocks.snapshotRoleViaCdp.mock.calls;
-    expect(calls).toHaveLength(2);
-    expect(calls[0]?.[0]).toMatchObject({ delta: undefined });
-    expect(calls[1]?.[0]).toMatchObject({ delta: undefined });
+    cdp.getDocumentIdentitiesViaCdp.mockResolvedValue({});
+    const handler = snapshotRoute();
+    await snapshot(roleQuery, handler);
+    const second = await snapshot(roleQuery, handler);
+    expect(cdp.snapshotRoleViaCdp.mock.calls.map(([options]) => options)).toMatchObject([
+      { delta: undefined },
+      { delta: undefined },
+    ]);
     expect(second.body).not.toHaveProperty("newElements");
     expect(second.body).not.toHaveProperty("snapshot", expect.stringContaining("[new]"));
   });
 
   it("reuses same-document delta keys across request contexts in one browser runtime", async () => {
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
-    const state = {
-      resolved: {
-        actionTimeoutMs: 60_000,
-        extraArgs: [],
-        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-      },
-    };
-    const firstHandler = getSnapshotGetHandler(state);
-    const secondHandler = getSnapshotGetHandler(state);
-    const first = createBrowserRouteResponse();
-    const second = createBrowserRouteResponse();
-    const request = { params: {}, query: { format: "ai", interactive: "true", urls: "1" } };
-
-    await firstHandler?.(request, first.res);
-    await secondHandler?.(request, second.res);
-
-    expect(first.statusCode).toBe(200);
-    expect(second.statusCode).toBe(200);
-    expect(cdpMocks.getDocumentIdentitiesViaCdp).toHaveBeenCalledWith(
+    const state = snapshotState();
+    const query = { ...roleQuery, urls: "1" };
+    const first = await snapshot(query, snapshotRoute(state));
+    const second = await snapshot(query, snapshotRoute(state));
+    expect([first.statusCode, second.statusCode]).toEqual([200, 200]);
+    expect(cdp.getDocumentIdentitiesViaCdp).toHaveBeenCalledWith(
       expect.objectContaining({ wsUrl: "ws://127.0.0.1/devtools/page/7", lookup: tabLookup }),
     );
-    expect(cdpMocks.snapshotRoleViaCdp.mock.calls[1]?.[0]).toMatchObject({
+    expect(cdp.snapshotRoleViaCdp.mock.calls[1]?.[0]).toMatchObject({
       urls: true,
       delta: { mode: "role", previousKeys: expect.any(Set) },
     });
   });
 });
 
+async function captureRelay(captureOperationTarget: () => (() => string) | undefined) {
+  const relays = new Map([["chrome", { bridge: { captureOperationTarget } }]]);
+  const ctx = { state: () => state } as unknown as BrowserRouteContext;
+  const state = { extensionRelays: relays, profiles: new Map([["chrome", {}]]) };
+  const resolveRelayTarget = await captureBrowserOperationTarget({
+    ctx,
+    profileName: "chrome",
+    targetId: "old-123",
+  });
+  const outcome = (operationTargetId: string) =>
+    resolveOperationTargetOutcome({
+      actedOnTargetId: "old-123",
+      operationTargetId,
+      resolveRelayTarget,
+    });
+  return { relays, resolveRelayTarget, outcome };
+}
+
 describe("captureBrowserOperationTarget", () => {
   it("fails closed when a registered relay cannot capture the acted-on target", async () => {
-    const relays = new Map([["chrome", { bridge: { captureOperationTarget: () => undefined } }]]);
-    const state = { extensionRelays: relays, profiles: new Map([["chrome", {}]]) };
-    const ctx = { state: () => state } as unknown as BrowserRouteContext;
-    const resolveRelayTarget = await captureBrowserOperationTarget({
-      ctx,
-      profileName: "chrome",
-      targetId: "old-123",
-    });
+    const { resolveRelayTarget, outcome } = await captureRelay(() => undefined);
 
     expect(typeof resolveRelayTarget).toBe("function");
-    expect(
-      await resolveOperationTargetOutcome({
-        actedOnTargetId: "old-123",
-        operationTargetId: "unrelated-999",
-        resolveRelayTarget,
-      }),
-    ).toBe("old-123");
+    expect(await outcome("unrelated-999")).toBe("old-123");
   });
 
   it("rejects a replacement relay even when it reports the same profile and target", async () => {
-    const original = {
-      bridge: { captureOperationTarget: () => () => "replacement-456" },
-    };
-    const relays = new Map([["chrome", original]]);
-    const state = { extensionRelays: relays, profiles: new Map([["chrome", {}]]) };
-    const ctx = { state: () => state } as unknown as BrowserRouteContext;
-    const resolveRelayTarget = await captureBrowserOperationTarget({
-      ctx,
-      profileName: "chrome",
-      targetId: "old-123",
-    });
+    const { relays, resolveRelayTarget, outcome } = await captureRelay(
+      () => () => "replacement-456",
+    );
 
-    expect(
-      await resolveOperationTargetOutcome({
-        actedOnTargetId: "old-123",
-        operationTargetId: "old-123",
-        resolveRelayTarget,
-      }),
-    ).toBe("replacement-456");
+    expect(await outcome("old-123")).toBe("replacement-456");
     relays.set("chrome", {
       bridge: { captureOperationTarget: () => () => "unrelated-999" },
     });
     expect(await resolveRelayTarget?.()).toBeUndefined();
-    expect(
-      await resolveOperationTargetOutcome({
-        actedOnTargetId: "old-123",
-        operationTargetId: "unrelated-999",
-        resolveRelayTarget,
+    expect(await outcome("unrelated-999")).toBe("old-123");
+  });
+});
+
+async function screenshot(body: Record<string, unknown> = {}) {
+  const { app, postHandlers } = createBrowserRouteApp();
+  registerBrowserAgentSnapshotRoutes(app, {
+    state: () => ({ resolved: { extraArgs: [] }, profiles: browserRuntime.profiles }),
+  } as never);
+  return await runRoute(postHandlers.get("/screenshot"), { body: { type: "png", ...body } });
+}
+
+describe("browser agent snapshot timeout routing", () => {
+  beforeEach(() => {
+    pwMocks.screenshot = true;
+    cdp.captureScreenshot.mockReset();
+    routeState.profileCtx.profile.headless = false;
+    browserRuntime.profiles.clear();
+    pwMocks.connected = false;
+    pwMocks.takeScreenshotViaPlaywright.mockClear();
+  });
+
+  it("uses the existing Playwright viewport owner even when the tab has a CDP URL", async () => {
+    pwMocks.connected = true;
+    cdp.captureScreenshot.mockRejectedValueOnce(new Error("fresh CDP loses the viewport"));
+    const response = await screenshot({ timeoutMs: 4321 });
+    expect(response.statusCode).toBe(200);
+    expect(pwMocks.takeScreenshotViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cdpUrl: "http://127.0.0.1:18800",
+        targetId: "tab-1",
+        timeoutMs: 4321,
       }),
-    ).toBe("old-123");
+    );
+    expect(cdp.captureScreenshot).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "headed launched browser", running: { headless: false, headlessSource: "request" } },
+    { name: "observed headed external browser", running: null },
+  ])("passes the actual launch mode for $name", async ({ running }) => {
+    routeState.profileCtx.profile.headless = true;
+    browserRuntime.profiles.set(routeState.profileCtx.profile.name, {
+      running,
+      ...(running === null
+        ? {
+            externalBrowserMode: {
+              browserWebSocketUrl: "ws://127.0.0.1:18800/devtools/browser/test-browser",
+              headless: Promise.resolve(false),
+            },
+          }
+        : {}),
+    });
+    cdp.captureScreenshot.mockResolvedValueOnce(Buffer.from("png"));
+    const response = await screenshot();
+    expect(response.statusCode).toBe(200);
+    expect(cdp.captureScreenshot).toHaveBeenCalledWith(
+      expect.objectContaining({ headless: false }),
+    );
+  });
+
+  it("rejects loose screenshot timeoutMs values before dispatching", async () => {
+    const response = await screenshot({ timeoutMs: "1e3" });
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toEqual({ error: "timeoutMs must be a positive integer." });
+    expect(cdp.captureScreenshot).not.toHaveBeenCalled();
   });
 });

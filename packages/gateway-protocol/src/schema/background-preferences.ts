@@ -1,24 +1,16 @@
+import type { Static } from "typebox";
 import { asProtocolRecord } from "../protocol-value-normalization.js";
+import type { SchemaContract } from "../schema-contract.js";
+import type { BackgroundPreferenceSchema } from "./users-background.js";
 
 export const USER_BACKGROUND_MAX_INPUT_BYTES = 8 * 1024 * 1024;
 export const USER_BACKGROUND_MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 export const USER_BACKGROUND_PREFERENCE_KEY = "ui.background";
 
 /** Personal artwork metadata only. Image bytes and serving URLs never enter preferences. */
-export type BackgroundSource =
-  | { kind: "none" }
-  | { kind: "theme" }
-  | { kind: "custom"; assetId: string };
+export type BackgroundSource = BackgroundPreference["source"];
 
-export type BackgroundPreference = {
-  source: BackgroundSource;
-  /** Missing means faded; keep omission intact for authoritative comparisons. */
-  presentation?: "faded" | "full-bleed";
-  showOnNewSession: boolean;
-  showInSessions: boolean;
-  /** Artwork strength, from 0 (hidden) to 1 (full strength). */
-  visibility: number;
-};
+export type BackgroundPreference = SchemaContract<Static<typeof BackgroundPreferenceSchema>>;
 
 const BACKGROUND_VISIBILITY_MIN = 0;
 const BACKGROUND_VISIBILITY_MAX = 1;

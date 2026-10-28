@@ -1,4 +1,3 @@
-// CLI config readiness guard and invalid-config recovery.
 import { withSuppressedNotes } from "../../../packages/terminal-core/src/note.js";
 import type {
   StartupConfigPreflightOptions,
@@ -78,6 +77,11 @@ export async function ensureConfigReady(params: {
   measure?: ConfigSnapshotReadMeasure;
   validateConfigOnly?: boolean;
 }): Promise<void> {
+  await using preflightResources = new AsyncDisposableStack();
+  let preflightCache: StartupConfigPreflightResult["pluginCache"];
+  preflightResources.defer(async () => {
+    await preflightCache?.[Symbol.asyncDispose]();
+  });
   const commandPath = params.commandPath ?? [];
   const commandName = commandPath[0];
   const subcommandName = commandPath[1];
@@ -143,6 +147,7 @@ export async function ensureConfigReady(params: {
       preflightResult = !params.suppressDoctorStdout
         ? await runStartupConfigPreflight()
         : await withSuppressedNotes(runStartupConfigPreflight);
+      preflightCache = preflightResult.pluginCache;
     } catch (error) {
       if (prepareGatewayState) {
         await (
@@ -159,12 +164,12 @@ export async function ensureConfigReady(params: {
 
   // Read-only diagnostics must not record config health. Core-only validation
   // also skips plugin metadata discovery, whose state reads create SQLite sidecars.
-  const configSnapshotOptions =
-    params.validateConfigOnly || commandName === "logs"
-      ? ({ observe: false, pluginValidation: "core-only" } as const)
-      : isManagedNodeRuntime || commandName === "status" || isRestartController
-        ? ({ observe: false } as const)
-        : undefined;
+  const isPassiveConfigOnly = params.validateConfigOnly || commandName === "logs";
+  const configSnapshotOptions = isPassiveConfigOnly
+    ? ({ observe: false, pluginValidation: "core-only" } as const)
+    : isManagedNodeRuntime || commandName === "status" || isRestartController
+      ? ({ observe: false } as const)
+      : undefined;
   const snapshot =
     preflightResult?.snapshot ?? (await getConfigSnapshot(configSnapshotOptions, params.measure));
   const isBareGatewayForegroundRun =
@@ -177,15 +182,6 @@ export async function ensureConfigReady(params: {
         subcommandName &&
         ALLOWED_INVALID_GATEWAY_SUBCOMMANDS.has(subcommandName))
     : false;
-  const [{ formatConfigIssueLines }, { renderConfigValidationIssueLines }] = await Promise.all([
-    import("../../config/issue-format.js"),
-    import("../../config/issue-location.js"),
-  ]);
-  const issues =
-    snapshot.exists && !snapshot.valid ? renderConfigValidationIssueLines(snapshot) : [];
-  const legacyIssues =
-    snapshot.legacyIssues.length > 0 ? formatConfigIssueLines(snapshot.legacyIssues, "-") : [];
-
   const invalid = snapshot.exists && !snapshot.valid;
   if (!invalid) {
     setRuntimeConfigSnapshot(snapshot.runtimeConfig ?? snapshot.config, snapshot.sourceConfig);
@@ -194,23 +190,31 @@ export async function ensureConfigReady(params: {
       adoptProcessPluginCache(
         getPluginMetadataSnapshotCache(preflightResult.pluginMetadataSnapshot),
       );
+      preflightCache = undefined;
     }
     return;
   }
 
   const [
+    { formatConfigIssueLines },
+    { renderConfigValidationIssueLines },
     { colorize, isRich, theme },
     { shortenHomePath },
     { formatCliCommand },
     { isPluginPackagingRuntimeOutputInvalidConfigSnapshot },
     { formatPluginPackagingRuntimeOutputRecoveryHint },
   ] = await Promise.all([
+    import("../../config/issue-format.js"),
+    import("../../config/issue-location.js"),
     import("../../../packages/terminal-core/src/theme.js"),
     import("../../utils.js"),
     import("../command-format.js"),
     import("../../config/recovery-policy.js"),
     import("../config-recovery-hints.js"),
   ]);
+  const issues = renderConfigValidationIssueLines(snapshot);
+  const legacyIssues =
+    snapshot.legacyIssues.length > 0 ? formatConfigIssueLines(snapshot.legacyIssues, "-") : [];
   const rich = isRich();
   const muted = (value: string) => colorize(rich, theme.muted, value);
   const error = (value: string) => colorize(rich, theme.error, value);
@@ -284,17 +288,19 @@ export async function ensureConfigReady(params: {
       retry: async () => {
         // Explicit Doctor owns the repair; retry only current snapshot validation.
         configSnapshotPromise = null;
-        const retrySnapshot = shouldRunStartupPreflight
-          ? (
-              await (
-                await import("../../commands/startup-config-preflight.js")
-              ).runStartupConfigPreflight({
-                gateway: false,
-                ...(params.measure ? { measure: params.measure } : {}),
-                ...(configSnapshotOptions?.observe === false ? { observe: false } : {}),
-              })
-            ).snapshot
-          : await getConfigSnapshot(configSnapshotOptions, params.measure);
+        const retryPreflight = shouldRunStartupPreflight
+          ? await (
+              await import("../../commands/startup-config-preflight.js")
+            ).runStartupConfigPreflight({
+              gateway: false,
+              ...(params.measure ? { measure: params.measure } : {}),
+              ...(configSnapshotOptions?.observe === false ? { observe: false } : {}),
+            })
+          : undefined;
+        preflightResources.use(retryPreflight?.pluginCache);
+        const retrySnapshot =
+          retryPreflight?.snapshot ??
+          (await getConfigSnapshot(configSnapshotOptions, params.measure));
         if (retrySnapshot.exists && !retrySnapshot.valid) {
           const retryIssues = renderConfigValidationIssueLines(retrySnapshot);
           const details = retryIssues.join("\n") || "Unknown validation issue.";
@@ -308,7 +314,7 @@ export async function ensureConfigReady(params: {
         );
       },
     });
-    if (recovery.status === "recovered") {
+    if (recovery) {
       return;
     }
     params.runtime.exit(isGatewayStartup ? 78 : 1);

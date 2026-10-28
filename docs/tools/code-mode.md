@@ -35,8 +35,8 @@ separate implementations:
   in Codex's in-process V8 Code Mode runtime.
 - OpenClaw Code Mode runs in the generic OpenClaw agent runtime and is
   enabled through global, agent, or model activation settings. Its `exec`
-  tool takes a JSON `{ title, code }` payload, executed by the selected Node or
-  QuickJS executor.
+  tool takes a JSON `{ code }` payload with an optional `title`, executed by
+  the selected Node or QuickJS executor.
 
 Both are JavaScript execution surfaces, not shell-command surfaces. Treat them
 as independent, differently-implemented features that happen to expose
@@ -74,7 +74,7 @@ job. Open the page that matches your task.
 - Every catalog-eligible enabled non-MCP tool (OpenClaw core, plugin, client) is
   hidden as a standalone model tool and exposed inside the guest program as an
   async global function. MCP stays under the `MCP` namespace.
-- The `exec` description carries a bounded quick index of final callable names,
+- The run's prompt carries a bounded quick index of final callable names,
   compact input hints, and compact declared output hints when a
   trusted tool provides an output schema. It omits descriptions, full schemas,
   MCP entries, and overflow entries. Callable `catalog.search(...)` results are
@@ -83,7 +83,8 @@ job. Open the page that matches your task.
   the full schema available through `describe()`. These hints do not change
   tool validation or output contracts. Core file and shell tool signatures stay
   first in the bounded index, followed by tools with declared output hints, so
-  catalog growth does not hide their input argument names.
+  catalog growth does not hide their input argument names. The index follows
+  the stable prompt prefix; catalog changes do not rewrite the `exec` schema.
 - Guest code calls globals directly or searches the hidden catalog for callable
   handles. A handle exposes bounded metadata and `describe()`, but never the
   exact internal catalog id. Calls use the same execution path as normal agent
@@ -104,6 +105,25 @@ Code mode changes the model-facing orchestration surface only. It does not
 replace tools, plugin tools, MCP tools, auth, approval policy, channel
 behavior, or model selection.
 
+## Creating sessions from Code Mode
+
+The compact surface preserves session routing. An explicit request such as
+“spin up a new task” uses the enabled `sessions_create` tool:
+include `message` to start work, or omit it for an idle session. This creates an
+independent persistent visible session, not a supervised child, so there is no
+completion event or yield expectation. See [Session tools](/concepts/session-tool#creating-an-independent-session).
+
+Availability comes from the current authorized tool set. If the
+compact index omits the tool or its inputs, use `catalog.search(...)` and the
+returned handle's `describe()` in OpenClaw Code Mode. In Codex Code Mode, use its
+`ALL_TOOLS` discovery and `tools` call surface. Neither surface enables a tool
+that the current capability and tool policy do not expose.
+
+Actual delegated helpers still use child tools (`sessions_spawn` for OpenClaw or
+ACP delegation, native collaboration tools for Codex helpers). Proactive,
+unrequested follow-up proposals use `suggest_task` when enabled; suggestion cards
+do not start work until accepted.
+
 ## Why use it
 
 - Smaller prompt surface: providers get two control tools, a bounded native-tool
@@ -115,7 +135,7 @@ behavior, or model selection.
   transform a tool result in one `exec`. Unknown outputs remain raw-first.
 - Provider neutral: works for OpenClaw, plugin, MCP, and client tools without
   depending on provider-native code execution.
-- Fails closed: if Code Mode is enabled but the selected executor is
+- No fallback: if Code Mode is enabled but the selected executor is
   unavailable, the run fails instead of silently falling back to broad direct
   tool exposure.
 

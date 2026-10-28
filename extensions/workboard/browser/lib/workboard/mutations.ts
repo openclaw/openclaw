@@ -17,6 +17,7 @@ import { normalizeCardPayload, normalizeCardsPayload } from "./normalization.ts"
 import {
   getWorkboardRuntime,
   getWorkboardState,
+  notifyWorkboard,
   invalidateWorkboardLoads,
   workboardHasActiveWrites,
   workboardMutationsReady,
@@ -58,14 +59,14 @@ export async function saveWorkboardCardDraft(params: WorkboardClientContext) {
   }
   if (cardId && (!base || base.id !== cardId)) {
     state.error = "This card changed before editing began. Cancel and reopen it to continue.";
-    params.requestUpdate?.();
+    notifyWorkboard(params.host);
     return;
   }
   invalidateWorkboardLoads(params.host);
   state.draftSaving = true;
   state.loading = true;
   state.error = null;
-  params.requestUpdate?.();
+  notifyWorkboard(params.host);
   try {
     let payload: unknown;
     if (base) {
@@ -98,7 +99,7 @@ export async function saveWorkboardCardDraft(params: WorkboardClientContext) {
   } finally {
     state.draftSaving = false;
     state.loading = false;
-    params.requestUpdate?.();
+    notifyWorkboard(params.host);
   }
 }
 
@@ -169,81 +170,71 @@ export async function moveWorkboardCard(
       | { beforeCardId: string | null; boardFilter: string; position?: never }
     ),
 ) {
-  const state = getWorkboardState(params.host);
-  if (
-    !params.client ||
-    !workboardMutationsReady(state) ||
-    state.dispatching ||
-    state.busyCardIds.has(params.cardId)
-  ) {
+  const current = getWorkboardState(params.host);
+  if (current.nextCursor && params.beforeCardId !== undefined) {
     return;
   }
-  const card = state.cards.find((candidate) => candidate.id === params.cardId);
+  const cards = current.cards;
+  const card = cards.find((candidate) => candidate.id === params.cardId);
   const moves =
     params.beforeCardId === undefined
-      ? [{ id: params.cardId, status: params.status, position: params.position }]
+      ? [
+          {
+            id: params.cardId,
+            status: params.status,
+            ...(current.nextCursor ? {} : { position: params.position }),
+          },
+        ]
       : card
-        ? planWorkboardCardDrop(
-            state.cards,
-            card,
-            params.status,
-            params.beforeCardId,
-            params.boardFilter,
-          )
+        ? planWorkboardCardDrop(cards, card, params.status, params.beforeCardId, params.boardFilter)
         : [];
-  if (!moves.length || moves.some((move) => state.busyCardIds.has(move.id))) {
+  if (!moves.length) {
     return;
   }
-  invalidateWorkboardLoads(params.host);
-  for (const move of moves) {
-    state.busyCardIds.add(move.id);
-  }
-  state.error = null;
-  // A recovered older load must not clear an error owned by this move.
-  delete getWorkboardRuntime(params.host).loadError;
-  params.requestUpdate?.();
   let reloadAfterFailure = false;
-  try {
-    for (const move of moves) {
-      const payload =
-        "expectedUpdatedAt" in move
-          ? await params.client.request("workboard.cards.update", {
-              id: move.id,
-              expectedUpdatedAt: move.expectedUpdatedAt,
-              patch: { position: move.position },
-            })
-          : await params.client.request("workboard.cards.move", {
-              ...move,
-              ...(params.expectedUpdatedAt !== undefined && move.id === params.cardId
-                ? { expectedUpdatedAt: params.expectedUpdatedAt }
-                : {}),
-            });
-      replaceCard(state, normalizeCardPayload(payload));
-    }
-  } catch (error) {
-    state.error = formatError(error);
-    if (!reconcileCardConflict(state, error)) {
-      // Even a single move can commit before its acknowledgment is lost.
-      state.mutationReadiness = "canonical_reload_required";
-      state.loaded = false;
-      state.loadAttempted = false;
-      reloadAfterFailure = true;
-    }
-  } finally {
-    for (const move of moves) {
-      state.busyCardIds.delete(move.id);
-    }
-    if (state.draggedCardId === params.cardId) {
-      state.draggedCardId = null;
-    }
-    params.requestUpdate?.();
-  }
+  await runWorkboardCardMutation(
+    { ...params, cardIds: moves.map((move) => move.id), reconcileConflict: false },
+    async (state, client) => {
+      // A recovered older load must not clear an error owned by this move.
+      delete getWorkboardRuntime(params.host).loadError;
+      try {
+        for (const move of moves) {
+          const payload =
+            "expectedUpdatedAt" in move
+              ? await client.request("workboard.cards.update", {
+                  id: move.id,
+                  expectedUpdatedAt: move.expectedUpdatedAt,
+                  patch: { position: move.position },
+                })
+              : await client.request("workboard.cards.move", {
+                  ...move,
+                  ...(params.expectedUpdatedAt !== undefined && move.id === params.cardId
+                    ? { expectedUpdatedAt: params.expectedUpdatedAt }
+                    : {}),
+                });
+          replaceCard(state, normalizeCardPayload(payload));
+        }
+      } catch (error) {
+        state.error = formatError(error);
+        if (!reconcileCardConflict(state, error)) {
+          // Even a single move can commit before its acknowledgment is lost.
+          state.mutationReadiness = "canonical_reload_required";
+          state.loaded = false;
+          state.loadAttempted = false;
+          reloadAfterFailure = true;
+        }
+      } finally {
+        if (state.draggedCardId === params.cardId) {
+          state.draggedCardId = null;
+        }
+      }
+    },
+  );
   if (reloadAfterFailure) {
     invalidateWorkboardLoads(params.host);
     await loadWorkboard({
       host: params.host,
       client: params.client,
-      requestUpdate: params.requestUpdate,
       force: true,
       preserveError: true,
     });
@@ -255,22 +246,28 @@ type WorkboardCardMutationParams = WorkboardClientContext & {
 };
 
 export async function runWorkboardCardMutation<T>(
-  params: WorkboardCardMutationParams & { reconcileConflict?: boolean },
+  params: WorkboardCardMutationParams & {
+    cardIds?: readonly string[];
+    reconcileConflict?: boolean;
+  },
   mutate: (state: ReturnType<typeof getWorkboardState>, client: GatewayBrowserClient) => Promise<T>,
 ): Promise<T | false> {
   const state = getWorkboardState(params.host);
+  const cardIds = params.cardIds ?? [params.cardId];
   if (
     !params.client ||
     !workboardMutationsReady(state) ||
     state.dispatching ||
-    state.busyCardIds.has(params.cardId)
+    cardIds.some((id) => state.busyCardIds.has(id))
   ) {
     return false;
   }
   invalidateWorkboardLoads(params.host);
-  state.busyCardIds.add(params.cardId);
+  for (const id of cardIds) {
+    state.busyCardIds.add(id);
+  }
   state.error = null;
-  params.requestUpdate?.();
+  notifyWorkboard(params.host);
   try {
     return await mutate(state, params.client);
   } catch (error) {
@@ -280,8 +277,10 @@ export async function runWorkboardCardMutation<T>(
     state.error = formatError(error);
     return false;
   } finally {
-    state.busyCardIds.delete(params.cardId);
-    params.requestUpdate?.();
+    for (const id of cardIds) {
+      state.busyCardIds.delete(id);
+    }
+    notifyWorkboard(params.host);
   }
 }
 
@@ -358,7 +357,7 @@ export async function dispatchWorkboard(params: WorkboardClientContext) {
   state.error = null;
   state.lastDispatchSummary = null;
   state.bulkResult = null;
-  params.requestUpdate?.();
+  notifyWorkboard(params.host);
   try {
     const dispatchResult = await params.client.request(
       "workboard.cards.dispatch",
@@ -368,6 +367,8 @@ export async function dispatchWorkboard(params: WorkboardClientContext) {
     const normalized = normalizeCardsPayload(payload);
     setWorkboardCards(state, normalized.cards);
     state.statuses = normalized.statuses;
+    state.nextCursor = normalized.nextCursor;
+    state.boards = normalized.boards;
     state.lastDispatchSummary = normalizeDispatchSummary(dispatchResult);
     // A teardown may have invalidated this in-flight dispatch. Keep its cached
     // result reload-required so reconnect cannot treat an old completion as canonical.
@@ -376,6 +377,6 @@ export async function dispatchWorkboard(params: WorkboardClientContext) {
     state.error = formatError(error);
   } finally {
     state.dispatching = false;
-    params.requestUpdate?.();
+    notifyWorkboard(params.host);
   }
 }

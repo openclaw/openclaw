@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, expectTypeOf, it } from "vitest";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -20,11 +20,7 @@ function privateGenerationEntry(): InternalSessionEntry {
     activeWriterRunId: "writer-run",
     lifecycleRevision: "generation-1",
     lifecycleRunId: "lifecycle-run",
-    sessionDiffBaselineCapture: {
-      version: 1,
-      captureId: "capture-1",
-      status: "pending",
-    },
+    sessionDiffBaselineCapture: { version: 1, captureId: "capture-1", status: "pending" },
     transcriptByteCompactionLatch: {
       activeBytes: 60_000,
       sessionId: "session-1",
@@ -42,64 +38,39 @@ function expectGenerationPrivateFieldsCleared(entry: InternalSessionEntry | unde
   expect(entry?.transcriptByteCompactionLatch).toBeUndefined();
 }
 
-const sessionEntryKeepsWriterClaimPrivate: "activeWriterRunId" extends keyof SessionEntry
-  ? false
-  : true = true;
-void sessionEntryKeepsWriterClaimPrivate;
-const sessionEntryKeepsBaselineClaimPrivate: "sessionDiffBaselineCapture" extends keyof SessionEntry
-  ? false
-  : true = true;
-void sessionEntryKeepsBaselineClaimPrivate;
-const sessionEntryKeepsByteCompactionLatchPrivate: "transcriptByteCompactionLatch" extends keyof SessionEntry
-  ? false
-  : true = true;
-void sessionEntryKeepsByteCompactionLatchPrivate;
-const sessionEntryKeepsThinkingSelectionPrivate: "thinkingLevelSelection" extends keyof SessionEntry
-  ? false
-  : true = true;
-void sessionEntryKeepsThinkingSelectionPrivate;
-const sessionFallbackKeepsThinkingSelectionPrivate: "prevThinkingLevelSelection" extends keyof NonNullable<
-  SessionEntry["modelFallback"]
->
-  ? false
-  : true = true;
-void sessionFallbackKeepsThinkingSelectionPrivate;
+expectTypeOf<
+  Extract<
+    keyof SessionEntry,
+    | "activeWriterRunId"
+    | "sessionDiffBaselineCapture"
+    | "transcriptByteCompactionLatch"
+    | "thinkingLevelSelection"
+  >
+>().toEqualTypeOf<never>();
+expectTypeOf<
+  Extract<keyof NonNullable<SessionEntry["modelFallback"]>, "prevThinkingLevelSelection">
+>().toEqualTypeOf<never>();
 
 describe("plugin session writer claim projection", () => {
   it.each(["patch", "upsert"] as const)(
     "preserves server publication through %s lifecycle changes while rejecting forged grants",
     async (method) => {
-      const sessionKey = "agent:main:plugin-publication";
       const storePath = path.join(sessionDirs.make(), "sessions.json");
+      const scope = { sessionKey: "agent:main:plugin-publication", storePath };
       const publicShare = { id: "a".repeat(48), sessionId: "session-1", createdAt: 1 };
       const updatedAt = Date.now();
-      await replaceSessionEntry(
-        { sessionKey, storePath },
-        {
-          ...privateGenerationEntry(),
-          publicShare,
-          updatedAt,
-        },
-      );
-      const mutate = async (entry: InternalSessionEntry) => {
-        if (method === "patch") {
-          await patchSessionEntry({
-            sessionKey,
-            storePath,
-            replaceEntry: true,
-            update: () => entry,
-          });
-        } else {
-          await upsertSessionEntry({ sessionKey, storePath, entry });
-        }
-      };
+      await replaceSessionEntry(scope, { ...privateGenerationEntry(), publicShare, updatedAt });
+      const mutate = (entry: InternalSessionEntry) =>
+        method === "patch"
+          ? patchSessionEntry({ ...scope, replaceEntry: true, update: () => entry })
+          : upsertSessionEntry({ ...scope, entry });
       await mutate({
         sessionId: "session-1",
         lifecycleRevision: "generation-2",
         updatedAt,
         publicShare: { ...publicShare, id: "b".repeat(48) },
       });
-      const sameSession = loadSessionEntry({ sessionKey, storePath });
+      const sameSession = loadSessionEntry(scope);
       expect(sameSession?.sessionId).toBe("session-1");
       expect(sameSession?.publicShare).toEqual(publicShare);
       expectGenerationPrivateFieldsCleared(sameSession);
@@ -110,122 +81,51 @@ describe("plugin session writer claim projection", () => {
         updatedAt,
         publicShare: { ...publicShare, sessionId: "session-2", id: "c".repeat(48) },
       });
-      expect(loadSessionEntry({ sessionKey, storePath })?.publicShare).toBeUndefined();
+      expect(loadSessionEntry(scope)?.publicShare).toBeUndefined();
     },
   );
 
   it("excludes private claims and retired thinking provenance from entries and patches", () => {
-    const entry = {
-      activeWriterRunId: "run-writer",
-      lifecycleRunId: "run-lifecycle",
-      sessionDiffBaselineCapture: {
-        version: 1,
-        captureId: "capture-writer",
-        status: "pending",
-      },
-      transcriptByteCompactionLatch: {
-        activeBytes: 60_000,
-        sessionId: "session-writer",
-        maxBytes: 50_000,
-      },
+    const publicFields = {
       model: "gpt-5.6",
+      modelFallback: { prevModel: "gpt-5.5", prevProvider: "openai", source: "agent-patch", ts: 1 },
+    };
+    const {
+      sessionId,
+      updatedAt,
+      lifecycleRevision: _revision,
+      ...claims
+    } = privateGenerationEntry();
+    const patch = {
+      ...claims,
+      ...publicFields,
       modelFallback: {
-        prevModel: "gpt-5.5",
-        prevProvider: "openai",
+        ...publicFields.modelFallback,
         prevThinkingLevelSelection: { retired: true },
-        source: "agent-patch",
-        ts: 1,
       },
-      sessionId: "session-writer",
       thinkingLevelSelection: { retired: true },
-      updatedAt: 10,
-    } as unknown as InternalSessionEntry;
-
-    expect(projectPluginSessionEntry(entry)).toEqual({
-      model: "gpt-5.6",
-      modelFallback: {
-        prevModel: "gpt-5.5",
-        prevProvider: "openai",
-        source: "agent-patch",
-        ts: 1,
-      },
-      sessionId: "session-writer",
-      updatedAt: 10,
+    } as unknown as Partial<InternalSessionEntry>;
+    expect(projectPluginSessionEntry({ ...patch, sessionId, updatedAt })).toEqual({
+      ...publicFields,
+      sessionId,
+      updatedAt,
     });
-    expect(
-      projectPluginSessionEntryPatch({
-        activeWriterRunId: "run-next",
-        lifecycleRunId: "run-lifecycle-next",
-        sessionDiffBaselineCapture: {
-          version: 1,
-          captureId: "capture-next",
-          status: "pending",
-        },
-        transcriptByteCompactionLatch: {
-          activeBytes: 70_000,
-          sessionId: "session-next",
-          maxBytes: 60_000,
-        },
-        model: "gpt-5.5",
-        modelFallback: {
-          prevModel: "gpt-5.4",
-          prevProvider: "openai",
-          prevThinkingLevelSelection: { retired: true },
-          source: "agent-patch",
-          ts: 2,
-        },
-        thinkingLevelSelection: { retired: true },
-      } as unknown as Partial<InternalSessionEntry>),
-    ).toEqual({
-      model: "gpt-5.5",
-      modelFallback: {
-        prevModel: "gpt-5.4",
-        prevProvider: "openai",
-        source: "agent-patch",
-        ts: 2,
-      },
-    });
+    expect(projectPluginSessionEntryPatch(patch)).toEqual(publicFields);
   });
 
   it("preserves private generation fields when patches and upserts omit lifecycle revision", async () => {
-    const sessionKey = "agent:main:patch-preserve-generation";
-    const storePath = path.join(sessionDirs.make(), "sessions.json");
-    await replaceSessionEntry({ sessionKey, storePath }, privateGenerationEntry());
+    const scope = {
+      sessionKey: "agent:main:patch-preserve-generation",
+      storePath: path.join(sessionDirs.make(), "sessions.json"),
+    };
+    await replaceSessionEntry(scope, privateGenerationEntry());
 
-    await patchSessionEntry({
-      sessionKey,
-      storePath,
-      update: () => ({ model: "gpt-5.6" }),
-    });
+    await patchSessionEntry({ ...scope, update: () => ({ model: "gpt-5.6" }) });
 
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-      activeWriterRunId: "writer-run",
-      lifecycleRevision: "generation-1",
-      lifecycleRunId: "lifecycle-run",
-      model: "gpt-5.6",
-      sessionDiffBaselineCapture: { captureId: "capture-1", status: "pending" },
-      transcriptByteCompactionLatch: {
-        activeBytes: 60_000,
-        sessionId: "session-1",
-        maxBytes: 50_000,
-      },
-    });
+    const { updatedAt: _updatedAt, ...generation } = privateGenerationEntry();
+    expect(loadSessionEntry(scope)).toMatchObject({ ...generation, model: "gpt-5.6" });
 
-    await upsertSessionEntry({
-      entry: { sessionId: "session-1", updatedAt: 20 },
-      sessionKey,
-      storePath,
-    });
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-      activeWriterRunId: "writer-run",
-      lifecycleRevision: "generation-1",
-      lifecycleRunId: "lifecycle-run",
-      sessionDiffBaselineCapture: { captureId: "capture-1", status: "pending" },
-      transcriptByteCompactionLatch: {
-        activeBytes: 60_000,
-        sessionId: "session-1",
-        maxBytes: 50_000,
-      },
-    });
+    await upsertSessionEntry({ entry: { sessionId: "session-1", updatedAt: 20 }, ...scope });
+    expect(loadSessionEntry(scope)).toMatchObject(generation);
   });
 });

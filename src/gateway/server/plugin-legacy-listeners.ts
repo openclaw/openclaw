@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createServer, type Server } from "node:http";
 import { runHttpConnectionRequest } from "../../infra/http-request-lifecycle.js";
 import { markPluginHttpLegacyListener } from "../../plugins/http-legacy-listener.js";
-import { onPluginHttpRoutesChanged } from "../../plugins/http-route-owner.js";
+import { pluginHttpRouteChanges } from "../../plugins/http-route-owner.js";
 import type { PluginHttpRouteRegistration, PluginRegistry } from "../../plugins/registry-types.js";
 
 type LegacyEndpoint = NonNullable<PluginHttpRouteRegistration["legacyListeners"]>[number];
@@ -147,18 +147,18 @@ export function startPluginLegacyListeners(params: {
       }
     }
   };
-  const stopWatching = onPluginHttpRoutesChanged(() => {
+  pluginHttpRouteChanges.onChange = () => {
     if (!queued && !stopped) {
       queued = true;
       queueMicrotask(() => runInGatewayContext(reconcile));
     }
-  });
+  };
   const stop = () => {
     if (stopped) {
       return;
     }
     stopped = true;
-    stopWatching();
+    pluginHttpRouteChanges.onChange = undefined;
     params.gatewayServer.off("close", stop);
     for (const listener of ownedListeners) {
       close(listener, true);

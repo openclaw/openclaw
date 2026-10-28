@@ -16,13 +16,15 @@ import {
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { prepareSqliteTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { parseSessionEntryJson } from "../config/sessions/session-accessor.sqlite-status.js";
 import { canonicalSessionValidationQuery } from "../config/sessions/session-canonical-key.js";
-import { validateCanonicalSessionRow } from "../config/sessions/session-canonical-row.js";
+import { validateCanonicalSessionRowEntry } from "../config/sessions/session-canonical-row.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { requireOpenClawStateDatabaseIdentity } from "../state/openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -49,6 +51,7 @@ import {
   advancePlacementFixtureToActive,
   writePlacementEnvironmentFixture,
 } from "./worker-environments/placement-test-fixtures.js";
+import { stagePlacementTurnClaimWorkerPublication } from "./worker-environments/placement-turn-authority.js";
 import type { ensureWorkerSessionPlacement } from "./worker-environments/session-placement-lifecycle.js";
 import { createWorkerPlacementRedispatch } from "./worker-environments/worker-placement-redispatch.js";
 
@@ -287,13 +290,15 @@ test.each(["channel", "incognito", "shared"] as const)(
     }
     const placements = createWorkerSessionPlacementStore();
     const finish = createDeferredCore();
+    const nextPublication = createDeferredCore();
+    let pending: ReturnType<typeof stagePlacementTurnClaimWorkerPublication> | undefined;
     let dispatchAssertion: (() => void) | undefined;
     const warn = vi.fn();
     // Dispatch is the existing coordinator boundary: this fixture records its real
     // durable admission and pauses provider work. No remote worker is simulated as live.
     const dispatch = vi.fn<
       Parameters<typeof createRequiredWorkerSessionPreparation>[0]["dispatch"]["dispatch"]
-    >(async (request, onTransition, assertCurrent) => {
+    >(async (request, onTransition, assertCurrent, signal, awaitRequestedHandoff) => {
       dispatchAssertion = assertCurrent;
       const sql = observeHostDataSql();
       try {
@@ -305,7 +310,20 @@ test.each(["channel", "incognito", "shared"] as const)(
       }
       const requested = await placements.startDispatch(request);
       onTransition?.(requested);
-      await finish.promise;
+      await awaitRequestedHandoff?.(signal);
+      pending = stagePlacementTurnClaimWorkerPublication(
+        requireOpenClawStateDatabaseIdentity({ db: openOpenClawStateDatabase().db }),
+        requested,
+        undefined,
+        requested.state,
+        requested,
+      );
+      nextPublication.resolve();
+      try {
+        await finish.promise;
+      } finally {
+        pending?.rollback();
+      }
       const failed = await placements.fail({
         sessionId: request.sessionId,
         expectedGeneration: requested.generation,
@@ -341,6 +359,9 @@ test.each(["channel", "incognito", "shared"] as const)(
         undefined,
         { waitForReady: false },
       );
+      await nextPublication.promise;
+      pending?.rollback();
+      pending = undefined;
       expect(() => retainedAssertion!()).toThrow("scope was released");
       const worktree = (await managedWorktrees.findLiveByOwner("session", key))!;
       ownedWorktrees.add(worktree.id);
@@ -384,7 +405,7 @@ test.each(["channel", "incognito", "shared"] as const)(
           state: "failed",
           recoveryError: "Synthetic provider unavailable",
         });
-        placements.retireSessionPlacement({
+        await placements.retireSessionPlacementAsync({
           sessionId: identity.sessionId,
           expectedState: "failed",
           expectedGeneration: failed.generation,
@@ -492,7 +513,8 @@ test.each(["unchanged", "caller", "runtime"] as const)(
         expect(preparedWorktreePath).toEqual(expect.any(String));
         // A separate connection cannot publish into either admitted source's host projection.
         if (change !== "unchanged") {
-          const foreign = new (requireNodeSqlite().DatabaseSync)(storePath);
+          // Another thread (e.g. a WAL checkpoint owner) may briefly hold the write lock.
+          const foreign = new (requireNodeSqlite().DatabaseSync)(storePath, { timeout: 5_000 });
           try {
             const sessionKey = change === "caller" ? caller.sessionKey : identity.sessionKey;
             const database = { agentId: "main", db: foreign };
@@ -519,7 +541,7 @@ test.each(["unchanged", "caller", "runtime"] as const)(
                 throw new Error("Foreign entry mutation lost its existing row");
               }
               // Validate the synthetic external writer's stored bytes; publish no host authority.
-              validateCanonicalSessionRow(row, "read");
+              validateCanonicalSessionRowEntry(row, parseSessionEntryJson(row, "list"), "read");
               foreign
                 .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
                 .run(sessionKey);
@@ -557,7 +579,11 @@ test.each(["unchanged", "caller", "runtime"] as const)(
           spawnedCwd: worktree.path,
         });
       } else {
-        await expect(pending).rejects.toThrow("Session changed during worker admission");
+        await expect(pending).rejects.toThrow(
+          change === "runtime"
+            ? "SQLite session state changed while preparing session-entry.patch"
+            : "Session changed during worker admission",
+        );
         expect(dispatch).not.toHaveBeenCalled();
         const entry = loadSessionEntry({ ...identity, storePath });
         expect(entry).not.toHaveProperty("worktree");
@@ -656,6 +682,7 @@ test.each(["unallocated", "missing", "different", "matching"] as const)(
           expect.any(Function),
           expect.any(Function),
           expect.any(AbortSignal),
+          undefined,
         );
         if (record === "unallocated") {
           expect(dispatch.mock.calls[0]?.[0]).not.toHaveProperty("inheritedProfile");

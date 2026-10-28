@@ -1,309 +1,135 @@
-// Conversation resolution tests cover channel conversation lookup and fallback rules.
-import { afterEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { afterEach, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
-  resolveCommandConversationResolution,
-  resolveInboundConversationResolution,
+  resolveCommandConversationResolution as command,
+  resolveInboundConversationResolution as inbound,
 } from "./conversation-resolution.js";
 import type { ChannelPlugin } from "./plugins/types.plugin.js";
 
-const testConfig = {} as OpenClawConfig;
-
-function registerChannelPlugin(plugin: ChannelPlugin): void {
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: plugin.id,
-        source: "test",
-        plugin,
-      },
-    ]),
-  );
+type Plugin = Omit<Partial<ChannelPlugin>, "id" | "config"> & {
+  id: string;
+  config?: Partial<ChannelPlugin["config"]>;
+};
+function register({ id, config, ...overrides }: Plugin) {
+  const plugin = { ...createChannelTestPluginBase({ id, config }), ...overrides };
+  setActivePluginRegistry(createTestRegistry([{ pluginId: id, source: "test", plugin }]));
 }
+const bindings = (overrides: Partial<NonNullable<ChannelPlugin["bindings"]>>) => ({
+  compileConfiguredBinding: () => null,
+  matchInboundConversation: () => null,
+  ...overrides,
+});
+afterEach(() => setActivePluginRegistry(createTestRegistry()));
 
-function createBindingProviderDefaults(): Pick<
-  NonNullable<ChannelPlugin["bindings"]>,
-  "compileConfiguredBinding" | "matchInboundConversation"
-> {
-  return {
-    compileConfiguredBinding: (_params) => null,
-    matchInboundConversation: (_params) => null,
-  };
-}
-
-describe("conversation resolution", () => {
-  afterEach(() => {
-    setActivePluginRegistry(createTestRegistry());
-  });
-
-  it("uses the runtime command resolver and plugin default account", () => {
-    registerChannelPlugin({
-      ...createChannelTestPluginBase({
-        id: "discord",
-        label: "Discord",
-        config: {
-          defaultAccountId: () => "work",
-        },
-      }),
-      bindings: {
-        ...createBindingProviderDefaults(),
-        resolveCommandConversation: ({ originatingTo }) => {
-          const conversationId = originatingTo?.trim().replace(/^discord:/i, "");
-          return conversationId ? { conversationId } : null;
-        },
-      },
-    });
-
-    expect(
-      resolveCommandConversationResolution({
-        cfg: testConfig,
-        channel: "discord",
-        originatingTo: "discord:channel:123",
-      }),
-    ).toEqual({
-      channel: "discord",
-      accountId: "work",
-      conversationId: "channel:123",
-    });
-  });
-
-  it("applies provider-owned self-parent defaults in one core path", () => {
-    registerChannelPlugin({
-      ...createChannelTestPluginBase({ id: "line", label: "LINE" }),
-      bindings: {
-        ...createBindingProviderDefaults(),
-        selfParentConversationByDefault: true,
-        resolveCommandConversation: () => ({
-          conversationId: "user:U1234567890abcdef1234567890abcdef",
-        }),
-      },
-    });
-
-    expect(
-      resolveCommandConversationResolution({
-        cfg: testConfig,
-        channel: "line",
-        accountId: "default",
-        originatingTo: "line:user:U1234567890abcdef1234567890abcdef",
-      }),
-    ).toEqual({
-      channel: "line",
-      accountId: "default",
-      conversationId: "user:U1234567890abcdef1234567890abcdef",
-      parentConversationId: "user:U1234567890abcdef1234567890abcdef",
-    });
-  });
-
-  it.each(["command", "threading"] as const)(
-    "normalizes conversation ids returned by the %s resolver",
-    (resolver) => {
-      const conversation = {
-        conversationId: "  user:U1234567890abcdef1234567890abcdef  ",
-        parentConversationId: "  room:R1234567890abcdef1234567890abcd  ",
-      };
-      registerChannelPlugin({
-        ...createChannelTestPluginBase({ id: "line", label: "LINE" }),
-        ...(resolver === "command"
-          ? {
-              bindings: {
-                ...createBindingProviderDefaults(),
-                resolveCommandConversation: () => conversation,
-              },
-            }
-          : {
-              threading: {
-                resolveFocusedBinding: () => ({
-                  ...conversation,
-                  placement: "current" as const,
-                  labelNoun: "conversation",
-                }),
-              },
-            }),
-      });
-
-      expect(
-        resolveCommandConversationResolution({
-          cfg: testConfig,
-          channel: "line",
-          accountId: " default ",
-          originatingTo: "ignored",
-        }),
-      ).toEqual({
-        channel: "line",
-        accountId: "default",
-        conversationId: "user:U1234567890abcdef1234567890abcdef",
-        parentConversationId: "room:R1234567890abcdef1234567890abcd",
-      });
+type Expected = [conversationId: string, parentConversationId?: string, accountId?: string];
+type CommandCase = [string, Plugin, string, Expected, string?];
+it.each<CommandCase>([
+  [
+    "runtime resolver and default account",
+    {
+      id: "discord",
+      config: { defaultAccountId: () => "work" },
+      bindings: bindings({ resolveCommandConversation: () => ({ conversationId: "channel:123" }) }),
     },
-  );
-
-  it("normalizes alias-prefixed topic routes before fallback resolution", () => {
-    registerChannelPlugin({
-      ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+    "discord:channel:123",
+    ["channel:123", undefined, "work"],
+  ],
+  [
+    "self-parent default",
+    {
+      id: "line",
+      bindings: bindings({
+        selfParentConversationByDefault: true,
+        resolveCommandConversation: () => ({ conversationId: "user:U123" }),
+      }),
+    },
+    "line:user:U123",
+    ["user:U123", "user:U123"],
+  ],
+  [
+    "focused binding normalization",
+    {
+      id: "line",
+      threading: {
+        resolveFocusedBinding: () => ({
+          conversationId: "  user:U123  ",
+          parentConversationId: "  room:R123  ",
+          placement: "current",
+          labelNoun: "conversation",
+        }),
+      },
+    },
+    "ignored",
+    ["user:U123", "room:R123"],
+    " default ",
+  ],
+  [
+    "alias-prefixed topic fallback",
+    {
+      id: "telegram",
       messaging: {
         targetPrefixes: ["tg"],
-        normalizeTarget: () => "telegram:group:-1001234567890:topic:77",
+        normalizeTarget: () => "telegram:group:-100123:topic:77",
       },
-    });
-
-    expect(
-      resolveCommandConversationResolution({
-        cfg: testConfig,
-        channel: "telegram",
-        accountId: "default",
-        originatingTo: "tg:group:-1001234567890:topic:77",
-      }),
-    ).toEqual({
-      channel: "telegram",
-      accountId: "default",
-      conversationId: "-1001234567890",
-    });
-  });
-
-  it.each([
+    },
+    "tg:group:-100123:topic:77",
+    ["-100123"],
+  ],
+  [
+    "undeclared raw shorthand",
     {
-      name: "declared raw shorthand",
-      channel: "telegram",
-      declaresNumericShorthand: true,
-      originatingTo: "-1001234567890:77",
-      expectedConversationId: "-1001234567890",
+      id: "plainchat",
+      messaging: { normalizeTarget: () => "plainchat:-100123:77" },
     },
-    {
-      name: "undeclared raw shorthand",
-      channel: "plainchat",
-      declaresNumericShorthand: false,
-      originatingTo: "-1001234567890:77",
-      expectedConversationId: "-1001234567890:77",
-    },
-    {
-      name: "declared normalized shorthand",
-      channel: "telegram",
-      declaresNumericShorthand: true,
-      originatingTo: "topic-alias",
-      expectedConversationId: "-1001234567890",
-    },
-    {
-      name: "undeclared normalized shorthand",
-      channel: "plainchat",
-      declaresNumericShorthand: false,
-      originatingTo: "topic-alias",
-      expectedConversationId: "-1001234567890:77",
-    },
-  ])(
-    "uses $name metadata in fallback resolution",
-    ({ channel, declaresNumericShorthand, originatingTo, expectedConversationId }) => {
-      registerChannelPlugin({
-        ...createChannelTestPluginBase({ id: channel, label: channel }),
-        messaging: {
-          ...(declaresNumericShorthand ? { numericTopicShorthand: true as const } : {}),
-          normalizeTarget: () => `${channel}:-1001234567890:77`,
-        },
-      });
-
-      expect(
-        resolveCommandConversationResolution({
-          cfg: testConfig,
-          channel,
-          accountId: "default",
-          originatingTo,
-        }),
-      ).toEqual({
-        channel,
-        accountId: "default",
-        conversationId: expectedConversationId,
-      });
-    },
-  );
-
-  it("normalizes numeric command thread ids through the shared route contract", () => {
-    registerChannelPlugin({
-      ...createChannelTestPluginBase({ id: "test-chat", label: "Test chat" }),
-    });
-
-    expect(
-      resolveCommandConversationResolution({
-        cfg: testConfig,
-        channel: "test-chat",
-        accountId: "default",
-        originatingTo: "test-chat:channel:parent-room",
-        threadId: 42.9,
-      }),
-    ).toEqual({
-      channel: "test-chat",
-      accountId: "default",
-      conversationId: "42",
-      parentConversationId: "parent-room",
-      threadId: "42",
-    });
+    "-100123:77",
+    ["-100123:77"],
+  ],
+])("resolves %s", (_name, plugin, to, expected, accountId) => {
+  const [conversationId, parentConversationId, expectedAccount = "default"] = expected;
+  register(plugin);
+  expect(command({ cfg: {}, channel: plugin.id, originatingTo: to, accountId })).toEqual({
+    channel: plugin.id,
+    accountId: expectedAccount,
+    conversationId,
+    parentConversationId,
   });
+});
 
-  it("keeps Matrix room casing when the channel resolver returns a child thread", () => {
-    registerChannelPlugin({
-      ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
-      messaging: {
-        resolveInboundConversation: ({ threadId, to }) => {
-          const parent = to?.trim().replace(/^(?:matrix:)?(?:channel:|room:)/iu, "");
-          return threadId && parent
-            ? { conversationId: String(threadId), parentConversationId: parent }
-            : null;
-        },
-      },
-    });
-
-    expect(
-      resolveInboundConversationResolution({
-        cfg: testConfig,
-        channel: "matrix",
-        to: "room:!Room:Example.org",
-        threadId: "$thread-root",
-      }),
-    ).toEqual({
-      channel: "matrix",
-      accountId: "default",
-      conversationId: "$thread-root",
-      parentConversationId: "!Room:Example.org",
-      threadId: "$thread-root",
-    });
+it.each(["command", "inbound"])("normalizes numeric %s thread ids", (entrypoint) => {
+  register({ id: "test-chat" });
+  const common = { cfg: {}, channel: "test-chat", threadId: 42.9 };
+  const target = "test-chat:channel:parent-room";
+  const result =
+    entrypoint === "command"
+      ? command({ ...common, originatingTo: target, accountId: "default" })
+      : inbound({ ...common, to: target });
+  expect(result).toEqual({
+    channel: "test-chat",
+    accountId: "default",
+    conversationId: "42",
+    parentConversationId: "parent-room",
+    threadId: "42",
   });
+});
 
-  it("does not fall through when a channel explicitly rejects an inbound target", () => {
-    registerChannelPlugin({
-      ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
-      messaging: {
-        resolveInboundConversation: () => null,
-      },
-    });
-
-    expect(
-      resolveInboundConversationResolution({
-        cfg: testConfig,
-        channel: "matrix",
-        to: "room:!Room:Example.org",
+it("keeps provider-resolved Matrix room casing for child threads", () => {
+  register({
+    id: "matrix",
+    messaging: {
+      resolveInboundConversation: () => ({
+        conversationId: "$thread-root",
+        parentConversationId: "!Room:Example.org",
       }),
-    ).toBeNull();
+    },
   });
-
-  it("normalizes numeric inbound thread ids through the shared route contract", () => {
-    registerChannelPlugin({
-      ...createChannelTestPluginBase({ id: "test-chat", label: "Test chat" }),
-    });
-
-    expect(
-      resolveInboundConversationResolution({
-        cfg: testConfig,
-        channel: "test-chat",
-        accountId: "default",
-        to: "test-chat:channel:parent-room",
-        threadId: 42.9,
-      }),
-    ).toEqual({
-      channel: "test-chat",
-      accountId: "default",
-      conversationId: "42",
-      parentConversationId: "parent-room",
-      threadId: "42",
-    });
+  expect(
+    inbound({ cfg: {}, channel: "matrix", to: "room:!Room:Example.org", threadId: "$thread-root" }),
+  ).toEqual({
+    channel: "matrix",
+    accountId: "default",
+    conversationId: "$thread-root",
+    parentConversationId: "!Room:Example.org",
+    threadId: "$thread-root",
   });
 });

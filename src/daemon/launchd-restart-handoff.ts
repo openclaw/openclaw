@@ -1,4 +1,3 @@
-/** Detached macOS launchd restart handoff for restarting from inside the service. */
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";

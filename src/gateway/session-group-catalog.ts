@@ -1,5 +1,5 @@
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -14,6 +14,7 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import type {
   SessionGroupCatalogMutation,
+  SessionGroupCatalogMutationResult,
   SessionGroupCatalogAdmission,
   SessionGroupCatalogSnapshot,
   SessionGroupMembershipSnapshot,
@@ -22,8 +23,7 @@ import type {
 function isCatalogAdmission(value: unknown): value is SessionGroupCatalogAdmission {
   return (
     isRecord(value) &&
-    Array.isArray(value.names) &&
-    value.names.every((name) => typeof name === "string") &&
+    isStringArray(value.names) &&
     (value.groups === undefined ||
       (Array.isArray(value.groups) &&
         value.groups.every(
@@ -52,9 +52,6 @@ export async function readSessionGroupMembershipInWorker(
   );
   if (!result) {
     return { stores: [], groups: [] };
-  }
-  if (!result.ok || result.type !== "sessionGroups.members") {
-    throw new Error("Session group membership worker returned an unexpected result");
   }
   return result.snapshot;
 }
@@ -171,10 +168,8 @@ export async function ensureSessionGroupCatalog(
         }
         if (!result) {
           install(catalog, { groups: [], defaults: [], sectionOrder: [] }, true);
-        } else if (result.ok && result.type === "sessionGroups.snapshot") {
-          install(catalog, result.snapshot);
         } else {
-          throw new Error("Session group catalog worker returned an unexpected result");
+          install(catalog, result.snapshot);
         }
       })().finally(() => {
         catalog.reading = undefined;
@@ -205,9 +200,16 @@ export function mutateSessionGroupCatalog(
   const mutation = structuredClone(input);
   const context = captureOpenClawStateWorkerContext({ env });
   const catalog = bindCatalog(context.admission);
-  const write = async () => {
+  const write = async (): Promise<SessionGroupCatalogMutationResult> => {
     context.admission.assertCurrent();
     assertCurrent?.();
+    // Join preceding mutations before consuming the owner's committed catalog.
+    if (
+      mutation.kind === "register" &&
+      catalog.snapshot?.groups.some(({ name }) => name === mutation.name)
+    ) {
+      return { changed: false, snapshot: catalog.snapshot };
+    }
     // A concurrent initial read must not reinstall facts from before this commit.
     catalog.revision += 1;
     try {

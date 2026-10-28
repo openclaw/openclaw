@@ -1,10 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import {
-  assertSessionStoreReadCandidate,
-  captureSessionStoreCandidateIdentities,
-} from "../config/sessions/session-store-read-candidates.js";
-import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
-import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import { captureSessionStoreEnvironment } from "../config/sessions/session-store-target-inventory.js";
 import type { SessionObserverDeps, SessionObserverRead } from "./session-observer-model.js";
 import { defaultPersistDigest } from "./session-observer-model.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
@@ -23,21 +18,12 @@ export function captureSessionObserverRead(
   agentId: string,
 ): SessionObserverRead {
   const cfg = deps.getConfig();
-  const routing = captureSessionMutationRouting(cfg);
-  const inventory = prepareSessionStoreTargetInventory(cfg, [agentId]);
-  const identities = captureSessionStoreCandidateIdentities(inventory.candidates);
+  const routing = captureSessionMutationRouting(cfg, undefined, [{ sessionKey, agentId }]);
+  const { config, serialized: env } = captureSessionStoreEnvironment(cfg);
   let target: GatewaySessionStoreTargetWithStore | undefined;
   let selection: GatewaySessionStoreSelection | undefined;
   const assertCurrent = () => {
     routing(deps.getConfig());
-    for (const candidate of inventory.candidates) {
-      assertSessionStoreReadCandidate(candidate.path, [candidate]);
-    }
-    for (const [pathname, expected] of identities) {
-      if (!isDeepStrictEqual(readDatabasePathIdentitySync(pathname), expected)) {
-        throw new Error("Session observer storage changed during observation");
-      }
-    }
   };
   const reader: SessionObserverRead = {
     assertCurrent,
@@ -80,8 +66,8 @@ export function captureSessionObserverRead(
       }
       return withGatewaySessionStoreTarget(
         {
-          cfg: inventory.config,
-          env: inventory.env,
+          cfg: config,
+          env,
           key: sessionKey,
           agentId,
           projection: "full",
@@ -112,7 +98,7 @@ export function captureSessionObserverRead(
           storePath: target.storePath,
           readSource: target.capturedReadSource,
           target: { canonicalKey: target.canonicalKey, storeKeys: target.storeKeys },
-          env: inventory.env,
+          env,
         },
         stillCurrent: () => {
           assertCurrent();

@@ -19,7 +19,7 @@ vi.mock("./browser/client.js", async (importOriginal) => ({
 }));
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
-  getRuntimeConfig: () => ({ browser: {}, gateway: { nodes: { browser: { mode: "off" } } } }),
+  readRuntimeConfig: () => ({ browser: {}, gateway: { nodes: { browser: { mode: "off" } } } }),
 }));
 vi.mock("./browser/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./browser/config.js")>()),

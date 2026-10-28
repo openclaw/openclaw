@@ -8,6 +8,7 @@ import {
   dockerReleaseArtifactName,
   preparedDockerEvidenceFromFullRelease,
   publishDockerRelease,
+  readDockerGithubJson,
   sealDockerRelease,
   validateDockerReleaseIdentity,
   validateDockerReleaseManifest,
@@ -25,6 +26,14 @@ const runAttempt = "2";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const mediaType = "application/vnd.oci.image.manifest.v1+json";
 const indexMediaType = "application/vnd.oci.image.index.v1+json";
+const defaultVersion = "2026.8.1-beta.2";
+const builtAt = "2026-09-01T00:00:00.000Z";
+const architectures = ["amd64", "arm64"];
+const registries = ["ghcr.io/openclaw/openclaw", "docker.io/openclaw/openclaw"];
+const workflowPath = (name: string) => `.github/workflows/${name}.yml`;
+const workflowRef = (name: string) => `${repository}/${workflowPath(name)}@refs/heads/main`;
+const readWorkflow = (name: string) => parse(readFileSync(workflowPath(name), "utf8"));
+const hash = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
 
 function temporaryDirectory() {
   return tempDirs.make("openclaw-docker-artifacts-");
@@ -42,7 +51,7 @@ function createLayout(
 ) {
   function blob(value: unknown) {
     const bytes = Buffer.from(JSON.stringify(value));
-    const digest = createHash("sha256").update(bytes).digest("hex");
+    const digest = hash(bytes);
     const file = path.join(directory, "blobs", "sha256", digest);
     mkdirSync(path.dirname(file), { recursive: true });
     writeFileSync(file, bytes);
@@ -55,26 +64,26 @@ function createLayout(
     config: {
       Labels: {
         "org.opencontainers.image.revision": options.labelSha ?? sourceSha,
-        "org.opencontainers.image.version": options.version ?? "2026.8.1-beta.2",
-        "org.opencontainers.image.created": options.builtAt ?? "2026-09-01T00:00:00.000Z",
+        "org.opencontainers.image.version": options.version ?? defaultVersion,
+        "org.opencontainers.image.created": options.builtAt ?? builtAt,
       },
     },
   });
-  const image = blob({
-    schemaVersion: 2,
-    mediaType,
-    config: { mediaType: "application/vnd.oci.image.config.v1+json", ...config },
-    layers: [],
-  });
+  const manifestBlob = (descriptor: ReturnType<typeof blob>, layers: unknown[]) =>
+    blob({
+      schemaVersion: 2,
+      mediaType,
+      config: { mediaType: "application/vnd.oci.image.config.v1+json", ...descriptor },
+      layers,
+    });
+  const image = manifestBlob(config, []);
   const predicates = [
     "https://spdx.dev/Document",
     ...(options.provenance === false ? [] : ["https://slsa.dev/provenance/v1"]),
   ];
-  const attestation = blob({
-    schemaVersion: 2,
-    mediaType,
-    config: { mediaType: "application/vnd.oci.image.config.v1+json", ...blob({}) },
-    layers: predicates.map((predicateType) =>
+  const attestation = manifestBlob(
+    blob({}),
+    predicates.map((predicateType) =>
       Object.assign(
         blob({ predicateType, subject: [{ digest: { sha256: image.digest.slice(7) } }] }),
         {
@@ -83,7 +92,7 @@ function createLayout(
         },
       ),
     ),
-  });
+  );
   const manifests = [
     { mediaType, ...image, platform: { os: "linux", architecture } },
     {
@@ -110,28 +119,35 @@ function createLayout(
   };
 }
 
-async function createPreparedRelease(includeBrowser = true, version = "2026.8.1-beta.2") {
+async function createPreparedRelease(
+  includeBrowser = true,
+  releaseVersion = defaultVersion,
+  recovery?: { artifactAttempt: string; architectureAttempts: [string, string] },
+) {
   const root = temporaryDirectory();
-  const artifactName = dockerReleaseArtifactName(sourceSha, runAttempt);
+  const artifactName = dockerReleaseArtifactName(
+    sourceSha,
+    recovery?.artifactAttempt ?? runAttempt,
+  );
   const context = {
     schemaVersion: 1,
     repository,
     sourceSha,
     toolingSha,
-    tag: `v${version}`,
-    version,
+    tag: `v${releaseVersion}`,
+    version: releaseVersion,
     imageTagSuffix: "-r20260901",
-    builtAt: "2026-09-01T00:00:00.000Z",
+    builtAt,
     includeBrowser,
     producer: {
       runId,
       runAttempt,
-      workflowRef: `${repository}/.github/workflows/full-release-validation.yml@refs/heads/main`,
+      workflowRef: workflowRef("full-release-validation"),
       workflowSha: toolingSha,
-      preparationWorkflowRef: `${repository}/.github/workflows/docker-release-prepare.yml@refs/heads/main`,
+      preparationWorkflowRef: workflowRef("docker-release-prepare"),
     },
   };
-  const artifacts = ["amd64", "arm64"].map((architecture, index) => ({
+  const artifacts = architectures.map((architecture, index) => ({
     id: index + 10,
     name: `${artifactName}-${architecture}`,
     digest: `sha256:${String(index + 1).repeat(64)}`,
@@ -149,10 +165,17 @@ async function createPreparedRelease(includeBrowser = true, version = "2026.8.1-
     conclusion: "success",
     head_sha: toolingSha,
   };
+  const architectureJobs = architectures.map((architecture, index) => ({
+    ...job,
+    id: 20 + index,
+    run_attempt: Number(recovery?.architectureAttempts[index] ?? runAttempt),
+    name: `Prepare Docker / Prepare Docker images (${architecture})`,
+    check_run_url: `https://api.github.com/repos/${repository}/check-runs/${20 + index}`,
+  }));
   const run = {
     id: Number(runId),
     run_attempt: Number(runAttempt),
-    path: ".github/workflows/full-release-validation.yml",
+    path: workflowPath("full-release-validation"),
     head_branch: "main",
     head_sha: toolingSha,
     event: "workflow_dispatch",
@@ -162,7 +185,7 @@ async function createPreparedRelease(includeBrowser = true, version = "2026.8.1-
     head_repository: { full_name: repository },
     referenced_workflows: [
       {
-        path: `${repository}/.github/workflows/docker-release-prepare.yml@${toolingSha}`,
+        path: `${repository}/${workflowPath("docker-release-prepare")}@${toolingSha}`,
         sha: toolingSha,
         ref: "refs/heads/main",
       },
@@ -179,17 +202,27 @@ async function createPreparedRelease(includeBrowser = true, version = "2026.8.1-
     if (endpoint.endsWith("/actions/jobs/7")) {
       return job;
     }
+    const architectureJob = architectureJobs.find((candidate) =>
+      endpoint.endsWith(`/actions/jobs/${candidate.id}`),
+    );
+    if (architectureJob) {
+      return architectureJob;
+    }
     if (endpoint.includes("/jobs?")) {
+      const attempt = Number(endpoint.match(/\/attempts\/([0-9]+)\//u)?.[1]);
+      const attemptJobs = architectureJobs.filter((candidate) => candidate.run_attempt === attempt);
+      const jobs = [
+        ...(job.run_attempt === attempt ? [job] : []),
+        ...attemptJobs,
+        {
+          ...job,
+          id: 8,
+          check_run_url: `https://api.github.com/repos/${repository}/check-runs/8`,
+        },
+      ];
       return {
-        jobs: [
-          job,
-          {
-            ...job,
-            id: 8,
-            check_run_url: `https://api.github.com/repos/${repository}/check-runs/8`,
-          },
-        ],
-        total_count: 2,
+        jobs,
+        total_count: jobs.length,
       };
     }
     if (endpoint.endsWith(`/actions/runs/${runId}/attempts/${runAttempt}`)) {
@@ -200,11 +233,11 @@ async function createPreparedRelease(includeBrowser = true, version = "2026.8.1-
     }
     throw new Error(`Unexpected API read: ${endpoint}`);
   };
-  for (const architecture of ["amd64", "arm64"]) {
+  for (const [architectureIndex, architecture] of architectures.entries()) {
     const images = [];
     for (const variant of includeBrowser ? ["default", "browser"] : ["default"]) {
       const directory = path.join(root, "payloads", `${artifactName}-${architecture}`, variant);
-      const image = createLayout(directory, architecture, { version });
+      const image = createLayout(directory, architecture, { version: releaseVersion });
       const verified = await verifyDockerReleaseLayout({
         ...context,
         directory,
@@ -215,6 +248,10 @@ async function createPreparedRelease(includeBrowser = true, version = "2026.8.1-
     }
     writeJson(path.join(root, "metadata", `${architecture}.json`), {
       ...context,
+      producer: {
+        ...context.producer,
+        runAttempt: recovery?.architectureAttempts[architectureIndex] ?? runAttempt,
+      },
       architecture,
       images,
     });
@@ -222,15 +259,16 @@ async function createPreparedRelease(includeBrowser = true, version = "2026.8.1-
   const manifest = sealDockerRelease({
     metadataDirectory: path.join(root, "metadata"),
     context,
+    artifactName,
     checkRunId: "7",
     readApi,
   });
-  return { root, manifest, run, attemptRun, job, artifacts, readApi };
+  return { root, manifest, run, attemptRun, job, architectureJobs, artifacts, readApi };
 }
 
 async function createPublicationRetry(conclusion = "failure") {
   const fixture = await createPreparedRelease(false);
-  const workflow = ".github/workflows/openclaw-release-publish.yml";
+  const workflow = workflowPath("openclaw-release-publish");
   fixture.manifest.producer.workflowRef = `${repository}/${workflow}@refs/heads/main`;
   fixture.run.path = fixture.attemptRun.path = workflow;
   fixture.attemptRun.status = "completed";
@@ -251,11 +289,20 @@ async function createPublicationRetry(conclusion = "failure") {
 function createRegistry({
   root,
   manifest,
-}: Pick<Awaited<ReturnType<typeof createPreparedRelease>>, "root" | "manifest">) {
+  revalidateAuthority = () => {},
+}: PreparedRelease & { revalidateAuthority?: () => void }) {
   const indexes = new Map<string, { digest: string; manifests: unknown[] }>();
+  const blobFiles = new Map<string, string>();
   for (const entry of manifest.architectures) {
     for (const image of entry.images) {
+      const directory = path.join(root, "payloads", entry.artifact.name, image.variant);
       indexes.set(image.indexDigest, { digest: image.indexDigest, manifests: image.manifests });
+      for (const descriptor of image.manifests) {
+        blobFiles.set(
+          descriptor.digest,
+          path.join(directory, "blobs", "sha256", descriptor.digest.slice(7)),
+        );
+      }
     }
   }
   const tags = new Map<string, string>();
@@ -274,7 +321,7 @@ function createRegistry({
       let digest = refs[0]!.split("@")[1]!;
       if (refs.length > 1) {
         const descriptors = refs.flatMap((ref) => indexes.get(ref.split("@")[1]!)!.manifests);
-        digest = `sha256:${createHash("sha256").update(JSON.stringify(descriptors)).digest("hex")}`;
+        digest = `sha256:${hash(JSON.stringify(descriptors))}`;
         indexes.set(digest, { digest, manifests: descriptors });
       }
       for (let index = 0; index < args.length; index += 1) {
@@ -301,30 +348,23 @@ function createRegistry({
         manifests: index.manifests,
       });
     }
-    for (const entry of manifest.architectures) {
-      for (const image of entry.images) {
-        const descriptor = image.manifests.find(
-          (candidate: { digest: string }) => candidate.digest === digest,
-        );
-        if (descriptor) {
-          return readFileSync(
-            path.join(
-              root,
-              "payloads",
-              entry.artifact.name,
-              image.variant,
-              "blobs",
-              "sha256",
-              digest.slice(7),
-            ),
-            "utf8",
-          );
-        }
-      }
+    const file = blobFiles.get(digest);
+    if (file) {
+      return readFileSync(file, "utf8");
     }
     throw new Error(`Unexpected Docker command: ${args.join(" ")}`);
   });
-  return { execute, calls, tags };
+  return {
+    execute,
+    calls,
+    tags,
+    publish: (overrides: Parameters<typeof publishPrepared>[2] = {}) =>
+      publishPrepared(root, manifest, {
+        execFileSyncImpl: execute,
+        revalidateAuthority,
+        ...overrides,
+      }),
+  };
 }
 
 async function createCandidateDockerPublication(recovered = false) {
@@ -343,7 +383,7 @@ async function createCandidateDockerPublication(recovered = false) {
   }
   const bytes = JSON.stringify(fixture.docker, null, 2) + "\n";
   Object.assign(fixture.manifest.publicationArtifacts.docker, {
-    preparedManifestSha256: createHash("sha256").update(bytes).digest("hex"),
+    preparedManifestSha256: hash(bytes),
   });
   const originalRun = structuredClone(fixture.parent);
   const currentRun = recovered
@@ -366,7 +406,11 @@ async function createCandidateDockerPublication(recovered = false) {
     root,
     verified,
     bytes,
-    registry: createRegistry({ root, manifest: fixture.docker }),
+    registry: createRegistry({
+      root,
+      manifest: fixture.docker,
+      revalidateAuthority: verified.revalidateAuthority,
+    }),
   };
 }
 
@@ -374,41 +418,176 @@ function registryWrites(calls: string[][]) {
   return calls.filter((call) => call[0] === "skopeo" || call[3] === "create");
 }
 
+type PreparedRelease = Pick<Awaited<ReturnType<typeof createPreparedRelease>>, "root" | "manifest">;
+type PublicationRetry = Awaited<ReturnType<typeof createPublicationRetry>>;
+function publishPrepared(
+  root: string,
+  manifest: PreparedRelease["manifest"],
+  overrides: Partial<Parameters<typeof publishDockerRelease>[0]> = {},
+) {
+  return publishDockerRelease({
+    manifest,
+    revalidateAuthority: () => {},
+    payloadDirectory: path.join(root, "payloads"),
+    images: ["ghcr.io/openclaw/openclaw"],
+    verifyTag: vi.fn(),
+    ...overrides,
+  });
+}
+
+function verifyPrepared(fixture: Awaited<ReturnType<typeof createPreparedRelease>>) {
+  return verifyDockerReleaseProducer(fixture.manifest, {
+    publisherSha: toolingSha,
+    readApi: fixture.readApi,
+  });
+}
+
+function expectedIdentity(manifest: PreparedRelease["manifest"]) {
+  return {
+    repository,
+    sourceSha,
+    tag: manifest.tag,
+    imageTagSuffix: manifest.imageTagSuffix,
+    artifactName: manifest.artifactName,
+    runId,
+    runAttempt,
+  };
+}
+
+function expectLines(value: unknown, lines: string[]) {
+  expect(String(value).split("\n")).toEqual(expect.arrayContaining(lines));
+}
+
 describe("prepared Docker publication", () => {
-  it.each([false])(
-    "publishes authenticated candidate bytes with original-attempt recovery=%s",
-    async (recovered) => {
-      const { fixture, root, verified, bytes, registry } =
-        await createCandidateDockerPublication(recovered);
-      const images = ["ghcr.io/openclaw/openclaw", "docker.io/openclaw/openclaw"];
-      const output = await publishDockerRelease({
-        manifest: fixture.docker,
-        revalidateAuthority: verified.revalidateAuthority,
-        payloadDirectory: path.join(root, "payloads"),
-        images,
-        execFileSyncImpl: registry.execute,
-        verifyTag: vi.fn(),
-      });
-      expect(JSON.stringify(verified.manifest, null, 2) + "\n").toBe(bytes);
-      expect(verified.manifest.producer.runAttempt).toBe("1");
-      const version = fixture.docker.version;
-      expect([...registry.tags.keys()]).toEqual([
-        ...["amd64", "arm64"].flatMap((arch) =>
-          images.flatMap((image) => [
-            image + ":" + version + "-" + arch,
-            image + ":" + version + "-slim-" + arch,
-          ]),
-        ),
-        ...images.flatMap((image) => [image + ":" + version, image + ":" + version + "-slim"]),
-      ]);
-      expect(registryWrites(registry.calls)).toHaveLength(10);
-      expect(output.split("\n")).toEqual(
-        ["default", "slim"].map(
-          (variant) => variant + "=" + registry.tags.get(images[0] + ":" + version),
-        ),
-      );
-    },
-  );
+  it("retries transient GitHub 5xx identity reads with a fresh request", () => {
+    const responses = [new Error("gh: Server Error (HTTP 502)"), '{"head_sha":"fresh"}'];
+    const runCommand = vi.fn(() => {
+      const response = responses.shift();
+      if (response instanceof Error) {
+        throw response;
+      }
+      return response!;
+    });
+    const sleep = vi.fn();
+
+    expect(
+      readDockerGithubJson("repos/openclaw/openclaw/actions/runs/100", {
+        runCommand,
+        sleep,
+        retryDelaysMs: [25],
+      }),
+    ).toEqual({ head_sha: "fresh" });
+    expect(runCommand).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(25);
+  });
+
+  it("does not retry Docker identity reads after an authorization failure", () => {
+    const failure = new Error("gh: Resource not accessible by integration (HTTP 403)");
+    const runCommand = vi.fn(() => {
+      throw failure;
+    });
+
+    expect(() =>
+      readDockerGithubJson("repos/openclaw/openclaw/actions/runs/100", {
+        runCommand,
+        sleep: vi.fn(),
+        retryDelaysMs: [0],
+      }),
+    ).toThrow(failure);
+    expect(runCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry an invalid Docker identity response", () => {
+    const runCommand = vi.fn(() => "not-json");
+
+    expect(() =>
+      readDockerGithubJson("repos/openclaw/openclaw/actions/runs/100", {
+        runCommand,
+        sleep: vi.fn(),
+        retryDelaysMs: [0],
+      }),
+    ).toThrow(SyntaxError);
+    expect(runCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("adopts successful architecture producers across a failed-job retry", async () => {
+    const fixture = await createPreparedRelease(false, defaultVersion, {
+      artifactAttempt: "1",
+      architectureAttempts: ["1", "2"],
+    });
+    expect(fixture.manifest.artifactName).toBe(dockerReleaseArtifactName(sourceSha, "1"));
+    expect(fixture.manifest.producer.runAttempt).toBe("2");
+    expect(
+      fixture.manifest.architectures.map(
+        (entry: { producer: { runAttempt: string } }) => entry.producer.runAttempt,
+      ),
+    ).toEqual(["1", "2"]);
+    expect((await verifyPrepared(fixture)).manifest).toBe(fixture.manifest);
+  });
+
+  it.each([
+    [
+      "another parent",
+      (metadata: { producer: { runId: string } }) => (metadata.producer.runId = "999"),
+    ],
+    [
+      "another tooling revision",
+      (metadata: { producer: { workflowSha: string } }) =>
+        (metadata.producer.workflowSha = sourceSha),
+    ],
+    [
+      "future attempt",
+      (metadata: { producer: { runAttempt: string } }) => (metadata.producer.runAttempt = "3"),
+    ],
+  ])("rejects %s architecture metadata before adoption", async (_label, mutate) => {
+    const fixture = await createPreparedRelease(false);
+    const metadataPath = path.join(fixture.root, "metadata", "amd64.json");
+    const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
+    const context = structuredClone(metadata);
+    delete context.architecture;
+    delete context.images;
+    mutate(metadata);
+    writeJson(metadataPath, metadata);
+    expect(() =>
+      sealDockerRelease({
+        metadataDirectory: path.join(fixture.root, "metadata"),
+        context,
+        artifactName: fixture.manifest.artifactName,
+        checkRunId: "7",
+        readApi: fixture.readApi,
+      }),
+    ).toThrow(/producer mismatch/u);
+  });
+
+  it("rejects a replaced architecture job before artifact acquisition", async () => {
+    const fixture = await createPreparedRelease(false);
+    fixture.architectureJobs[0]!.run_attempt += 1;
+    await expect(verifyPrepared(fixture)).rejects.toThrow(/amd64 preparation job/u);
+  });
+
+  it("publishes authenticated candidate bytes", async () => {
+    const { fixture, verified, bytes, registry } = await createCandidateDockerPublication();
+    const images = registries;
+    const output = await registry.publish({ images });
+    expect(JSON.stringify(verified.manifest, null, 2) + "\n").toBe(bytes);
+    expect(verified.manifest.producer.runAttempt).toBe("1");
+    const version = fixture.docker.version;
+    expect([...registry.tags.keys()]).toEqual([
+      ...["amd64", "arm64"].flatMap((arch) =>
+        images.flatMap((image) => [
+          image + ":" + version + "-" + arch,
+          image + ":" + version + "-slim-" + arch,
+        ]),
+      ),
+      ...images.flatMap((image) => [image + ":" + version, image + ":" + version + "-slim"]),
+    ]);
+    expect(registryWrites(registry.calls)).toHaveLength(10);
+    expect(output.split("\n")).toEqual(
+      ["default", "slim"].map(
+        (variant) => variant + "=" + registry.tags.get(images[0] + ":" + version),
+      ),
+    );
+  });
 
   it.each(["acquisition", "async OCI read", "final tag read"])(
     "blocks candidate publication when authority is revoked during %s",
@@ -422,11 +601,8 @@ describe("prepared Docker publication", () => {
           fixture.admission.authority.permission = "read";
         }
       });
-      const publication = publishDockerRelease({
-        manifest: fixture.docker,
+      const publication = publishPrepared(root, fixture.docker, {
         revalidateAuthority: verified.revalidateAuthority,
-        payloadDirectory: path.join(root, "payloads"),
-        images: ["ghcr.io/openclaw/openclaw"],
         execFileSyncImpl: registry.execute,
         verifyTag,
       });
@@ -447,7 +623,7 @@ describe("prepared Docker publication", () => {
   ] as const)(
     "stops candidate writes across the %s boundary after P moves",
     async (_boundary, completedWrites) => {
-      const { fixture, root, verified, registry } = await createCandidateDockerPublication(true);
+      const { fixture, registry } = await createCandidateDockerPublication(true);
       let prefix: string[][] = [];
       const execute = (command: string, args: readonly string[]) => {
         const result = registry.execute(command, args);
@@ -459,14 +635,7 @@ describe("prepared Docker publication", () => {
         return result;
       };
       await expect(
-        publishDockerRelease({
-          manifest: fixture.docker,
-          revalidateAuthority: verified.revalidateAuthority,
-          payloadDirectory: path.join(root, "payloads"),
-          images: ["ghcr.io/openclaw/openclaw", "docker.io/openclaw/openclaw"],
-          execFileSyncImpl: execute,
-          verifyTag: vi.fn(),
-        }),
+        registry.publish({ images: registries, execFileSyncImpl: execute }),
       ).rejects.toThrow(/tag|publisher|admission|authority/i);
       expect(prefix).toHaveLength(completedWrites);
       expect(registryWrites(registry.calls)).toEqual(prefix);
@@ -493,17 +662,14 @@ describe("prepared Docker publication", () => {
         }
         return output;
       };
-      const publication = publishDockerRelease({
-        manifest,
+      const publication = registry.publish({
         revalidateAuthority: () => {
           if (revoked) {
             throw new Error("Publication authority revoked");
           }
         },
-        payloadDirectory: path.join(root, "payloads"),
-        images: ["ghcr.io/openclaw/openclaw", "docker.io/openclaw/openclaw"],
+        images: registries,
         execFileSyncImpl: execute,
-        verifyTag: vi.fn(),
       });
       if (boundary === "allowed") {
         await publication;
@@ -519,48 +685,27 @@ describe("prepared Docker publication", () => {
     },
   );
 
-  it.each(["timed_out"])(
-    "reuses its successful preparation when retrying a %s publication attempt",
-    async (conclusion) => {
-      const fixture = await createPublicationRetry(conclusion);
-      expect(
-        (await verifyDockerReleaseProducer(fixture.manifest, fixture.publisher)).manifest,
-      ).toBe(fixture.manifest);
-    },
-  );
+  it("reuses its successful preparation when retrying a timed-out publication attempt", async () => {
+    const fixture = await createPublicationRetry("timed_out");
+    expect((await verifyDockerReleaseProducer(fixture.manifest, fixture.publisher)).manifest).toBe(
+      fixture.manifest,
+    );
+  });
 
-  it.each([
-    "unrelated publisher",
-    "failed current parent",
-    "changed historical source",
-    "changed historical workflow",
-    "missing historical preparation",
-    "failed seal",
-    "replaced artifact",
-  ])("rejects a publication retry with %s", async (failure) => {
+  it.each<[string, (fixture: PublicationRetry) => void]>([
+    ["unrelated publisher", (f) => (f.publisher.publisherRunId = "200")],
+    [
+      "failed current parent",
+      (f) => Object.assign(f.run, { status: "completed", conclusion: "failure" }),
+    ],
+    ["changed historical source", (f) => (f.attemptRun.head_sha = sourceSha)],
+    ["changed historical workflow", (f) => (f.attemptRun.path = workflowPath("ci"))],
+    ["missing historical preparation", (f) => (f.attemptRun.referenced_workflows = [])],
+    ["failed seal", (f) => (f.job.conclusion = "failure")],
+    ["replaced artifact", (f) => (f.artifacts[0]!.id += 100)],
+  ])("rejects a publication retry with %s", async (_failure, mutate) => {
     const fixture = await createPublicationRetry();
-    if (failure === "unrelated publisher") {
-      fixture.publisher.publisherRunId = "200";
-    }
-    if (failure === "failed current parent") {
-      fixture.run.status = "completed";
-      fixture.run.conclusion = "failure";
-    }
-    if (failure === "changed historical source") {
-      fixture.attemptRun.head_sha = sourceSha;
-    }
-    if (failure === "changed historical workflow") {
-      fixture.attemptRun.path = ".github/workflows/ci.yml";
-    }
-    if (failure === "missing historical preparation") {
-      fixture.attemptRun.referenced_workflows = [];
-    }
-    if (failure === "failed seal") {
-      fixture.job.conclusion = "failure";
-    }
-    if (failure === "replaced artifact") {
-      fixture.artifacts[0]!.id += 100;
-    }
+    mutate(fixture);
     await expect(
       verifyDockerReleaseProducer(fixture.manifest, fixture.publisher),
     ).rejects.toThrow();
@@ -568,17 +713,10 @@ describe("prepared Docker publication", () => {
 
   it("preserves scheduled stable and extended-stable image refresh preparation", async () => {
     const fixture = await createPreparedRelease(false);
-    fixture.manifest.producer.workflowRef = `${repository}/.github/workflows/docker-image-refresh.yml@refs/heads/main`;
-    fixture.run.path = ".github/workflows/docker-image-refresh.yml";
+    fixture.manifest.producer.workflowRef = workflowRef("docker-image-refresh");
+    fixture.run.path = workflowPath("docker-image-refresh");
     fixture.run.event = "schedule";
-    expect(
-      (
-        await verifyDockerReleaseProducer(fixture.manifest, {
-          publisherSha: toolingSha,
-          readApi: fixture.readApi,
-        })
-      ).manifest,
-    ).toBe(fixture.manifest);
+    expect((await verifyPrepared(fixture)).manifest).toBe(fixture.manifest);
   });
 
   it("rejects missing provenance and mismatched source labels in actual OCI bytes", async () => {
@@ -590,8 +728,8 @@ describe("prepared Docker publication", () => {
           directory,
           architecture: "amd64",
           sourceSha,
-          version: "2026.8.1-beta.2",
-          builtAt: "2026-09-01T00:00:00.000Z",
+          version: defaultVersion,
+          builtAt,
           expectedDigest: image.indexDigest,
         }),
       ).rejects.toThrow(/missing predicate|labels/);
@@ -607,30 +745,19 @@ describe("prepared Docker publication", () => {
       "corrupt",
     );
     const execute = vi.fn();
-    await expect(
-      publishDockerRelease({
-        manifest,
-        revalidateAuthority: () => {},
-        payloadDirectory: path.join(root, "payloads"),
-        images: ["ghcr.io/openclaw/openclaw"],
-        execFileSyncImpl: execute,
-        verifyTag: vi.fn(),
-      }),
-    ).rejects.toThrow("OCI blob size/type mismatch");
+    await expect(publishPrepared(root, manifest, { execFileSyncImpl: execute })).rejects.toThrow(
+      "OCI blob size/type mismatch",
+    );
     expect(execute).not.toHaveBeenCalled();
   });
 
   it("copies preserved indexes to both registries and emits verified immutable mirror inputs", async () => {
     const { root, manifest } = await createPreparedRelease();
-    const { execute, calls, tags } = createRegistry({ root, manifest });
+    const { publish, calls, tags } = createRegistry({ root, manifest });
     const verifyTag = vi.fn();
     const promote = vi.fn();
-    const output = await publishDockerRelease({
-      manifest,
-      revalidateAuthority: () => {},
-      payloadDirectory: path.join(root, "payloads"),
-      images: ["ghcr.io/openclaw/openclaw", "docker.io/openclaw/openclaw"],
-      execFileSyncImpl: execute,
+    const output = await publish({
+      images: registries,
       verifyTag,
       promote,
     });
@@ -657,45 +784,26 @@ describe("prepared Docker publication", () => {
     const execute = vi.fn((command: string) =>
       command === "skopeo" ? "" : JSON.stringify({ digest: `sha256:${"f".repeat(64)}` }),
     );
-    await expect(
-      publishDockerRelease({
-        manifest,
-        revalidateAuthority: () => {},
-        payloadDirectory: path.join(root, "payloads"),
-        images: ["ghcr.io/openclaw/openclaw"],
-        execFileSyncImpl: execute,
-        verifyTag: vi.fn(),
-      }),
-    ).rejects.toThrow("did not preserve");
+    await expect(publishPrepared(root, manifest, { execFileSyncImpl: execute })).rejects.toThrow(
+      "did not preserve",
+    );
     expect(execute).toHaveBeenCalledTimes(2);
   });
 
-  it.each([["2026.8.1", "v2026.8.1-2"]] as const)(
-    "seals package %s for exactly release %s",
-    async (packageVersion, tag) => {
-      const policy = validateDockerReleaseIdentity({ tag, sourceSha, packageVersion });
-      expect(policy.channel).toBe("stable");
-      expect(policy.version).toBe(tag.slice(1));
-      const { manifest } = await createPreparedRelease(false, policy.version);
-      const expected = {
-        repository,
-        sourceSha,
-        tag,
-        imageTagSuffix: manifest.imageTagSuffix,
-        artifactName: manifest.artifactName,
-        runId,
-        runAttempt,
-      };
-      expect(validateDockerReleaseManifest(manifest, expected)).toBe(manifest);
-      for (const otherTag of ["v2026.8.1", "v2026.8.1-2", "v2026.8.1-3"].filter(
-        (candidate) => candidate !== tag,
-      )) {
-        expect(() =>
-          validateDockerReleaseManifest(manifest, { ...expected, tag: otherTag }),
-        ).toThrow("does not match the release");
-      }
-    },
-  );
+  it("seals package 2026.8.1 for exactly release v2026.8.1-2", async () => {
+    const packageVersion = "2026.8.1";
+    const tag = "v2026.8.1-2";
+    const policy = validateDockerReleaseIdentity({ tag, sourceSha, packageVersion });
+    expect(policy).toMatchObject({ channel: "stable", version: tag.slice(1) });
+    const { manifest } = await createPreparedRelease(false, policy.version);
+    const expected = { ...expectedIdentity(manifest), tag };
+    expect(validateDockerReleaseManifest(manifest, expected)).toBe(manifest);
+    for (const otherTag of ["v2026.8.1", "v2026.8.1-3"]) {
+      expect(() => validateDockerReleaseManifest(manifest, { ...expected, tag: otherTag })).toThrow(
+        "does not match the release",
+      );
+    }
+  });
 
   it("rejects a correction for another package base or an unsupported release train", () => {
     for (const [packageVersion, tag] of [
@@ -715,103 +823,74 @@ describe("prepared Docker publication", () => {
     ).toThrow("alpha");
   });
 
-  it.each([{ workflow: "full-release-validation", fullRunId: runId, fullRunAttempt: runAttempt }])(
-    "resolves $workflow Docker evidence from its selected full release",
-    async ({ workflow, fullRunId, fullRunAttempt }) => {
-      const fixture = await createPreparedRelease(false);
-      const { manifest } = fixture;
-      fixture.run.path = `.github/workflows/${workflow}.yml`;
-      fixture.run.status = "completed";
-      fixture.run.conclusion = "success";
-      Object.assign(fixture.attemptRun, structuredClone(fixture.run));
-      manifest.producer.workflowRef = `${repository}/${fixture.run.path}@refs/heads/main`;
-      const prepared = {
-        preparedRunId: runId,
-        preparedRunAttempt: runAttempt,
-        preparedArtifactName: manifest.artifactName,
-        preparedManifestSha256: "c".repeat(64),
-      };
-      const full = {
-        runId: fullRunId,
-        runAttempt: Number(fullRunAttempt),
-        targetSha: sourceSha,
-        publicationArtifacts: { docker: prepared },
-      };
-      const selection = {
-        manifest: full,
-        sourceSha,
-        runId: fullRunId,
-        runAttempt: fullRunAttempt,
-      };
-      const selected = preparedDockerEvidenceFromFullRelease(selection);
-      expect(selected).toBe(prepared);
-      const expected = {
-        repository,
-        sourceSha,
-        tag: manifest.tag,
-        imageTagSuffix: manifest.imageTagSuffix,
-        artifactName: selected.preparedArtifactName,
-        runId: selected.preparedRunId,
-        runAttempt: selected.preparedRunAttempt,
-      };
-      expect(validateDockerReleaseManifest(manifest, expected)).toBe(manifest);
-      expect(
-        (
-          await verifyDockerReleaseProducer(manifest, {
-            publisherSha: toolingSha,
-            readApi: fixture.readApi,
-          })
-        ).manifest,
-      ).toBe(manifest);
-      expect(preparedDockerEvidenceFromFullRelease({ ...selection, manifest: {} })).toBeNull();
-      for (const mismatch of [{ sourceSha: toolingSha }, { runId: "300" }, { runAttempt: "4" }]) {
-        expect(() => preparedDockerEvidenceFromFullRelease({ ...selection, ...mismatch })).toThrow(
-          "selected full release",
-        );
-      }
-      for (const invalid of [
-        { preparedRunId: 100 },
-        { preparedRunId: "0" },
-        { preparedRunAttempt: 2 },
-        { preparedRunAttempt: "0" },
-        { preparedRunAttempt: "1" },
-        { preparedArtifactName: dockerReleaseArtifactName(sourceSha, "3") },
-        { preparedManifestSha256: "invalid" },
-      ]) {
-        expect(() =>
-          preparedDockerEvidenceFromFullRelease({
-            ...selection,
-            manifest: {
-              ...full,
-              publicationArtifacts: { docker: { ...prepared, ...invalid } },
-            },
-          }),
-        ).toThrow("incomplete or stale");
-      }
-      expect(() => validateDockerReleaseManifest(manifest, { ...expected, runId: "300" })).toThrow(
-        "producer identity mismatch",
+  it("resolves Docker evidence from its selected full release", async () => {
+    const fixture = await createPreparedRelease(false);
+    const { manifest } = fixture;
+    fixture.run.path = workflowPath("full-release-validation");
+    fixture.run.status = "completed";
+    fixture.run.conclusion = "success";
+    Object.assign(fixture.attemptRun, structuredClone(fixture.run));
+    manifest.producer.workflowRef = `${repository}/${fixture.run.path}@refs/heads/main`;
+    const prepared = {
+      preparedRunId: runId,
+      preparedRunAttempt: runAttempt,
+      preparedArtifactName: manifest.artifactName,
+      preparedManifestSha256: "c".repeat(64),
+    };
+    const full = {
+      runId,
+      runAttempt: Number(runAttempt),
+      targetSha: sourceSha,
+      publicationArtifacts: { docker: prepared },
+    };
+    const selection = { manifest: full, sourceSha, runId, runAttempt };
+    const selected = preparedDockerEvidenceFromFullRelease(selection);
+    expect(selected).toBe(prepared);
+    const expected = {
+      ...expectedIdentity(manifest),
+      artifactName: selected.preparedArtifactName,
+      runId: selected.preparedRunId,
+      runAttempt: selected.preparedRunAttempt,
+    };
+    expect(validateDockerReleaseManifest(manifest, expected)).toBe(manifest);
+    expect((await verifyPrepared(fixture)).manifest).toBe(manifest);
+    expect(preparedDockerEvidenceFromFullRelease({ ...selection, manifest: {} })).toBeNull();
+    for (const mismatch of [{ sourceSha: toolingSha }, { runId: "300" }, { runAttempt: "4" }]) {
+      expect(() => preparedDockerEvidenceFromFullRelease({ ...selection, ...mismatch })).toThrow(
+        "selected full release",
       );
-      fixture.run.run_attempt += 1;
-      expect(
-        (
-          await verifyDockerReleaseProducer(manifest, {
-            publisherSha: toolingSha,
-            readApi: fixture.readApi,
-          })
-        ).manifest,
-      ).toBe(manifest);
-      fixture.attemptRun.conclusion = "failure";
-      await expect(
-        verifyDockerReleaseProducer(manifest, {
-          publisherSha: toolingSha,
-          readApi: fixture.readApi,
+    }
+    for (const invalid of [
+      { preparedRunId: 100 },
+      { preparedRunId: "0" },
+      { preparedRunAttempt: 2 },
+      { preparedRunAttempt: "0" },
+      { preparedArtifactName: dockerReleaseArtifactName(toolingSha, "3") },
+      { preparedManifestSha256: "invalid" },
+    ]) {
+      expect(() =>
+        preparedDockerEvidenceFromFullRelease({
+          ...selection,
+          manifest: {
+            ...full,
+            publicationArtifacts: { docker: { ...prepared, ...invalid } },
+          },
         }),
-      ).rejects.toThrow("Historical Docker producer did not qualify");
-    },
-  );
+      ).toThrow("incomplete or stale");
+    }
+    expect(() => validateDockerReleaseManifest(manifest, { ...expected, runId: "300" })).toThrow(
+      "producer identity mismatch",
+    );
+    fixture.run.run_attempt += 1;
+    expect((await verifyPrepared(fixture)).manifest).toBe(manifest);
+    fixture.attemptRun.conclusion = "failure";
+    await expect(verifyPrepared(fixture)).rejects.toThrow(
+      "Historical Docker producer did not qualify",
+    );
+  });
 
   it("prepares both native architectures with one release identity and smokes before sealing", () => {
-    const prepare = parse(readFileSync(".github/workflows/docker-release-prepare.yml", "utf8"));
+    const prepare = readWorkflow("docker-release-prepare");
     const build = prepare.jobs.build;
     const steps = build.steps as {
       id?: string;
@@ -836,22 +915,18 @@ describe("prepared Docker publication", () => {
         sbom: true,
         provenance: "mode=max",
       });
-      expect(String(step.with?.["build-args"]).split("\n")).toEqual(
-        expect.arrayContaining([
-          "GITHUB_ACTIONS=true",
-          "GIT_COMMIT=${{ inputs.release_sha }}",
-          "OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve.outputs.built_at }}",
-          "OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve.outputs.version }}",
-          "OPENCLAW_EXTENSIONS=diagnostics-otel,codex",
-        ]),
-      );
-      expect(String(step.with?.labels).split("\n")).toEqual(
-        expect.arrayContaining([
-          "org.opencontainers.image.revision=${{ inputs.release_sha }}",
-          "org.opencontainers.image.version=${{ needs.resolve.outputs.version }}",
-          "org.opencontainers.image.created=${{ needs.resolve.outputs.built_at }}",
-        ]),
-      );
+      expectLines(step.with?.["build-args"], [
+        "GITHUB_ACTIONS=true",
+        "GIT_COMMIT=${{ inputs.release_sha }}",
+        "OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve.outputs.built_at }}",
+        "OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve.outputs.version }}",
+        "OPENCLAW_EXTENSIONS=diagnostics-otel,codex",
+      ]);
+      expectLines(step.with?.labels, [
+        "org.opencontainers.image.revision=${{ inputs.release_sha }}",
+        "org.opencontainers.image.version=${{ needs.resolve.outputs.version }}",
+        "org.opencontainers.image.created=${{ needs.resolve.outputs.built_at }}",
+      ]);
     }
     const browser = steps.find((step) => step.id === "build-browser");
     expect(browser?.if).toBe("${{ needs.resolve.outputs.include_browser == 'true' }}");
@@ -863,12 +938,18 @@ describe("prepared Docker publication", () => {
       ["browser", "build-browser"],
     ]) {
       const relay = steps.find((step) => step.name === `Relay ${variant} image limit warnings`);
-      expect(relay?.if).toBe(`\${{ always() && steps.${buildId}.outputs.metadata != '' }}`);
-      expect(relay?.run).toContain('["buildx.build.ref"]');
-      expect(relay?.["continue-on-error"]).toBe(true);
-      expect(relay?.run).toContain('docker buildx history logs --progress plain "$build_ref"');
-      expect(relay?.run).toContain("::notice title=Build limit warning relay skipped::");
-      expect(relay?.run).toContain("node workflow-source/scripts/relay-build-limit-warnings.mts");
+      expect(relay).toMatchObject({
+        if: `\${{ always() && steps.${buildId}.outputs.metadata != '' }}`,
+        "continue-on-error": true,
+      });
+      for (const command of [
+        '["buildx.build.ref"]',
+        'docker buildx history logs --progress plain "$build_ref"',
+        "::notice title=Build limit warning relay skipped::",
+        "node workflow-source/scripts/relay-build-limit-warnings.mts",
+      ]) {
+        expect(relay?.run).toContain(command);
+      }
     }
     const smoke = steps.findIndex((step) =>
       step.run?.includes("docker-release-artifacts.mjs prepare"),
@@ -881,8 +962,8 @@ describe("prepared Docker publication", () => {
   });
 
   it("keeps preparation unable to publish and serializes the single approved writer", () => {
-    const prepare = parse(readFileSync(".github/workflows/docker-release-prepare.yml", "utf8"));
-    const publish = parse(readFileSync(".github/workflows/docker-release.yml", "utf8"));
+    const prepare = readWorkflow("docker-release-prepare");
+    const publish = readWorkflow("docker-release");
     expect(prepare.on.workflow_call.secrets).toBeUndefined();
     expect(prepare.permissions).toEqual({ contents: "read" });
     for (const job of Object.values(prepare.jobs) as {
@@ -894,8 +975,7 @@ describe("prepared Docker publication", () => {
       expect(
         Object.values(job.permissions ?? {}).every((permission) => permission === "read"),
       ).toBe(true);
-      expect(job.environment).toBeUndefined();
-      expect(job.concurrency).toBeUndefined();
+      expect([job.environment, job.concurrency]).toEqual([undefined, undefined]);
       expect(job.steps?.some((step) => step.uses?.startsWith("docker/login-action@"))).toBe(false);
       for (const step of job.steps ?? []) {
         if (step.uses?.startsWith("docker/build-push-action@")) {
@@ -910,10 +990,10 @@ describe("prepared Docker publication", () => {
     const writer = publish.jobs.publish;
     expect(approval, "approval must not hold the global publication lock").toBeDefined();
     expect(approval.environment).toBe("docker-release");
-    expect(approval.permissions).toEqual({});
-    expect(approval.concurrency).toBeUndefined();
-    expect(JSON.stringify(approval)).not.toContain("secrets.");
     expect(approval.needs).toEqual(["validate_release_identity", "prepare"]);
+    expect(approval.concurrency).toBeUndefined();
+    expect(approval.permissions).toEqual({});
+    expect(JSON.stringify(approval)).not.toContain("secrets.");
     expect(writer.environment).toBeUndefined();
     expect(writer.needs).toEqual(["validate_release_identity", "prepare", "approve"]);
     for (const [identity, prepared, approved, cancelled, canApprove, canPublish] of [
@@ -938,7 +1018,7 @@ describe("prepared Docker publication", () => {
       expect(evaluate(approval.if)).toBe(canApprove);
       expect(evaluate(writer.if)).toBe(canPublish);
     }
-    expect(publish.jobs.publish.concurrency).toEqual({
+    expect(writer.concurrency).toEqual({
       group: "docker-release-publish",
       "cancel-in-progress": false,
       queue: "max",

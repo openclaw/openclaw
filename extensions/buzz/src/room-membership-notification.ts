@@ -1,4 +1,4 @@
-import type { Event, Relay } from "nostr-tools";
+import type { Relay } from "nostr-tools";
 import { openBuzzRelaySubscription } from "./relay-subscription.js";
 import { BUZZ_CHANNEL_ID_PATTERN, parseBuzzTarget } from "./target.js";
 
@@ -13,34 +13,6 @@ export type BuzzRoomMembershipNotification = {
   roomId: string;
 };
 
-function parseBuzzRoomMembershipNotification(params: {
-  event: Event;
-  relayPublicKey: string;
-  botPublicKey: string;
-}): BuzzRoomMembershipNotification | undefined {
-  const { event } = params;
-  if (
-    (event.kind !== BUZZ_MEMBER_ADDED_NOTIFICATION_KIND &&
-      event.kind !== BUZZ_MEMBER_REMOVED_NOTIFICATION_KIND) ||
-    event.pubkey.toLowerCase() !== params.relayPublicKey ||
-    !event.tags.some((tag) => tag[0] === "p" && tag[1]?.toLowerCase() === params.botPublicKey)
-  ) {
-    return undefined;
-  }
-  const roomId = event.tags
-    .find((tag) => tag[0] === "h")?.[1]
-    ?.trim()
-    .toLowerCase();
-  if (!roomId || !BUZZ_CHANNEL_ID_PATTERN.test(roomId)) {
-    return undefined;
-  }
-  return {
-    eventId: event.id,
-    kind: event.kind,
-    roomId,
-  };
-}
-
 export function startBuzzRoomMembershipNotifications(params: {
   relay: Relay;
   relayPublicKey: string;
@@ -48,7 +20,7 @@ export function startBuzzRoomMembershipNotifications(params: {
   configuredRoomIds: string[];
   since: number;
   signal?: AbortSignal;
-  onNotification?: (notification: BuzzRoomMembershipNotification) => boolean;
+  onNotification: (notification: BuzzRoomMembershipNotification) => boolean;
   onFatalError: (error: Error) => void;
 }): void {
   const configuredRoomIds = new Set(params.configuredRoomIds.map(parseBuzzTarget));
@@ -64,16 +36,27 @@ export function startBuzzRoomMembershipNotifications(params: {
     ],
     {
       onevent: (event) => {
-        const notification = parseBuzzRoomMembershipNotification({
-          event,
-          relayPublicKey: params.relayPublicKey,
-          botPublicKey: params.botPublicKey,
-        });
         if (
-          notification &&
-          configuredRoomIds.has(notification.roomId) &&
-          !params.onNotification?.(notification)
+          (event.kind !== BUZZ_MEMBER_ADDED_NOTIFICATION_KIND &&
+            event.kind !== BUZZ_MEMBER_REMOVED_NOTIFICATION_KIND) ||
+          event.pubkey.toLowerCase() !== params.relayPublicKey ||
+          !event.tags.some((tag) => tag[0] === "p" && tag[1]?.toLowerCase() === params.botPublicKey)
         ) {
+          return;
+        }
+        const roomId = event.tags
+          .find((tag) => tag[0] === "h")?.[1]
+          ?.trim()
+          .toLowerCase();
+        if (!roomId || !BUZZ_CHANNEL_ID_PATTERN.test(roomId)) {
+          return;
+        }
+        const notification: BuzzRoomMembershipNotification = {
+          eventId: event.id,
+          kind: event.kind,
+          roomId,
+        };
+        if (configuredRoomIds.has(notification.roomId) && !params.onNotification(notification)) {
           params.onFatalError(
             new Error(
               `Buzz room ${notification.roomId} membership changed; rebuilding subscriptions`,

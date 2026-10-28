@@ -4,6 +4,7 @@ import {
   normalizeDiscordSnowflake,
   resolveDiscordDirectoryUserId,
 } from "./directory-cache.js";
+import { findDiscordUrlRanges } from "./url-ranges.js";
 
 type DiscordMentionAliasesConfig = Record<string, string>;
 
@@ -14,19 +15,15 @@ const DISCORD_BROADCAST_MENTION_PATTERN = /@(everyone|here)\b/;
 
 export function formatMention(params: {
   userId?: string | number | bigint | null;
-  roleId?: string | number | bigint | null;
   channelId?: string | number | bigint | null;
 }): string {
   const userId = params.userId == null ? null : normalizeDiscordSnowflake(params.userId);
-  const roleId = params.roleId == null ? null : normalizeDiscordSnowflake(params.roleId);
   const channelId = params.channelId == null ? null : normalizeDiscordSnowflake(params.channelId);
-  const mentions = [
-    userId ? `<@${userId}>` : null,
-    roleId ? `<@&${roleId}>` : null,
-    channelId ? `<#${channelId}>` : null,
-  ].filter((entry): entry is string => Boolean(entry));
+  const mentions = [userId ? `<@${userId}>` : null, channelId ? `<#${channelId}>` : null].filter(
+    (entry): entry is string => Boolean(entry),
+  );
   if (mentions.length !== 1) {
-    throw new Error("formatMention requires exactly one of userId, roleId, or channelId");
+    throw new Error("formatMention requires exactly one of userId or channelId");
   }
   return expectDefined(mentions.at(0), "single Discord mention target");
 }
@@ -63,23 +60,32 @@ function rewritePlainTextMentions(
     mentionAliases?: DiscordMentionAliasesConfig | null;
   },
 ): string {
+  const urlRanges = findDiscordUrlRanges(text);
   return text.replace(
     MENTION_CANDIDATE_PATTERN,
-    (match: string, prefix: string, handle: string) => {
-      const lookup = handle.toLowerCase();
-      if (DISCORD_RESERVED_MENTIONS.has(lookup)) {
+    (match: string, prefix: string, handle: string, offset: number) => {
+      const mentionStart = offset + prefix.length;
+      if (urlRanges.some(({ start, end }) => start <= mentionStart && mentionStart < end)) {
         return match;
       }
-      const userId =
-        resolveConfiguredMentionAlias(handle, params.mentionAliases) ??
-        resolveDiscordDirectoryUserId({
-          accountId: params.accountId,
-          handle,
-        });
-      if (!userId) {
-        return match;
+      for (let candidate = handle; candidate.length >= 2; candidate = candidate.slice(0, -1)) {
+        if (DISCORD_RESERVED_MENTIONS.has(candidate.toLowerCase())) {
+          return match;
+        }
+        const userId =
+          resolveConfiguredMentionAlias(candidate, params.mentionAliases) ??
+          resolveDiscordDirectoryUserId({
+            accountId: params.accountId,
+            handle: candidate,
+          });
+        if (userId) {
+          return `${prefix}${formatMention({ userId })}${handle.slice(candidate.length)}`;
+        }
+        if (!candidate.endsWith(".")) {
+          return match;
+        }
       }
-      return `${prefix}${formatMention({ userId })}`;
+      return match;
     },
   );
 }

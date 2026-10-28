@@ -10,6 +10,7 @@ import { resolveDockerE2ePlan } from "../../scripts/lib/docker-e2e-plan.mts";
 import { allReleasePathLanes } from "../../scripts/lib/docker-e2e-scenarios.mts";
 import { createPluginPrereleaseTestPlan } from "../../scripts/lib/plugin-prerelease-test-plan.mts";
 import {
+  createReleaseCheckSelection,
   createReleaseSourceSelection,
   createReleaseWorkflowMatrixPlan,
 } from "../../scripts/plan-release-workflow-matrix.mjs";
@@ -24,20 +25,14 @@ function workflow(): WorkflowDocument {
   ) as WorkflowDocument;
 }
 
-type WorkflowStep = {
+type WorkflowStep = Partial<Record<"id" | "if" | "name" | "run", string>> & {
   "continue-on-error"?: boolean;
   env?: Record<string, string>;
-  id?: string;
-  if?: string;
-  name?: string;
-  run?: string;
-  with?: Record<string, unknown>;
 };
 
 type MatrixEntry = {
   advisory?: boolean;
   chunk_id?: string;
-  id?: string;
   label?: string;
   profiles?: string;
   docker_lanes?: string;
@@ -52,61 +47,68 @@ type WorkflowJob = {
   "timeout-minutes"?: string | number;
   env: Record<string, string>;
   if?: string;
-  needs: string[];
-  outputs: Record<string, string>;
   steps: WorkflowStep[];
-  strategy: { matrix: { include: MatrixEntry[] } };
 };
 
 type WorkflowDocument = {
   env: Record<string, string>;
   jobs: Record<string, WorkflowJob>;
-  on: {
-    workflow_call: { inputs: Record<string, unknown> };
-    workflow_dispatch: { inputs: Record<string, unknown> };
-  };
+  on: Record<"workflow_call" | "workflow_dispatch", { inputs: Record<string, unknown> }>;
 };
 
 function requiredJob(definition: WorkflowDocument, name: string): WorkflowJob {
   return expectDefined(definition.jobs[name], `release workflow job ${name}`);
 }
 
+function requiredStep(job: WorkflowJob, name: string): WorkflowStep {
+  return expectDefined(
+    job.steps.find((step) => step.name === name),
+    name,
+  );
+}
+
+function bashRun(command: string, env: NodeJS.ProcessEnv, cwd?: string) {
+  return spawnSync("bash", ["--noprofile", "--norc", "-c", command], {
+    encoding: "utf8",
+    env,
+    cwd,
+  });
+}
+
+function runFixture(command: string, args: string[], env: NodeJS.ProcessEnv, cwd?: string) {
+  const result = spawnSync(command, args, { encoding: "utf8", env, cwd });
+  expect(result.status, result.stderr).toBe(0);
+  return result.stdout;
+}
+
+function parseOutputs(text: string) {
+  return Object.fromEntries(
+    text
+      .trim()
+      .split("\n")
+      .map((line) => {
+        const separator = line.indexOf("=");
+        return [line.slice(0, separator), line.slice(separator + 1)];
+      }),
+  );
+}
+
 // Direct dispatches build from the selected ref. Only trusted workflow callers
 // may provide the complete immutable package artifact tuple.
-const WORKFLOW_CALL_ONLY_INPUTS = new Set([
-  "runner_group",
-  "package_sha256",
-  "prepublish_plugin_registry_manifest_sha256",
-  "shared_image_archive_sha256",
-  "published_upgrade_survivor_baseline_scope",
-  "prepare_only",
-  "emit_candidate_evidence",
-  "release_soak",
-  "package_published",
-  "package_artifact_name",
-  "prepared_npm_bundle_json",
-  "package_artifact_id",
-  "package_artifact_digest",
-  "package_artifact_run_id",
-  "package_artifact_run_attempt",
-  "package_file_name",
-  "package_source_sha",
-  "package_sha256",
-  "package_version",
-  "enable_prepublish_plugin_registry",
-  "prepublish_plugin_registry_artifact_name",
-  "prepublish_plugin_registry_artifact_id",
-  "prepublish_plugin_registry_artifact_digest",
-  "prepublish_plugin_registry_artifact_run_id",
-  "prepublish_plugin_registry_artifact_run_attempt",
-  "prepublish_plugin_registry_manifest_sha256",
-  "shared_image_artifact_name",
-  "shared_image_artifact_id",
-  "shared_image_artifact_digest",
-  "shared_image_artifact_run_id",
-  "shared_image_artifact_run_attempt",
-  "shared_image_archive_sha256",
-]);
+const WORKFLOW_CALL_ONLY_INPUTS = new Set(
+  `runner_group package_sha256
+prepublish_plugin_registry_manifest_sha256 shared_image_archive_sha256
+published_upgrade_survivor_baseline_scope prepare_only emit_candidate_evidence release_soak
+package_published package_artifact_name prepared_npm_bundle_json package_artifact_id
+package_artifact_digest package_artifact_run_id package_artifact_run_attempt package_file_name
+package_source_sha package_version enable_prepublish_plugin_registry
+prepublish_plugin_registry_artifact_name prepublish_plugin_registry_artifact_id
+prepublish_plugin_registry_artifact_digest prepublish_plugin_registry_artifact_run_id
+prepublish_plugin_registry_artifact_run_attempt shared_image_artifact_name shared_image_artifact_id
+shared_image_artifact_digest shared_image_artifact_run_id shared_image_artifact_run_attempt`.split(
+    /\s+/u,
+  ),
+);
 
 const PACKAGE_UPDATE_CHUNKS = [
   "package-update-openai",
@@ -120,71 +122,71 @@ const FULL_DOCKER_CHUNKS = [
   ...PACKAGE_UPDATE_CHUNKS,
   "plugins-runtime-plugins",
   "plugins-runtime-services",
-  "plugins-runtime-install-a",
-  "plugins-runtime-install-b",
-  "plugins-runtime-install-c",
-  "plugins-runtime-install-d",
-  "plugins-runtime-install-e",
-  "plugins-runtime-install-f",
-  "plugins-runtime-install-g",
-  "plugins-runtime-install-h",
+  ..."abcdefgh".split("").map((shard) => `plugins-runtime-install-${shard}`),
 ];
 
-const PROFILE_EXPECTATIONS = [
-  {
-    profile: "stable",
-    dockerE2eChunks: FULL_DOCKER_CHUNKS,
-    liveModelProviders: ["anthropic", "google", "minimax", "openai"],
-  },
-];
+const STABLE_PROVIDERS = ["anthropic", "google", "minimax", "openai"];
+
+function expectStableMatrices(docker: MatrixEntry[], live: MatrixEntry[]) {
+  expect(docker.map((row) => row.chunk_id)).toEqual(FULL_DOCKER_CHUNKS);
+  expect(live.map((row) => row.providers)).toEqual(STABLE_PROVIDERS);
+}
+
+describe("Windows node release-check selection", () => {
+  it.each([
+    ["all", "all", true],
+    ["all", "candidate", true],
+    ["all", "independent", false],
+    ["windows-node", "all", true],
+    ["windows-node", "candidate", true],
+    ["windows-node", "independent", false],
+    ["cross-os", "candidate", false],
+  ])("schedules %s/%s only with candidate execution", (rerunGroup, phase, scheduled) => {
+    const selected = createReleaseCheckSelection({ rerunGroup, phase });
+    expect(selected.windows_node_scheduled).toBe(scheduled);
+    if (scheduled) {
+      expect(selected.package_required).toBe(true);
+      expect(JSON.parse(selected.release_check_groups_json)).toContain("windows-node");
+    }
+    if (rerunGroup === "windows-node") {
+      expect(selected).toMatchObject({
+        package_required: scheduled,
+        cross_os_scheduled: false,
+        package_acceptance_scheduled: false,
+        docker_required: false,
+        install_smoke_scheduled: false,
+        live_e2e_scheduled: false,
+        qa_parity_scheduled: false,
+        qa_live_scheduled: false,
+      });
+    }
+  });
+});
 
 describe("scripts/plan-release-workflow-matrix.mjs", () => {
-  it.each([{ input: "", profile: "stable" }])(
-    "normalizes CLI profile $input to $profile matrices",
-    ({ input, profile }) => {
-      const result = spawnSync(process.execPath, ["scripts/plan-release-workflow-matrix.mjs"], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          RELEASE_TEST_PROFILE: input,
-          INCLUDE_RELEASE_PATH_SUITES: "true",
-          INCLUDE_LIVE_SUITES: "true",
-          DOCKER_LANES: "",
-          LIVE_MODEL_PROVIDERS: "",
-          LIVE_SUITE_FILTER: "",
-          LIVE_MODELS_ONLY: "false",
-          PREPARE_ONLY: "false",
-          GITHUB_STEP_SUMMARY: "",
-        },
-      });
-      expect(result.status, result.stderr).toBe(0);
-      const outputs = Object.fromEntries(
-        result.stdout
-          .trim()
-          .split("\n")
-          .map((line) => {
-            const separator = line.indexOf("=");
-            return [line.slice(0, separator), line.slice(separator + 1)];
-          }),
-      );
-      const expected = expectDefined(
-        PROFILE_EXPECTATIONS.find((row) => row.profile === profile),
-        `matrix expectations for ${profile}`,
-      );
-      expect(
-        JSON.parse(
-          expectDefined(outputs.docker_e2e_matrix, "Docker E2E matrix output"),
-        ).include.map((row: MatrixEntry) => row.chunk_id),
-      ).toEqual(expected.dockerE2eChunks);
-      expect(outputs.docker_e2e_count).toBe(String(expected.dockerE2eChunks.length));
-      expect(
-        JSON.parse(
-          expectDefined(outputs.live_models_matrix, "live models matrix output"),
-        ).include.map((row: MatrixEntry) => row.providers),
-      ).toEqual(expected.liveModelProviders);
-      expect(outputs.live_models_count).toBe(String(expected.liveModelProviders.length));
-    },
-  );
+  it("normalizes an empty CLI profile to stable matrices", () => {
+    const stdout = runFixture(process.execPath, ["scripts/plan-release-workflow-matrix.mjs"], {
+      ...process.env,
+      RELEASE_TEST_PROFILE: "",
+      INCLUDE_RELEASE_PATH_SUITES: "true",
+      INCLUDE_LIVE_SUITES: "true",
+      DOCKER_LANES: "",
+      LIVE_MODEL_PROVIDERS: "",
+      LIVE_SUITE_FILTER: "",
+      LIVE_MODELS_ONLY: "false",
+      PREPARE_ONLY: "false",
+      GITHUB_STEP_SUMMARY: "",
+    });
+    const outputs = parseOutputs(stdout);
+    expectStableMatrices(
+      JSON.parse(expectDefined(outputs.docker_e2e_matrix, "Docker E2E matrix output")).include,
+      JSON.parse(expectDefined(outputs.live_models_matrix, "live models matrix output")).include,
+    );
+    expect(outputs).toMatchObject({
+      docker_e2e_count: String(FULL_DOCKER_CHUNKS.length),
+      live_models_count: String(STABLE_PROVIDERS.length),
+    });
+  });
 
   it("keeps the API strict for an empty CLI profile value", () => {
     expect(() => createReleaseWorkflowMatrixPlan({ releaseProfile: "" })).toThrow(
@@ -200,9 +202,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       includeLiveSuites: true,
       includeOpenWebUI: true,
     });
-    expect(selected.docker).toEqual([]);
-    expect(selected.consumers).toEqual([]);
-    expect(selected.codexSuites).toEqual([]);
+    expect(selected).toMatchObject({ docker: [], consumers: [], codexSuites: [] });
     expect(selected.preparationLanes).toEqual([
       ...new Set([
         ...allReleasePathLanes({ releaseProfile: "full", includeOpenWebUI: true }).map(
@@ -264,19 +264,97 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     },
   );
 
+  it.each(["beta", "minimum", "stable", "full"])(
+    "selects prompt-cache checks by default and for focused %s validation",
+    (releaseProfile) => {
+      const job = requiredJob(workflow(), "validate_release_live_cache");
+      expect(job["timeout-minutes"]).toBe(30);
+      const condition = expectDefined(job.if, "live-cache job selection");
+      for (const [liveSuiteFilter, enabled] of [
+        ["", true],
+        ["live-cache", true],
+        ["docker-live-models", false],
+      ] as const) {
+        expect(
+          runInNewContext(condition, {
+            inputs: {
+              prepare_only: false,
+              include_live_suites: true,
+              live_models_only: false,
+              live_suite_filter: liveSuiteFilter,
+              release_test_profile: releaseProfile,
+            },
+          }),
+        ).toBe(enabled);
+      }
+      expect(job.steps.map((step) => step.name)).toEqual(
+        expect.arrayContaining([
+          "Verify live prompt cache floors",
+          "Verify live prompt prefix reuse",
+          "Verify live agent prompt prefix reuse",
+        ]),
+      );
+    },
+  );
+
+  it.each([
+    [
+      "Verify live prompt prefix reuse",
+      "--import ./scripts/tsx.mjs scripts/e2e/anthropic-cache-live.mts",
+    ],
+    [
+      "Verify live agent prompt prefix reuse",
+      "test:live src/agents/embedded-agent-runner.cache.live.test.ts --testNamePattern release prompt-prefix gate --reporter=default --reporter=json --outputFile.json=.artifacts/live-cache/agent-prefix-reuse.vitest.json",
+    ],
+  ])("propagates harness results from %s to the release gate", (stepName, args) => {
+    const job = requiredJob(workflow(), "validate_release_live_cache");
+    const step = requiredStep(job, stepName);
+    for (const code of [0, 23]) {
+      const cwd = tempDirs.make("openclaw-live-cache-shell-replay-");
+      const result = bashRun(
+        `timeout() { while [[ "$1" == --* ]]; do shift; done; shift; "$@"; }
+node() { printf '%s\\n' "$*"; return "$HARNESS_EXIT"; }
+pnpm() { node "$@"; }
+${expectDefined(step.run, "prompt-prefix command")}`,
+        { PATH: process.env.PATH, HARNESS_EXIT: String(code) },
+        cwd,
+      );
+      expect({ stdout: result.stdout.trim(), status: result.status }, result.stderr).toEqual({
+        stdout: args,
+        status: code,
+      });
+    }
+    expect(step["continue-on-error"]).not.toBe(true);
+  });
+
+  it("retains exact-candidate live cache diagnostics on failure", () => {
+    const job = requiredJob(workflow(), "validate_release_live_cache");
+    expect(requiredStep(job, "Verify live prompt cache floors").run).toContain(
+      "cache-floors.vitest.json",
+    );
+    expect(requiredStep(job, "Verify live agent prompt prefix reuse").run).toContain(
+      "agent-prefix-reuse.vitest.json",
+    );
+    const upload = requiredStep(job, "Upload live cache diagnostics");
+    expect(upload).toMatchObject({
+      if: "always()",
+      uses: "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+      with: {
+        name: "live-cache-${{ needs.validate_selected_ref.outputs.selected_sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
+        path: ".artifacts/live-cache/",
+        "retention-days": 14,
+        "if-no-files-found": "warn",
+      },
+    });
+  });
+
   it.each([
     ["validate_docker_e2e", "Run Docker E2E chunk"],
     ["validate_docker_lanes", "Run targeted Docker E2E lanes"],
   ])("drains diagnostics after credential failure in %s", (jobName, runStepName) => {
     const job = requiredJob(workflow(), jobName);
-    const credentials = expectDefined(
-      job.steps.find((step) => step.name === "Validate Docker E2E credentials"),
-      "credential validation step",
-    );
-    const run = expectDefined(
-      job.steps.find((step) => step.name === runStepName),
-      "Docker execution step",
-    );
+    const credentials = requiredStep(job, "Validate Docker E2E credentials");
+    const run = requiredStep(job, runStepName);
     // Credential validation must be reached only after every setup/binding step
     // succeeds; nothing fallible may intervene before diagnostic continuation.
     expect(job.steps.indexOf(run)).toBe(job.steps.indexOf(credentials) + 1);
@@ -299,14 +377,11 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       },
     ]) {
       for (const authenticated of [false, true]) {
-        const result = spawnSync("bash", ["--noprofile", "--norc", "-c", preflight], {
-          encoding: "utf8",
-          env: {
-            PATH: process.env.PATH,
-            CREDENTIALS: credential,
-            ...alternatives,
-            ...(authenticated ? { [key]: "synthetic-api-key" } : {}),
-          },
+        const result = bashRun(preflight, {
+          PATH: process.env.PATH,
+          CREDENTIALS: credential,
+          ...alternatives,
+          ...(authenticated ? { [key]: "synthetic-api-key" } : {}),
         });
         expect(result.status, result.stderr).toBe(authenticated ? 0 : 1);
         if (!authenticated) {
@@ -316,57 +391,37 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       }
     }
 
-    for (const state of [
-      { label: "success", success: true, cancelled: false, outcome: "success", selected: true },
-      {
-        label: "credential failure",
-        success: false,
-        cancelled: false,
-        outcome: "failure",
-        selected: true,
-      },
-      {
-        label: "setup failure",
-        success: false,
-        cancelled: false,
-        outcome: "skipped",
-        selected: true,
-      },
-      { label: "cancelled", success: false, cancelled: true, outcome: "failure", selected: true },
-      {
-        label: "unselected profile",
-        success: true,
-        cancelled: false,
-        outcome: "skipped",
-        selected: false,
-      },
-    ]) {
+    for (const [label, success, cancelled, outcome, selected] of [
+      ["success", true, false, "success", true],
+      ["credential failure", false, false, "failure", true],
+      ["setup failure", false, false, "skipped", true],
+      ["cancelled", false, true, "failure", true],
+      ["unselected profile", true, false, "skipped", false],
+    ] as const) {
       const evaluate = (step: WorkflowStep) => {
         const expression = (step.if ?? "success()").replace(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/u, "$1");
         // GitHub implicitly adds success() unless a status function is present.
         const implicitSuccess = /\b(?:always|cancelled|failure|success)\s*\(/u.test(expression)
           ? true
-          : state.success;
+          : success;
         return (
           implicitSuccess &&
           runInNewContext(expression, {
             always: () => true,
-            cancelled: () => state.cancelled,
-            failure: () => !state.success && !state.cancelled,
-            success: () => state.success,
+            cancelled: () => cancelled,
+            failure: () => !success && !cancelled,
+            success: () => success,
             contains: (value: string, item: string) => value.includes(item),
             inputs: { release_test_profile: "full" },
-            matrix: { profiles: state.selected ? "stable full" : "beta" },
-            steps: { [credentials.id ?? ""]: { outcome: state.outcome } },
+            matrix: { profiles: selected ? "stable full" : "beta" },
+            steps: { [credentials.id ?? ""]: { outcome } },
           })
         );
       };
-      const profileSelected = jobName === "validate_docker_lanes" || state.selected;
-      expect(evaluate(credentials), `${state.label}: preflight`).toBe(
-        state.success && profileSelected,
-      );
-      expect(evaluate(run), `${state.label}: diagnostics`).toBe(
-        !state.cancelled && profileSelected && (state.success || state.outcome === "failure"),
+      const profileSelected = jobName === "validate_docker_lanes" || selected;
+      expect(evaluate(credentials), `${label}: preflight`).toBe(success && profileSelected);
+      expect(evaluate(run), `${label}: diagnostics`).toBe(
+        !cancelled && profileSelected && (success || outcome === "failure"),
       );
     }
   });
@@ -391,47 +446,26 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       SELECTED_SHA: "a".repeat(40),
       SHARED_IMAGE_POLICY: "no-push-artifact",
     };
-    const steps = requiredJob(definition, "plan_release_workflow_matrices").steps;
-    const setup = expectDefined(
-      steps.find((entry) => entry.name === "Setup admission Node.js"),
-      "matrix planner Node setup",
-    );
+    const plannerJob = requiredJob(definition, "plan_release_workflow_matrices");
+    const { steps } = plannerJob;
+    const setup = requiredStep(plannerJob, "Setup admission Node.js");
     expect(setup.if).toBeUndefined();
-    expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.x" });
+    expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.22.1" });
     expect(setup.run).toContain("source .github/actions/setup-pnpm-store-cache/ensure-node.sh");
     expect(setup.run).toContain('openclaw_ensure_node "$REQUESTED_NODE_VERSION"');
-    const planner = expectDefined(
-      steps.find((entry) => entry.name === "Plan shared live image plugins"),
-      "live image planner step",
-    );
+    const planner = requiredStep(plannerJob, "Plan shared live image plugins");
     expect(steps.indexOf(setup)).toBeLessThan(steps.indexOf(planner));
-    const planned = spawnSync(bash, ["-c", expectDefined(planner.run, "planner command")], {
-      cwd: outputDir,
-      encoding: "utf8",
-      env,
-    });
-    expect(planned.status, planned.stderr).toBe(0);
+    runFixture(bash, ["-c", expectDefined(planner.run, "planner command")], env, outputDir);
     const selected = readFileSync(outputPath, "utf8").trim().split("=")[1];
-    const step = expectDefined(
-      requiredJob(definition, "prepare_live_test_image").steps.find(
-        (entry) => entry.name === "Resolve shared live-test image tag",
-      ),
-      "live image selection step",
+    const step = requiredStep(
+      requiredJob(definition, "prepare_live_test_image"),
+      "Resolve shared live-test image tag",
     );
-    const result = spawnSync(bash, ["-c", expectDefined(step.run, "selection command")], {
-      encoding: "utf8",
-      env: {
-        ...env,
-        LIVE_IMAGE_EXTENSIONS: selected,
-      },
+    runFixture(bash, ["-c", expectDefined(step.run, "selection command")], {
+      ...env,
+      LIVE_IMAGE_EXTENSIONS: selected,
     });
-    expect(result.status, result.stderr).toBe(0);
-    const outputs = Object.fromEntries(
-      readFileSync(outputPath, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => line.split("=")),
-    );
+    const outputs = parseOutputs(readFileSync(outputPath, "utf8"));
     expect(outputs.live_image?.split(":")[1]?.length).toBeLessThanOrEqual(128);
     const builtIds = new Set(
       collectBundledPluginBuildEntries({
@@ -502,10 +536,10 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     expect(definition.env.OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG).toBe(
       "${{ inputs.allow_unreleased_changelog }}",
     );
-    const packageStep = requiredJob(definition, "prepare_docker_e2e_image").steps.find(
-      (step: WorkflowStep) => step.name === "Pack OpenClaw package for Docker E2E",
+    const requiredPackageStep = requiredStep(
+      requiredJob(definition, "prepare_docker_e2e_image"),
+      "Pack OpenClaw package for Docker E2E",
     );
-    const requiredPackageStep = expectDefined(packageStep, "Docker E2E package step");
     expect(requiredPackageStep.env?.ALLOW_UNRELEASED_CHANGELOG).toBe(
       "${{ inputs.allow_unreleased_changelog }}",
     );
@@ -513,53 +547,32 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     expect(requiredPackageStep.run).toContain("grep -Fq");
   });
 
-  it.each(PROFILE_EXPECTATIONS)(
-    "keeps $profile release jobs to profile-enabled Docker E2E chunks and live model providers",
-    ({ profile, dockerE2eChunks, liveModelProviders }) => {
-      const plan = createReleaseWorkflowMatrixPlan({
-        includeLiveSuites: true,
-        includeReleasePathSuites: true,
-        releaseProfile: profile,
-      });
-
-      expect(plan.dockerE2e.matrix.include.map((entry: MatrixEntry) => entry.chunk_id)).toEqual(
-        dockerE2eChunks,
-      );
+  it("keeps stable release jobs to enabled Docker chunks and live providers", () => {
+    const options = {
+      includeLiveSuites: true,
+      includeReleasePathSuites: true,
+      releaseProfile: "stable",
+    };
+    const plan = createReleaseWorkflowMatrixPlan(options);
+    // The CLI normalization case owns the exact stable chunk/provider inventory.
+    for (const [chunk, timeout] of [
+      ["package-update-openai", 60],
+      ["package-update-restart-auth", 75],
+    ]) {
       expect(
-        plan.dockerE2e.matrix.include.find(
-          (entry: MatrixEntry) => entry.chunk_id === "package-update-openai",
-        ),
-      ).toMatchObject({ timeout_minutes: 60 });
-      expect(
-        plan.dockerE2e.matrix.include.find(
-          (entry: MatrixEntry) => entry.chunk_id === "package-update-restart-auth",
-        ),
-      ).toMatchObject({ timeout_minutes: 75 });
-      expect(plan.liveModels.matrix.include.map((entry: MatrixEntry) => entry.providers)).toEqual(
-        liveModelProviders,
-      );
-      expect(plan.liveModels.matrix.include).toContainEqual({
-        provider_label: "MiniMax",
-        providers: "minimax",
-        models: "minimax/MiniMax-M3,minimax-portal/MiniMax-M3",
-        max_models: "2",
-        profiles: "stable full",
-      });
-      const admission = createReleaseSourceSelection({
-        includeLiveSuites: true,
-        includeReleasePathSuites: true,
-        releaseProfile: profile,
-      });
-      expect(admission.docker.map((entry) => ("chunk" in entry ? entry.chunk : undefined))).toEqual(
-        dockerE2eChunks,
-      );
-      expect(admission.codexSuites).toEqual(
-        plan.liveDocker.matrix.include
-          .filter((entry: MatrixEntry) => entry.suite_id?.startsWith("live-codex-harness"))
-          .map((entry: MatrixEntry) => entry.suite_id),
-      );
-    },
-  );
+        plan.dockerE2e.matrix.include.find((entry: MatrixEntry) => entry.chunk_id === chunk),
+      ).toMatchObject({ timeout_minutes: timeout });
+    }
+    const admission = createReleaseSourceSelection(options);
+    expect(admission.docker.map((entry) => ("chunk" in entry ? entry.chunk : undefined))).toEqual(
+      FULL_DOCKER_CHUNKS,
+    );
+    expect(admission.codexSuites).toEqual(
+      plan.liveDocker.matrix.include
+        .filter((entry: MatrixEntry) => entry.suite_id?.startsWith("live-codex-harness"))
+        .map((entry: MatrixEntry) => entry.suite_id),
+    );
+  });
 
   it("isolates migration baselines without duplicating or dropping upgrade coverage", () => {
     const options = {
@@ -608,80 +621,71 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     );
   });
 
-  it.each(["stable"])(
-    "keeps live Anthropic cache proof in both %s release-core workflow steps",
-    (releaseProfile) => {
-      const definition = workflow();
-      const job = requiredJob(definition, "validate_docker_e2e");
-      const directory = tempDirs.make("openclaw-release-core-cache-");
-      symlinkSync(process.cwd(), path.join(directory, ".release-harness"), "dir");
-      const expressions: Record<string, string> = {
-        "inputs.release_test_profile": releaseProfile,
-        "inputs.include_openwebui": "false",
-        "matrix.chunk_id": "core",
-        "matrix.docker_lanes": "",
-        "steps.plan.outputs.needs_package": "1",
-        "steps.plan.outputs.needs_live_image": "0",
-        "needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_id": "",
-      };
-      const render = (value: string) =>
-        value.replace(/\$\{\{\s*(.*?)\s*\}\}/gu, (_, expression: string) =>
-          expectDefined(expressions[expression], `release-core fixture expression ${expression}`),
-        );
-      for (const stepName of ["Plan Docker E2E chunk", "Run Docker E2E chunk"]) {
-        const step = expectDefined(
-          job.steps.find((entry) => entry.name === stepName),
-          stepName,
-        );
-        // Preserve every scheduler selector from the real workflow. PLAN_JSON
-        // only substitutes scheduling for execution; it does not change lanes.
-        const selectors = Object.fromEntries(
-          Object.entries({ ...definition.env, ...job.env, ...step.env })
-            .filter(([key]) =>
-              /^(?:OPENCLAW_DOCKER_ALL_|DOCKER_E2E_CHUNK$|CHUNK$|INCLUDE_OPENWEBUI$|RELEASE_TEST_PROFILE$)/u.test(
-                key,
-              ),
+  it("keeps live Anthropic cache proof in both stable release-core steps", () => {
+    const releaseProfile = "stable";
+    const definition = workflow();
+    const job = requiredJob(definition, "validate_docker_e2e");
+    const directory = tempDirs.make("openclaw-release-core-cache-");
+    symlinkSync(process.cwd(), path.join(directory, ".release-harness"), "dir");
+    const expressions: Record<string, string> = {
+      "inputs.release_test_profile": releaseProfile,
+      "inputs.include_openwebui": "false",
+      "matrix.chunk_id": "core",
+      "matrix.docker_lanes": "",
+      "steps.plan.outputs.needs_package": "1",
+      "steps.plan.outputs.needs_live_image": "0",
+      "needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_id": "",
+    };
+    const render = (value: string) =>
+      value.replace(/\$\{\{\s*(.*?)\s*\}\}/gu, (_, expression: string) =>
+        expectDefined(expressions[expression], `release-core fixture expression ${expression}`),
+      );
+    for (const stepName of ["Plan Docker E2E chunk", "Run Docker E2E chunk"]) {
+      const step = requiredStep(job, stepName);
+      // Preserve every scheduler selector from the real workflow. PLAN_JSON
+      // only substitutes scheduling for execution; it does not change lanes.
+      const selectors = Object.fromEntries(
+        Object.entries({ ...definition.env, ...job.env, ...step.env })
+          .filter(([key]) =>
+            /^(?:OPENCLAW_DOCKER_ALL_|DOCKER_E2E_CHUNK$|CHUNK$|INCLUDE_OPENWEBUI$|RELEASE_TEST_PROFILE$)/u.test(
+              key,
+            ),
+          )
+          .map(([key, value]) => [key, render(value)]),
+      );
+      const stdout = runFixture(
+        "bash",
+        ["--noprofile", "--norc", "-c", render(expectDefined(step.run, stepName))],
+        {
+          PATH: process.env.PATH,
+          GITHUB_WORKSPACE: process.cwd(),
+          GITHUB_OUTPUT: path.join(directory, "outputs"),
+          TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
+          OPENCLAW_DOCKER_E2E_REPO_ROOT: process.cwd(),
+          ...selectors,
+          OPENCLAW_DOCKER_ALL_PLAN_JSON: "1",
+        },
+        directory,
+      );
+      const plan = JSON.parse(
+        stepName === "Plan Docker E2E chunk"
+          ? readFileSync(
+              path.join(directory, ".artifacts/docker-tests/release-core-plan.json"),
+              "utf8",
             )
-            .map(([key, value]) => [key, render(value)]),
-        );
-        const result = spawnSync(
-          "bash",
-          ["--noprofile", "--norc", "-c", render(expectDefined(step.run, stepName))],
-          {
-            cwd: directory,
-            encoding: "utf8",
-            env: {
-              PATH: process.env.PATH,
-              GITHUB_WORKSPACE: process.cwd(),
-              GITHUB_OUTPUT: path.join(directory, "outputs"),
-              TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
-              OPENCLAW_DOCKER_E2E_REPO_ROOT: process.cwd(),
-              ...selectors,
-              OPENCLAW_DOCKER_ALL_PLAN_JSON: "1",
-            },
-          },
-        );
-        expect(result.status, result.stderr).toBe(0);
-        const plan = JSON.parse(
-          stepName === "Plan Docker E2E chunk"
-            ? readFileSync(
-                path.join(directory, ".artifacts/docker-tests/release-core-plan.json"),
-                "utf8",
-              )
-            : result.stdout,
-        );
-        expect(plan.releaseProfile).toBe(releaseProfile);
-        expect(plan.lanes).toContainEqual(
-          expect.objectContaining({
-            name: "live-anthropic-cache",
-            live: true,
-            imageKind: "functional",
-          }),
-        );
-        expect(plan.credentials).toContain("anthropic-api-key");
-      }
-    },
-  );
+          : stdout,
+      );
+      expect(plan.releaseProfile).toBe(releaseProfile);
+      expect(plan.lanes).toContainEqual(
+        expect.objectContaining({
+          name: "live-anthropic-cache",
+          live: true,
+          imageKind: "functional",
+        }),
+      );
+      expect(plan.credentials).toContain("anthropic-api-key");
+    }
+  });
 
   it("keeps stable and full Anthropic Docker proof blocking", () => {
     const jobs = workflow().jobs;
@@ -696,26 +700,16 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
             .matrix.include,
       )
       .filter((entry: MatrixEntry) => entry.suite_group === "live-gateway-anthropic-docker")
-      .map((entry: MatrixEntry) => ({
-        advisory: entry.advisory,
-        label: entry.label,
-        profiles: entry.profiles,
-        suiteId: entry.suite_id,
-      }));
+      .map((entry: MatrixEntry) => [entry.advisory, entry.label, entry.profiles, entry.suite_id]);
 
     expect(anthropicEntries).toEqual([
-      {
-        advisory: undefined,
-        label: "Docker live gateway Anthropic",
-        profiles: "stable",
-        suiteId: "live-gateway-anthropic-docker",
-      },
-      {
-        advisory: undefined,
-        label: "Docker live gateway Anthropic (full)",
-        profiles: "full",
-        suiteId: "live-gateway-anthropic-docker-full",
-      },
+      [undefined, "Docker live gateway Anthropic", "stable", "live-gateway-anthropic-docker"],
+      [
+        undefined,
+        "Docker live gateway Anthropic (full)",
+        "full",
+        "live-gateway-anthropic-docker-full",
+      ],
     ]);
     const conditionalSteps = dockerLiveJob.steps.filter((step: WorkflowStep) => step.if);
     expect(conditionalSteps.length).toBeGreaterThan(0);

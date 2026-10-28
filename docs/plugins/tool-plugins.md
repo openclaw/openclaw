@@ -5,7 +5,7 @@ sidebarTitle: "Tool Plugins"
 read_when:
   - You want to build a simple OpenClaw plugin that only adds agent tools
   - You want to use defineToolPlugin instead of hand-writing plugin manifest metadata
-  - You need to scaffold, generate, validate, test, or publish a tool-only plugin
+  - You need to create, generate, validate, test, or publish a tool-only plugin
   - You need the plugin tool context's memory audience and currency guards
 ---
 
@@ -20,7 +20,7 @@ or [Provider Plugins](/plugins/sdk-provider-plugins) instead.
 
 ## Requirements
 
-- Node 24.16+ or Node 26.1+.
+- Node 24.22.1+ or Node 26.12.1+.
 - TypeScript ESM package output.
 - `typebox` in `dependencies` (not just `devDependencies` - the generated
   plugin imports it at runtime).
@@ -40,7 +40,7 @@ npm run plugin:validate
 npm test
 ```
 
-`plugins init` scaffolds:
+`plugins init` creates these starter files:
 
 | File                   | Purpose                                                           |
 | ---------------------- | ----------------------------------------------------------------- |
@@ -66,7 +66,7 @@ Plugin stock-quotes is valid.
 | -------------------- | ------------------ | -------------------------------------- |
 | `--directory <path>` | `<id>`             | Output directory                       |
 | `--name <name>`      | Title-cased `<id>` | Display name                           |
-| `--type <type>`      | `tool`             | Scaffold type: `tool` or `provider`    |
+| `--type <type>`      | `tool`             | Plugin type: `tool` or `provider`      |
 | `--force`            | off                | Overwrite an existing output directory |
 
 ## Write a tool
@@ -75,9 +75,15 @@ Plugin stock-quotes is valid.
 static list of tools. Parameter and config types are inferred from the
 TypeBox schemas.
 
+Each tool can declare `workspaceAccess`: `false` for a workspace-independent tool,
+`"execute"` for a pure factory whose tool reads or writes working files, or `true`
+when its factory also reads the workspace. An omitted factory declaration waits
+for complete workspace preparation; an omitted static declaration waits only
+at execution. Explicit declarations preserve early first replies during checkout.
+
 ```typescript
-import { Type } from "typebox";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
+import { Type } from "typebox";
 
 export default defineToolPlugin({
   id: "stock-quotes",
@@ -118,6 +124,71 @@ export default defineToolPlugin({
 
 Tool names are the stable API. Pick names that are unique, lowercase, and
 specific enough to avoid collisions with core tools or other plugins.
+
+OpenClaw bounds tool input schemas to 128 nested schema levels, including
+expanded local references. Deeper subschemas become permissive `{}` schemas
+so the tool remains callable. A one-time warning names the affected tool;
+validation beyond the cutoff is unavailable. Keep schemas shallow enough to
+describe useful arguments to the model. This applies to MCP tools too.
+
+## Provider-portable dictionaries and validation
+
+Declare dictionaries explicitly. On native OpenAI Responses routes, compatibility
+normalization turns a nested `{ type: "object" }` or `Type.Object({})` without
+`additionalProperties` or non-empty `patternProperties` into a closed empty object,
+rejecting every key. Plain `Type.Record(Type.String(), valueSchema)` retains keys
+matched by its `patternProperties` and does not trigger this warning. Other pattern
+maps admit only matching keys after normalization. Use `additionalProperties: true`,
+or the SDK helper:
+
+```typescript
+import { openRecord } from "openclaw/plugin-sdk/tool-plugin";
+import { Type } from "typebox";
+
+const parameters = Type.Object({
+  metadata: openRecord("Arbitrary JSON metadata keyed by name."),
+});
+```
+
+Registration emits one warning per affected tool, listing up to 12 nested schema
+paths and the number of remaining paths. Static tool warnings appear in
+`openclaw plugins inspect <id> --runtime` and doctor plugin diagnostics. Factory
+schemas are checked only when the factory produces tools: warnings appear in
+doctor through its default `runtime-tool-schemas` check, which resolves tools,
+and in runtime status plugin health. They do not appear in
+`plugins inspect --runtime`, which never invokes factories. Inspection is
+best-effort: unreadable or circular schemas remain the runtime quarantine
+owner's responsibility, not a registration failure. Warnings do not reject
+registration or change normalization. These warnings cover only tools passed to
+`api.registerTool`, including its factories. MCP and bundled tools assembled outside
+that API are not covered. Native OpenAI runtime inspection happens after normalization
+and emits no open-object warning; extending coverage to those tools is a follow-up.
+For fixed records, declare non-empty `properties` and an explicit
+`additionalProperties` policy instead.
+
+Provider schema support differs: Gemini cleanup removes `additionalProperties`
+and flattens mixed unions. An explicitly open dictionary preserves keys through
+OpenAI compatibility normalization, but it does not promise strict-mode support
+on every provider. Validate application-specific constraints in the concrete
+tool's `prepareArguments(args)`, before execution:
+
+```typescript
+import { ToolArgumentValidationError } from "openclaw/plugin-sdk/tool-plugin";
+
+function prepareArguments(args: unknown) {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    throw new ToolArgumentValidationError("Expected an object of tool arguments.");
+  }
+  return args;
+}
+```
+
+Only this typed error thrown by `prepareArguments(args)` is classified as
+`errorKind: "argument-validation"`. Generic preparation failures and errors thrown by
+`execute` keep their existing error classification. Typed preparation rejections
+participate in the existing argument-validation admission and tool-loop accounting.
+If the agent produces no reply, the fallback warning says "failed: invalid arguments"
+instead of "blocked".
 
 ## Optional and factory tools
 
@@ -184,6 +255,29 @@ in the captured lineage changes incarnation or lifecycle.
 `assertInvocationCurrent` separately checks the admitted tool invocation and
 plugin lifetime. Use a version 2 tool context when the tool depends on these live
 authority checks.
+
+`toolContext.browser?.allowLocalLoopback` records that the host prepared
+unrestricted execution on the Gateway machine for this turn. It is a capability
+fact, not authority: the Browser plugin combines it with `assertInvocationCurrent`,
+operator policy, and live ownership of local Chrome. Do not derive it from model
+arguments or apply it to remote browser transports.
+
+`toolContext.approvalReviewerDeviceIds` contains the host-selected devices for
+an approval initiated by this tool. Pass it to `plugin.approval.request` when
+using the trusted in-process Gateway runtime. It only routes review to those
+devices; each reviewer still needs `operator.approvals`, and the tool must not
+take reviewer IDs from model-authored arguments.
+
+`toolContext.runId` is the host run id of the agent turn that built the tool.
+`toolContext.inputProvenance` is the host-stamped origin of that turn's input,
+when its producer supplied one. A background exec completion wake carries
+`{ kind: "internal_system", sourceTool: "exec", runId }`, where `runId` names
+the run whose `exec` call started the command. Compare it with the `runId` the
+factory saw on that earlier turn in the same session to recognize the
+completion of work that turn started. Both fields are facts for plugin-owned
+policy, not authority: a wake is never an owner turn (`senderIsOwner` is not
+`true`), restart-recovered "Exec lost" notices carry no `runId`, and the
+Gateway `agent` method accepts exec provenance only from backend callers.
 
 A factory may return a core `AgentTool`, an array of them, or `null` or
 `undefined` to opt out, as the example above does. When it returns a concrete
@@ -554,7 +648,7 @@ which editors surface as migration warnings. To enforce them in CI, enable a
 type-aware rule such as
 [`@typescript-eslint/no-deprecated`](https://typescript-eslint.io/rules/no-deprecated/).
 Oxlint is not type-aware, so it cannot enforce these annotations. The generated
-`plugins init` scaffold therefore does not add a deprecation lint config.
+`plugins init` starter files therefore do not add a deprecation lint config.
 
 `plugins validate` checks that:
 
@@ -597,14 +691,15 @@ clawhub package publish ./stock-quotes --dry-run
 clawhub package publish ./stock-quotes
 ```
 
-Install with an explicit ClawHub locator:
+Install from ClawHub:
 
 ```bash
-openclaw plugins install clawhub:your-org/stock-quotes
+openclaw plugins install your-org/stock-quotes
 ```
 
-Bare npm package specs install from npm, but ClawHub is the preferred
-discovery and distribution surface for OpenClaw plugins. See [ClawHub publishing](/clawhub/publishing) for owner scope and
+ClawHub is the default source for package specs and the preferred
+discovery and distribution surface for OpenClaw plugins. Use `npm:<package>`
+for an npm install. See [ClawHub publishing](/clawhub/publishing) for owner scope and
 release review.
 
 ## Troubleshooting

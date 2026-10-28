@@ -1,17 +1,19 @@
 import { isDeepStrictEqual } from "node:util";
 import {
-  hasOnlyAssistantReasoningContent,
   isReasoningOnlyLengthAssistantTurn,
   isStreamErrorFallbackContent,
 } from "@openclaw/ai/internal/shared";
-import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
+import {
+  isCompactionReplayCheckpoint,
+  replaceCompactionReplayOwnerContent,
+} from "@openclaw/ai/transports";
 import { asFiniteNumber as toFiniteCostNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   asOptionalObjectRecord,
   asOptionalRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
-import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
@@ -23,22 +25,26 @@ import {
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
 import { hasPersistedMedia } from "../../sessions/user-turn-media.js";
-import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
+import { isSilentAssistantTranscriptMessage } from "../../shared/chat-message-content.js";
+import { sanitizeGoogleAssistantFirstOrdering as sanitizeGoogleTurnOrdering } from "../../shared/google-turn-ordering.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import {
+  isTranscriptOnlyOpenClawAssistantMessage,
+  OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
+} from "../../shared/transcript-only-openclaw-assistant.js";
 import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "../compaction-usage.js";
+import { sanitizeSessionMessagesImages } from "../embedded-agent-helpers/images.js";
 import {
-  downgradeOpenAIFunctionCallReasoningPairs,
   dropStaleOpenAIReasoning,
   normalizeOpenAIResponsesToolCallIds,
-  sanitizeGoogleTurnOrdering,
-  sanitizeSessionMessagesImages,
-  validateAnthropicTurns,
-  validateGeminiTurns,
-} from "../embedded-agent-helpers.js";
+} from "../embedded-agent-helpers/openai.js";
 import {
   providerRequiresSignedThinking,
   shouldAllowProviderOwnedThinkingReplay,
-  shouldMergeConsecutiveUserTurns,
+  shouldMergeConsecutiveTurns,
+  validateAnthropicTurns,
+  validateGeminiTurns,
 } from "../embedded-agent-helpers/turns.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -54,6 +60,7 @@ import {
   extractToolResultId,
   sanitizeToolCallIdsForCloudCodeAssist,
 } from "../tool-call-id.js";
+import { createCompletedToolCallPredicate } from "../tool-call-shared.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import type { TranscriptPolicy } from "../transcript-policy.types.js";
 import {
@@ -86,6 +93,8 @@ const MANAGED_DISPLAY_BLOCK_TYPES = new Set([
   "video",
 ]);
 type AssistantReplayMessage = Extract<AgentMessage, { role: "assistant" }>;
+// Only immutable publications qualify; replacing a transcript message starts a new revision.
+const normalizedReplayMessages = new WeakMap<AgentMessage, AgentMessage | null>();
 
 type ProviderReplayHookParams = {
   config?: OpenClawConfig;
@@ -203,7 +212,6 @@ function normalizeAssistantReplayBlockContent(
   replayContent: unknown[],
 ): AssistantReplayMessage | null {
   let touched = false;
-  let removedSilentText = false;
   const sanitizedContent: unknown[] = [];
   for (const block of replayContent) {
     const record = asOptionalRecord(block);
@@ -219,17 +227,29 @@ function normalizeAssistantReplayBlockContent(
     }
     const strippedText = stripInternalMetadataForDisplay(text);
     const trimmed = strippedText.trim();
-    const isSilentText =
-      trimmed.length > 0 && isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN);
-    if (strippedText === text && !isSilentText) {
+    if (strippedText === text) {
       sanitizedContent.push(block);
       continue;
     }
     touched = true;
-    if (trimmed && !isSilentText) {
+    if (trimmed) {
       sanitizedContent.push({ ...record, text: strippedText });
     }
-    removedSilentText ||= isSilentText;
+  }
+  const spoken = message.openclawDelivery?.tts?.text;
+  if (
+    spoken?.trim() &&
+    !sanitizedContent.some((block) => {
+      const record = asOptionalRecord(block);
+      return (
+        record?.type === "toolCall" ||
+        (record?.type === "text" && typeof record.text === "string" && record.text.trim())
+      );
+    })
+  ) {
+    // Restore speech only in model history; the stored and displayed turn stays unchanged.
+    sanitizedContent.push({ type: "text", text: spoken });
+    touched = true;
   }
   if (!touched) {
     return message;
@@ -241,12 +261,18 @@ function normalizeAssistantReplayBlockContent(
     message,
     sanitizedContent as AssistantReplayMessage["content"],
   );
-  // A silent reply has no visible assistant output. Do not let its signed
-  // reasoning merge into the next assistant turn during strict replay.
-  return removedSilentText && hasOnlyAssistantReasoningContent(normalized) ? null : normalized;
+  return normalized;
 }
 
 function isBareDeliveryMirrorDuplicate(out: AgentMessage[], next: AssistantReplayMessage): boolean {
+  // Canonical automation results are visible conversation turns, not mirrors,
+  // even when they repeat the preceding reply without using model tokens.
+  if (
+    next.provider === OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER &&
+    next.model === "automation-result"
+  ) {
+    return false;
+  }
   const previous = out.at(-1);
   if (!previous || previous.role !== "assistant") {
     return false;
@@ -274,27 +300,32 @@ function isBareDeliveryMirrorDuplicate(out: AgentMessage[], next: AssistantRepla
 
 function normalizeAssistantReplayMessage(
   message: AssistantReplayMessage,
-  out: AgentMessage[],
 ): AssistantReplayMessage | null {
   if (isTranscriptOnlyOpenClawAssistantMessage(message)) {
     // Drop from the in-memory replay copy; the persisted JSONL keeps the
     // entry so user-facing transcript surfaces are unchanged.
     return null;
   }
-  // Failed attempts have no model content; discard the legacy placeholder too.
+  // Empty failed or aborted attempts have no model content; discard the legacy placeholder too.
   // Keep billed silent replies and incomplete tool/length states unchanged.
   if (
     isStreamErrorFallbackContent(message.content) &&
     (message.stopReason === "error" ||
-      isZeroUsageEmptyStopAssistantTurn({ ...message, content: [] }))
+      message.stopReason === "aborted" ||
+      (isZeroUsageEmptyStopAssistantTurn({ ...message, content: [] }) &&
+        !isCompactionReplayCheckpoint(message.providerReplay)))
   ) {
     return null;
   }
   const replayContent = (message as { content?: unknown }).content;
+  // Hidden transcript rows still belong to model context, including tool-call/result pairs.
+  if (asOptionalRecord(message)?.display !== false && isSilentAssistantTranscriptMessage(message)) {
+    return null;
+  }
   if (typeof replayContent === "string") {
     const strippedText = stripInternalMetadataForDisplay(replayContent);
     const trimmed = strippedText.trim();
-    return !trimmed || isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN)
+    return !trimmed
       ? null
       : replaceCompactionReplayOwnerContent(message, [{ type: "text", text: strippedText }]);
   }
@@ -313,24 +344,63 @@ function normalizeAssistantReplayMessage(
   if (!normalized || isReasoningOnlyLengthAssistantTurn(normalized)) {
     return null;
   }
-  // Historical side-branch rebuilds could strip every mirror marker while
-  // retaining the zero-usage receipt immediately after its source reply.
-  // Keep this recovery shape narrow; ordinary repeated model turns survive.
-  return isBareDeliveryMirrorDuplicate(out, normalized) ? null : normalized;
+  return normalized;
 }
 
 export function normalizeAssistantReplayContent(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
+  let isCompletedToolCall: ReturnType<typeof createCompletedToolCallPredicate> | undefined;
   const out: AgentMessage[] = [];
   for (const message of messages) {
     if (message?.role !== "user" && message?.role !== "assistant") {
       out.push(message);
       continue;
     }
-    const normalized =
-      message.role === "user"
-        ? sanitizeUserReplayContent(message)
-        : normalizeAssistantReplayMessage(message, out);
+    let normalized = normalizedReplayMessages.get(message);
+    if (normalized === undefined) {
+      normalized =
+        message.role === "user"
+          ? sanitizeUserReplayContent(message)
+          : normalizeAssistantReplayMessage(message);
+      if (isOwnedTranscriptPayload(message)) {
+        normalizedReplayMessages.set(
+          message,
+          normalized === message ? message : freezeJsonSnapshot(normalized),
+        );
+      }
+    }
+    // Mirrors depend on the preceding replay turn; newly appended tool results below
+    // can also repair an older failed turn. Neither decision belongs in the memo.
+    if (
+      normalized?.role === "assistant" &&
+      typeof message.content !== "string" &&
+      isBareDeliveryMirrorDuplicate(out, normalized)
+    ) {
+      normalized = null;
+    }
+    if (
+      normalized?.role === "assistant" &&
+      (normalized.stopReason === "error" || normalized.stopReason === "aborted") &&
+      normalized.content.some((block) => block.type === "toolCall")
+    ) {
+      const completedToolCall = (isCompletedToolCall ??=
+        createCompletedToolCallPredicate(messages));
+      if (
+        normalized.content.some((block) => block.type === "toolCall" && completedToolCall(block))
+      ) {
+        // Signed thinking belongs to the completed calls; the failed source stays intact for display.
+        const completed = normalized.content.filter(
+          (block) =>
+            block.type !== "text" && (block.type !== "toolCall" || completedToolCall(block)),
+        );
+        normalized = {
+          ...replaceCompactionReplayOwnerContent(normalized, completed),
+          stopReason: "toolUse",
+        };
+      } else {
+        normalized = null;
+      }
+    }
     if (normalized) {
       out.push(normalized);
     }
@@ -587,20 +657,15 @@ export async function sanitizeSessionHistory(
     allowedToolNames: params.allowedToolNames,
     allowProviderOwnedThinkingReplay,
   });
-  // OpenAI Responses rejects orphan/missing function_call_output items. Upstream
-  // Codex repairs those gaps with "aborted"; keep that before the fc_* downgrade
-  // so both call and result ids are rewritten together. Covered by unit replay
-  // tests plus live OpenAI/Codex and generic replay-repair model tests.
+  // Repair missing tool results before normalizing paired call/result ids.
   if (policy.repairToolUseResultPairing) {
     messages = sanitizeToolUseResultPairingForModel(messages, isOpenAIResponsesApi);
   }
   if (isOpenAIResponsesApi) {
-    messages = downgradeOpenAIFunctionCallReasoningPairs(
-      normalizeOpenAIResponsesToolCallIds(
-        // Keep the pre-switch prompt prefix byte-stable: once rs_*/msg_* ids are
-        // invalidated by a switch, every later replay must keep dropping them.
-        dropStaleOpenAIReasoning(messages, latestModelSwitchTimestamp ?? undefined),
-      ),
+    messages = normalizeOpenAIResponsesToolCallIds(
+      // Keep the pre-switch prompt prefix byte-stable: once rs_*/msg_* ids are
+      // invalidated by a switch, every later replay must keep dropping them.
+      dropStaleOpenAIReasoning(messages, latestModelSwitchTimestamp ?? undefined),
     );
   } else if (policy.sanitizeToolCallIds && policy.toolCallIdMode) {
     messages = sanitizeToolCallIdsForCloudCodeAssist(messages, policy.toolCallIdMode, {
@@ -663,10 +728,7 @@ export async function sanitizeSessionHistory(
   // provider-owned ordering rewrite above; keep this generic fallback for the
   // strict OpenAI-compatible path and for any provider that leaves assistant-
   // first repair to core. See #38962.
-  const googleOrdered = sanitizeGoogleTurnOrdering(messages);
-  return isOpenAIResponsesApi
-    ? assertOpenAIResponsesToolUseResultInvariant(googleOrdered)
-    : googleOrdered;
+  return sanitizeGoogleTurnOrdering(messages);
 }
 
 /**
@@ -700,7 +762,7 @@ export async function validateReplayTurns(
     : params.messages;
   return policy.validateAnthropicTurns
     ? validateAnthropicTurns(validatedGemini, {
-        mergeConsecutiveUserTurns: shouldMergeConsecutiveUserTurns(policy, params.modelApi),
+        mergeConsecutiveTurns: shouldMergeConsecutiveTurns(policy, params.modelApi),
       })
     : validatedGemini;
 }

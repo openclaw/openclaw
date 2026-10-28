@@ -20,7 +20,7 @@ Signal is a downloadable channel plugin (`@openclaw/signal`). The gateway talks 
 openclaw plugins install @openclaw/signal
 ```
 
-`@openclaw/signal` installs from npm first, then falls back to its declared ClawHub package only when the npm target is unavailable. Use `npm:` or `clawhub:` to force a source. `plugins install` registers and enables the plugin; no separate `enable` step is needed. See [Plugins](/tools/plugin) for general install rules.
+`@openclaw/signal` installs from ClawHub by default. Use `npm:@openclaw/signal` to install directly from npm. `plugins install` registers and enables the plugin; no separate `enable` step is needed. See [Plugins](/tools/plugin) for general install rules.
 
 ## Quick setup
 
@@ -89,7 +89,7 @@ Omitted account `dmPolicy` and `groupPolicy` inherit the channel root; explicit 
 
 ## What it is
 
-- Deterministic routing: replies always go back to Signal.
+- Replies always go back to Signal.
 - DMs share the agent's main session; with default `session.groupScope: "per-group"`, groups are isolated (`agent:<agentId>:signal:group:<groupId>`).
 - By default, Signal may write config updates triggered by `/config set|unset` (requires `commands.config: true`). Disable with `channels.signal.configWrites: false`.
 
@@ -115,6 +115,8 @@ signal-cli --version
 ```
 
 If you use the JVM build (`signal-cli-${VERSION}.tar.gz`), install a JRE first. Keep `signal-cli` updated; upstream notes old releases can break as Signal server APIs change.
+
+A managed `signal-cli` daemon gets only an allowlisted environment; see [Managed daemon environment](#managed-daemon-environment).
 
 3. Register and verify the number:
 
@@ -183,6 +185,25 @@ openclaw channels add --channel signal --signal-number +15551234567 \
 
 This skips auto-spawn and OpenClaw's startup wait. For a managed daemon with a slow start, set `channels.signal.transport.startupTimeoutMs`.
 
+## Managed daemon environment
+
+A managed `signal-cli` daemon gets only process essentials from the Gateway environment: `PATH`, `HOME`, user, locale (`LANG`, `LC_*`), `TZ`, temp directories, `XDG_*`, the Java launcher inputs (`JAVA_HOME`, `JAVA_OPTS`, `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS`, `_JAVA_OPTIONS`, `SIGNAL_CLI_OPTS`), signal-cli's own `SIGNAL_CLI_CONFIG` and `SIGNAL_CLI_USER_AGENT`, the native library path (`LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, `DYLD_FALLBACK_LIBRARY_PATH`), and common Windows system variables. Provider keys, Gateway tokens and other secrets in the Gateway environment do not reach it.
+
+Proxy and trust-store variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY` in either case, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`) are not inherited. When any of them is set, the Gateway logs a one-time warning naming them (names only, never values) when it starts the daemon, and `openclaw doctor` reports the same.
+
+`signal-cli` runs on the JVM, which takes proxy and trust-store settings from Java system properties. Pick one:
+
+- Pass Java properties through `JAVA_TOOL_OPTIONS`, which the daemon inherits:
+
+  ```bash
+  JAVA_TOOL_OPTIONS="-Dhttps.proxyHost=proxy.example -Dhttps.proxyPort=3128 -Dhttp.nonProxyHosts=localhost|127.0.0.1"
+  ```
+
+  For a private CA, add `-Djavax.net.ssl.trustStore=/path/to/truststore.p12 -Djavax.net.ssl.trustStoreType=PKCS12`.
+
+- Point `channels.signal.transport.cliPath` at a wrapper script that sets what it needs (for example, turns your proxy variables into Java properties), then runs `signal-cli "$@"`.
+- Run the daemon yourself and use [external native daemon mode](#external-native-daemon-mode).
+
 ## Container mode (bbernhard/signal-cli-rest-api)
 
 Instead of running `signal-cli` natively, use the [bbernhard/signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api) Docker container, which wraps `signal-cli` behind a REST + WebSocket interface.
@@ -243,6 +264,7 @@ Operational notes:
 
 - Use `MODE=json-rpc` for receiving. `MODE=normal` can make `/v1/about` look healthy, but `/v1/receive/{account}` will not WebSocket-upgrade, so container receive streaming will fail its check.
 - Set `kind: "container"` for the bbernhard REST API and `kind: "external-native"` for native `signal-cli` JSON-RPC/SSE.
+- The receive WebSocket sends standard ping frames. When the container stops answering them (for example after a network drop that never closed the connection), OpenClaw drops the socket and reconnects. A quiet account alone never triggers a reconnect.
 - Container attachment downloads honor the same media byte limits as native mode. Oversized responses are rejected before being fully buffered when the server sends `Content-Length`, and while streaming otherwise.
 - Health and missing-attachment results do not wait for an unused response body's cancellation to finish.
 
@@ -404,9 +426,14 @@ Signal exec and plugin approval prompts use the top-level `approvals.exec` and `
 
 Approval reaction resolution requires explicit Signal approvers from `channels.signal.allowFrom`, `channels.signal.defaultTo`, or the matching account-level fields. Direct same-chat exec approval prompts can still suppress the duplicate local `/approve` fallback without explicit approvers; no-approver group approvals keep the local fallback visible.
 
-## Question reactions
+<a id="question-reactions" />
 
-For an `ask_user` prompt with one non-secret, single-select question and one to four options, Signal shows `1️⃣` through `4️⃣` beside the option labels. React to the delivered prompt with the matching number to answer it. OpenClaw verifies the reaction targets the bot-authored message, then maps the number to the canonical option through the Gateway. Stale or duplicate taps are ignored. Multi-question, multi-select, and free-text prompts remain text-reply-only; normal Signal DM/group admission rules authorize the sender.
+## Agent questions
+
+Signal does not expose the [`ask_user`](/tools/ask-user) tool. When the agent
+needs your input, it asks in an ordinary message and you reply in plain text.
+Numbered reactions do not answer questions. Approval reactions described above
+are unchanged.
 
 ## Delivery targets (CLI/cron)
 
@@ -484,6 +511,7 @@ openclaw pairing list signal
 Common failures:
 
 - Daemon reachable but no replies: verify `account`, `transport.kind`, the transport URL, and receive mode.
+- Event stream repeatedly closes: inspect the daemon or proxy; a healthy idle stream stays open, and unexpected closure appears as a lost connection in logs and channel status.
 - DMs ignored: sender is pending pairing approval.
 - Group messages ignored: group sender/mention gating blocks delivery.
 - Config validation errors after edits: run `openclaw doctor --fix`.

@@ -11,6 +11,15 @@ import type {
 export const SOURCE_PAGE_MAX_MESSAGES = 128;
 export const SOURCE_PAGE_MAX_BYTES = 8 * 1024 * 1024;
 
+export class SessionTranscriptSourceMessageTooLargeError extends Error {
+  readonly code = "TRANSCRIPT_SOURCE_MESSAGE_TOO_LARGE";
+
+  constructor() {
+    super(`Transcript source message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`);
+    this.name = "SessionTranscriptSourceMessageTooLargeError";
+  }
+}
+
 type SourceReader = SessionTranscriptReader["readSessionMessagesWithSourceAsync"];
 
 /** Each pull releases its snapshot before the consumer or the next worker request runs. */

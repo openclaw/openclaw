@@ -2,8 +2,6 @@ import { saveResponseMedia } from "openclaw/plugin-sdk/media-runtime";
 import { resolveMSTeamsMediaKind } from "./shared.js";
 import type { MSTeamsInboundMedia } from "./types.js";
 
-type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-
 /**
  * Direct save path used when the caller supplies the already-guarded fetch
  * implementation. This lets Teams-specific auth fallback own the request
@@ -12,11 +10,10 @@ type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Respo
 export async function downloadAndStoreMSTeamsRemoteMedia(params: {
   url: string;
   filePathHint: string;
-  fetchImpl: FetchLike;
+  fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   maxBytes: number;
   contentTypeHint?: string;
   kind?: MSTeamsInboundMedia["kind"];
-  preserveFilenames?: boolean;
 }): Promise<MSTeamsInboundMedia> {
   const response = await params.fetchImpl(params.url, { redirect: "follow" });
   try {
@@ -25,7 +22,6 @@ export async function downloadAndStoreMSTeamsRemoteMedia(params: {
       filePathHint: params.filePathHint,
       maxBytes: params.maxBytes,
       fallbackContentType: params.contentTypeHint,
-      originalFilename: params.preserveFilenames ? params.filePathHint : undefined,
     });
     return {
       path: saved.path,

@@ -5,6 +5,7 @@ import {
 } from "@openclaw/fs-safe/guest";
 import { parseDirectoryEntries, type DirectoryEntry } from "../../infra/directory-entries.js";
 import type {
+  SandboxBackendCommandParams,
   SandboxBackendCommandResult,
   SandboxFsBridgeContext,
 } from "./backend-handle.types.js";
@@ -36,14 +37,22 @@ import {
 } from "./remote-fs-bridge-paths.js";
 import {
   authorizedRemotePinnedPath,
-  resolveRemotePinnedTarget,
+  resolveRemotePinnedCanonicalFrame,
   type RemotePinnedTarget,
-  type RemotePinnedTargetParams,
 } from "./remote-fs-bridge-pinned-frame.js";
-import type { ResolvedRemotePath, RemoteShellSandboxHandle } from "./remote-fs-bridge.types.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./workspace-mounts.js";
 
-export type { RemoteShellSandboxHandle } from "./remote-fs-bridge.types.js";
+type ResolvedRemotePath = SandboxResolvedPath & {
+  writable: boolean;
+  mountRootPath: string;
+};
+
+/** Minimal remote shell contract used by the SSH filesystem bridge. */
+export type RemoteShellSandboxHandle = {
+  remoteWorkspaceDir: string;
+  remoteAgentWorkspaceDir: string;
+  runRemoteShellScript(params: SandboxBackendCommandParams): Promise<SandboxBackendCommandResult>;
+};
 
 export function createRemoteShellSandboxFsBridge(params: {
   sandbox: SandboxFsBridgeContext;
@@ -622,40 +631,90 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     };
   }
 
-  private resolvePinnedTarget(
+  private async resolvePinnedTarget(
     target: ResolvedRemotePath,
     action: string,
     signal: AbortSignal | undefined,
-    options: Pick<
-      RemotePinnedTargetParams,
-      "requireWritable" | "directory" | "includeDescendants"
-    > & {
+    options: {
+      requireWritable?: boolean;
+      directory?: boolean;
+      includeDescendants?: boolean;
       pinnedPath?: string;
     } = {},
   ): Promise<RemotePinnedTarget> {
     const { pinnedPath, ...pinOptions } = options;
-    return resolveRemotePinnedTarget(
-      {
-        containerPath: target.containerPath,
-        mountRootPath: target.mountRootPath,
+    const params = {
+      containerPath: target.containerPath,
+      mountRootPath: target.mountRootPath,
+      action,
+      signal,
+      ...pinOptions,
+      pinnedCanonicalPath: authorizedRemotePinnedPath(
+        pinnedPath,
+        target.containerPath,
         action,
-        signal,
-        ...pinOptions,
-        pinnedCanonicalPath: authorizedRemotePinnedPath(
-          pinnedPath,
-          target.containerPath,
-          action,
-          options,
-        ),
-      },
-      {
-        mounts: this.getMounts(),
-        resolveCanonicalPath: (canonicalParams) => this.resolveCanonicalPath(canonicalParams),
-        assertRemoteProtectedPathWritable: (protectedParams) =>
-          this.assertRemoteProtectedPathWritable(protectedParams),
-        runRemoteShellScript: (command) => this.runtime.runRemoteShellScript(command),
-      },
-    );
+        options,
+      ),
+    };
+    const mounts = this.getMounts();
+    const basename = params.directory ? "" : path.posix.basename(params.containerPath);
+    if (!params.directory && (!basename || basename === "." || basename === "/")) {
+      throw new Error(`Invalid sandbox entry target: ${params.containerPath}`);
+    }
+    const { canonicalPath, canonicalMountRoot, logicalPath } =
+      params.pinnedCanonicalPath !== undefined
+        ? await resolveRemotePinnedCanonicalFrame({
+            // mkdirp pins the directory itself; file operations pin their parent.
+            pinnedPath: params.pinnedCanonicalPath,
+            directory: params.directory === true,
+            mountRootPath: params.mountRootPath,
+            action: params.action,
+            signal: params.signal,
+            runRemoteShellScript: (command) => this.runtime.runRemoteShellScript(command),
+          })
+        : await this.resolveCanonicalPath({
+            // Resolve the full parent; the guest mutation owns the final entry's
+            // no-follow unlink/rename semantics after the basename is separated.
+            containerPath: normalizeContainerPath(
+              params.directory ? params.containerPath : path.posix.dirname(params.containerPath),
+            ),
+            mountRootPath: params.mountRootPath,
+            action: params.action,
+            signal: params.signal,
+          });
+    const mount = resolveRemoteMountByContainerPath(mounts, logicalPath);
+    if (!mount) {
+      throw new Error(
+        `Sandbox path escapes allowed mounts; cannot ${params.action}: ${params.containerPath}`,
+      );
+    }
+    if (params.requireWritable && !mount.writable) {
+      throw new Error(
+        `Sandbox path is read-only; cannot ${params.action}: ${params.containerPath}`,
+      );
+    }
+    if (params.requireWritable) {
+      await this.assertRemoteProtectedPathWritable({
+        containerPath: path.posix.join(logicalPath, basename),
+        action: params.action,
+        displayPath: params.containerPath,
+        signal: params.signal,
+        includeDescendants: params.includeDescendants,
+      });
+    }
+    // Resolve mount policy in the logical namespace, but pin mutations to the
+    // canonical root so a legitimate symlinked workspace root is not reopened.
+    const relativeParentPath = path.posix.relative(canonicalMountRoot, canonicalPath);
+    if (relativePathEscapesContainerRoot(relativeParentPath)) {
+      throw new Error(
+        `Sandbox path escapes allowed mounts; cannot ${params.action}: ${params.containerPath}`,
+      );
+    }
+    return {
+      mountRootPath: canonicalMountRoot,
+      relativeParentPath: relativeParentPath === "." ? "" : relativeParentPath,
+      basename,
+    };
   }
 
   private async runMutation(params: {

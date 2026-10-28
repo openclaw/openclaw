@@ -1,11 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as installedRecords from "../plugins/installed-plugin-index-record-reader.js";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
+import * as schemaValidator from "../plugins/schema-validator.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { OpenClawConfig } from "./types.js";
 import {
-  validateConfigObjectWithPlugins,
   validateConfigObjectWithPluginsAsync,
+  validateConfigObjectWithStrictFactsAsync,
+  type ValidateConfigWithPluginsAsyncParams,
 } from "./validation.js";
 import type { PreparedConfigValidationPluginMetadata } from "./validation.types.js";
 
@@ -14,43 +16,113 @@ const env = {
   OPENCLAW_STATE_DIR: "/fixture/state",
   OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
 };
+afterEach(() => vi.restoreAllMocks());
 
-function preparedMetadata(): PreparedConfigValidationPluginMetadata {
-  const manifestRegistry: PluginManifestRegistry = {
-    diagnostics: [],
-    plugins: [
-      {
-        id: "validation-fixture",
-        channels: [],
-        cliBackends: [],
-        hooks: [],
-        providers: [],
-        skills: [],
-        origin: "bundled",
-        rootDir: "/fixture/plugin",
-        source: "/fixture/plugin/index.js",
-        manifestPath: "/fixture/plugin/openclaw.plugin.json",
-        configSchema: {
-          type: "object",
-          properties: { workspace: { type: "string", default: "prepared-workspace" } },
-          required: ["workspace"],
-          additionalProperties: false,
-        },
-      },
-    ],
+function pluginConfig() {
+  return {
+    plugins: {
+      allow: ["validation-fixture"],
+      entries: { "validation-fixture": { enabled: true, config: {} } },
+    },
   };
-  return { manifestRegistry, installedPluginRecordIds: new Set() };
 }
 
+function preparedMetadata(): PreparedConfigValidationPluginMetadata {
+  const plugin = createPluginManifestRecordFixture({
+    id: "validation-fixture",
+    rootDir: "/fixture/plugin",
+    configSchema: {
+      type: "object",
+      properties: { workspace: { type: "string", default: "prepared-workspace" } },
+      required: ["workspace"],
+      additionalProperties: false,
+    },
+  });
+  return {
+    manifestRegistry: { diagnostics: [], plugins: [plugin] },
+    installedPluginRecordIds: new Set(),
+  };
+}
+
+let metadata: PreparedConfigValidationPluginMetadata;
+let load = vi.fn(async () => preparedMetadata());
+beforeEach(() => {
+  metadata = preparedMetadata();
+  load = vi.fn(async () => metadata);
+});
+const validate = (raw: unknown, options: Partial<ValidateConfigWithPluginsAsyncParams> = {}) =>
+  validateConfigObjectWithPluginsAsync(raw, {
+    env,
+    loadPluginMetadataSnapshotAsync: load,
+    ...options,
+  });
+const workspace = (result: Awaited<ReturnType<typeof validate>>) =>
+  expectDefined(
+    result.ok ? result.config.plugins?.entries?.["validation-fixture"]?.config : undefined,
+    "fixture plugin settings",
+  );
+
 describe("async config plugin validation", () => {
+  it("revalidates edited settings and schemas while isolating reused plugin defaults", async () => {
+    const raw = pluginConfig();
+    const check = vi.spyOn(schemaValidator, "validatePluginSchemaValue");
+    workspace(await validate(raw)).workspace = "caller-mutated";
+    expect(workspace(await validate(raw)).workspace).toBe("prepared-workspace");
+    expect(check).toHaveBeenCalledTimes(1);
+
+    raw.plugins.entries["validation-fixture"].config = { workspace: 42 };
+    expect(await validate(raw)).toMatchObject({
+      ok: false,
+      issues: [
+        expect.objectContaining({ path: "plugins.entries.validation-fixture.config.workspace" }),
+      ],
+    });
+    raw.plugins.entries["validation-fixture"].config = {};
+    expect(workspace(await validate(raw)).workspace).toBe("prepared-workspace");
+    const schema = expectDefined(metadata.manifestRegistry.plugins[0]?.configSchema, "schema");
+    schema.properties = { workspace: { type: "string", default: "edited-default" } };
+    expect(workspace(await validate(raw)).workspace).toBe("edited-default");
+
+    metadata = preparedMetadata();
+    expect(workspace(await validate(raw)).workspace).toBe("prepared-workspace");
+    for (const empty of [{ plugins: { enabled: false } }, { gateway: { mode: "local" } }]) {
+      expect((await validate(empty)).ok).toBe(true);
+      expect(workspace(await validate(raw)).workspace).toBe("prepared-workspace");
+    }
+    expect(check).toHaveBeenCalledTimes(6);
+  });
+
+  it.each(["runtime", "strict", "core-only"] as const)(
+    "validates core-only settings in %s mode without plugin metadata",
+    async (mode) => {
+      const validateCore =
+        mode === "strict"
+          ? validateConfigObjectWithStrictFactsAsync
+          : validateConfigObjectWithPluginsAsync;
+      const raw = {
+        gateway: { mode: "local" },
+        agents: { defaults: { timeoutSeconds: 30 } },
+        ...(mode === "core-only" ? pluginConfig() : {}),
+      };
+      const result = await validateCore(raw, {
+        env,
+        ...(mode === "core-only" ? { pluginValidation: "core-only" as const } : {}),
+        loadPluginMetadataSnapshotAsync: async () => {
+          throw new Error("Plugin metadata must not be needed for these settings");
+        },
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        config: raw,
+        warnings: [],
+        ...(mode === "strict" ? { strictIssues: [] } : {}),
+      });
+    },
+  );
+
   it("returns core issues before requesting plugin metadata", async () => {
     const raw = { gateway: { port: 0 } };
-    const load = vi.fn(async () => preparedMetadata());
-    const result = await validateConfigObjectWithPluginsAsync(raw, {
-      env,
-      loadPluginMetadataSnapshotAsync: load,
-    });
-    expect(result).toEqual(validateConfigObjectWithPlugins(raw, { env }));
+    const result = await validate(raw);
     expect(result).toMatchObject({
       ok: false,
       issues: expect.arrayContaining([expect.objectContaining({ path: "gateway.port" })]),
@@ -60,111 +132,47 @@ describe("async config plugin validation", () => {
   });
 
   it("awaits metadata before applying defaults without mixing in later raw mutations", async () => {
-    const metadata = preparedMetadata();
     const gate = createDeferredCore<PreparedConfigValidationPluginMetadata>();
-    const load = vi.fn((_config: OpenClawConfig) => gate.promise);
     const raw = {
       gateway: { port: 18789 },
-      plugins: {
-        allow: ["validation-fixture"],
-        entries: { "validation-fixture": { enabled: true, config: {} } },
-      },
+      ...pluginConfig(),
     };
-    const expected = validateConfigObjectWithPlugins(raw, {
-      env,
-      pluginMetadataSnapshot: metadata,
-    });
-    const pending = validateConfigObjectWithPluginsAsync(raw, {
-      env,
-      loadPluginMetadataSnapshotAsync: load,
-    });
+    const pending = validate(raw, { loadPluginMetadataSnapshotAsync: () => gate.promise });
     let settled = false;
     const observed = pending.finally(() => {
       settled = true;
     });
     try {
       await Promise.resolve();
-      expect(load).toHaveBeenCalledOnce();
       expect(settled).toBe(false);
       raw.gateway.port = 0;
       raw.plugins.allow.push("not-in-the-prepared-input");
       gate.resolve(metadata);
       const result = await observed;
-      expect(result).toEqual(expected);
       expect(result).toMatchObject({
         ok: true,
-        config: {
-          gateway: { port: 18789 },
-          plugins: {
-            entries: { "validation-fixture": { config: { workspace: "prepared-workspace" } } },
-          },
-        },
+        config: { gateway: { port: 18789 }, plugins: { allow: ["validation-fixture"] } },
       });
+      expect(workspace(result).workspace).toBe("prepared-workspace");
     } finally {
       gate.resolve(metadata);
       await observed;
     }
   });
 
-  it.each(["full", "core-only"] as const)(
-    "keeps synchronous %s policy and explicit ownership results",
-    async (pluginValidation) => {
-      const metadata = preparedMetadata();
-      const raw = {
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "main" } },
-          entries: { main: {}, ops: {} },
-        },
-        plugins: {
-          allow: ["validation-fixture"],
-          entries: { "validation-fixture": { enabled: true, config: {} } },
-        },
-      };
-      const load = vi.fn(async () => metadata);
-      const result = await validateConfigObjectWithPluginsAsync(raw, {
-        env,
-        pluginValidation,
-        loadPluginMetadataSnapshotAsync: load,
-      });
-      expect(result).toEqual(
-        validateConfigObjectWithPlugins(raw, {
-          env,
-          pluginValidation,
-          pluginMetadataSnapshot: metadata,
-        }),
-      );
-      expect(result.ok).toBe(true);
-      expect(load).toHaveBeenCalledTimes(pluginValidation === "core-only" ? 0 : 1);
-    },
-  );
-
   it("uses prepared installed evidence for stale channels without a synchronous store read", async () => {
     const read = vi.spyOn(installedRecords, "loadInstalledPluginIndexInstallRecordsSync");
-    const metadata = preparedMetadata();
     metadata.installedPluginRecordIds = new Set(["missing-fixture"]);
-    try {
-      const result = await validateConfigObjectWithPluginsAsync(
-        {
-          channels: { "missing-fixture": { enabled: true } },
-        },
-        {
-          env,
-          loadPluginMetadataSnapshotAsync: async () => metadata,
-        },
-      );
-      expect(result).toMatchObject({
-        ok: true,
-        warnings: expect.arrayContaining([
-          expect.objectContaining({
-            path: "channels.missing-fixture",
-            message: expect.stringContaining("stale channel plugin config ignored"),
-          }),
-        ]),
-      });
-      expect(read).not.toHaveBeenCalled();
-    } finally {
-      read.mockRestore();
-    }
+    const result = await validate({ channels: { "missing-fixture": { enabled: true } } });
+    expect(result).toMatchObject({
+      ok: true,
+      warnings: expect.arrayContaining([
+        expect.objectContaining({
+          path: "channels.missing-fixture",
+          message: expect.stringContaining("stale channel plugin config ignored"),
+        }),
+      ]),
+    });
+    expect(read).not.toHaveBeenCalled();
   });
 });

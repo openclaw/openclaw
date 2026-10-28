@@ -11,6 +11,8 @@ describe("detectChangedScope Windows routing", () => {
     "src/auto-reply/usage-bar/template.ts",
     "src/media-understanding/attachments.cache.test.ts",
     "src/infra/home-display.ts",
+    "src/agents/sessions/tools/read.ts",
+    "src/agents/sessions/tools/render-utils.test.ts",
     "src/infra/home-dir.test.ts",
     "src/agents/provider-local-service.shutdown.test.ts",
     "src/infra/openclaw-cli-invocation.test-support.ts",

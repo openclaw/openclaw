@@ -1,10 +1,14 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import type { ControlUiSessionListSnapshot } from "../../../src/plugin-sdk/control-ui.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayBrowserClient } from "../api/gateway.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import { AssistantDock, type AssistantDockOwner } from "../app/assistant-dock.ts";
+import { makeBootRoster } from "../app/bootstrap.test-support.ts";
+import { createApplicationConfigCapability } from "../app/config.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { PLUGIN_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
 import { takeSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
@@ -16,41 +20,128 @@ import {
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
 import { type ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
 
-function createRosterHost(request: GatewayBrowserClient["request"]) {
-  const client = { request } as GatewayBrowserClient;
-  const { gateway } = createGatewayHarness(client);
-  const agents = createAgentCapability(gateway);
-  const sessions = createTestSessionCapability(gateway);
-  const context = { gateway, agents, sessions } as unknown as ApplicationContext;
-  const abort = new AbortController();
+const subscribe = () => () => undefined;
+const subscriptions = Object.fromEntries(
+  ["gateway", "sessions", "agents", "agentSelection", "theme"].map((name) => [name, { subscribe }]),
+);
+const sessionListener = () => vi.fn<(snapshot: ControlUiSessionListSnapshot) => void>();
+const sessionList = (
+  key: string,
+  ts = 1,
+  fields: Partial<ReturnType<typeof sessionsResult>["sessions"][number]> = {},
+) => sessionsResult([{ key, kind: "direct", updatedAt: ts, ...fields }], ts);
+
+function createHost(
+  context: ApplicationContext,
+  runtime?: ControlUiPluginRuntime,
+  client?: GatewayBrowserClient,
+) {
   const owner = {
     client,
-    abort,
+    abort: new AbortController(),
     descriptor: { pluginId: "review" },
-    disposers: new Set(),
-    contributions: { navigation: new Map() },
+    disposers: new Set<() => void>(),
+    contributions: { navigation: new Map(), panels: new Map() },
   } as Omit<ControlUiPluginOwner, "host">;
+  const activeRuntime =
+    runtime ??
+    ({
+      isCurrent: (current: Omit<ControlUiPluginOwner, "host">) =>
+        current === owner && !current.abort.signal.aborted,
+    } as ControlUiPluginRuntime);
+  const dispose = () => {
+    owner.abort.abort();
+    owner.disposers.forEach((stop) => stop());
+    owner.disposers.clear();
+  };
+  onTestFinished(dispose);
+  return {
+    owner,
+    abort: owner.abort,
+    dispose,
+    host: createControlUiPluginHost(() => context, activeRuntime, owner),
+  };
+}
+
+const sessionSnapshot = (
+  result: ReturnType<typeof sessionsResult> | null,
+  error: string | null = null,
+) => {
+  const { sessions, hasMore, nextOffset, totalCount } = result ?? {};
+  return {
+    result: result ? { sessions, hasMore, nextOffset, totalCount } : null,
+    loading: false,
+    error,
+  };
+};
+
+function createRosterHost(request: GatewayBrowserClient["request"], assistantDock?: AssistantDock) {
+  const client = createTestGatewayClient((method, ...args) =>
+    method === "plugins.controlUi.list"
+      ? { plugins: [], diagnostics: [] }
+      : request(method, ...args),
+  );
+  const { gateway } = createGatewayHarness(client, undefined, {
+    initial: { hello: gatewayHelloForMethods(["plugins.controlUi.list"]) },
+  });
+  const agents = createAgentCapability(gateway);
+  const sessions = createTestSessionCapability(gateway);
+  const context = {
+    ...subscriptions,
+    gateway,
+    agents,
+    sessions,
+    config: createApplicationConfigCapability({ resourceBasePath: "" }),
+    assistantDock,
+  } as unknown as ApplicationContext;
   const runtime = new ControlUiPluginRuntime(() => context);
   runtime.start();
+  const activation = createHost(context, runtime, client);
+  const dispose = () => {
+    activation.dispose();
+    runtime.dispose();
+    agents.dispose();
+    sessions.dispose();
+  };
+  onTestFinished(dispose);
   return {
+    activate: () => createHost(context, runtime, client),
+    activation,
     context,
-    host: createControlUiPluginHost(() => context, runtime, owner),
+    host: activation.host,
     runtime,
     agents,
     sessions,
-    dispose: () => {
-      abort.abort();
-      owner.disposers.forEach((dispose) => dispose());
-      owner.disposers.clear();
-      runtime.dispose();
-      agents.dispose();
-      sessions.dispose();
-    },
+    dispose,
   };
+}
+
+const globalList = (agentId: string, ts: number, fields: Parameters<typeof sessionList>[2]) =>
+  sessionsResult([{ key: "global", kind: "global", agentId, ...fields }], ts);
+const chatPath = (pathname: string) => expect.objectContaining({ pathname });
+
+function scopedHost(host: ReturnType<typeof createHost>["host"]) {
+  const view = new AbortController();
+  onTestFinished(() => view.abort());
+  return { view, host: scopeControlUiHost(host, view.signal) };
+}
+
+async function observeGlobal(
+  fixture: ReturnType<typeof createRosterHost>,
+  queried: ReturnType<typeof sessionsResult>,
+) {
+  const listener = sessionListener();
+  fixture.host.sessions.observe({ agentId: "writer", includeGlobal: true }, listener);
+  await vi.waitFor(() =>
+    expect(listener.mock.lastCall?.[0].result?.sessions).toEqual(queried.sessions),
+  );
+  const session = expectDefined(listener.mock.lastCall?.[0].result?.sessions[0], "queried session");
+  return { sessionKey: session.key, agentId: session.agentId };
 }
 
 describe("native UI roster refresh", () => {
@@ -67,18 +158,12 @@ describe("native UI roster refresh", () => {
     });
     const client = createTestGatewayClient(request);
     const fixture = createRosterHost(client.request.bind(client));
-    onTestFinished(fixture.dispose);
-    await expect(
-      fixture.host.sessions.create({
-        agentId: "main",
-        displayName: "Board agent",
-        surface: "plugin-dock",
-      }),
-    ).resolves.toBe(key);
-    expect(request).toHaveBeenCalledWith("sessions.create", {
-      agentId: "main",
-      displayName: "Board agent",
-      surface: "plugin-dock",
+    const params = { agentId: "main", displayName: "Board agent", surface: "plugin-dock" } as const;
+    await expect(fixture.host.sessions.create(params)).resolves.toBe(key);
+    expect(request).toHaveBeenCalledWith("sessions.create", params, {
+      timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+      signal: fixture.host.signal,
+      retainSentResultOnAbort: true,
     });
     expect(request).toHaveBeenCalledWith(
       "sessions.list",
@@ -87,21 +172,15 @@ describe("native UI roster refresh", () => {
   });
 
   it("observes independent session windows without replacing or exposing the application roster", async () => {
-    const primary = sessionsResult(
-      [{ key: "agent:main:current", kind: "direct", updatedAt: 1 }],
-      1,
-    );
+    const primary = sessionList("agent:main:current");
     const found = {
-      ...sessionsResult(
-        [{ key: "agent:writer:linked", kind: "direct", updatedAt: 2, label: "Linked session" }],
-        2,
-      ),
+      ...sessionList("agent:writer:linked", 2, { label: "Linked session" }),
       hasMore: true,
       nextOffset: 1,
       totalCount: 2,
     };
     const research = {
-      ...sessionsResult([{ key: "agent:research:current", kind: "direct", updatedAt: 3 }], 3),
+      ...sessionList("agent:research:current", 3),
       hasMore: false,
       nextOffset: null,
       totalCount: 1,
@@ -112,26 +191,20 @@ describe("native UI roster refresh", () => {
       .mockResolvedValueOnce(found)
       .mockResolvedValueOnce(research);
     const fixture = createRosterHost(request);
-    onTestFinished(fixture.dispose);
-    const linkedListener = vi.fn<(snapshot: ControlUiSessionListSnapshot) => void>();
-    const researchListener = vi.fn<(snapshot: ControlUiSessionListSnapshot) => void>();
+    const linkedListener = sessionListener();
+    const researchListener = sessionListener();
+    const query = {
+      search: "linked",
+      archived: "all" as const,
+      configuredAgentsOnly: false,
+      limit: 1,
+    };
     await fixture.sessions.refresh({ agentId: "main" });
-    fixture.host.sessions.observe(
-      { search: "linked", archived: "all", configuredAgentsOnly: false, limit: 1 },
-      linkedListener,
-    );
+    fixture.host.sessions.observe(query, linkedListener);
     fixture.host.sessions.observe({ agentId: "research", limit: 2 }, researchListener);
     await vi.waitFor(() => {
-      expect(linkedListener).toHaveBeenLastCalledWith({
-        loading: false,
-        error: null,
-        result: { sessions: found.sessions, hasMore: true, nextOffset: 1, totalCount: 2 },
-      });
-      expect(researchListener).toHaveBeenLastCalledWith({
-        loading: false,
-        error: null,
-        result: { sessions: research.sessions, hasMore: false, nextOffset: null, totalCount: 1 },
-      });
+      expect(linkedListener).toHaveBeenLastCalledWith(sessionSnapshot(found));
+      expect(researchListener).toHaveBeenLastCalledWith(sessionSnapshot(research));
     });
     expect(fixture.host.sessions.rows).toEqual(primary.sessions);
     expect(fixture.sessions.state.agentId).toBe("main");
@@ -140,44 +213,33 @@ describe("native UI roster refresh", () => {
       {
         rowMode: "compact",
         source: "chat-pane",
+        ifRowsRevision: "",
         includeGlobal: true,
         includeUnknown: true,
         excludeDock: true,
-        configuredAgentsOnly: false,
-        limit: 1,
-        archived: "all",
-        search: "linked",
+        ...query,
       },
     ]);
-    const delivered = linkedListener.mock.lastCall?.[0].result?.sessions[0];
-    if (!delivered) {
-      throw new Error("Expected the observer to receive a session row");
-    }
+    const delivered = expectDefined(linkedListener.mock.lastCall?.[0].result?.sessions[0], "row");
     Object.assign(delivered, { label: "Plugin-local edit" });
+    const { archived, ...options } = query;
     expect(
       fixture.sessions.listSnapshot({
-        search: "linked",
-        archivedFilter: "all",
-        configuredAgentsOnly: false,
-        limit: 1,
+        ...options,
+        archivedFilter: archived,
       }).result?.sessions[0]?.label,
     ).toBe("Linked session");
     expect(fixture.host.sessions.rows).toEqual(primary.sessions);
   });
 
   it("publishes session query errors and rejects failed refreshes while allowing recovery", async () => {
-    const found = sessionsResult([{ key: "agent:writer:linked", kind: "direct", updatedAt: 1 }], 1);
+    const found = sessionList("agent:writer:linked", 1);
     const request = vi.fn().mockRejectedValueOnce(new Error("Query unavailable"));
     const fixture = createRosterHost(request);
-    onTestFinished(fixture.dispose);
-    const listener = vi.fn<(snapshot: ControlUiSessionListSnapshot) => void>();
+    const listener = sessionListener();
     const observer = fixture.host.sessions.observe({ search: "linked" }, listener);
     await vi.waitFor(() => {
-      expect(listener).toHaveBeenLastCalledWith({
-        result: null,
-        loading: false,
-        error: "Query unavailable",
-      });
+      expect(listener).toHaveBeenLastCalledWith(sessionSnapshot(null, "Query unavailable"));
       expect(fixture.runtime.errors).toContainEqual({
         pluginId: "review",
         message: "Query unavailable",
@@ -185,107 +247,72 @@ describe("native UI roster refresh", () => {
     });
     request.mockResolvedValueOnce(found);
     await observer.refresh();
-    const result = {
-      sessions: found.sessions,
-      hasMore: undefined,
-      nextOffset: undefined,
-      totalCount: undefined,
-    };
-    expect(listener).toHaveBeenLastCalledWith({ result, loading: false, error: null });
+    expect(listener).toHaveBeenLastCalledWith(sessionSnapshot(found));
     request.mockRejectedValueOnce(new Error("Refresh unavailable"));
     await expect(observer.refresh()).rejects.toThrow("Refresh unavailable");
-    expect(listener).toHaveBeenLastCalledWith({
-      result,
-      loading: false,
-      error: "Refresh unavailable",
-    });
-    expect(fixture.sessions.state.result).toBeNull();
-    expect(fixture.sessions.state.error).toBeNull();
+    expect(listener).toHaveBeenLastCalledWith(sessionSnapshot(found, "Refresh unavailable"));
+    expect(fixture.sessions.state).toMatchObject({ result: null, error: null });
   });
 
   it("ends session query callbacks and refresh authority when its view is disposed", async () => {
-    const first = sessionsResult([{ key: "agent:writer:first", kind: "direct", updatedAt: 1 }], 1);
-    const next = sessionsResult([{ key: "agent:writer:next", kind: "direct", updatedAt: 2 }], 2);
+    const first = sessionList("agent:writer:first", 1);
+    const next = sessionList("agent:writer:next", 2);
     const pending = createDeferred<typeof next>();
     const request = vi
       .fn()
       .mockResolvedValueOnce(first)
       .mockImplementationOnce(() => pending.promise);
     const fixture = createRosterHost(request);
-    const view = new AbortController();
-    const host = scopeControlUiHost(fixture.host, view.signal);
-    const listener = vi.fn<(snapshot: ControlUiSessionListSnapshot) => void>();
-    try {
-      const observer = host.sessions.observe({ agentId: "writer", limit: 1 }, listener);
-      await vi.waitFor(() => {
-        expect(listener.mock.lastCall?.[0].result?.sessions).toEqual(first.sessions);
-        expect(listener.mock.lastCall?.[0].loading).toBe(false);
-      });
-      const refresh = observer.refresh;
-      const refreshing = expect(refresh()).rejects.toThrow();
-      expect(request).toHaveBeenCalledTimes(2);
-      const callbackCount = listener.mock.calls.length;
-      view.abort();
-      pending.resolve(next);
-      await refreshing;
-      expect(listener.mock.calls.length).toBe(callbackCount);
-      expect(fixture.host.signal.aborted).toBe(false);
-      expect(() => refresh()).toThrow("This plugin UI view has ended.");
-      expect(request).toHaveBeenCalledTimes(2);
-    } finally {
-      view.abort();
-      pending.resolve(next);
-      fixture.dispose();
-    }
+    const { view, host } = scopedHost(fixture.host);
+    const listener = sessionListener();
+    onTestFinished(() => pending.resolve(next));
+    const observer = host.sessions.observe({ agentId: "writer", limit: 1 }, listener);
+    await vi.waitFor(() => {
+      expect(listener.mock.lastCall?.[0].result?.sessions).toEqual(first.sessions);
+      expect(listener.mock.lastCall?.[0].loading).toBe(false);
+    });
+    const refresh = observer.refresh;
+    const refreshing = expect(refresh()).rejects.toThrow();
+    expect(request).toHaveBeenCalledTimes(2);
+    const callbackCount = listener.mock.calls.length;
+    view.abort();
+    pending.resolve(next);
+    await refreshing;
+    expect(listener.mock.calls.length).toBe(callbackCount);
+    expect(fixture.host.signal.aborted).toBe(false);
+    expect(() => refresh()).toThrow("This plugin UI view has ended.");
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("stops notifications when an observer's initial callback disposes its view", () => {
     const request = vi.fn().mockResolvedValue(sessionsResult([], 1));
     const fixture = createRosterHost(request);
-    const view = new AbortController();
-    const host = scopeControlUiHost(fixture.host, view.signal);
+    const { view, host } = scopedHost(fixture.host);
     const callbackAbortedStates: boolean[] = [];
-    try {
-      expect(() =>
-        host.sessions.observe({ agentId: "writer", limit: 1 }, () => {
-          callbackAbortedStates.push(view.signal.aborted);
-          view.abort();
-        }),
-      ).toThrow("This plugin UI view has ended.");
-      expect(callbackAbortedStates).toEqual([false]);
-    } finally {
-      view.abort();
-      fixture.dispose();
-    }
+    expect(() =>
+      host.sessions.observe({ agentId: "writer", limit: 1 }, () => {
+        callbackAbortedStates.push(view.signal.aborted);
+        view.abort();
+      }),
+    ).toThrow("This plugin UI view has ended.");
+    expect(callbackAbortedStates).toEqual([false]);
   });
 
   it.each(["agents", "sessions"] as const)(
     "refreshes cached %s rows without discarding the current roster scope",
     async (surface) => {
-      const firstAgents: AgentsListResult = {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [{ id: "main" }],
-      };
+      const firstAgents: AgentsListResult = makeBootRoster();
       const nextAgents: AgentsListResult = {
         ...firstAgents,
         agents: [...firstAgents.agents, { id: "research" }],
       };
-      const firstSessions = sessionsResult(
-        [{ key: "agent:research:old", kind: "direct", updatedAt: 1 }],
-        1,
-      );
-      const nextSessions = sessionsResult(
-        [{ key: "agent:research:new", kind: "direct", updatedAt: 2 }],
-        2,
-      );
+      const firstSessions = sessionList("agent:research:old", 1);
+      const nextSessions = sessionList("agent:research:new", 2);
       const request = vi
         .fn()
         .mockResolvedValueOnce(surface === "agents" ? firstAgents : firstSessions)
         .mockResolvedValueOnce(surface === "agents" ? nextAgents : nextSessions);
       const fixture = createRosterHost(request);
-      onTestFinished(fixture.dispose);
       if (surface === "agents") {
         await fixture.agents.ensureList();
       } else {
@@ -305,7 +332,6 @@ describe("native UI roster refresh", () => {
     async (surface) => {
       const request = vi.fn().mockRejectedValue(new Error("Roster unavailable"));
       const fixture = createRosterHost(request);
-      onTestFinished(fixture.dispose);
       await expect(fixture.host[surface].refresh()).rejects.toThrow();
       expect(request).toHaveBeenCalledOnce();
       expect(
@@ -317,14 +343,8 @@ describe("native UI roster refresh", () => {
 
 describe("native UI session mutations", () => {
   it("patches a queried global owner without replacing the primary roster or its model", async () => {
-    const primary = sessionsResult(
-      [{ key: "global", kind: "global", agentId: "main", model: "main-model" }],
-      1,
-    );
-    const queried = sessionsResult(
-      [{ key: "global", kind: "global", agentId: "writer", model: "writer-model" }],
-      2,
-    );
+    const primary = globalList("main", 1, { model: "main-model" });
+    const queried = globalList("writer", 2, { model: "writer-model" });
     const patch = createDeferred<unknown>();
     const request = vi
       .fn()
@@ -333,53 +353,36 @@ describe("native UI session mutations", () => {
       .mockImplementationOnce(() => patch.promise)
       .mockResolvedValueOnce(primary);
     const fixture = createRosterHost(request);
-    const listener = vi.fn<(snapshot: ControlUiSessionListSnapshot) => void>();
-    try {
-      await fixture.sessions.refresh({ agentId: "main", search: "current", limit: 7 });
-      fixture.host.sessions.observe({ agentId: "writer", includeGlobal: true }, listener);
-      await vi.waitFor(() =>
-        expect(listener.mock.lastCall?.[0].result?.sessions).toEqual(queried.sessions),
-      );
-      const session = listener.mock.lastCall?.[0].result?.sessions[0];
-      if (!session) {
-        throw new Error("Expected the queried global session");
-      }
+    onTestFinished(() => patch.resolve(null));
+    await fixture.sessions.refresh({ agentId: "main", search: "current", limit: 7 });
+    const session = await observeGlobal(fixture, queried);
+    const updating = fixture.host.sessions.patch(session, { model: "replacement-model" });
+    const completed = expect(updating).resolves.toBeUndefined();
+    expect(fixture.sessions.state.modelOverrides).toEqual({});
+    patch.resolve({ key: "global", entry: { model: "replacement-model" } });
+    await completed;
 
-      const updating = fixture.host.sessions.patch(
-        { sessionKey: session.key, agentId: session.agentId },
-        { model: "replacement-model" },
-      );
-      const completed = expect(updating).resolves.toBeUndefined();
-      expect(fixture.sessions.state.modelOverrides).toEqual({});
-      patch.resolve({ key: "global", entry: { model: "replacement-model" } });
-      await completed;
-
-      expect(request).toHaveBeenCalledWith("sessions.patch", {
-        key: "global",
-        agentId: "writer",
-        model: "replacement-model",
-      });
-      expect(request).toHaveBeenLastCalledWith(
-        "sessions.list",
-        expect.objectContaining({
-          agentId: "main",
-          search: "current",
-          limit: 7,
-        }),
-      );
-      expect(fixture.sessions.state.agentId).toBe("main");
-      expect(fixture.sessions.state.modelOverrides).toEqual({});
-      expect(fixture.host.sessions.rows).toEqual(primary.sessions);
-    } finally {
-      patch.resolve(null);
-      fixture.dispose();
-    }
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "global",
+      agentId: "writer",
+      model: "replacement-model",
+    });
+    expect(request).toHaveBeenLastCalledWith(
+      "sessions.list",
+      expect.objectContaining({
+        agentId: "main",
+        search: "current",
+        limit: 7,
+      }),
+    );
+    expect(fixture.sessions.state.agentId).toBe("main");
+    expect(fixture.sessions.state.modelOverrides).toEqual({});
+    expect(fixture.host.sessions.rows).toEqual(primary.sessions);
   });
 
   it("rejects a session patch that its session owner could not complete", async () => {
     const request = vi.fn();
     const fixture = createRosterHost(request);
-    onTestFinished(fixture.dispose);
     fixture.sessions.dispose();
     await expect(
       fixture.host.sessions.patch(
@@ -391,48 +394,28 @@ describe("native UI session mutations", () => {
   });
 });
 
-describe("native UI locale subscription", () => {
-  it("publishes locale changes through the host and fences notifications after activation ends", async () => {
-    const original = i18n.getLocale();
-    const next = original === "de" ? "en" : "de";
-    const subscribe = () => () => undefined;
-    const context = {
-      gateway: { subscribe },
-      sessions: { subscribe },
-      agents: { subscribe },
-      agentSelection: { subscribe },
-      theme: { subscribe },
-    } as unknown as ApplicationContext;
-    const abort = new AbortController();
-    const owner = { abort, descriptor: { pluginId: "review" }, disposers: new Set() } as Omit<
-      ControlUiPluginOwner,
-      "host"
-    >;
-    const runtime = {
-      isCurrent: (current: Omit<ControlUiPluginOwner, "host">) =>
-        current === owner && !current.abort.signal.aborted,
-    } as ControlUiPluginRuntime;
-    const host = createControlUiPluginHost(() => context, runtime, owner);
-    const notified = vi.fn(() => host.locale);
-    const stop = host.subscribe(notified);
-    try {
-      await i18n.setLocale(next);
-      expect(notified).toHaveReturnedWith(next);
-      expect(notified).toHaveBeenCalledOnce();
-      abort.abort();
-      await i18n.setLocale(original);
-      expect(notified).toHaveBeenCalledOnce();
-    } finally {
-      stop();
-      await i18n.setLocale(original);
-    }
+it("publishes locale changes through the host and fences notifications after activation ends", async () => {
+  const original = i18n.getLocale();
+  const next = original === "de" ? "en" : "de";
+  const context = subscriptions as unknown as ApplicationContext;
+  const { host, abort } = createHost(context);
+  const notified = vi.fn(() => host.locale);
+  const stop = host.subscribe(notified);
+  onTestFinished(async () => {
+    stop();
+    await i18n.setLocale(original);
   });
+  await i18n.setLocale(next);
+  expect(notified).toHaveReturnedWith(next);
+  expect(notified).toHaveBeenCalledOnce();
+  abort.abort();
+  await i18n.setLocale(original);
+  expect(notified).toHaveBeenCalledOnce();
 });
 
 describe("native UI page navigation", () => {
   it("pins and unpins through saved sidebar preferences once and retires the handles", () => {
     const fixture = createRosterHost(vi.fn());
-    onTestFinished(fixture.dispose);
     let sidebarEntries = ["route:usage", "session:agent:main:existing"];
     const update = vi.fn((patch: { sidebarEntries: string[] }) => {
       sidebarEntries = patch.sidebarEntries;
@@ -445,12 +428,8 @@ describe("native UI page navigation", () => {
         update,
       },
     });
-    const view = new AbortController();
-    const {
-      pinNavigation: pin,
-      unpinNavigation: unpin,
-      isNavigationPinned: isPinned,
-    } = scopeControlUiHost(fixture.host, view.signal).ui;
+    const { view, host } = scopedHost(fixture.host);
+    const { pinNavigation: pin, unpinNavigation: unpin, isNavigationPinned: isPinned } = host.ui;
     expect(isPinned("board")).toBe(false);
     pin("board");
     expect(update).not.toHaveBeenCalled();
@@ -488,17 +467,10 @@ describe("native UI page navigation", () => {
   });
 
   it("opens a queried global session with its owner before changing the selected key", async () => {
-    const primary = sessionsResult(
-      [{ key: "global", kind: "global", agentId: "main", boardFace: "dashboard" }],
-      1,
-    );
-    const queried = sessionsResult(
-      [{ key: "global", kind: "global", agentId: "writer", boardFace: "chat" }],
-      2,
-    );
+    const primary = globalList("main", 1, { boardFace: "dashboard" });
+    const queried = globalList("writer", 2, { boardFace: "chat" });
     const request = vi.fn().mockResolvedValueOnce(primary).mockResolvedValueOnce(queried);
     const fixture = createRosterHost(request);
-    onTestFinished(fixture.dispose);
     const selection = createAgentSelectionCapability(
       {
         ...fixture.context.gateway,
@@ -513,34 +485,25 @@ describe("native UI page navigation", () => {
     });
     Object.assign(fixture.context, { basePath: "", agentSelection: selection, navigate });
     Object.assign(fixture.context.gateway, { setSessionKey });
-    const listener = vi.fn<(snapshot: ControlUiSessionListSnapshot) => void>();
     await fixture.sessions.refresh({ agentId: "main" });
-    fixture.host.sessions.observe({ agentId: "writer", includeGlobal: true }, listener);
-    await vi.waitFor(() =>
-      expect(listener.mock.lastCall?.[0].result?.sessions).toEqual(queried.sessions),
-    );
-    const session = listener.mock.lastCall?.[0].result?.sessions[0];
-    if (!session) {
-      throw new Error("Expected the queried global session");
-    }
+    fixture.host.sessions.open(await observeGlobal(fixture, queried));
 
-    fixture.host.sessions.open({ sessionKey: session.key, agentId: session.agentId });
-
-    expect(navigate).toHaveBeenCalledWith(
-      "chat",
-      expect.objectContaining({ pathname: "/chat/writer" }),
-    );
+    expect(navigate).toHaveBeenCalledWith("chat", chatPath("/chat/writer"));
     expect(setSessionKey).toHaveBeenCalledWith("global");
     expect(selectedWhenKeyChanged).toBe("writer");
     expect(fixture.sessions.state.agentId).toBe("main");
     expect(fixture.host.sessions.rows).toEqual(primary.sessions);
   });
 
-  it.each(["native", "generic", "slug"])(
+  it.each([
+    ["native", { placement: "route:workboard" }, "/console/workboard/Team%20%2F%20One"],
+    ["generic", null, "/console/plugin"],
+    ["slug", { slug: "reports" }, "/console/reports"],
+  ] as const)(
     "preserves scoped filters during replacement navigation (%s route)",
-    (kind) => {
-      const native = kind === "native";
+    (kind, tab, pathname) => {
       const originalUrl = window.location.href;
+      onTestFinished(() => window.history.replaceState(null, "", originalUrl));
       window.history.replaceState(null, "", "/?agent=main&p.filter=ready");
       const navigate = vi.fn();
       const replace = vi.fn();
@@ -549,233 +512,158 @@ describe("native UI page navigation", () => {
         gateway: {
           snapshot: {
             hello: {
-              controlUiTabs: native
-                ? [{ pluginId: "review", id: "board", placement: "route:workboard" }]
-                : kind === "slug"
-                  ? [{ pluginId: "review", id: "board", slug: "reports" }]
-                  : [],
+              controlUiTabs: tab ? [{ pluginId: "review", id: "board", ...tab }] : [],
             },
           },
         },
         navigate,
         replace,
       } as unknown as ApplicationContext;
-      const abort = new AbortController();
-      const owner = { abort, descriptor: { pluginId: "review" }, disposers: new Set() } as Omit<
-        ControlUiPluginOwner,
-        "host"
-      >;
-      const runtime = {
-        isCurrent: (current: Omit<ControlUiPluginOwner, "host">) =>
-          current === owner && !current.abort.signal.aborted,
-      } as ControlUiPluginRuntime;
-      const host = createControlUiPluginHost(() => context, runtime, owner);
+      const { host, abort } = createHost(context);
       const target = { id: "board", path: ["Team / One"], params: { filter: "done" } };
-      try {
-        const location = new URL(
-          host.navigation.pageHref(target, { preserveSearch: true }),
-          window.location.origin,
-        );
-        expect(location.pathname).toBe(
-          native
-            ? "/console/workboard/Team%20%2F%20One"
-            : kind === "slug"
-              ? "/console/reports"
-              : "/console/plugin",
-        );
-        expect(location.searchParams.get("agent")).toBe("main");
-        expect(location.searchParams.get("p.filter")).toBe("done");
-        if (kind === "generic") {
-          expect(location.searchParams.get("plugin")).toBe("review");
-          expect(location.searchParams.get("id")).toBe("board");
-        } else if (kind === "slug") {
-          expect(location.searchParams.has("plugin")).toBe(false);
-          expect(location.searchParams.has("id")).toBe(false);
-        }
-        host.navigation.openPage(target, { replace: true, preserveSearch: true });
-        expect(replace).toHaveBeenCalledWith(
-          native ? "workboard" : "plugin",
-          expect.objectContaining({
-            pathname: location.pathname,
-            search: location.search,
-          }),
-        );
-        expect(navigate).not.toHaveBeenCalled();
-        expect(
-          new URL(host.navigation.pageHref(target), window.location.origin).searchParams.has(
-            "agent",
-          ),
-        ).toBe(false);
-        abort.abort();
-        expect(() => host.navigation.openPage(target)).toThrow("activation has ended");
-      } finally {
-        window.history.replaceState(null, "", originalUrl);
+      const location = new URL(
+        host.navigation.pageHref(target, { preserveSearch: true }),
+        window.location.origin,
+      );
+      expect(location.pathname).toBe(pathname);
+      expect(Object.fromEntries(location.searchParams)).toMatchObject({
+        agent: "main",
+        "p.filter": "done",
+      });
+      if (kind === "generic") {
+        expect(Object.fromEntries(location.searchParams)).toMatchObject({
+          plugin: "review",
+          id: "board",
+        });
+      } else if (kind === "slug") {
+        expect([location.searchParams.has("plugin"), location.searchParams.has("id")]).toEqual([
+          false,
+          false,
+        ]);
       }
+      host.navigation.openPage(target, { replace: true, preserveSearch: true });
+      expect(replace).toHaveBeenCalledWith(
+        kind === "native" ? "workboard" : "plugin",
+        expect.objectContaining({ pathname, search: location.search }),
+      );
+      expect(navigate).not.toHaveBeenCalled();
+      expect(
+        new URL(host.navigation.pageHref(target), window.location.origin).searchParams.has("agent"),
+      ).toBe(false);
+      abort.abort();
+      expect(() => host.navigation.openPage(target)).toThrow("activation has ended");
     },
   );
 });
 
-describe("native UI plugin panels", () => {
-  it("opens only owned panels and retires retained view and activation handles", () => {
-    const navigate = vi.fn();
-    const context = {
-      basePath: "",
-      navigate,
-      gateway: { snapshot: { sessionKey: "agent:main:main", hello: null }, setSessionKey: vi.fn() },
-      agents: { state: { agentsList: null } },
-      agentSelection: { state: { selectedId: "main" }, set: vi.fn() },
-      sessions: { state: { result: null } },
-    } as unknown as ApplicationContext;
-    const abort = new AbortController();
-    const owner = {
-      abort,
-      descriptor: { pluginId: "review" },
-      disposers: new Set(),
-      contributions: { panels: new Map([["document", {}]]) },
-    } as Omit<ControlUiPluginOwner, "host">;
-    const runtime = {
-      isCurrent: () => !abort.signal.aborted,
-    } as unknown as ControlUiPluginRuntime;
-    const host = createControlUiPluginHost(() => context, runtime, owner);
-    const listener = vi.fn();
-    window.addEventListener(PLUGIN_PANEL_TOGGLE_EVENT, listener);
-    try {
-      expect(() => host.ui.openPanel("foreign/document")).toThrow("own registered panel");
-      const view = new AbortController();
-      const open = scopeControlUiHost(host, view.signal).ui.openPanel;
-      open("document", { sessionKey: "global", agentId: "writer" });
-      expect(navigate).toHaveBeenCalledWith(
-        "chat",
-        expect.objectContaining({ pathname: "/chat/writer" }),
-      );
-      expect(listener).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          detail: {
-            pluginId: "review",
-            panelId: "document",
-            sessionKey: "global",
-            agentId: "writer",
-            open: true,
-          },
-        }),
-      );
-      expect(takeSessionPanelToggle("plugin:review/document", "global", "writer")).not.toBeNull();
-      open("document", { sessionKey: "agent:writer:document" });
-      expect(navigate).toHaveBeenLastCalledWith(
-        "chat",
-        expect.objectContaining({ pathname: "/chat/writer/document" }),
-      );
-      expect(context.agentSelection.set).toHaveBeenLastCalledWith("writer");
-      expect(listener).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          detail: expect.objectContaining({
-            sessionKey: "agent:writer:document",
-            agentId: "writer",
-          }),
-        }),
-      );
-      expect(
-        takeSessionPanelToggle("plugin:review/document", "agent:writer:document", "writer"),
-      ).not.toBeNull();
-      view.abort();
-      expect(() => open("document")).toThrow("view has ended");
-      abort.abort();
-      expect(() => host.ui.openPanel("document")).toThrow("activation has ended");
-    } finally {
-      window.removeEventListener(PLUGIN_PANEL_TOGGLE_EVENT, listener);
-      abort.abort();
-    }
+it("opens only owned panels and retires retained view and activation handles", () => {
+  const navigate = vi.fn();
+  const context = {
+    basePath: "",
+    navigate,
+    gateway: { snapshot: { sessionKey: "agent:main:main", hello: null }, setSessionKey: vi.fn() },
+    agents: { state: { agentsList: null } },
+    agentSelection: { state: { selectedId: "main" }, set: vi.fn() },
+    sessions: { state: { result: null } },
+  } as unknown as ApplicationContext;
+  const { host, abort, owner } = createHost(context);
+  owner.contributions.panels.set("document", {
+    value: { id: "document", label: "Document", mount: () => undefined },
+    signal: abort.signal,
   });
+  const listener = vi.fn();
+  window.addEventListener(PLUGIN_PANEL_TOGGLE_EVENT, listener);
+  onTestFinished(() => {
+    window.removeEventListener(PLUGIN_PANEL_TOGGLE_EVENT, listener);
+    abort.abort();
+  });
+  expect(() => host.ui.openPanel("foreign/document")).toThrow("own registered panel");
+  const { view, host: scoped } = scopedHost(host);
+  const open = scoped.ui.openPanel;
+  open("document", { sessionKey: "global", agentId: "writer" });
+  expect(navigate).toHaveBeenCalledWith("chat", chatPath("/chat/writer"));
+  expect(listener).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      detail: {
+        pluginId: "review",
+        panelId: "document",
+        sessionKey: "global",
+        agentId: "writer",
+        open: true,
+      },
+    }),
+  );
+  expect(takeSessionPanelToggle("plugin:review/document", "global", "writer")).not.toBeNull();
+  const documentKey = "agent:writer:document";
+  open("document", { sessionKey: documentKey });
+  expect(navigate).toHaveBeenLastCalledWith("chat", chatPath("/chat/writer/document"));
+  expect(context.agentSelection.set).toHaveBeenLastCalledWith("writer");
+  expect(listener).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      detail: expect.objectContaining({
+        sessionKey: documentKey,
+        agentId: "writer",
+      }),
+    }),
+  );
+  expect(takeSessionPanelToggle("plugin:review/document", documentKey, "writer")).not.toBeNull();
+  view.abort();
+  expect(() => open("document")).toThrow("view has ended");
+  abort.abort();
+  expect(() => host.ui.openPanel("document")).toThrow("activation has ended");
 });
 
-describe("native UI conversation dock", () => {
-  it("adapts dock operations, publishes snapshots, and retires activation and view handles", () => {
-    const dock = new AssistantDock();
-    let session: { key: string; activation: object } | null = null;
-    const panel: AssistantDockOwner = {
-      openSession: vi.fn((params, activation) => {
-        session = { key: params.sessionKey, activation };
+it("adapts dock operations, publishes snapshots, and retires activation and view handles", () => {
+  const dock = new AssistantDock();
+  let session: { key: string; activation: object } | null = null;
+  const panel: AssistantDockOwner = {
+    openSession: vi.fn((params, activation) => {
+      session = { key: params.sessionKey, activation };
+      dock.notify();
+    }),
+    closeSession: vi.fn((activation) => {
+      if (!activation || activation === session?.activation) {
+        session = null;
         dock.notify();
-      }),
-      closeSession: vi.fn((activation) => {
-        if (!activation || activation === session?.activation) {
-          session = null;
-          dock.notify();
-        }
-      }),
-      get openSessionKey() {
-        return session?.key ?? null;
-      },
-    };
-    const detach = dock.attach(panel);
-    const subscribe = () => () => undefined;
-    const client = new GatewayBrowserClient({ url: "ws://gateway.example.test" });
-    const { gateway } = createGatewayHarness(client);
-    const context = {
-      assistantDock: dock,
-      gateway,
-      sessions: { subscribe },
-      agents: { subscribe },
-      agentSelection: { subscribe },
-      theme: { subscribe },
-    } as unknown as ApplicationContext;
-    const runtime = new ControlUiPluginRuntime(() => context);
-    runtime.start();
-    const makeHost = () => {
-      const owner = {
-        client,
-        abort: new AbortController(),
-        descriptor: { pluginId: "review" },
-        disposers: new Set(),
-      } as Omit<ControlUiPluginOwner, "host">;
-      return {
-        host: createControlUiPluginHost(() => context, runtime, owner),
-        dispose: () => {
-          owner.abort.abort();
-          owner.disposers.forEach((dispose) => dispose());
-          owner.disposers.clear();
-        },
-      };
-    };
-    const first = makeHost();
-    const second = makeHost();
-    const notified = vi.fn(() => second.host.dock?.openSessionKey);
-    const stop = second.host.subscribe(notified);
-    const params = {
-      sessionKey: "agent:research:review",
-      agentId: "research",
-      label: "Review",
-      context: { page: "review:board", detail: { filter: "stuck" } },
-    };
-    try {
-      expect(first.host.dock?.openSessionKey).toBeNull();
-      first.host.dock?.openSession(params);
-      expect(panel.openSession).toHaveBeenCalledWith(params, expect.any(AbortController));
-      expect(notified).toHaveLastReturnedWith(params.sessionKey);
-      first.host.dock?.close();
-      expect(notified).toHaveLastReturnedWith(null);
-      first.host.dock?.openSession(params);
-      const view = new AbortController();
-      const scoped = scopeControlUiHost(second.host, view.signal);
-      const retainedOpen = scoped.dock!.openSession;
-      retainedOpen({ ...params, sessionKey: "agent:research:second" });
-      view.abort();
-      // Navigation retires a view's handles, but the activation still owns its dock.
-      expect(second.host.dock?.openSessionKey).toBe("agent:research:second");
-      expect(() => retainedOpen(params)).toThrow("view has ended");
-      first.dispose();
-      expect(second.host.dock?.openSessionKey).toBe("agent:research:second");
-      const close = second.host.dock!.close;
-      second.dispose();
-      expect(dock.openSessionKey).toBeNull();
-      expect(() => close()).toThrow("activation has ended");
-    } finally {
-      stop();
-      first.dispose();
-      second.dispose();
-      detach();
-      runtime.dispose();
-      client.stop();
-    }
+      }
+    }),
+    get openSessionKey() {
+      return session?.key ?? null;
+    },
+  };
+  const detach = dock.attach(panel);
+  const fixture = createRosterHost(vi.fn(), dock);
+  const first = fixture.activation;
+  const second = fixture.activate();
+  const notified = vi.fn(() => second.host.dock?.openSessionKey);
+  const stop = second.host.subscribe(notified);
+  const params = {
+    sessionKey: "agent:research:review",
+    agentId: "research",
+    label: "Review",
+    context: { page: "review:board", detail: { filter: "stuck" } },
+  };
+  onTestFinished(() => {
+    stop();
+    detach();
   });
+  expect(first.host.dock?.openSessionKey).toBeNull();
+  first.host.dock?.openSession(params);
+  expect(panel.openSession).toHaveBeenCalledWith(params, expect.any(AbortController));
+  expect(notified).toHaveLastReturnedWith(params.sessionKey);
+  first.host.dock?.close();
+  expect(notified).toHaveLastReturnedWith(null);
+  first.host.dock?.openSession(params);
+  const { view, host: scoped } = scopedHost(second.host);
+  const retainedOpen = scoped.dock!.openSession;
+  retainedOpen({ ...params, sessionKey: "agent:research:second" });
+  view.abort();
+  expect(second.host.dock?.openSessionKey).toBe("agent:research:second");
+  expect(() => retainedOpen(params)).toThrow("view has ended");
+  first.dispose();
+  expect(second.host.dock?.openSessionKey).toBe("agent:research:second");
+  const close = second.host.dock!.close;
+  second.dispose();
+  expect(dock.openSessionKey).toBeNull();
+  expect(() => close()).toThrow("activation has ended");
 });

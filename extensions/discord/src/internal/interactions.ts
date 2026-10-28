@@ -1,7 +1,7 @@
 import {
-  ComponentType,
   InteractionResponseType,
   InteractionType,
+  MessageFlags,
   Routes,
   type APIApplicationCommandAutocompleteInteraction,
   type APIApplicationCommandInteraction,
@@ -14,7 +14,6 @@ import {
   type APIUser,
 } from "discord-api-types/v10";
 import { OptionsHandler } from "./interaction-options.js";
-import { needsComponentsV2Query, type InteractionResponseState } from "./interaction-response.js";
 import { extractModalFields, ModalFields } from "./modal-fields.js";
 import { serializePayload, type MessagePayload } from "./payload.js";
 import { assertDiscordInteractionPayload } from "./schemas.js";
@@ -26,6 +25,12 @@ import {
   type DiscordChannel,
   type StructureClient,
 } from "./structures.js";
+
+type InteractionResponseState = "unacknowledged" | "deferred" | "deferred-update" | "replied";
+
+function needsComponentsV2Query(body: ReturnType<typeof serializePayload>): boolean {
+  return "flags" in body && ((body.flags ?? 0) & MessageFlags.IsComponentsV2) !== 0;
+}
 
 type InteractionClient = StructureClient & {
   options: { clientId: string };
@@ -273,13 +278,6 @@ export class BaseComponentInteraction extends BaseInteraction {
   }
 }
 
-export class ButtonInteraction extends BaseComponentInteraction {}
-export class StringSelectMenuInteraction extends BaseComponentInteraction {}
-class UserSelectMenuInteraction extends BaseComponentInteraction {}
-class RoleSelectMenuInteraction extends BaseComponentInteraction {}
-class MentionableSelectMenuInteraction extends BaseComponentInteraction {}
-class ChannelSelectMenuInteraction extends BaseComponentInteraction {}
-
 export class ModalInteraction extends BaseInteraction {
   readonly fields: ModalFields;
   constructor(client: InteractionClient, rawData: APIModalSubmitInteraction & RawInteraction) {
@@ -295,15 +293,6 @@ export class ModalInteraction extends BaseInteraction {
   }
 }
 
-const componentInteractions = new Map<number, typeof BaseComponentInteraction>([
-  [ComponentType.Button, ButtonInteraction],
-  [ComponentType.StringSelect, StringSelectMenuInteraction],
-  [ComponentType.UserSelect, UserSelectMenuInteraction],
-  [ComponentType.RoleSelect, RoleSelectMenuInteraction],
-  [ComponentType.MentionableSelect, MentionableSelectMenuInteraction],
-  [ComponentType.ChannelSelect, ChannelSelectMenuInteraction],
-]);
-
 export function createInteraction(client: InteractionClient, rawData: RawInteraction) {
   assertDiscordInteractionPayload(rawData);
   if (rawData.type === InteractionType.ApplicationCommandAutocomplete) {
@@ -316,9 +305,7 @@ export function createInteraction(client: InteractionClient, rawData: RawInterac
     return new ModalInteraction(client, rawData);
   }
   if (rawData.type === InteractionType.MessageComponent) {
-    const Component =
-      componentInteractions.get(rawData.data?.component_type) ?? BaseComponentInteraction;
-    return new Component(client, rawData);
+    return new BaseComponentInteraction(client, rawData);
   }
   return new BaseInteraction(client, rawData);
 }

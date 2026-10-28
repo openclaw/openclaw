@@ -119,28 +119,49 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
     observed.closeWork = undefined;
   });
 
-  nodeIt("owns spawning through startup callbacks and the complete shutdown join", async () => {
-    const server = await startGatewayServer();
-    try {
-      expect(observed.brokerPid).toBeTypeOf("number");
-      expect(observed.admission?.isStopped).toBe(false);
-      expect(observed.startupParent).toBe(observed.brokerPid);
-      expect(observed.startupParent).not.toBe(process.pid);
-    } finally {
-      await server.close();
-    }
-    expect(observed.shutdownParent).toBe(observed.brokerPid);
-    expect(observed.admission?.isStopped).toBe(true);
-    expect(() => process.kill(observed.brokerPid!, 0)).toThrow();
-  });
+  it.each(process.versions.bun ? [true] : [false, true])(
+    "owns startup callbacks and shutdown with native Bun transport=%s",
+    async (native) => {
+      const bun = Object.getOwnPropertyDescriptor(process.versions, "bun");
+      if (native) {
+        Object.defineProperty(process.versions, "bun", { value: "1.4.3", configurable: true });
+      }
+      try {
+        const server = await startGatewayServer();
+        const parent = native ? process.pid : observed.brokerPid;
+        try {
+          if (native) {
+            expect(observed.brokerPid).toBeUndefined();
+          } else {
+            expect(observed.brokerPid).toBeTypeOf("number");
+            expect(observed.admission?.isStopped).toBe(false);
+            expect(observed.startupParent).not.toBe(process.pid);
+          }
+          expect(observed.startupParent).toBe(parent);
+        } finally {
+          await server.close();
+        }
+        expect(observed.shutdownParent).toBe(parent);
+        if (!native) {
+          expect(observed.admission?.isStopped).toBe(true);
+          expect(() => process.kill(observed.brokerPid!, 0)).toThrow();
+        }
+      } finally {
+        if (bun) {
+          Object.defineProperty(process.versions, "bun", bun);
+        } else {
+          Reflect.deleteProperty(process.versions, "bun");
+        }
+      }
+    },
+  );
 
   nodeIt.each(["shutdown", "startup failure", "shutdown failure"] as const)(
     "owns the auth read child through runtime callbacks and %s",
     async (phase) => {
       const root = tempDirs.make("openclaw-gateway-auth-worker-");
       const source = path.join(root, "source.sqlite");
-      const database = new (requireNodeSqlite().DatabaseSync)(source);
-      database.close();
+      new (requireNodeSqlite().DatabaseSync)(source).close();
       const read = () =>
         runSqliteReadOnlyWorker(source, {
           mode: "auth-profile-rows",
@@ -193,8 +214,9 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
           }
         }
         expect(spawnCount).toBe(1);
-        expect(child?.exitCode).toBe(0);
         expect(child?.connected).toBe(false);
+        expect(child?.pid).toBeTypeOf("number");
+        expect(() => process.kill(child!.pid!, 0)).toThrow();
         expect(() => process.kill(observed.brokerPid!, 0)).toThrow();
       } finally {
         resume.resolve();
@@ -203,27 +225,6 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
       }
     },
   );
-
-  it("preserves Bun's native process transport", async () => {
-    const bun = Object.getOwnPropertyDescriptor(process.versions, "bun");
-    Object.defineProperty(process.versions, "bun", { value: "1.4.2", configurable: true });
-    try {
-      const server = await startGatewayServer();
-      try {
-        expect(observed.brokerPid).toBeUndefined();
-        expect(observed.startupParent).toBe(process.pid);
-      } finally {
-        await server.close();
-      }
-      expect(observed.shutdownParent).toBe(process.pid);
-    } finally {
-      if (bun) {
-        Object.defineProperty(process.versions, "bun", bun);
-      } else {
-        Reflect.deleteProperty(process.versions, "bun");
-      }
-    }
-  });
 
   nodeIt.each(["beforeAdopt", "afterAdopt", "close-before-sidecars"] as const)(
     "joins an outer CLI admission before broker extinction when core fails at %s",
@@ -251,14 +252,10 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
                 return started.close();
               })
             : starting;
-        void ending.then(
-          () => {
-            settled = true;
-          },
-          () => {
-            settled = true;
-          },
-        );
+        const markSettled = () => {
+          settled = true;
+        };
+        void ending.then(markSettled, markSettled);
         try {
           await withTestTimeout(cleanup.started.promise, 5_000, "Admission stop did not begin");
           await nextTurn();

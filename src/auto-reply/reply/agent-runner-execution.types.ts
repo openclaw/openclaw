@@ -1,26 +1,24 @@
-import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import type {
+  CompactionAccountingFact,
+  CompactionAccountingTarget,
+} from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { FailoverReason } from "../../agents/failover/signal.js";
 import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { AutomationResult } from "../../infra/agent-run-registry.types.js";
+import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import type { resolveBlockStreamingChunking } from "./block-streaming.js";
-import type { CurrentTurnImages } from "./current-turn-images.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import type { FollowupRun } from "./queue.js";
+import type { InternalFollowupRun } from "./queue/types.js";
 import type { DirectBlockDelivery } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
-
-export type InternalFollowupRun = FollowupRun & {
-  /** Keep admission state out of the public plugin-facing FollowupRun contract. */
-  currentTurnImagesPrepared?: true;
-  mediaImageLayout?: CurrentTurnImages["mediaImageLayout"];
-};
 
 export type CompletedAgentAuthSelection = Pick<
   FollowupRun["run"],
@@ -46,6 +44,7 @@ export type AgentTurnCompaction = {
 type AbortedAgentTurn = {
   kind: "aborted";
   reason: "user" | "restart" | "superseded";
+  sessionWriter?: CompactionAccountingTarget;
   compaction?: AgentTurnCompaction;
 };
 
@@ -55,13 +54,18 @@ export type AgentTurnInternalResult =
   | SettledAgentTurn
   | {
       kind: "final";
+      sessionWriter?: CompactionAccountingTarget;
       payload: ReplyPayload;
       resolved?: { provider: string; model: string };
       postCompactionModelFailure?: true;
     };
 
-type SettledAgentTurnBase = {
+export type SettledAgentTurn = {
   kind: "settled";
+  /** Captured before terminal event settlement consumes the invocation. */
+  automation?: { result?: AutomationResult; includeReasoning: boolean };
+  /** The runtime's claimed writer, independent of whether it compacted. */
+  sessionWriter?: CompactionAccountingTarget;
   maintenanceAuthProfile?: CompletedAgentAuthSelection;
   compactionRequestBudget?: CompactionRequestBudget;
   result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
@@ -69,26 +73,22 @@ type SettledAgentTurnBase = {
   fallback: { exhausted: boolean; attempts: RuntimeFallbackAttempt[] };
   autoCompactionCount: number;
   compaction?: AgentTurnCompaction;
-  didLogHeartbeatStrip: boolean;
   /** Captured before cleanup; late settlements remain in the live receipts below. */
   hasDirectlySentBlockReply?: true;
   /** Delivery receipts for direct tool-flush payloads, including retry custody. */
   directBlockDeliveries?: DirectBlockDelivery[];
-};
-
-export type SettledAgentTurn = SettledAgentTurnBase &
-  (
-    | {
-        status: "ok";
-        terminalFailurePayload?: never;
-        postCompactionModelFailure?: never;
-      }
-    | {
-        status: "failed";
-        terminalFailurePayload: ReplyPayload;
-        postCompactionModelFailure?: true;
-      }
-  );
+} & (
+  | {
+      status: "ok";
+      terminalFailurePayload?: never;
+      postCompactionModelFailure?: never;
+    }
+  | {
+      status: "failed";
+      terminalFailurePayload?: ReplyPayload;
+      postCompactionModelFailure?: true;
+    }
+);
 
 /** Closed result shared by foreground and queued agent-turn callers. */
 export type AgentTurnExecutionResult = {
@@ -98,6 +98,7 @@ export type AgentTurnExecutionResult = {
     | AbortedAgentTurn
     | {
         kind: "rejected";
+        sessionWriter?: CompactionAccountingTarget;
         compaction?: AgentTurnCompaction;
         payload: ReplyPayload;
         resolved?: { provider: string; model: string };
@@ -109,7 +110,7 @@ export type AgentTurnExecutionResult = {
 export type ReplyAgentTurnContext = {
   commandBody: string;
   transcriptCommandBody?: string;
-  followupRun: FollowupRun;
+  followupRun: InternalFollowupRun;
   sessionCtx: TemplateContext;
   replyOperation?: ReplyOperation;
   opts?: InternalGetReplyOptions;
@@ -125,6 +126,8 @@ export type ReplyAgentTurnContext = {
 
 /** Inputs shared by direct and queued agent-turn execution. */
 export type AgentTurnParams = ReplyAgentTurnContext & {
+  /** Shared by fallback candidates; required preflight already attempted its checkpoint. */
+  recoveryMemoryFlushAttempted?: boolean;
   /** The admitted queued delivery owner settles every terminal outcome. */
   completionSource?: "reply-dispatch";
   replyThreading?: TemplateContext["ReplyThreading"];
@@ -135,7 +138,6 @@ export type AgentTurnParams = ReplyAgentTurnContext & {
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
   pendingToolTasks: Set<Promise<void>>;
-  isHeartbeat: boolean;
   getActiveSessionEntry: () => SessionEntry | undefined;
   activeSessionStore?: Record<string, SessionEntry>;
   replyMediaContext?: ReplyMediaContext;

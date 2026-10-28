@@ -1,18 +1,10 @@
-// Gateway Talk handoff registry.
 // Manages short-lived browser Talk rooms, tokens, events, and turn ownership.
 import { randomBytes, randomUUID } from "node:crypto";
-import {
-  asDateTimestampMs,
-  isFutureDateTimestampMs,
-  resolveDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "@openclaw/normalization-core/number-coercion";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { recordTalkObservabilityEvent } from "../../talk/observability.js";
 import {
   createTalkSessionController,
   type TalkBrain,
-  type TalkEvent,
   type TalkMode,
   type TalkSessionController,
   type TalkTransport,
@@ -46,12 +38,6 @@ type TalkHandoffRecord = Omit<TalkHandoffCreateParams, "ttlMs" | "mode" | "trans
   room: { talk: TalkSessionController };
 };
 
-type TalkHandoffRevokeResult = {
-  revoked: boolean;
-  roomId?: string;
-  events: TalkEvent[];
-};
-
 const handoffs = resolveGlobalMap<string, TalkHandoffRecord>(
   Symbol.for("openclaw.talkHandoffs"),
   "close-and-restart",
@@ -60,10 +46,8 @@ const handoffs = resolveGlobalMap<string, TalkHandoffRecord>(
 /** Creates a short-lived Talk room and returns the only plaintext join token. */
 export function createTalkHandoff(params: TalkHandoffCreateParams) {
   pruneExpiredTalkHandoffs();
-  const rawCreatedAt = Date.now();
-  const createdAt = resolveDateTimestampMs(rawCreatedAt);
-  const ttlMs = normalizeTtlMs(params.ttlMs);
-  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawCreatedAt }) ?? 0;
+  const createdAt = Date.now();
+  const expiresAt = createdAt + normalizeTtlMs(params.ttlMs);
   const id = randomUUID();
   const roomId = `talk_${id}`;
   const token = randomBytes(32).toString("base64url");
@@ -95,14 +79,9 @@ export function createTalkHandoff(params: TalkHandoffCreateParams) {
     payload: { handoffId: id, roomId },
   });
   handoffs.set(id, record);
-  const { room, ...publicRecord } = record;
+  const { room: _room, ...publicRecord } = record;
   return {
     ...publicRecord,
-    room: {
-      activeClientId: undefined,
-      activeTurnId: room.talk.activeTurnId,
-      recentTalkEvents: [...room.talk.recentEvents],
-    },
     token,
   };
 }
@@ -114,23 +93,18 @@ export function getTalkHandoff(id: string): TalkHandoffRecord | undefined {
 }
 
 /** Revokes a handoff and emits the final room-close event if it existed. */
-export function revokeTalkHandoff(id: string): TalkHandoffRevokeResult {
+export function revokeTalkHandoff(id: string): void {
   pruneExpiredTalkHandoffs();
   const record = handoffs.get(id);
   if (!record) {
-    return { revoked: false, events: [] };
+    return;
   }
-  const event = record.room.talk.emit({
+  record.room.talk.emit({
     type: "session.closed",
     payload: { reason: "revoked", handoffId: id, roomId: record.roomId },
     final: true,
   });
   handoffs.delete(id);
-  return {
-    revoked: true,
-    roomId: record.roomId,
-    events: [event],
-  };
 }
 
 function normalizeTtlMs(value: number | undefined): number {
@@ -140,13 +114,10 @@ function normalizeTtlMs(value: number | undefined): number {
   return Math.min(Math.max(Math.trunc(value), 1000), MAX_TALK_HANDOFF_TTL_MS);
 }
 
-function pruneExpiredTalkHandoffs(now = Date.now()): void {
-  const validNow = asDateTimestampMs(now);
-  if (validNow === undefined) {
-    return;
-  }
+function pruneExpiredTalkHandoffs(): void {
+  const now = Date.now();
   for (const [id, record] of handoffs) {
-    if (!isFutureDateTimestampMs(record.expiresAt, { nowMs: validNow })) {
+    if (record.expiresAt <= now) {
       record.room.talk.emit({
         type: "session.closed",
         payload: { reason: "expired", handoffId: id, roomId: record.roomId },

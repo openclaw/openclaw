@@ -280,46 +280,45 @@ export async function resolvePluginVersionDriftTargets(
   };
 }
 
-function isPluginEnabled(config: OpenClawConfig | undefined, pluginId: string): boolean {
-  const normalizedPluginConfig = normalizePluginsConfig(config?.plugins);
-  return resolveEffectiveEnableState({
-    id: pluginId,
-    origin: "global",
-    config: normalizedPluginConfig,
-    rootConfig: config,
-  }).enabled;
-}
-
-function shouldCompareOfficialInstallToGateway(params: {
-  pluginId: string;
-  record: PluginInstallRecord;
-}): boolean {
-  const officialNpmSpec = resolveTrustedSourceLinkedOfficialNpmInstall(params)?.npmSpec;
-  if (officialNpmSpec) {
-    return parseRegistryNpmSpec(officialNpmSpec)?.selectorKind !== "exact-version";
-  }
-  const officialClawHubInstall = resolveTrustedSourceLinkedOfficialClawHubInstall(params);
-  if (officialClawHubInstall) {
-    if (officialClawHubInstall.clawhubSpec) {
-      return !parseClawHubPluginSpec(officialClawHubInstall.clawhubSpec)?.version;
+function* officialPluginVersionCandidates(params: {
+  installRecords: Record<string, PluginInstallRecord>;
+  config?: OpenClawConfig;
+}) {
+  const config = normalizePluginsConfig(params.config?.plugins);
+  for (const [pluginId, record] of Object.entries(params.installRecords)) {
+    if (
+      !resolveEffectiveEnableState({
+        id: pluginId,
+        origin: "global",
+        config,
+        rootConfig: params.config,
+      }).enabled
+    ) {
+      continue;
     }
-    return (
-      parseRegistryNpmSpec(officialClawHubInstall.npmSpec ?? "")?.selectorKind !== "exact-version"
-    );
+    const identity = { pluginId, record };
+    const officialNpmSpec = resolveTrustedSourceLinkedOfficialNpmInstall(identity)?.npmSpec;
+    const officialClawHubInstall = officialNpmSpec
+      ? undefined
+      : resolveTrustedSourceLinkedOfficialClawHubInstall(identity);
+    const compareToGateway = officialNpmSpec
+      ? parseRegistryNpmSpec(officialNpmSpec)?.selectorKind !== "exact-version"
+      : officialClawHubInstall?.clawhubSpec
+        ? !parseClawHubPluginSpec(officialClawHubInstall.clawhubSpec)?.version
+        : officialClawHubInstall !== undefined &&
+          parseRegistryNpmSpec(officialClawHubInstall.npmSpec ?? "")?.selectorKind !==
+            "exact-version";
+    if (compareToGateway) {
+      yield { pluginId, record, officialNpmSpec, officialClawHubInstall };
+    }
   }
-  return false;
 }
 
 export function hasOfficialPluginVersionCandidates(params: {
   installRecords: Record<string, PluginInstallRecord>;
   config?: OpenClawConfig;
 }): boolean {
-  return Object.entries(params.installRecords).some(
-    ([pluginId, record]) =>
-      Boolean(record) &&
-      isPluginEnabled(params.config, pluginId) &&
-      shouldCompareOfficialInstallToGateway({ pluginId, record }),
-  );
+  return !officialPluginVersionCandidates(params).next().done;
 }
 
 /** Exact cohort targets shared by automatic updates and Doctor's drift repair. */
@@ -330,16 +329,11 @@ export function resolveOfficialPluginCohortNpmSpecs(params: {
 }): Record<string, string> {
   const version = resolveOpenClawReleaseCohortVersion(params.gatewayVersion);
   const specs: Record<string, string> = {};
-  for (const [pluginId, record] of Object.entries(params.installRecords)) {
-    if (
-      record.source !== "npm" ||
-      !isPluginEnabled(params.config, pluginId) ||
-      !shouldCompareOfficialInstallToGateway({ pluginId, record })
-    ) {
+  for (const { pluginId, record, officialNpmSpec } of officialPluginVersionCandidates(params)) {
+    if (record.source !== "npm") {
       continue;
     }
-    const official = resolveTrustedSourceLinkedOfficialNpmInstall({ pluginId, record })?.npmSpec;
-    const packageName = official ? parseRegistryNpmSpec(official)?.name : undefined;
+    const packageName = officialNpmSpec ? parseRegistryNpmSpec(officialNpmSpec)?.name : undefined;
     if (
       packageName &&
       parseRegistryNpmSpec(`${packageName}@${version}`)?.selectorKind === "exact-version"
@@ -360,14 +354,10 @@ export function detectPluginVersionDrift(params: {
   const normalizedGateway = resolveOpenClawReleaseCohortVersion(gatewayVersion);
   const drifts: PluginVersionDriftEntry[] = [];
 
-  for (const [pluginId, record] of Object.entries(installRecords)) {
-    if (
-      !record ||
-      !isPluginEnabled(config, pluginId) ||
-      !shouldCompareOfficialInstallToGateway({ pluginId, record })
-    ) {
-      continue;
-    }
+  for (const { pluginId, record, officialClawHubInstall } of officialPluginVersionCandidates({
+    installRecords,
+    config,
+  })) {
     const installedVersion = record.resolvedVersion ?? record.version;
     if (!installedVersion) {
       continue;
@@ -382,7 +372,10 @@ export function detectPluginVersionDrift(params: {
         ? (record.clawhubPackage?.trim() ?? parseClawHubPluginSpec(record.spec ?? "")?.name)
         : undefined;
     const clawhubOfficialSpec = clawhubPackage
-      ? resolveTrustedSourceLinkedOfficialClawHubInstall({ pluginId, record })?.clawhubSpec
+      ? (
+          officialClawHubInstall ??
+          resolveTrustedSourceLinkedOfficialClawHubInstall({ pluginId, record })
+        )?.clawhubSpec
       : undefined;
     drifts.push({
       pluginId,

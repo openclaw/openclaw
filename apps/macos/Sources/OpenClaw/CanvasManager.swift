@@ -2,13 +2,10 @@ import AppKit
 import Foundation
 import OpenClawIPC
 import OpenClawKit
-import OSLog
 
 @MainActor
 final class CanvasManager {
     static let shared = CanvasManager()
-
-    private static let logger = Logger(subsystem: "ai.openclaw", category: "CanvasManager")
 
     private var panelController: CanvasWindowController?
 
@@ -29,12 +26,6 @@ final class CanvasManager {
         path: String? = nil,
         placement: CanvasPlacement? = nil) throws -> String
     {
-        Self.logger.debug(
-            """
-            show session=\(sessionKey, privacy: .public) \
-            hasTarget=\(path != nil) \
-            placement=\(placement != nil)
-            """)
         let anchorProvider = self.defaultAnchorProvider ?? Self.mouseAnchorProvider
         let normalizedTarget = path?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -109,11 +100,9 @@ final class CanvasManager {
         let session = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if let controller = panelController, controller.sessionKey == session {
-            Self.logger.debug("ensureController reuse existing session=\(session, privacy: .public)")
             return (controller, false)
         }
 
-        Self.logger.debug("ensureController creating new session=\(session, privacy: .public)")
         self.panelController?.close()
         self.panelController = nil
 

@@ -69,17 +69,43 @@ export function resolveUniqueCatalogModelRoute<T extends ModelTransportRoute>(
   return match;
 }
 
-/** Capabilities belong to the catalog route; config owns them only for a different/custom route. */
+/** Catalogs own route defaults; operator reasoning declarations take precedence. */
 export function resolveCatalogOwnedModelCompat(params: {
   catalogRoute?: ModelTransportRoute;
   catalogCompat?: ModelCompatConfig;
   configuredRoute?: ModelTransportRoute;
   configuredCompat?: ModelCompatConfig;
 }): ModelCompatConfig | undefined {
-  if (!params.catalogRoute) {
+  if (
+    !params.catalogRoute ||
+    !modelTransportRoutesMatch(params.catalogRoute, params.configuredRoute ?? {})
+  ) {
     return params.configuredCompat;
   }
-  return modelTransportRoutesMatch(params.catalogRoute, params.configuredRoute ?? {})
-    ? params.catalogCompat
-    : params.configuredCompat;
+  const configured = params.configuredCompat;
+  const efforts = configured?.supportedReasoningEfforts;
+  if (
+    efforts === undefined &&
+    configured?.supportsReasoningEffort === undefined &&
+    configured?.reasoningEffortMap === undefined
+  ) {
+    return params.catalogCompat;
+  }
+  return {
+    ...params.catalogCompat,
+    ...(efforts !== undefined
+      ? { supportedReasoningEfforts: efforts, supportsReasoningEffort: efforts.length > 0 }
+      : configured?.supportsReasoningEffort !== false &&
+          (Object.keys(configured?.reasoningEffortMap ?? {}).length > 0 ||
+            (configured?.supportsReasoningEffort === true &&
+              params.catalogCompat?.supportedReasoningEfforts?.length === 0))
+        ? { supportedReasoningEfforts: undefined, supportsReasoningEffort: true }
+        : {}),
+    ...(configured?.supportsReasoningEffort !== undefined
+      ? { supportsReasoningEffort: configured.supportsReasoningEffort }
+      : {}),
+    ...(configured?.reasoningEffortMap !== undefined
+      ? { reasoningEffortMap: configured.reasoningEffortMap }
+      : {}),
+  };
 }

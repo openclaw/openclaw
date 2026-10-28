@@ -203,7 +203,11 @@ function resolveFoundryOpenAIModelTokenLimits(
   if (/^gpt-5\.(?:4(?:-pro)?|5|6(?:-(?:sol|terra|luna))?)$/u.test(normalized)) {
     return { contextWindow: 1_050_000, maxTokens: 128_000 };
   }
-  if (/^gpt-5\.4-(?:mini|nano)$/u.test(normalized)) {
+  if (
+    /^(?:gpt-5(?:-(?:mini|nano|codex|pro))?|gpt-5\.(?:1(?:-codex(?:-(?:mini|max))?)?|2(?:-codex)?|3-codex|4-(?:mini|nano)))$/u.test(
+      normalized,
+    )
+  ) {
     return { contextWindow: 400_000, maxTokens: 128_000 };
   }
   return undefined;
@@ -246,21 +250,14 @@ export function requiresFoundryMaxCompletionTokens(value?: string | null): boole
   return matchesFoundryOpenAIFamily(normalizeOptionalLowercaseString(value), "gpt-5");
 }
 
-function supportsFoundryReasoningEffort(value?: string | null): boolean {
+function resolveFoundryReasoningEfforts(value?: string | null): string[] | undefined {
   const normalized = normalizeOptionalLowercaseString(value);
   if (
     !normalized ||
     /^gpt-5-chat(?:-|$)/u.test(normalized) ||
-    /^o1-mini(?:-|$)/u.test(normalized)
+    /^o1-mini(?:-|$)/u.test(normalized) ||
+    !requiresFoundryMaxCompletionTokens(normalized)
   ) {
-    return false;
-  }
-  return requiresFoundryMaxCompletionTokens(normalized);
-}
-
-function resolveFoundryReasoningEfforts(value?: string | null): string[] | undefined {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized || !supportsFoundryReasoningEffort(normalized)) {
     return undefined;
   }
   if (normalized === "gpt-5.1-codex-max") {
@@ -346,7 +343,7 @@ export function buildFoundryProviderBaseUrl(
   const resolvedApi = resolveFoundryApi(modelId, modelNameHint, configuredApi);
   const base = normalizeFoundryEndpoint(endpoint);
   const path = resolvedApi === ANTHROPIC_MESSAGES_API ? "/anthropic" : "/openai/v1";
-  return base.endsWith(path) ? base : `${base}${path}`;
+  return `${base}${path}`;
 }
 
 export function extractFoundryEndpoint(baseUrl: string | null | undefined): string | undefined {
@@ -371,7 +368,7 @@ export function resolveFoundryModelCapabilities(
   const api = resolveFoundryApi(modelId, modelName, configuredApi);
   const normalizedInput = normalizeModelInput(existingInput);
   const supportedReasoningEfforts = resolveFoundryReasoningEfforts(modelName);
-  const supportsReasoningEffort = supportsFoundryReasoningEffort(modelName);
+  const supportsReasoningEffort = supportedReasoningEfforts !== undefined;
   const isAnthropic = api === ANTHROPIC_MESSAGES_API || isAnthropicFoundryDeployment(modelName);
   const supportsClaudeThinking =
     isAnthropic &&
@@ -548,9 +545,7 @@ export function buildFoundryAuthResult(params: {
           },
         },
       },
-      ...(Array.isArray(params.currentPluginsAllow) &&
-      params.currentPluginsAllow.length > 0 &&
-      !params.currentPluginsAllow.includes(PROVIDER_ID)
+      ...(params.currentPluginsAllow?.length && !params.currentPluginsAllow.includes(PROVIDER_ID)
         ? { plugins: { allow: [...params.currentPluginsAllow, PROVIDER_ID] } }
         : {}),
     },

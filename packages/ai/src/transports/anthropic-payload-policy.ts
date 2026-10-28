@@ -257,12 +257,49 @@ export function applyAnthropicRequestCacheControl(
   const usedMarkers =
     countAnthropicCacheControlMarkers(payload.system) +
     countAnthropicCacheControlMarkers(payload.tools);
-  applyAnthropicCacheControlToMessages(
-    payload.messages,
-    cacheControl,
-    ANTHROPIC_CACHE_CONTROL_LIMIT - usedMarkers,
-    cacheBreakpointOptOutMessageIndexes,
-  );
+  const messages = payload.messages;
+  const markerLimit = ANTHROPIC_CACHE_CONTROL_LIMIT - usedMarkers;
+  if (!Array.isArray(messages) || messages.length === 0 || markerLimit <= 0) {
+    return;
+  }
+
+  let stableEnd = messages.length;
+  for (const index of cacheBreakpointOptOutMessageIndexes) {
+    stableEnd = Math.min(stableEnd, index);
+  }
+  let marked = 0;
+  for (let i = stableEnd - 1; i >= 0 && marked < Math.min(markerLimit, 2); i--) {
+    const record = messages[i];
+    if (!isRecord(record) || record.role !== "user") {
+      continue;
+    }
+
+    const content = record.content;
+    const blocks = typeof content === "string" ? [{ type: "text", text: content }] : content;
+    if (!Array.isArray(blocks)) {
+      continue;
+    }
+
+    for (let j = blocks.length - 1; j >= 0; j--) {
+      const blockRecord = blocks[j];
+      if (!isRecord(blockRecord)) {
+        continue;
+      }
+      if (
+        blockRecord.type === "text" ||
+        blockRecord.type === "image" ||
+        blockRecord.type === "tool_result"
+      ) {
+        // Keep a prior write reachable beyond the 20-block lookback, before transient context.
+        blockRecord.cache_control = cacheControl;
+        if (typeof content === "string") {
+          record.content = blocks;
+        }
+        marked++;
+        break;
+      }
+    }
+  }
 }
 
 function normalizeAnthropicSystemBlocks(
@@ -320,68 +357,6 @@ function normalizeAnthropicSystemBlocks(
 
   if (cacheControl) {
     system.splice(0, system.length, ...normalizedBlocks);
-  }
-}
-
-/** Apply one shared deepest-stable-message cache breakpoint policy. */
-function applyAnthropicCacheControlToMessages(
-  messages: unknown,
-  cacheControl: AnthropicEphemeralCacheControl,
-  markerLimit: number,
-  cacheBreakpointOptOutMessageIndexes: ReadonlySet<number>,
-): void {
-  if (!Array.isArray(messages) || messages.length === 0 || markerLimit <= 0) {
-    return;
-  }
-
-  let fallbackToolResult: Record<string, unknown> | undefined;
-
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i];
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-
-    const record = message as Record<string, unknown>;
-    if (record.role !== "user" || cacheBreakpointOptOutMessageIndexes.has(i)) {
-      continue;
-    }
-
-    const content = record.content;
-    const blocks = typeof content === "string" ? [{ type: "text", text: content }] : content;
-    if (!Array.isArray(blocks)) {
-      continue;
-    }
-
-    for (let j = blocks.length - 1; j >= 0; j--) {
-      const block = blocks[j];
-      if (!block || typeof block !== "object") {
-        continue;
-      }
-
-      const blockRecord = block as Record<string, unknown>;
-      if (blockRecord.type === "text" || blockRecord.type === "image") {
-        if (fallbackToolResult && markerLimit === 1) {
-          fallbackToolResult.cache_control = cacheControl;
-          return;
-        }
-        blockRecord.cache_control = cacheControl;
-        if (typeof content === "string") {
-          record.content = blocks;
-        }
-        if (fallbackToolResult && markerLimit > 1) {
-          fallbackToolResult.cache_control = cacheControl;
-        }
-        return;
-      }
-      if (blockRecord.type === "tool_result" && fallbackToolResult === undefined) {
-        fallbackToolResult = blockRecord;
-      }
-    }
-  }
-
-  if (fallbackToolResult) {
-    fallbackToolResult.cache_control = cacheControl;
   }
 }
 

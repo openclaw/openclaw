@@ -82,15 +82,19 @@ export class AcpTranslatorAgentEvents {
       const preambles = (pending.sentPreambles ??= new Map());
       const isNewPreamble = !preambles.has(itemId);
       let sent = preambles.get(itemId) ?? "";
-      let preceding = "";
       const previous = pending.preamblePreview;
+      const baseline = previous?.itemId === itemId ? previous.text : sent;
+      if (!isNewPreamble && !text.startsWith(baseline)) {
+        return;
+      }
+      let preceding = "";
       if (isNewPreamble && previous) {
         // One retired preview can contain several subsequently identified items.
         sent = previous.sent.slice(previous.text.length).replace(/^\n+/, "");
         preambles.set(previous.itemId, previous.text);
         pending.preamblePreview = undefined;
       }
-      if (isNewPreamble && typeof projection.retainedText === "string") {
+      if (isNewPreamble && projection.retainedText !== undefined) {
         sent = "";
         const retained = projection.retainedText.trimEnd();
         const answer = pending.sentText ?? "";

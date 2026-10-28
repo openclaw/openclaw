@@ -20,10 +20,11 @@ openclaw plugins disable facetime
 ```
 
 The uninstall removes the HAL driver, cached driver output, staged and
-timestamped helper dylibs for FaceTime and Phone, the helper key, and the staged
-helper build stamp. It does not kill unrelated processes.
+timestamped helper dylibs for FaceTime and earlier Phone injections, the helper
+key, and the staged helper build stamp. It does not kill unrelated processes.
 
-Quit and reopen FaceTime and Phone so neither app retains a mapped helper.
+Quit and reopen FaceTime. If an earlier version injected Phone, quit and reopen
+Phone as well so it releases the old helper.
 If an app will not quit normally, terminate only that exact app from Activity
 Monitor and reopen it. Do not use broad process-name kill commands.
 
@@ -54,7 +55,7 @@ restores the previous driver and does not restart Core Audio. If status remains
 session and inspect its exact error. Never copy an unverified driver into
 `/Library/Audio/Plug-Ins/HAL` manually.
 
-The installer intentionally rejects Xcode that is not canonical, Apple-signed,
+The installer intentionally rejects Xcode that is not installed directly at `/Applications/Xcode.app`, Apple-signed,
 root-owned, or free of group/world-writable content. Reinstall Xcode from Apple
 into `/Applications` using an administrator-managed installation. If the error
 names a writable path component, an administrator must remove group/world write

@@ -16,6 +16,7 @@ import {
   SsrFPolicyConfigSchema,
   TtsConfigSchema,
 } from "./zod-schema.core.js";
+import { DatabaseConfigSchema } from "./zod-schema.database.js";
 import { DesktopConfigSchema } from "./zod-schema.desktop.js";
 import { GatewayConfigSchema } from "./zod-schema.gateway.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
@@ -108,7 +109,7 @@ export const OpenClawSchemaShape = {
       cdpUrl: z.string().optional(),
       /** Override the browser executable path (all platforms). */
       executablePath: z.string().optional(),
-      /** Start Chrome headless (best-effort). Default: false */
+      /** Local managed browsers default to headless; false requests a visible window. */
       headless: z.boolean().optional(),
       /** Pass --no-sandbox to Chrome (Linux containers). Default: false */
       noSandbox: z.boolean().optional(),
@@ -509,6 +510,7 @@ export const OpenClawSchemaShape = {
   talk: TalkSchema.optional(),
   gateway: GatewayConfigSchema,
   cloudWorkers: CloudWorkersConfigSchema,
+  database: DatabaseConfigSchema,
   storage: StorageConfigSchema,
   desktop: DesktopConfigSchema,
   memory: MemorySchema,
@@ -529,7 +531,7 @@ export const OpenClawSchemaShape = {
            * sit outside the configured source root.
            */
           allowSymlinkTargets: z.array(z.string()).optional(),
-          /** Watch skill folders for changes and refresh the skills snapshot. */
+          /** Enable passive skill rescans; explicit changes and startup still refresh immediately. */
           watch: z.boolean().optional(),
         })
         .optional(),
@@ -562,8 +564,10 @@ export const OpenClawSchemaShape = {
           /** Autonomous Skill Workshop learning. */
           autonomous: z
             .strictObject({
-              /** "auto" lets agents save and update Workshop skills; "off" disables autonomous learning. */
-              mode: z.union([z.literal("off"), z.literal("auto")]).optional(),
+              /** "auto" lets background reviews change Workshop skills; "propose" saves their changes as drafts for review; "off" disables background learning. */
+              mode: z.union([z.literal("off"), z.literal("propose"), z.literal("auto")]).optional(),
+              /** Post background review notices to supported channels. Default: false. */
+              channelNotices: z.boolean().optional(),
             })
             .optional(),
           /** Maximum Workshop skill file size in bytes. */

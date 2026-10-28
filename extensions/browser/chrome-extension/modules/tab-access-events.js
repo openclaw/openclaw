@@ -2,7 +2,6 @@ import { ACCESS_MODE_ALL, ACCESS_MODE_SELECTED } from "./relay-core.js";
 
 /** Register Chrome lifecycle events that can grant, revoke, or project tab access. */
 export function registerTabAccessEvents({
-  chromeApi = chrome,
   accessReady,
   policy,
   attachments,
@@ -14,9 +13,10 @@ export function registerTabAccessEvents({
   removeTabFromOpenClawGroup,
   runAccessMutation,
 }) {
+  const chrome = globalThis.chrome;
   let groupEventRevision = 0;
 
-  chromeApi.debugger.onEvent.addListener((source, method, params) => {
+  chrome.debugger.onEvent.addListener((source, method, params) => {
     if (typeof source.tabId !== "number") {
       return;
     }
@@ -36,7 +36,7 @@ export function registerTabAccessEvents({
     );
   });
 
-  chromeApi.debugger.onDetach.addListener((source, reason) => {
+  chrome.debugger.onDetach.addListener((source, reason) => {
     if (typeof source.tabId !== "number") {
       return;
     }
@@ -64,7 +64,7 @@ export function registerTabAccessEvents({
     }).catch(() => undefined);
   });
 
-  chromeApi.tabs.onRemoved.addListener((tabId) => {
+  chrome.tabs.onRemoved.addListener((tabId) => {
     policy.retireTab(tabId);
     void detachDebugger(tabId).catch((error) =>
       console.warn("Debugger removal cleanup failed", error),
@@ -76,7 +76,7 @@ export function registerTabAccessEvents({
     })();
   });
 
-  chromeApi.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
+  chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
     const revocation = policy.beginRevocation(addedTabId);
     policy.retireTab(addedTabId);
     policy.retireTab(removedTabId);
@@ -94,7 +94,7 @@ export function registerTabAccessEvents({
     })().catch(() => undefined);
   });
 
-  chromeApi.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     scheduleTabsSync();
     const generation = attachments.get(tabId);
     const pendingAttach = generation?.pending;
@@ -185,6 +185,6 @@ export function registerTabAccessEvents({
       }
     });
   };
-  chromeApi.tabGroups.onUpdated.addListener(onGroupChanged);
-  chromeApi.tabGroups.onRemoved.addListener((group) => onGroupChanged(group, true));
+  chrome.tabGroups.onUpdated.addListener(onGroupChanged);
+  chrome.tabGroups.onRemoved.addListener((group) => onGroupChanged(group, true));
 }

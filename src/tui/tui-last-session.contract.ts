@@ -11,7 +11,7 @@ export function isTuiLastSessionReadCommand(value: unknown): value is TuiLastSes
 }
 
 export type TuiLastSessionWorkerOperations = {
-  "tui.lastSession.write": { input: { stateKey: string; sessionKey: string }; output: void };
+  "tui.lastSession.write": { input: { scopeKey: string; sessionKey: string }; output: void };
   "tui.lastSession.clear": {
     input: { retiredSessionKeys: string[] };
     output: number;

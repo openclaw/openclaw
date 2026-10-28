@@ -6,6 +6,7 @@ import { resolveDistArtifactLockPath } from "../scripts/lib/dist-artifact-owners
 import { listTsdownOutputRoots } from "../scripts/tsdown-build.mts";
 import { runUpdateGatewayBuild } from "../scripts/update-gateway-build.mts";
 import * as gatewayBindings from "../src/daemon/managed-gateway-bindings.js";
+import { resolveManagedUpdateLeaseDatabasePath } from "../src/infra/update-managed-service-handoff-lease.js";
 import { CommandProcessCleanupError } from "../src/process/exec-result.js";
 import { retainCommandProcessCleanup } from "../src/process/exec-spawn.js";
 import * as nativeExec from "../src/process/exec.js";
@@ -20,203 +21,215 @@ vi.mock("../scripts/lib/managed-child-process.mts", async (importOriginal) => ({
   runManagedCommand: lifecycleMock,
 }));
 
-async function runTransaction(
-  stop: string,
-  restart: string,
-  fixture: {
-    root: string;
-    build: () => Promise<{ exitCode: number; admissionRefused?: true }>;
-    lifecycle: (command: string) => Promise<number>;
-  },
-) {
+async function runTransaction(fixture: {
+  build: () => Promise<{ exitCode: number; admissionRefused?: true }>;
+  lifecycle?: (command: string) => Promise<number>;
+  events?: string[];
+}) {
   buildMock.mockImplementation(fixture.build);
-  lifecycleMock.mockImplementation(({ args }: { args: string[] }) => fixture.lifecycle(args[1]!));
-  const cwd = vi.spyOn(process, "cwd").mockReturnValue(fixture.root);
-  try {
-    return await runUpdateGatewayBuild(stop, restart, shimDir);
-  } finally {
-    cwd.mockRestore();
-  }
+  lifecycleMock.mockImplementation(({ args }: { args: string[] }) => {
+    fixture.events?.push(args[1]!);
+    return fixture.lifecycle?.(args[1]!) ?? Promise.resolve(0);
+  });
+  return await runUpdateGatewayBuild("stop", "restart", shimDir);
 }
 
 let scratch: string;
 let workdir: string;
 let shimDir: string;
+function writeFiles(root: string, files: Record<string, string>) {
+  for (const [file, value] of Object.entries(files)) {
+    const target = path.join(root, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, value);
+  }
+}
+const read = (file: string) => fs.readFileSync(path.join(workdir, file), "utf8");
+const exists = (file: string) => fs.existsSync(path.join(workdir, file));
+const inode = (file: string) => fs.statSync(path.join(workdir, file)).ino;
+const ownerExists = () =>
+  fs.existsSync(path.join(resolveDistArtifactLockPath(workdir), "owner.json"));
+const commandSuccess = (stdout = "") => ({
+  code: 0,
+  stdout,
+  stderr: "",
+  signal: null,
+  killed: false,
+  termination: "exit" as const,
+  noOutputTimedOut: false,
+});
 beforeEach(() => {
   scratch = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-update-build-"));
   workdir = path.join(scratch, "checkout");
+  vi.stubEnv("TMPDIR", scratch);
+  const database = resolveManagedUpdateLeaseDatabasePath();
+  if (!fs.realpathSync(path.dirname(database)).startsWith(fs.realpathSync(scratch) + path.sep)) {
+    throw new Error("Non-private handoff database");
+  }
   shimDir = path.join(scratch, "bin");
   fs.mkdirSync(shimDir);
+  vi.spyOn(process, "cwd").mockReturnValue(workdir);
 });
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   fs.rmSync(scratch, { recursive: true, force: true });
 });
 
 describe("source update build output transaction", () => {
   const outputs = () => listTsdownOutputRoots();
-  const writeOutput = (output: string, value: string) => {
-    fs.mkdirSync(path.join(workdir, output), { recursive: true });
-    fs.writeFileSync(path.join(workdir, output, "marker"), value);
-  };
-  const readOutput = (output: string) =>
-    fs.readFileSync(path.join(workdir, output, "marker"), "utf8");
+  const writeOutput = (output: string, value: string) =>
+    writeFiles(workdir, { [`${output}/marker`]: value });
+  const readOutput = (output: string) => read(`${output}/marker`);
   const backups = () =>
     fs.readdirSync(workdir).filter((name) => name.startsWith(".update-build-backup."));
-  beforeEach(() => fs.mkdirSync(workdir));
-
-  it("refuses publication when a shared consumer starts during candidate import", async () => {
-    const command = nativeExec.runCommandWithTimeout;
-    const git = async (directory: string, ...args: string[]) => {
-      const result = await command(["git", "-C", directory, ...args], {
-        cwd: directory,
-        timeoutMs: 5_000,
-        env: { ...process.env, GIT_CONFIG_COUNT: "0" },
-      });
-      expect(result.code, result.stderr).toBe(0);
-      return result.stdout.trim();
-    };
-    const writeRuntime = (directory: string, sha: string, marker: string) => {
-      fs.mkdirSync(path.join(directory, "dist/control-ui"), { recursive: true });
-      fs.writeFileSync(path.join(directory, "dist/entry.js"), "// fixture runtime\n");
-      fs.writeFileSync(path.join(directory, "dist/control-ui/index.html"), "ready");
-      fs.writeFileSync(
-        path.join(directory, "dist/build-info.json"),
-        JSON.stringify({ commit: sha, buildId: sha }),
-      );
-      for (const name of [".buildstamp", ".runtime-postbuildstamp"]) {
-        fs.writeFileSync(path.join(directory, "dist", name), JSON.stringify({ head: sha }));
-      }
-      fs.writeFileSync(path.join(directory, "dist/marker"), marker);
-    };
-    await git(workdir, "init", "--initial-branch=main");
-    await git(workdir, "config", "user.name", "OpenClaw Test");
-    await git(workdir, "config", "user.email", "openclaw@example.com");
-    await git(workdir, "config", "commit.gpgsign", "false");
-    fs.writeFileSync(
-      path.join(workdir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.9.1", packageManager: "pnpm@12.4.0" }),
-    );
-    fs.writeFileSync(path.join(workdir, "pnpm-workspace.yaml"), "packages: []\n");
-    fs.writeFileSync(path.join(workdir, ".gitignore"), "dist/\nnode_modules/\n.artifacts/\n");
-    await git(workdir, "add", ".");
-    await git(workdir, "commit", "-m", "original");
-    const before = await git(workdir, "rev-parse", "HEAD");
-    await git(workdir, "checkout", "-b", "target");
-    fs.writeFileSync(path.join(workdir, "target.txt"), "candidate source\n");
-    await git(workdir, "add", "target.txt");
-    await git(workdir, "commit", "-m", "target");
-    const target = await git(workdir, "rev-parse", "HEAD");
-    await git(workdir, "checkout", "main");
-    writeRuntime(workdir, before, "original");
-    fs.mkdirSync(path.join(workdir, "node_modules"));
-    const dependency = path.join(workdir, "node_modules/marker");
-    fs.writeFileSync(dependency, "original dependency");
-    const originalInodes = ["dist/marker", "node_modules/marker"].map(
-      (name) => fs.statSync(path.join(workdir, name)).ino,
-    );
-    let consumerLive = false;
-    let imported = false;
-    const observed: boolean[] = [];
-    const siblingEnv = { HOME: path.join(scratch, "sibling-home"), OPENCLAW_PROFILE: "sibling" };
-    vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockResolvedValue([
-      { env: siblingEnv },
-    ]);
-    vi.spyOn(gatewayBindings, "readManagedGatewayBindingState").mockImplementation(async () => {
-      observed.push(consumerLive);
-      return {
-        installed: true,
-        loadState: { status: "loaded" },
-        running: consumerLive,
-        env: siblingEnv,
-        command: {
-          programArguments: [process.execPath, path.join(workdir, "dist/entry.js"), "gateway"],
-        },
-        runtime: {
-          status: consumerLive ? "running" : "stopped",
-          pid: consumerLive ? 631 : undefined,
-        },
-      };
-    });
-    vi.spyOn(nativeExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
-      if (argv[0] === "pnpm") {
-        const directory = typeof options === "number" ? undefined : options.cwd;
-        expect(directory).toBeDefined();
-        expect(directory).not.toBe(workdir);
-        if (argv.includes("install")) {
-          fs.mkdirSync(path.join(directory!, "node_modules"), { recursive: true });
-          fs.writeFileSync(path.join(directory!, "node_modules/marker"), "candidate dependency");
-        }
-        if (argv.includes("build")) {
-          writeRuntime(directory!, await git(directory!, "rev-parse", "HEAD"), "candidate");
-        }
-        return {
-          code: 0,
-          stdout: argv.includes("--version") ? "12.4.0" : "",
-          stderr: "",
-          signal: null,
-          killed: false,
-          termination: "exit",
-          noOutputTimedOut: false,
-        };
-      }
-      const result = await command(argv, options);
-      if (argv.includes("index-pack")) {
-        expect(result.code, result.stderr).toBe(0);
-        imported = true;
-        consumerLive = true;
-      }
-      return result;
-    });
-    const lifecycle: string[] = [];
-    lifecycleMock.mockImplementation(async ({ args }: { args: string[] }) => {
-      lifecycle.push(args[1]!);
-      if (args[1] === "restart-selected") {
-        expect(await git(workdir, "rev-parse", "HEAD")).toBe(before);
-        expect(readOutput("dist")).toBe("original");
-        expect(fs.readFileSync(dependency, "utf8")).toBe("original dependency");
-      }
-      return 0;
-    });
-    const cwd = vi.spyOn(process, "cwd").mockReturnValue(workdir);
-    let outcome: PromiseSettledResult<number>;
-    try {
-      [outcome] = await Promise.allSettled([
-        runUpdateGatewayBuild("stop-selected", "restart-selected", shimDir, target),
-      ]);
-    } finally {
-      cwd.mockRestore();
-    }
-    expect(imported).toBe(true);
-    expect(consumerLive).toBe(true);
-    expect(lifecycle).toEqual(["stop-selected", "restart-selected"]);
-    expect({
-      outcome: outcome.status,
-      rejection: outcome.status === "rejected" ? String(outcome.reason) : undefined,
-      lastObservedConsumerLive: observed.at(-1),
-      head: await git(workdir, "rev-parse", "HEAD"),
-      targetSourceExists: fs.existsSync(path.join(workdir, "target.txt")),
-      runtime: readOutput("dist"),
-      dependency: fs.readFileSync(dependency, "utf8"),
-      inodes: ["dist/marker", "node_modules/marker"].map(
-        (name) => fs.statSync(path.join(workdir, name)).ino,
-      ),
-    }).toEqual({
-      outcome: "rejected",
-      rejection: expect.stringContaining("another managed Gateway"),
-      lastObservedConsumerLive: true,
-      head: before,
-      targetSourceExists: false,
-      runtime: "original",
-      dependency: "original dependency",
-      inodes: originalInodes,
-    });
-    expect(
-      fs
-        .readdirSync(path.join(workdir, ".git/objects/pack"))
-        .filter((name) => name.endsWith(".keep")),
-    ).toEqual([]);
+  beforeEach(() => {
+    fs.mkdirSync(workdir);
+    // TMPDIR can itself be inside the invoking checkout. Keep synthetic custody local.
+    fs.mkdirSync(path.join(workdir, ".git"));
   });
+
+  it.each(["shared consumer", "migration refusal", "admission unavailable"])(
+    "preserves the incumbent on %s",
+    async (failure) => {
+      const command = nativeExec.runCommandWithTimeout;
+      const git = async (directory: string, ...args: string[]) => {
+        const result = await command(["git", "-C", directory, ...args], {
+          cwd: directory,
+          timeoutMs: 5_000,
+          env: { ...process.env, GIT_CONFIG_COUNT: "0" },
+        });
+        expect(result.code, result.stderr).toBe(0);
+        return result.stdout.trim();
+      };
+      const writeRuntime = (directory: string, sha: string, marker: string) => {
+        writeFiles(directory, {
+          "dist/entry.js": `console.log(${JSON.stringify(
+            JSON.stringify({
+              protocol: 1,
+              verdict: failure === "migration refusal" ? "refuse" : "admit",
+              reasons:
+                failure === "migration refusal"
+                  ? [{ code: "heartbeat-migration", message: "Conflicting automation scratch" }]
+                  : [],
+              warnings: [],
+              facts: { candidateVersion: "2026.9.1", installedVersion: "2026.9.1", checks: [] },
+            }),
+          )}); process.exit(${failure === "migration refusal" ? 3 : failure === "admission unavailable" ? 2 : 0});`,
+          "dist/control-ui/index.html": "ready",
+          "dist/build-info.json": JSON.stringify({ commit: sha, buildId: sha }),
+          "dist/.buildstamp": JSON.stringify({ head: sha }),
+          "dist/.runtime-postbuildstamp": JSON.stringify({ head: sha }),
+          "dist/marker": marker,
+        });
+      };
+      await git(workdir, "init", "--initial-branch=main");
+      await git(workdir, "config", "user.name", "OpenClaw Test");
+      await git(workdir, "config", "user.email", "openclaw@example.com");
+      await git(workdir, "config", "commit.gpgsign", "false");
+      writeFiles(workdir, {
+        "package.json": JSON.stringify({
+          name: "openclaw",
+          version: "2026.9.1",
+          packageManager: "pnpm@12.4.0",
+          openclaw: { updateAdmissionProtocol: 1 },
+        }),
+        "pnpm-workspace.yaml": "packages: []\n",
+        ".gitignore": "dist/\nnode_modules/\n.artifacts/\n",
+      });
+      await git(workdir, "add", ".");
+      await git(workdir, "commit", "-m", "original");
+      const before = await git(workdir, "rev-parse", "HEAD");
+      await git(workdir, "checkout", "-b", "target");
+      writeFiles(workdir, { "target.txt": "candidate source\n" });
+      await git(workdir, "add", "target.txt");
+      await git(workdir, "commit", "-m", "target");
+      const target = await git(workdir, "rev-parse", "HEAD");
+      await git(workdir, "checkout", "main");
+      writeRuntime(workdir, before, "original");
+      writeFiles(workdir, { "node_modules/marker": "original dependency" });
+      const inodes = () => ["dist/marker", "node_modules/marker"].map(inode);
+      const originalInodes = inodes();
+      let consumerLive = false;
+      let imported = false;
+      const observed: boolean[] = [];
+      const siblingEnv = { HOME: path.join(scratch, "sibling-home"), OPENCLAW_PROFILE: "sibling" };
+      vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockResolvedValue([
+        { env: siblingEnv },
+      ]);
+      vi.spyOn(gatewayBindings, "readManagedGatewayBindingState").mockImplementation(async () => {
+        observed.push(consumerLive);
+        return {
+          installed: true,
+          loadState: { status: "loaded" },
+          running: consumerLive,
+          env: siblingEnv,
+          command: {
+            programArguments: [process.execPath, path.join(workdir, "dist/entry.js"), "gateway"],
+          },
+          runtime: {
+            status: consumerLive ? "running" : "stopped",
+            pid: consumerLive ? 631 : undefined,
+          },
+        };
+      });
+      vi.spyOn(nativeExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+        if (argv[0] === "pnpm") {
+          const directory = typeof options === "number" ? undefined : options.cwd;
+          expect(directory).toBeDefined();
+          expect(directory).not.toBe(workdir);
+          if (argv.includes("install")) {
+            writeFiles(directory!, { "node_modules/marker": "candidate dependency" });
+          }
+          if (argv.includes("build")) {
+            writeRuntime(directory!, await git(directory!, "rev-parse", "HEAD"), "candidate");
+          }
+          return commandSuccess(argv.includes("--version") ? "12.4.0" : "");
+        }
+        const result = await command(argv, options);
+        if (argv.includes("index-pack")) {
+          expect(result.code, result.stderr).toBe(0);
+          imported = true;
+          consumerLive = true;
+        }
+        return result;
+      });
+      const lifecycle: string[] = [];
+      lifecycleMock.mockImplementation(async ({ args }: { args: string[] }) => {
+        lifecycle.push(args[1]!);
+        if (args[1] === "restart-selected") {
+          expect(await git(workdir, "rev-parse", "HEAD")).toBe(before);
+          expect(readOutput("dist")).toBe("original");
+          expect(read("node_modules/marker")).toBe("original dependency");
+        }
+        return 0;
+      });
+      const reachedPublication = failure === "shared consumer";
+      await expect(
+        runUpdateGatewayBuild("stop-selected", "restart-selected", shimDir, target),
+      ).rejects.toThrow(
+        reachedPublication
+          ? "another managed Gateway"
+          : failure === "migration refusal"
+            ? "Conflicting automation scratch"
+            : "Candidate admission unavailable (exit-2)",
+      );
+      expect(imported).toBe(reachedPublication);
+      expect(consumerLive).toBe(reachedPublication);
+      expect(lifecycle).toEqual(reachedPublication ? ["stop-selected", "restart-selected"] : []);
+      expect(observed.at(-1)).toBe(reachedPublication ? true : undefined);
+      expect(await git(workdir, "rev-parse", "HEAD")).toBe(before);
+      expect(exists("target.txt")).toBe(false);
+      expect(readOutput("dist")).toBe("original");
+      expect(read("node_modules/marker")).toBe("original dependency");
+      expect(inodes()).toEqual(originalInodes);
+      expect(
+        fs
+          .readdirSync(path.join(workdir, ".git/objects/pack"))
+          .filter((name) => name.endsWith(".keep")),
+      ).toEqual([]);
+    },
+  );
 
   it.each(["throw", "late", "joined"] as const)(
     "retains reference-update custody only for canonical uncertainty (%s)",
@@ -227,32 +240,18 @@ describe("source update build output transaction", () => {
       if (mode === "late") {
         command.mockImplementationOnce(async () => {
           retainCommandProcessCleanup(Promise.resolve("uncertain"));
-          return {
-            stdout: "a".repeat(40),
-            stderr: "",
-            code: 0,
-            signal: null,
-            killed: false,
-            termination: "exit",
-            noOutputTimedOut: false,
-          };
+          return commandSuccess("a".repeat(40));
         });
       }
-      const cwd = vi.spyOn(process, "cwd").mockReturnValue(workdir);
       lifecycleMock.mockClear();
-      try {
-        await expect(
-          runUpdateGatewayBuild("stop", "restart", shimDir, "a".repeat(40)),
-        ).rejects.toThrow();
-        const owner = resolveDistArtifactLockPath(workdir);
-        expect(fs.existsSync(path.join(owner, "owner.json"))).toBe(uncertain);
-        expect(fs.existsSync(path.join(owner, "unjoined"))).toBe(uncertain);
-        expect(command).toHaveBeenCalledTimes(1);
-        expect(lifecycleMock).not.toHaveBeenCalled();
-      } finally {
-        command.mockRestore();
-        cwd.mockRestore();
-      }
+      await expect(
+        runUpdateGatewayBuild("stop", "restart", shimDir, "a".repeat(40)),
+      ).rejects.toThrow();
+      const owner = resolveDistArtifactLockPath(workdir);
+      expect(fs.existsSync(path.join(owner, "owner.json"))).toBe(uncertain);
+      expect(fs.existsSync(path.join(owner, "unjoined"))).toBe(uncertain);
+      expect(command).toHaveBeenCalledTimes(1);
+      expect(lifecycleMock).not.toHaveBeenCalled();
     },
   );
 
@@ -264,18 +263,15 @@ describe("source update build output transaction", () => {
         writeOutput(output, `old:${output}`);
       }
       const events: string[] = [];
-      const result = runTransaction("stop", "restart", {
-        root: workdir,
+      const result = runTransaction({
         lifecycle: async (command) => {
-          expect(fs.existsSync(path.join(resolveDistArtifactLockPath(workdir), "owner.json"))).toBe(
-            true,
-          );
+          expect(ownerExists()).toBe(true);
           events.push(command);
           if (command === "restart") {
             for (const output of oldRoots) {
               expect(readOutput(output)).toBe(`old:${output}`);
             }
-            expect(fs.existsSync(path.join(workdir, outputs().at(-1)!))).toBe(false);
+            expect(exists(outputs().at(-1)!)).toBe(false);
           }
           return command === "restart" && mode === "recovery failure" ? 23 : 0;
         },
@@ -318,8 +314,7 @@ describe("source update build output transaction", () => {
     async (restartCode) => {
       writeOutput("dist/control-ui", "preserved UI");
       writeOutput("dist", "old");
-      const result = runTransaction("stop", "restart", {
-        root: workdir,
+      const result = runTransaction({
         lifecycle: async (command) => (command === "stop" ? 0 : restartCode),
         build: async () => {
           expect(readOutput("dist/control-ui")).toBe("preserved UI");
@@ -336,26 +331,20 @@ describe("source update build output transaction", () => {
       expect(readOutput("dist/control-ui")).toBe("preserved UI");
       expect(backups()).toHaveLength(restartCode ? 1 : 0);
       if (restartCode) {
-        expect(fs.readFileSync(path.join(workdir, backups()[0]!, "dist/marker"), "utf8")).toBe(
-          "old",
-        );
+        expect(read(`${backups()[0]!}/dist/marker`)).toBe("old");
       }
     },
   );
 
   it("does not build or replace outputs after a failed stop", async () => {
     writeOutput("dist", "old");
-    let built = false;
-    const code = await runTransaction("stop", "restart", {
-      root: workdir,
+    const build = vi.fn(async () => ({ exitCode: 0 }));
+    const code = await runTransaction({
       lifecycle: async () => 23,
-      build: async () => {
-        built = true;
-        return { exitCode: 0 };
-      },
+      build,
     });
     expect(code).toBe(23);
-    expect(built).toBe(false);
+    expect(build).not.toHaveBeenCalled();
     expect(readOutput("dist")).toBe("old");
     expect(backups()).toEqual([]);
   });
@@ -364,12 +353,8 @@ describe("source update build output transaction", () => {
     writeOutput("dist", "old");
     const events: string[] = [];
     await expect(
-      runTransaction("stop", "restart", {
-        root: workdir,
-        lifecycle: async (command) => {
-          events.push(command);
-          return 0;
-        },
+      runTransaction({
+        events,
         build: async () => {
           writeOutput("dist", "partial");
           throw Object.assign(new Error("writer cleanup uncertain"), {
@@ -381,22 +366,17 @@ describe("source update build output transaction", () => {
     expect(events).toEqual(["stop"]);
     expect(readOutput("dist")).toBe("partial");
     expect(backups()).toHaveLength(1);
-    expect(fs.existsSync(path.join(resolveDistArtifactLockPath(workdir), "owner.json"))).toBe(true);
+    expect(ownerExists()).toBe(true);
   });
 
   it("does not restart or follow a replaced output root when restoration is unsafe", async () => {
     writeOutput("dist", "old");
     const outside = path.join(scratch, "outside");
-    fs.mkdirSync(outside);
-    fs.writeFileSync(path.join(outside, "marker"), "outside");
+    writeFiles(outside, { marker: "outside" });
     const events: string[] = [];
     await expect(
-      runTransaction("stop", "restart", {
-        root: workdir,
-        lifecycle: async (command) => {
-          events.push(command);
-          return 0;
-        },
+      runTransaction({
+        events,
         build: async () => {
           fs.rmSync(path.join(workdir, "dist"), { recursive: true });
           fs.symlinkSync(outside, path.join(workdir, "dist"));
@@ -412,25 +392,21 @@ describe("source update build output transaction", () => {
   it("does not rm or restore output roots when the live-dist fence refuses before mutation", async () => {
     writeOutput("dist", "old");
     const events: string[] = [];
-    const inode = fs.statSync(path.join(workdir, "dist", "marker")).ino;
-    const code = await runTransaction("stop", "restart", {
-      root: workdir,
-      lifecycle: async (command) => {
-        events.push(command);
-        return 0;
-      },
+    const originalInode = inode("dist/marker");
+    const code = await runTransaction({
+      events,
       build: async () => {
         events.push("build");
         writeOutput("dist", "old");
-        fs.writeFileSync(path.join(workdir, "dist", "canary"), "after-backup");
+        writeFiles(workdir, { "dist/canary": "after-backup" });
         return { exitCode: 1, admissionRefused: true };
       },
     });
     expect(code).toBe(1);
     expect(events).toEqual(["stop", "build", "restart"]);
     expect(readOutput("dist")).toBe("old");
-    expect(fs.readFileSync(path.join(workdir, "dist", "canary"), "utf8")).toBe("after-backup");
-    expect(fs.statSync(path.join(workdir, "dist", "marker")).ino).toBe(inode);
+    expect(read("dist/canary")).toBe("after-backup");
+    expect(inode("dist/marker")).toBe(originalInode);
     expect(backups()).toEqual([]);
   });
 
@@ -440,12 +416,8 @@ describe("source update build output transaction", () => {
     fs.symlinkSync(outside, path.join(workdir, "packages"));
     const lifecycle: string[] = [];
     await expect(
-      runTransaction("stop", "restart", {
-        root: workdir,
-        lifecycle: async (command) => {
-          lifecycle.push(command);
-          return 0;
-        },
+      runTransaction({
+        events: lifecycle,
         build: async () => ({ exitCode: 0 }),
       }),
     ).rejects.toThrow("symbolic link");

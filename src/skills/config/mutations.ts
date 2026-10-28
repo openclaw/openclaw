@@ -13,10 +13,10 @@ export async function updateSkillConfigEntry(params: {
     mutate: (draft) => {
       const entries = { ...draft.skills?.entries };
       const current = { ...entries[params.skillKey] };
-      if (typeof params.enabled === "boolean") {
+      if (params.enabled !== undefined) {
         current.enabled = params.enabled;
       }
-      if (typeof params.apiKey === "string") {
+      if (params.apiKey !== undefined) {
         const trimmed = normalizeSecretInput(params.apiKey);
         if (trimmed === REDACTED_SENTINEL) {
           // Keep the stored secret when a client round-trips a redacted response value.
@@ -26,7 +26,7 @@ export async function updateSkillConfigEntry(params: {
           delete current.apiKey;
         }
       }
-      if (params.env && typeof params.env === "object") {
+      if (params.env) {
         const nextEnv = { ...current.env };
         for (const [key, value] of Object.entries(params.env)) {
           const trimmedKey = key.trim();

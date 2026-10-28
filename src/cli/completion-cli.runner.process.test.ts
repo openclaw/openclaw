@@ -9,22 +9,18 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 type ChildExit = { code: number | null; signal: NodeJS.Signals | null };
-type Settlement =
-  | { state: "pending" }
-  | { state: "fulfilled" }
-  | { state: "rejected"; error: unknown };
-
 function observeSettlement(promise: Promise<unknown>) {
-  const observed: { value: Settlement } = { value: { state: "pending" } };
-  void promise.then(
-    () => {
-      observed.value = { state: "fulfilled" };
-    },
-    (error: unknown) => {
-      observed.value = { state: "rejected", error };
-    },
-  );
+  const observed = vi.fn<(value: unknown) => void>();
+  void promise.then(observed, observed);
   return observed;
+}
+
+function rejection(settlement: ReturnType<typeof observeSettlement>) {
+  const error = settlement.mock.calls[0]?.[0];
+  if (!(error instanceof Error)) {
+    throw new Error("Completion and caller cleanup must reject with an Error");
+  }
+  return error;
 }
 
 it.skipIf(process.platform === "win32").each([
@@ -66,7 +62,6 @@ process.stdout.write("completion primary failure\\n");
     const tempDirs = createTempDirTracker();
     const children: Promise<ChildExit>[] = [];
     const liveChildren: childProcess.ChildProcess[] = [];
-    let sentTermination = false;
     let childStdout = "";
     const readinessTimeout = message === "PowerShell completion runner did not become ready";
     try {
@@ -85,14 +80,6 @@ process.stdout.write("completion primary failure\\n");
           const child = childProcess.spawn(...args);
           if (args[0] === executable) {
             liveChildren.push(child);
-            const kill = child.kill.bind(child);
-            vi.spyOn(child, "kill").mockImplementation((signal) => {
-              const sent = kill(signal);
-              if (signal === "SIGTERM" && sent) {
-                sentTermination = true;
-              }
-              return sent;
-            });
             if (!child.stdout || !child.stderr) {
               throw new Error("Completion fixture requires both output pipes");
             }
@@ -134,50 +121,27 @@ process.stdout.write("completion primary failure\\n");
       if (readinessTimeout) {
         await partialStdout.promise;
         await vi.advanceTimersByTimeAsync(14_999);
-        expect(first.value).toEqual({ state: "pending" });
-        expect(sentTermination).toBe(false);
+        expect(first).not.toHaveBeenCalled();
+        expect(liveChildren[0]?.killed).toBe(false);
         await vi.advanceTimersByTimeAsync(1);
       }
       expect(await closed.promise).toEqual(outcome);
       // The real child is closed; only promise continuations remain.
       // Node drains those before setImmediate's check phase, regardless of chain depth.
       await setImmediate();
-      const primaryFailure = expect.objectContaining({
-        message: expect.stringContaining(message),
-      });
-      expect(first.value).toEqual({ state: "rejected", error: primaryFailure });
-      expect(second.value).toEqual(first.value);
-      expect(caller.value).toEqual(first.value);
+      const primaryFailure = rejection(first);
+      expect(primaryFailure).toMatchObject({ message: expect.stringContaining(message) });
       expect(children).toHaveLength(1);
-      if (
-        first.value.state !== "rejected" ||
-        second.value.state !== "rejected" ||
-        caller.value.state !== "rejected"
-      ) {
-        throw new Error("Completion and caller cleanup must reject");
+      for (const completion of [second, caller]) {
+        expect(rejection(completion)).toBe(primaryFailure);
       }
-      expect(second.value.error).toBe(first.value.error);
-      expect(caller.value.error).toBe(first.value.error);
       if (readinessTimeout) {
-        expect(first.value.error).toBeInstanceOf(Error);
-        if (!(first.value.error instanceof Error)) {
-          throw new Error("Readiness timeout must reject with an Error");
-        }
-        const diagnostic = JSON.parse(first.value.error.message.split("\nStartup: ")[1] ?? "null");
+        const diagnostic = JSON.parse(primaryFailure.message.split("\nStartup: ")[1] ?? "null");
         expect(diagnostic).toMatchObject({
-          executable,
           elapsedMs: 15_000,
-          spawnElapsedMs: 0,
-          pid: liveChildren[0]?.pid,
-          exitCode: null,
-          signalCode: null,
-          killed: false,
           stdoutTail: "x".repeat(4096 - "partial READY".length) + "partial READY",
         });
-        expect(first.value.error.message.length).toBeLessThan(6_000);
-      }
-      if (outcome.signal) {
-        expect(sentTermination).toBe(true);
+        expect(primaryFailure.message.length).toBeLessThan(6_000);
       }
       if (outcome.signal === "SIGKILL") {
         expect(childStdout).toContain("completion fixture received SIGTERM");

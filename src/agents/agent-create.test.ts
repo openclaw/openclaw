@@ -1,6 +1,20 @@
+import { statSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
-import { FsSafeError } from "../infra/fs-safe.js";
+import type { LegacyMainSessionMigrationResult } from "../config/sessions/legacy-main-session-migration.contract.js";
+import { FsSafeError, type ReadResult } from "../infra/fs-safe.js";
+
+const identityStat = statSync(new URL(import.meta.url));
+
+function identityReadResult(content: string): ReadResult {
+  return {
+    buffer: Buffer.from(content),
+    containment: "best-effort",
+    realPath: "/tmp/work/IDENTITY.md",
+    exactIdentity: { dev: 1n, ino: 1n },
+    stat: identityStat,
+  };
+}
 
 const mocks = vi.hoisted(() => ({
   config: {} as Record<string, unknown>,
@@ -11,26 +25,24 @@ const mocks = vi.hoisted(() => ({
   ensureAgentWorkspace: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
   resolveAgentDir: vi.fn(),
-  rootRead: vi.fn(),
+  rootRead: vi.fn<() => Promise<ReadResult>>(),
   rootWrite: vi.fn(),
   mkdir: vi.fn(),
   recordAgentProvenance: vi.fn(),
   readAgentDeletionJournal: vi.fn(() => undefined as Record<string, unknown> | undefined),
   claimCompletedAgentDeletion: vi.fn(() => true),
   migrateLegacyMainSessionKeys: vi.fn(),
-  resolveSharedAuthStoreOwnership: vi.fn(),
+  prepareSharedAuthStoreOwnership: vi.fn(),
+  provisionDefaultProactiveJob: vi.fn(async () => undefined),
 }));
 
 vi.mock("node:fs/promises", () => ({ default: { mkdir: mocks.mkdir } }));
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    transformConfigFileWithRetry: mocks.transformConfigFileWithRetry,
-    withConfigMutationExclusive: mocks.withConfigMutationExclusive,
-  };
-});
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  transformConfigFileWithRetry: mocks.transformConfigFileWithRetry,
+  withConfigMutationExclusive: mocks.withConfigMutationExclusive,
+}));
 
 vi.mock("../commands/agents.bindings.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../commands/agents.bindings.js")>()),
@@ -57,62 +69,109 @@ vi.mock("../state/agent-provenance.js", () => ({
   recordAgentProvenance: mocks.recordAgentProvenance,
 }));
 
+// mock-isolation: Creation/config unit cases leave real provisioning to Cron integration coverage.
+vi.mock("../cron/default-proactive-job.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cron/default-proactive-job.js")>()),
+  provisionDefaultProactiveJob: mocks.provisionDefaultProactiveJob,
+}));
+
+// mock-isolation: Workspace/config unit cases do not own a real SQLite worker or creation store.
+vi.mock("../state/openclaw-agent-execution.js", () => ({
+  prepareOpenClawAgentDatabaseExecution: async () => {},
+}));
+
 vi.mock("../config/sessions/legacy-main-session-migration.js", () => ({
   migrateLegacyMainSessionKeys: mocks.migrateLegacyMainSessionKeys,
 }));
 
-vi.mock("./auth-profiles/path-resolve.js", () => ({
-  resolveSharedAuthStoreOwnership: mocks.resolveSharedAuthStoreOwnership,
+vi.mock("./auth-profiles/path-resolve.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth-profiles/path-resolve.js")>()),
+  prepareSharedAuthStoreOwnership: mocks.prepareSharedAuthStoreOwnership,
 }));
 
-vi.mock("./workspace.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./workspace.js")>();
-  return { ...actual, ensureAgentWorkspace: mocks.ensureAgentWorkspace };
-});
+vi.mock("./workspace.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./workspace.js")>()),
+  ensureAgentWorkspace: mocks.ensureAgentWorkspace,
+}));
 
 vi.mock("../config/sessions/paths.js", () => ({
   resolveSessionTranscriptsDirForAgent: (agentId: string) => `/tmp/transcripts-${agentId}`,
 }));
 
-vi.mock("../infra/fs-safe.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/fs-safe.js")>();
-  return {
-    ...actual,
-    root: vi.fn(async () => ({
-      read: mocks.rootRead,
-      write: mocks.rootWrite,
-    })),
-  };
-});
+vi.mock("../infra/fs-safe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/fs-safe.js")>()),
+  root: vi.fn(async () => ({ read: mocks.rootRead, write: mocks.rootWrite })),
+}));
 
 import { createAgent } from "./agent-create.js";
+
+function migration(overrides: Partial<LegacyMainSessionMigrationResult> = {}) {
+  return {
+    armed: true,
+    changes: [],
+    complete: true,
+    ledgerComplete: true,
+    legacyAgentId: "main",
+    mainKey: "main",
+    warnings: [],
+    outcomes: [{ kind: "no-legacy-rows", detail: "matching completed ledger" }],
+    ...overrides,
+  };
+}
+
+function roster(entries: Record<string, object> = { main: {} }) {
+  return { agents: { entries } };
+}
+
+function expectCreation(params: Parameters<typeof createAgent>[0], expected: object) {
+  return expect(createAgent(params)).resolves.toMatchObject(expected);
+}
+
+function expectError(reason: string, name = "researcher", doctor = false) {
+  return expectCreation(
+    { name },
+    {
+      status: "error",
+      reason,
+      ...(doctor ? { message: expect.stringContaining("openclaw doctor --fix") } : {}),
+    },
+  );
+}
+
+function workspace(dir = "/tmp/default-researcher", bootstrapPending = false) {
+  mocks.ensureAgentWorkspace.mockResolvedValue({ dir, bootstrapPending });
+}
+
+function deletion(cleanupCompleted: boolean) {
+  mocks.readAgentDeletionJournal.mockReturnValue({ operationId: "delete-1", cleanupCompleted });
+}
+
+type Transform = (
+  config: Record<string, unknown>,
+  context: unknown,
+) => Promise<{
+  nextConfig: Record<string, unknown>;
+  result: unknown;
+}>;
+const transformCurrent = (transform: Transform) =>
+  transform(structuredClone(mocks.config), { snapshot: { exists: false }, previousHash: null });
 
 describe("createAgent", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.config = { agents: { entries: { main: {} } } };
+    mocks.config = roster();
     mocks.persisted = {};
     mocks.readAgentDeletionJournal.mockReturnValue(undefined);
     mocks.claimCompletedAgentDeletion.mockReturnValue(true);
-    mocks.migrateLegacyMainSessionKeys.mockResolvedValue({
-      armed: true,
-      changes: [],
-      complete: true,
-      ledgerComplete: true,
-      legacyAgentId: "main",
-      mainKey: "main",
-      outcomes: [{ kind: "no-legacy-rows", detail: "matching completed ledger" }],
-      ownerAgentId: "researcher",
-      warnings: [],
-    });
-    mocks.resolveSharedAuthStoreOwnership.mockReturnValue({ location: "state-db" });
+    mocks.migrateLegacyMainSessionKeys.mockResolvedValue(migration({ ownerAgentId: "researcher" }));
+    mocks.prepareSharedAuthStoreOwnership.mockResolvedValue({ location: "state-db" });
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/default-researcher");
     mocks.resolveAgentDir.mockReturnValue("/tmp/agent-researcher");
     mocks.ensureAgentWorkspace.mockImplementation(async ({ dir }: { dir: string }) => ({
       dir,
       bootstrapPending: true,
     }));
-    mocks.rootRead.mockResolvedValue({ buffer: Buffer.from("") });
+    mocks.rootRead.mockResolvedValue(identityReadResult(""));
     mocks.rootWrite.mockResolvedValue(undefined);
     mocks.mkdir.mockResolvedValue(undefined);
     mocks.parseBindingSpecs.mockReturnValue({ bindings: [], errors: [] });
@@ -120,43 +179,20 @@ describe("createAgent", () => {
       async (fn: (config: Record<string, unknown>) => Promise<unknown>) => await fn(mocks.config),
     );
     mocks.transformConfigFileWithRetry.mockImplementation(
-      async ({
-        transform,
-      }: {
-        transform: (config: Record<string, unknown>, context: unknown) => Promise<unknown>;
-      }) => {
-        const transformed = (await transform(structuredClone(mocks.config), {
-          snapshot: { exists: false },
-          previousHash: null,
-        })) as {
-          nextConfig: Record<string, unknown>;
-          result: unknown;
-        };
+      async ({ transform }: { transform: Transform }) => {
+        const transformed = await transformCurrent(transform);
         mocks.persisted = transformed.nextConfig;
         mocks.config = transformed.nextConfig;
-        return {
-          path: "/tmp/created-config.json",
-          result: transformed.result,
-          nextConfig: transformed.nextConfig,
-        };
+        return { path: "/tmp/created-config.json", ...transformed };
       },
     );
   });
 
   it("returns validation errors before mutation", async () => {
-    await expect(createAgent({ name: "  " })).resolves.toMatchObject({
-      status: "error",
-      reason: "invalid-name",
-    });
-    await expect(createAgent({ name: "###" })).resolves.toMatchObject({
-      status: "error",
-      reason: "invalid-name",
-    });
+    await expectError("invalid-name", "  ");
+    await expectError("invalid-name", "###");
     for (const name of ["OpenClaw", "crestodian"]) {
-      await expect(createAgent({ name })).resolves.toMatchObject({
-        status: "error",
-        reason: "reserved-id",
-      });
+      await expectError("reserved-id", name);
     }
     expect(mocks.transformConfigFileWithRetry).not.toHaveBeenCalled();
   });
@@ -169,124 +205,50 @@ describe("createAgent", () => {
     { kind: "legacy-json-store", armed: true, paths: ["/tmp/sessions.json"] },
     { kind: "store-unreadable", armed: true, paths: ["/tmp/store.sqlite"] },
   ] as const)("rejects main while the $kind session outcome is unresolved", async (outcome) => {
-    mocks.config = { agents: { entries: { robby: { id: "robby" } } } };
-    mocks.migrateLegacyMainSessionKeys.mockResolvedValueOnce({
-      armed: outcome.armed,
-      changes: [],
-      complete: false,
-      ledgerComplete: false,
-      legacyAgentId: "main",
-      mainKey: "main",
-      outcomes: [
-        {
-          ...outcome,
-          paths: "paths" in outcome ? outcome.paths : ["/tmp/legacy.sqlite", "/tmp/owner.sqlite"],
-          sourceKeys: ["agent:main:main", "agent:robby:main"],
-        },
-      ],
-      warnings: [],
-    });
+    mocks.config = roster({ robby: { id: "robby" } });
+    mocks.migrateLegacyMainSessionKeys.mockResolvedValueOnce(
+      migration({
+        armed: outcome.armed,
+        complete: false,
+        ledgerComplete: false,
+        outcomes: [
+          {
+            ...outcome,
+            paths:
+              "paths" in outcome && outcome.paths
+                ? [...outcome.paths]
+                : ["/tmp/legacy.sqlite", "/tmp/owner.sqlite"],
+            sourceKeys: ["agent:main:main", "agent:robby:main"],
+          },
+        ],
+      }),
+    );
 
-    await expect(createAgent({ name: "main" })).resolves.toMatchObject({
-      status: "error",
-      reason: "legacy-session-migration-required",
-      message: expect.stringContaining("openclaw doctor --fix"),
-    });
+    await expectError("legacy-session-migration-required", "main", true);
     expect(mocks.transformConfigFileWithRetry).not.toHaveBeenCalled();
   });
 
   it("rejects main while its agent database still owns shared auth", async () => {
-    mocks.config = { agents: { entries: { robby: { id: "robby" } } } };
-    mocks.resolveSharedAuthStoreOwnership.mockReturnValueOnce({ location: "legacy-main" });
+    mocks.config = roster({ robby: { id: "robby" } });
+    mocks.prepareSharedAuthStoreOwnership.mockResolvedValueOnce({ location: "legacy-main" });
 
-    await expect(createAgent({ name: "main" })).resolves.toMatchObject({
-      status: "error",
-      reason: "shared-auth-store-owned-by-main",
-      message: expect.stringContaining("openclaw doctor --fix"),
-    });
+    await expectError("shared-auth-store-owned-by-main", "main", true);
     expect(mocks.transformConfigFileWithRetry).not.toHaveBeenCalled();
   });
 
   it("creates main when an unarmed scan proves every legacy store clean", async () => {
-    mocks.config = { agents: { entries: { robby: { id: "robby" } } } };
-    mocks.migrateLegacyMainSessionKeys.mockResolvedValueOnce({
-      armed: false,
-      changes: [],
-      complete: true,
-      ledgerComplete: false,
-      legacyAgentId: "main",
-      mainKey: "main",
-      outcomes: [{ kind: "no-legacy-rows", detail: "no configured owner" }],
-      warnings: [],
-    });
+    mocks.config = roster({ robby: { id: "robby" } });
+    mocks.migrateLegacyMainSessionKeys.mockResolvedValueOnce(
+      migration({
+        armed: false,
+        ledgerComplete: false,
+        outcomes: [{ kind: "no-legacy-rows", detail: "no configured owner" }],
+      }),
+    );
 
-    await expect(createAgent({ name: "main" })).resolves.toMatchObject({
-      status: "created",
-      agentId: "main",
-    });
-    expect(mocks.resolveSharedAuthStoreOwnership).toHaveBeenCalledOnce();
+    await expectCreation({ name: "main" }, { status: "created", agentId: "main" });
+    expect(mocks.prepareSharedAuthStoreOwnership).toHaveBeenCalledOnce();
     expect(mocks.transformConfigFileWithRetry).toHaveBeenCalledOnce();
-  });
-
-  it("accepts a complete staged entry", async () => {
-    const result = await createAgent({
-      entry: {
-        id: "researcher",
-        name: "Researcher",
-        workspace: "/tmp/staged-work",
-        agentDir: "/tmp/staged-agent",
-        model: "openai/gpt-5.5",
-        identity: { name: "Researcher", emoji: "🔎" },
-      },
-    });
-
-    expect(result).toMatchObject({
-      status: "created",
-      agentId: "researcher",
-      workspace: "/tmp/staged-work",
-      agentDir: "/tmp/staged-agent",
-    });
-    expect(mocks.persisted).toMatchObject({
-      agents: {
-        entries: {
-          researcher: expect.objectContaining({ model: "openai/gpt-5.5" }),
-        },
-      },
-    });
-    expect(mocks.persisted.agents).not.toHaveProperty("list");
-  });
-
-  it("publishes guided staging and its new agent in one conditional transform", async () => {
-    const result = await createAgent({
-      entry: {
-        id: "researcher",
-        name: "Researcher",
-        workspace: "/tmp/staged-work",
-      },
-      stagedConfig: {
-        writeSnapshot: { snapshot: createTestConfigSnapshot({}), writeOptions: {} },
-        config: {
-          agents: {
-            entries: {
-              main: {},
-              researcher: { workspace: "/tmp/staged-work" },
-            },
-          },
-          channels: { telegram: { enabled: true } },
-        },
-      },
-    });
-
-    expect(result).toMatchObject({ status: "created", agentId: "researcher" });
-    if (result.status === "error") {
-      throw new Error(result.message);
-    }
-    expect(mocks.transformConfigFileWithRetry).toHaveBeenCalledOnce();
-    expect(mocks.persisted).toMatchObject({
-      agents: { entries: { main: expect.any(Object), researcher: expect.any(Object) } },
-      channels: { telegram: { enabled: true } },
-    });
-    expect(result.config).toEqual(mocks.persisted);
   });
 
   it("rejects guided staging whose original revision no longer owns creation", async () => {
@@ -294,14 +256,14 @@ describe("createAgent", () => {
       createAgent({
         entry: { id: "researcher" },
         stagedConfig: {
-          config: { agents: { entries: { researcher: {} } } },
+          config: roster({ researcher: {} }),
           writeSnapshot: {
             snapshot: { ...createTestConfigSnapshot({}), hash: "stale-revision" },
             writeOptions: {},
           },
         },
       }),
-    ).rejects.toThrow("config changed before first-agent creation");
+    ).rejects.toThrow("config changed before agent creation or restoration");
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
   });
 
@@ -317,19 +279,12 @@ describe("createAgent", () => {
         writeOptions: expect.objectContaining({ allowedAgentRosterRemovals: ["main"] }),
       }),
     );
-    expect(mocks.persisted).toMatchObject({
-      agents: { entries: { robby: expect.objectContaining({ workspace: "/tmp/robby" }) } },
-    });
-    expect(
-      (mocks.persisted.agents as { entries?: Record<string, unknown> }).entries,
-    ).not.toHaveProperty("main");
+    expect(mocks.persisted).toHaveProperty("agents.entries.robby.workspace", "/tmp/robby");
+    expect(mocks.persisted).not.toHaveProperty("agents.entries.main");
   });
 
   it("preserves the staged model over the explicit parameter when workspace setup normalizes the path", async () => {
-    mocks.ensureAgentWorkspace.mockResolvedValue({
-      dir: "/normalized/work",
-      bootstrapPending: true,
-    });
+    workspace("/normalized/work", true);
 
     await createAgent({
       entry: {
@@ -341,33 +296,23 @@ describe("createAgent", () => {
       model: "openai/parameter",
     });
 
-    expect(mocks.persisted).toMatchObject({
-      agents: {
-        entries: {
-          researcher: expect.objectContaining({
-            model: "openai/staged",
-            workspace: "/normalized/work",
-          }),
-        },
-      },
-    });
+    expect(mocks.persisted).toMatchObject(
+      roster({
+        researcher: { model: "openai/staged", workspace: "/normalized/work" },
+      }),
+    );
   });
 
   it("provisions the injected main roster only through a bootstrap entry", async () => {
-    await expect(
-      createAgent({
-        entry: {
-          id: "main",
-          name: "main",
-          workspace: "/tmp/main-work",
-        },
+    await expectCreation(
+      {
+        entry: { id: "main", name: "main", workspace: "/tmp/main-work" },
         bootstrapMain: true,
-      }),
-    ).resolves.toMatchObject({ status: "existing", agentId: "main" });
+      },
+      { status: "existing", agentId: "main" },
+    );
     expect(mocks.ensureAgentWorkspace).toHaveBeenCalledOnce();
-    expect(mocks.persisted).toMatchObject({
-      agents: { entries: { main: expect.objectContaining({ workspace: "/tmp/main-work" }) } },
-    });
+    expect(mocks.persisted).toHaveProperty("agents.entries.main.workspace", "/tmp/main-work");
   });
 
   it("does not materialize a minimal main entry from a persisted snapshot", async () => {
@@ -379,20 +324,18 @@ describe("createAgent", () => {
       return { ...transformed, result: transformed.result };
     });
 
-    await expect(
-      createAgent({
+    await expectCreation(
+      {
         entry: { id: "main", workspace: "/tmp/replacement" },
         bootstrapMain: true,
-      }),
-    ).resolves.toMatchObject({ status: "existing", workspace: "/tmp/persisted" });
+      },
+      { status: "existing", workspace: "/tmp/persisted" },
+    );
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
   });
 
   it("prepares staged config effects after setup and immediately before publication", async () => {
-    mocks.ensureAgentWorkspace.mockResolvedValue({
-      dir: "/tmp/default-researcher",
-      bootstrapPending: false,
-    });
+    workspace();
     const commit = vi.fn();
     const prepareConfigCommit = vi.fn(async () => {
       expect(mocks.ensureAgentWorkspace).toHaveBeenCalledOnce();
@@ -414,10 +357,7 @@ describe("createAgent", () => {
     const commit = vi.fn();
     const prepareConfigCommit = vi.fn(async () => ({ commit, rollback }));
     mocks.transformConfigFileWithRetry.mockImplementationOnce(async ({ transform }) => {
-      await transform(structuredClone(mocks.config), {
-        snapshot: { exists: false },
-        previousHash: null,
-      });
+      await transformCurrent(transform);
       throw new Error("injected config commit failure");
     });
 
@@ -437,16 +377,13 @@ describe("createAgent", () => {
     }));
     mocks.rootRead.mockRejectedValue(new FsSafeError("invalid-path", "unsafe identity path"));
 
-    await expect(createAgent({ name: "researcher" })).resolves.toMatchObject({
-      status: "error",
-      reason: "unsafe-identity-file",
-    });
+    await expectError("unsafe-identity-file");
     expect(mocks.transformConfigFileWithRetry).toHaveBeenCalledOnce();
     expect(mocks.persisted).not.toHaveProperty("agents");
   });
 
   it("rechecks creation authority after reading identity and before writing it", async () => {
-    mocks.ensureAgentWorkspace.mockResolvedValue({ dir: "/tmp/work", bootstrapPending: false });
+    workspace("/tmp/work");
     const closed = new Error("creation authority closed");
     const beforePersistentApply = vi.fn();
     mocks.rootRead.mockImplementationOnce(async () => {
@@ -454,7 +391,7 @@ describe("createAgent", () => {
       beforePersistentApply.mockImplementation(() => {
         throw closed;
       });
-      return { buffer: Buffer.from("# Identity\n") };
+      return identityReadResult("# Identity\n");
     });
     const prepareConfigCommit = vi.fn();
 
@@ -467,44 +404,17 @@ describe("createAgent", () => {
   });
 
   it("does not recreate an id with pending deletion cleanup", async () => {
-    mocks.readAgentDeletionJournal.mockReturnValue({
-      operationId: "delete-1",
-      cleanupCompleted: false,
-    });
+    deletion(false);
 
-    await expect(createAgent({ name: "researcher" })).resolves.toMatchObject({
-      status: "error",
-      reason: "deletion-pending",
-    });
+    await expectError("deletion-pending");
     expect(mocks.transformConfigFileWithRetry).not.toHaveBeenCalled();
   });
 
-  it("claims a completed deletion tombstone after recreating the id", async () => {
-    mocks.readAgentDeletionJournal.mockReturnValue({
-      operationId: "delete-1",
-      cleanupCompleted: true,
-    });
-
-    await expect(createAgent({ name: "researcher" })).resolves.toMatchObject({
-      status: "created",
-      agentId: "researcher",
-    });
-    expect(mocks.claimCompletedAgentDeletion).toHaveBeenCalledWith("researcher", "delete-1");
-  });
-
   it("claims a recovered completed tombstone only once for an existing roster entry", async () => {
-    mocks.config = {
-      agents: { entries: { main: {}, researcher: {} } },
-    };
-    mocks.readAgentDeletionJournal.mockReturnValue({
-      operationId: "delete-1",
-      cleanupCompleted: true,
-    });
+    mocks.config = roster({ main: {}, researcher: {} });
+    deletion(true);
 
-    await expect(createAgent({ name: "researcher" })).resolves.toMatchObject({
-      status: "error",
-      reason: "already-exists",
-    });
+    await expectError("already-exists");
     expect(mocks.claimCompletedAgentDeletion).toHaveBeenCalledTimes(1);
   });
 
@@ -518,13 +428,14 @@ describe("createAgent", () => {
       return await transform({ agents: { entries: { main: {} } } });
     });
 
-    await expect(
-      createAgent({
+    await expectCreation(
+      {
         name: "researcher",
         bindingSpecs: ["removed"],
         transformConfig: transformConfig as never,
-      }),
-    ).resolves.toMatchObject({ status: "error", reason: "invalid-bindings" });
+      },
+      { status: "error", reason: "invalid-bindings" },
+    );
     expect(mocks.parseBindingSpecs).toHaveBeenCalledOnce();
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
   });

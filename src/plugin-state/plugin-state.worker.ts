@@ -1,12 +1,16 @@
 import { err, ok } from "@openclaw/normalization-core/result";
 import { requestSessionEntriesCurrentAdmission } from "../config/sessions/session-entry-current-admission.worker.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
+import { executeSqliteQuerySync, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { captureOpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-cache.js";
 import type {
   OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db-contract.js";
+import { hasOpenClawStateTablesBeyondStartupCheckpoint } from "../state/openclaw-state-db-schema-helpers.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type {
   PluginStateOperationCommit,
@@ -17,23 +21,28 @@ import { withPluginStateWorkerReceipt } from "./plugin-state-publication.js";
 import {
   compareAndApplyPluginStateEntry,
   observePluginStateEntry,
-} from "./plugin-state-store.comparison.js";
+} from "./plugin-state-store.comparison.worker.js";
 import {
+  isMissingPluginStateTableError,
   withPluginStateDatabaseReadOnly,
   wrapPluginStateError,
 } from "./plugin-state-store.database.js";
 import { registerPluginStateSequencedJournalEntryInDatabase } from "./plugin-state-store.journal.js";
 import {
-  countLivePluginStateNamespaceEntries,
-  deleteExpiredPluginStateEntries,
   deletePluginStateEntry,
   lookupPluginStateEntry,
+  countLivePluginStateNamespaceEntries,
+  getPluginStateKysely,
+  PLUGIN_STATE_NAMESPACE_MAX_ROWS,
+  pluginStateNamespaceRowBytes,
+  type PluginStateDatabase,
+  type PluginStateReadRow,
 } from "./plugin-state-store.kernel.js";
+import { movePluginStateEntries } from "./plugin-state-store.moves.worker.js";
 import {
   clearPluginStateNamespace,
   consumePluginStateEntry,
   deletePluginStateEntryIfEqual,
-  movePluginStateEntries,
   registerPluginStateEntryIfAbsent,
 } from "./plugin-state-store.mutations.js";
 import {
@@ -50,7 +59,9 @@ import type {
   PluginStateOperationHandler,
 } from "./plugin-state-store.types.js";
 import {
-  type PluginStateWorkerOperations,
+  type PluginStateWriteOperations,
+  type PluginStateReadCommand,
+  type PluginStateReadResult,
   pluginStateWorkerOperations,
 } from "./plugin-state-worker-contract.js";
 import { capturePluginStateWorkerFailure } from "./plugin-state-worker-errors.js";
@@ -58,6 +69,118 @@ import {
   clearRuntimeHealthEntries,
   hasRuntimeHealthEntriesToClear,
 } from "./runtime-health-store.kernel.js";
+
+/** Keep expired raw rows so a later clock correction has the same view as SQL. */
+function loadPluginStateNamespaceRows(
+  store: PluginStateDatabase,
+  params: { pluginId: string; namespace: string; maxBytes: number },
+): PluginStateReadRow[] | undefined {
+  const query = getPluginStateKysely(store.db)
+    .selectFrom("plugin_state_entries")
+    .where("plugin_id", "=", params.pluginId)
+    .where("namespace", "=", params.namespace)
+    .limit(PLUGIN_STATE_NAMESPACE_MAX_ROWS + 1);
+  const payload = query.select(["entry_key", "value_json", "created_at", "expires_at"]);
+  if (isPostgresSqlConnection(store.db)) {
+    // The PG adapter buffers results; size metadata bounds the payload before materialization.
+    return runSqliteReadSnapshotSync(store.db, () => {
+      const sizes = executeSqliteQuerySync(
+        store.db,
+        query.select((eb) => [
+          eb.fn<number>("octet_length", ["entry_key"]).as("key_bytes"),
+          eb.fn<number>("octet_length", ["value_json"]).as("value_bytes"),
+        ]),
+      ).rows;
+      // UTF-8 byte lengths conservatively bound the retained UTF-16 strings.
+      const bytes = sizes.reduce(
+        (sum, row) => sum + 128 + 2 * (row.key_bytes + row.value_bytes),
+        0,
+      );
+      if (sizes.length > PLUGIN_STATE_NAMESPACE_MAX_ROWS || bytes > params.maxBytes) {
+        return undefined;
+      }
+      return executeSqliteQuerySync(store.db, payload).rows;
+    });
+  }
+  const rows: PluginStateReadRow[] = [];
+  let bytes = 0;
+  for (const row of iterateSqliteQuerySync(store.db, payload)) {
+    bytes += pluginStateNamespaceRowBytes(row);
+    if (rows.length === PLUGIN_STATE_NAMESPACE_MAX_ROWS || bytes > params.maxBytes) {
+      return undefined;
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+export function readPluginStateCommand(
+  store: PluginStateDatabase,
+  command: PluginStateReadCommand,
+): PluginStateReadResult {
+  const description = pluginStateWorkerOperations[command.type];
+  try {
+    switch (command.type) {
+      case "pluginState.lookup":
+        return { type: command.type, result: ok(lookupPluginStateEntry(store, command.input)) };
+      case "pluginState.lookupMany":
+        return {
+          type: command.type,
+          result: ok(
+            lookupPluginStateEntries(store, command.input).map((row) =>
+              row.ok ? row : err(capturePluginStateWorkerFailure(row.error)),
+            ),
+          ),
+        };
+      case "pluginState.entries":
+        return { type: command.type, result: ok(listPluginStateEntries(store, command.input)) };
+      case "pluginState.entriesInKeyRange":
+        return {
+          type: command.type,
+          result: ok(listPluginStateEntriesInKeyRange(store, command.input)),
+        };
+      default:
+        return {
+          type: command.type,
+          result: ok(
+            countLivePluginStateNamespaceEntries(store.db, { ...command.input, now: Date.now() }),
+          ),
+        };
+    }
+  } catch (error) {
+    // Lease bootstrap precedes creation of the plugin-state table; other missing tables are damage.
+    if (
+      isMissingPluginStateTableError(error) &&
+      !hasOpenClawStateTablesBeyondStartupCheckpoint(store.db)
+    ) {
+      switch (command.type) {
+        case "pluginState.lookup":
+          return { type: command.type, result: ok(undefined) };
+        case "pluginState.count":
+          return { type: command.type, result: ok(0) };
+        case "pluginState.lookupMany":
+          return { type: command.type, result: ok(command.input.keys.map(() => ok(undefined))) };
+        default:
+          return { type: command.type, result: ok([]) };
+      }
+    }
+    return {
+      type: command.type,
+      result: {
+        ok: false,
+        error: capturePluginStateWorkerFailure(
+          wrapPluginStateError(
+            error,
+            description.operation,
+            description.code,
+            description.message,
+            store.path,
+          ),
+        ),
+      },
+    };
+  }
+}
 
 const operationHandlers = new Map<
   string,
@@ -91,13 +214,21 @@ export async function preparePluginStateOperation(input: PluginStateOperationInp
   );
 }
 
-export function executePluginStateCommand(
-  command: SqliteWorkerCommand<PluginStateWorkerOperations>,
+export function executePluginStateCommand<Key extends keyof PluginStateWriteOperations>(
+  command: { type: Key; input: PluginStateWriteOperations[Key]["input"] },
   options: OpenClawStateDatabaseOptions & { path: string },
   openDatabase: () => OpenClawStateDatabase,
   hasRetainedDatabase: boolean,
-): PluginStateWorkerOperations[keyof PluginStateWorkerOperations]["output"] {
+): PluginStateWriteOperations[Key]["output"];
+export function executePluginStateCommand(
+  command: SqliteWorkerCommand<PluginStateWriteOperations>,
+  options: OpenClawStateDatabaseOptions & { path: string },
+  openDatabase: () => OpenClawStateDatabase,
+  hasRetainedDatabase: boolean,
+): PluginStateWriteOperations[keyof PluginStateWriteOperations]["output"] {
   const description = pluginStateWorkerOperations[command.type];
+  // Initial grants may wait for the host, so request them before taking the writer.
+  // Commit grants still recheck session authority inside the transaction.
   const admit = (stage: "transaction" | "commit") =>
     requestSessionEntriesCurrentAdmission(command.input?.sessionEntryCurrentSources, {
       stage,
@@ -115,6 +246,19 @@ export function executePluginStateCommand(
         ),
       ),
     );
+  if (command.type === "pluginState.loadNamespace") {
+    try {
+      return ok(
+        withPluginStateDatabaseReadOnly(
+          description.operation,
+          (store) => loadPluginStateNamespaceRows(store, command.input),
+          options,
+        ),
+      );
+    } catch (error) {
+      return failure(error);
+    }
+  }
   if (command.type === "pluginState.executeOperation") {
     try {
       const handler = operationHandlers.get(operationHandlerKey(command.input));
@@ -122,12 +266,27 @@ export function executePluginStateCommand(
         throw new Error("Plugin state operation was not prepared");
       }
       if (command.input.writeStores.length === 0) {
+        const run = (store: PluginStateDatabase | undefined) => {
+          let emptyShortcut = false;
+          const result = executePluginStateOperation(
+            store,
+            command.input,
+            (input, tx) => {
+              const shortcut = command.input.ifEmpty;
+              emptyShortcut = shortcut !== undefined && tx.entries(shortcut.store).length === 0;
+              return emptyShortcut ? shortcut!.value : handler(input, tx);
+            },
+            options.path,
+            getDatabaseEngineInput("state") !== undefined,
+          );
+          return emptyShortcut ? { ...result, emptyShortcut: true as const } : result;
+        };
+        if (command.input.namespaceSnapshots) {
+          return ok(run(undefined));
+        }
         const result = withPluginStateDatabaseReadOnly(
           "lookup",
-          (store) => {
-            const run = () => executePluginStateOperation(store, command.input, handler);
-            return store.db.isTransaction ? run() : runSqliteDeferredTransactionSync(store.db, run);
-          },
+          (store) => runSqliteReadSnapshotSync(store.db, () => run(store)),
           options,
         );
         if (!result) {
@@ -136,17 +295,16 @@ export function executePluginStateCommand(
         return ok(result);
       }
       const database = openDatabase();
+      admit("transaction");
       return ok(
         runOpenClawStateWriteTransaction(
           (store) => {
-            admit("transaction");
             const result = withPluginStateWorkerReceipt(
               store.db,
               () => executePluginStateOperation(store, command.input, handler),
-              (completed): PluginStateOperationCommit => ({
+              (): PluginStateOperationCommit => ({
                 pluginStateOperation: {
                   receiptId: command.input.receiptId,
-                  validUntil: completed.validUntil,
                 },
               }),
             );
@@ -156,67 +314,6 @@ export function executePluginStateCommand(
           { ...options, database },
         ),
       );
-    } catch (error) {
-      return failure(error);
-    }
-  }
-  if (
-    command.type === "pluginState.lookup" ||
-    command.type === "pluginState.lookupMany" ||
-    command.type === "pluginState.entries" ||
-    command.type === "pluginState.entriesInKeyRange" ||
-    command.type === "pluginState.count"
-  ) {
-    try {
-      switch (command.type) {
-        case "pluginState.lookup":
-          return ok(
-            withPluginStateDatabaseReadOnly(
-              "lookup",
-              (store) => lookupPluginStateEntry(store, command.input),
-              options,
-            ),
-          );
-        case "pluginState.lookupMany": {
-          const rows =
-            withPluginStateDatabaseReadOnly(
-              "lookup",
-              (store) => lookupPluginStateEntries(store, command.input),
-              options,
-            ) ?? command.input.keys.map(() => ok(undefined));
-          return ok(
-            rows.map((row) => (row.ok ? row : err(capturePluginStateWorkerFailure(row.error)))),
-          );
-        }
-        case "pluginState.entriesInKeyRange":
-          return ok(
-            withPluginStateDatabaseReadOnly(
-              "entries",
-              (store) => listPluginStateEntriesInKeyRange(store, command.input),
-              options,
-            ) ?? [],
-          );
-        case "pluginState.entries":
-          return ok(
-            withPluginStateDatabaseReadOnly(
-              "entries",
-              (store) => listPluginStateEntries(store, command.input),
-              options,
-            ) ?? [],
-          );
-        case "pluginState.count":
-          return ok(
-            withPluginStateDatabaseReadOnly(
-              "count",
-              ({ db }) =>
-                countLivePluginStateNamespaceEntries(db, {
-                  ...command.input,
-                  now: Date.now(),
-                }),
-              options,
-            ) ?? 0,
-          );
-      }
     } catch (error) {
       return failure(error);
     }
@@ -256,9 +353,9 @@ export function executePluginStateCommand(
   try {
     if (command.type === "pluginState.replaceEntry") {
       // Replacing an approval first revokes its predecessor, even if registration fails.
+      admit("transaction");
       runOpenClawStateWriteTransaction(
         (store) => {
-          admit("transaction");
           withPluginStateWorkerReceipt(store.db, () =>
             deletePluginStateEntry(store.db, command.input),
           );
@@ -267,10 +364,10 @@ export function executePluginStateCommand(
         { ...options, database },
       );
     }
+    admit("transaction");
     return ok(
       runOpenClawStateWriteTransaction(
         (store) => {
-          admit("transaction");
           const result = withPluginStateWorkerReceipt(store.db, () => {
             switch (command.type) {
               case "pluginState.appendJournal":
@@ -319,8 +416,6 @@ export function executePluginStateCommand(
                 return clearPluginStateNamespace(store.db, command.input);
               case "pluginState.clearRuntimeHealth":
                 return clearRuntimeHealthEntries(store, command.input);
-              case "pluginState.sweep":
-                return deleteExpiredPluginStateEntries(store.db, Date.now());
               default:
                 throw new Error("Plugin-state read command entered its write path");
             }

@@ -1,4 +1,3 @@
-import { asPositiveFiniteNumber as positiveExtractionLimit } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.js";
 import {
   type InputFileLimits,
@@ -27,10 +26,8 @@ export function resolveFileExtractionLimits(cfg: OpenClawConfig): FileExtraction
   const files = cfg.gateway?.http?.endpoints?.responses?.files;
   const allowedMimesConfigured = Boolean(files?.allowedMimes?.length);
   const defaults = cfg.agents?.defaults;
-  const maxMb =
-    positiveExtractionLimit(defaults?.mediaMaxMb) ?? INBOUND_FILE_EXTRACTION_DEFAULT_MAX_MB;
-  const maxPages =
-    positiveExtractionLimit(defaults?.pdfMaxPages) ?? INBOUND_FILE_EXTRACTION_DEFAULT_MAX_PAGES;
+  const maxMb = defaults?.mediaMaxMb ?? INBOUND_FILE_EXTRACTION_DEFAULT_MAX_MB;
+  const maxPages = defaults?.pdfMaxPages ?? INBOUND_FILE_EXTRACTION_DEFAULT_MAX_PAGES;
   const inboundFiles: InputFileLimitsConfig = {
     ...files,
     maxBytes:
@@ -38,9 +35,7 @@ export function resolveFileExtractionLimits(cfg: OpenClawConfig): FileExtraction
       Math.min(Math.floor(maxMb * 1024 * 1024), INBOUND_FILE_EXTRACTION_MAX_BYTES_CAP),
     pdf: {
       ...files?.pdf,
-      maxPages:
-        files?.pdf?.maxPages ??
-        Math.min(Math.trunc(maxPages), INBOUND_FILE_EXTRACTION_MAX_PAGES_CAP),
+      maxPages: files?.pdf?.maxPages ?? Math.min(maxPages, INBOUND_FILE_EXTRACTION_MAX_PAGES_CAP),
     },
   };
   return {

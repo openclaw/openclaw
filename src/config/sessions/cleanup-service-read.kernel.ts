@@ -1,19 +1,15 @@
-import {
-  asOptionalRecord,
-  isRecord,
-  readStringField,
-} from "@openclaw/normalization-core/record-coerce";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { shouldPreserveSessionCleanupEntry } from "./cleanup-service-read.policy.js";
 import type {
   SessionCleanupReadInput,
   SessionCleanupReadResult,
 } from "./cleanup-service-read.types.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import { listSqliteSessionEntriesFromDatabase } from "./session-accessor.sqlite-entry-list.read.js";
-import { readTranscriptSnapshot } from "./session-accessor.sqlite-read.js";
+import { findTranscriptEventInDatabase } from "./session-accessor.sqlite-read.js";
 import { readWithCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
-import { shouldPreserveMaintenanceEntry } from "./store-maintenance.js";
 
 function isTranscriptMessageRole(role: unknown): boolean {
   return (
@@ -47,7 +43,7 @@ function isTranscriptMessageRecord(entry: unknown): boolean {
 export function readSessionCleanupSnapshotInDatabase(
   database: Parameters<typeof listSqliteSessionEntriesFromDatabase>[0],
   request: Pick<SessionCleanupReadInput, "env" | "fixMissing" | "continuation">,
-): SessionCleanupReadResult {
+): Omit<SessionCleanupReadResult, "retainedArtifactPaths"> {
   const read = () => {
     const entries = listSqliteSessionEntriesFromDatabase(
       database,
@@ -63,19 +59,7 @@ export function readSessionCleanupSnapshotInDatabase(
     const missing: SessionCleanupReadResult["missing"] = [];
     if (request.fixMissing) {
       for (const { sessionKey, entry } of entries) {
-        // Cleanup cannot release harness ownership or delete a user-shelved archive.
-        if (
-          (entry.modelSelectionLocked === true || entry.archivedAt !== undefined) &&
-          shouldPreserveMaintenanceEntry({ key: sessionKey, entry })
-        ) {
-          continue;
-        }
-        const legacySessionFile = readStringField(asOptionalRecord(entry), "sessionFile");
-        if (
-          parseAgentSessionKey(sessionKey) &&
-          (entry.initializationPending === true ||
-            (entry.sessionId === sessionKey && !legacySessionFile?.trim()))
-        ) {
+        if (shouldPreserveSessionCleanupEntry(sessionKey, entry)) {
           continue;
         }
         if (!entry.sessionId) {
@@ -90,8 +74,15 @@ export function readSessionCleanupSnapshotInDatabase(
         }
         try {
           // Cold, malformed, or unavailable transcripts cannot prove absence.
-          const { events } = readTranscriptSnapshot(database, entry.sessionId);
-          if (events.some(isTranscriptMessageRecord)) {
+          if (
+            findTranscriptEventInDatabase(
+              database,
+              entry.sessionId,
+              isTranscriptMessageRecord,
+              undefined,
+              { malformed: "throw" },
+            )
+          ) {
             continue;
           }
           missing.push({
@@ -112,7 +103,7 @@ export function readSessionCleanupSnapshotInDatabase(
   };
   return readWithCanonicalSessionReaderContinuation(database, request.continuation, () =>
     request.fixMissing && !database.db.isTransaction
-      ? runSqliteDeferredTransactionSync(database.db, read)
+      ? runSqliteReadSnapshotSync(database.db, read)
       : read(),
   );
 }

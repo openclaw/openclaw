@@ -1,5 +1,3 @@
-// Exercises recursive command-risk detection through interpreters, carriers,
-// shell wrappers, env split-string, eval, and source invocations.
 import { describe, expect, it } from "vitest";
 import {
   buildCommandPayloadArgvCandidates,
@@ -10,311 +8,154 @@ import {
   detectShellWrapperThroughCarrierArgv,
 } from "./risks.js";
 
+const sudoFlags = ["-EH", "-i", "-s", "-k", "--reset-timestamp", "--shell"];
+
+function expectInlineEval(argv: string[], flag = "-c") {
+  expect(detectInlineEvalArgv(argv)?.flag).toBe(flag);
+}
+
+function expectNoInlineEval(argv: string[]) {
+  expect(detectInlineEvalArgv(argv)).toBeNull();
+}
+
+function expectPayloads(argv: string[], expected: string[][]) {
+  expect(buildCommandPayloadArgvCandidates(argv)).toEqual(expected);
+}
+
+function expectShellCarrier(argv: string[], expected: string | null) {
+  expect(
+    detectShellWrapperThroughCarrierArgv(argv, (args, startIndex) => args[startIndex] === "-lc"),
+  ).toBe(expected);
+}
+
 describe("command-analysis risks", () => {
   it("detects inline eval through transparent carriers", () => {
-    expect(detectInlineEvalArgv(["python3", "-c", "print(1)"])?.flag).toBe("-c");
-    expect(detectInlineEvalArgv(["sudo", "python3", "-c", "print(1)"])?.flag).toBe("-c");
-    expect(detectInlineEvalArgv(["sudo", "-u", "root", "python3", "-c", "print(1)"])?.flag).toBe(
-      "-c",
-    );
-    expect(detectInlineEvalArgv(["sudo", "-uroot", "python3", "-c", "print(1)"])?.flag).toBe("-c");
-    expect(detectInlineEvalArgv(["sudo", "-EH", "python3", "-c", "print(1)"])?.flag).toBe("-c");
-    expect(detectInlineEvalArgv(["sudo", "-i", "python3", "-c", "print(1)"])?.flag).toBe("-c");
-    expect(detectInlineEvalArgv(["sudo", "-s", "python3", "-c", "print(1)"])?.flag).toBe("-c");
-    expect(detectInlineEvalArgv(["sudo", "-k", "python3", "-c", "print(1)"])?.flag).toBe("-c");
-    expect(
-      detectInlineEvalArgv(["sudo", "--reset-timestamp", "python3", "-c", "print(1)"])?.flag,
-    ).toBe("-c");
-    expect(
-      detectInlineEvalArgv(["sudo", "--command-timeout=1", "python3", "-c", "print(1)"])?.flag,
-    ).toBe("-c");
-    expect(detectInlineEvalArgv(["sudo", "--chroot=/", "python3", "-c", "print(1)"])?.flag).toBe(
-      "-c",
-    );
-    expect(
-      detectInlineEvalArgv(["sudo", "PYTHONPATH=/tmp", "python3", "-c", "print(1)"])?.flag,
-    ).toBe("-c");
-    expect(
-      detectInlineEvalArgv(["sudo", "-u", "root", "PYTHONPATH=/tmp", "python3", "-c", "print(1)"])
-        ?.flag,
-    ).toBe("-c");
-    expect(
-      detectInlineEvalArgv(["sudo", "--", "PYTHONPATH=/tmp", "python3", "-c", "print(1)"])?.flag,
-    ).toBe("-c");
-    expect(detectInlineEvalArgv(["sudo", "--shell", "python3", "-c", "print(1)"])?.flag).toBe("-c");
-    expect(detectInlineEvalArgv(["sudo", "-Eu", "root", "python3", "-c", "print(1)"])?.flag).toBe(
-      "-c",
-    );
-    expect(detectInlineEvalArgv(["doas", "-uroot", "python3", "-c", "print(1)"])?.flag).toBe("-c");
-    expect(detectInlineEvalArgv(["env", "sudo", "python3", "-c", "print(1)"])?.flag).toBe("-c");
-    expect(
-      detectInlineEvalArgv(["env", "env", "env", "env", "env", "env", "python3", "-c", "print(1)"])
-        ?.flag,
-    ).toBe("-c");
-    expect(detectInlineEvalArgv(["env", "-iSpython3 -c 'print(1)'"])?.flag).toBe("-c");
-    expect(detectInlineEvalArgv(["env", "-iS", "python3 -c 'print(1)'"])?.flag).toBe("-c");
-    expect(detectInlineEvalArgv(["env", "-S", "python3 -c", "print(1)"])?.flag).toBe("-c");
-    expect(detectInlineEvalArgv(["env", "-iSpython3 -c", "print(1)"])?.flag).toBe("-c");
-    expect(detectInlineEvalArgv(["env", "-P", "/usr/bin", "python3", "-c", "print(1)"])?.flag).toBe(
-      "-c",
-    );
-    expect(detectInlineEvalArgv(["exec", "python3", "-c", "print(1)"])?.flag).toBe("-c");
-    expect(detectInlineEvalArgv(["exec", "-a", "py", "python3", "-c", "print(1)"])?.flag).toBe(
-      "-c",
-    );
-    expect(detectInlineEvalArgv(["command", "node", "--eval", "1"])?.flag).toBe("--eval");
-    expect(detectInlineEvalArgv(["env", "-S", 'python3 -c "print(1)"'])?.flag).toBe("-c");
-    expect(
-      detectInlineEvalArgv(["sh", "-lc", '$0 "$@"', "find", ".", "-exec", "id", "{}", ";"])?.flag,
-    ).toBe("-exec");
-    expect(
-      detectInlineEvalArgv(["bash", "-c", 'exec -- "$0" "$@"', "xargs", "sh", "-c", "id"])?.flag,
-    ).toBe("<command>");
-    expect(
-      detectInlineEvalArgv(["env", "sh", "-lc", '$0 "$@"', "find", ".", "-okdir", "id", "{}", ";"])
-        ?.flag,
-    ).toBe("-okdir");
-    expect(
-      detectInlineEvalArgv(["sudo", "sh", "-lc", '$0 "$@"', "find", ".", "-exec", "id", "{}", ";"])
-        ?.flag,
-    ).toBe("-exec");
-    expect(
-      detectInlineEvalArgv([
-        "command",
-        "sh",
-        "-lc",
-        '$0 "$@"',
-        "find",
-        ".",
-        "-execdir",
-        "id",
-        "{}",
-        ";",
-      ])?.flag,
-    ).toBe("-execdir");
-    expect(
-      detectInlineEvalArgv(["sh", "-lc", '$0 "$1" "$2"', "find", ".", "-exec", "id", "{}", ";"])
-        ?.flag,
-    ).toBe("-exec");
-    expect(detectInlineEvalArgv(["python3", "script.py"])).toBeNull();
+    const find = ["find", ".", "-exec", "id", "{}", ";"];
+    const trampoline = ["sh", "-lc", '$0 "$@"', "find", "."];
+    expectInlineEval(["python3", "-c", "print(1)"]);
+    expectInlineEval(["sudo", "python3", "-c", "print(1)"]);
+    expectInlineEval(["sudo", "-u", "root", "python3", "-c", "print(1)"]);
+    expectInlineEval(["sudo", "-uroot", "python3", "-c", "print(1)"]);
+    for (const flag of sudoFlags) {
+      expectInlineEval(["sudo", flag, "python3", "-c", "print(1)"]);
+    }
+    expectInlineEval(["sudo", "--command-timeout=1", "python3", "-c", "print(1)"]);
+    expectInlineEval(["sudo", "--chroot=/", "python3", "-c", "print(1)"]);
+    expectInlineEval(["sudo", "PYTHONPATH=/tmp", "python3", "-c", "print(1)"]);
+    expectInlineEval(["sudo", "-u", "root", "PYTHONPATH=/tmp", "python3", "-c", "print(1)"]);
+    expectInlineEval(["sudo", "--", "PYTHONPATH=/tmp", "python3", "-c", "print(1)"]);
+    expectInlineEval(["sudo", "-Eu", "root", "python3", "-c", "print(1)"]);
+    expectInlineEval(["doas", "-uroot", "python3", "-c", "print(1)"]);
+    expectInlineEval(["env", "sudo", "python3", "-c", "print(1)"]);
+    expectInlineEval(["env", "env", "env", "env", "env", "env", "python3", "-c", "print(1)"]);
+    expectInlineEval(["env", "-iSpython3 -c 'print(1)'"]);
+    expectInlineEval(["env", "-iS", "python3 -c 'print(1)'"]);
+    expectInlineEval(["env", "-S", "python3 -c", "print(1)"]);
+    expectInlineEval(["env", "-iSpython3 -c", "print(1)"]);
+    expectInlineEval(["env", "-P", "/usr/bin", "python3", "-c", "print(1)"]);
+    expectInlineEval(["exec", "python3", "-c", "print(1)"]);
+    expectInlineEval(["exec", "-a", "py", "python3", "-c", "print(1)"]);
+    expectInlineEval(["command", "node", "--eval", "1"], "--eval");
+    expectInlineEval(["env", "-S", 'python3 -c "print(1)"']);
+    expectInlineEval(["sh", "-lc", '$0 "$@"', ...find], "-exec");
+    expectInlineEval(["bash", "-c", 'exec -- "$0" "$@"', "xargs", "sh", "-c", "id"], "<command>");
+    expectInlineEval(["env", ...trampoline, "-okdir", "id", "{}", ";"], "-okdir");
+    expectInlineEval(["sudo", "sh", "-lc", '$0 "$@"', ...find], "-exec");
+    expectInlineEval(["command", ...trampoline, "-execdir", "id", "{}", ";"], "-execdir");
+    expectInlineEval(["sh", "-lc", '$0 "$1" "$2"', ...find], "-exec");
+    expectNoInlineEval(["python3", "script.py"]);
   });
 
   it("keeps carrier inline eval detection command-boundary aware", () => {
-    expect(detectInlineEvalArgv(["command", "echo", "python3", "-c", "print(1)"])).toBeNull();
-    expect(detectInlineEvalArgv(["sudo", "echo", "python3", "-c", "print(1)"])).toBeNull();
-    expect(
-      detectInlineEvalArgv(["sudo", "FOO=bar", "echo", "python3", "-c", "print(1)"]),
-    ).toBeNull();
-    expect(detectInlineEvalArgv(["env", "-S", 'echo python3 -c "print(1)"'])).toBeNull();
-    expect(detectInlineEvalArgv(["command", "-v", "python3", "-c", "print(1)"])).toBeNull();
-    expect(detectInlineEvalArgv(["sh", "-lc", '$0 "$@"', "find", ".", "-name", "*.ts"])).toBeNull();
-    expect(detectInlineEvalArgv(["sh", "-lc", 'echo "$0"; "$@"', "find", ".", "-exec"])).toBeNull();
-    expect(
-      detectInlineEvalArgv(["sh", "-lc", '$0 "$1"', "find", ".", "-exec", "id", "{}", ";"]),
-    ).toBeNull();
-    expect(
-      detectInlineEvalArgv(["sh", "-lc", '$0 "$*"', "find", ".", "-exec", "id", "{}", ";"]),
-    ).toBeNull();
-  });
-
-  it("detects command carriers", () => {
-    expect(detectCommandCarrierArgv(["find", ".", "-exec", "rm", "{}", ";"])).toEqual([
-      { command: "find", flag: "-exec" },
-    ]);
-    expect(detectCommandCarrierArgv(["xargs", "-I{}", "sh", "-c", "id"])).toEqual([
-      { command: "xargs" },
-    ]);
-    expect(detectCommandCarrierArgv(["env", "-S", "sh -c id"])).toEqual([
-      { command: "env", flag: "-S" },
-    ]);
-    expect(
-      detectCommandCarrierArgv(["runuser", "-u", "root", "python3", "-c", "print(1)"]),
-    ).toEqual([{ command: "runuser" }]);
+    expectNoInlineEval(["command", "echo", "python3", "-c", "print(1)"]);
+    expectNoInlineEval(["sudo", "echo", "python3", "-c", "print(1)"]);
+    expectNoInlineEval(["sudo", "FOO=bar", "echo", "python3", "-c", "print(1)"]);
+    expectNoInlineEval(["env", "-S", 'echo python3 -c "print(1)"']);
+    expectNoInlineEval(["command", "-v", "python3", "-c", "print(1)"]);
+    expectNoInlineEval(["sh", "-lc", '$0 "$@"', "find", ".", "-name", "*.ts"]);
+    expectNoInlineEval(["sh", "-lc", 'echo "$0"; "$@"', "find", ".", "-exec"]);
+    expectNoInlineEval(["sh", "-lc", '$0 "$1"', "find", ".", "-exec", "id", "{}", ";"]);
+    expectNoInlineEval(["sh", "-lc", '$0 "$*"', "find", ".", "-exec", "id", "{}", ";"]);
   });
 
   it.each([
-    { args: ["-S", "sh -c id"], flag: "-S" },
-    { args: ["-Ssh -c id"], flag: "-S" },
-    { args: ["-iS", "sh -c id"], flag: "-S" },
-    { args: ["-iSsh -c id"], flag: "-S" },
-    { args: ["-is", "sh -c id"], flag: "-s" },
-    { args: ["--split-string=sh -c id"], flag: "--split-string" },
-  ])("detects env split-string carrier form $args", ({ args, flag }) => {
-    expect(detectCommandCarrierArgv(["env", ...args])).toEqual([{ command: "env", flag }]);
+    { argv: ["find", ".", "-exec", "rm", "{}", ";"], command: "find", flag: "-exec" },
+    { argv: ["xargs", "-I{}", "sh", "-c", "id"], command: "xargs" },
+    { argv: ["runuser", "-u", "root", "python3", "-c", "print(1)"], command: "runuser" },
+    { argv: ["env", "-S", "sh -c id"], command: "env", flag: "-S" },
+    { argv: ["env", "-Ssh -c id"], command: "env", flag: "-S" },
+    { argv: ["env", "-iS", "sh -c id"], command: "env", flag: "-S" },
+    { argv: ["env", "-is", "sh -c id"], command: "env", flag: "-s" },
+    { argv: ["env", "--split-string=sh -c id"], command: "env", flag: "--split-string" },
+  ])("detects command carrier $argv", ({ argv, command, flag }) => {
+    expect(detectCommandCarrierArgv(argv)).toEqual([flag ? { command, flag } : { command }]);
   });
 
   it("detects shell wrappers carried through prefix commands", () => {
-    const hit = detectShellWrapperThroughCarrierArgv(
-      ["sudo", "bash", "-lc", "id"],
-      (argv, startIndex) => argv[startIndex] === "-lc",
-    );
-    expect(hit).toBe("sudo");
-    expect(
-      detectShellWrapperThroughCarrierArgv(
-        ["sudo", "-uroot", "bash", "-lc", "id"],
-        (argv, startIndex) => argv[startIndex] === "-lc",
-      ),
-    ).toBe("sudo");
-    expect(
-      detectShellWrapperThroughCarrierArgv(
-        ["sudo", "-EH", "bash", "-lc", "id"],
-        (argv, startIndex) => argv[startIndex] === "-lc",
-      ),
-    ).toBe("sudo");
-    expect(
-      detectShellWrapperThroughCarrierArgv(
-        ["exec", "bash", "-lc", "id"],
-        (argv, startIndex) => argv[startIndex] === "-lc",
-      ),
-    ).toBe("exec");
-    expect(
-      detectShellWrapperThroughCarrierArgv(
-        ["sudo", "echo", "bash", "-lc", "id"],
-        (argv, startIndex) => argv[startIndex] === "-lc",
-      ),
-    ).toBeNull();
+    expectShellCarrier(["sudo", "bash", "-lc", "id"], "sudo");
+    expectShellCarrier(["sudo", "-uroot", "bash", "-lc", "id"], "sudo");
+    expectShellCarrier(["sudo", "-EH", "bash", "-lc", "id"], "sudo");
+    expectShellCarrier(["exec", "bash", "-lc", "id"], "exec");
+    expectShellCarrier(["sudo", "echo", "bash", "-lc", "id"], null);
   });
 
-  it("detects carried eval and source builtins", () => {
-    expect(detectCarriedShellBuiltinArgv(["builtin", "eval", "echo hi"])).toEqual({
-      kind: "eval",
-    });
-    expect(detectCarriedShellBuiltinArgv(["command", "source", "./env.sh"])).toEqual({
-      kind: "source",
-      command: "source",
-    });
-    expect(detectCarriedShellBuiltinArgv(["exec", "eval", "echo hi"])).toEqual({
-      kind: "eval",
-    });
-    expect(detectCarriedShellBuiltinArgv(["exec", "source", "./env.sh"])).toEqual({
-      kind: "source",
-      command: "source",
-    });
-    expect(detectCarriedShellBuiltinArgv(["command", "echo", "eval"])).toBeNull();
+  it.each([
+    { argv: ["builtin", "eval", "echo hi"], expected: { kind: "eval" } },
+    { argv: ["command", "source", "./env.sh"], expected: { kind: "source", command: "source" } },
+    { argv: ["exec", "eval", "echo hi"], expected: { kind: "eval" } },
+    { argv: ["exec", "source", "./env.sh"], expected: { kind: "source", command: "source" } },
+    { argv: ["command", "echo", "eval"], expected: null },
+  ])("detects carried shell builtin $argv", ({ argv, expected }) => {
+    expect(detectCarriedShellBuiltinArgv(argv)).toEqual(expected);
   });
 
   it("builds executable payload candidates through carriers and shell wrappers", () => {
-    expect(buildCommandPayloadArgvCandidates(["FOO=1", "sudo", "-E", "/approve", "abc"])).toEqual([
-      ["/approve", "abc"],
-    ]);
-    expect(buildCommandPayloadArgvCandidates(["sudo", "-EH", "/approve", "abc"])).toEqual([
-      ["/approve", "abc"],
-    ]);
-    expect(buildCommandPayloadArgvCandidates(["sudo", "-i", "/approve", "abc"])).toEqual([
-      ["/approve", "abc"],
-    ]);
-    expect(buildCommandPayloadArgvCandidates(["sudo", "-s", "/approve", "abc"])).toEqual([
-      ["/approve", "abc"],
-    ]);
-    expect(buildCommandPayloadArgvCandidates(["sudo", "-k", "/approve", "abc"])).toEqual([
-      ["/approve", "abc"],
-    ]);
-    expect(
-      buildCommandPayloadArgvCandidates(["sudo", "--reset-timestamp", "/approve", "abc"]),
-    ).toEqual([["/approve", "abc"]]);
-    expect(
-      buildCommandPayloadArgvCandidates(["sudo", "--command-timeout=1", "/approve", "abc"]),
-    ).toEqual([["/approve", "abc"]]);
-    expect(
-      buildCommandPayloadArgvCandidates(["sudo", "OPENCLAW_ENV=1", "/approve", "abc"]),
-    ).toEqual([["/approve", "abc"]]);
-    expect(buildCommandPayloadArgvCandidates(["sudo", "--shell", "/approve", "abc"])).toEqual([
-      ["/approve", "abc"],
-    ]);
-    expect(
-      buildCommandPayloadArgvCandidates(["sudo", "--preserve-groups", "/approve", "abc"]),
-    ).toEqual([["/approve", "abc"]]);
-    expect(
-      buildCommandPayloadArgvCandidates([
-        "sudo",
-        "-uroot",
-        "bash",
-        "-lc",
-        "/approve req allow-once",
-      ]),
-    ).toEqual([
+    const allowOnce = [
       ["bash", "-lc", "/approve req allow-once"],
       ["/approve", "req", "allow-once"],
-    ]);
-    expect(
-      buildCommandPayloadArgvCandidates([
-        "doas",
-        "-uroot",
-        "bash",
-        "-lc",
-        "/approve req allow-once",
-      ]),
-    ).toEqual([
-      ["bash", "-lc", "/approve req allow-once"],
-      ["/approve", "req", "allow-once"],
-    ]);
-    expect(
-      buildCommandPayloadArgvCandidates(["env", "-S", "bash -lc '/approve abc deny'"]),
-    ).toEqual([
+    ];
+    const deny = [
       ["bash", "-lc", "/approve abc deny"],
       ["/approve", "abc", "deny"],
-    ]);
-    expect(
-      buildCommandPayloadArgvCandidates(["env", "-S", "bash -lc", "/approve abc deny"]),
-    ).toEqual([
-      ["bash", "-lc", "/approve abc deny"],
-      ["/approve", "abc", "deny"],
-    ]);
-    expect(buildCommandPayloadArgvCandidates(["env", "-iSbash -lc", "/approve abc deny"])).toEqual([
-      ["bash", "-lc", "/approve abc deny"],
-      ["/approve", "abc", "deny"],
-    ]);
-    expect(buildCommandPayloadArgvCandidates(["env", "-P", "/usr/bin", "/approve", "abc"])).toEqual(
-      [["/approve", "abc"]],
+    ];
+    expectPayloads(["FOO=1", "sudo", "-E", "/approve", "abc"], [["/approve", "abc"]]);
+    for (const flag of sudoFlags) {
+      expectPayloads(["sudo", flag, "/approve", "abc"], [["/approve", "abc"]]);
+    }
+    expectPayloads(["sudo", "--command-timeout=1", "/approve", "abc"], [["/approve", "abc"]]);
+    expectPayloads(["sudo", "OPENCLAW_ENV=1", "/approve", "abc"], [["/approve", "abc"]]);
+    expectPayloads(["sudo", "--preserve-groups", "/approve", "abc"], [["/approve", "abc"]]);
+    expectPayloads(["sudo", "-uroot", "bash", "-lc", "/approve req allow-once"], allowOnce);
+    expectPayloads(["doas", "-uroot", "bash", "-lc", "/approve req allow-once"], allowOnce);
+    expectPayloads(["env", "-S", "bash -lc '/approve abc deny'"], deny);
+    expectPayloads(["env", "-S", "bash -lc", "/approve abc deny"], deny);
+    expectPayloads(["env", "-iSbash -lc", "/approve abc deny"], deny);
+    expectPayloads(["env", "-P", "/usr/bin", "/approve", "abc"], [["/approve", "abc"]]);
+    expectPayloads(["exec", "-a", "openclaw", "/approve", "abc"], [["/approve", "abc"]]);
+    expectPayloads(["command", "-v", "/approve"], [["command", "-v", "/approve"]]);
+    const command = ["openclaw", "channels", "login", "--channel", "whatsapp"];
+    expectPayloads(
+      ["env", "env", "env", "env", "env", "env", ...command],
+      [5, 4, 3, 2, 1, 0].map((count) => Array<string>(count).fill("env").concat(command)),
     );
-    expect(
-      buildCommandPayloadArgvCandidates(["exec", "-a", "openclaw", "/approve", "abc"]),
-    ).toEqual([["/approve", "abc"]]);
-    expect(buildCommandPayloadArgvCandidates(["command", "-v", "/approve"])).toEqual([
-      ["command", "-v", "/approve"],
-    ]);
-    expect(
-      buildCommandPayloadArgvCandidates([
-        "env",
-        "env",
-        "env",
-        "env",
-        "env",
-        "env",
-        "openclaw",
-        "channels",
-        "login",
-        "--channel",
-        "whatsapp",
-      ]),
-    ).toEqual([
-      ["env", "env", "env", "env", "env", "openclaw", "channels", "login", "--channel", "whatsapp"],
-      ["env", "env", "env", "env", "openclaw", "channels", "login", "--channel", "whatsapp"],
-      ["env", "env", "env", "openclaw", "channels", "login", "--channel", "whatsapp"],
-      ["env", "env", "openclaw", "channels", "login", "--channel", "whatsapp"],
-      ["env", "openclaw", "channels", "login", "--channel", "whatsapp"],
-      ["openclaw", "channels", "login", "--channel", "whatsapp"],
-    ]);
   });
 
   it("checks both effective and original argv for segment inline eval", () => {
+    const argv = ["sudo", "python3", "-c", "print(1)"];
+    const executable = {
+      kind: "executable",
+      rawExecutable: "sudo",
+      executableName: "sudo",
+    } as const;
     const hit = detectInlineEvalInSegments([
       {
         raw: "sudo python3 -c 'print(1)'",
-        argv: ["sudo", "python3", "-c", "print(1)"],
+        argv,
         resolution: {
           kind: "command",
-          execution: {
-            kind: "executable",
-            rawExecutable: "sudo",
-            executableName: "sudo",
-          },
-          policy: {
-            kind: "executable",
-            rawExecutable: "sudo",
-            executableName: "sudo",
-          },
-          effectiveArgv: ["sudo", "python3", "-c", "print(1)"],
+          execution: executable,
+          policy: executable,
+          effectiveArgv: argv,
         },
       },
     ]);

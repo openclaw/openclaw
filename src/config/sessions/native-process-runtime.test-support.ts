@@ -9,6 +9,11 @@ export const sessionNativeProcessEntrypoints = {
     sourceWorkerName: "session-accessor",
     distWorkerPath: "config/sessions/session-accessor.js",
   },
+  compactionCrash: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "session-compaction-crash.test-support",
+    distWorkerPath: "config/sessions/session-compaction-crash.test-support.js",
+  },
   canonicalReadiness: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "session-canonical-validation-readiness",

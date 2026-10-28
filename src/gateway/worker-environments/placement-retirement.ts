@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { required } from "./placement-record.js";
+import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { required, type WorkerSessionPlacementIdentity } from "./placement-record.js";
 import { query, turnClaimValues } from "./placement-row-codec.js";
 import { publishPlacementTurnClaimCleared } from "./placement-turn-authority.js";
 
@@ -13,29 +13,26 @@ export type WorkerSessionPlacementRetirement = {
 };
 
 export function retireWorkerSessionPlacement(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: WorkerSessionPlacementRetirement,
-  options: { onlyIfCurrent?: boolean } = {},
-): boolean {
+): WorkerSessionPlacementIdentity | undefined {
   const sessionId = required(input.sessionId, "session id");
   if (!RETIRABLE_PLACEMENT_STATES.some((state) => state === input.expectedState)) {
     throw new Error(`Cannot retire worker session placement from ${input.expectedState}`);
   }
-  const result = executeSqliteQuerySync(
+  const result = executeSqliteQueryTakeFirstSync(
     db,
     query(db)
       .deleteFrom("worker_session_placements")
       .where("session_id", "=", sessionId)
       .where("state", "=", input.expectedState)
       .where("transition_generation", "=", input.expectedGeneration)
-      .where((eb) => eb.and(turnClaimValues(null))),
+      .where((eb) => eb.and(turnClaimValues(null)))
+      .returning(["session_id as sessionId", "agent_id as agentId", "session_key as sessionKey"]),
   );
-  if (result.numAffectedRows !== 1n) {
-    if (options.onlyIfCurrent) {
-      return false;
-    }
-    throw new Error(`Worker session placement ${sessionId} changed before retirement`);
+  if (!result) {
+    return undefined;
   }
-  publishPlacementTurnClaimCleared(db, sessionId, input.expectedState, true);
-  return true;
+  publishPlacementTurnClaimCleared(db, sessionId, input.expectedState);
+  return result;
 }

@@ -10,11 +10,14 @@ import {
 } from "./progress-format.js";
 import { writeQaSuiteArtifacts } from "./suite-artifacts.js";
 import { createQaSuiteEvidenceInvocation, rebaseQaSuiteEvidence } from "./suite-evidence.js";
-import { mapQaSuiteWithConcurrency, resolveQaSuiteWorkerStartStaggerMs } from "./suite-planning.js";
+import {
+  mapQaSuiteWithConcurrency,
+  resolveQaSuiteWorkerStartStaggerMs,
+  scenarioRequiresControlUi,
+} from "./suite-planning.js";
 import { createQaSuiteProgressController } from "./suite-progress.js";
 import { completeQaSuiteRun } from "./suite-run-completion.js";
 import { createQaSuiteRunResources } from "./suite-run-resources.js";
-import { buildQaIsolatedScenarioWorkerParams } from "./suite-support.js";
 import type {
   QaSuiteResolvedRunContext,
   QaSuiteResult,
@@ -163,34 +166,49 @@ export async function runQaFlowSuiteIsolated(
           return scenarioResult;
         };
         try {
-          const workerParams = markQaSuiteNestedRun(
-            buildQaIsolatedScenarioWorkerParams({
-              repoRoot,
-              outputDir: scenarioOutputDir,
-              providerMode,
-              transportId,
-              channelDriver: params?.channelDriver,
-              channelId: params?.channelId,
-              primaryModel,
-              alternateModel,
-              fastMode,
-              startLab,
-              scenario,
-              input: params,
-            }),
-          );
+          const workerParams: QaSuiteRunParams = markQaSuiteNestedRun({
+            adapterFactories: params?.adapterFactories,
+            adapterOptions: params?.adapterOptions,
+            channelId: params?.channelId,
+            evidenceMode: params?.evidenceMode,
+            repoRoot,
+            sutOpenClawCommand: params?.sutOpenClawCommand,
+            mutateConfig: params?.mutateConfig,
+            outputDir: scenarioOutputDir,
+            providerMode,
+            transportId,
+            channelDriver: params?.channelDriver,
+            primaryModel,
+            alternateModel,
+            fastMode,
+            thinkingDefault: params?.thinkingDefault,
+            claudeCliAuthMode: params?.claudeCliAuthMode,
+            scenarioIds: [scenario.id],
+            ...(params?.scenarioDefinitions ? { scenarioDefinitions: [scenario] } : {}),
+            enabledPluginIds: params?.enabledPluginIds,
+            concurrency: 1,
+            startLab,
+            controlUiEnabled: params?.controlUiEnabled ?? scenarioRequiresControlUi(scenario),
+            transportReadyTimeoutMs: params?.transportReadyTimeoutMs,
+            workerStartStaggerMs: params?.workerStartStaggerMs,
+            forcedRuntime:
+              params?.forcedRuntime ??
+              (scenario.execution.kind === "flow" ? scenario.execution.runtime : undefined),
+            roundTripProbe:
+              params?.roundTripProbe?.scenarioId === scenario.id
+                ? params.roundTripProbe
+                : undefined,
+            writeEvidenceFile: params?.writeEvidenceFile,
+          });
           workerParams.evidenceAnchors = [anchor];
           const childInput = rebaseQaSuiteEvidence(
             recording.invocation.childInput(index),
             outputDir,
             scenarioOutputDir,
           );
-          if (childInput.schemaVersion !== 3) {
-            throw new Error("isolated child requires its captured invocation");
-          }
           workerParams.evidenceContinuation = childInput;
           workerParams.onEvidence = (summary) => {
-            childEvidence = structuredClone(summary);
+            childEvidence = summary;
           };
           startedScenarioIndexes.add(index);
           const childSuiteResult: QaSuiteResult = await runQaFlowSuite(workerParams);

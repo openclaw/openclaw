@@ -15,6 +15,7 @@ import {
   type SessionEndTranscriptSource,
 } from "../../plugins/session-end-transcript.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
+import { runWithSessionControllerCleanup } from "../../sessions/session-controller.owner-context.js";
 import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js";
 
 type ReplySessionEndReason = Extract<
@@ -83,13 +84,15 @@ export function emitReplySessionStartHook(
   params: Parameters<typeof buildSessionStartHookPayload>[0],
 ): void {
   const payload = buildSessionStartHookPayload(params);
-  // Lifecycle hooks outlive their requester; deferred plugin work must belong
-  // to the detached scope that keeps the Gateway drain alive until completion.
-  void runWithGatewayDetachedWorkContinuation(async () => {
-    await runOutsideStoreWriterContext(() =>
-      hookRunner.runSessionStart(payload.event, payload.context),
-    );
-  }, "hooks:session-start").catch(() => {});
+  // Lifecycle hooks outlive their requester and must not inherit its writer
+  // lane or controller ownership while their detached work keeps drain alive.
+  void runWithSessionControllerCleanup(() =>
+    runWithGatewayDetachedWorkContinuation(async () => {
+      await runOutsideStoreWriterContext(() =>
+        hookRunner.runSessionStart(payload.event, payload.context),
+      );
+    }, "hooks:session-start"),
+  ).catch(() => {});
 }
 
 export function buildSessionEndHookPayload(
@@ -144,9 +147,11 @@ export function emitReplySessionEndHook(params: {
       )
     : { available: false as const, reason: "unsupported-source" as const };
   const payload = buildSessionEndHookPayload({ ...params, endedTranscript });
-  void runWithGatewayDetachedWorkContinuation(async () => {
-    await runOutsideStoreWriterContext(() =>
-      params.hookRunner.runSessionEnd(payload.event, payload.context),
-    );
-  }, "hooks:session-end").catch(() => {});
+  void runWithSessionControllerCleanup(() =>
+    runWithGatewayDetachedWorkContinuation(async () => {
+      await runOutsideStoreWriterContext(() =>
+        params.hookRunner.runSessionEnd(payload.event, payload.context),
+      );
+    }, "hooks:session-end"),
+  ).catch(() => {});
 }

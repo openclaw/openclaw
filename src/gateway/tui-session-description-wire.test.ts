@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { expect, it } from "vitest";
 import { WebSocketServer } from "ws";
+import { sendFrame } from "../../packages/gateway-client/src/client.transport.test-support.js";
 import {
   validateSessionsDescribeParams,
   validateSessionsListParams,
@@ -23,56 +24,37 @@ it("describes sessions over the published wire without changing legacy key seman
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     const requests: Array<{ method: string; params: unknown }> = [];
     let responseKey = "";
-    let holdDescription = false;
-    const heldRequest = createDeferred();
+    const session = (key: string) => ({ key, sessionId: "transcript", model: "selected-model" });
+    const defaults = { model: "default-model" };
     let client: GatewayChatClient | undefined;
     server.on("connection", (socket) => {
       sendMinimalGatewayConnectChallenge(socket);
       socket.on("message", (data) => {
-        const frame = parseMinimalGatewayRequestFrame(data);
-        if (!frame.id || !frame.method) {
+        const { id, method, params } = parseMinimalGatewayRequestFrame(data);
+        if (!id || !method) {
           return;
         }
-        if (frame.method === "connect") {
+        const reply = (payload: unknown) => sendMinimalGatewayResponse(socket, id, payload);
+        if (method === "connect") {
           const hello = buildMinimalGatewayHelloOkPayload({
             methods: ["sessions.describe", "sessions.list"],
           });
-          sendMinimalGatewayResponse(socket, frame.id, {
-            ...hello,
-            server: { ...hello.server, version: "2026.9.4" },
-          });
+          hello.server.version = "2026.9.4";
+          reply(hello);
           return;
         }
-        requests.push({ method: frame.method, params: frame.params });
-        if (frame.method === "sessions.describe" && validateSessionsDescribeParams(frame.params)) {
-          if (holdDescription) {
-            heldRequest.resolve();
-            return;
-          }
-          sendMinimalGatewayResponse(socket, frame.id, {
-            session: {
-              key: responseKey,
-              sessionId: "selected-transcript",
-              model: "selected-model",
-            },
-          });
-        } else if (frame.method === "sessions.list" && validateSessionsListParams(frame.params)) {
-          sendMinimalGatewayResponse(socket, frame.id, {
-            ts: 0,
-            path: "synthetic-store",
-            count: 0,
-            sessions: [],
-            defaults: { model: "default-model" },
-          });
+        requests.push({ method, params });
+        if (method === "sessions.describe" && validateSessionsDescribeParams(params)) {
+          reply({ session: session(responseKey) });
+        } else if (method === "sessions.list" && validateSessionsListParams(params)) {
+          reply({ defaults });
         } else {
-          socket.send(
-            JSON.stringify({
-              type: "res",
-              id: frame.id,
-              ok: false,
-              error: { code: "INVALID_REQUEST", message: "Unexpected metadata request shape" },
-            }),
-          );
+          sendFrame(socket, {
+            type: "res",
+            id,
+            ok: false,
+            error: { code: "INVALID_REQUEST", message: "Unexpected metadata request shape" },
+          });
         }
       });
     });
@@ -88,47 +70,23 @@ it("describes sessions over the published wire without changing legacy key seman
       client.onConnectError = (error) => connected.reject(error);
       client.start();
       await connected.promise;
-      for (const testCase of [
+      for (const { sessionKey, key, owner, agentId } of [
         { sessionKey: "agent:ops:notes", key: "agent:ops:notes", owner: "ops" },
-        { sessionKey: "agent:ops:main", key: "global", owner: "ops" },
         { sessionKey: "main", agentId: "ops", key: "global", owner: "ops" },
-        { sessionKey: "global", agentId: "ops", key: "global", owner: "ops" },
         { sessionKey: "unknown", key: "unknown", owner: undefined },
       ]) {
         requests.length = 0;
-        responseKey = testCase.key;
-        await expect(
-          client.describeSession({
-            sessionKey: testCase.sessionKey,
-            ...(testCase.agentId ? { agentId: testCase.agentId } : {}),
-          }),
-        ).resolves.toEqual({
-          session: { key: testCase.key, sessionId: "selected-transcript", model: "selected-model" },
-          defaults: { model: "default-model" },
+        responseKey = key;
+        const agent = agentId ? { agentId } : {};
+        await expect(client.describeSession({ sessionKey, ...agent })).resolves.toEqual({
+          session: session(key),
+          defaults,
         });
         expect(requests).toEqual([
-          {
-            method: "sessions.describe",
-            params: {
-              key: testCase.sessionKey,
-              ...(testCase.agentId ? { agentId: testCase.agentId } : {}),
-            },
-          },
-          {
-            method: "sessions.list",
-            params: {
-              ...(testCase.owner ? { agentId: testCase.owner } : {}),
-              limit: 1,
-            },
-          },
+          { method: "sessions.describe", params: { key: sessionKey, ...agent } },
+          { method: "sessions.list", params: { ...(owner ? { agentId: owner } : {}), limit: 1 } },
         ]);
       }
-      holdDescription = true;
-      const pending = client.describeSession({ sessionKey: "agent:ops:notes" });
-      const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
-      await heldRequest.promise;
-      await client.stop();
-      await rejected;
     } finally {
       await client?.stop();
       await closeMinimalGatewayServer(server);

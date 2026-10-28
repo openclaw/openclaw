@@ -10,6 +10,8 @@ import {
 import { getPairingAdapter } from "../channels/plugins/pairing.js";
 import type { ChannelPairingAdapter } from "../channels/plugins/pairing.types.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import { recordWorkerMessage } from "../infra/worker-message-metrics.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -117,6 +119,7 @@ function mutatePairing(params: PairingOptions, mutation: PairingMutation) {
             context.admission.assertCurrent();
             assertCurrent?.();
             facts.replyPort.postMessage(normalized, []);
+            recordWorkerMessage("admission", "to_worker", normalized.length * 2);
           } else if (
             facts.kind !== "channel-pairing" ||
             (request.stage !== "transaction" && request.stage !== "commit")
@@ -130,12 +133,17 @@ function mutatePairing(params: PairingOptions, mutation: PairingMutation) {
   );
 }
 
-/** @deprecated Use readChannelAllowFromStore; retained for the v2026.9.8 SDK until the next Plugin SDK major. */
+/** @deprecated Await readChannelAllowFromStore; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function readChannelAllowFromStoreSync(
   channel: PairingChannel,
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string,
 ): string[] {
+  warnPluginSdkDeprecation({
+    family: "channel-pairing-sync-allowlist",
+    method: "readChannelAllowFromStoreSync",
+    replacement: "readChannelAllowFromStore",
+  });
   const resolvedAccountId = resolveAllowFromAccountId(accountId);
   return (
     readChannelAllowEntries(openOpenClawStateDatabase({ env }).db, channel)[resolvedAccountId] ?? []
@@ -247,7 +255,6 @@ export async function approveChannelPairingRequest(params: {
   channel: PairingChannel;
   requestId: string;
   accountId: string;
-  env?: NodeJS.ProcessEnv;
   pairingAdapter?: ChannelPairingAdapter;
 }): Promise<{ id: string; entry: PairingRequest } | null> {
   const requestId = normalizeOptionalString(params.requestId);
@@ -261,7 +268,6 @@ export async function dismissChannelPairingRequest(params: {
   channel: PairingChannel;
   requestId: string;
   accountId: string;
-  env?: NodeJS.ProcessEnv;
 }): Promise<{ id: string; entry: PairingRequest } | null> {
   const requestId = normalizeOptionalString(params.requestId);
   return requestId

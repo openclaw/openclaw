@@ -1,11 +1,11 @@
 // Real grammY ingress and Bot API sockets: stalled forum metadata must not block delivery.
 import { createServer, type Server } from "node:http";
-import type { AddressInfo, Socket } from "node:net";
+import type { Socket } from "node:net";
 import { Bot } from "grammy";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { defaultTelegramBotDeps } from "./bot-deps.js";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createTelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
 import {
   createTelegramInboundPipeline,
@@ -51,10 +51,7 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
         resolveSocketClosed?.();
       });
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    apiRoot = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    apiRoot = `http://127.0.0.1:${await listenOnLoopback(server)}`;
   });
 
   afterAll(async () => {
@@ -63,9 +60,7 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
     for (const socket of liveSockets) {
       socket.destroy();
     }
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
+    await server[Symbol.asyncDispose]();
   });
 
   it("dispatches DMs immediately and the supergroup after cancelling its stalled socket", async () => {
@@ -110,7 +105,6 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
       opts: { token: "123456:integration-token", botInfo },
       runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
       telegramCfg: {},
-      telegramDeps: defaultTelegramBotDeps,
       logger: getChildLogger({ module: "telegram/forum-ingress-test" }),
       resolveGroupPolicy: () => ({ allowlistEnabled: false, allowed: true }),
       resolveGroupActivation: () => undefined,
@@ -166,7 +160,7 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
         storePath: "integration",
         model: undefined,
       }),
-      resolvePromptContextAmbientWatermark: () => undefined,
+      resolvePromptContextAmbientWatermark: async () => undefined,
       recordMessageForReplyChain: async (msg) => ({
         messageId: String(msg.message_id),
         sender: "integration sender",

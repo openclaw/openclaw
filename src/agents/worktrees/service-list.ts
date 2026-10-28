@@ -8,7 +8,6 @@ import type { ManagedWorktreeRecord } from "./types.js";
 export async function reconcileListedWorktrees(
   env: NodeJS.ProcessEnv,
   records: readonly ManagedWorktreeRecord[],
-  now: () => number,
 ): Promise<ManagedWorktreeRecord[]> {
   const context = captureWorktreeRunEndContext(env);
   const listed: ManagedWorktreeRecord[] = [];
@@ -27,7 +26,7 @@ export async function reconcileListedWorktrees(
               return current;
             }
             return (
-              await retireMissingRegistryWorktree(context.environment, current, now(), () => {
+              await retireMissingRegistryWorktree(context.environment, current, Date.now(), () => {
                 context.admission.assertCurrent();
                 guard.commitGuard();
               })

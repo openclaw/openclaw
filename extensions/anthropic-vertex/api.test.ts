@@ -1,30 +1,8 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
-import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import type { Model } from "openclaw/plugin-sdk/llm";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { AnthropicVertexStreamDeps } from "./stream-runtime.js";
-
-function createStreamDeps() {
-  const streamAnthropicMock = vi.fn(
-    (..._args: Parameters<AnthropicVertexStreamDeps["streamAnthropic"]>) =>
-      createAssistantMessageEventStream(),
-  );
-  const anthropicVertexCtorMock = vi.fn();
-  const MockAnthropicVertex = function MockAnthropicVertex(options: unknown) {
-    anthropicVertexCtorMock(options);
-  } as unknown as AnthropicVertexStreamDeps["AnthropicVertex"];
-  const MockGoogleAuth =
-    function MockGoogleAuth() {} as unknown as AnthropicVertexStreamDeps["GoogleAuth"];
-
-  return {
-    deps: {
-      AnthropicVertex: MockAnthropicVertex,
-      GoogleAuth: MockGoogleAuth,
-      streamAnthropic: streamAnthropicMock,
-    },
-    streamAnthropicMock,
-    anthropicVertexCtorMock,
-  };
-}
+import { createStreamDeps } from "./stream.test-support.js";
 
 let createAnthropicVertexStreamFn: typeof import("./api.js").createAnthropicVertexStreamFn;
 let createAnthropicVertexStreamFnForModel: typeof import("./api.js").createAnthropicVertexStreamFnForModel;

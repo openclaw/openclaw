@@ -36,6 +36,12 @@ describe("buildFeishuPresentationCard", () => {
 });
 
 describe("isFeishuCardWithinEnvelope", () => {
+  it("rejects cyclic cards at the serialization boundary", () => {
+    const card: Record<string, unknown> = { schema: "2.0" };
+    card.body = card;
+    expect(isFeishuCardWithinEnvelope(card)).toBe(false);
+  });
+
   it("counts nested elements against the 200-element API limit", () => {
     const buildCard = (elementCount: number) => ({
       schema: "2.0",

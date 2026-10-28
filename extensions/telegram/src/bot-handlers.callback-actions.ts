@@ -150,10 +150,9 @@ export async function handleTelegramQuestionCallback(params: {
   cfg: ResolveQuestionParams["cfg"];
   senderId: string;
   feedback: (text: string, mode: QuestionFeedbackMode) => Promise<unknown>;
-  resolveQuestion?: typeof questionGatewayRuntime.resolveOption;
 }): Promise<void> {
   try {
-    const result = await (params.resolveQuestion ?? questionGatewayRuntime.resolveOption)({
+    const result = await questionGatewayRuntime.resolveOption({
       cfg: params.cfg,
       questionId: params.callback.questionId,
       ...(params.callback.intent === "custom-input"

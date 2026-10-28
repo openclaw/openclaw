@@ -20,7 +20,6 @@ import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { JsonFileReadError, readJsonSync } from "../infra/json-files.js";
 import { resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
-import { findEnvPlaintextFindings } from "./audit-env.js";
 import {
   findSecretStorePlaintextResidueFindings,
   findSecretStoreRedactedValueFindings,
@@ -32,6 +31,7 @@ import { createSecretsConfigIO } from "./config-io.js";
 import { classifyConfigSecretTarget } from "./config-secret-target.js";
 import { getSkippedExecRefStaticError, selectRefsForExecPolicy } from "./exec-resolution-policy.js";
 import { isLikelySensitiveModelProviderHeaderName } from "./model-provider-header-policy.js";
+import { listKnownSecretEnvVarNames } from "./provider-env-vars.js";
 import { secretRefKey } from "./ref-contract.js";
 import { isSecretResolutionError } from "./resolve-errors.js";
 import {
@@ -41,7 +41,7 @@ import {
   type SecretRefResolveCache,
 } from "./resolve.js";
 import { isExpectedResolvedSecretValue } from "./secret-value.js";
-import { isNonEmptyString, isRecord } from "./shared.js";
+import { isNonEmptyString, isRecord, parseEnvValue } from "./shared.js";
 import { listAgentModelsJsonPaths, listSecretsDotEnvPaths } from "./storage-scan.js";
 import { discoverConfigSecretTargets } from "./target-registry.js";
 
@@ -594,10 +594,27 @@ export async function runSecretsAudit(
   }
 
   for (const envPath of envPaths) {
-    const findings = findEnvPlaintextFindings(envPath);
-    if (findings) {
-      collector.filesScanned.add(envPath);
-      collector.findings.push(...findings);
+    if (!fs.existsSync(envPath)) {
+      continue;
+    }
+    collector.filesScanned.add(envPath);
+    const knownKeys = new Set(listKnownSecretEnvVarNames());
+    for (const line of fs.readFileSync(envPath, "utf8").split(/\r?\n/)) {
+      const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+      if (!match) {
+        continue;
+      }
+      const key = match[1] ?? "";
+      if (!knownKeys.has(key) || !parseEnvValue(match[2] ?? "")) {
+        continue;
+      }
+      collector.findings.push({
+        code: "PLAINTEXT_FOUND",
+        severity: "warn",
+        file: envPath,
+        jsonPath: `$env.${key}`,
+        message: `Potential secret found in .env (${key}).`,
+      });
     }
   }
   collector.findings.push(

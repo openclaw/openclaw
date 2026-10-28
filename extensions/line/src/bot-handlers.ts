@@ -108,10 +108,6 @@ interface LineHandlerContext {
   historyLimit?: number;
 }
 
-function normalizeLineIngressEntry(value: string): string | null {
-  return normalizeLineAllowEntry(value) || null;
-}
-
 /**
  * Say one line back to a sender, preferring their reply token so the answer costs no
  * push quota, and falling back to a push when no token is usable. A partial-delivery
@@ -245,7 +241,7 @@ async function resolveLineEventAdmission(
       accountId: account.accountId,
       identity: {
         key: "line-user-id",
-        normalize: normalizeLineIngressEntry,
+        normalize: (value: string) => normalizeLineAllowEntry(value) || null,
         sensitivity: "pii",
         entryIdPrefix: "line-entry",
       },
@@ -406,194 +402,6 @@ function resolveEventRawText(event: MessageEvent | PostbackEvent | JoinEvent): s
   return "";
 }
 
-async function handleMessageEvent(
-  event: MessageEvent,
-  context: LineHandlerContext,
-  setParts: readonly MessageEvent[],
-): Promise<void> {
-  const { cfg, account, runtime, mediaMaxBytes, processMessage } = context;
-  const message = event.message;
-
-  const decision = await resolveLineEventAdmission(event, context);
-  if (!decision) {
-    return;
-  }
-
-  const { isGroup, groupId, roomId, userId } = getLineSourceInfo(event.source);
-  if (isGroup && decision.access.activationAccess.shouldSkip) {
-    const rawText = message.type === "text" ? readLineTextMessageBody(message) : "";
-    const historyKey = groupId ?? roomId;
-    const groupsConfigPath = resolveChannelGroupsConfigPath({
-      cfg,
-      channel: "line",
-      accountId: account.accountId,
-      groups: account.config.groups,
-    });
-    logInboundDrop({
-      log: runtime.log,
-      channel: "line",
-      reason: "no mention",
-      target: historyKey,
-      onceKey: JSON.stringify([account.accountId, historyKey]),
-      hint: `Mention patterns can be derived from the agent identity name. Set ${groupsConfigPath}[${JSON.stringify(historyKey)}].requireMention=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
-    });
-    const senderId = userId ?? "unknown";
-    if (historyKey && context.groupHistories) {
-      const displayName = userId
-        ? await getUserDisplayName(userId, {
-            cfg,
-            accountId: account.accountId,
-            channelAccessToken: account.channelAccessToken,
-            groupId,
-            roomId,
-          })
-        : senderId;
-      // History has one sender string; keep the stable ID when display names collide.
-      const sender = displayName === senderId ? senderId : `${displayName} (${senderId})`;
-      createChannelHistoryWindow({ historyMap: context.groupHistories }).record({
-        historyKey,
-        limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
-        entry: {
-          sender,
-          body: rawText || `<${message.type}>`,
-          timestamp: event.timestamp,
-        },
-      });
-    }
-    return;
-  }
-
-  // Reserve the group window before any await below. Concurrent ambient and
-  // mention events see only unreserved entries; failed turns release theirs.
-  const groupHistoryKey = isGroup ? (groupId ?? roomId) : undefined;
-  const historyReservation = reserveLineGroupHistory(
-    context.groupHistories,
-    groupHistoryKey,
-    context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
-  );
-
-  try {
-    const allMedia: MediaRef[] = [];
-    let mediaUnavailable = false;
-    const abortSignal = context.turnAdoptionLifecycle?.abortSignal;
-    // LINE splits one multi-image send into several webhook events. The spool
-    // hands the whole set here, so every part's media joins one turn.
-    for (const part of orderedLineSetMessages(message, setParts)) {
-      if (!isDownloadableLineMessageType(part.type)) {
-        continue;
-      }
-      try {
-        const originalFilename =
-          part.type === "file" ? normalizeOptionalString(part.fileName) : undefined;
-        const media = await downloadLineMedia(part.id, account.channelAccessToken, mediaMaxBytes, {
-          originalFilename,
-          ...(abortSignal ? { signal: abortSignal } : {}),
-        });
-        abortSignal?.throwIfAborted();
-        allMedia.push({
-          path: media.path,
-          contentType: media.contentType,
-          // LINE names only file messages; the model needs that name to answer
-          // questions that refer to the attachment by it.
-          ...(originalFilename ? { fileName: originalFilename } : {}),
-        });
-      } catch (err) {
-        if (abortSignal?.aborted) {
-          throw abortSignal.reason;
-        }
-        if (isRetryableLineInboundMediaError(err)) {
-          // Preparation-phase failure before turn adoption: reject so the durable
-          // ingress drain retries the whole event once LINE finishes preparing the
-          // media, instead of degrading it to an unavailable-attachment notice that
-          // permanently loses media with no text fallback.
-          throw err;
-        }
-        mediaUnavailable = true;
-        const errMsg = String(err);
-        if (errMsg.includes("exceeds") && errMsg.includes("limit")) {
-          logVerbose(`line: media exceeds size limit for message ${part.id}`);
-        } else {
-          runtime.error?.(danger(`line: failed to download media: ${errMsg}`));
-        }
-      }
-    }
-
-    // Which part the turn answers as is a different fact from what order its
-    // media reads in. Reply tokens expire, so a set delivered out of order
-    // answers with its freshest part, while the media keeps the sender's order.
-    const answerAs = setParts.reduce(
-      (freshest, part) => (part.timestamp > freshest.timestamp ? part : freshest),
-      event,
-    );
-
-    const messageContext = await buildLineMessageContext({
-      event: answerAs,
-      allMedia: [...allMedia],
-      mediaUnavailable,
-      ...(context.missingParts === undefined ? {} : { missingParts: context.missingParts }),
-      cfg,
-      account,
-      preparedRoute: decision.preparedRoute,
-      commandAuthorized: decision.access.commandAccess.authorized,
-      resolveChannelIngress: decision.resolveBoundAccess,
-      inboundHistory: historyReservation.inboundHistory,
-      mentions: decision.mentions,
-      buildContext: context.buildContext,
-    });
-    if (!messageContext) {
-      logVerbose("line: skipping empty message");
-    } else {
-      await processMessage(messageContext, {
-        // The config this event resolved to, not the one the monitor booted on.
-        cfg: context.cfg,
-        ...(context.turnAdoptionLifecycle
-          ? { turnAdoptionLifecycle: context.turnAdoptionLifecycle }
-          : {}),
-      });
-      historyReservation.commit();
-    }
-  } finally {
-    historyReservation.release();
-  }
-}
-
-async function handleJoinEvent(event: JoinEvent, context: LineHandlerContext): Promise<void> {
-  const { groupId, roomId, isGroup } = getLineSourceInfo(event.source);
-  const conversationId = groupId ?? roomId;
-  if (!isGroup || !conversationId) {
-    return;
-  }
-  logVerbose(`line: bot joined ${groupId ? `group ${groupId}` : `room ${roomId}`}`);
-  const { cfg, account } = context;
-  const roomAllowed = Boolean(await resolveLineEventAdmission(event, context));
-  await reportChannelRoomJoin({
-    cfg,
-    channel: "line",
-    accountId: account.accountId,
-    conversationId,
-    deliverTo: conversationId,
-    route: resolveAgentRoute({
-      cfg,
-      channel: "line",
-      accountId: account.accountId,
-      peer: { kind: "group", id: conversationId },
-    }),
-    roomAllowed,
-    resolveRoomContext: async () => {
-      // LINE cannot retrieve prior messages, and multi-person rooms have no name API.
-      const roomContext = { historyUnavailable: true };
-      const title = groupId
-        ? await getLineGroupName(groupId, {
-            cfg,
-            accountId: account.accountId,
-            channelAccessToken: account.channelAccessToken,
-          })
-        : undefined;
-      return title ? { ...roomContext, title } : roomContext;
-    },
-  });
-}
-
 /** What a tap that did not answer the question has to tell the person who tapped. */
 function lineQuestionOutcomeNotice(status: "already-terminal" | "failed"): string {
   if (status === "already-terminal") {
@@ -602,73 +410,6 @@ function lineQuestionOutcomeNotice(status: "already-terminal" | "failed"): strin
     return "That question is no longer waiting for an answer.";
   }
   return "Could not record that answer. Reply with the option text instead.";
-}
-
-async function handlePostbackEvent(
-  event: PostbackEvent,
-  context: LineHandlerContext,
-): Promise<void> {
-  const data = event.postback.data;
-  logVerbose(`line: received postback: ${data}`);
-
-  const decision = await resolveLineEventAdmission(event, context);
-  if (!decision) {
-    return;
-  }
-
-  const question = parseLineQuestionPostbackData(data ?? "");
-  if (question) {
-    // An ask_user tap answers the pending question; it is not a new turn.
-    const { userId, groupId, roomId } = getLineSourceInfo(event.source);
-    // Re-read admission without issuing another pairing challenge.
-    const authorize = async () => isLineEventAdmitted(await decision.resolveBoundAccess());
-    const outcome = await resolveLineQuestionPostback({
-      cfg: context.cfg,
-      callback: question,
-      accountId: context.account.accountId,
-      ...(userId ? { senderId: userId } : {}),
-      authorize,
-    });
-    // A recorded answer needs no acknowledgement: the agent's next reply is the
-    // feedback, and LINE already echoed the label through the action's displayText.
-    const pushTarget = groupId ?? roomId ?? (userId ? `line:${userId}` : undefined);
-    if (outcome.status === "answered" || outcome.status === "denied" || !pushTarget) {
-      return;
-    }
-    await sendLineHandlerText({
-      context,
-      replyToken: event.replyToken,
-      pushTarget,
-      logLabel: "line: question answer notice failed",
-      text: lineQuestionOutcomeNotice(outcome.status),
-      authorize,
-    });
-    return;
-  }
-
-  // A malformed question callback must not fall through as an ordinary user message.
-  if (isLineQuestionPostbackData(data ?? "")) {
-    return;
-  }
-
-  const postbackContext = await buildLinePostbackContext({
-    event,
-    cfg: context.cfg,
-    account: context.account,
-    commandAuthorized: decision.access.commandAccess.authorized,
-    resolveChannelIngress: decision.resolveBoundAccess,
-    buildContext: context.buildContext,
-  });
-  if (!postbackContext) {
-    return;
-  }
-
-  await context.processMessage(postbackContext, {
-    cfg: context.cfg,
-    ...(context.turnAdoptionLifecycle
-      ? { turnAdoptionLifecycle: context.turnAdoptionLifecycle }
-      : {}),
-  });
 }
 
 /** Media reads in the order the sender picked, whatever order LINE delivered. */
@@ -688,7 +429,7 @@ function orderedLineSetMessages(
  * event is the turn's own and the rest are the set parts behind it.
  */
 export async function handleLineWebhookEvents(
-  events: WebhookEvent[],
+  events: readonly WebhookEvent[],
   context: LineHandlerContext,
 ): Promise<void> {
   const [event, ...setParts] = events;
@@ -697,30 +438,267 @@ export async function handleLineWebhookEvents(
   }
   try {
     switch (event.type) {
-      case "message":
-        await handleMessageEvent(
-          event,
-          context,
-          setParts.filter((part): part is MessageEvent => part.type === "message"),
+      case "message": {
+        const messageSetParts = setParts.filter(
+          (part): part is MessageEvent => part.type === "message",
         );
-        break;
-      case "follow":
-      case "unfollow": {
-        const { userId } = getLineSourceInfo(event.source);
-        logVerbose(`line: user ${userId ?? "unknown"} ${event.type}ed`);
+        const { cfg, account, runtime, mediaMaxBytes, processMessage } = context;
+        const message = event.message;
+
+        const decision = await resolveLineEventAdmission(event, context);
+        if (!decision) {
+          return;
+        }
+
+        const { isGroup, groupId, roomId, userId } = getLineSourceInfo(event.source);
+        if (isGroup && decision.access.activationAccess.shouldSkip) {
+          const rawText = message.type === "text" ? readLineTextMessageBody(message) : "";
+          const historyKey = groupId ?? roomId;
+          const groupsConfigPath = resolveChannelGroupsConfigPath({
+            cfg,
+            channel: "line",
+            accountId: account.accountId,
+            groups: account.config.groups,
+          });
+          logInboundDrop({
+            log: runtime.log,
+            channel: "line",
+            reason: "no mention",
+            target: historyKey,
+            onceKey: JSON.stringify([account.accountId, historyKey]),
+            hint: `Mention patterns can be derived from the agent identity name. Set ${groupsConfigPath}[${JSON.stringify(historyKey)}].requireMention=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
+          });
+          const senderId = userId ?? "unknown";
+          if (historyKey && context.groupHistories) {
+            const displayName = userId
+              ? await getUserDisplayName(userId, {
+                  cfg,
+                  accountId: account.accountId,
+                  channelAccessToken: account.channelAccessToken,
+                  groupId,
+                  roomId,
+                })
+              : senderId;
+            // History has one sender string; keep the stable ID when display names collide.
+            const sender = displayName === senderId ? senderId : `${displayName} (${senderId})`;
+            createChannelHistoryWindow({ historyMap: context.groupHistories }).record({
+              historyKey,
+              limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+              entry: {
+                sender,
+                body: rawText || `<${message.type}>`,
+                timestamp: event.timestamp,
+              },
+            });
+          }
+          return;
+        }
+
+        // Reserve the group window before any await below. Concurrent ambient and
+        // mention events see only unreserved entries; failed turns release theirs.
+        const groupHistoryKey = isGroup ? (groupId ?? roomId) : undefined;
+        const historyReservation = reserveLineGroupHistory(
+          context.groupHistories,
+          groupHistoryKey,
+          context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+        );
+
+        try {
+          const allMedia: MediaRef[] = [];
+          let mediaUnavailable = false;
+          const abortSignal = context.turnAdoptionLifecycle?.abortSignal;
+          // LINE splits one multi-image send into several webhook events. The spool
+          // hands the whole set here, so every part's media joins one turn.
+          for (const part of orderedLineSetMessages(message, messageSetParts)) {
+            if (!isDownloadableLineMessageType(part.type)) {
+              continue;
+            }
+            try {
+              const originalFilename =
+                part.type === "file" ? normalizeOptionalString(part.fileName) : undefined;
+              const media = await downloadLineMedia(
+                part.id,
+                account.channelAccessToken,
+                mediaMaxBytes,
+                {
+                  originalFilename,
+                  ...(abortSignal ? { signal: abortSignal } : {}),
+                },
+              );
+              abortSignal?.throwIfAborted();
+              allMedia.push({
+                path: media.path,
+                contentType: media.contentType,
+                // LINE names only file messages; the model needs that name to answer
+                // questions that refer to the attachment by it.
+                ...(originalFilename ? { fileName: originalFilename } : {}),
+              });
+            } catch (err) {
+              if (abortSignal?.aborted) {
+                throw abortSignal.reason;
+              }
+              if (isRetryableLineInboundMediaError(err)) {
+                // Preparation-phase failure before turn adoption: reject so the durable
+                // ingress drain retries the whole event once LINE finishes preparing the
+                // media, instead of degrading it to an unavailable-attachment notice that
+                // permanently loses media with no text fallback.
+                throw err;
+              }
+              mediaUnavailable = true;
+              const errMsg = String(err);
+              if (errMsg.includes("exceeds") && errMsg.includes("limit")) {
+                logVerbose(`line: media exceeds size limit for message ${part.id}`);
+              } else {
+                runtime.error?.(danger(`line: failed to download media: ${errMsg}`));
+              }
+            }
+          }
+
+          // Which part the turn answers as is a different fact from what order its
+          // media reads in. Reply tokens expire, so a set delivered out of order
+          // answers with its freshest part, while the media keeps the sender's order.
+          const answerAs = messageSetParts.reduce(
+            (freshest, part) => (part.timestamp > freshest.timestamp ? part : freshest),
+            event,
+          );
+
+          const messageContext = await buildLineMessageContext({
+            event: answerAs,
+            allMedia,
+            mediaUnavailable,
+            ...(context.missingParts === undefined ? {} : { missingParts: context.missingParts }),
+            cfg,
+            account,
+            preparedRoute: decision.preparedRoute,
+            commandAuthorized: decision.access.commandAccess.authorized,
+            resolveChannelIngress: decision.resolveBoundAccess,
+            inboundHistory: historyReservation.inboundHistory,
+            mentions: decision.mentions,
+            buildContext: context.buildContext,
+          });
+          if (messageContext) {
+            await processMessage(messageContext, {
+              // The config this event resolved to, not the one the monitor booted on.
+              cfg: context.cfg,
+              ...(context.turnAdoptionLifecycle
+                ? { turnAdoptionLifecycle: context.turnAdoptionLifecycle }
+                : {}),
+            });
+            historyReservation.commit();
+          }
+        } finally {
+          historyReservation.release();
+        }
         break;
       }
-      case "join":
-        await handleJoinEvent(event, context);
+      case "follow":
+      case "unfollow":
         break;
+      case "join": {
+        const { groupId, roomId, isGroup } = getLineSourceInfo(event.source);
+        const conversationId = groupId ?? roomId;
+        if (!isGroup || !conversationId) {
+          return;
+        }
+        logVerbose(`line: bot joined ${groupId ? `group ${groupId}` : `room ${roomId}`}`);
+        const { cfg, account } = context;
+        const roomAllowed = Boolean(await resolveLineEventAdmission(event, context));
+        await reportChannelRoomJoin({
+          cfg,
+          channel: "line",
+          accountId: account.accountId,
+          conversationId,
+          deliverTo: conversationId,
+          route: resolveAgentRoute({
+            cfg,
+            channel: "line",
+            accountId: account.accountId,
+            peer: { kind: "group", id: conversationId },
+          }),
+          roomAllowed,
+          resolveRoomContext: async () => {
+            // LINE cannot retrieve prior messages, and multi-person rooms have no name API.
+            const roomContext = { historyUnavailable: true };
+            const title = groupId
+              ? await getLineGroupName(groupId, {
+                  cfg,
+                  accountId: account.accountId,
+                  channelAccessToken: account.channelAccessToken,
+                })
+              : undefined;
+            return title ? { ...roomContext, title } : roomContext;
+          },
+        });
+        break;
+      }
       case "leave": {
         const { groupId, roomId } = getLineSourceInfo(event.source);
         logVerbose(`line: bot left ${groupId ? `group ${groupId}` : `room ${roomId}`}`);
         break;
       }
-      case "postback":
-        await handlePostbackEvent(event, context);
+      case "postback": {
+        const data = event.postback.data;
+
+        const decision = await resolveLineEventAdmission(event, context);
+        if (!decision) {
+          return;
+        }
+
+        const question = parseLineQuestionPostbackData(data ?? "");
+        if (question) {
+          // An ask_user tap answers the pending question; it is not a new turn.
+          const { userId, groupId, roomId } = getLineSourceInfo(event.source);
+          // Re-read admission without issuing another pairing challenge.
+          const authorize = async () => isLineEventAdmitted(await decision.resolveBoundAccess());
+          const outcome = await resolveLineQuestionPostback({
+            cfg: context.cfg,
+            callback: question,
+            accountId: context.account.accountId,
+            ...(userId ? { senderId: userId } : {}),
+            authorize,
+          });
+          // A recorded answer needs no acknowledgement: the agent's next reply is the
+          // feedback, and LINE already echoed the label through the action's displayText.
+          const pushTarget = groupId ?? roomId ?? (userId ? `line:${userId}` : undefined);
+          if (outcome.status === "answered" || outcome.status === "denied" || !pushTarget) {
+            return;
+          }
+          await sendLineHandlerText({
+            context,
+            replyToken: event.replyToken,
+            pushTarget,
+            logLabel: "line: question answer notice failed",
+            text: lineQuestionOutcomeNotice(outcome.status),
+            authorize,
+          });
+          return;
+        }
+
+        // A malformed question callback must not fall through as an ordinary user message.
+        if (isLineQuestionPostbackData(data ?? "")) {
+          return;
+        }
+
+        const postbackContext = await buildLinePostbackContext({
+          event,
+          cfg: context.cfg,
+          account: context.account,
+          commandAuthorized: decision.access.commandAccess.authorized,
+          resolveChannelIngress: decision.resolveBoundAccess,
+          buildContext: context.buildContext,
+        });
+        if (!postbackContext) {
+          return;
+        }
+
+        await context.processMessage(postbackContext, {
+          cfg: context.cfg,
+          ...(context.turnAdoptionLifecycle
+            ? { turnAdoptionLifecycle: context.turnAdoptionLifecycle }
+            : {}),
+        });
         break;
+      }
       default:
         logVerbose(`line: unhandled event type: ${event.type}`);
     }

@@ -1,5 +1,6 @@
 import {
   readPreparedSessionEntryChange,
+  readPreparedSessionEntryPublicationSource,
   type SessionEntryPublicationSource,
 } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import { captureCanonicalSessionReaderContinuation } from "../config/sessions/session-canonical-key.js";
@@ -157,13 +158,13 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
       ) {
         return;
       }
-      for (const store of matching(change)) {
+      const publication = readPreparedSessionEntryPublicationSource(change);
+      for (const store of matching({ storePath: publication.canonicalPath ?? change.storePath })) {
         const source = prepared?.source;
         if (
           source &&
           (source.identity !== store.target.identity ||
             source.birthtime !== store.target.birthtime ||
-            (store.target.filename !== undefined && source.filename !== store.target.filename) ||
             (store.publishedSource?.incarnation === source.incarnation &&
               store.publishedSource.revision !== undefined &&
               source.revision !== undefined &&
@@ -210,7 +211,7 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
           (facts.kind === "entry" && previous[4] !== facts.previousSessionId) ||
           ((facts.kind === "member" || facts.kind === "category") &&
             previous[4] !== facts.sessionId) ||
-          (facts.kind === "participants" && !facts.projection)
+          (facts.kind === "participants" && !facts.projection && facts.projectionChanged !== false)
         ) {
           store.facts.delete(change.sessionKey);
           store.dirty.add(change.sessionKey);

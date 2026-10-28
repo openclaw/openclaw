@@ -16,7 +16,7 @@ const MAX_CLEANUP_WARNINGS = 20;
 const STAGING_PROFILE_PREFIX = ".github-profile.staging-";
 const MANAGED_AGENT_KEY_PATTERN = /^[a-f0-9]{64}$/u;
 
-type GitHubProfileCleanupResult = { removed: number; warnings: string[] };
+type GitHubProfileCleanupResult = { warnings: string[] };
 
 async function readCleanupDirectory(candidate: string, label: string, warnings: string[]) {
   let identity;
@@ -30,7 +30,8 @@ async function readCleanupDirectory(candidate: string, label: string, warnings: 
       warnings.push(`refused unsafe ${label}: ${candidate}`);
       return undefined;
     }
-    throw error;
+    warnings.push(`failed to read ${label}: ${candidate}: ${String(error)}`);
+    return undefined;
   }
   if (identity.realPath !== path.resolve(candidate)) {
     warnings.push(`refused escaped ${label}: ${candidate}`);
@@ -58,13 +59,13 @@ async function cleanupProfileRoot(params: {
   directory: string;
   preservedProfileIds: ReadonlySet<string> | undefined;
   warnings: string[];
-}): Promise<number> {
+}): Promise<void> {
   const orphanAgent = params.preservedProfileIds === undefined;
   const label = orphanAgent ? "managed GitHub agent profile" : "managed GitHub profile";
   const directory = path.join(params.root.rootReal, params.directory);
   const identity = await readCleanupDirectory(directory, `${label} root`, params.warnings);
   if (!identity) {
-    return 0;
+    return;
   }
   const candidates: string[] = [];
   for (const entry of await params.root.list(params.directory, { withFileTypes: true })) {
@@ -81,10 +82,9 @@ async function cleanupProfileRoot(params: {
     }
     // An orphan root is retired only after every direct child is admitted.
     if (orphanAgent) {
-      return 0;
+      return;
     }
   }
-  let removed = 0;
   for (const relativePath of orphanAgent ? [params.directory] : candidates) {
     const candidate = path.join(params.root.rootReal, relativePath);
     const candidateIdentity = orphanAgent
@@ -105,9 +105,7 @@ async function cleanupProfileRoot(params: {
         }
       },
     });
-    removed += 1;
   }
-  return removed;
 }
 
 /** Retires only generations unreferenced by the immutable startup config snapshot. */
@@ -132,7 +130,7 @@ export async function cleanupRetiredManagedGitHubProfiles(params: {
   );
   // Initial setup can be durable before its config CAS is known. Pending
   // refresh metadata also owns the selected stable profile until recovery.
-  for (const { record } of listGitHubOAuthRecords()) {
+  for (const { record } of await listGitHubOAuthRecords()) {
     if (!record) {
       continue;
     }
@@ -145,10 +143,9 @@ export async function cleanupRetiredManagedGitHubProfiles(params: {
     profiles.add(record.profileId);
     agentProfiles.set(agentKey, profiles);
   }
-  let removed = 0;
   const system = await openCleanupRoot(systemRoot, "managed GitHub profile root", warnings);
   if (system) {
-    removed += await cleanupProfileRoot({
+    await cleanupProfileRoot({
       root: system,
       directory: ".",
       preservedProfileIds: systemProfiles,
@@ -168,7 +165,7 @@ export async function cleanupRetiredManagedGitHubProfiles(params: {
         );
         continue;
       }
-      removed += await cleanupProfileRoot({
+      await cleanupProfileRoot({
         root: registry,
         directory: entry.name,
         preservedProfileIds: agentProfiles.get(entry.name),
@@ -177,11 +174,10 @@ export async function cleanupRetiredManagedGitHubProfiles(params: {
     }
   }
   if (warnings.length <= MAX_CLEANUP_WARNINGS) {
-    return { removed, warnings };
+    return { warnings };
   }
   const omitted = warnings.length - MAX_CLEANUP_WARNINGS;
   return {
-    removed,
     warnings: [
       ...warnings.slice(0, MAX_CLEANUP_WARNINGS),
       `omitted ${omitted} additional managed GitHub profile cleanup warnings`,

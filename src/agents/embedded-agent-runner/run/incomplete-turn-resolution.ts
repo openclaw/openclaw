@@ -1,19 +1,15 @@
 import { hasOnlyAssistantReasoningContent } from "@openclaw/ai/internal/shared";
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import {
   hasAcceptedSessionSpawn,
   hasCompletionMessageSessionSpawn,
+  type AcceptedSessionSpawn,
 } from "../../accepted-session-spawn.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
-import { collectTextContentBlocks } from "../../content-blocks.js";
-import { formatUserFacingAssistantErrorText } from "../../embedded-agent-helpers.js";
+import { formatUserFacingAssistantErrorText } from "../../embedded-agent-helpers/error-text.js";
 import { renderAgentHarnessPreflightUserMessage } from "../../embedded-agent-helpers/user-facing-text.js";
 import type { MessagingToolSend } from "../../embedded-agent-messaging.types.js";
 import { isToolAuthoredSourceReplyForAssistant } from "../../embedded-agent-tool-authored-source-reply.js";
@@ -21,12 +17,15 @@ import { renderAssistantRequestFailureCopy } from "../../failover/assistant-requ
 import { resolveReplyFailoverFacts } from "../../failover/request-error-facts.js";
 import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
 import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint.js";
-import type { AgentMessage } from "../../runtime/index.js";
+import {
+  MISSING_REPLY_NOTICE_TEXT,
+  MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT,
+} from "../../reply-completion.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
   resolveSourceReplyDelivery,
 } from "../delivery-evidence.js";
-import type { EmbeddedRunLivenessState } from "../types.js";
+import type { EmbeddedAgentRunResult, EmbeddedRunLivenessState } from "../types.js";
 import {
   hasAsyncActivity,
   hasAttemptTerminalState,
@@ -34,31 +33,23 @@ import {
 } from "./attempt-terminal-evidence.js";
 import {
   classifyAssistantTurn,
+  countSettledTurnDeliveryPayloads,
   isIncompleteTerminalAssistantTurn,
   joinAssistantTexts,
   type IncompleteTurnAttempt,
 } from "./incomplete-turn-classification.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
-type SilentToolResultAttempt = Pick<
-  EmbeddedRunAttemptResult,
-  | "clientToolCalls"
-  | "yieldDetected"
-  | "didSendDeterministicApprovalPrompt"
-  | "lastToolError"
-  | "messagesSnapshot"
-  | "toolMetas"
->;
-
 type RunLivenessAttempt = Pick<
   EmbeddedRunAttemptResult,
   "currentAttemptAssistant" | "currentAttemptCompletedAssistant" | "replayMetadata" | "terminal"
 >;
 
-type TerminalAuthFailureContext = {
+type TerminalFailureContext = {
   assistantProfileFailureReason?: AuthProfileFailureReason | null;
   provider: string;
   runParams: Pick<Parameters<typeof buildProviderAuthRecoveryHint>[0], "config" | "workspaceDir">;
+  prepared: { payloadsForVisibleCompletion: EmbeddedAgentRunResult["payloads"] };
 };
 
 /**
@@ -68,15 +59,27 @@ type TerminalAuthFailureContext = {
  */
 export function resolveIncompleteTurnPayloadText(params: {
   payloadCount: number;
+  rawPayloadCount?: number;
   aborted: boolean;
   externalAbort: boolean;
   timedOut: boolean;
   hadPotentialSideEffects?: boolean;
   hasIntentionalTerminalCompletion?: boolean;
-  terminalAuthFailure?: TerminalAuthFailureContext;
+  terminalFailure?: TerminalFailureContext;
   attempt: IncompleteTurnAttempt;
 }): string | null {
-  const assistantState = classifyAssistantTurn(params);
+  // A generated warning reports a failed tool; it is not the answer that consumes
+  // the failure. Keep its prepared detail when the terminal owner records failure.
+  const payloads = params.terminalFailure?.prepared.payloadsForVisibleCompletion;
+  const toolFailurePayload =
+    params.attempt.terminal.kind === "ok" && params.attempt.lastToolError
+      ? payloads?.find((payload) => getReplyPayloadMetadata(payload)?.toolErrorWarning)
+      : undefined;
+  const payloadCount = toolFailurePayload
+    ? countSettledTurnDeliveryPayloads({ payloads, attempt: params.attempt })
+    : params.payloadCount;
+  const assistantState = classifyAssistantTurn({ ...params, payloadCount });
+  const textToolCallAttempt = params.attempt.textToolCallAttempt === true;
   const assistant = assistantState.assistant;
   const completionAttempt = {
     ...params.attempt,
@@ -90,7 +93,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   // nothing. A length stop that did produce visible text is a partial answer and
   // is delivered with a truncation notice instead. (#76477)
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
-    hasAssistantVisibleText: params.payloadCount > 0,
+    hasAssistantVisibleText: payloadCount > 0,
     hasTerminalOutput,
     lastAssistant: assistant,
   });
@@ -98,21 +101,27 @@ export function resolveIncompleteTurnPayloadText(params: {
   // content; bypass the visible-text guard when thinking was the only output
   // so that incomplete-turn stall detection fires below. (#89787, #91953)
   const thinkingOnlyTerminal =
-    params.payloadCount !== 0 &&
+    payloadCount !== 0 &&
     params.attempt.keptAnswer === undefined &&
     !assistantState.visibleText.length &&
     !assistant?.openclawDelivery?.tts?.text?.trim() &&
     !hasTerminalOutput &&
     Boolean(assistant && hasOnlyAssistantReasoningContent(assistant));
+  const presentationHiddenAssistantReply =
+    (params.rawPayloadCount ?? params.payloadCount) > payloadCount;
 
   if (
-    (params.payloadCount !== 0 && !incompleteTerminalAssistant && !thinkingOnlyTerminal) ||
+    (payloadCount !== 0 &&
+      !incompleteTerminalAssistant &&
+      !thinkingOnlyTerminal &&
+      !textToolCallAttempt) ||
     (params.aborted && params.externalAbort) ||
     params.timedOut ||
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.lastToolError ||
+    (toolFailurePayload && hasTerminalOutput) ||
+    (params.attempt.lastToolError && !toolFailurePayload) ||
     params.hasIntentionalTerminalCompletion ||
     params.attempt.hasToolMediaBlockReply ||
     resolveSourceReplyDelivery(completionAttempt) !== "missing" ||
@@ -137,15 +146,25 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
+  const textToolCallFailureText = textToolCallAttempt
+    ? "⚠️ The model wrote a tool call as text instead of calling the tool. No tool ran for that call."
+    : undefined;
+
   const stopReason = assistant?.stopReason;
   if (
+    !textToolCallAttempt &&
     !incompleteTerminalAssistant &&
     !assistantState.reasoningOnly &&
     !thinkingOnlyTerminal &&
+    !presentationHiddenAssistantReply &&
     !assistantState.emptyResponse &&
     stopReason !== "error"
   ) {
     return null;
+  }
+
+  if (toolFailurePayload?.text) {
+    return toolFailurePayload.text;
   }
 
   const { promptError } = projectAgentRunAttemptTerminal(params.attempt.terminal);
@@ -164,6 +183,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   // A non-replayable harness failure may have no assistant message to carry its error.
   // Share classified copy with thrown failures; never display raw prompt diagnostics.
   const promptFailureText =
+    textToolCallFailureText ??
     preflightFailureText ??
     (failureFacts
       ? (failureFacts.providerRequestError?.userMessage ??
@@ -175,7 +195,12 @@ export function resolveIncompleteTurnPayloadText(params: {
         }))
       : undefined);
   if (params.hadPotentialSideEffects || params.attempt.replayMetadata.hadPotentialSideEffects) {
-    return `${promptFailureText ?? "⚠️ Agent couldn't generate a response."} Note: some tool actions may have already been executed — please verify before retrying.`;
+    return promptFailureText
+      ? `${promptFailureText} Note: some tool actions may have already been executed — please verify before retrying.`
+      : MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT;
+  }
+  if (textToolCallFailureText) {
+    return `${textToolCallFailureText} Please try again or use a model with native tool calling.`;
   }
   if (preflightFailureText !== undefined) {
     return preflightFailureText;
@@ -183,7 +208,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   if (assistant && isProviderRefusalAssistantError(assistant)) {
     return formatUserFacingAssistantErrorText(assistant);
   }
-  const authFailure = params.terminalAuthFailure;
+  const authFailure = params.terminalFailure;
   const reason = authFailure?.assistantProfileFailureReason;
   if (authFailure && (reason === "auth" || reason === "auth_permanent")) {
     return renderAuthProfileFailoverCopy({
@@ -202,7 +227,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     promptFailureText ??
     (stopReason === "length"
       ? "⚠️ The model reached its output token limit before generating an answer. Please try again."
-      : "⚠️ Agent couldn't generate a response. Please try again.")
+      : MISSING_REPLY_NOTICE_TEXT)
   );
 }
 
@@ -243,7 +268,7 @@ interface YieldContinuationAttempt {
   clientToolCalls?: readonly unknown[];
   didSendDeterministicApprovalPrompt?: boolean;
   successfulCronAdds?: number;
-  acceptedSessionSpawns?: readonly { runId: string; childSessionKey: string }[];
+  acceptedSessionSpawns?: readonly AcceptedSessionSpawn[];
   runtimeContinuationStarted?: boolean;
   yieldMessageWaitRegistered?: boolean;
   messagingToolSentTexts?: readonly string[];
@@ -252,19 +277,27 @@ interface YieldContinuationAttempt {
   toolMetas?: readonly { asyncStarted?: boolean }[];
 }
 
-/** Continuation evidence for a yielded turn — sources that will produce future output. */
-export function hasYieldContinuationEvidence(attempt: YieldContinuationAttempt): boolean {
+/** Same-attempt work that can resume execution or deliver its completion. */
+export function hasRunContinuationEvidence(attempt: YieldContinuationAttempt): boolean {
   // Only same-attempt evidence is causal here. Session-wide active descendants may be
   // stale or unrelated and must not suppress the diagnostic for this yielded turn.
   return (
     (attempt.clientToolCalls?.length ?? 0) > 0 ||
     attempt.didSendDeterministicApprovalPrompt === true ||
-    hasCommittedMessagingToolDeliveryEvidence(attempt) ||
-    hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
+    hasCompletionMessageSessionSpawn(attempt.acceptedSessionSpawns) ||
     attempt.runtimeContinuationStarted === true ||
     attempt.yieldMessageWaitRegistered === true ||
-    hasAsyncActivity(attempt.toolMetas) ||
-    (attempt.successfulCronAdds ?? 0) > 0
+    hasAsyncActivity(attempt.toolMetas)
+  );
+}
+
+/** A deliberate yield can also leave accepted work or already-sent output. */
+export function hasYieldContinuationEvidence(attempt: YieldContinuationAttempt): boolean {
+  return (
+    hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
+    hasCommittedMessagingToolDeliveryEvidence(attempt) ||
+    (attempt.successfulCronAdds ?? 0) > 0 ||
+    hasRunContinuationEvidence(attempt)
   );
 }
 
@@ -274,71 +307,8 @@ export const YIELD_DIAGNOSTIC_TEXT =
 export const TRUNCATED_REPLY_NOTICE_TEXT =
   "⚠️ Reply truncated at the model's output token limit. The text above is partial — ask to continue it.";
 
-function readMessageTextContent(message: AgentMessage): string | undefined {
-  const content = (message as { content?: unknown }).content;
-  return normalizeOptionalString(
-    typeof content === "string"
-      ? content
-      : collectTextContentBlocks(content)
-          .map((item) => item.trim())
-          .filter((item) => item.length > 0)
-          .join("\n"),
-  );
-}
-
-function hasTrailingSilentToolResult(messages: readonly AgentMessage[]): boolean {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i];
-    if (!message) {
-      continue;
-    }
-    const role = normalizeLowercaseStringOrEmpty(message?.role);
-    if (role === "toolresult" || role === "tool_result" || role === "tool") {
-      if ((message as { isError?: boolean }).isError === true) {
-        return false;
-      }
-      const text =
-        readMessageTextContent(message) ??
-        normalizeOptionalString(
-          (message as { details?: { aggregated?: unknown } }).details?.aggregated,
-        );
-      return isSilentReplyText(text, SILENT_REPLY_TOKEN);
-    }
-    if (role === "assistant" && !readMessageTextContent(message)) {
-      continue;
-    }
-    return false;
-  }
-  return false;
-}
-
-/** Emits the silent-reply token for cron turns whose last successful tool result is silent. */
-export function resolveSilentToolResultReplyPayload(params: {
-  isCronTrigger: boolean;
-  payloadCount: number;
-  aborted: boolean;
-  timedOut: boolean;
-  attempt: SilentToolResultAttempt;
-}): { text: typeof SILENT_REPLY_TOKEN } | null {
-  if (
-    !params.isCronTrigger ||
-    params.payloadCount !== 0 ||
-    params.aborted ||
-    params.timedOut ||
-    (params.attempt.toolMetas?.length ?? 0) === 0 ||
-    params.attempt.clientToolCalls ||
-    params.attempt.yieldDetected ||
-    params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.lastToolError ||
-    (params.attempt.messagesSnapshot?.length ?? 0) === 0
-  ) {
-    return null;
-  }
-
-  return hasTrailingSilentToolResult(params.attempt.messagesSnapshot)
-    ? { text: SILENT_REPLY_TOKEN }
-    : null;
-}
+export const CUT_OFF_SUMMARY_NOTICE_TEXT =
+  "⚠️ The model was cut off at its output token limit, so the summary above was written afterwards without tools. Some work may be unfinished — check before relying on it.";
 
 /**
  * Marks replay invalid whenever the recorded attempt might not be safe to
@@ -373,7 +343,10 @@ export function resolveRunLivenessState(params: {
     return "abandoned";
   }
   const terminal = projectAgentRunAttemptTerminal(params.attempt.terminal);
-  if (terminal.promptErrorSource === "compaction" || terminal.timedOutDuringCompaction) {
+  if (
+    !terminal.timedOutDuringToolExecution &&
+    (terminal.promptErrorSource === "compaction" || terminal.timedOutDuringCompaction)
+  ) {
     return "paused";
   }
   if ((params.aborted || params.timedOut) && params.payloadCount === 0) {

@@ -2,11 +2,12 @@ import type { ChannelPreviewStreamingConfig, SessionThreadBindingsConfig } from 
 import type {
   ChannelBotInteractionConfig,
   ChannelExecApprovalConfig,
+  ChannelGroupDmConfig,
   ChannelReactionConfig,
   CommonChannelGroupConfig,
   CommonChannelMessagingConfig,
+  MultiAccountChannelConfig,
 } from "./types.channel-messaging-common.js";
-import type { DiscordPresenceEventsConfig } from "./types.discord-presence.js";
 import type { ProviderCommandsConfig } from "./types.messages.js";
 import type { SecretInput } from "./types.secrets.js";
 import type { TtsConfig } from "./types.tts.js";
@@ -20,14 +21,7 @@ export type DiscordPluralKitConfig = {
 
 export type DiscordMentionAliasesConfig = Record<string, string>;
 
-export type DiscordDmConfig = {
-  /** If false, ignore all incoming Discord DMs. Default: true. */
-  enabled?: boolean;
-  /** If true, allow group DMs (default: false). */
-  groupEnabled?: boolean;
-  /** Optional allowlist for group DM channels (ids or slugs). */
-  groupChannels?: string[];
-};
+export type DiscordDmConfig = ChannelGroupDmConfig<string>;
 
 export type DiscordGuildChannelConfig = Omit<CommonChannelGroupConfig, "allowFrom"> & {
   /** Override mention gating in threads created by this bot; omitted preserves autoThread behavior. */
@@ -67,7 +61,23 @@ export type DiscordGuildEntry = Pick<
   slug?: string;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: DiscordReactionNotificationMode;
-  presenceEvents?: DiscordPresenceEventsConfig;
+  presenceEvents?: {
+    /** Enable online-presence system events for this guild. Default: true when configured. */
+    enabled?: boolean;
+    /** Discord channel ID that receives the routed agent wake. */
+    channelId: string;
+    /** Optional immutable Discord user ID allowlist. Omit to include all human members. */
+    users?: string[];
+    /**
+     * Suppress presence-derived online events for this many seconds after a new Gateway
+     * session while guild presence state is rebuilt. 0 disables. Default: 300.
+     */
+    reconnectSuppressSeconds?: number;
+    /** Maximum queued online events for this guild per burst window. Default: 8. */
+    burstLimit?: number;
+    /** Sliding burst-detection window in seconds. Default: 60. */
+    burstWindowSeconds?: number;
+  };
   channels?: Record<string, DiscordGuildChannelConfig>;
 };
 
@@ -305,8 +315,4 @@ export type DiscordAccountConfig = Omit<
     };
   };
 
-export type DiscordConfig = {
-  accounts?: Record<string, DiscordAccountConfig>;
-  /** Optional default account id when multiple accounts are configured. */
-  defaultAccount?: string;
-} & DiscordAccountConfig;
+export type DiscordConfig = MultiAccountChannelConfig<DiscordAccountConfig>;

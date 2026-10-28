@@ -45,14 +45,6 @@ protocol LocationServicing: Sendable {
     func stopMonitoringSignificantLocationChanges()
 }
 
-extension LocationServicing {
-    func authorizationSnapshot() -> LocationAuthorizationSnapshot {
-        LocationAuthorizationSnapshot(
-            authorizationStatus: self.authorizationStatus(),
-            accuracyAuthorization: self.accuracyAuthorization())
-    }
-}
-
 @MainActor
 protocol DeviceStatusServicing: Sendable {
     func status() async throws -> OpenClawDeviceStatusPayload

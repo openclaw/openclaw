@@ -5,10 +5,6 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import {
-  hasBundledChannelPersistedAuthState,
-  listBundledChannelIdsWithPersistedAuthState,
-} from "../channels/plugins/persisted-auth-state.js";
 import { hasMeaningfulChannelConfig } from "../config/channel-config-activation.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -17,6 +13,11 @@ import { listOfficialExternalChannelEnvVars } from "../plugins/official-external
 import { isRecord } from "../utils.js";
 import { isChannelConfigMetadataKey } from "./config-metadata.js";
 import { listBundledChannelIds } from "./plugins/bundled-ids.js";
+import {
+  hasBundledChannelPackageState,
+  hasBundledChannelPackageStateAsync,
+  listBundledChannelIdsForPackageState,
+} from "./plugins/package-state-probes.js";
 
 export { hasMeaningfulChannelConfig } from "../config/channel-config-activation.js";
 
@@ -34,7 +35,7 @@ type ChannelPresenceOptions = {
 /** Source that made a channel look potentially configured. */
 export type ChannelPresenceSignalSource = "config" | "env" | "persisted-auth";
 
-type ChannelPresenceSignal = {
+export type ChannelPresenceSignal = {
   channelId: string;
   source: ChannelPresenceSignalSource;
 };
@@ -93,19 +94,6 @@ export function listPotentialConfiguredChannelPresenceSignals(
       signals.set(key, { channelId, source });
     }
   };
-  const scopedChannelIds = options.channelIds
-    ? new Set(
-        options.channelIds
-          .map((channelId) => normalizeOptionalLowercaseString(channelId))
-          .filter((channelId): channelId is string => Boolean(channelId)),
-      )
-    : undefined;
-  const channelEnvPrefixes = listChannelEnvPrefixes(
-    options.channelIds ?? listBundledChannelIds(env, options.discovery),
-  );
-  const officialExternalChannelEnvVars = listOfficialExternalChannelEnvVars().filter(
-    ({ channelId }) => !scopedChannelIds || scopedChannelIds.has(channelId),
-  );
   const channels = isRecord(cfg.channels) ? cfg.channels : null;
   if (channels) {
     for (const [key, value] of Object.entries(channels)) {
@@ -121,6 +109,19 @@ export function listPotentialConfiguredChannelPresenceSignals(
   }
 
   if (options.ambientEnvTriggers !== "suppress") {
+    const scopedChannelIds = options.channelIds
+      ? new Set(
+          options.channelIds
+            .map((channelId) => normalizeOptionalLowercaseString(channelId))
+            .filter((channelId): channelId is string => Boolean(channelId)),
+        )
+      : undefined;
+    const channelEnvPrefixes = listChannelEnvPrefixes(
+      options.channelIds ?? listBundledChannelIds(env, options.discovery),
+    );
+    const officialExternalChannelEnvVars = listOfficialExternalChannelEnvVars().filter(
+      ({ channelId }) => !scopedChannelIds || scopedChannelIds.has(channelId),
+    );
     for (const [key, value] of Object.entries(env)) {
       if (!hasNonEmptyString(value)) {
         continue;
@@ -144,7 +145,10 @@ export function listPotentialConfiguredChannelPresenceSignals(
   ) {
     // Persisted auth can make a channel usable even when config/env is empty, but only probe it
     // when the state directory exists to keep startup/status checks cheap.
-    for (const channelId of listBundledChannelIdsWithPersistedAuthState(options.discovery)) {
+    for (const channelId of listBundledChannelIdsForPackageState(
+      "persistedAuthState",
+      options.discovery,
+    )) {
       if (
         options.persistedAuthChannelIds &&
         !options.persistedAuthChannelIds.has(normalizeOptionalLowercaseString(channelId) ?? "")
@@ -152,7 +156,8 @@ export function listPotentialConfiguredChannelPresenceSignals(
         continue;
       }
       if (
-        hasBundledChannelPersistedAuthState({
+        hasBundledChannelPackageState({
+          metadataKey: "persistedAuthState",
           channelId,
           cfg,
           env,
@@ -165,4 +170,56 @@ export function listPotentialConfiguredChannelPresenceSignals(
   }
 
   return [...signals.values()];
+}
+
+/** Reads persisted credential presence off-thread before publishing channel signals. */
+export async function listPotentialConfiguredChannelPresenceSignalsAsync(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+  options: ChannelPresenceOptions = {},
+): Promise<ChannelPresenceSignal[]> {
+  const signals = listPotentialConfiguredChannelPresenceSignals(cfg, env, {
+    ...options,
+    includePersistedAuthState: false,
+  });
+  const persistedChannelIds = new Set<string>();
+  if (
+    options.includePersistedAuthState === false ||
+    options.persistedAuthChannelIds?.size === 0 ||
+    !fs.existsSync(resolveStateDir(env, os.homedir))
+  ) {
+    return signals;
+  }
+  for (const channelId of listBundledChannelIdsForPackageState(
+    "persistedAuthState",
+    options.discovery,
+  )) {
+    const normalizedChannelId = channelId.trim();
+    if (
+      !normalizedChannelId ||
+      isChannelConfigMetadataKey(normalizedChannelId) ||
+      persistedChannelIds.has(normalizedChannelId)
+    ) {
+      continue;
+    }
+    if (
+      options.persistedAuthChannelIds &&
+      !options.persistedAuthChannelIds.has(normalizeOptionalLowercaseString(channelId) ?? "")
+    ) {
+      continue;
+    }
+    if (
+      await hasBundledChannelPackageStateAsync({
+        metadataKey: "persistedAuthState",
+        channelId,
+        cfg,
+        env,
+        discovery: options.discovery,
+      })
+    ) {
+      persistedChannelIds.add(normalizedChannelId);
+      signals.push({ channelId: normalizedChannelId, source: "persisted-auth" });
+    }
+  }
+  return signals;
 }

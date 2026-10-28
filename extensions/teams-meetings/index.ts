@@ -4,7 +4,6 @@ import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "openclaw/plugin-sdk/real
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { TEAMS_MEETINGS_CLI_METADATA } from "./cli-metadata.js";
-import { TeamsMeetingsInvalidRequestError } from "./src/errors.js";
 import { TEAMS_MEETINGS_PLATFORM_ADAPTER } from "./src/transports/teams-meetings-platform-adapter.js";
 import type {
   TeamsMeetingsManualActionReason,
@@ -29,7 +28,7 @@ export const teamsMeetingsPlugin = MeetingPlatformAdapter.defineBrowserMeetingPl
     resolveGatewayOperationTimeoutMs: (config) =>
       Math.max(60_000, addTimerTimeoutGraceMs(config.chrome.joinTimeoutMs, 30_000) ?? 1),
   },
-  InvalidRequestError: TeamsMeetingsInvalidRequestError,
+  InvalidRequestError: class TeamsMeetingsInvalidRequestError extends Error {},
   toolUrlDescription: "Microsoft Teams meeting URL",
   transcriptSource: {
     id: "teams",

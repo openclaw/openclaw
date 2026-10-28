@@ -1,24 +1,19 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import {
-  deferSqliteWorkerCommitReceipt,
-  requestSqliteWorkerOperationAdmission,
-} from "../../infra/sqlite-worker-operation-admission.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type {
   DB as StateDatabase,
   WorkerTranscriptCommitHeads,
   WorkerTranscriptCommits,
 } from "../../state/openclaw-state-db.generated.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
-import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
+import type {
+  WorkerOperationHandlers,
+  WorkerWriteOperationContext,
+} from "../../state/worker-operation-registry.js";
 import {
   isWorkerTranscriptCommitOutcome,
   type WorkerTranscriptCommitInput,
@@ -69,9 +64,9 @@ function normalizeInput(input: WorkerTranscriptCommitInput, nowMs: number): Norm
   };
 }
 
-const query = (db: DatabaseSync) => getNodeSqliteKysely<TranscriptCommitDb>(db);
+const query = (db: EngineConnection) => getNodeSqliteKysely<TranscriptCommitDb>(db);
 
-function findHead(db: DatabaseSync, input: NormalizedCommitInput): HeadRow | undefined {
+function findHead(db: EngineConnection, input: NormalizedCommitInput): HeadRow | undefined {
   return executeSqliteQueryTakeFirstSync(
     db,
     query(db)
@@ -82,7 +77,7 @@ function findHead(db: DatabaseSync, input: NormalizedCommitInput): HeadRow | und
   );
 }
 
-function findCommit(db: DatabaseSync, input: NormalizedCommitInput): CommitRow | undefined {
+function findCommit(db: EngineConnection, input: NormalizedCommitInput): CommitRow | undefined {
   return executeSqliteQueryTakeFirstSync(
     db,
     query(db)
@@ -120,35 +115,14 @@ function classifyExistingCommit(params: {
   throw new Error("Worker transcript commit row has invalid terminal state");
 }
 
-function writeTranscriptCommit<T>(
-  database: OpenClawStateDatabase,
-  operationLabel: string,
-  operation: (db: DatabaseSync) => T,
-): T {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      const result = operation(db);
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: result });
-      deferSqliteWorkerCommitReceipt(db, result);
-      return result;
-    },
-    { database },
-    { operationLabel },
-  );
-}
-
 export const workerTranscriptCommitOperations = {
   "placementTranscript.begin": (
     rawInput: WorkerTranscriptCommitOperations["placementTranscript.begin"]["input"],
-    { open },
+    { writeAdmitted },
   ): WorkerTranscriptCommitBeginResult => {
-    const database = open();
     const input = normalizeInput(rawInput, rawInput.nowMs);
-    return writeTranscriptCommit<WorkerTranscriptCommitBeginResult>(
-      database,
-      "placementTranscript.begin",
-      (db) => {
+    return writeAdmitted<WorkerTranscriptCommitBeginResult>(
+      ({ db }) => {
         const head = findHead(db, input);
         const existing = classifyExistingCommit({ head, commit: findCommit(db, input), input });
         if (existing) {
@@ -188,20 +162,22 @@ export const workerTranscriptCommitOperations = {
         );
         return { kind: "claimed" };
       },
+      {
+        operationLabel: "placementTranscript.begin",
+        receipt: "result",
+        transactionEnvironment: "process",
+      },
     );
   },
 
   "placementTranscript.complete": (
     rawInput: WorkerTranscriptCommitOperations["placementTranscript.complete"]["input"],
-    { open },
+    { writeAdmitted },
   ): WorkerTranscriptCommitOutcome => {
-    const database = open();
     const input = normalizeInput(rawInput, rawInput.nowMs);
     const resultJson = JSON.stringify(rawInput.outcome);
-    return writeTranscriptCommit<WorkerTranscriptCommitOutcome>(
-      database,
-      "placementTranscript.complete",
-      (db) => {
+    return writeAdmitted<WorkerTranscriptCommitOutcome>(
+      ({ db }) => {
         const head = findHead(db, input);
         const commit = findCommit(db, input);
         const existing = classifyExistingCommit({ head, commit, input });
@@ -254,6 +230,11 @@ export const workerTranscriptCommitOperations = {
         }
         return rawInput.outcome;
       },
+      {
+        operationLabel: "placementTranscript.complete",
+        receipt: "result",
+        transactionEnvironment: "process",
+      },
     );
   },
 
@@ -261,33 +242,39 @@ export const workerTranscriptCommitOperations = {
   // known rollback. Recovered reservations can describe an already committed batch.
   "placementTranscript.discard": (
     rawInput: WorkerTranscriptCommitOperations["placementTranscript.discard"]["input"],
-    { open },
+    { writeAdmitted },
   ): true => {
-    const database = open();
     const input = normalizeInput(rawInput, rawInput.nowMs);
-    return writeTranscriptCommit<true>(database, "placementTranscript.discard", (db) => {
-      executeSqliteQuerySync(
-        db,
-        query(db)
-          .deleteFrom("worker_transcript_commits")
-          .where("session_id", "=", input.sessionId)
-          .where("run_epoch", "=", input.runEpoch)
-          .where("seq", "=", input.seq)
-          .where("request_hash", "=", input.requestHash)
-          .where("state", "=", "pending")
-          .where((eb) =>
-            eb.exists(
-              eb
-                .selectFrom("worker_transcript_commit_heads")
-                .select("session_id")
-                .where("session_id", "=", input.sessionId)
-                .where("run_epoch", "=", input.runEpoch)
-                .where("environment_id", "=", input.environmentId)
-                .where("next_seq", "=", input.seq),
+    return writeAdmitted<true>(
+      ({ db }) => {
+        executeSqliteQuerySync(
+          db,
+          query(db)
+            .deleteFrom("worker_transcript_commits")
+            .where("session_id", "=", input.sessionId)
+            .where("run_epoch", "=", input.runEpoch)
+            .where("seq", "=", input.seq)
+            .where("request_hash", "=", input.requestHash)
+            .where("state", "=", "pending")
+            .where((eb) =>
+              eb.exists(
+                eb
+                  .selectFrom("worker_transcript_commit_heads")
+                  .select("session_id")
+                  .where("session_id", "=", input.sessionId)
+                  .where("run_epoch", "=", input.runEpoch)
+                  .where("environment_id", "=", input.environmentId)
+                  .where("next_seq", "=", input.seq),
+              ),
             ),
-          ),
-      );
-      return true;
-    });
+        );
+        return true;
+      },
+      {
+        operationLabel: "placementTranscript.discard",
+        receipt: "result",
+        transactionEnvironment: "process",
+      },
+    );
   },
-} satisfies WorkerOperationHandlers;
+} satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;

@@ -1,8 +1,7 @@
 import { getProcessInstanceStartTime } from "../shared/pid-alive.js";
-import { sleep } from "../utils/sleep.js";
 import { isChildProcessTreeAlive } from "./child-process-tree.js";
 import type { CommandProcessIdentity } from "./command-process-custody.types.js";
-import { COMMAND_PROCESS_TREE_KILL_GRACE_MS } from "./exec-spawn.js";
+import { waitForCommandProcessGroupExit } from "./exec-spawn.js";
 import { killProcessTree } from "./kill-tree.js";
 
 /** Join recorded groups after their original in-process cleanup owner was lost. */
@@ -30,17 +29,15 @@ export async function settleCommandProcessGroups(
           return unresolved("Recorded process identity could not be confirmed");
         }
         killProcessTree(pid, { detached: true, force: true });
-        const deadline = Date.now() + COMMAND_PROCESS_TREE_KILL_GRACE_MS;
-        while (isChildProcessTreeAlive(identity)) {
+        const exit = await waitForCommandProcessGroupExit(pid, () => {
           const current = getProcessInstanceStartTime(pid);
-          if (current !== null && current !== startedAt) {
-            return unresolved("Process identity changed during cleanup");
-          }
-          const remaining = deadline - Date.now();
-          if (remaining <= 0) {
-            return unresolved("Recorded process group remains alive after forced cleanup");
-          }
-          await sleep(Math.min(25, remaining));
+          return current === null || current === startedAt;
+        });
+        if (exit === "replaced") {
+          return unresolved("Process identity changed during cleanup");
+        }
+        if (exit === "alive") {
+          return unresolved("Recorded process group remains alive after forced cleanup");
         }
         return undefined;
       } catch (error) {

@@ -1,6 +1,5 @@
 import { selectStoredSessionLineage } from "../../gateway/session-store-key.js";
 import type { GatewaySessionModelSource } from "../../gateway/session-utils-contracts.js";
-import { createGatewaySessionLineageReader } from "../../gateway/session-utils-store-lineage.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -19,10 +18,17 @@ export type GatewayStoredSessionTarget = GatewaySessionModelSource & {
 
 export type GatewayStoredSessionTargets = ReadonlyMap<string, GatewayStoredSessionTarget>;
 
+export type GatewaySessionLineageReader = {
+  readStored: (agentId: string, key: string) => SessionEntry | undefined;
+  readAlias: (key: string, agentId: string) => SessionEntry | undefined;
+};
+
 export function createSessionModelSources(
   cfg: OpenClawConfig,
   diagnostics: string[],
-  preparedAgentIds?: ReadonlySet<string>,
+  preparedAgentIds: ReadonlySet<string> | undefined,
+  readQualifiedParent: GatewaySessionLineageReader,
+  isExcludedOwner: (agentId: string, storePath: string) => boolean,
 ) {
   const physicalStores = new Map<
     string,
@@ -52,9 +58,9 @@ export function createSessionModelSources(
         if (!logicalEntries.has(identity)) {
           logicalEntries.set(identity, entry);
         }
-        let read = readers.get(logicalAgentId);
+        const readerKey = logicalAgentId;
+        let read = readers.get(readerKey);
         if (!read) {
-          const readQualifiedParent = createGatewaySessionLineageReader(cfg);
           // Capture the chosen fallback separately: it is not proof that the literal row exists.
           const selectedParents = new Map<
             string,
@@ -67,6 +73,9 @@ export function createSessionModelSources(
             // Stored qualified lineage retains its owner before a main alias collapses.
             const parsed = parseAgentSessionKey(parentKey);
             const agentId = normalizeAgentId(parsed?.agentId ?? logicalAgentId);
+            if (isExcludedOwner(agentId, target.storePath)) {
+              return { key: parentKey, value: undefined };
+            }
             const refusal = readAgentDatabaseAdmissionRefusal(agentId);
             if (refusal) {
               const message = `${refusal.reason}\n${refusal.repairHint}`;
@@ -110,7 +119,7 @@ export function createSessionModelSources(
             readSourceEntry: (key) => select(key).value,
             resolveSourceKey: (key) => select(key).key,
           };
-          readers.set(logicalAgentId, read);
+          readers.set(readerKey, read);
         }
         return read;
       };

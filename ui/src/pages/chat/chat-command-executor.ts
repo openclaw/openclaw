@@ -2,6 +2,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import {
   isSessionDefaultDirectiveValue,
   normalizeVerboseLevel,
@@ -15,6 +16,8 @@ import type {
 } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatCommandResultsEnglish } from "../../i18n/locales/en-chat-command-results.ts";
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import {
   getSlashCommandCategoryLabel,
   getSlashCommandDescription,
@@ -42,29 +45,30 @@ import {
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import { buildChatApiAttachments } from "./attachment-api.ts";
 import { normalizeChatSendAckStatus } from "./chat-send-ack.ts";
 import { patchChatCommandSessionSettings, selectedGlobalScope } from "./chat-settings-patches.ts";
+
+registerChatCommandResultsEnglish();
 
 type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
   content?: string;
   /** Side-effect action the caller should perform after displaying the result. */
   action?: "refresh";
-  /** Model-dependent tools need refreshing after a confirmed selection. */
-  modelChanged?: boolean;
   /** When set, the caller should track this as the active run (enables Abort, blocks concurrent sends). */
   trackRunId?: string;
-  /** When set, the caller should surface a visible pending item tied to the current run. */
-  pendingCurrentRun?: boolean;
   /** The command did not complete and a durable queued invocation may be retried. */
   failed?: boolean;
 };
 
 type SlashCommandContext = {
+  attachments?: readonly ChatAttachment[];
   sessions: SessionCapability;
   sessionAccessSnapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase">;
   readSessionAccessSnapshot?: () => Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase">;
   isCurrent?: () => boolean;
+  runRequest?: { runId: string; signal: AbortSignal };
   chatModelCatalog?: ModelCatalogEntry[];
   defaultAgentId?: string;
   agentId?: string;
@@ -99,7 +103,7 @@ async function patchSession(
   context: SlashCommandContext,
   sessionKey: string,
   patch: Parameters<typeof patchChatCommandSessionSettings>[2],
-  success: () => Pick<SlashCommandResult, "content" | "modelChanged">,
+  success: () => Pick<SlashCommandResult, "content">,
   failureKey: string,
   options?: Parameters<typeof patchChatCommandSessionSettings>[3],
 ): Promise<SlashCommandResult> {
@@ -255,7 +259,6 @@ async function executeModel(
     { model: requestedModel },
     () => ({
       content: t("chat.commandResults.model.set", { model: `\`${requestedModel}\`` }),
-      modelChanged: true,
     }),
     "chat.commandResults.model.setFailed",
     { ownsModelOverride: context.ownsModelOverride },
@@ -427,8 +430,9 @@ async function executeUsage(
     if (!session) {
       return { content: t("chat.commandResults.usage.noActiveThread") };
     }
-    const hasInputTokens = Number.isFinite(session.inputTokens);
-    const hasOutputTokens = Number.isFinite(session.outputTokens);
+    const usageAvailable = session.usageReport?.state !== "unavailable";
+    const hasInputTokens = usageAvailable && Number.isFinite(session.inputTokens);
+    const hasOutputTokens = usageAvailable && Number.isFinite(session.outputTokens);
     const input = hasInputTokens ? (session.inputTokens ?? 0) : 0;
     const output = hasOutputTokens ? (session.outputTokens ?? 0) : 0;
     const cumulativeTotal = hasInputTokens || hasOutputTokens ? input + output : null;
@@ -450,10 +454,10 @@ async function executeUsage(
     const lines = [
       `**${t("chat.commandResults.usage.title")}**`,
       t("chat.commandResults.usage.inputTokens", {
-        count: `**${formatCompactTokenCount(input)}**`,
+        count: `**${hasInputTokens ? formatCompactTokenCount(input) : t("chat.commandResults.usage.notAvailable")}**`,
       }),
       t("chat.commandResults.usage.outputTokens", {
-        count: `**${formatCompactTokenCount(output)}**`,
+        count: `**${hasOutputTokens ? formatCompactTokenCount(output) : t("chat.commandResults.usage.notAvailable")}**`,
       }),
       t("chat.commandResults.usage.totalTokens", { count: `**${totalDisplay}**` }),
     ];
@@ -577,18 +581,30 @@ async function executeRunCommand(
   try {
     const message = args.trim();
     if (!message) {
-      return { content: t(`chat.commandResults.${command}.usage`) };
+      return {
+        content: t(`chat.commandResults.${command}.usage`),
+        ...(context.attachments?.length ? { failed: true } : {}),
+      };
     }
     assertCurrentSlashCommand(context);
-    const response = await client.request<{ runId?: unknown; status?: unknown }>("chat.send", {
-      sessionKey,
-      ...selectedGlobalScope(sessionKey, context),
-      message,
-      ...(command === "steer"
-        ? { deliver: false, queueMode: "steer" }
-        : { queueMode: "interrupt" }),
-      idempotencyKey: generateUUID(),
-    });
+    const response = await client.request<{ runId?: unknown; status?: unknown }>(
+      "chat.send",
+      {
+        sessionKey,
+        ...selectedGlobalScope(sessionKey, context),
+        message,
+        attachments: buildChatApiAttachments(context.attachments),
+        ...(command === "steer"
+          ? { deliver: false, queueMode: "steer" }
+          : { queueMode: "interrupt" }),
+        idempotencyKey: context.runRequest?.runId ?? generateUUID(),
+      },
+      {
+        timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+        signal: context.runRequest?.signal,
+        retainSentResultOnAbort: true,
+      },
+    );
     const ackStatus = normalizeChatSendAckStatus(response?.status);
     if (ackStatus === "timeout" || ackStatus === "error") {
       return {
@@ -599,12 +615,8 @@ async function executeRunCommand(
       };
     }
     const result: SlashCommandResult = { content: t(`chat.commandResults.${command}.succeeded`) };
-    if (ackStatus === "started" || ackStatus === "in_flight") {
-      if (command === "steer") {
-        result.pendingCurrentRun = true;
-      } else {
-        result.trackRunId = typeof response?.runId === "string" ? response.runId : undefined;
-      }
+    if (command === "redirect" && (ackStatus === "started" || ackStatus === "in_flight")) {
+      result.trackRunId = typeof response?.runId === "string" ? response.runId : undefined;
     }
     return result;
   } catch (err) {

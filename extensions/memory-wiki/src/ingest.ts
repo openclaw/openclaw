@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
@@ -5,7 +6,12 @@ import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
-import { preserveHumanNotesBlock, slugifyWikiPageStem, slugifyWikiSegment } from "./markdown.js";
+import {
+  decodeWikiPageUtf8,
+  preserveHumanNotesBlock,
+  slugifyWikiPageStem,
+  slugifyWikiSegment,
+} from "./markdown.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { renderImportedSourcePage } from "./source-page-shared.js";
 import { resolveMemoryWikiTimestamp } from "./time.js";
@@ -31,6 +37,11 @@ export async function ingestMemoryWikiSource(params: {
     params.signal?.throwIfAborted();
     if (buffer.subarray(0, 4096).includes(0)) {
       throw new Error(`Cannot ingest binary file as markdown source: ${sourcePath}`);
+    }
+    if (!isUtf8(buffer)) {
+      throw new Error(
+        `Source file must be valid UTF-8: ${sourcePath}. Save the source as valid UTF-8 and retry the ingest.`,
+      );
     }
     const title =
       params.title?.trim() ||
@@ -68,7 +79,7 @@ export async function ingestMemoryWikiSource(params: {
     const existing = created
       ? ""
       : await readExistingWikiPage(
-          () => fs.readFile(pagePath, "utf8"),
+          async () => decodeWikiPageUtf8(await fs.readFile(pagePath), pagePath),
           (error) => {
             const code = asNullableRecord(error)?.code;
             return code === "ENOENT" || code === "EISDIR";

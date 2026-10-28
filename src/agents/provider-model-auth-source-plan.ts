@@ -56,6 +56,18 @@ export type ProviderModelAuthSourceClassification =
       authorization: ProviderModelAuthAuthorization;
     };
 
+/** A credentialless route or a key the operator configured in env or provider config. */
+export function isConfiguredKeyAuthSource(
+  source: ProviderModelAuthSourceClassification | { kind: "none" } | undefined,
+): boolean {
+  return (
+    source?.kind === "direct" &&
+    (source.evidence === "synthetic" ||
+      source.evidence === "environment" ||
+      source.evidence === "provider-config")
+  );
+}
+
 /** Drops profile ids, modes, readiness, and cooldown state from a selected source. */
 export function classifyProviderModelAuthSource(
   source: ProviderModelAuthSource,

@@ -9,8 +9,12 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../config/io.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+  type CapturedSessionActorStorageOwner,
+} from "../config/sessions/session-actor-storage-binding.js";
 import type { PaginatedSessionHistory } from "../config/sessions/session-history-types.js";
-import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -46,15 +50,20 @@ import {
   SessionHistorySseState,
 } from "./session-history-state.js";
 import { resolveCursorSeq } from "./session-history-tail.js";
-import { createSessionListEntryFilter, resolveSessionSharingTarget } from "./session-sharing.js";
-import { resolveSessionStoreKey } from "./session-store-key.js";
+import {
+  prepareSessionMutationFacts,
+  type PreparedSessionSourceFacts,
+  type SessionFactsRead,
+} from "./session-sharing-preparation.js";
+import { prepareProjectedSessionSharing } from "./session-sharing.js";
+import { resolveSessionStoreIdentity, resolveSessionStoreKey } from "./session-store-key.js";
 import {
   resolveTranscriptPathForComparison,
   resolveTranscriptUpdatePathForComparison,
 } from "./session-transcript-path.js";
+import type { GatewaySessionStoreTargetWithStore } from "./session-utils-store.types.js";
 import {
   resolveCanonicalSessionEntryFromStoreKeys,
-  resolveGatewaySessionStoreTargetWithStore,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.js";
 
@@ -135,6 +144,8 @@ function resolveSessionHistoryHttpClient(
       scopes,
     },
     authenticatedUserProfile: requestAuth.authenticatedUserProfile,
+    preparedSessionProfile: requestAuth.preparedSessionProfile,
+    internal: { operatorRoleActor: requestAuth.operatorRoleActor },
   };
 }
 
@@ -160,23 +171,6 @@ export async function handleSessionHistoryHttpRequest(
   }
 
   const canonicalKey = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
-  let selected: Result<ReturnType<typeof captureIncognitoSessionSource>, unknown>;
-  let assertSourceCurrent = () => {};
-  try {
-    const source = captureIncognitoSessionSource({ sessionKey: canonicalKey });
-    if (source && !("kind" in source)) {
-      const claim = source.actor.sessions.captureCurrent(canonicalKey);
-      assertSourceCurrent = () => {
-        source.admissionSignal?.throwIfAborted();
-        source.actor.assertReadable();
-        claim.assertCurrent();
-      };
-    }
-    selected = ok(source);
-  } catch (error) {
-    selected = err(error);
-  }
-
   // Session history intentionally uses the shared-secret HTTP trust model:
   // token/password bearer auth grants default operator scopes so simple API key
   // callers can read their own history without a scope header.
@@ -189,23 +183,30 @@ export async function handleSessionHistoryHttpRequest(
   if (!authResult) {
     return true;
   }
-  if (!selected.ok) {
-    throw selected.error;
-  }
-  const source = selected.value;
-  assertSourceCurrent();
-  const serve = () =>
-    serveAuthorizedSessionHistory(
-      req,
-      res,
-      opts,
-      url,
-      source ? canonicalKey : sessionKey,
-      authResult,
-      source,
-      assertSourceCurrent,
-    );
-  return source && !("kind" in source) ? source.actor.sessions.withSharedState(serve) : serve();
+  const assertResponseCurrent = () => {
+    if (res.destroyed || res.writableEnded) {
+      throw new Error("Session history response closed");
+    }
+  };
+  const source = captureSessionActorStorageOwner(
+    { sessionKey: canonicalKey },
+    { assertCurrent: assertResponseCurrent, authorize: assertResponseCurrent },
+  );
+  const assertSessionCurrent = source?.owner?.captureSessionReadGuard(canonicalKey);
+  const assertSourceCurrent = () => {
+    source?.authority.assertCurrent();
+    assertSessionCurrent?.();
+  };
+  return serveAuthorizedSessionHistory(
+    req,
+    res,
+    opts,
+    url,
+    source ? canonicalKey : sessionKey,
+    authResult,
+    source,
+    assertSourceCurrent,
+  );
 }
 
 async function serveAuthorizedSessionHistory(
@@ -215,47 +216,52 @@ async function serveAuthorizedSessionHistory(
   url: URL,
   sessionKey: string,
   authResult: NonNullable<Awaited<ReturnType<typeof authorizeScopedGatewayHttpRequestOrReply>>>,
-  source: ReturnType<typeof captureIncognitoSessionSource>,
+  source: CapturedSessionActorStorageOwner | undefined,
   assertSourceCurrent: () => void,
 ): Promise<boolean> {
   const { cfg, requestAuth, operatorScopes } = authResult;
-  let target: ReturnType<typeof resolveGatewaySessionStoreTargetWithStore>;
+  let sharing: SessionFactsRead<PreparedSessionSourceFacts> | undefined;
+  using sharingLifetime = {
+    transferred: false,
+    [Symbol.dispose]() {
+      if (!this.transferred) {
+        sharing?.release();
+      }
+    },
+  };
+  let target: GatewaySessionStoreTargetWithStore;
   let entry: ReturnType<typeof resolveCanonicalSessionEntryFromStoreKeys>;
   try {
     if (source) {
-      if ("kind" in source) {
-        source.assertCurrent();
-        sendJson(res, 404, {
-          ok: false,
-          error: { type: "not_found", message: `Session not found: ${sessionKey}` },
-        });
-        return true;
-      }
-      const { actor, admissionSignal } = source;
-      const read = await actor.sessions.read(
-        { assertCurrent: assertSourceCurrent },
-        { sessionKey },
-        admissionSignal,
-      );
       assertSourceCurrent();
-      entry = read.entry;
+      entry = readCapturedSessionActorEntry(source, sessionKey);
       target = {
-        agentId: actor.agentId,
+        agentId: source.agentId,
         canonicalKey: sessionKey,
-        storePath: actor.path,
+        storePath: source.path,
         storeKeys: [sessionKey],
         store: entry ? { [sessionKey]: entry } : {},
-        readSource: { agentId: actor.agentId, path: actor.path },
+        readSource: { agentId: source.agentId, path: source.path },
       };
     } else {
-      target = resolveGatewaySessionStoreTargetWithStore({
+      const { agentId } = resolveSessionStoreIdentity({ cfg, sessionKey });
+      sharing = await prepareSessionMutationFacts({
         cfg,
-        key: sessionKey,
-        exactRead: true,
-        // Preserve configured-store initialization; retired and incognito targets stay read-only.
-        readOnly: false,
+        agentId,
+        sessionKey,
+        allowMissing: true,
       });
-      entry = resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
+      const current = sharing.readCurrent(getRuntimeConfig());
+      const resolved = current.target;
+      entry = resolved?.entry;
+      target = {
+        ...sharing.storageTarget,
+        storeKeys: resolved?.storeKeys ?? [sharing.storageTarget.canonicalKey],
+        store: entry ? { [resolved!.storeKey]: entry } : {},
+        readSource: current.sourcePath
+          ? { agentId: current.sourceAgentId ?? agentId, path: current.sourcePath }
+          : undefined,
+      };
     }
   } catch (error) {
     if ((error as { code?: unknown })?.code !== "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED") {
@@ -281,8 +287,11 @@ async function serveAuthorizedSessionHistory(
   const historyClient = resolveSessionHistoryHttpClient(requestAuth, operatorScopes);
   if (
     !entry?.sessionId ||
-    createSessionListEntryFilter({ cfg, client: historyClient })?.(target.canonicalKey, entry) ===
-      false
+    prepareProjectedSessionSharing({
+      cfg,
+      client: historyClient,
+      isMember: () => false,
+    }).entryFilter?.(target.canonicalKey, entry) === false
   ) {
     sendSessionNotFound();
     return true;
@@ -306,9 +315,18 @@ async function serveAuthorizedSessionHistory(
     sessionKey: target.canonicalKey,
     storePath: target.storePath,
   };
+  const streamClosed = createDeferredCore();
   const publishAuthorizedHistory = async (
     publish: (presentation: HistoryPresentation) => void,
   ): Promise<boolean> => {
+    try {
+      const pending = sharing?.prepareRead();
+      if (pending) {
+        await Promise.race([pending, streamClosed.promise]);
+      }
+    } catch {
+      return false;
+    }
     const cfgLocal = getRuntimeConfig();
     const currentRequestAuth = await checkGatewayHttpRequestAuth({
       ...opts,
@@ -344,11 +362,24 @@ async function serveAuthorizedSessionHistory(
     } catch {
       return false;
     }
-    const currentTarget = resolveSessionSharingTarget({
-      cfg: currentConfig,
-      sessionKey: target.canonicalKey,
-      agentId: target.agentId,
-    });
+    let currentTarget;
+    try {
+      if (source) {
+        const currentEntry = readCapturedSessionActorEntry(source, sessionKey);
+        currentTarget = currentEntry
+          ? {
+              agentId: source.agentId,
+              canonicalKey: sessionKey,
+              storePath: source.path,
+              entry: currentEntry,
+            }
+          : null;
+      } else {
+        currentTarget = sharing!.readCurrent(currentConfig).target;
+      }
+    } catch {
+      return false;
+    }
     if (
       currentTarget === null ||
       currentTarget.agentId !== historyTarget.agentId ||
@@ -358,10 +389,11 @@ async function serveAuthorizedSessionHistory(
       currentTarget.entry.lifecycleRevision !== entry.lifecycleRevision ||
       (entry.sessionStartedAt !== undefined &&
         currentTarget.entry.sessionStartedAt !== entry.sessionStartedAt) ||
-      createSessionListEntryFilter({ cfg: currentConfig, client: currentClient })?.(
-        currentTarget.canonicalKey,
-        currentTarget.entry,
-      ) === false
+      prepareProjectedSessionSharing({
+        cfg: currentConfig,
+        client: currentClient,
+        isMember: () => false,
+      }).entryFilter?.(currentTarget.canonicalKey, currentTarget.entry) === false
     ) {
       return false;
     }
@@ -441,7 +473,6 @@ async function serveAuthorizedSessionHistory(
     cursor,
     snapshot: historySnapshot,
   });
-  const streamClosed = createDeferredCore();
   let streamStopped = false;
   let streamQueue = Promise.resolve();
   let pendingRefresh: (() => Promise<void>) | undefined;
@@ -459,7 +490,7 @@ async function serveAuthorizedSessionHistory(
       ...projectHistory(snapshot, presentation),
     });
     // Send the entire requested page before bounding private live state.
-    // Cursor refreshes reread SQLite, so their next page remains complete.
+    // Cursor refreshes reread the owner, so their next page remains complete.
     sseState.retainRecentMessages(MAX_SESSION_HISTORY_LIMIT);
   }
 
@@ -479,10 +510,9 @@ async function serveAuthorizedSessionHistory(
       return;
     }
     streamStopped = true;
-    if (streamResources.heartbeat) {
-      clearInterval(streamResources.heartbeat);
-    }
+    clearInterval(streamResources.heartbeat);
     streamResources.unsubscribe?.();
+    sharing?.release();
     streamClosed.resolve();
   }
 
@@ -515,8 +545,8 @@ async function serveAuthorizedSessionHistory(
 
   function handleResponseStreamClose() {
     releaseStreamResources();
-    req.off("close", handleRequestStreamClose);
-    req.off("error", handleRequestStreamError);
+    // The request can emit its abort error after the response closes. Its own
+    // close handler releases those listeners once request errors have settled.
     res.off("close", handleResponseStreamClose);
     res.off("finish", handleResponseStreamFinish);
     res.off("error", handleResponseStreamError);
@@ -670,6 +700,7 @@ async function serveAuthorizedSessionHistory(
       }
     });
   });
+  sharingLifetime.transferred = true;
   if (source) {
     await streamClosed.promise;
     await streamQueue;

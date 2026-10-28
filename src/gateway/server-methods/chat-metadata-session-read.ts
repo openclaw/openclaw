@@ -56,7 +56,7 @@ export async function prepareChatMetadataSessionRead(params: {
   const options = { agentId: params.agentId, projection: [] };
   try {
     if (isIncognitoSessionKey(resolveSessionStoreIdentity(params).canonicalKey)) {
-      const selected = retainGatewaySessionEntryReadOnly(
+      const selected = await retainGatewaySessionEntryReadOnly(
         params.sessionKey,
         params.agentId,
         sameMetadataEntry,
@@ -133,29 +133,11 @@ export async function prepareChatMetadataSessionRead(params: {
       isDeepStrictEqual(current.capturedReadSource, selected.capturedReadSource) &&
       isDeepStrictEqual(current.capturedReadSources, selected.capturedReadSources) &&
       sameMetadataEntry(selected.entry, current.entry);
-    let requestRead: ReturnType<typeof retainGatewaySessionEntryReadOnly> | undefined;
     return {
       selected,
       isCurrent,
       assertCurrent,
-      beforeRequest: () => {
-        assertCurrent();
-        // GuardedFetchOptions.beforeRequest is synchronous after transport preparation,
-        // immediately before credential send. Retain the old canonical reread here;
-        // awaiting a worker would reopen the foreign-commit revocation window.
-        if (!requestRead) {
-          requestRead = retainGatewaySessionEntryReadOnly(
-            params.sessionKey,
-            params.agentId,
-            sameMetadataEntry,
-            params.cfg,
-          );
-          releases.push(requestRead.release);
-        }
-        if (!matchesSelected(requestRead) || !requestRead.isCurrentAtResponse()) {
-          throw changed();
-        }
-      },
+      beforeRequest: assertCurrent,
       release,
       async withCurrent<T>(consume: () => T): Promise<Awaited<T>> {
         assertRefreshable();

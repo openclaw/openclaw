@@ -3,10 +3,7 @@ import {
   normalizeNullableString as toTrimmedString,
   normalizeLowercaseStringOrEmpty,
 } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionOperationEvent } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
-import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
@@ -76,85 +73,6 @@ function parseFallbackAttemptSummaries(summaries: unknown, attempts: unknown): s
   return out;
 }
 
-export function resolveChatProjectionRunId(params: {
-  localRunId?: string | null;
-  activeRunIds?: readonly string[];
-  queue?: readonly ChatQueueItem[];
-}): string | null {
-  if (params.localRunId) {
-    return params.localRunId;
-  }
-  const activeRunIds = new Set(params.activeRunIds ?? []);
-  // A session row can lag local completion. Restore its run identity only when
-  // the durable outbox independently proves that the same send is reconnecting.
-  return (
-    params.queue?.find(
-      (item) =>
-        item.sendState === "waiting-reconnect" &&
-        typeof item.sendRunId === "string" &&
-        activeRunIds.has(item.sendRunId),
-    )?.sendRunId ?? null
-  );
-}
-
-type WaitingApprovalSnapshotHost = Pick<
-  ToolStreamHost,
-  | "sessionKey"
-  | "assistantAgentId"
-  | "agentsList"
-  | "hello"
-  | "knownAgentRunIds"
-  | "waitingApprovalStatuses"
-  | "waitingApprovalResolvedIds"
->;
-
-export function reconcileWaitingApprovalsFromSnapshot(
-  host: WaitingApprovalSnapshotHost,
-  queue: readonly ExecApprovalRequest[],
-): boolean {
-  const waiting = (host.waitingApprovalStatuses ??= new Map());
-  const resolvedIds = (host.waitingApprovalResolvedIds ??= new Set());
-  const allQueuedIds = new Set(queue.map((approval) => approval.id));
-  for (const approvalId of resolvedIds) {
-    if (!allQueuedIds.has(approvalId)) {
-      resolvedIds.delete(approvalId);
-    }
-  }
-  const matchingApprovals = queue.filter(
-    (approval) =>
-      approval.kind === "exec" &&
-      approval.request.sessionKey &&
-      uiSessionEventMatches(host, approval.request.sessionKey, approval.request.agentId),
-  );
-  const queuedIds = new Set(matchingApprovals.map((approval) => approval.id));
-  let changed = false;
-  for (const approvalId of waiting.keys()) {
-    if (!queuedIds.has(approvalId)) {
-      waiting.delete(approvalId);
-      changed = true;
-    }
-  }
-  if (waiting.size > 0) {
-    return changed;
-  }
-  // On a fresh mount the inline approval card still exposes the parked request in the transcript.
-  // Spinner-label hydration across mounts needs an authoritative Gateway run-state contract and
-  // is deliberately deferred.
-  for (const approval of matchingApprovals) {
-    const runId = toTrimmedString(approval.request.runId);
-    if (!runId || !host.knownAgentRunIds?.has(runId) || resolvedIds.has(approval.id)) {
-      continue;
-    }
-    waiting.set(approval.id, {
-      approvalId: approval.id,
-      toolCallId: null,
-      runId,
-    });
-    changed = true;
-  }
-  return changed;
-}
-
 const COMPACTION_ACTIVE_STALE_TIMEOUT_MS = 5 * 60_000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
 
@@ -192,7 +110,6 @@ function setCompactionStatus(
       }
       host.compactionStatus = null;
       host.compactionClearTimer = null;
-      host.requestUpdate?.();
     }, COMPACTION_ACTIVE_STALE_TIMEOUT_MS);
   }
 }
@@ -234,6 +151,9 @@ export function handleSessionOperationEvent(
 function handleCompactionEvent(host: ToolStreamHost, payload: AgentEventPayload) {
   const data = payload.data ?? {};
   const phase = typeof data.phase === "string" ? data.phase : "";
+  if (phase !== "start" && phase !== "end") {
+    return;
+  }
   const completed = data.completed === true;
   const itemId = toTrimmedString(data.itemId) ?? undefined;
 
@@ -308,9 +228,7 @@ function handleLifecycleFallbackEvent(host: ToolStreamHost, payload: AgentEventP
   const active =
     resolveModelLabel(data.activeProvider, data.activeModel) ??
     resolveModelLabel(data.toProvider, data.toModel);
-  const previous =
-    resolveModelLabel(data.previousActiveProvider, data.previousActiveModel) ??
-    toTrimmedString(data.previousActiveModel);
+  const previous = resolveModelLabel(data.previousActiveProvider, data.previousActiveModel);
   if (!selected || !active) {
     return;
   }
@@ -341,7 +259,6 @@ function handleLifecycleFallbackEvent(host: ToolStreamHost, payload: AgentEventP
   host.fallbackClearTimer = window.setTimeout(() => {
     host.fallbackStatus = null;
     host.fallbackClearTimer = null;
-    host.requestUpdate?.();
   }, FALLBACK_TOAST_DURATION_MS);
 }
 
@@ -359,8 +276,6 @@ function handleLifecycleApprovalEvent(host: ToolStreamHost, payload: AgentEventP
     const waiting = (host.waitingApprovalStatuses ??= new Map());
     host.waitingApprovalResolvedIds?.delete(approvalId);
     waiting.set(approvalId, {
-      approvalId,
-      toolCallId: toTrimmedString(payload.data?.toolCallId),
       runId: payload.runId,
     });
     return true;
@@ -371,6 +286,50 @@ function handleLifecycleApprovalEvent(host: ToolStreamHost, payload: AgentEventP
 }
 
 export function handleStreamStatus(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  if (
+    payload.stream === "run_status" &&
+    (payload.data.phase === "waiting_for_model" || payload.data.phase === "starting_model")
+  ) {
+    reconcileChatRunStartup(host, {
+      state: "status",
+      runId: payload.runId,
+      phase: payload.data.phase,
+      ...(payload.data.phase === "waiting_for_model"
+        ? { waitReason: payload.data.reason === "slot" ? "slot" : "response" }
+        : {}),
+      seq: payload.seq,
+    });
+    return true;
+  }
+  if (
+    payload.stream === "lifecycle" &&
+    payload.data.phase === "start" &&
+    host.chatRunStartup?.state === "status" &&
+    host.chatRunStartup.phase === "finishing"
+  ) {
+    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
+  }
+  if (payload.stream === "lifecycle" && payload.data.phase === "finishing") {
+    reconcileChatRunStartup(host, {
+      state: "status",
+      runId: payload.runId,
+      phase: "finishing",
+      seq: payload.seq,
+    });
+    return true;
+  }
+  if (payload.stream === "lifecycle" && payload.data.phase === "fallback_step") {
+    const model = toTrimmedString(payload.data.fallbackStepToModel);
+    if (payload.data.fallbackStepFinalOutcome === "next_fallback" && model) {
+      reconcileChatRunStartup(host, {
+        state: "status",
+        runId: payload.runId,
+        phase: "fallback",
+        seq: payload.seq,
+      });
+    }
+    return true;
+  }
   if (payload.stream === "run_status" && payload.data.phase === "retrying") {
     const message = toTrimmedString(payload.data.message);
     if (message) {
@@ -378,14 +337,26 @@ export function handleStreamStatus(host: ToolStreamHost, payload: AgentEventPayl
         state: "status",
         runId: payload.runId,
         phase: "retrying",
-        message: formatUiExternalText(truncateUtf16Safe(message, 256)),
+        ...(typeof payload.data.retryAt === "number" && Number.isFinite(payload.data.retryAt)
+          ? { retryAt: payload.data.retryAt }
+          : {}),
         seq: payload.seq,
       });
     }
     return true;
   }
   if (payload.stream === "assistant") {
-    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
+    if ((payload.data.text || payload.data.delta) && payload.data.phase !== "commentary") {
+      reconcileChatRunStartup(host, {
+        state: "status",
+        runId: payload.runId,
+        phase: "answer",
+        seq: payload.seq,
+      });
+    } else {
+      // Reconnect snapshots retain the assistant sequence without copying its text.
+      reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
+    }
     return true;
   }
   if (payload.stream === "compaction") {

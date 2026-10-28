@@ -1,14 +1,16 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import {
-  isHiddenAssistantStreamText,
-  shouldHideAssistantChatMessage,
-} from "../../lib/chat/message-visibility.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isHiddenAssistantStreamText } from "../../lib/chat/message-visibility.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
-import { isChatRunStartupPhase, reconcileChatRunStartup } from "./chat-run-startup.ts";
+import {
+  isChatRunStartupPhase,
+  isChatRunRecoveryStatus,
+  reconcileChatRunStartup,
+} from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import {
   getChatRunOwner,
@@ -25,7 +27,7 @@ import {
 } from "./run-lifecycle.ts";
 import { replaceChatStream } from "./stream-causal-boundary.ts";
 import { materializeVisibleStreamState } from "./stream-reconciliation.ts";
-import { handleAgentEvent } from "./tool-stream.ts";
+import type { handleAgentEvent } from "./tool-stream.ts";
 
 export function materializeVisibleAssistantStreamMessages(
   messages: unknown[],
@@ -40,7 +42,7 @@ export function materializeVisibleAssistantStreamMessages(
   return materializeVisibleStreamState(messages, state, {
     ...opts,
     persistCommentary: opts.persistCommentary ?? persistsChatCommentary(state),
-    isHiddenAssistantMessage: shouldHideAssistantChatMessage,
+    isHiddenAssistantMessage: isAssistantHeartbeatAckForDisplay,
     isHiddenStreamText: isHiddenAssistantStreamText,
   });
 }
@@ -95,12 +97,14 @@ export function readRunProjections(state: ChatState, sessionKey: string, agentId
 export function applyHistoryRun(params: {
   state: ChatState;
   run: ChatHistoryResult["inFlightRun"];
+  observedRunActivity?: boolean;
   sessionInfo: GatewaySessionRow | undefined;
   historyRun: ChatHistoryRunObservation | undefined;
   previousRunProjections: ReturnType<typeof getChatSessionProjection>["runs"];
   runProjectionsBeforeApply: ReturnType<typeof getChatSessionProjection>["runs"];
   currentRunProjections: ReturnType<typeof getChatSessionProjection>["runs"];
   resetStream: boolean;
+  replayAgentEvent: typeof handleAgentEvent | undefined;
 }): void {
   const {
     state,
@@ -147,7 +151,7 @@ export function applyHistoryRun(params: {
         sessionInfo.status === "killed" ||
         sessionInfo.status === "timeout") &&
       sessionInfo.hasActiveRun !== true &&
-      !isSessionRunActive(sessionInfo) &&
+      !isSessionRunStateActive(sessionInfo) &&
       (!state.chatRunId || state.chatRunId === terminalRunId) &&
       !hasOtherSendingRun(terminalRunId) &&
       ((sessionInfo.status !== "killed" && !knownRun) ||
@@ -183,6 +187,7 @@ export function applyHistoryRun(params: {
             : sessionInfo.status === "timeout"
               ? "timeout"
               : "error",
+        suppressErrorNotice: sessionInfo.suppressErrorNotice,
         errorMessage:
           sessionInfo.status === "failed" || sessionInfo.status === "timeout"
             ? (failureMessage ?? sessionInfo.lastRunError)
@@ -217,7 +222,7 @@ export function applyHistoryRun(params: {
     runProjectionsUnchanged(previousRunProjections, currentRunProjections, inFlightRunId);
   const activeRunIds = sessionInfo?.activeRunIds;
   const inFlightRunIsActive =
-    isSessionRunActive(sessionInfo ?? {}) &&
+    isSessionRunStateActive(sessionInfo ?? {}) &&
     (!Array.isArray(activeRunIds) || activeRunIds.includes(inFlightRunId)) &&
     (!projectedInFlightRun || projectedInFlightRun.status === "streaming");
   // Only a read issued while this pane still owned the old run can replace it.
@@ -269,8 +274,12 @@ export function applyHistoryRun(params: {
   );
   const startupPhase = startup?.data.phase;
   if (
-    run.text &&
-    !(state.chatRunStartup?.state === "status" && state.chatRunStartup.phase === "retrying")
+    (run.text ||
+      (!startup &&
+        state.chatRunStartup?.runId !== inFlightRunId &&
+        (params.observedRunActivity ?? state.knownAgentRunIds?.has(inFlightRunId)))) &&
+    startupPhase !== "waiting_for_model" &&
+    !isChatRunRecoveryStatus(state.chatRunStartup)
   ) {
     reconcileChatRunStartup(state, { state: "activity", runId: inFlightRunId });
   } else if (startup && isChatRunStartupPhase(startupPhase)) {
@@ -278,6 +287,9 @@ export function applyHistoryRun(params: {
       state: "status",
       runId: inFlightRunId,
       phase: startupPhase,
+      ...(startupPhase === "waiting_for_model"
+        ? { waitReason: startup.data.reason === "slot" ? ("slot" as const) : ("response" as const) }
+        : {}),
       seq: startup.seq,
     });
   }
@@ -288,7 +300,7 @@ export function applyHistoryRun(params: {
     for (const event of run.events) {
       if (event?.runId === run.runId) {
         // SAFETY: history replays the same agent events against the pane that owns live tool state.
-        handleAgentEvent(state as never, event as never, "history");
+        params.replayAgentEvent?.(state as never, event as never, "history");
       }
     }
   }

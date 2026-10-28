@@ -20,7 +20,7 @@ test("public required sessions.create publishes an owned non-main session before
   const key = "agent:main:dashboard:required-publication";
   const { ws } = await openClient({
     scopes: ["operator.write", "operator.read"],
-    deviceIdentityPath: path.join(dir, "required-writer.json"),
+    deviceIdentityPath: path.join(dir, "required-writer", "client", "credentials.sqlite"),
   });
   try {
     const created = await rpcReq<{

@@ -287,43 +287,47 @@ struct MacNodePresenceReporterTests {
     }
 
     @Test func `first activity sample sends immediately`() {
-        #expect(MacNodePresenceReporter._testShouldSend(
+        #expect(MacNodePresenceReporter.shouldSend(
             idleSeconds: 0,
+            saturated: false,
             nowMs: 100_000,
-            lastSentAtMs: nil,
-            lastSentActiveAtMs: nil))
+            delivery: nil))
     }
 
     @Test func `continuous activity is throttled and then refreshed`() {
-        #expect(!MacNodePresenceReporter._testShouldSend(
+        let duringThrottle = MacNodePresenceReporter.shouldSend(
             idleSeconds: 0,
+            saturated: false,
             nowMs: 110_000,
-            lastSentAtMs: 100_000,
-            lastSentActiveAtMs: 100_000))
-        #expect(MacNodePresenceReporter._testShouldSend(
+            delivery: .init(sentAtMs: 100_000, lastActiveAtMs: 100_000, source: .system))
+        #expect(!duringThrottle)
+        let atRefresh = MacNodePresenceReporter.shouldSend(
             idleSeconds: 0,
+            saturated: false,
             nowMs: 115_000,
-            lastSentAtMs: 100_000,
-            lastSentActiveAtMs: 100_000))
+            delivery: .init(sentAtMs: 100_000, lastActiveAtMs: 100_000, source: .system))
+        #expect(atRefresh)
     }
 
     @Test func `idle presence gets a sparse keepalive`() {
-        #expect(!MacNodePresenceReporter._testShouldSend(
+        let beforeKeepalive = MacNodePresenceReporter.shouldSend(
             idleSeconds: 100,
+            saturated: false,
             nowMs: 200_000,
-            lastSentAtMs: 100_000,
-            lastSentActiveAtMs: 100_000))
-        #expect(!MacNodePresenceReporter._testShouldSend(
+            delivery: .init(sentAtMs: 100_000, lastActiveAtMs: 100_000, source: .system))
+        #expect(!beforeKeepalive)
+        let whileSaturated = MacNodePresenceReporter.shouldSend(
             idleSeconds: 2_592_000,
+            saturated: true,
             nowMs: 115_000,
-            lastSentAtMs: 100_000,
-            lastSentActiveAtMs: 100_000,
-            saturated: true))
-        #expect(MacNodePresenceReporter._testShouldSend(
+            delivery: .init(sentAtMs: 100_000, lastActiveAtMs: 100_000, source: .system))
+        #expect(!whileSaturated)
+        let atKeepalive = MacNodePresenceReporter.shouldSend(
             idleSeconds: 180,
+            saturated: false,
             nowMs: 280_000,
-            lastSentAtMs: 100_000,
-            lastSentActiveAtMs: 100_000))
+            delivery: .init(sentAtMs: 100_000, lastActiveAtMs: 100_000, source: .system))
+        #expect(atKeepalive)
     }
 }
 
@@ -370,6 +374,7 @@ private final class PresenceSenderRecorder {
 @MainActor
 private final class PresenceClearRecorder {
     private var outcomes: [MacNodePresenceReporter.ClearDeliveryResult]
+    private var callWaiters: [Int: AsyncTestGate] = [:]
     private(set) var calls = 0
     private(set) var unsupportedCalls = 0
 
@@ -379,6 +384,7 @@ private final class PresenceClearRecorder {
 
     func clear() async -> MacNodePresenceReporter.ClearDeliveryResult {
         self.calls += 1
+        self.callWaiters.removeValue(forKey: self.calls)?.open()
         return self.outcomes.isEmpty ? .cleared : self.outcomes.removeFirst()
     }
 
@@ -387,14 +393,11 @@ private final class PresenceClearRecorder {
     }
 
     func waitForCallCount(_ expected: Int) async {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(4))
-        while clock.now < deadline {
-            if self.calls >= expected { return }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        // The final suspension may have completed the work before this waiter resumes.
-        #expect(self.calls >= expected, "timed out waiting for \(expected) presence clear calls")
+        if self.calls >= expected { return }
+        let waiter = AsyncTestGate()
+        self.callWaiters[expected] = waiter
+        await waiter.wait()
+        #expect(self.calls >= expected, "expected \(expected) presence clear calls")
     }
 }
 

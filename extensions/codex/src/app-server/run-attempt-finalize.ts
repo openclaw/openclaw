@@ -4,7 +4,7 @@ import {
   formatErrorMessage,
   runAgentHarnessLlmOutputHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { appendSessionYieldContext } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { classifyCodexModelCallFailureKind } from "./attempt-diagnostics.js";
 import {
@@ -26,8 +26,8 @@ import {
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
 import { settleReplyMedia } from "./run-attempt-reply-media.js";
-import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import { beginCodexAttemptSettlement } from "./run-attempt-settlement.js";
+import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import {
   canClearCodexBindingForRecovery,
   clearCodexBindingAfterInvalidImagePayload,
@@ -49,10 +49,10 @@ import {
   markCodexAuthProfileBlockedFromRateLimits,
   refreshCodexUsageLimitPromptError,
 } from "./usage-limit-error.js";
-import { buildCodexUserPromptMessage } from "./user-prompt-message.js";
+import { buildCodexAgentEndMessages, buildCodexUserPromptMessage } from "./user-prompt-message.js";
 
 export async function finalizeCodexAttempt(
-  resources: CodexAttemptResources,
+  resources: StartedCodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
   lifecycle: CodexAttemptLifecycleController,
   notifications: CodexAttemptNotificationController,
@@ -109,7 +109,7 @@ export async function finalizeCodexAttempt(
     isActive: isSettlementActive,
     readRetainedNativeCommands,
   } = await beginCodexAttemptSettlement(resources, turnRuntime, notifications, activeTurn);
-  let projectionDrained = false;
+  let projectionDrained: boolean;
   try {
     try {
       // Native completion does not end accepted projection or checkpoint work.
@@ -124,17 +124,28 @@ export async function finalizeCodexAttempt(
       }
     } finally {
       if (!state.projectionClosed) {
+        activeProjector.prepareTerminalToolResultCheckpoint(toolBridge.telemetry, {
+          readRetainedNativeCommands,
+        });
         await resources.runCleanupStep("codex-transcript-checkpoint", closeProjection);
       }
     }
+    const steeringMessages = turnRuntime.steeringQueueRef.current?.getAcceptedMessages();
     const result = activeProjector.buildResult(toolBridge.telemetry, {
       yieldDetected: toolState.yieldDetected,
       readRetainedNativeCommands,
       // The original transcript fence excludes steering accepted during this turn.
-      steeringMessages: params.pluginRuntimeRefreshPending?.()
-        ? turnRuntime.steeringQueueRef.current?.getAcceptedMessages()
-        : undefined,
+      steeringMessages: params.pluginRuntimeRefreshPending?.() ? steeringMessages : undefined,
     });
+    if (steeringMessages?.length) {
+      // Keep the result identity that carries host-issued TTS delivery provenance.
+      // Historical send receipts remain available for side-effect accounting.
+      Object.assign(result, {
+        sourceReplyDeliveryState: toolBridge.telemetry.finalSourceReplyDelivered
+          ? ("delivered" as const)
+          : ("missing" as const),
+      });
+    }
     const terminalAssistantSource = result.messagesSnapshot.find(
       (message) => readMirrorIdentity(message) === `${activeTurnId}:assistant`,
     );
@@ -284,9 +295,13 @@ export async function finalizeCodexAttempt(
         !effectiveTimedOut &&
         (finalPromptError === null || finalPromptError === undefined) &&
         (completedTurnStatus === "completed" || locallyCompletedTurn);
-      const completedSourceReply = toolBridge.telemetry.messagingToolSentTargets.some(
-        (target) => target.sourceReplyFinal === true,
-      );
+      const completedSourceReply =
+        result.sourceReplyDeliveryState !== undefined
+          ? result.sourceReplyDeliveryState === "delivered"
+          : toolBridge.telemetry.finalSourceReplyDelivered ||
+            toolBridge.telemetry.messagingToolSentTargets.some(
+              (target) => target.sourceReplyFinal === true,
+            );
       if (completedSourceReply) {
         // Harness classification only sees assistant/reasoning/plan projections.
         // A reply delivered entirely through the source message tool is visible
@@ -348,7 +363,7 @@ export async function finalizeCodexAttempt(
       const mirrorTerminal = projectTerminalOutcome();
       state.pendingSettlementStage = "transcript/mirror";
       return codexTranscriptMirrorRuntime.mirrorBestEffort({
-        assertWriteCurrent: createNativeSessionBindingAuthority([], () => {
+        assertWriteCurrent: createNativeSessionBindingScope(() => {
           // Expiry replaces this exact pending write; it cannot borrow the degraded final's owner.
           if (!isSettlementActive() || state.settlementWarning !== warning) {
             throw new Error("Codex transcript settlement is no longer active");
@@ -472,38 +487,10 @@ export async function finalizeCodexAttempt(
     }
     const { assistantTranscriptOwned, assistantTranscriptIdempotencyKey, terminalAnchor } =
       mirrorOutcome;
-    const shouldCaptureSettledTurnFinalizationContext =
+    const settledTurnFinalizationEligible =
       result.assistantTexts.every((text) => !text.trim()) &&
       result.messagesSnapshot.some((message) => message.role === "toolResult") &&
       (!finalPromptError || activeProjector.settledTurnFailureFinalizationAllowed);
-    // Supervised auth belongs to its native connection, which has no generic stock
-    // tool-free summary operation. Retain fallback eligibility instead of selecting host auth.
-    const settledTurnFinalizationContext = shouldCaptureSettledTurnFinalizationContext
-      ? ((!usesSupervisionConnection && !resourceState.nativeSettlementExpired
-          ? await captureCodexSettledTurnFinalizationContext({
-              ...activeTranscriptTarget,
-              model: resourceState.thread.model,
-              modelProvider: resourceState.thread.modelProvider,
-              authProfileId: startupAuthProfileId,
-              mirroredMessages: mirrorOutcome.mirroredMessages,
-              settledMessages: result.messagesSnapshot,
-              turnId: activeTurnId,
-              signal: params.abortSignal,
-              assertActive: connection.assertCurrent,
-              withCurrent: connection.withCurrent,
-            })
-          : undefined) ?? Object.freeze({ source: "unavailable" as const }))
-      : undefined;
-    if (settledTurnFinalizationContext?.source === "unavailable") {
-      embeddedAgentLog.warn("codex settled-turn finalization context is unavailable", {
-        runId: params.runId,
-        threadId: resourceState.thread.threadId,
-        turnId: activeTurnId,
-        reason: usesSupervisionConnection
-          ? "native_auth_finalization_unsupported"
-          : "context_unavailable",
-      });
-    }
     runAgentHarnessLlmOutputHook({
       event: {
         ...buildLlmOutputEvent(),
@@ -522,7 +509,7 @@ export async function finalizeCodexAttempt(
     await runCodexAgentEndHook(params, {
       skillExperienceReviewSource: providerRefusal ? undefined : terminalAnchor,
       event: {
-        messages: result.messagesSnapshot,
+        messages: buildCodexAgentEndMessages(params, result.messagesSnapshot, activeTurnId),
         success: !finalAborted && !finalPromptError,
         ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
         durationMs: Date.now() - attemptStartedAt,
@@ -649,16 +636,6 @@ export async function finalizeCodexAttempt(
         },
       });
     }
-    emitLifecycleTerminal({
-      phase: finalPromptError ? "error" : "end",
-      ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
-      ...(assistantTranscriptIdempotencyKey ? { assistantTranscriptIdempotencyKey } : {}),
-      ...buildLifecycleTerminalMeta({
-        aborted: finalAborted,
-        timedOut: effectiveTimedOut,
-        yielded: finalPromptError ? undefined : toolState.yieldDetected,
-      }),
-    });
     // Preserve the exact result identity carrying host-issued TTS delivery provenance.
     const finalizedResult: EmbeddedRunAttemptResult = Object.assign(result, {
       ...(runtimeModelSelection ? { runtimeModelSelection } : {}),
@@ -684,13 +661,69 @@ export async function finalizeCodexAttempt(
       ...(assistantTranscriptOwned ? { assistantTranscriptOwned: true } : {}),
       ...(assistantTranscriptIdempotencyKey ? { assistantTranscriptIdempotencyKey } : {}),
       ...(terminalAnchor ? { contextEngineTerminalAnchor: terminalAnchor } : {}),
-      ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
+      ...(settledTurnFinalizationEligible
+        ? { settledTurnFinalizationContext: Object.freeze({ source: "unavailable" as const }) }
+        : {}),
       ...(resourceState.runtimeArtifact ? { runtimeArtifact: resourceState.runtimeArtifact } : {}),
       ...(resourceState.runtimeContinuationStarted ? { runtimeContinuationStarted: true } : {}),
       ...(!finalAborted && !effectiveTimedOut && !finalPromptError && preparedAuthBinding
         ? { authBindingFingerprint: preparedAuthBinding.fingerprint }
         : {}),
       systemPromptReport,
+    });
+    if (settledTurnFinalizationEligible) {
+      await params.onSettledTurn?.(finalizedResult, async () => {
+        // A same-run continuation retains the original prompt's transcript identity.
+        const continuedPrompt = params.suppressNextUserMessagePersistence
+          ? params.userTurnTranscriptRecorder?.getPersistedMessage?.()
+          : undefined;
+        const continuedPromptIdentity = continuedPrompt && readMirrorIdentity(continuedPrompt);
+        const evidencePrefix = continuedPrompt && continuedPromptIdentity ? [continuedPrompt] : [];
+        // Supervised auth has no stock tool-free summary operation. Preserve eligibility
+        // for the host fallback without substituting another credential owner.
+        const finalizationContext =
+          (!usesSupervisionConnection && !resourceState.nativeSettlementExpired
+            ? await captureCodexSettledTurnFinalizationContext({
+                ...activeTranscriptTarget,
+                model: resourceState.thread.model,
+                modelProvider: resourceState.thread.modelProvider,
+                authProfileId: startupAuthProfileId,
+                mirroredMessages: [...evidencePrefix, ...mirrorOutcome.mirroredMessages],
+                settledMessages: [...evidencePrefix, ...result.messagesSnapshot],
+                ...(continuedPromptIdentity ? { promptIdentity: continuedPromptIdentity } : {}),
+                turnId: activeTurnId,
+                // A stranded-reply retry suppresses its system prompt and carries no
+                // recorder, so no prompt row exists for this turn anywhere.
+                promptSuppressed:
+                  params.suppressNextUserMessagePersistence === true &&
+                  !params.userTurnTranscriptRecorder,
+                signal: params.abortSignal,
+                assertActive: connection.assertCurrent,
+                withCurrent: connection.withCurrent,
+              })
+            : undefined) ?? Object.freeze({ source: "unavailable" as const });
+        if (finalizationContext.source === "unavailable") {
+          embeddedAgentLog.warn("codex settled-turn finalization context is unavailable", {
+            runId: params.runId,
+            threadId: resourceState.thread.threadId,
+            turnId: activeTurnId,
+            reason: usesSupervisionConnection
+              ? "native_auth_finalization_unsupported"
+              : "context_unavailable",
+          });
+        }
+        return finalizationContext;
+      });
+    }
+    emitLifecycleTerminal({
+      phase: finalPromptError ? "error" : "end",
+      ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
+      ...(assistantTranscriptIdempotencyKey ? { assistantTranscriptIdempotencyKey } : {}),
+      ...buildLifecycleTerminalMeta({
+        aborted: finalAborted,
+        timedOut: effectiveTimedOut,
+        yielded: finalPromptError ? undefined : toolState.yieldDetected,
+      }),
     });
     if (turnSucceeded && toolState.yieldDetected && !runAbortController.signal.aborted) {
       resourceState.nativeHookRelay?.authorizeRetentionAfterSuccessfulYield();

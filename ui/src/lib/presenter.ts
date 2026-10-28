@@ -65,6 +65,10 @@ export function formatCronSchedule(job: Pick<CronJob, "schedule">) {
     // without this branch they fall through and render "Cron undefined".
     return `On exit: ${s.command}${s.cwd ? ` (cwd: ${s.cwd})` : ""}`;
   }
+  if (s.kind === "event") {
+    const name = typeof s.options.name === "string" ? s.options.name : s.source;
+    return `Event: ${name}`;
+  }
   if (s.kind === "stream") {
     return `Stream: ${s.command.join(" ")}${s.cwd ? ` (cwd: ${s.cwd})` : ""}`;
   }
@@ -73,6 +77,10 @@ export function formatCronSchedule(job: Pick<CronJob, "schedule">) {
 
 export function formatCronPayload(job: CronJob) {
   const p = job.payload;
+  // Newer Gateways name the stored kind; its agentTurn payload is only a placeholder.
+  if (job.payloadSource?.kind === "pluginCommand") {
+    return `Plugin command: /${job.payloadSource.command} (${job.payloadSource.pluginId})`;
+  }
   if (p.kind === "systemEvent") {
     return `System: ${p.text}`;
   }
@@ -81,9 +89,6 @@ export function formatCronPayload(job: CronJob) {
   }
   if (p.kind === "script") {
     return `Script: ${p.script}`;
-  }
-  if (p.kind === "heartbeat") {
-    return "Heartbeat monitor";
   }
   const base = `Agent: ${p.message}`;
   const delivery = job.delivery;

@@ -17,5 +17,5 @@ export function resolveChannelMediaMaxBytes(params: {
     accountId,
   });
   const limitMb = channelLimit || params.cfg.agents?.defaults?.mediaMaxMb;
-  return limitMb ? limitMb * MB : undefined;
+  return limitMb ? Math.floor(limitMb * MB) : undefined;
 }

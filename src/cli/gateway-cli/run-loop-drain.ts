@@ -7,7 +7,7 @@ import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.
 import { formatGatewayDrainCounts } from "../../infra/gateway-drain.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { beginGatewayShutdownCleanup } from "../../process/gateway-work-admission.js";
-import type { GatewayRunSignalAction, GatewayRunSignalRequest } from "./run-loop-request.js";
+import type { GatewayRunSignalRequest } from "./run-loop-request.js";
 import { formatShutdownReason } from "./run-loop-shutdown-format.js";
 
 const RESTART_DRAIN_STILL_PENDING_WARN_MS = 30_000;
@@ -31,13 +31,49 @@ export async function drainGatewayActiveWork({
 }) {
   const { restartIntent } = request;
   let drainTimedOut = false;
-  const reportDrainSnapshot = createGatewayDrainReporter(
-    request.action,
-    drainTimeoutMs,
-    runtime,
-    logger,
-    recordCounts,
-  );
+  const action = request.action;
+  const drainBudget =
+    drainTimeoutMs === undefined ? "without a timeout" : `with timeout ${drainTimeoutMs}ms`;
+  let lastPendingWarningAt: number | undefined;
+  const reportDrainSnapshot = (snapshot: GatewayActiveWorkSnapshot) => {
+    recordCounts(
+      `${formatGatewayDrainCounts(snapshot) || "no active work"}; pending owners: ${
+        snapshot.blockers.map(({ message }) => message).join("; ") || "none"
+      }`,
+    );
+    const now = Date.now();
+    if (lastPendingWarningAt === undefined) {
+      lastPendingWarningAt = now;
+      if (!snapshot.idle) {
+        logger.info(
+          `draining active work before ${action} ${drainBudget}: ${formatGatewayDrainCounts(snapshot)}`,
+        );
+        const requestTimeoutMs = Math.max(
+          0,
+          ...runtime
+            .listActiveSessionRunIds()
+            .map(
+              (sessionId) =>
+                runtime.getDiagnosticSessionActivitySnapshot({ sessionId })
+                  ?.activeModelCallRequestTimeoutMs ?? 0,
+            ),
+        );
+        if (requestTimeoutMs > 0) {
+          logger.info(
+            `largest observed model request timeout is ${requestTimeoutMs}ms; shutdown drain budget remains ${drainBudget}`,
+          );
+        }
+      }
+    } else if (
+      !snapshot.idle &&
+      now - lastPendingWarningAt >= RESTART_DRAIN_STILL_PENDING_WARN_MS
+    ) {
+      lastPendingWarningAt = now;
+      logger.warn(
+        `still draining active work before ${action}: ${formatGatewayDrainCounts(snapshot)}`,
+      );
+    }
+  };
   // On restart, wait for the canonical process activity inventory before
   // tearing down the server so active work can settle.
   if (request.action !== "stop") {
@@ -60,6 +96,11 @@ export async function drainGatewayActiveWork({
         }
 
         reportDrainSnapshot(initialSnapshot);
+        if (request.interruptAfterDrain) {
+          logger.info("external restart owner already drained; interrupting remaining work");
+          runtime.abortActiveCronTaskRuns();
+          return;
+        }
         const remainingDrainTimeoutMs =
           restartDrainDeadlineAt === undefined
             ? undefined
@@ -78,7 +119,7 @@ export async function drainGatewayActiveWork({
         recordWarning(warning);
         logger.warn(warning);
         // Connection work can retain cron cleanup; cancel before close joins it.
-        runtime.abortActiveCronTaskRuns("Gateway restarting.");
+        runtime.abortActiveCronTaskRuns();
       },
       () => [
         ["activeWork", activeWorkAtDrainStart],
@@ -102,8 +143,8 @@ export async function drainGatewayActiveWork({
         logger.warn(
           `gateway active-work drain timeout reached; proceeding with shutdown: ${formatGatewayDrainCounts(activeWorkDrain.snapshot)}`,
         );
-        runtime.abortEmbeddedAgentRun(undefined, { mode: "all" });
-        runtime.abortActiveCronTaskRuns("Gateway stopping.");
+        // The server shutdown owner records task custody before canceling runs.
+        runtime.abortActiveCronTaskRuns();
       }
     } catch (err) {
       logger.warn(
@@ -114,58 +155,4 @@ export async function drainGatewayActiveWork({
   }
   beginGatewayShutdownCleanup();
   return drainTimedOut;
-}
-
-function createGatewayDrainReporter(
-  action: GatewayRunSignalAction,
-  drainTimeoutMs: number | undefined,
-  runtime: Pick<
-    typeof import("./lifecycle.runtime.js"),
-    "listActiveEmbeddedRunSessionIds" | "getDiagnosticSessionActivitySnapshot"
-  >,
-  logger: Pick<SubsystemLogger, "info" | "warn">,
-  recordCounts: (counts: string) => void,
-) {
-  const drainBudget =
-    drainTimeoutMs === undefined ? "without a timeout" : `with timeout ${drainTimeoutMs}ms`;
-  let lastPendingWarningAt: number | undefined;
-  return (snapshot: GatewayActiveWorkSnapshot) => {
-    recordCounts(
-      `${formatGatewayDrainCounts(snapshot) || "no active work"}; pending owners: ${
-        snapshot.blockers.map(({ message }) => message).join("; ") || "none"
-      }`,
-    );
-    const now = Date.now();
-    if (lastPendingWarningAt === undefined) {
-      lastPendingWarningAt = now;
-      if (!snapshot.idle) {
-        logger.info(
-          `draining active work before ${action} ${drainBudget}: ${formatGatewayDrainCounts(snapshot)}`,
-        );
-        const requestTimeoutMs = Math.max(
-          0,
-          ...runtime
-            .listActiveEmbeddedRunSessionIds()
-            .map(
-              (sessionId) =>
-                runtime.getDiagnosticSessionActivitySnapshot({ sessionId })
-                  ?.activeModelCallRequestTimeoutMs ?? 0,
-            ),
-        );
-        if (requestTimeoutMs > 0) {
-          logger.info(
-            `largest observed model request timeout is ${requestTimeoutMs}ms; shutdown drain budget remains ${drainBudget}`,
-          );
-        }
-      }
-    } else if (
-      !snapshot.idle &&
-      now - lastPendingWarningAt >= RESTART_DRAIN_STILL_PENDING_WARN_MS
-    ) {
-      lastPendingWarningAt = now;
-      logger.warn(
-        `still draining active work before ${action}: ${formatGatewayDrainCounts(snapshot)}`,
-      );
-    }
-  };
 }

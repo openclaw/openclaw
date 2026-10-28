@@ -1,3 +1,4 @@
+import { mapErrorCauseChain } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -5,7 +6,6 @@ import chalk from "chalk";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { SESSION_LIST_SOURCES } from "../../packages/gateway-protocol/src/schema/sessions-list.js";
 import { isVerbose } from "../globals.js";
-import { stringifyNonErrorCause } from "../infra/errors.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -57,7 +57,7 @@ export function summarizeSessionListForWsLog(input: unknown): Record<string, unk
   const params = isRecord(input) ? input : {};
   return {
     source: SESSION_LIST_SOURCES.find((source) => source === params.source) ?? "unspecified",
-    rowMode: params.rowMode === "compact" ? "compact" : "full",
+    rowMode: ["compact", "dashboard", "sidebar"].find((mode) => mode === params.rowMode) ?? "full",
     limit:
       typeof params.limit === "number" && Number.isSafeInteger(params.limit) && params.limit > 0
         ? params.limit
@@ -118,7 +118,9 @@ function shortId(value: string): string {
 export function formatForLog(value: unknown): string {
   try {
     if (value instanceof Error) {
-      const combined = renderErrorChainForLog(value);
+      const combined = mapErrorCauseChain(value, renderSingleErrorForLog)
+        .filter(Boolean)
+        .join(" <- ");
       if (combined) {
         return redactLogText(combined);
       }
@@ -170,35 +172,6 @@ function renderSingleErrorForLog(error: Error): string {
   return parts.filter(Boolean).join(": ").trim();
 }
 
-function renderErrorChainForLog(error: Error): string {
-  const segments: string[] = [renderSingleErrorForLog(error)];
-  let current: unknown = error.cause;
-  let depth = 0;
-  while (current !== undefined && current !== null && depth < 8) {
-    if (current instanceof Error) {
-      segments.push(renderSingleErrorForLog(current));
-      current = current.cause;
-    } else {
-      segments.push(stringifyNonErrorCause(current));
-      current = undefined;
-    }
-    depth += 1;
-  }
-  return segments.filter(Boolean).join(" <- ");
-}
-
-function compactPreview(input: string, maxLen = 160): string {
-  const prefixLength = maxLen * 2;
-  let oneLine = input.slice(0, prefixLength).replace(/\s+/g, " ").trim();
-  if (oneLine.length <= maxLen && input.length > prefixLength) {
-    oneLine = input.replace(/\s+/g, " ").trim();
-  }
-  if (oneLine.length <= maxLen) {
-    return oneLine;
-  }
-  return `${truncateUtf16Safe(oneLine, Math.max(0, maxLen - 1))}…`;
-}
-
 /** Extracts small, non-sensitive fields from agent event payloads for WS logs. */
 export function summarizeAgentEventForWsLog(payload: unknown): Record<string, unknown> {
   if (!payload || typeof payload !== "object") {
@@ -238,8 +211,8 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
 
   if (stream === "assistant") {
     const text = readStringValue(data.text);
-    if (text?.trimStart()) {
-      extra.text = compactPreview(text);
+    if (text !== undefined) {
+      extra.textChars = text.length;
     }
     const mediaCount = resolveSendableOutboundReplyParts({
       mediaUrls: Array.isArray(data.mediaUrls) ? data.mediaUrls : undefined,
@@ -261,8 +234,8 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
       extra.call = shortId(toolCallId);
     }
     const meta = readStringValue(data.meta);
-    if (meta?.trim()) {
-      extra.meta = meta;
+    if (meta !== undefined) {
+      extra.metaChars = meta.length;
     }
     if (typeof data.isError === "boolean") {
       extra.err = data.isError;
@@ -270,17 +243,20 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
     return extra;
   }
 
-  if (stream === "lifecycle") {
+  if (stream === "lifecycle" || stream === "compaction") {
     const phase = typeof data.phase === "string" ? data.phase : undefined;
     if (phase) {
       extra.phase = phase;
+    }
+    if (stream === "compaction" && typeof data.outcome === "string") {
+      extra.outcome = data.outcome;
     }
     if (typeof data.aborted === "boolean") {
       extra.aborted = data.aborted;
     }
     const error = typeof data.error === "string" ? data.error : undefined;
     if (error?.trimStart()) {
-      extra.error = compactPreview(error, 120);
+      extra.err = true;
     }
     return extra;
   }
@@ -335,20 +311,18 @@ export function logWs(
       );
       return;
     }
-    if (
-      direction !== "out" ||
-      kind !== "res" ||
-      !(
-        ok === false ||
-        (typeof durationMs === "number" && durationMs >= DEFAULT_WS_SLOW_MS) ||
-        (meta?.method === "sessions.list" &&
-          typeof meta.bytes === "number" &&
-          meta.bytes >= 200 * 1024)
-      )
-    ) {
+    if (direction !== "out" || kind !== "res") {
       return;
     }
   } else if (compact && kind === "req" && direction === "in" && connId && id) {
+    return;
+  }
+
+  const level =
+    !verbose && ok === true && !(typeof durationMs === "number" && durationMs >= DEFAULT_WS_SLOW_MS)
+      ? "debug"
+      : "info";
+  if (!wsLog.isEnabled(level)) {
     return;
   }
 
@@ -374,7 +348,7 @@ export function logWs(
     trailing.push(`${chalk.dim("id")}=${chalk.gray(shortId(id))}`);
   }
 
-  wsLog.info(
+  wsLog[level](
     [
       `${arrowColor(arrow)} ${chalk.bold(kind)}`,
       kind === "res" && ok !== undefined

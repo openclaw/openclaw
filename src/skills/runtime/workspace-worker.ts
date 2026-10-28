@@ -143,16 +143,10 @@ export async function serveWorkspaceSkills(options: {
     return;
   }
   if (operation === "watch") {
-    const {
-      ensureSkillsWatcher,
-      reconcileSkillsWatcherCoverage,
-      closeSkillsWatchers,
-      registerSkillsChangeListener,
-    } = await import("./refresh.js");
+    const { ensureSkillsWatcher, closeSkillsWatchers, registerSkillsChangeListener } =
+      await import("./refresh.js");
     const lines = skillWorkerLines(input);
     let stopped = false;
-    let queued = false;
-    let unavailable = false;
     let unsubscribe: (() => void) | undefined;
     let retiring: Promise<void> | undefined;
     let outputClosing: Promise<void> | undefined;
@@ -184,37 +178,18 @@ export async function serveWorkspaceSkills(options: {
         if (stopped || event.workspaceDir !== workspace) {
           return;
         }
-        if (event.reason === "watch-unavailable") {
-          unavailable = true;
-        }
-        const recovered = event.reason === "watch-available";
-        if (recovered) {
-          if (event.sourceScope?.executionWorkspaceDir !== params.executionWorkspaceDir) {
-            return;
-          }
-          // Fresh scans can reveal a symlink or nested root while normal watch
-          // discovery is suppressed. Verify those new targets before clearing
-          // the host's fallback, and let their ready event retry this check.
-          if (!reconcileSkillsWatcherCoverage(params)) {
-            return;
-          }
-          unavailable = false;
-        }
         notifier?.send(
-          recovered ? "available" : event.reason === "watch-unavailable" ? "unavailable" : "change",
+          event.reason === "watch-available"
+            ? "available"
+            : event.reason === "watch-unavailable"
+              ? "unavailable"
+              : "change",
         );
-        // Native events also invalidate discovery targets (for example a new symlink).
-        if (event.reason === "watch" && !queued && !unavailable) {
-          queued = true;
-          queueMicrotask(() => {
-            queued = false;
-            if (!stopped && !unavailable) {
-              ensureSkillsWatcher(params);
-            }
-          });
-        }
       });
-      ensureSkillsWatcher(params);
+      await ensureSkillsWatcher(params);
+      if (!stopped) {
+        notifier.send("available");
+      }
       try {
         await lines.read();
         throw new Error("Unexpected message on the skill watch subscription");
@@ -380,7 +355,8 @@ export async function serveWorkspaceSkills(options: {
       // SAFETY: The adapter serializes the native source plan; workspace identity is checked next.
       const discovery = decoded as WorkspaceSkillSourceRequest;
       assertWorkspace(discovery, workspace);
-      const { readWorkspaceSkillSources } = await import("../loading/workspace-skill-loader.js");
+      const { readWorkspaceSkillSources } =
+        await import("../loading/workspace-skill-source-reader.js");
       await write(readWorkspaceSkillSources(discovery));
       return;
     }

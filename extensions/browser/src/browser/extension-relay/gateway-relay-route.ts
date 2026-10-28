@@ -3,7 +3,7 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   rejectWebSocketUpgrade,
@@ -74,13 +74,13 @@ async function resolveGatewayRelay(resource: string) {
     throw new Error("Gateway relay profile is unavailable");
   }
   const lifecycle = getProfileLifecycle(runtime);
-  const generation = lifecycle.generation;
+  const profileSignal = lifecycle.controller.signal;
   return {
     relay,
     profileName,
     assertCurrent: () => {
       if (
-        lifecycle.generation !== generation ||
+        profileSignal.aborted ||
         lifecycle.transitionReason ||
         lifecycle.terminal ||
         getBrowserControlState() !== state ||

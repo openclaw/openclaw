@@ -1,5 +1,6 @@
 // Trusted channel catalog helpers that hide unenabled workspace-shadowed entries.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   getChannelPluginCatalogEntry,
   listRawChannelPluginCatalogEntries,
@@ -11,11 +12,38 @@ import {
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
 } from "../../plugins/config-state.js";
+import type { InstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
 import {
   hasExplicitManifestOwnerTrust,
   resolveManifestOwnerBasePolicyBlock,
 } from "../../plugins/manifest-owner-policy.js";
 import type { PluginOrigin } from "../../plugins/plugin-origin.types.js";
+import { listPluginContributionIds } from "../../plugins/plugin-registry.js";
+import type { ChannelChoice } from "../onboard-types.js";
+
+export function listManifestInstalledChannelIds(params: {
+  cfg: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  index?: InstalledPluginIndex;
+}): Set<ChannelChoice> {
+  const resolvedConfig = applyPluginAutoEnable({
+    config: params.cfg,
+    env: params.env ?? process.env,
+  }).config;
+  const workspaceDir =
+    params.workspaceDir ??
+    resolveAgentWorkspaceDir(resolvedConfig, resolveDefaultAgentId(resolvedConfig));
+  return new Set(
+    listPluginContributionIds({
+      contribution: "channels",
+      config: resolvedConfig,
+      workspaceDir,
+      env: params.env ?? process.env,
+      ...(params.index ? { index: params.index } : {}),
+    }),
+  );
+}
 
 type TrustedChannelCatalogOptions = Pick<
   NonNullable<Parameters<typeof getChannelPluginCatalogEntry>[1]>,
@@ -111,14 +139,6 @@ function resolveRejectedCatalogLookup(
   return lookup;
 }
 
-function resolveRejectedCatalogEntryKey(entry: ChannelPluginCatalogEntry): string | null {
-  const pluginId = entry.pluginId?.trim();
-  if (pluginId) {
-    return `plugin:${entry.origin ?? ""}:${pluginId}`;
-  }
-  return isLocalChannelPluginOrigin(entry.origin) ? `origin:${entry.origin}` : null;
-}
-
 /** Resolve a catalog entry, falling back to non-workspace metadata when workspace entry is untrusted. */
 export function getTrustedChannelPluginCatalogEntry(
   channelId: string,
@@ -127,12 +147,6 @@ export function getTrustedChannelPluginCatalogEntry(
 ): ChannelPluginCatalogEntry | undefined {
   const extraPaths = resolveTrustedCatalogExtraPaths(params.cfg);
   const rejectedEntries = [...rejected];
-  const seenRejectedKeys = new Set(
-    rejectedEntries.flatMap((entry) => {
-      const key = resolveRejectedCatalogEntryKey(entry);
-      return key ? [key] : [];
-    }),
-  );
 
   for (let attempts = 0; attempts <= MAX_TRUSTED_CATALOG_FALLBACKS; attempts += 1) {
     const candidate = getChannelPluginCatalogEntry(channelId, {
@@ -150,15 +164,6 @@ export function getTrustedChannelPluginCatalogEntry(
       return candidate;
     }
 
-    // Malformed discovery can ignore exclusions and resurface the same untrusted
-    // local entry. Stop instead of looping forever while searching for fallback metadata.
-    const rejectedKey = resolveRejectedCatalogEntryKey(candidate);
-    if (rejectedKey && seenRejectedKeys.has(rejectedKey)) {
-      return undefined;
-    }
-    if (rejectedKey) {
-      seenRejectedKeys.add(rejectedKey);
-    }
     rejectedEntries.push(candidate);
   }
   return undefined;

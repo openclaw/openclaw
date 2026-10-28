@@ -1,4 +1,3 @@
-// Legacy auth-choice alias handling for CLI/onboarding compatibility.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveManifestDeprecatedProviderAuthChoice } from "../plugins/provider-auth-choices.js";
 import type { AuthChoice } from "./onboard-types.js";

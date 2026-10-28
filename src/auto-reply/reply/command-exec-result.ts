@@ -12,7 +12,7 @@ export function formatCommandExecResult(
   runningLabel: string,
 ): string {
   const text = result.content
-    ?.map((chunk) => (chunk.type === "text" && typeof chunk.text === "string" ? chunk.text : ""))
+    ?.map((chunk) => (chunk.type === "text" ? (chunk.text ?? "") : ""))
     .filter(Boolean)
     .join("\n")
     .trim();

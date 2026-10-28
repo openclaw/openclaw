@@ -3,8 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { listSessionEntriesReadOnly } from "../../config/sessions/session-accessor.js";
-import { logVerbose } from "../../globals.js";
+import { readSessionEntrySummariesInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   LegacyInteractiveReply,
@@ -18,7 +17,7 @@ import {
 } from "../../utils/delivery-context.read.js";
 import type { ReplyPayload } from "../types.js";
 import { formatCommandExecResult, formatCommandExecText } from "./command-exec-result.js";
-import { commandReply, matchCommandPrefix, rejectNonOwnerCommand } from "./command-gates.js";
+import { commandReply, defineAuthorizedTextCommand, matchCommandPrefix } from "./command-gates.js";
 import { buildPluginCommandContext } from "./commands-context.js";
 import { buildCurrentOpenClawCliExecRequest } from "./commands-openclaw-cli.js";
 import {
@@ -49,79 +48,69 @@ type CodexDiagnosticsApprovalIntegration = {
   approvalFollowup?: () => Promise<string | undefined>;
 };
 
-export const handleDiagnosticsCommand: CommandHandler = async (input, allowTextCommands) => {
-  const params = { ...input, command: { ...input.command } };
-  if (!allowTextCommands) {
-    return null;
-  }
-  const args = matchCommandPrefix(
-    params.command.commandBodyNormalized.trim(),
-    DIAGNOSTICS_COMMAND,
-    {
-      allowColon: true,
-    },
-  );
-  if (args == null) {
-    return null;
-  }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /diagnostics from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
-  }
-  const nonOwner = rejectNonOwnerCommand(params, DIAGNOSTICS_COMMAND);
-  if (nonOwner) {
-    return nonOwner;
-  }
-  // Inventory belongs to this authorized command, not every reply's retained
-  // session view. Metadata preserves Codex target discovery without prompt snapshots.
-  const commandParams = params.storePath
-    ? {
-        ...params,
-        sessionStore: {
-          ...Object.fromEntries(
-            listSessionEntriesReadOnly({
-              agentId: params.agentId,
-              storePath: params.storePath,
-              projection: "list",
-            }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-          ),
-          ...params.sessionStore,
-        },
+export const handleDiagnosticsCommand: CommandHandler = defineAuthorizedTextCommand(
+  {
+    label: DIAGNOSTICS_COMMAND,
+    match: (body) => matchCommandPrefix(body.trim(), DIAGNOSTICS_COMMAND, { allowColon: true }),
+    ownerOnly: true,
+    silentUnauthorized: true,
+  },
+  async (input, args) => {
+    const params = { ...input, command: { ...input.command } };
+    // Inventory belongs to this authorized command, not every reply's retained
+    // session view. Metadata preserves Codex target discovery without prompt snapshots.
+    const commandParams = params.storePath
+      ? {
+          ...params,
+          sessionStore: {
+            ...Object.fromEntries(
+              (
+                await readSessionEntrySummariesInWorker({
+                  agentId: params.agentId,
+                  storePath: params.storePath,
+                })
+              ).map(({ sessionKey, entry }) => [sessionKey, entry]),
+            ),
+            ...params.sessionStore,
+          },
+        }
+      : params;
+    if (isCodexDiagnosticsConfirmationAction(args)) {
+      const codexResult = await executeCodexDiagnosticsAddon(commandParams, args);
+      const reply = codexResult
+        ? rewriteCodexDiagnosticsResult(codexResult)
+        : { text: "No Codex diagnostics confirmation handler is available for this session." };
+      if (commandParams.isGroup) {
+        return await deliverGroupDiagnosticsReplyPrivately(commandParams, reply);
       }
-    : params;
-  if (isCodexDiagnosticsConfirmationAction(args)) {
-    const codexResult = await executeCodexDiagnosticsAddon(commandParams, args);
-    const reply = codexResult
-      ? rewriteCodexDiagnosticsResult(codexResult)
-      : { text: "No Codex diagnostics confirmation handler is available for this session." };
-    if (commandParams.isGroup) {
-      return await deliverGroupDiagnosticsReplyPrivately(commandParams, reply);
+      return commandReply(reply);
     }
-    return commandReply(reply);
-  }
 
-  if (commandParams.isGroup) {
-    const privateTarget = (await resolvePrivateDiagnosticsTargetsForCommand(commandParams))[0];
-    if (!privateTarget) {
-      return commandReply(DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE);
-    }
-    const privateReply = await buildDiagnosticsReply(commandParams, args, {
-      diagnosticsPrivateRouted: true,
-      privateApprovalTarget: privateTarget,
-    });
-    if (!privateReply) {
-      return commandReply(
-        "Diagnostics are sensitive. Owner approval is pending on the private route.",
+    if (commandParams.isGroup) {
+      const privateTarget = (await resolvePrivateDiagnosticsTargetsForCommand(commandParams))[0];
+      if (!privateTarget) {
+        return commandReply(DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE);
+      }
+      const privateReply = await buildDiagnosticsReply(commandParams, args, {
+        diagnosticsPrivateRouted: true,
+        privateApprovalTarget: privateTarget,
+      });
+      if (!privateReply) {
+        return commandReply(
+          "Diagnostics are sensitive. Owner approval is pending on the private route.",
+        );
+      }
+      return await deliverGroupDiagnosticsReplyPrivately(
+        commandParams,
+        privateReply,
+        privateTarget,
       );
     }
-    return await deliverGroupDiagnosticsReplyPrivately(commandParams, privateReply, privateTarget);
-  }
 
-  const reply = await buildDiagnosticsReply(commandParams, args);
-  return reply ? commandReply(reply) : { shouldContinue: false };
-};
+    const reply = await buildDiagnosticsReply(commandParams, args);
+    return reply ? commandReply(reply) : { shouldContinue: false };
+  },
+);
 
 async function deliverGroupDiagnosticsReplyPrivately(
   params: HandleCommandsParams,
@@ -377,15 +366,11 @@ function buildCodexDiagnosticsSessions(
         accountId:
           normalizeOptionalString(delivery?.accountId) ??
           normalizeOptionalString(origin?.accountId) ??
-          (isCurrent ? (params.ctx.AccountId ?? undefined) : undefined),
+          (isCurrent ? params.ctx.AccountId : undefined),
         messageThreadId:
           delivery?.threadId ??
           origin?.threadId ??
-          (isCurrent &&
-          (typeof params.ctx.MessageThreadId === "string" ||
-            typeof params.ctx.MessageThreadId === "number")
-            ? params.ctx.MessageThreadId
-            : undefined),
+          (isCurrent ? params.ctx.MessageThreadId : undefined),
         threadParentId: isCurrent ? normalizeOptionalString(params.ctx.ThreadParentId) : undefined,
       };
     });

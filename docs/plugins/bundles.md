@@ -7,7 +7,7 @@ read_when:
 title: "Plugin bundles"
 ---
 
-OpenClaw can install plugins from four external ecosystems: the vendor-neutral
+OpenClaw can install plugins from four external formats: the vendor-neutral
 [**Agent Plugins**](https://agent-plugins.org) standard, plus **Codex**,
 **Claude**, and **Cursor**. These are called **bundles** - content and metadata
 packs that OpenClaw maps into native features like skills, hooks, and MCP tools.
@@ -127,8 +127,60 @@ them:
   restriction must permit the tool.
 - Only supported stdio-backed LSP servers are runnable; unsupported
   transports still show up in `openclaw plugins inspect <id>`.
+- LSP servers do not inherit the Gateway environment; see
+  [LSP server environment](/plugins/bundles#lsp-server-environment).
 - Canceling a turn or compaction cancels pending LSP startup, stops additional
   servers from starting, and cleans up servers already acquired by that operation.
+
+#### LSP server environment
+
+Bundle LSP servers start from an allowlisted environment, not the full Gateway
+environment:
+
+- The process essentials stdio MCP servers get: `HOME`, `LOGNAME`, `PATH`,
+  `TERM`, `USER` (the standard system variables on Windows).
+- Locale and temp: `LANG`, `LANGUAGE`, `LC_*`, `TZ`, `TMPDIR`, `TMP`, `TEMP`.
+- XDG base directories: `XDG_CACHE_HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
+  `XDG_STATE_HOME`, `XDG_RUNTIME_DIR`, `XDG_CONFIG_DIRS`, `XDG_DATA_DIRS`.
+- Toolchain locations: `GOROOT`, `GOMODCACHE`, `GOBIN`, `JAVA_HOME`,
+  `RUSTUP_HOME`, `RUSTUP_TOOLCHAIN`.
+- Then the server's own `env` from its `.lsp.json` entry.
+
+Provider API keys, Gateway and hook tokens, secret-manager credentials, and
+every other Gateway variable are not passed. The host exec env policy applies
+on top: it drops inherited `GOPATH` and `CARGO_HOME`, and it refuses some names
+even in the server's `env`, including proxy variables (`HTTP_PROXY`,
+`HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`), CA bundle variables (`SSL_CERT_FILE`,
+`SSL_CERT_DIR`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`),
+`GRADLE_USER_HOME`, `VIRTUAL_ENV`, `PYTHONPATH`, `NODE_OPTIONS`, `NODE_PATH`,
+and Go settings such as `GOPATH`, `GOFLAGS`, `GOPROXY`, and `GOPRIVATE`.
+
+To pass a variable a language server needs:
+
+- If the policy allows it (for example `CARGO_TARGET_DIR`, `DOTNET_ROOT`, or
+  `ANDROID_HOME`), add it to that server's `env` in the bundle's `.lsp.json`:
+
+  ```json
+  {
+    "lspServers": {
+      "kotlin": {
+        "command": "kotlin-language-server",
+        "env": { "ANDROID_HOME": "/opt/android-sdk" }
+      }
+    }
+  }
+  ```
+
+- If the policy refuses it, the server has to set it itself, for example by
+  pointing its `command` at a wrapper script that exports the variable and then
+  runs the language server.
+
+When a server starts, the Gateway logs one warning per server naming commonly
+needed variables (proxy, CA bundle, Python, Node, Go, Rust, JVM, .NET, and
+Android settings) that are set in the Gateway environment but not passed, and
+whether the server's `env` can supply them. `openclaw doctor` prints the same
+names for configured bundle LSP servers. Both print variable names only, never
+values, and skip names that look like secrets.
 
 ### Detected but not executed
 
@@ -151,7 +203,7 @@ These are recognized and shown in diagnostics, but OpenClaw does not run them:
   default; use `tools.deny: ["bundle-mcp"]` to opt out for an agent or gateway.
 - Project-local embedded agent settings still apply after bundle defaults, so
   workspace settings can override bundle MCP entries when needed.
-- Bundle MCP tool catalogs are sorted deterministically before registration, so
+- Bundle MCP tool catalogs are sorted in a fixed order before registration, so
   upstream `listTools()` order changes do not thrash prompt-cache tool blocks.
 
 ### Transports
@@ -220,7 +272,7 @@ OpenClaw registers bundle MCP tools with provider-safe names in the form
 - Full tool names are capped at 64 characters.
 - Empty server names fall back to `mcp`.
 - Colliding sanitized names are disambiguated with numeric suffixes.
-- Final exposed tool order is deterministic by safe name, keeping repeated
+- Final exposed tool order is sorted by safe name, keeping repeated
   embedded-agent turns cache-stable.
 - Profile filtering treats every tool from one bundle MCP server as
   plugin-owned by `bundle-mcp`, so profile allow/deny lists can reference

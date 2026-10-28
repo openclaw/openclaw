@@ -189,13 +189,13 @@ enum GatewayWebSocketTestSupport {
         return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 
-    static func okResponseData(id: String) -> Data {
+    static func okResponseData(id: String, payload: String = #"{"ok":true}"#) -> Data {
         let json = """
         {
           "type": "res",
           "id": "\(id)",
           "ok": true,
-          "payload": { "ok": true }
+          "payload": \(payload)
         }
         """
         return Data(json.utf8)

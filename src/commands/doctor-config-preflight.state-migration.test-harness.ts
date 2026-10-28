@@ -259,6 +259,7 @@ vi.mock("./doctor/shared/plugin-metadata-snapshot-scope.js", () => ({
     run: (_scope: unknown, operation: () => unknown) =>
       runWithPluginMetadataSnapshot(params.getBaseSnapshot(), operation),
     invalidate: vi.fn(),
+    [Symbol.asyncDispose]: async () => {},
   }),
 }));
 

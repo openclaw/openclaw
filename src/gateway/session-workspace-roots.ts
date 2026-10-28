@@ -19,6 +19,7 @@ type SessionWorkspaceEntry = Pick<
   | "sandboxMode"
   | "createdActor"
   | "repositoryWorkspaceId"
+  | "deviceFolder"
 >;
 
 type SessionFileReadContext = {
@@ -67,6 +68,16 @@ export function resolveSessionWorkspaceRoots(
   entry: SessionWorkspaceEntry,
   readContext?: SessionFileReadContext,
 ) {
+  // A node-owned path has no Gateway-local equivalent, including stale local metadata.
+  if (entry.deviceFolder) {
+    return {
+      checkoutPending: false,
+      readScope: "root" as const,
+      spawnedCwd: undefined,
+      root: undefined,
+      diffCwd: undefined,
+    };
+  }
   const spawnedCwd = normalizeOptionalString(entry.spawnedCwd);
   const spawnedWorkspaceDir = normalizeOptionalString(entry.spawnedWorkspaceDir);
   const checkoutPending =

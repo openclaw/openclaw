@@ -99,14 +99,14 @@ export async function readBundledPluginAssetHooks(options: AssetOptions = {}) {
     options.deferIsolated ? listGeneratedExtensionAssetSources({ rootDir: repoRoot }) : [],
   );
   // Their package builders generate and validate assets after compiling the
-  // isolated graph. Manifest writers must finish before compilation and input
-  // capture; keep those hooks early, along with untracked source packages.
+  // isolated graph. Browser declarations fingerprint dependencies outside that
+  // graph; keep those hooks early, along with untracked source packages.
   const deferredPluginIds = new Set(
     options.deferIsolated
       ? collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot })
           .filter(
             ({ id, isolated }) =>
-              isolated && !generatedSources.has(`extensions/${id}/openclaw.plugin.json`),
+              isolated && !generatedSources.has(`extensions/${id}/dist/openclaw.plugin.json`),
           )
           .map(({ id }) => id)
       : [],

@@ -2,13 +2,14 @@ import {
   bindMessageInjectionAdmission,
   createLegacyMessageInjectionAuthority,
 } from "../../auto-reply/reply/message-injection-authority.js";
+import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import type {
   ReplyBackendHandle,
   ReplyBackendMessageInjection,
   ReplyBackendMessageInjectionV2,
   ReplyToolAuthorityPreparation,
-} from "../../auto-reply/reply/reply-run-registry.contracts.js";
-import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+} from "../../sessions/session-controller.contracts.js";
 import {
   capturePreparedToolAuthorityReads,
   type PreparedToolAuthorityRead,
@@ -64,6 +65,11 @@ export function bindMessageInjectionV2(
       if (getPreparation && guarded.queueMessageAsync) {
         return guarded.queueMessageAsync(text, options, getPreparation(), authorityKind);
       }
+      warnPluginSdkDeprecation({
+        family: "reply-tool-authority-sync-preparation",
+        method: "ReplyBackendMessageInjectionV2.queueMessage",
+        replacement: "queueMessageAsync with awaited authority preparation",
+      });
       legacy?.assertQueueCurrent();
       return guarded.queueMessage(text, options, assertFinalCurrent, authorityKind);
     },
@@ -77,16 +83,33 @@ export function bindMessageInjectionV2(
               authorityKind,
             )
         : guarded.claimPendingUserInputAnswer
-          ? (text, options) =>
-              guarded.claimPendingUserInputAnswer!(text, options, assertCurrent, authorityKind)
+          ? (text, options) => {
+              warnPluginSdkDeprecation({
+                family: "reply-tool-authority-sync-preparation",
+                method: "ReplyBackendMessageInjectionV2.claimPendingUserInputAnswer",
+                replacement: "claimPendingUserInputAnswerAsync with awaited authority preparation",
+              });
+              return guarded.claimPendingUserInputAnswer!(
+                text,
+                options,
+                assertCurrent,
+                authorityKind,
+              );
+            }
           : undefined,
     cancelPendingUserInput:
       getPreparation && guarded.cancelPendingUserInputAsync
         ? (resolvedBy) =>
             guarded.cancelPendingUserInputAsync!(resolvedBy, getPreparation(), authorityKind)
         : guarded.cancelPendingUserInput
-          ? (resolvedBy) =>
-              guarded.cancelPendingUserInput!(resolvedBy, assertCurrent, authorityKind)
+          ? (resolvedBy) => {
+              warnPluginSdkDeprecation({
+                family: "reply-tool-authority-sync-preparation",
+                method: "ReplyBackendMessageInjectionV2.cancelPendingUserInput",
+                replacement: "cancelPendingUserInputAsync with awaited authority preparation",
+              });
+              return guarded.cancelPendingUserInput!(resolvedBy, assertCurrent, authorityKind);
+            }
           : undefined,
   };
 }

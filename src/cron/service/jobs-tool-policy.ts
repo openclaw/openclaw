@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRuntimeToolAllowed } from "../../agents/tool-policy-match.js";
+import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { cloneCronRuntimeAuthority, type CronRuntimeAuthority } from "../runtime-authority.js";
 import {
@@ -8,6 +9,7 @@ import {
   resolveCronScheduledToolPolicy,
   type CronScheduledToolPolicy,
 } from "../scheduled-tool-policy.js";
+import { isCronOperatorSourceParent } from "../session-target.js";
 import {
   normalizeCronToolsAllowProvenance,
   resolveCronAuthenticatedCallerOrigin,
@@ -87,8 +89,9 @@ export function cronJobMessageActionAuthorityInputsEqual(
 }
 
 /** Binds native requester authority to executable inputs using the canonical storage projection. */
-function resolveCronRequesterExecutionRevision(job: CronStoredJob): string {
+export function resolveCronRequesterExecutionRevision(job: CronStoredJob): string {
   const {
+    operatorSource: _operatorSource,
     description: _description,
     displayName: _displayName,
     createdActor: _createdActor,
@@ -96,6 +99,46 @@ function resolveCronRequesterExecutionRevision(job: CronStoredJob): string {
     ...executableJob
   } = job;
   return resolveCronJobConfigRevision(executableJob);
+}
+
+/** Runtime auto-disable writes enabled into job_json without rebinding the owner's source. */
+export function resolveCronOperatorExecutionRevision(job: CronStoredJob): string {
+  return resolveCronRequesterExecutionRevision({ ...job, enabled: true });
+}
+
+/** Executable edits cannot borrow the previous creator's authenticated source. */
+export function reconcileCronOperatorSource(params: {
+  job: CronStoredJob;
+  previousJob?: CronStoredJob;
+  captured?: NonNullable<CronStoredJob["operatorSource"]>["source"];
+  capturedExecutionRevision?: string;
+  /** Agent-less jobs run as the configured default agent, so they match on that agent. */
+  defaultAgentId?: string;
+}): void {
+  const { job, previousJob } = params;
+  if (!params.captured && !previousJob?.operatorSource) {
+    delete job.operatorSource;
+    return;
+  }
+  const executionRevision = resolveCronOperatorExecutionRevision(job);
+  const captured =
+    params.capturedExecutionRevision === executionRevision ? params.captured : undefined;
+  const previous = previousJob?.operatorSource;
+  const source = captured ?? previous?.source;
+  if (
+    source &&
+    (captured || previous?.executionRevision === executionRevision) &&
+    job.payload.kind === "agentTurn" &&
+    job.scheduledToolPolicy?.mode === "account" &&
+    job.owner?.sessionKey === source.sessionKey &&
+    job.scheduledToolPolicy.ownerSessionKey === source.sessionKey &&
+    tryResolveCronJobEffectiveAgentId(job, params.defaultAgentId) === source.agentId &&
+    isCronOperatorSourceParent(job, source.sessionKey)
+  ) {
+    job.operatorSource = { source, executionRevision };
+  } else {
+    delete job.operatorSource;
+  }
 }
 
 /** Rebinds or clears authenticated requester facts after the complete mutation is known. */

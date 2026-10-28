@@ -1,4 +1,3 @@
-// Gateway Protocol schema module defines Gateway host system information.
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";

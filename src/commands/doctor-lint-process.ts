@@ -2,6 +2,7 @@ import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { registerSignalExitBarrier } from "../cli/signal-exit-barrier.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
+import type { DoctorUpdateBudget } from "../flows/doctor-update-budget.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
@@ -13,14 +14,14 @@ import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import { drainProcessOutput } from "../process/output-drain.js";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
-import type { DoctorLintCliOptions } from "./doctor-lint-options.js";
+import type { DoctorLintCliOptions, DoctorLintWorkerInput } from "./doctor-lint-options.js";
 
 const MAX_OUTPUT_BYTES = 1024 * 1024;
 
 /** The copied rehearsal may stop its private inspector after its checks have reported. */
 export async function runUpdateDoctorLintProcess(
   opts: DoctorLintCliOptions,
-  disposalDeadlineMs?: number,
+  budget?: Pick<DoctorUpdateBudget, "disposalDeadlineMs" | "commandStartedAtMs">,
 ): Promise<number> {
   if (!resolveUpdateRehearsalRoot(process.env) || opts.json !== true) {
     throw new Error("Doctor lint worker requires an isolated update rehearsal in JSON mode.");
@@ -59,8 +60,12 @@ export async function runUpdateDoctorLintProcess(
   process.stdout.on("error", onOutputError);
   process.stderr.on("error", onOutputError);
   try {
+    const input: DoctorLintWorkerInput = {
+      options: opts,
+      commandStartedAtMs: budget?.commandStartedAtMs,
+    };
     worker = runUtf8CommandWithTimeout([process.execPath, ...resolveRuntimeWorkerArgv(workerUrl)], {
-      input: JSON.stringify(opts),
+      input: JSON.stringify(input),
       baseEnv: process.env,
       ...(/\.[cm]?ts$/.test(fileURLToPath(workerUrl))
         ? { env: { TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", workerUrl)) } }
@@ -99,7 +104,7 @@ export async function runUpdateDoctorLintProcess(
         process.stdout.write(`${line}\n`);
         const allowance = Math.max(5_000, reportedAt - started);
         cancelDisposalDeadline = scheduleAbsoluteDeadline(
-          Math.min(reportedAt + allowance, disposalDeadlineMs ?? Infinity),
+          Math.min(reportedAt + allowance, budget?.disposalDeadlineMs ?? Infinity),
           () => {
             disposalTerminationRequested = true;
             controller.abort();

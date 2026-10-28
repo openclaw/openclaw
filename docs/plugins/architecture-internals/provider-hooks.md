@@ -68,7 +68,7 @@ listed here.
 | `catalog`                         | Publish provider config into `models.providers` during `models.json` generation                                | Provider owns a catalog or base URL defaults                                                                                                  |
 | `applyConfigDefaults`             | Apply provider-owned global config defaults during config materialization                                      | Defaults depend on auth mode, env, or provider model-family semantics                                                                         |
 | _(built-in model lookup)_         | OpenClaw tries the normal registry/catalog path first                                                          | _(not a plugin hook)_                                                                                                                         |
-| `normalizeModelId`                | Normalize legacy or preview model-id aliases before lookup                                                     | Provider owns alias cleanup before canonical model resolution                                                                                 |
+| `normalizeModelId`                | Normalize legacy or preview model-id aliases before lookup                                                     | Provider owns alias cleanup before normalized model resolution                                                                                |
 | `normalizeTransport`              | Normalize provider-family `api` / `baseUrl` before generic model assembly                                      | Provider owns transport cleanup for custom provider ids in the same transport family                                                          |
 | `normalizeConfig`                 | Normalize `models.providers.<id>` before runtime/provider resolution                                           | Provider needs config cleanup that should live with the owning plugin                                                                         |
 | `applyNativeStreamingUsageCompat` | Apply native streaming-usage compat rewrites to config providers                                               | Provider needs endpoint-driven native streaming usage metadata fixes                                                                          |
@@ -101,7 +101,8 @@ listed here.
 | `supportsXHighThinking`           | `xhigh` reasoning support compatibility hook                                                                   | Provider wants `xhigh` on only a subset of models                                                                                             |
 | `resolveDefaultThinkingLevel`     | Default `/think` level compatibility hook                                                                      | Provider owns default `/think` policy for a model family                                                                                      |
 | `isModernModelRef`                | Modern-model matcher for live profile filters and smoke selection                                              | Provider owns live/smoke preferred-model matching                                                                                             |
-| `prepareRuntimeAuth`              | Exchange a configured credential into the actual runtime token/key just before inference                       | Provider needs a token exchange or short-lived request credential                                                                             |
+| `prepareRuntimeAuthV2`            | Capability-aware credential exchange before chat or decision inference                                         | Provider needs a token exchange or short-lived request credential without requiring chat model fields                                         |
+| `prepareRuntimeAuth`              | Legacy chat exchange with its full runtime model contract                                                      | Existing third-party plugins; migrate to V2 for decision support                                                                              |
 | `resolveUsageAuth`                | Resolve usage/billing credentials for `/usage` and related status surfaces                                     | Provider needs custom usage/quota token parsing or a different usage credential                                                               |
 | `fetchUsageSnapshot`              | Fetch and normalize provider-specific usage/quota snapshots after auth is resolved                             | Provider needs a provider-specific usage endpoint or payload parser                                                                           |
 | `createEmbeddingProvider`         | Build a provider-owned embedding adapter for memory/search                                                     | Memory embedding behavior belongs with the provider plugin                                                                                    |
@@ -113,7 +114,7 @@ listed here.
 
 `reconcileLocalService` runs only for configured local services, including a
 healthy process reused from outside the current Gateway process. Keep it cheap,
-idempotent, and abort-aware. A rejection blocks the provider request and
+safe to repeat, and abort-aware. A rejection blocks the provider request and
 releases its lease without classifying the healthy process as a startup failure.
 
 Normalization dispatch is hook-specific:
@@ -196,7 +197,7 @@ api.registerProvider({
     contextWindow: 128000,
     maxTokens: 8192,
   }),
-  prepareRuntimeAuth: async (ctx) => {
+  prepareRuntimeAuthV2: async (ctx) => {
     const exchanged = await exchangeToken(ctx.apiKey);
     return {
       apiKey: exchanged.token,
@@ -245,7 +246,7 @@ mirroring the list.
   </Accordion>
   <Accordion title="Anthropic-specific stream helpers">
     Beta headers, `/fast` / `serviceTier`, and `context1m` live inside the
-    Anthropic plugin's public `api.ts` / `contract-api.ts` seam
+    Anthropic plugin's public `api.ts` / `contract-api.ts` interface
     (`wrapAnthropicProviderStream`, `resolveAnthropicBetas`,
     `resolveAnthropicFastMode`, `resolveAnthropicServiceTier`) rather than in
     the generic SDK.

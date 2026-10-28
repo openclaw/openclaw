@@ -1,29 +1,78 @@
-import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import type { SourceFile } from "typescript/unstable/ast";
-import {
-  createVirtualFileSystem,
-  type FileSystem,
-  type FileSystemEntries,
-} from "typescript/unstable/fs";
+import type { SourceFile } from "typescript/ast";
+import { createFileSystem, createFileSystemLayer, type FileSystemCallbacks } from "typescript/fs";
 import {
   API,
   type CreateSnapshotParams,
   type Diagnostic,
   type Project,
   type Snapshot,
-} from "typescript/unstable/sync";
+} from "typescript/sync";
 
 export type NativeTypeScriptSource = { fileName: string; text: string };
 export type NativeTypeScriptParser = ReturnType<typeof createNativeTypeScriptParser>;
 export type NativeTypeScriptProject = ReturnType<typeof createNativeTypeScriptProject>;
+export type NativeTypeScriptObserver = (
+  phase: string,
+  facts?: Readonly<Record<string, string | number>>,
+) => void;
+
+/** Diagnostics must never replace an analysis or disposal outcome. */
+export function reportNativeTypeScriptPhase(
+  observer: NativeTypeScriptObserver | undefined,
+  phase: string,
+  facts?: Readonly<Record<string, string | number>>,
+) {
+  try {
+    observer?.(phase, facts);
+  } catch {
+    // The analysis remains authoritative when its diagnostic sink fails.
+  }
+}
+
+function nativePhaseReporter(getApi: () => API | undefined, observer: NativeTypeScriptObserver) {
+  let totals: Readonly<Record<string, number>> | undefined;
+  return (phase: string, sample = true) => {
+    const api = getApi();
+    if (!api) {
+      return;
+    }
+    let fresh = false;
+    if (sample) {
+      try {
+        const timing = api.getTimingInfo().totals;
+        totals = Object.fromEntries(
+          (
+            [
+              "requestCount",
+              "roundTripMs",
+              "serverTimeMs",
+              "bytesSent",
+              "bytesReceived",
+              "sourceFilesFetched",
+              "nodesFetched",
+              "nodesMaterialized",
+            ] as const
+          ).map((metric) => [metric, timing[metric]]),
+        );
+        fresh = true;
+      } catch {
+        // Timing is an extra RPC; retain the last successful snapshot if it fails.
+      }
+    }
+    reportNativeTypeScriptPhase(observer, phase, {
+      ...totals,
+      timingSample: fresh ? "current" : totals ? "last-successful" : "unavailable",
+    });
+  };
+}
 
 type ProjectOptions = {
   cwd: string;
   configFileName: string;
   files?: Readonly<Record<string, string>>;
-  fs?: FileSystem;
+  fs?: FileSystemCallbacks;
 };
 
 /** Select the same installed compiler as the native API, including in relocated tooling. */
@@ -40,81 +89,42 @@ function compilerFileName(cwd: string, file: string) {
   return path.resolve(cwd, file).split(path.sep).join("/");
 }
 
-function directoryEntries(directory: string): FileSystemEntries {
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(directory, { withFileTypes: true });
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      "code" in error &&
-      (error.code === "ENOENT" || error.code === "ENOTDIR")
-    ) {
-      return { files: [], directories: [] };
-    }
-    throw error;
-  }
-  const files: string[] = [];
-  const directories: string[] = [];
-  for (const entry of entries) {
-    const isDirectory = entry.isSymbolicLink()
-      ? fs.statSync(path.join(directory, entry.name), { throwIfNoEntry: false })?.isDirectory()
-      : entry.isDirectory();
-    (isDirectory ? directories : files).push(entry.name);
-  }
-  return { files, directories };
-}
-
-function overlayFileSystem(
-  cwd: string,
-  files: Readonly<Record<string, string>>,
-  base: FileSystem = {},
-): FileSystem {
-  const contents = Object.fromEntries(
-    Object.entries(files).map(([file, text]) => [compilerFileName(cwd, file), text]),
-  );
-  const virtual = createVirtualFileSystem(contents);
-  const hasFile = (file: string) => Object.hasOwn(contents, compilerFileName(cwd, file));
-  return {
-    readFile: (file) =>
-      hasFile(file) ? contents[compilerFileName(cwd, file)] : base.readFile?.(file),
-    fileExists: (file) => (hasFile(file) ? true : base.fileExists?.(file)),
-    directoryExists: (directory) =>
-      virtual.directoryExists?.(directory) || base.directoryExists?.(directory),
-    realpath: (file) => (hasFile(file) ? compilerFileName(cwd, file) : base.realpath?.(file)),
-    getAccessibleEntries(directory) {
-      const added = virtual.getAccessibleEntries?.(directory);
-      if (!added) {
-        return base.getAccessibleEntries?.(directory);
-      }
-      const existing = base.getAccessibleEntries?.(directory) ?? directoryEntries(directory);
-      return {
-        files: [...new Set([...existing.files, ...added.files])],
-        directories: [...new Set([...existing.directories, ...added.directories])],
-      };
-    },
-  };
-}
-
 /** Own one native compiler process and its immutable semantic snapshot. */
-export function createNativeTypeScriptProject(options: ProjectOptions) {
+export function createNativeTypeScriptProject(
+  options: ProjectOptions & { observer?: NativeTypeScriptObserver },
+) {
   const cwd = path.resolve(options.cwd);
   const configFileName = compilerFileName(cwd, options.configFileName);
   const api = new API({
     cwd,
-    fs: options.files ? overlayFileSystem(cwd, options.files, options.fs) : options.fs,
+    fs: options.fs,
+    collectTiming: options.observer ? true : undefined,
   });
+  const checkpoint = options.observer && nativePhaseReporter(() => api, options.observer);
   let snapshot: Snapshot;
   let project: Project;
   try {
-    snapshot = api.createSnapshot({ openProjects: [configFileName], ensurePrograms: true });
+    snapshot = api.createSnapshot({
+      openProjects: [configFileName],
+      ensurePrograms: true,
+      fileSystem: options.files
+        ? createFileSystemLayer(
+            Object.entries(options.files).map(([file, text]) => [
+              compilerFileName(cwd, file),
+              text,
+            ]),
+          )
+        : undefined,
+    });
     const opened = snapshot.getConfiguredProject(configFileName);
     if (!opened) {
       throw new Error(`Native TypeScript did not open ${configFileName}`);
     }
     project = opened;
+    checkpoint?.("project");
   } catch (error) {
     api.close();
+    checkpoint?.("close", false);
     throw error;
   }
   let closed = false;
@@ -124,23 +134,33 @@ export function createNativeTypeScriptProject(options: ProjectOptions) {
     }
     closed = true;
     api.close();
+    // Error unwinding must not issue another RPC to a possibly failed compiler.
+    checkpoint?.("close", false);
   };
-  return { api, snapshot, project, close, [Symbol.dispose]: close };
+  return { api, snapshot, project, checkpoint, close, [Symbol.dispose]: close };
 }
 
 /** The async transport keeps its child referenced while close ends the server's input. */
 export async function createNativeTypeScriptProjectAsync(options: ProjectOptions) {
-  const { API: AsyncAPI } = await import("typescript/unstable/async");
+  const { API: AsyncAPI } = await import("typescript/async");
   const cwd = path.resolve(options.cwd);
   const configFileName = compilerFileName(cwd, options.configFileName);
   const api = new AsyncAPI({
     cwd,
-    fs: options.files ? overlayFileSystem(cwd, options.files, options.fs) : options.fs,
+    fs: options.fs,
   });
   try {
     const snapshot = await api.createSnapshot({
       openProjects: [configFileName],
       ensurePrograms: true,
+      fileSystem: options.files
+        ? createFileSystemLayer(
+            Object.entries(options.files).map(([file, text]) => [
+              compilerFileName(cwd, file),
+              text,
+            ]),
+          )
+        : undefined,
     });
     const project = snapshot.getConfiguredProject(configFileName);
     if (!project) {
@@ -159,12 +179,12 @@ export async function createNativeTypeScriptProjectAsync(options: ProjectOptions
 export function createNativeTypeScriptParser({
   cwd = process.cwd(),
   tsserverPath,
-}: { cwd?: string; tsserverPath?: string } = {}) {
+  observer,
+}: { cwd?: string; tsserverPath?: string; observer?: NativeTypeScriptObserver } = {}) {
   const root = path.resolve(cwd);
   const configFileName = compilerFileName(root, ".openclaw-native-parser.tsconfig.json");
-  let files: Record<string, string> = {};
-  let virtual = createVirtualFileSystem(files);
   let api: API | undefined;
+  const checkpoint = observer && nativePhaseReporter(() => api, observer);
   let snapshot: Snapshot | undefined;
   let project: Project | undefined;
   let sourceNames: string[] = [];
@@ -190,7 +210,7 @@ export function createNativeTypeScriptParser({
     if (names.includes(configFileName)) {
       throw new Error(`Native TypeScript parser source conflicts with ${configFileName}`);
     }
-    files = Object.fromEntries(
+    const files = Object.fromEntries(
       sources.map((source) => [compilerFileName(root, source.fileName), source.text]),
     );
     files[configFileName] = JSON.stringify({
@@ -205,23 +225,16 @@ export function createNativeTypeScriptParser({
       },
       files: names,
     });
-    virtual = createVirtualFileSystem(files);
     api ??= new API({
       cwd: root,
       tsserverPath,
-      fs: {
-        readFile: (file) => virtual.readFile?.(file) ?? null,
-        fileExists: (file) => virtual.fileExists?.(file) ?? false,
-        directoryExists: (directory) => virtual.directoryExists?.(directory) ?? false,
-        getAccessibleEntries: (directory) =>
-          virtual.getAccessibleEntries?.(directory) ?? { files: [], directories: [] },
-        realpath: (file) => file,
-      },
+      collectTiming: observer ? true : undefined,
     });
     const previousNames = new Set(sourceNames);
     const currentNames = new Set(names);
     const changes: CreateSnapshotParams = {
       ...(previous ? {} : { openProjects: [configFileName] }),
+      fileSystem: createFileSystem(Object.entries(files)),
       // A config-file change reloads its root list; invalidateAll retains the old roots.
       fileNotifications: {
         changed: [configFileName, ...names.filter((name) => previousNames.has(name))],
@@ -238,13 +251,16 @@ export function createNativeTypeScriptParser({
       throw new Error("Native TypeScript did not open the syntax scan project");
     }
     const program = project.program;
-    return names.map((fileName) => {
+    checkpoint?.("project");
+    const parsed = names.map((fileName) => {
       const sourceFile = program.getSourceFile(fileName);
       if (!sourceFile) {
         throw new Error(`Native TypeScript did not parse ${fileName}`);
       }
       return sourceFile;
     });
+    checkpoint?.("sources");
+    return parsed;
   };
   const close = () => {
     if (closed) {
@@ -252,14 +268,14 @@ export function createNativeTypeScriptParser({
     }
     closed = true;
     api?.close();
+    checkpoint?.("close", false);
     api = undefined;
     project = undefined;
     snapshot = undefined;
-    files = {};
-    virtual = createVirtualFileSystem(files);
     sourceNames = [];
   };
   return {
+    checkpoint,
     parseSourceFiles,
     parseSourceFile(fileName: string, text: string): SourceFile {
       const sourceFile = parseSourceFiles([{ fileName, text }])[0];

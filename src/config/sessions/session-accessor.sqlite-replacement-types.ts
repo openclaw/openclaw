@@ -1,11 +1,18 @@
-import type { SubagentMaintenanceDurableBasis } from "../../agents/subagents/registry/subagent-registry-read.types.js";
+import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { ResolvedSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import type {
   SessionEntryMaintenanceInput,
   SessionEntryMaintenancePlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
-import type { SessionEntryReplacement, TranscriptEvent } from "./session-accessor.types.js";
+import type {
+  SessionEntryCommitContext,
+  SessionEntryReplacement,
+  TranscriptEvent,
+} from "./session-accessor.types.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
+import type { SessionNativeBindingParticipants } from "./session-native-binding.types.js";
+import type { SessionSourcePredicate } from "./session-source-authority.js";
 import type { SessionEntry } from "./types.js";
 
 export type SqliteSessionEntryReplacement = SessionEntryReplacement & {
@@ -13,6 +20,8 @@ export type SqliteSessionEntryReplacement = SessionEntryReplacement & {
 };
 
 export type SessionEntryReplacementCommit = {
+  sources?: SessionSourcePredicate[];
+  nativeBindings?: SessionNativeBindingParticipants;
   expectedRows: Map<string, ResolvedSessionEntryRow>;
   labelOwnerKeys: string[];
   includeLabelOwners?: string;
@@ -27,7 +36,6 @@ export type SessionEntryReplacementCommit = {
   checkPendingArchiveRecovery?: boolean;
   consumePendingReset?: boolean;
   maintenance?: SessionEntryMaintenanceInput;
-  maintenanceRunBasis?: SubagentMaintenanceDurableBasis;
   ownerAssignment?: { sessionKey: string; owner: SessionOwnerAssignment };
 };
 
@@ -37,4 +45,21 @@ export type SessionEntryReplacementCommitted = {
   current: Map<string, SessionEntry>;
   maintenancePlans: SessionEntryMaintenancePlan[];
   membershipInvalidatedKeys: string[];
+};
+
+export type SessionEntryReplacementCandidate = {
+  kind: "session-entry-replacements";
+  result: Pick<SessionEntryReplacementCommitted, "maintenancePlans">;
+  publication: SessionEntryReplacementPublication;
+};
+
+export type SessionEntryWorkerLifecycle<T = unknown> = {
+  identityAgentId: string;
+  onResult?: (value: T | undefined) => void;
+  beforeCommit?: (
+    publication: SessionEntryReplacementPublication,
+    operation: RetainedWorkerTransactionAdmission,
+  ) => void;
+  afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
+  onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
 };

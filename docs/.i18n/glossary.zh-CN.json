@@ -1,5 +1,41 @@
 [
   {
+    "source": "Get support",
+    "target": "获取支持"
+  },
+  {
+    "source": "Database engines",
+    "target": "数据库引擎"
+  },
+  {
+    "source": "PostgreSQL operator guide",
+    "target": "PostgreSQL 运维指南"
+  },
+  {
+    "source": "MCP Events",
+    "target": "MCP Events"
+  },
+  {
+    "source": "Mcp Events plugin reference",
+    "target": "MCP Events 插件参考"
+  },
+  {
+    "source": "MCP connections",
+    "target": "MCP 连接"
+  },
+  {
+    "source": "Plugin service runtime",
+    "target": "插件服务运行时"
+  },
+  {
+    "source": "Migrate synchronous SQLite APIs",
+    "target": "迁移同步 SQLite API"
+  },
+  {
+    "source": "Async SQLite migration",
+    "target": "异步 SQLite 迁移"
+  },
+  {
     "source": "X / Twitter",
     "target": "X / Twitter"
   },
@@ -26,6 +62,42 @@
   {
     "source": "radius",
     "target": "radius"
+  },
+  {
+    "source": "Requesty",
+    "target": "Requesty"
+  },
+  {
+    "source": "Requesty (unified router)",
+    "target": "Requesty（统一路由）"
+  },
+  {
+    "source": "Requesty plugin reference",
+    "target": "Requesty 插件参考"
+  },
+  {
+    "source": "requesty",
+    "target": "requesty"
+  },
+  {
+    "source": "Abliteration",
+    "target": "Abliteration"
+  },
+  {
+    "source": "Abliteration plugin reference",
+    "target": "Abliteration 插件参考"
+  },
+  {
+    "source": "abliteration",
+    "target": "abliteration"
+  },
+  {
+    "source": "All providers",
+    "target": "所有提供商"
+  },
+  {
+    "source": "Thinking modes",
+    "target": "思考模式"
   },
   {
     "source": "Omarchy",
@@ -726,6 +798,14 @@
   {
     "source": "Moonshot AI",
     "target": "Moonshot AI"
+  },
+  {
+    "source": "Neon AI Gateway",
+    "target": "Neon AI Gateway"
+  },
+  {
+    "source": "Liquid Inference",
+    "target": "Liquid Inference"
   },
   {
     "source": "Mistral",
@@ -2872,6 +2952,10 @@
     "target": "会话管理"
   },
   {
+    "source": "Session controller",
+    "target": "会话控制器"
+  },
+  {
     "source": "Transcript hygiene",
     "target": "转录净化"
   },
@@ -4012,6 +4096,10 @@
     "target": "标准场景覆盖"
   },
   {
+    "source": "Scenario coverage",
+    "target": "场景覆盖"
+  },
+  {
     "source": "Channel QA reference",
     "target": "通道 QA 参考"
   },
@@ -5034,5 +5122,61 @@
   {
     "source": "Recommended models",
     "target": "推荐模型"
+  },
+  {
+    "source": "MCP Relay",
+    "target": "MCP Relay"
+  },
+  {
+    "source": "Mcp Relay plugin reference",
+    "target": "MCP Relay 插件参考"
+  },
+  {
+    "source": "mcp-relay",
+    "target": "mcp-relay"
+  },
+  {
+    "source": "Remote Control UI ingress",
+    "target": "远程 Control UI 入口"
+  },
+  {
+    "source": "Cloud environment file",
+    "target": "云环境文件"
+  },
+  {
+    "source": "Standalone builds",
+    "target": "独立可执行文件构建"
+  },
+  {
+    "source": "PostgreSQL operator guide",
+    "target": "PostgreSQL 运维指南"
+  },
+  {
+    "source": "Plugin runtime compatibility",
+    "target": "插件运行时兼容性"
+  },
+  {
+    "source": "Runtime compatibility",
+    "target": "运行时兼容性"
+  },
+  {
+    "source": "Runtime compatibility lint",
+    "target": "运行时兼容性静态检查"
+  },
+  {
+    "source": "Liquid AI",
+    "target": "Liquid AI"
+  },
+  {
+    "source": "Liquid AI plugin reference",
+    "target": "Liquid AI 插件参考"
+  },
+  {
+    "source": "liquid-ai",
+    "target": "liquid-ai"
+  },
+  {
+    "source": "Liquid AI (Decision models)",
+    "target": "Liquid AI（决策模型）"
   }
 ]

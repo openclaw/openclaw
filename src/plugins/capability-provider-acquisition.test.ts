@@ -64,7 +64,6 @@ it.each([{ custody: "borrowed" }, { custody: "owned" }] as const)(
             session: { ...session, title: "Captured by the plugin" },
           });
           expect(() => acquired.assertOpen()).not.toThrow();
-          instance.reserveReplacement()();
           if (custody === "owned") {
             expect(instance.retainedWorkCount).toBeGreaterThan(0);
           } else {

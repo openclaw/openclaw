@@ -2,8 +2,11 @@ import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/rep
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { markChatAbortTerminalOutcome } from "../chat-abort-lifecycle-internal.js";
-import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
+import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources.js";
+import {
+  captureChatAbortRegistrationGuard,
+  markChatAbortTerminalOutcome,
+} from "../chat-abort-lifecycle-internal.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
 import { capLiveAssistantText } from "../live-chat-projector.js";
 import type { GatewayBroadcastOpts } from "../server-broadcast-types.js";
@@ -114,7 +117,7 @@ type ChatTerminal =
     };
 
 type ChatTerminalBroadcastParams = ChatBroadcastParams & {
-  terminalEntry: Pick<ChatAbortControllerEntry, "terminalOutcomeObserved"> | undefined;
+  terminalEntry: RpcSourceRef | undefined;
 };
 
 type ChatFrame = ChatTerminal | { state: "delta"; text: string };
@@ -207,6 +210,12 @@ export function broadcastChatDelta(
 }
 
 export function broadcastChatTerminal(params: ChatTerminalBroadcastParams & ChatTerminal): void {
+  if (
+    params.terminalEntry &&
+    !captureChatAbortRegistrationGuard([{ runId: params.runId, entry: params.terminalEntry }])()
+  ) {
+    return;
+  }
   markChatAbortTerminalOutcome(params.terminalEntry);
   broadcastChatFrame(params);
   params.context.agentRunSeq.delete(params.runId);

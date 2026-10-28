@@ -1,5 +1,6 @@
+import type { Static } from "typebox";
 import { asProtocolRecord } from "./protocol-value-normalization.js";
-import type { SessionMoveExpectedSource } from "./schema/session-placement.js";
+import type * as ErrorSchemas from "./schema/error-codes.js";
 
 /** Display projection for an assistant failure without visible reply content. */
 export const GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT =
@@ -42,57 +43,52 @@ export const GatewayErrorDetailCodes = {
   SESSION_WORKSPACE_RECOVERY_REQUIRED: "SESSION_WORKSPACE_RECOVERY_REQUIRED",
   TASK_WORKTREE_SOURCE_REQUIRED: "TASK_WORKTREE_SOURCE_REQUIRED",
   TASK_HISTORY_PREVIEW_CAPACITY: "TASK_HISTORY_PREVIEW_CAPACITY",
+  CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED: "CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED",
+  CLAW_REVIEW_REQUIRED: "CLAW_REVIEW_REQUIRED",
+  PENDING_INPUT_NOT_RETIRED: "PENDING_INPUT_NOT_RETIRED",
+  OPENCLAW_CONFIG_READONLY: "OPENCLAW_CONFIG_READONLY",
 } as const;
 
 /** Missing cron automation identified by its exact store key. */
-export type CronJobNotFoundErrorDetails = {
-  code: typeof GatewayErrorDetailCodes.CRON_JOB_NOT_FOUND;
-  jobId: string;
-};
+export type CronJobNotFoundErrorDetails = Static<
+  typeof ErrorSchemas.CronJobNotFoundErrorDetailsSchema
+>;
 
 /** Missing operator-scope details shared by WebSocket and HTTP responses. */
-export type MissingScopeErrorDetails = {
-  code: typeof GatewayErrorDetailCodes.MISSING_SCOPE;
-  missingScope: string;
-  requiredScopes: string[];
-};
+export type MissingScopeErrorDetails = Static<typeof ErrorSchemas.MissingScopeErrorDetailsSchema>;
 
-export type McpAppViewExpiredErrorDetails = {
-  code: typeof GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED;
-};
+export type McpAppViewExpiredErrorDetails = Static<
+  typeof ErrorSchemas.McpAppViewExpiredErrorDetailsSchema
+>;
 
-export type OutboundDeliveryQueuedErrorDetails = {
-  code: typeof GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED;
-};
+export type OutboundDeliveryQueuedErrorDetails = Static<
+  typeof ErrorSchemas.OutboundDeliveryQueuedErrorDetailsSchema
+>;
 
 /** Per-profile preference quota details returned by users.prefs.set. */
-export type UserPrefsLimitExceededErrorDetails = {
-  code: typeof GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED;
-  limit: number;
-  currentCount: number;
-};
+export type UserPrefsLimitExceededErrorDetails = Static<
+  typeof ErrorSchemas.UserPrefsLimitExceededErrorDetailsSchema
+>;
 
 /** Unknown agent details carried by agent-scoped method validation failures. */
-export type UnknownAgentIdErrorDetails = {
-  code: typeof GatewayErrorDetailCodes.UNKNOWN_AGENT_ID;
-  agentId: string;
-};
+export type UnknownAgentIdErrorDetails = Static<
+  typeof ErrorSchemas.UnknownAgentIdErrorDetailsSchema
+>;
 
 /** Setup rejected before its task or wizard session was admitted. */
-export type SetupAdmissionBusyErrorDetails = {
-  code: typeof GatewayErrorDetailCodes.SETUP_ADMISSION_BUSY;
-};
+export type SetupAdmissionBusyErrorDetails = Static<
+  typeof ErrorSchemas.SetupAdmissionBusyErrorDetailsSchema
+>;
 
 /** This invocation rejected its selection before admission; earlier calls may still be pending. */
-export type GitHubPublicationSelectionRejectedErrorDetails = {
-  code: typeof GatewayErrorDetailCodes.GITHUB_PUBLICATION_SELECTION_REJECTED;
-  idempotencyKey: string;
-};
+export type GitHubPublicationSelectionRejectedErrorDetails = Static<
+  typeof ErrorSchemas.GitHubPublicationSelectionRejectedErrorDetailsSchema
+>;
 
 /** Missing or expired process-local setup wizard session. */
-export type WizardNotFoundErrorDetails = {
-  code: typeof GatewayErrorDetailCodes.WIZARD_NOT_FOUND;
-};
+export type WizardNotFoundErrorDetails = Static<
+  typeof ErrorSchemas.WizardNotFoundErrorDetailsSchema
+>;
 
 export type ProjectCloneFailureCause =
   | "invalid_url"
@@ -108,19 +104,27 @@ export type ProjectCloneErrorDetails = {
 };
 
 /** Exact retained workspace owner that must be recovered or explicitly abandoned. */
-export type SessionWorkspaceRecoveryRequiredErrorDetails = {
-  code: typeof GatewayErrorDetailCodes.SESSION_WORKSPACE_RECOVERY_REQUIRED;
-  cause: "device_offline";
-  recoveryAction: "continue_on_gateway";
-  sessionId: string;
-  source: SessionMoveExpectedSource;
-};
+export type SessionWorkspaceRecoveryRequiredErrorDetails = Static<
+  typeof ErrorSchemas.SessionWorkspaceRecoveryRequiredErrorDetailsSchema
+>;
 
 /** Structured details emitted by method-level failures. */
-export type TaskWorktreeSourceRequiredErrorDetails = {
-  code: typeof GatewayErrorDetailCodes.TASK_WORKTREE_SOURCE_REQUIRED;
-  cwd: string;
-};
+export type TaskWorktreeSourceRequiredErrorDetails = Static<
+  typeof ErrorSchemas.TaskWorktreeSourceRequiredErrorDetailsSchema
+>;
+
+export type ClawHubRiskAcknowledgementRequiredErrorDetails = Static<
+  typeof ErrorSchemas.ClawHubRiskAcknowledgementRequiredErrorDetailsSchema
+>;
+
+export type ClawReviewRequiredErrorDetails = Static<
+  typeof ErrorSchemas.ClawReviewRequiredErrorDetailsSchema
+>;
+
+/** Requested pending inputs that are still queued or held by a settling turn. */
+export type PendingInputNotRetiredErrorDetails = Static<
+  typeof ErrorSchemas.PendingInputNotRetiredErrorDetailsSchema
+>;
 
 /** Structured details emitted by method-level failures. */
 export type GatewayErrorDetails =
@@ -136,7 +140,34 @@ export type GatewayErrorDetails =
   | GitHubPublicationSelectionRejectedErrorDetails
   | SessionWorkspaceRecoveryRequiredErrorDetails
   | TaskWorktreeSourceRequiredErrorDetails
-  | { code: typeof GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY };
+  | ClawHubRiskAcknowledgementRequiredErrorDetails
+  | ClawReviewRequiredErrorDetails
+  | PendingInputNotRetiredErrorDetails
+  | { code: typeof GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY }
+  | { code: typeof GatewayErrorDetailCodes.OPENCLAW_CONFIG_READONLY };
+
+export function readClawHubRiskAcknowledgementRequiredError(
+  error: unknown,
+): ClawHubRiskAcknowledgementRequiredErrorDetails | null {
+  const record = asProtocolRecord(error);
+  const details = asProtocolRecord(record?.details);
+  const warning = typeof details?.warning === "string" ? details.warning.trim() : "";
+  return record?.code === ErrorCodes.INVALID_REQUEST &&
+    details?.code === GatewayErrorDetailCodes.CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED &&
+    warning
+    ? { code: GatewayErrorDetailCodes.CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED, warning }
+    : null;
+}
+
+export function readClawReviewRequiredError(error: unknown): ClawReviewRequiredErrorDetails | null {
+  const record = asProtocolRecord(error);
+  const details = asProtocolRecord(record?.details);
+  return record?.code === ErrorCodes.INVALID_REQUEST &&
+    details?.code === GatewayErrorDetailCodes.CLAW_REVIEW_REQUIRED &&
+    (details.kind === "plugin" || details.kind === "skill")
+    ? { code: GatewayErrorDetailCodes.CLAW_REVIEW_REQUIRED, kind: details.kind }
+    : null;
+}
 
 const LEGACY_MISSING_SCOPE_PATTERN = /\bmissing scope:\s*([a-z0-9._-]+)/i;
 

@@ -12,6 +12,7 @@ import {
   ROOT_TSCONFIG,
   RUNTIME_POSTBUILD_STAMP,
   createCurrentGitSpawnRecorder,
+  createSpawnRecorder,
   createExitedProcess,
   it,
   resolvePath,
@@ -20,26 +21,30 @@ import {
   setupStampedProject,
   setupTrackedProject,
 } from "../../test/scripts/run-node.test-support.js";
-import { withTestDir } from "../test-helpers/temp-dir.js";
+
+const currentStamp = '{"head":"abc123","inputsClean":true}\n';
+const inspectFence = () => vi.spyOn(liveGatewayDistFence, "resolveLiveManagedGatewayDistFence");
+const refuseFence = () =>
+  inspectFence().mockResolvedValue({
+    refuse: true,
+    message: "[openclaw] Refusing to rebuild dist while a managed Gateway is still running.",
+  });
 
 beforeEach(() => {
-  const fence = vi
-    .spyOn(liveGatewayDistFence, "resolveLiveManagedGatewayDistFence")
-    .mockResolvedValue({ refuse: false });
+  const fence = inspectFence().mockResolvedValue({ refuse: false });
   onTestFinished(() => fence.mockRestore());
 });
 
 describe("run-node live Gateway dist fence", () => {
   it("refuses runtime postbuild writes while a live Gateway uses dist", async ({ tmp }) => {
-    await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
+    await setupStampedProject(tmp, {
+      oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+    });
     const output = path.join(tmp, "dist", "postbuild-observation.json");
     const runRuntimePostBuild = vi.fn(async () => {
       await fs.writeFile(output, "mutated\n");
     });
-    vi.spyOn(liveGatewayDistFence, "resolveLiveManagedGatewayDistFence").mockResolvedValue({
-      refuse: true,
-      message: "[openclaw] Refusing to rebuild dist while a managed Gateway is still running.",
-    });
+    refuseFence();
     const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder();
     const exitCode = await runNodeCommand(tmp, {
       env: { OPENCLAW_FORCE_RUNTIME_POSTBUILD: "1" },
@@ -71,18 +76,13 @@ describe("run-node live Gateway dist fence", () => {
     "dispatches $label against dirty dist without rebuilding",
     async ({ args, stale }, { tmp }) => {
       await setupStampedProject(tmp, {
-        files: { [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n' },
+        files: { [RUNTIME_POSTBUILD_STAMP]: currentStamp },
         trackConfig: true,
       });
       if (stale) {
         await fs.rm(resolvePath(tmp, BUILD_STAMP));
       }
-      const fence = vi
-        .spyOn(liveGatewayDistFence, "resolveLiveManagedGatewayDistFence")
-        .mockResolvedValue({
-          refuse: true,
-          message: "[openclaw] Refusing to rebuild dist while a managed Gateway is still running.",
-        });
+      const fence = refuseFence();
       const runRuntimePostBuild = vi.fn();
       const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder({
         gitStatus: ` M ${ROOT_SRC}\0`,
@@ -96,12 +96,10 @@ describe("run-node live Gateway dist fence", () => {
 
   it("applies --profile to fence inspection and the rebuild child", async ({ tmp }) => {
     const fenceEnvs: Array<NodeJS.ProcessEnv | undefined> = [];
-    const resolveLiveGatewayDistFence = vi
-      .spyOn(liveGatewayDistFence, "resolveLiveManagedGatewayDistFence")
-      .mockImplementation(async (_cwd, deps) => {
-        fenceEnvs.push(deps?.env);
-        return { refuse: false };
-      });
+    const resolveLiveGatewayDistFence = inspectFence().mockImplementation(async (_cwd, deps) => {
+      fenceEnvs.push(deps?.env);
+      return { refuse: false };
+    });
     const spawnCalls: Array<{ args: string[]; env?: NodeJS.ProcessEnv }> = [];
     const spawn = (_cmd: string, args: string[], options: SpawnOptions) => {
       spawnCalls.push({ args, env: options.env });
@@ -120,16 +118,11 @@ describe("run-node live Gateway dist fence", () => {
 
   it("still fences non-recovery rebuilds on a dirty live checkout", async ({ tmp }) => {
     await setupStampedProject(tmp, {
-      files: { [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n' },
+      files: { [RUNTIME_POSTBUILD_STAMP]: currentStamp },
       trackConfig: true,
     });
     const stderr: string[] = [];
-    const resolveLiveGatewayDistFence = vi
-      .spyOn(liveGatewayDistFence, "resolveLiveManagedGatewayDistFence")
-      .mockResolvedValue({
-        refuse: true,
-        message: "[openclaw] Refusing to rebuild dist while a managed Gateway is still running.",
-      });
+    const resolveLiveGatewayDistFence = refuseFence();
     const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder({
       gitStatus: ` M ${ROOT_SRC}\0`,
     });
@@ -146,7 +139,7 @@ describe("run-node live Gateway dist fence", () => {
     expect(spawnCalls).toEqual([]);
   });
 
-  it.each([
+  it.for([
     {
       command: "parity-report",
       reportScript: "qa-parity-report.ts",
@@ -169,41 +162,29 @@ describe("run-node live Gateway dist fence", () => {
     },
   ])(
     "keeps source-only QA $command on Node before the live dist fence when Bun is selected",
-    async ({ command, reportScript, reportArgs }) => {
-      await withTestDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
-        await setupTrackedProject(tmp, {
-          files: { "extensions/qa-lab/src/cli.runtime.ts": "export {};\n" },
-          buildPaths: [DIST_ENTRY, BUILD_STAMP],
-        });
-        const resolveLiveGatewayDistFence = vi
-          .spyOn(liveGatewayDistFence, "resolveLiveManagedGatewayDistFence")
-          .mockResolvedValue({
-            refuse: true,
-            message:
-              "[openclaw] Refusing to rebuild dist while a managed Gateway is still running.",
-          });
-        const spawnCalls: string[][] = [];
-        const spawn = (cmd: string, args: string[]) => {
-          spawnCalls.push([cmd, ...args]);
-          return createExitedProcess(0);
-        };
-        const exitCode = await runNodeCommand(tmp, {
-          args: ["qa", command, ...reportArgs],
-          env: { OPENCLAW_VITEST_RUNTIME: "bun" },
-          spawn,
-        });
-        expect(exitCode).toBe(0);
-        expect(resolveLiveGatewayDistFence).not.toHaveBeenCalled();
-        expect(spawnCalls).toEqual([
-          [
-            process.execPath,
-            "--import",
-            "tsx",
-            path.join(tmp, "scripts", reportScript),
-            ...reportArgs,
-          ],
-        ]);
+    async ({ command, reportScript, reportArgs }, { tmp }) => {
+      await setupTrackedProject(tmp, {
+        files: { "extensions/qa-lab/src/cli.runtime.ts": "export {};\n" },
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
       });
+      const resolveLiveGatewayDistFence = refuseFence();
+      const { spawnCalls, spawn } = createSpawnRecorder();
+      const exitCode = await runNodeCommand(tmp, {
+        args: ["qa", command, ...reportArgs],
+        env: { OPENCLAW_VITEST_RUNTIME: "bun" },
+        spawn,
+      });
+      expect(exitCode).toBe(0);
+      expect(resolveLiveGatewayDistFence).not.toHaveBeenCalled();
+      expect(spawnCalls).toEqual([
+        [
+          process.execPath,
+          "--import",
+          "tsx",
+          path.join(tmp, "scripts", reportScript),
+          ...reportArgs,
+        ],
+      ]);
     },
   );
 });

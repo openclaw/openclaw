@@ -9,16 +9,15 @@ import { z } from "zod";
 import type { SessionCatalogTranscriptItem } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
-import { resolveSessionEntry } from "../config/sessions/session-accessor.sqlite-exact-read.js";
 import { readSessionTranscriptHistoryEventPage } from "../config/sessions/session-accessor.sqlite-history-events.js";
 import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
-import { assertCapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.js";
+import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { readSessionHistoryPageInWorker } from "../config/sessions/session-history-worker-runtime.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { redactToolPayloadText } from "../logging/redact.js";
+import { readPluginInlineViewBlock } from "../shared/plugin-inline-view.js";
 import { isAssistantTextContentType } from "./chat-display-projection.helpers.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
-import { isSuppressedControlReplyText } from "./control-reply-text.js";
 import { prepareSessionCatalogSourceParticipantProjector } from "./session-catalog-identity.js";
 import { projectSessionDisplayMessage } from "./session-display-projection.js";
 import { sqliteMessageEventWithSeq } from "./session-transcript-entry-message.js";
@@ -56,14 +55,16 @@ const CursorSchema = z.strictObject({
 });
 type CatalogCursor = z.infer<typeof CursorSchema>;
 
-function readCatalogHistoryPage(
+async function readCatalogHistoryPage(
   scope: SessionTranscriptReadScope,
   options: { offset: number; maxMessages: number },
 ) {
-  const page = readSessionTranscriptHistoryEventPage(scope, {
-    ...options,
-    maxBytes: MAX_CATALOG_READ_BYTES,
-    readOnly: true,
+  const page = await readSessionHistoryPageInWorker({
+    kind: "history-event-page",
+    params: {
+      target: scope,
+      options: { ...options, maxBytes: MAX_CATALOG_READ_BYTES },
+    },
   });
   if (page.omittedOversized) {
     throw new Error(
@@ -92,7 +93,7 @@ function decodeCursor(cursor: string | undefined): CatalogCursor | undefined {
 }
 
 function boundedText(text: string): Pick<SessionCatalogTranscriptItem, "text" | "truncated"> {
-  const redacted = redactToolPayloadText(text);
+  const redacted = text;
   return redacted.length > MAX_CATALOG_TEXT_CHARS
     ? { text: truncateUtf16Safe(redacted, MAX_CATALOG_TEXT_CHARS), truncated: true }
     : { text: redacted };
@@ -102,6 +103,15 @@ function projectContentItem(
   role: unknown,
   value: unknown,
 ): SessionCatalogTranscriptItem | undefined {
+  const record = asOptionalRecord(value);
+  const inline =
+    role !== "user" &&
+    (readPluginInlineViewBlock(value) ??
+      readPluginInlineViewBlock(asOptionalRecord(record?.details)?.pluginView));
+  if (inline) {
+    // The catalog is an explicitly text-only transfer: never forward component data or authority.
+    return { type: "agentMessage", ...boundedText(inline.summary) };
+  }
   if (role !== "user" && role !== "assistant") {
     return undefined;
   }
@@ -110,11 +120,7 @@ function projectContentItem(
     return undefined;
   }
   const text = typeof value === "string" ? value : block?.text;
-  if (
-    typeof text !== "string" ||
-    !text.trim() ||
-    (role === "assistant" && isSuppressedControlReplyText(text))
-  ) {
+  if (typeof text !== "string" || !text.trim()) {
     return undefined;
   }
   return { type: role === "user" ? "userMessage" : "agentMessage", ...boundedText(text) };
@@ -144,7 +150,8 @@ function projectMessageItems(
   const content = Array.isArray(message.content)
     ? message.content
     : [message.content ?? message.text];
-  return content
+  const inline = readPluginInlineViewBlock(asOptionalRecord(message.details)?.pluginView);
+  return (inline ? [inline] : content)
     .flatMap((block, index) => {
       const item = projectContentItem(message.role, block);
       if (!item) {
@@ -155,9 +162,7 @@ function projectMessageItems(
           ...(metadata?.truncated === true ? { truncated: true } : {}),
           ...(typeof metadata?.id === "string" ? { id: `${metadata.id}:${index}` } : {}),
           ...(timestampText ? { timestamp: timestampText } : {}),
-          ...(typeof message.model === "string"
-            ? { model: redactToolPayloadText(message.model).slice(0, 200) }
-            : {}),
+          ...(typeof message.model === "string" ? { model: message.model.slice(0, 200) } : {}),
           ...(sender ? { sender } : {}),
         }),
       ];
@@ -168,27 +173,42 @@ function projectMessageItems(
 /** Reads conversation text without joining the source Gateway's writer lifecycle. */
 export async function readSessionTranscriptCatalogPage(
   params: CatalogReadParams,
+  captureActorCurrent?: (assertCurrent: () => void) => void,
 ): Promise<SessionTranscriptCatalogPage> {
   const cursor = decodeCursor(params.cursor);
   if (!Number.isSafeInteger(params.limit) || params.limit < 1 || params.limit > MAX_CATALOG_ITEMS) {
     throw new Error(`Session transcript limit must be an integer from 1 to ${MAX_CATALOG_ITEMS}.`);
   }
   const storePath = resolveSessionStorePathForScope(params);
-  let assertSourceCurrent: () => void = () => {
-    throw new Error("Session source was not captured");
-  };
-  const entry = resolveSessionEntry(
+  return withSessionEntryReadOnlyInWorker(
     { ...params, storePath },
-    {
-      readOnly: true,
-      onReadSource: (source) => {
-        assertSourceCurrent = () => assertCapturedSessionEntryReadSource(source);
-      },
+    () => {},
+    async (read, owner) => {
+      if (!read.ok) {
+        throw read.error;
+      }
+      if (!read.value) {
+        throw new Error("Session not found; refresh the session catalog.");
+      }
+      return readCatalogPageFromEntry(
+        { ...params, storePath },
+        read.value,
+        cursor,
+        owner.assertCurrent,
+        captureActorCurrent,
+      );
     },
-  ).existing;
-  if (!entry) {
-    throw new Error("Session not found; refresh the session catalog.");
-  }
+  );
+}
+
+async function readCatalogPageFromEntry(
+  params: CatalogReadParams & { storePath: string },
+  entry: SessionEntry,
+  cursor: CatalogCursor | undefined,
+  assertSourceCurrent: () => void,
+  captureActorCurrent?: (assertCurrent: () => void) => void,
+): Promise<SessionTranscriptCatalogPage> {
+  const storePath = params.storePath;
   const scope = {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
@@ -197,10 +217,10 @@ export async function readSessionTranscriptCatalogPage(
     storePath,
   };
   const scopeHash = createHash("sha256")
-    // Item offsets from the earlier tool-inclusive projection cannot resume this view.
+    // Item offsets from earlier projections (without inline summaries) cannot resume this view.
     .update(
       JSON.stringify([
-        "conversation",
+        "conversation-inline",
         params.agentId,
         params.sessionKey,
         entry.sessionId,
@@ -208,28 +228,29 @@ export async function readSessionTranscriptCatalogPage(
       ]),
     )
     .digest("base64url");
-  const snapshot = readCatalogHistoryPage(scope, {
+  let page = await readCatalogHistoryPage(scope, {
     offset: 0,
-    maxMessages: 1,
+    maxMessages: cursor ? 1 : params.limit + 1,
   });
+  const { totalMessages, displaySource } = page;
   if (
     cursor &&
     (cursor.scope !== scopeHash ||
-      cursor.source !== snapshot.displaySource ||
-      cursor.anchor.seq > snapshot.totalMessages ||
-      cursor.before > snapshot.totalMessages)
+      cursor.source !== displaySource ||
+      cursor.anchor.seq > totalMessages ||
+      cursor.before > totalMessages)
   ) {
     throw new Error(
       "Session transcript cursor no longer matches this session; reload the session.",
     );
   }
-  const tail = snapshot.events.at(-1);
+  const tail = page.events.at(-1);
   const anchor = cursor?.anchor ?? (tail ? { seq: tail.seq, eventSeq: tail.eventSeq } : undefined);
   // Appends retain this active-path anchor; leaf rewinds can preserve the rewrite
   // generation, so source hashes alone cannot fence a cursor onto its original branch.
   if (cursor) {
-    const anchoredPage = readCatalogHistoryPage(scope, {
-      offset: snapshot.totalMessages - cursor.anchor.seq,
+    const anchoredPage = await readCatalogHistoryPage(scope, {
+      offset: totalMessages - cursor.anchor.seq,
       maxMessages: 1,
     });
     if (anchoredPage.events[0]?.eventSeq !== cursor.anchor.eventSeq) {
@@ -239,7 +260,7 @@ export async function readSessionTranscriptCatalogPage(
     }
   }
   const limit = params.limit;
-  let before = cursor?.before ?? snapshot.totalMessages;
+  let before = cursor?.before ?? totalMessages;
   let skip = cursor?.skip ?? 0;
   let scanned = 0;
   const items: SessionCatalogTranscriptItem[] = [];
@@ -248,17 +269,11 @@ export async function readSessionTranscriptCatalogPage(
     Awaited<ReturnType<typeof prepareSessionCatalogSourceParticipantProjector>>
   >();
   while (before > 0 && items.length < limit && scanned < MAX_CATALOG_SCAN_MESSAGES) {
-    const page = readCatalogHistoryPage(scope, {
-      offset: snapshot.totalMessages - before,
-      maxMessages: Math.min(before, limit + 1),
-    });
-    // A source append preserves positions; a rewrite rotates displaySource and invalidates cursors.
-    if (
-      page.displaySource !== snapshot.displaySource ||
-      page.activeLeafEntryId !== snapshot.activeLeafEntryId ||
-      page.totalMessages !== snapshot.totalMessages
-    ) {
-      throw new Error("Session transcript changed during this read; retry the page.");
+    if (cursor || scanned > 0) {
+      page = await readCatalogHistoryPage(scope, {
+        offset: totalMessages - before,
+        maxMessages: Math.min(before, limit + 1),
+      });
     }
     const projected = projectChatDisplayMessages(page.events.map(sqliteMessageEventWithSeq), {
       maxChars: MAX_CATALOG_TEXT_CHARS,
@@ -276,7 +291,6 @@ export async function readSessionTranscriptCatalogPage(
         : [];
     });
     const preparedSender = await prepareSessionCatalogSourceParticipantProjector(identities);
-    assertSourceCurrent();
     for (const identity of identities) {
       if (identity.type === "profile") {
         senderProjectors.set(identity.id, preparedSender);
@@ -315,28 +329,32 @@ export async function readSessionTranscriptCatalogPage(
       break;
     }
   }
-  // Later batches yield after earlier senders have already been projected.
-  for (const cohort of new Set(senderProjectors.values())) {
-    cohort.assertCurrent();
-  }
+  assertSourceCurrent();
   const nextCursor =
     before > 0 && anchor
       ? Buffer.from(
           JSON.stringify({
             version: 1,
             scope: scopeHash,
-            source: snapshot.displaySource,
+            source: displaySource,
             anchor,
             before,
             skip,
           } satisfies CatalogCursor),
         ).toString("base64url")
       : undefined;
+  const assertActorsCurrent = () => {
+    for (const projector of senderProjectors.values()) {
+      projector.assertCurrent();
+    }
+  };
+  assertActorsCurrent();
+  captureActorCurrent?.(assertActorsCurrent);
   return { items, ...(nextCursor ? { nextCursor } : {}) };
 }
 
-/** Matches local session-title precedence, with a bounded read-only first-message probe. */
-export function readSessionTranscriptCatalogTitle(params: {
+/** @deprecated Use readSessionTranscriptCatalogTitleAsync. */
+export function readLegacySessionTranscriptCatalogTitle(params: {
   agentId: string;
   sessionKey: string;
   storePath?: string;
@@ -353,27 +371,75 @@ export function readSessionTranscriptCatalogTitle(params: {
     sessionEntry: params.entry,
   };
   try {
-    const snapshot = readCatalogHistoryPage(scope, { offset: 0, maxMessages: 0 });
+    const snapshot = readSessionTranscriptHistoryEventPage(scope, {
+      offset: 0,
+      maxMessages: 0,
+      readOnly: true,
+    });
     const page = readSessionTranscriptHistoryEventPage(scope, {
       offset: Math.max(0, snapshot.totalMessages - 100),
       maxMessages: 100,
       maxBytes: MAX_CATALOG_READ_BYTES,
       readOnly: true,
     });
-    // A clipped prefix cannot establish the first user message's title.
-    if (page.olderOffset !== undefined || page.omittedOversized) {
-      return undefined;
-    }
-    for (const event of page.events) {
-      const message = projectSessionDisplayMessage(sqliteMessageEventWithSeq(event));
-      if (message?.role === "user") {
-        const derived = deriveSessionTitle(params.entry, message.text);
-        return derived ? boundedText(derived).text : undefined;
-      }
-    }
+    return deriveCatalogHistoryTitle(params.entry, page);
   } catch (error) {
     if (!(error instanceof SessionTranscriptColdError)) {
       throw error;
+    }
+  }
+  return undefined;
+}
+
+/** Matches title precedence without opening SQLite on the Gateway thread. */
+export async function readSessionTranscriptCatalogTitleAsync(
+  params: Parameters<typeof readLegacySessionTranscriptCatalogTitle>[0],
+): Promise<string | undefined> {
+  const title = deriveSessionTitle(params.entry);
+  if (title) {
+    return boundedText(title).text;
+  }
+  const scope = {
+    ...params,
+    storePath: resolveSessionStorePathForScope(params),
+    sessionId: params.entry.sessionId,
+    sessionEntry: params.entry,
+  };
+  try {
+    const page = await readSessionHistoryPageInWorker({
+      kind: "history-event-page",
+      params: {
+        target: scope,
+        options: {
+          offset: 0,
+          beforeSeq: 101,
+          maxMessages: 100,
+          maxBytes: MAX_CATALOG_READ_BYTES,
+        },
+      },
+    });
+    return deriveCatalogHistoryTitle(params.entry, page);
+  } catch (error) {
+    if (!(error instanceof SessionTranscriptColdError)) {
+      throw error;
+    }
+  }
+  return undefined;
+}
+
+function deriveCatalogHistoryTitle(
+  entry: SessionEntry,
+  page: Awaited<ReturnType<typeof readCatalogHistoryPage>>,
+): string | undefined {
+  // A clipped prefix cannot establish the first user message's title.
+  if (page.olderOffset !== undefined || page.omittedOversized) {
+    return undefined;
+  }
+  for (const event of page.events) {
+    const message = projectSessionDisplayMessage(sqliteMessageEventWithSeq(event));
+    if (message?.role === "user") {
+      const derived = deriveSessionTitle(entry, message.text);
+      return derived ? boundedText(derived).text : undefined;
     }
   }
   return undefined;

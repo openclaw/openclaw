@@ -3,7 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { loadCronQuarantinedJobs, resolveCronJobsStorePath } from "../../../cron/store.js";
+import { resolveCronJobsStorePath } from "../../../cron/store.js";
 import type { HealthFinding } from "../../../flows/health-checks.js";
 import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
@@ -11,10 +11,13 @@ import { shortenHomePath } from "../../../utils.js";
 import type { DoctorPrompter, DoctorOptions } from "../../doctor-prompter.js";
 import { countLabel as pluralize } from "../../doctor-state-integrity-format.js";
 import {
+  maybeRepairCronStoreSelection,
+  readCronStoreSelectionForDoctor,
+} from "./default-store-selection.js";
+import {
   applyLegacyCronStoreRepair,
   loadLegacyCronRepairState,
   readLegacyCronStorePath,
-  rethrowLegacyCronStoreError,
   type LegacyCronRepairState,
 } from "./legacy-repair.js";
 import {
@@ -109,9 +112,21 @@ export async function collectLegacyCronStoreHealthFindings(params: {
 }): Promise<readonly HealthFinding[]> {
   let state: LegacyCronRepairState | null;
   try {
+    const selection = await readCronStoreSelectionForDoctor(params.cfg);
+    if (selection.status === "unresolved") {
+      return [
+        legacyCronStoreFinding({
+          message: selection.message,
+          path: selection.storePath,
+          requirement: "cron-default-partition-selected",
+          fixHint:
+            "Run openclaw doctor --fix in an interactive terminal and complete Select the default cron partition. --yes does not choose a partition.",
+        }),
+      ];
+    }
     state = await loadLegacyCronRepairState({ cfg: params.cfg, readOnly: true });
   } catch (err) {
-    rethrowLegacyCronStoreError(err);
+    rethrowSqliteSchemaVersionError(err);
     const storePath = resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg));
     return [
       legacyCronStoreFinding({
@@ -131,29 +146,19 @@ export async function collectLegacyCronStoreHealthFindings(params: {
   }
 
   const findings: HealthFinding[] = [];
-  const { storePath, legacyQuarantine, rawJobs } = state;
+  const { legacyQuarantine, rawJobs } = state;
   const sqliteStorePath = resolveOpenClawStateSqlitePath();
   const recordFinding = (
     finding: Omit<Parameters<typeof legacyCronStoreFinding>[0], "path">,
     path = sqliteStorePath,
   ) => findings.push(legacyCronStoreFinding({ ...finding, path }));
 
-  try {
-    const quarantine = await loadCronQuarantinedJobs(storePath);
-    if (quarantine.length > 0) {
-      recordFinding({
-        message: `${pluralize(quarantine.length, "quarantined cron job row")} found in SQLite at ${shortenHomePath(sqliteStorePath)}.`,
-        requirement: "quarantined-cron-rows",
-        fixHint:
-          "Review or repair quarantined rows before restoring any job to the active cron store.",
-      });
-    }
-  } catch (err) {
-    rethrowSqliteSchemaVersionError(err);
+  if (state.persistedQuarantine.length > 0) {
     recordFinding({
-      message: `Unable to read quarantined cron rows in SQLite at ${shortenHomePath(sqliteStorePath)}.`,
-      requirement: "cron-quarantine-readable",
-      fixHint: `Check the shared state database permissions and contents. Details: ${errorMessage(err)}`,
+      message: `${pluralize(state.persistedQuarantine.length, "quarantined cron job row")} found in SQLite at ${shortenHomePath(sqliteStorePath)}.`,
+      requirement: "quarantined-cron-rows",
+      fixHint:
+        "Review or repair quarantined rows before restoring any job to the active cron store.",
     });
   }
 
@@ -187,7 +192,7 @@ export async function collectLegacyCronStoreHealthFindings(params: {
   }
   for (const job of normalized.legacyTriggerScriptJobs) {
     recordFinding({
-      message: `Legacy cron trigger script for ${job} can be migrated to canonical direct tool calls.`,
+      message: `Legacy cron trigger script for ${job} can be migrated to direct tool calls.`,
       requirement: "legacy-cron-trigger-script",
     });
   }
@@ -243,13 +248,16 @@ export async function collectLegacyCronStoreHealthFindings(params: {
 export async function maybeRepairLegacyCronStore(params: {
   cfg: OpenClawConfig;
   options: DoctorOptions;
-  prompter: Pick<DoctorPrompter, "confirm">;
+  prompter: Pick<DoctorPrompter, "confirm"> & Partial<Pick<DoctorPrompter, "selectRuntimeRepair">>;
 }) {
   let state: LegacyCronRepairState | null;
   try {
+    if (!(await maybeRepairCronStoreSelection(params))) {
+      return;
+    }
     state = await loadLegacyCronRepairState({ cfg: params.cfg });
   } catch (err) {
-    rethrowLegacyCronStoreError(err);
+    rethrowSqliteSchemaVersionError(err);
     const reason = err instanceof Error ? err.message : String(err);
     const storePath = resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg));
     note(
@@ -288,25 +296,12 @@ export async function maybeRepairLegacyCronStore(params: {
     (entry) => entry.reason === "invalid-schedule" && entry.job,
   ).length;
   const sqliteStorePath = resolveOpenClawStateSqlitePath();
-  try {
-    const quarantine = await loadCronQuarantinedJobs(storePath);
-    if (quarantine.length > 0) {
-      note(
-        [
-          `Quarantined cron job rows found in SQLite at ${shortenHomePath(sqliteStorePath)}.`,
-          `- ${pluralize(quarantine.length, "row")} was removed from the active cron store after runtime validation failed.`,
-          "- Review or repair quarantined rows before restoring any job to the active cron store.",
-        ].join("\n"),
-        "Cron",
-      );
-    }
-  } catch (err) {
-    rethrowSqliteSchemaVersionError(err);
-    const reason = err instanceof Error ? err.message : String(err);
+  if (persistedQuarantine.length > 0) {
     note(
       [
-        `Unable to read quarantined cron rows in SQLite at ${shortenHomePath(sqliteStorePath)}.`,
-        `- ${reason}`,
+        `Quarantined cron job rows found in SQLite at ${shortenHomePath(sqliteStorePath)}.`,
+        `- ${pluralize(persistedQuarantine.length, "row")} was removed from the active cron store after runtime validation failed.`,
+        "- Review or repair quarantined rows before restoring any job to the active cron store.",
       ].join("\n"),
       "Cron",
     );

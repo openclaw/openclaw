@@ -65,7 +65,6 @@ const UI_E2E_FILE_SECONDS_HINTS = new Map<string, number>([
   ["device-token-reconnect.e2e.test.ts", 12],
   ["github-link-hovercard.e2e.test.ts", 11],
   ["initial-connect-splash.e2e.test.ts", 16],
-  ["lobster-pet-dismiss-menu-overflow.e2e.test.ts", 12],
   ["locale-offline-retry.e2e.test.ts", 13],
   ["mobile-pairing.e2e.test.ts", 12],
   ["model-providers.e2e.test.ts", 13],
@@ -107,6 +106,14 @@ const UI_E2E_FILE_SECONDS_HINTS = new Map<string, number>([
 // tests included -- keep rebalancing automatically off their source size.
 const UI_E2E_FALLBACK_SECONDS_PER_KB = 0.38;
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
+// These source fixtures borrow one invocation's compiled subprocess generation.
+// New borrowers may add preparation elsewhere until this measured group is refreshed.
+const UI_E2E_SHARED_WORKER_FILES = new Set([
+  "ui/src/e2e/model-providers-profile-outcomes.e2e.test.ts",
+  "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
+  "ui/src/e2e/question-guest.e2e.test.ts",
+  "ui/src/e2e/screen-requester-routing.e2e.test.ts",
+]);
 
 function estimateFileSeconds(moduleId: string): number {
   const { fileSeconds, perFileOverheadSeconds } = readUiE2eFileTimings();
@@ -119,12 +126,40 @@ function estimateFileSeconds(moduleId: string): number {
 }
 
 export class UiE2eSequencer extends BaseSequencer {
+  override async sort(files: TestSpecification[]): Promise<TestSpecification[]> {
+    // eslint-disable-next-line unicorn/no-array-sort -- BaseSequencer.sort is Vitest's ordering API.
+    const ordered = await super.sort(files);
+    const parallel = ordered.filter((file) => file.project.config.sequence.groupOrder === 0);
+    if (parallel.some((file) => this.ctx.cache.getTestSpecificationResult(file))) {
+      // Keep native failed-first and observed-duration ordering on warm reruns.
+      return ordered;
+    }
+    const seconds = new Map(parallel.map((file) => [file, estimateFileSeconds(file.moduleId)]));
+    return ordered.toSorted((left, right) => {
+      const groupOrder =
+        left.project.config.sequence.groupOrder - right.project.config.sequence.groupOrder;
+      if (groupOrder || left.project.config.sequence.groupOrder !== 0) {
+        return groupOrder;
+      }
+      // Bundled and private fixtures share this worker pool; do not queue builds last.
+      return (
+        seconds.get(right)! - seconds.get(left)! ||
+        left.moduleId.localeCompare(right.moduleId) ||
+        left.project.name.localeCompare(right.project.name)
+      );
+    });
+  }
+
   override async shard(files: TestSpecification[]): Promise<TestSpecification[]> {
     // Vitest invokes shard() only when config.shard is present.
     return selectWeightedShard(
       files,
       this.ctx.config.shard!,
       (file) => estimateFileSeconds(file.moduleId) / effectiveProjectWorkers(file),
+      (file) =>
+        UI_E2E_SHARED_WORKER_FILES.has(relative(repoRoot, file.moduleId).replaceAll("\\", "/"))
+          ? "compiled-workers"
+          : undefined,
     );
   }
 }

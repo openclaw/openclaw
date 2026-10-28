@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
 
@@ -20,6 +21,26 @@ export function resolvePnpmGlobalDirFromGlobalRoot(globalRoot?: string | null): 
   }
   const layoutDir = path.dirname(normalized);
   return /^\d+$/u.test(path.basename(layoutDir)) ? path.dirname(layoutDir) : null;
+}
+
+export function resolvePnpmHome(globalRoot?: string | null): string | null {
+  const globalDir = resolvePnpmGlobalDirFromGlobalRoot(globalRoot);
+  return globalDir && path.basename(globalDir) === "global" ? path.dirname(globalDir) : null;
+}
+
+/** Resolve the installation-local launcher before considering pnpm from PATH. */
+export function resolvePnpmCommand(globalRoot?: string | null): string | undefined {
+  const home = resolvePnpmHome(globalRoot);
+  if (!home) {
+    return undefined;
+  }
+  // pnpm 10 installs its shim in PNPM_HOME; pnpm 11 moved it into bin/.
+  const dirs =
+    path.basename(globalRoot ?? "") === "node_modules"
+      ? [home, path.join(home, "bin")]
+      : [path.join(home, "bin"), home];
+  const name = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+  return dirs.map((dir) => path.join(dir, name)).find(fs.existsSync);
 }
 
 /** Native activation replaces the complete manager project, not only its package directory. */

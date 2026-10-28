@@ -79,20 +79,6 @@ export const handleCommandsListCommand: CommandHandler = defineAuthorizedTextCom
   },
 );
 
-function buildSkillCommandUsage(skillCommands: NonNullable<HandleCommandsParams["skillCommands"]>) {
-  const lines = ["Usage: /skill <name> [input]"];
-  if (skillCommands.length > 0) {
-    const names = skillCommands.slice(0, 8).map((command) => command.skillName || command.name);
-    lines.push("", `Available: ${names.join(", ")}`);
-    lines.push(
-      `More: /commands${skillCommands.length > names.length ? ` (${skillCommands.length - names.length} more)` : ""}`,
-    );
-  } else {
-    lines.push("", "Use /commands to list available skill commands.");
-  }
-  return lines.join("\n");
-}
-
 export const handleSkillCommandUsage: CommandHandler = defineAuthorizedTextCommand(
   {
     label: "/skill",
@@ -112,7 +98,17 @@ export const handleSkillCommandUsage: CommandHandler = defineAuthorizedTextComma
       return null;
     }
     const prefix = rawName ? `Unknown skill: ${rawName}\n\n` : "";
-    return commandReply(`${prefix}${buildSkillCommandUsage(skillCommands)}`);
+    const lines = ["Usage: /skill <name> [input]"];
+    if (skillCommands.length > 0) {
+      const names = skillCommands.slice(0, 8).map((command) => command.skillName || command.name);
+      lines.push("", `Available: ${names.join(", ")}`);
+      lines.push(
+        `More: /commands${skillCommands.length > names.length ? ` (${skillCommands.length - names.length} more)` : ""}`,
+      );
+    } else {
+      lines.push("", "Use /commands to list available skill commands.");
+    }
+    return commandReply(`${prefix}${lines.join("\n")}`);
   },
 );
 
@@ -136,11 +132,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
   }
 
   try {
-    const effectiveAccountId = resolveChannelAccountId({
-      cfg: params.cfg,
-      ctx: params.ctx,
-      command: params.command,
-    });
+    const effectiveAccountId = resolveChannelAccountId(params);
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
     const sessionBound = Boolean(params.sessionKey);
     const threadingContext = buildThreadingToolContext({
@@ -172,10 +164,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
         accountId: effectiveAccountId,
         currentChannelId: threadingContext.currentChannelId,
         currentThreadTs:
-          typeof params.ctx.MessageThreadId === "string" ||
-          typeof params.ctx.MessageThreadId === "number"
-            ? String(params.ctx.MessageThreadId)
-            : undefined,
+          params.ctx.MessageThreadId !== undefined ? String(params.ctx.MessageThreadId) : undefined,
         currentMessageId: threadingContext.currentMessageId,
         groupId: targetSessionEntry?.groupId ?? extractExplicitGroupId(params.ctx.From),
         groupChannel:
@@ -211,11 +200,7 @@ export const handleStatusCommand: CommandHandler = defineAuthorizedTextCommand(
   },
   async (params, normalizedStatusCommand) => {
     if (normalizedStatusCommand === "/status plugins") {
-      const reply = await buildStatusPluginsReply({
-        cfg: params.cfg,
-        command: params.command,
-        workspaceDir: params.workspaceDir,
-      });
+      const reply = await buildStatusPluginsReply(params);
       return commandReply(reply);
     }
     if (normalizedStatusCommand.startsWith("/status ")) {

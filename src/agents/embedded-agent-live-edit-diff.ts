@@ -1,4 +1,5 @@
 import { parseStreamingJson } from "@openclaw/ai/internal/runtime";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { countStreamingFileMutationLines } from "./file-mutation-args.js";
 import { resolveFileMutationToolName } from "./tool-mutation-names.js";
@@ -34,19 +35,13 @@ function readToolCallBlock(event: Record<string, unknown>): Record<string, unkno
     return undefined;
   }
   const content = (partial as { content?: unknown }).content;
-  const block = Array.isArray(content) ? content[contentIndex] : undefined;
-  return block && typeof block === "object" && !Array.isArray(block)
-    ? (block as Record<string, unknown>)
-    : undefined;
+  return asOptionalRecord(Array.isArray(content) ? content[contentIndex] : undefined);
 }
 
 function readToolCallId(event: Record<string, unknown>): string | undefined {
-  const toolCall = event.toolCall;
-  if (toolCall && typeof toolCall === "object" && !Array.isArray(toolCall)) {
-    const id = (toolCall as Record<string, unknown>).id;
-    if (typeof id === "string" && id) {
-      return id;
-    }
+  const id = asOptionalRecord(event.toolCall)?.id;
+  if (typeof id === "string" && id) {
+    return id;
   }
   const block = readToolCallBlock(event);
   return typeof block?.id === "string" && block.id ? block.id : undefined;
@@ -75,6 +70,8 @@ export function updateLiveEditDiffProgress(
   const block = readToolCallBlock(event);
   const toolCallId = typeof block?.id === "string" ? block.id : "";
   const name = typeof block?.name === "string" ? block.name : "";
+  // partialJson is the producer's live buffer, not a per-event snapshot. A lagging reader sees a
+  // newer value (counts only move forward) or none after toolcall_end (skipped); accepted for progress.
   const partialJson = typeof block?.partialJson === "string" ? block.partialJson : "";
   return updateLiveEditDiffProgressFromInput(stateByToolCallId, {
     toolCallId,

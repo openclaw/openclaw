@@ -1,3 +1,4 @@
+import type { SqliteAuthSchema } from "../../infra/sqlite-readonly-auth-schema.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
 import type {
@@ -5,13 +6,20 @@ import type {
   AuthProfileStore,
   AuthProfileStoreOwner,
   OAuthCredential,
-  UserModelAuthProfile,
+  ProfileUsageStats,
   SharedAuthStoreOwnership,
 } from "./types.js";
-import type {
-  PersonalAuthProfileUsageReduction,
-  PersonalAuthProfileUsageResult,
-} from "./usage-reduction.js";
+import type { PersonalAuthProfileUsageReduction } from "./usage-reduction.js";
+
+export type AuthProfileReadSource =
+  | { kind: "shared-state"; databasePath: string }
+  | {
+      kind: "agent";
+      databasePath: string;
+      agentId: string;
+      identity: string | undefined;
+      schema: SqliteAuthSchema | undefined;
+    };
 
 export type AuthProfileUsageInput = {
   profileId: string;
@@ -25,12 +33,13 @@ export type AuthProfileUsageInput = {
 
 export type AuthProfileUsageReceipt = {
   store: AuthProfileStore;
-  result: PersonalAuthProfileUsageResult | undefined;
+  result: ProfileUsageStats | undefined;
   publication: {
     credentialsChanged: boolean;
     profileSetChanged: boolean;
     stateChanged: boolean;
     selectionChanged: boolean;
+    availabilityOnly?: boolean;
     profileIds: string[];
   };
 };
@@ -60,9 +69,7 @@ export type AuthStoreUpdateInput = {
   peerGeneration?: { profileId: string; generation: OAuthCredential };
 };
 
-export type AuthStoreUpdatePublication = AuthProfileUsageReceipt["publication"] & {
-  oauthRefreshClaimIds: ReadonlyMap<string, string | undefined>;
-};
+export type AuthStoreUpdatePublication = AuthProfileUsageReceipt["publication"];
 
 export type AuthStoreUpdateOperations = {
   "authProfiles.update": { input: AuthStoreUpdateInput; output: boolean };
@@ -77,36 +84,4 @@ export type AuthProfileBootstrapInput = {
 export type AuthProfileBootstrapResult = {
   ownership: SharedAuthStoreOwnership;
   relocated: boolean;
-};
-
-export type AuthProfileWorkerOperations = AuthStoreUpdateOperations & {
-  "authProfiles.bootstrap": {
-    input: AuthProfileBootstrapInput;
-    output: AuthProfileBootstrapResult;
-  };
-  "authProfiles.personalAccept": {
-    input: { profileId: string; credential: AuthProfileCredential };
-    output: boolean;
-  };
-  "authProfiles.personalReplace": {
-    input: { profileId: string; expected: UserModelAuthProfile; next: UserModelAuthProfile };
-    output: UserModelAuthProfile | undefined;
-  };
-  "authProfiles.usage": { input: AuthProfileUsageInput; output: AuthProfileUsageResult };
-  "authProfiles.personalUsage": {
-    input: { profileId: string; reduction: PersonalAuthProfileUsageReduction };
-    output: PersonalAuthProfileUsageResult | undefined;
-  };
-  "authProfiles.read": {
-    input: { artifactPreserving: boolean };
-    output: void;
-  };
-  "authProfiles.sharedOwnership": {
-    input: { artifactPreserving: boolean };
-    output: unknown;
-  };
-  "authProfiles.personal": {
-    input: { profileId: string; artifactPreserving: boolean };
-    output: UserModelAuthProfile | undefined;
-  };
 };

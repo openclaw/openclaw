@@ -1,10 +1,8 @@
 // Vitest ui config wires the ui test shard.
 import type { ViteUserConfig } from "vitest/config";
 import { controlUiLocaleModulesPlugin } from "../../ui/config/control-ui-locales.ts";
-import { controlUiSolidPlugin } from "../../ui/vite.config.ts";
 import { nonBrowserTestBasenamePattern } from "./vitest.include-patterns.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
-import { jsdomOptimizedDeps } from "./vitest.shared.config.ts";
 import { uiIsolatedTestFiles } from "./vitest.ui-isolated-paths.mjs";
 import {
   controlUiE2eTestGlobs,
@@ -26,7 +24,6 @@ export function createUiVitestConfig(env?: Record<string, string | undefined>): 
   // Isolated files must never enter the shared module graph, including scoped runs.
   const exclude = [...controlUiE2eTestGlobs, ...uiIsolatedTestFiles, ...uiTimingTestFiles];
   const config = createScopedVitestConfig(includePatterns, {
-    deps: jsdomOptimizedDeps,
     environment: "jsdom",
     env,
     exclude,
@@ -35,12 +32,12 @@ export function createUiVitestConfig(env?: Record<string, string | undefined>): 
     intersectIncludeFile: true,
     isolate: false,
     name: "ui",
-    setupFiles: ["ui/src/test-helpers/lit-warnings.setup.ts"],
+    setupFiles: ["ui/src/test-helpers/dom.setup.ts"],
     useNonIsolatedRunner: true,
   });
   return {
     ...config,
-    plugins: [...(config.plugins ?? []), controlUiLocaleModulesPlugin(), controlUiSolidPlugin()],
+    plugins: [...(config.plugins ?? []), controlUiLocaleModulesPlugin()],
   };
 }
 

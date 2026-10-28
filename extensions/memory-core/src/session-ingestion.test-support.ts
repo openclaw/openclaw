@@ -19,21 +19,17 @@ export function makeMessage(role: "user" | "assistant", timestamp: string, conte
   return { role, timestamp, content };
 }
 
-export async function writeTranscript(
-  filePath: string,
-  messages: TranscriptMessage[],
-): Promise<void> {
+function transcriptMessage({ role, content, timestamp, owner }: TranscriptMessage) {
+  return { role, content, timestamp, ...(owner ? { __openclaw: { senderIsOwner: true } } : {}) };
+}
+
+export async function writeTranscript(filePath: string, messages: TranscriptMessage[]) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const records = messages.map((message, index) => ({
     type: "message",
     id: `message-${index}`,
     timestamp: message.timestamp,
-    message: {
-      role: message.role,
-      content: message.content,
-      timestamp: message.timestamp,
-      ...(message.owner ? { __openclaw: { senderIsOwner: true } } : {}),
-    },
+    message: transcriptMessage(message),
   }));
   await fs.writeFile(filePath, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
 }
@@ -42,52 +38,37 @@ export async function seedCanonicalTranscript(
   sessionId: string,
   messages: TranscriptMessage[],
   metadata: Partial<Parameters<typeof upsertSessionEntry>[0]["entry"]> = {},
-): Promise<void> {
+) {
   const agentId = "main";
   const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
   const storePath = path.join(sessionsDir, "sessions.json");
   const sessionKey = `agent:${agentId}:session-backfill:${sessionId}`;
-  const updatedAt = Math.max(
-    Date.now(),
-    ...messages.map((message) => Date.parse(message.timestamp)),
-  );
+  const entry = {
+    ...metadata,
+    sessionId,
+    updatedAt: Math.max(Date.now(), ...messages.map((message) => Date.parse(message.timestamp))),
+  };
   await fs.mkdir(sessionsDir, { recursive: true });
-  const entry = { ...metadata, sessionId, updatedAt };
-  await upsertSessionEntry({ agentId, sessionKey, storePath, entry });
+  const session = { agentId, sessionKey, storePath };
+  await upsertSessionEntry({ ...session, entry });
   for (const message of messages) {
     await appendSessionTranscriptMessageByIdentity({
-      agentId,
+      ...session,
       sessionId,
-      sessionKey,
-      storePath,
-      message: {
-        role: message.role,
-        content: message.content,
-        timestamp: message.timestamp,
-        ...(message.owner ? { __openclaw: { senderIsOwner: true } } : {}),
-      },
+      message: transcriptMessage(message),
     });
   }
-  await upsertSessionEntry({ agentId, sessionKey, storePath, entry });
+  await upsertSessionEntry({ ...session, entry });
 }
 
-export function hashStagedContent(
-  entries: Awaited<ReturnType<typeof readShortTermRecallEntries>>,
-): string {
+export function hashStagedContent(entries: Awaited<ReturnType<typeof readShortTermRecallEntries>>) {
   const content = entries
-    .map((entry) => ({
-      claimHash: entry.claimHash,
-      provenance: entry.provenance,
-      snippet: entry.snippet,
-    }))
+    .map(({ claimHash, provenance, snippet }) => ({ claimHash, provenance, snippet }))
     .toSorted((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
   return createHash("sha256").update(JSON.stringify(content)).digest("hex");
 }
 
-export async function withSessionAdmissionReadBudget<T>(
-  operation: () => Promise<T>,
-  maximum: number,
-): Promise<T> {
+export async function withoutHostSessionAdmissionReads<T>(operation: () => Promise<T>): Promise<T> {
   let metadataReads = 0;
   const observation = observeHostDataSql((sql, database) => {
     if (
@@ -99,9 +80,6 @@ export async function withSessionAdmissionReadBudget<T>(
     }
   });
   const result = await operation().finally(observation.restore);
-  expect(metadataReads).toBeLessThanOrEqual(maximum);
-  if (maximum > 0) {
-    expect(metadataReads).toBeGreaterThan(0);
-  }
+  expect(metadataReads).toBe(0);
   return result;
 }

@@ -4,7 +4,11 @@
  */
 const GLOBAL_SINGLETON_RESETS_KEY = Symbol.for("openclaw.globalSingletonLifecycleResets");
 
-type GlobalSingletonLifecycle = "close-and-restart" | "close-only" | "plugin-registry";
+type GlobalSingletonLifecycle =
+  | "close-and-restart"
+  | "close-only"
+  | "plugin-registry"
+  | "shared-state";
 type GlobalSingletonReset<T> = (value: T) => void | Promise<void>;
 type RegisteredGlobalSingletonReset = {
   lifecycle: GlobalSingletonLifecycle;
@@ -81,10 +85,17 @@ export function resolveGlobalSet<T>(key: symbol, lifecycle: GlobalSingletonLifec
 
 /** Resets every opt-in singleton while preserving shared object identity for the next lifecycle. */
 export async function drainGlobalSingletonLifecycleState(
-  event: "close" | "plugin-registry" | "restart" = "close",
+  event: "close" | "plugin-registry" | "restart" | "shared-state" = "close",
+  options: { retainSharedState?: boolean } = {},
 ): Promise<void> {
   const resets = [...resolveGlobalSingletonResetRegistry().values()]
     .filter(({ lifecycle }) => {
+      if (event === "shared-state") {
+        return lifecycle === "shared-state";
+      }
+      if (lifecycle === "shared-state") {
+        return event !== "plugin-registry" && !options.retainSharedState;
+      }
       if (event === "plugin-registry") {
         return lifecycle === "plugin-registry";
       }

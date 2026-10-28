@@ -111,9 +111,10 @@ export type MarkdownBlockSpan = {
   sourceEndLine?: number;
 };
 
-export type MarkdownIRWithMetadata = MarkdownIR & {
+export type MarkdownIRWithMetadata = Omit<MarkdownIR, "listItems"> & {
   /** Parser-owned block metadata, attached without changing legacy serialization. */
   blocks?: MarkdownBlockSpan[];
+  listItems?: MarkdownListItemWithMetadata[];
 };
 
 /** Preserve the serialized marker shape while projecting rendered coordinates. */

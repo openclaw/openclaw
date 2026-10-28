@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "id": "clawnstantine",
+  "name": "Clawnstantine",
+  "description": "Imperial purple costume, golden laurel, and a contour-following gold sash.",
+  "palette": {
+    "shell": "#7546a0",
+    "claw": "#a576c4",
+    "glint": "#ffe09a"
+  },
+  "layers": {
+    "shell_overlay": "<g class=\"lob-clawnstantine\">\n    <path d=\"M18 48 Q60 62 102 48 L104 52 C104 72 90 90 76 95 Q60 98 44 95 C30 90 16 72 16 52 Z\" fill=\"#4e296e\" />\n    <path d=\"M28 61 Q30 72 39 78 M70 88 Q82 82 91 65\" fill=\"none\" stroke=\"#a576c4\" stroke-width=\"1.6\" stroke-linecap=\"round\" />\n    \n    <path d=\"M81.5 45.5 C70 64 50 78 29.9 85.444 C32.971 88.632 36.349 91.249 39.814 93.121 C62 85 81 68 90.5 50.5 Z\" fill=\"#e5bc62\" />\n    <path d=\"M84 51 C73 68 57 80 39 87\" fill=\"none\" stroke=\"#fff0bc\" stroke-width=\"1.6\" stroke-linecap=\"round\" />\n    <circle cx=\"85\" cy=\"49\" r=\"6\" fill=\"#e5bc62\" />\n    <circle cx=\"85\" cy=\"49\" r=\"3\" fill=\"#58c8b5\" />\n    <g class=\"lob-clawnstantine__laurel\" fill=\"#e5bc62\" stroke=\"#bd8a38\" stroke-width=\"0.6\">\n      <path d=\"M31 27 Q31 15 50 11 M89 27 Q89 15 70 11\" fill=\"none\" stroke=\"#e5bc62\" stroke-width=\"2\" />\n      <path d=\"M33 25 Q23 21 28 15 Q35 17 33 25 Z M37 19 Q28 13 34 9 Q41 12 37 19 Z M43 14 Q38 7 44 6 Q49 9 43 14 Z\" />\n      <path d=\"M87 25 Q97 21 92 15 Q85 17 87 25 Z M83 19 Q92 13 86 9 Q79 12 83 19 Z M77 14 Q82 7 76 6 Q71 9 77 14 Z\" />\n    </g>\n  </g>"
+  }
+}

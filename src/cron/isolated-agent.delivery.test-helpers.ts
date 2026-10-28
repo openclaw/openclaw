@@ -1,5 +1,6 @@
 // Isolated agent delivery test helpers build delivery targets and mocks.
 import { vi } from "vitest";
+import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import type { CliDeps } from "../cli/deps.js";
 
@@ -20,11 +21,19 @@ export function mockAgentPayloads(
   payloads: Array<Record<string, unknown>>,
   extra: Partial<Awaited<ReturnType<typeof runEmbeddedAgent>>> = {},
 ): void {
+  const last = payloads.at(-1);
+  const prepared = prepareAgentRunTerminalReply({
+    rawText: typeof last?.text === "string" ? last.text : undefined,
+  });
   vi.mocked(runEmbeddedAgent).mockResolvedValue({
-    payloads,
+    payloads: payloads.map((payload) =>
+      payload === last ? { ...payload, text: prepared.text || undefined } : payload,
+    ),
     meta: {
       durationMs: 5,
       agentMeta: { sessionId: "s", provider: "p", model: "m" },
+      terminalReply: prepared.terminalReply,
+      finalAssistantVisibleText: prepared.text || undefined,
     },
     ...extra,
   });

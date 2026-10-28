@@ -1,10 +1,17 @@
+import {
+  getReplyPayloadMetadata,
+  isHostNoticePayload,
+  isReplyPayloadTerminalContent,
+} from "../../../auto-reply/reply-payload.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { hasMessagingToolDeliveryEvidence } from "../delivery-evidence.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
 import { copyAttemptDeliveryState } from "./attempt-delivery-state.js";
-import { resolveRunLivenessState } from "./incomplete-turn-resolution.js";
 import {
-  isEmbeddedRunTerminalAbort,
+  hasRunContinuationEvidence,
+  resolveRunLivenessState,
+} from "./incomplete-turn-resolution.js";
+import {
   isEmbeddedRunTerminalTimeout,
   isEmbeddedRunTimeoutFinal,
   type EmbeddedRunTerminalState,
@@ -21,33 +28,56 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
   startedAtMs: number;
 }): EmbeddedAgentRunResult | undefined {
   const timeoutFinal = isEmbeddedRunTimeoutFinal(input.attempt);
+  const terminalTimedOut = isEmbeddedRunTerminalTimeout(input.terminalState.outcome);
+  const { idleTimedOut, timedOutDuringToolExecution, timedOutDuringCompaction } =
+    projectAgentRunAttemptTerminal(input.attempt.terminal);
+  const unfinishedWorkTimeout =
+    terminalTimedOut &&
+    (timedOutDuringToolExecution || timedOutDuringCompaction) &&
+    !(
+      timedOutDuringCompaction &&
+      input.terminalPrepared.hasSuccessfulFinalAssistantAfterPromptTimeout
+    ) &&
+    input.terminalPrepared.replyDeliveryState === "missing" &&
+    // Tool artifacts are retained for delivery, but cannot complete the source reply.
+    !input.terminalPrepared.payloads?.some((payload) => {
+      const metadata = getReplyPayloadMetadata(payload);
+      return (
+        !isHostNoticePayload(payload) &&
+        isReplyPayloadTerminalContent(payload) &&
+        metadata?.sourceReplyFinal !== false &&
+        metadata?.precedingInputAnswer !== true
+      );
+    }) &&
+    !hasRunContinuationEvidence(input.attempt);
   if (
-    !input.terminalPrepared.timedOutDuringPrompt ||
-    (!timeoutFinal &&
+    (!input.terminalPrepared.timedOutDuringPrompt && !unfinishedWorkTimeout) ||
+    (!unfinishedWorkTimeout &&
+      !timeoutFinal &&
       (input.terminalPrepared.hasSuccessfulFinalAssistantAfterPromptTimeout ||
         hasMessagingToolDeliveryEvidence(input.attempt)))
   ) {
     return undefined;
   }
-  const { idleTimedOut } = projectAgentRunAttemptTerminal(input.attempt.terminal);
-  const terminalAborted = isEmbeddedRunTerminalAbort(input.terminalState.outcome);
-  const terminalTimedOut = isEmbeddedRunTerminalTimeout(input.terminalState.outcome);
-  const defaultTimeoutText = idleTimedOut
-    ? "The model did not produce a response before the model idle timeout. " +
-      "Please try again, or increase `models.providers.<id>.timeoutSeconds` for slow local or self-hosted providers. " +
-      "If `agents.defaults.timeoutSeconds` or a run-specific timeout is lower, raise that ceiling too; provider timeouts cannot extend the whole agent run."
-    : "Request timed out before a response was generated. " +
-      "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.";
+  const defaultTimeoutText = timedOutDuringCompaction
+    ? "Context compaction timed out before a response was generated. Please try again."
+    : idleTimedOut
+      ? "The model did not produce a response before the model idle timeout. " +
+        "Please try again, or increase `models.providers.<id>.timeoutSeconds` for slow local or self-hosted providers. " +
+        "If `agents.defaults.timeoutSeconds` or a run-specific timeout is lower, raise that ceiling too; provider timeouts cannot extend a model attempt budget."
+      : "Request timed out before a response was generated. " +
+        "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.";
   const timeoutText = input.attempt.promptTimeoutOutcome?.message?.trim() || defaultTimeoutText;
   const replayInvalid =
     input.attempt.promptTimeoutOutcome?.replayInvalid ?? input.resolveReplayInvalid(null);
   const livenessState =
     input.attempt.promptTimeoutOutcome?.livenessState ??
     resolveRunLivenessState({
-      payloadCount: input.terminalPrepared.hasPartialAssistantTextAfterPromptTimeout
-        ? 0
-        : (input.terminalPrepared.payloads?.length ?? 0),
-      aborted: terminalAborted,
+      payloadCount:
+        unfinishedWorkTimeout || input.terminalPrepared.hasPartialAssistantTextAfterPromptTimeout
+          ? 0
+          : (input.terminalPrepared.payloads?.length ?? 0),
+      aborted: false,
       timedOut: terminalTimedOut,
       attempt: input.attempt,
       incompleteTurnText: null,
@@ -58,6 +88,7 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
     input.attempt.promptTimeoutOutcome?.providerStarted ??
     input.terminalState.outcome.providerStarted;
   const timeoutAttribution = {
+    ...(unfinishedWorkTimeout && timedOutDuringCompaction ? { stopReason: "timeout" } : {}),
     ...(timeoutPhase ? { timeoutPhase } : {}),
     ...(typeof providerStarted === "boolean" ? { providerStarted } : {}),
   };
@@ -73,11 +104,15 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
       modelFallbackStopReason: "agent_run_terminal_timeout",
       durationMs: Date.now() - input.startedAtMs,
       agentMeta: input.terminalPrepared.agentMeta,
-      aborted: terminalAborted,
+      aborted: false,
       systemPromptReport: input.attempt.systemPromptReport,
       finalPromptText: input.attempt.finalPromptText,
       finalAssistantVisibleText: input.terminalPrepared.finalAssistantVisibleText,
+      terminalReply: input.terminalPrepared.preparedTerminalReply.terminalReply,
       finalAssistantRawText: input.terminalPrepared.finalAssistantRawText,
+      ...(input.terminalPrepared.finalAssistantMessageRawText !== undefined
+        ? { finalAssistantMessageRawText: input.terminalPrepared.finalAssistantMessageRawText }
+        : {}),
       replayInvalid,
       livenessState,
       ...timeoutAttribution,

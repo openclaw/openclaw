@@ -1,5 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import {
@@ -8,8 +7,8 @@ import {
 } from "../accepted-session-spawn.js";
 import { withFollowupRequest } from "../subagents/completion/session-followup-completion.js";
 import type { FollowupRequest } from "../subagents/completion/session-followup-completion.types.js";
+import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../subagents/registry/subagent-registry-read.js";
-import type { AgentStepSession } from "./agent-step.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
@@ -22,6 +21,7 @@ import {
   startSessionsSendAgentRun,
   trySessionsSendActiveRunDelivery,
 } from "./sessions-send-tool.delivery.js";
+import type { AgentStepSession } from "./sessions-send-tool.types.js";
 import { jsonResult } from "./tool-results.js";
 
 /** Reconcile only the original admission; an uncertain ACK never starts a replacement. */
@@ -56,7 +56,7 @@ export async function startSessionsSendFollowup(
         start: {
           ...start,
           result: jsonResult({
-            ...(isRecord(start.result.details) ? start.result.details : {}),
+            ...start.result.details,
             sentBeforeError: true,
           }),
         },
@@ -81,6 +81,7 @@ export async function dispatchSessionsSendFollowup(
   options: {
     message: string;
     ownChild: boolean;
+    persistentChildAccess?: boolean;
     nativeChild: boolean;
     watch: boolean;
     requesterSessionKey: string;
@@ -100,11 +101,10 @@ export async function dispatchSessionsSendFollowup(
       )
     : undefined;
   const sameRequester = replyContext.requesterSessionKey === options.requesterSessionKey;
+  const isCronRequester = isCronRunSessionKey(options.requesterSessionKey);
   const requesterTurn =
-    params.allowActiveRunQueueDelivery &&
-    !params.expectedSessionId &&
+    (!params.expectedSessionId || options.persistentChildAccess) &&
     options.nativeChild &&
-    !isCronRunSessionKey(options.requesterSessionKey) &&
     sameRequester &&
     (options.ownChild ||
       (completionChild?.requesterSessionKey === options.requesterSessionKey &&
@@ -116,11 +116,14 @@ export async function dispatchSessionsSendFollowup(
     throw new Error("Child followup completion requires its original requester session.");
   }
   const active = await trySessionsSendActiveRunDelivery(params, options.ownChild);
-  const completionTurn =
-    options.watch || (options.ownChild && !("ok" in active)) ? requesterTurn : undefined;
+  const registryTurn =
+    (!isCronRequester && options.watch) || (options.ownChild && !("ok" in active))
+      ? requesterTurn
+      : undefined;
+  const completionTurn = isCronRequester ? undefined : registryTurn;
   const request =
     !("ok" in active) &&
-    (completionTurn || (replyContext.replyMode === "one-way" && options.ownChild)) &&
+    (registryTurn || (replyContext.replyMode === "one-way" && options.ownChild)) &&
     sameRequester
       ? await prepareSessionsSendFollowup({
           runId: params.runId,
@@ -141,11 +144,11 @@ export async function dispatchSessionsSendFollowup(
     "ok" in active
       ? { start: active, completion: undefined }
       : await startSessionsSendFollowup(
-          completionTurn ? undefined : request,
+          registryTurn ? undefined : request,
           {
             ...params,
             ...active,
-            ...(completionTurn
+            ...(registryTurn
               ? {
                   retainAcceptance: true,
                   assertDispatchCurrent: () => {
@@ -161,7 +164,7 @@ export async function dispatchSessionsSendFollowup(
           replyContext,
         );
   try {
-    if (start.ok && completionTurn) {
+    if (start.ok && registryTurn) {
       const { registerSubagentRun, adoptSubagentRunForRequesterTurn } =
         await import("../subagents/registry/subagent-registry.js");
       // Acceptance already owns the input; retained custody owns recording its result obligation.
@@ -184,7 +187,7 @@ export async function dispatchSessionsSendFollowup(
               expected,
               requesterSessionKey: options.requesterSessionKey,
               requesterAgentId: options.requesterAgentId,
-              requesterTurnRunId: completionTurn,
+              requesterTurnRunId: registryTurn,
               assertCurrent: assertCompletionCurrent,
             });
           }
@@ -203,13 +206,13 @@ export async function dispatchSessionsSendFollowup(
               requesterSessionKey: options.requesterSessionKey,
               requesterDisplayKey: options.requesterSessionKey,
               requesterAgentId: options.requesterAgentId,
-              requesterTurnRunId: completionTurn,
+              requesterTurnRunId: registryTurn,
               requesterOrigin: replyContext.requesterOrigin,
               task: options.message,
               cleanup: "keep",
               spawnMode: "session",
-              expectsCompletionMessage: true,
-              completionTarget: "parent",
+              expectsCompletionMessage: Boolean(completionTurn),
+              completionTarget: completionTurn ? "parent" : undefined,
               completionRequesterSessionId: replyContext.requesterSession?.sessionId,
               completionRequesterLifecycleRevision:
                 replyContext.requesterSession?.lifecycleRevision,
@@ -220,7 +223,19 @@ export async function dispatchSessionsSendFollowup(
               acceptedRunReplay: true,
             },
           );
-          accepted = { runId: start.runId, childSessionKey, expectsCompletionMessage: true };
+          accepted = {
+            runId: start.runId,
+            childSessionKey,
+            expectsCompletionMessage: Boolean(completionTurn),
+          };
+        }
+        if (completionTurn && request?.requesterAuthority) {
+          const runId = start.targetDisposition === "steered" ? start.steeredRunId : start.runId;
+          const entry = runId ? subagentRuns.get(runId) : undefined;
+          if (!entry) {
+            throw new Error("Accepted child followup has no registry owner.");
+          }
+          request.requesterAuthority.bind({ entry, runs: subagentRuns });
         }
         return accepted;
       };
@@ -271,7 +286,7 @@ export async function dispatchSessionsSendFollowup(
     };
   } finally {
     admissionOpen = false;
-    if (completionTurn) {
+    if (registryTurn) {
       request?.custody.release();
     }
   }
@@ -282,7 +297,7 @@ export async function dispatchSessionsSendFollowup(
   if (
     start.ok &&
     options.watch &&
-    !params.expectedSessionId &&
+    (!params.expectedSessionId || options.persistentChildAccess) &&
     replyContext.requesterSessionKey &&
     targetSessionKey &&
     replyContext.requesterSessionKey !== targetSessionKey
@@ -300,6 +315,16 @@ export async function dispatchSessionsSendFollowup(
     start,
     completion,
     registryCompletion: Boolean(start.ok && completionTurn),
-    watchField: options.watch ? { watched } : {},
+    watchField: options.watch
+      ? {
+          watched,
+          ...(!watched && start.ok
+            ? {
+                watchError:
+                  "The send was accepted, but no proactive state watch was registered. Watches require distinct, valid agent-qualified session keys and current session authority. Use owner-scoped session_status changesSince to reconcile state.",
+              }
+            : {}),
+        }
+      : {},
   };
 }

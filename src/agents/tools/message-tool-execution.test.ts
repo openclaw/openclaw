@@ -1,17 +1,18 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import {
   ErrorCodes,
   GatewayErrorDetailCodes,
 } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import { withGroupThreadTurn } from "../../auto-reply/group-thread-context.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveReactionMessageId } from "../../channels/plugins/actions/reaction-message-id.js";
 import type {
   ChannelMessageActionContext,
   ChannelMessageActionName,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
+import * as commandSecretGateway from "../../cli/command-secret-gateway.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   clearBootEchoContextForSession,
@@ -25,19 +26,20 @@ import type {
   MessageActionInput,
   MessageActionResult,
 } from "../../infra/outbound/message-action-contracts.js";
-import { runMessageAction as runRealMessageAction } from "../../infra/outbound/message-action-runner.js";
+import * as messageActionRunner from "../../infra/outbound/message-action-runner.js";
 import {
   workspaceConfig,
   workspaceTestPlugin,
 } from "../../infra/outbound/message-action-runner.test-support.js";
-import type { PluginHookMessageSendingResult } from "../../plugins/hook-message.types.js";
+import type { HookResult } from "../../plugins/hook-runner-types.js";
 import { createHookRunner } from "../../plugins/hooks.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
+import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
+import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
+import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
 import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
 import { isDeliveredMessageToolOnlySourceReplyResult } from "../embedded-agent-message-tool-source-reply.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "../embedded-agent-runner/run/terminal-outcome.js";
@@ -48,7 +50,14 @@ import {
 } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { readToolResultDetails } from "../tool-result-error.js";
 import { jsonResult } from "./common.js";
+import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createMessageTool } from "./message-tool-execution.js";
+import {
+  registerMessageChannel,
+  stubMessageSecrets,
+} from "./message-tool-execution.test-support.js";
+
+type MessageSendingHookResult = HookResult<"message_sending">;
 
 const EMPTY_CATALOG = {
   version: 0,
@@ -56,18 +65,14 @@ const EMPTY_CATALOG = {
   getChannel: () => undefined,
 } as const;
 
-const secretDeps = {
-  getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-  resolveCommandSecretRefsViaGateway: async ({ config }) => ({
-    resolvedConfig: config,
-    diagnostics: [],
-    targetStatesByPath: {},
-    hadUnresolvedTargets: false,
-  }),
-} satisfies Pick<
-  NonNullable<Parameters<typeof createMessageTool>[0]>,
-  "getScopedChannelsCommandSecretTargets" | "resolveCommandSecretRefsViaGateway"
->;
+beforeEach(() => {
+  stubMessageSecrets();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
+});
 
 describe("registered message action source completion", () => {
   afterEach(() => resetPluginRuntimeStateForTest());
@@ -78,6 +83,7 @@ describe("registered message action source completion", () => {
     target?: string;
     delivery?: Record<string, unknown>;
     media?: boolean;
+    collision?: "before" | "during" | "replacement" | "unbound";
     expected?: true;
   }> = [
     ...(
@@ -152,12 +158,41 @@ describe("registered message action source completion", () => {
       target: "C123",
     })),
     { action: "react", mode: "non-reply mutation", target: "C123" },
+    {
+      action: "upload-file",
+      mode: "colliding run-scoped source under another ambient owner",
+      collision: "before",
+      expected: true,
+    },
+    {
+      action: "upload-file",
+      mode: "colliding ambient owner without the requested run binding",
+      collision: "unbound",
+      expected: true,
+    },
+    {
+      action: "upload-file",
+      mode: "colliding unscoped source during delivery",
+      collision: "during",
+      expected: true,
+    },
+    {
+      action: "upload-file",
+      mode: "colliding successor before unscoped invocation",
+      collision: "replacement",
+      expected: true,
+    },
   ];
 
   it.each(cases)(
     "records only eligible source completion for $action ($mode)",
-    async ({ action, mode, target, delivery, media, expected }) => {
+    async ({ action, mode, target, delivery, media, collision, expected }) => {
+      const sessionId = "source-completion-session";
+      let competingOperation: ReturnType<typeof createReplyOperation> | undefined;
       const handleAction = vi.fn(async ({ params }: ChannelMessageActionContext) => {
+        if (collision === "during") {
+          createCollision();
+        }
         if (mode === "throw") {
           throw new Error("synthetic upload failure");
         }
@@ -169,21 +204,13 @@ describe("registered message action source completion", () => {
           ...(mode === "partial" ? { sentBeforeError: true } : {}),
         });
       });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "workspace",
-            source: "test",
-            plugin: {
-              ...workspaceTestPlugin,
-              actions: {
-                describeMessageTool: () => ({ actions: [action] }),
-                handleAction,
-              },
-            } satisfies ChannelPlugin,
-          },
-        ]),
-      );
+      registerMessageChannel({
+        ...workspaceTestPlugin,
+        actions: {
+          describeMessageTool: () => ({ actions: [action] }),
+          handleAction,
+        },
+      } satisfies ChannelPlugin);
       const identity = {
         agentId: "main",
         runId: "source-completion-run",
@@ -203,25 +230,67 @@ describe("registered message action source completion", () => {
       // The turn's reply operation keeps this fact so a later stall cannot answer again.
       const operation = createReplyOperation({
         sessionKey: identity.sessionKey,
-        sessionId: "source-completion-session",
+        sessionId,
         resetTriggered: false,
+        ...(collision && {
+          target: captureSessionTarget({
+            storeScope: "/stores/message-source.sqlite",
+            sessionKey: identity.sessionKey,
+            incarnation: sessionId,
+          }),
+        }),
       });
-      try {
-        const tool = createMessageTool({
-          config: {
-            ...workspaceConfig,
-            tools: { message: { crossContext: { allowWithinProvider: true } } },
-          },
-          ...source,
-          agentId: identity.agentId,
-          runId: identity.runId,
-          sessionId: operation.sessionId,
-          agentSessionKey: identity.sessionKey,
-          agentAccountId: "default",
-          messageActionTurnCapability: capability,
-          sourceReplyDeliveryMode: "automatic",
-          ...secretDeps,
+      const createCollision = (storeScope = "/stores/message-other.sqlite") => {
+        competingOperation = createReplyOperation({
+          sessionKey: identity.sessionKey,
+          sessionId,
+          resetTriggered: false,
+          target: captureSessionTarget({
+            storeScope,
+            sessionKey: identity.sessionKey,
+            incarnation: sessionId,
+          }),
         });
+      };
+      if (collision === "before") {
+        operation.attachBackend({ kind: "embedded", runId: identity.runId, cancel() {} });
+      }
+      if (collision === "before" || collision === "unbound") {
+        createCollision();
+      }
+      try {
+        const config: OpenClawConfig = {
+          ...workspaceConfig,
+          tools: { message: { crossContext: { allowWithinProvider: true } } },
+        };
+        setRuntimeConfigSnapshot(config);
+        const createTool = () =>
+          createMessageTool({
+            config,
+            ...source,
+            agentId: identity.agentId,
+            runId: identity.runId,
+            sessionId: operation.sessionId,
+            agentSessionKey: identity.sessionKey,
+            agentAccountId: "default",
+            messageActionTurnCapability: capability,
+            sourceReplyDeliveryMode: "automatic",
+          });
+        const ambientOperation = competingOperation;
+        const tool =
+          (collision === "before" || collision === "unbound") && ambientOperation
+            ? await withGatewayToolCallerIdentity(
+                {
+                  ...identity,
+                  operationalRunInstance: createOperationalRunInstanceRef(identity.runId),
+                },
+                () => withSessionControllerOwner(ambientOperation, createTool),
+              )
+            : createTool();
+        if (collision === "replacement") {
+          operation.complete();
+          createCollision("/stores/message-source.sqlite");
+        }
         const execution = tool.execute("source-upload", {
           action,
           message: "Uploaded source reply",
@@ -250,7 +319,10 @@ describe("registered message action source completion", () => {
             (result.details as { messageDelivery?: unknown }).messageDelivery,
           );
           expect(deliveryFact?.sourceReplyDelivered).toBe(expected);
-          expect(operation.sourceReplyDelivered).toBe(expected === true);
+          expect(operation.sourceReplyDelivered).toBe(expected === true && collision !== "unbound");
+          if (competingOperation) {
+            expect(competingOperation.sourceReplyDelivered).toBe(false);
+          }
           if (expected) {
             expect(deliveryFact).toMatchObject({
               status: "settled",
@@ -261,6 +333,7 @@ describe("registered message action source completion", () => {
         }
       } finally {
         operation.complete();
+        competingOperation?.complete();
         revokeMessageActionTurnCapability(capability);
       }
     },
@@ -268,9 +341,10 @@ describe("registered message action source completion", () => {
 });
 
 function createFailingMessageTool(error: Error) {
-  const runMessageAction = vi.fn(async () => {
-    throw error;
-  });
+  const runMessageAction = vi
+    .spyOn(messageActionRunner, "runMessageAction")
+    .mockRejectedValue(error);
+  setRuntimeConfigSnapshot({});
   const tool = createMessageTool({
     config: {},
     runId: "run-queued-delivery",
@@ -280,13 +354,14 @@ function createFailingMessageTool(error: Error) {
     currentChannelProvider: "telegram",
     currentChannelId: "chat-123",
     currentMessagingTarget: "chat-123",
-    ...secretDeps,
-    runMessageAction,
   });
   return { tool, runMessageAction };
 }
 
-function sentIdempotencyKey(runMessageAction: ReturnType<typeof vi.fn>, call: number) {
+function sentIdempotencyKey(
+  runMessageAction: MockInstance<typeof messageActionRunner.runMessageAction>,
+  call: number,
+) {
   const request = runMessageAction.mock.calls[call]?.[0] as
     | { params?: { idempotencyKey?: string } }
     | undefined;
@@ -333,7 +408,7 @@ it.each(["read", "edit", "delete", "pin", "unpin"] as const)(
       id: "slack",
       config: { listAccountIds: () => ["default"], resolveAccount: () => ({ enabled: true }) },
     });
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "slack", source: "test", plugin }]));
+    registerMessageChannel(plugin);
     const identity = {
       agentId: "main",
       runId: "scheduled-account-selection",
@@ -352,10 +427,11 @@ it.each(["read", "edit", "delete", "pin", "unpin"] as const)(
         assertCurrent: () => {},
       },
     });
-    const resolveSecrets = vi.fn(async () => {
-      throw new Error("Credential preparation must not run for a missing account");
-    });
+    const resolveSecrets = vi
+      .spyOn(commandSecretGateway, "resolveCommandSecretRefsViaGateway")
+      .mockRejectedValue(new Error("Credential preparation must not run for a missing account"));
     try {
+      setRuntimeConfigSnapshot(cfg);
       const tool = createMessageTool({
         config: cfg,
         agentId: identity.agentId,
@@ -366,7 +442,6 @@ it.each(["read", "edit", "delete", "pin", "unpin"] as const)(
         messageActionTurnCapability: token,
         preparedMessageToolCatalog: EMPTY_CATALOG,
         admitScheduledInvocation: () => cfg,
-        resolveCommandSecretRefsViaGateway: resolveSecrets,
       });
       await expect(
         tool.execute(action, {
@@ -503,22 +578,16 @@ describe("message tool terminal source actions", () => {
         return jsonResult(payload ?? { ok: true });
       },
     );
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "workspace",
-          source: "test",
-          origin: "bundled",
-          plugin: {
-            ...workspaceTestPlugin,
-            actions: {
-              describeMessageTool: () => ({ actions: ["send", "react"] }),
-              providerOwnedReadGates: true,
-              handleAction,
-            },
-          },
+    registerMessageChannel(
+      {
+        ...workspaceTestPlugin,
+        actions: {
+          describeMessageTool: () => ({ actions: ["send", "react"] }),
+          providerOwnedReadGates: true,
+          handleAction,
         },
-      ]),
+      },
+      "bundled",
     );
     const source = {
       currentChannelProvider: "workspace",
@@ -535,6 +604,7 @@ describe("message tool terminal source actions", () => {
       requesterAccountId: "default",
       toolContext: source,
     });
+    setRuntimeConfigSnapshot(workspaceConfig);
     const tool = createMessageTool({
       config: workspaceConfig,
       agentSessionKey: sessionKey,
@@ -544,8 +614,6 @@ describe("message tool terminal source actions", () => {
       messageActionTurnCapability: turnCapability,
       ...source,
       sourceReplyDeliveryMode: "automatic",
-      ...secretDeps,
-      runMessageAction: runRealMessageAction,
     });
 
     const result = await tool.execute("terminal-action", { action: "react", emoji: "👍", ...args });
@@ -598,7 +666,7 @@ describe("message tool terminal source actions", () => {
         terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
         settledTurnFinalizationAvailable: true,
       });
-      expect(finalization === null).toBe(completes);
+      expect(finalization).toBeNull();
     }
   });
 });
@@ -628,24 +696,17 @@ describe("message tool group thread replies", () => {
   ])("sends a native location without an attribution caption after $name", async ({ message }) => {
     setBootEchoContextForSession(sessionKey, bootPrompt);
     const received: Record<string, unknown>[] = [];
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "workspace",
-          source: "test",
-          plugin: {
-            ...workspaceTestPlugin,
-            actions: {
-              describeMessageTool: () => ({ actions: ["send"] }),
-              handleAction: async ({ params }) => {
-                received.push(params);
-                return jsonResult({ ok: true, messageId: "location-1" });
-              },
-            },
-          } satisfies ChannelPlugin,
+    registerMessageChannel({
+      ...workspaceTestPlugin,
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        handleAction: async ({ params }) => {
+          received.push(params);
+          return jsonResult({ ok: true, messageId: "location-1" });
         },
-      ]),
-    );
+      },
+    } satisfies ChannelPlugin);
+    setRuntimeConfigSnapshot(workspaceConfig);
     const tool = createMessageTool({
       config: workspaceConfig,
       agentSessionKey: sessionKey,
@@ -653,8 +714,6 @@ describe("message tool group thread replies", () => {
       currentChannelId: "C12345678",
       currentMessagingTarget: "C12345678",
       currentThreadTs: "42",
-      ...secretDeps,
-      runMessageAction: runRealMessageAction,
     });
     const participant = { agentId: "reviewer", name: "Reviewer" };
     const location = { latitude: 48.858844, longitude: 2.294351 };
@@ -675,42 +734,25 @@ describe("message tool group thread replies", () => {
     "labels source replies and observes only successful final text in the originating %s thread",
     async (channel) => {
       const sourceThread = channel === "discord" ? "123" : "42";
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: channel,
-            source: "test",
-            plugin: {
-              ...createChannelTestPluginBase({ id: channel }),
-              threading: { threadAddressing: channel === "slack" ? "message" : "address" },
-              actions: {
-                describeMessageTool: () => ({ actions: ["send", "edit"] }),
-                messageActionTargetAliases: {
-                  edit: { aliases: ["messageId"], deliveryTargetAliases: [] },
-                },
-              },
-            } satisfies ChannelPlugin,
+      registerMessageChannel({
+        ...createChannelTestPluginBase({ id: channel }),
+        threading: { threadAddressing: channel === "slack" ? "message" : "address" },
+        actions: {
+          describeMessageTool: () => ({ actions: ["send", "edit"] }),
+          messageActionTargetAliases: {
+            edit: { aliases: ["messageId"], deliveryTargetAliases: [] },
           },
-        ]),
-      );
+        },
+      } satisfies ChannelPlugin);
       const delivered: unknown[] = [];
       const recordReply = vi.fn();
-      const sendingHook = vi.fn<() => PluginHookMessageSendingResult>();
+      const sendingHook = vi.fn<() => MessageSendingHookResult>();
       const hookRunner = createHookRunner(
         createMockPluginRegistry([{ hookName: "message_sending", handler: sendingHook }]),
       );
-      const tool = createMessageTool({
-        config: {},
-        agentSessionKey: `agent:reviewer:${channel}:group:123:thread:${sourceThread}`,
-        currentChannelProvider: channel,
-        currentChannelId: "123",
-        currentMessagingTarget: "123",
-        currentThreadTs: sourceThread,
-        ...secretDeps,
-        runMessageAction: async ({
-          action,
-          params,
-        }: MessageActionInput): Promise<MessageActionResult> => {
+      setRuntimeConfigSnapshot({});
+      vi.spyOn(messageActionRunner, "runMessageAction").mockImplementation(
+        async ({ action, params }: MessageActionInput): Promise<MessageActionResult> => {
           if (action !== "send" && action !== "edit") {
             throw new Error(`Unexpected fixture action: ${action}`);
           }
@@ -718,7 +760,7 @@ describe("message tool group thread replies", () => {
           if (String(params.message).includes("Failed reply")) {
             throw new Error("delivery failed");
           }
-          let hookResult: PluginHookMessageSendingResult | undefined;
+          let hookResult: MessageSendingHookResult | undefined;
           if (String(params.message).includes("hook")) {
             sendingHook.mockReturnValue(
               String(params.message).includes("Cancelled")
@@ -773,6 +815,14 @@ describe("message tool group thread replies", () => {
               }
             : { ...common, kind: "action", action };
         },
+      );
+      const tool = createMessageTool({
+        config: {},
+        agentSessionKey: `agent:reviewer:${channel}:group:123:thread:${sourceThread}`,
+        currentChannelProvider: channel,
+        currentChannelId: "123",
+        currentMessagingTarget: "123",
+        currentThreadTs: sourceThread,
       });
       const participant = { agentId: "reviewer", name: "Reviewer" };
       await withGroupThreadTurn(
@@ -824,6 +874,7 @@ describe("message tool group thread replies", () => {
         "Other thread",
         "Top-level send",
         "**Reviewer**\nRedirected reply",
+        "**Reviewer**\nNO_REPLY",
         "**Reviewer**\n",
         "**Reviewer**\nEdited final",
         "Unplaced edit",
@@ -832,6 +883,7 @@ describe("message tool group thread replies", () => {
         [{ text: "Final reply" }],
         [{ text: "**Reviewer**\nRewritten visible final" }],
         [{ text: "**Reviewer**\nPass-through hook" }],
+        [{ text: "NO_REPLY" }],
         [{ mediaUrl: "https://example.com/group-thread.png" }],
         [{ text: "Edited final" }],
       ]);

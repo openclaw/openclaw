@@ -7,7 +7,35 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayUpdateLifecycle } from "./update-check-lifecycle.js";
 
+const schedulerLog = vi.hoisted(() => ({ debug: vi.fn(), trace: vi.fn(), error: vi.fn() }));
+vi.mock("../logging/subsystem.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
+  createSubsystemLogger: () => schedulerLog,
+}));
+
 describe("Gateway update lifecycle", () => {
+  it.each([false, true])("reports scheduled failures unless closing, aborted=%s", async (abort) => {
+    schedulerLog.error.mockClear();
+    const time = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(time.clock);
+    const lifecycle = createGatewayUpdateLifecycle(scheduler);
+    lifecycle.schedule("update.check", async () => {
+      if (abort) {
+        scheduler.beginClose();
+      }
+      throw new Error("synthetic update task failure");
+    });
+    try {
+      await time.wake();
+      expect(schedulerLog.error.mock.calls).toEqual(
+        abort ? [] : [["update.check failed: Error: synthetic update task failure"]],
+      );
+      expect(scheduler.nextWakeAtMs).toBeNull();
+    } finally {
+      await Promise.all([lifecycle.stop(), scheduler.stop()]);
+    }
+  });
+
   it.each(["scheduled", "manual"] as const)(
     "fences %s discovery at Gateway close and joins its admitted work",
     async (entry) => {

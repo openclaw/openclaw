@@ -15,16 +15,20 @@ type QueuedBootstrapTask = {
   run: () => Promise<unknown>;
 };
 
-/** Owns the queue and revokes pending work synchronously with its connection epoch. */
+/** Owns the queue and clears pending work when its connection ends. */
 export function createConnectionBootstrapCoordinator() {
   let client: object | null = null;
-  let generation = 0;
   let active = 0;
   let foregroundRoute: string | null | undefined = null;
   let foregroundPane:
     | { owner: object; sessionKey: string; client: object | null; ready: boolean }
     | undefined;
   const tasks = new Map<string | object, QueuedBootstrapTask>();
+  const foregroundPending = () =>
+    foregroundRoute !== null &&
+    (!foregroundPane?.ready ||
+      foregroundPane.client !== client ||
+      foregroundPane.sessionKey !== foregroundRoute);
 
   const drain = () => {
     // The map owns both ordering and deduplication; route prerequisites can pass held bulk jobs.
@@ -32,24 +36,16 @@ export function createConnectionBootstrapCoordinator() {
       if (!client || active >= MAX_CONNECTION_BOOTSTRAP_CONCURRENCY) {
         return;
       }
-      const foregroundPending =
-        foregroundRoute !== null &&
-        (!foregroundPane?.ready ||
-          foregroundPane.client !== client ||
-          foregroundPane.sessionKey !== foregroundRoute);
-      if (task.started || (foregroundPending && task.background)) {
+      if (task.started || (foregroundPending() && task.background)) {
         continue;
       }
       task.started = true;
       active++;
-      const taskGeneration = generation;
       const finish = () => {
-        if (taskGeneration === generation) {
+        task.resolve();
+        if (tasks.get(key) === task) {
           tasks.delete(key);
           active--;
-        }
-        task.resolve();
-        if (taskGeneration === generation) {
           drain();
         }
       };
@@ -62,7 +58,6 @@ export function createConnectionBootstrapCoordinator() {
   };
 
   const reset = () => {
-    generation += 1;
     client = null;
     active = 0;
     foregroundPane = undefined;
@@ -76,6 +71,17 @@ export function createConnectionBootstrapCoordinator() {
 
   return {
     reset,
+    /** Retiring a caller releases only its unstarted work, never an active slot. */
+    cancelQueued(this: void, key: string | object) {
+      const task = tasks.get(key);
+      if (task && !task.started) {
+        tasks.delete(key);
+        task.resolve();
+      }
+    },
+    get foregroundReady() {
+      return !foregroundPending();
+    },
     synchronize(this: void, params: { client: object | null; connected: boolean }) {
       const nextClient = params.connected ? params.client : null;
       if (!nextClient || (client && client !== nextClient)) {

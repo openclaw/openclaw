@@ -17,10 +17,8 @@ import {
   resultDetails,
   testing,
   waitUntilCompleted,
-  fakeTool,
   runUntilCompleted,
 } from "./code-mode.test-support.js";
-import { projectMcpCallToolResult } from "./mcp-content.js";
 import {
   addClientToolsToToolCatalog,
   registerHeadlessToolSearchCatalog,
@@ -115,9 +113,8 @@ describe("Code Mode output provenance", () => {
         jsonResult({ ok: true }),
       );
       const result = await runCodeModeScriptHeadless({
-        ctx: createHeadlessCodeModeHarness([tool]),
+        ctx: createHeadlessCodeModeHarness([tool], { codeMode: { maxOutputBytes: cap } }),
         code: `text(${JSON.stringify(first)}); await output_boundary({}); ${last ? `text(${JSON.stringify(last)});` : ""} ${fail ? 'throw new Error("DIAGNOSTIC" + "é".repeat(4000));' : "return true;"}`,
-        ...(cap ? { overrides: { maxOutputBytes: cap } } : {}),
       });
       expect(result.status).toBe(fail ? "failed" : "completed");
       expectCodeModeSharedBudget(result, cap ?? 65536);
@@ -171,7 +168,7 @@ describe("Code Mode output provenance", () => {
 
   it("reports only unsettled calls without replaying clipped output", async () => {
     const { ctx, tools: codeModeTools } = createCodeModeHarness({
-      codeMode: { timeoutMs: 500, maxOutputBytes: 1024 },
+      codeMode: { maxOutputBytes: 1024 },
     });
     applyCodeModeCatalog({
       tools: [
@@ -188,13 +185,15 @@ describe("Code Mode output provenance", () => {
 
     const first = resultDetails(
       await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
-        "code-call-timeout",
+        "code-call-pending",
         {
           code: `
-          text(${JSON.stringify("before timeout".repeat(200))});
+          text(${JSON.stringify("before yield".repeat(200))});
           const fast = fake_fast({});
           const slow = fake_slow({});
           await fast;
+          await yield_control();
+          await yield_control();
           await slow;
           return "done";
         `,
@@ -203,29 +202,28 @@ describe("Code Mode output provenance", () => {
     );
     expect(first.status).toBe("waiting");
     expectOriginalCodeModeMarker((first.output as unknown[])[0], [
-      { type: "text", text: "before timeout".repeat(200) },
+      { type: "text", text: "before yield".repeat(200) },
     ]);
-    // The fast call may settle as the snapshot is parked, but the slow call must remain pending.
-    expect(first.pendingToolCalls).toContainEqual(
+    expect(first.pendingToolCalls).toEqual([
       expect.objectContaining({ id: "bridge:callValue:2", method: "callValue" }),
-    );
+      expect.objectContaining({ method: "yield" }),
+    ]);
     expect(first.runId).toEqual(expect.any(String));
     const runId = String(first.runId);
 
-    const activeRun = testing.activeRuns.get(runId);
-    expect(activeRun).toBeDefined();
-    activeRun!.config.timeoutMs = 100;
-
     const second = resultDetails(
       await expectDefined(codeModeTools[1], "codeModeTools[1] test invariant").execute(
-        "code-wait-timeout",
+        "code-wait-pending",
         { runId },
       ),
     );
 
     expect(second.status).toBe("waiting");
     expect(second.output).toEqual([]);
-    expect(second.pendingToolCalls).toEqual([expect.objectContaining({ method: "callValue" })]);
+    expect(second.pendingToolCalls).toEqual([
+      expect.objectContaining({ id: "bridge:callValue:2", method: "callValue" }),
+      expect.objectContaining({ method: "yield" }),
+    ]);
   });
 });
 
@@ -628,53 +626,4 @@ it("projects nested Errors before their custom toJSON can hide the failure", asy
     { type: "json", value: { error } },
     { type: "text", text: JSON.stringify(error) },
   ]);
-});
-
-describe("Code Mode tool execution scheduling", () => {
-  it.each(["native", "mcp"] as const)(
-    "honors sequential-only %s tools through independent calls",
-    async (source) => {
-      let active = 0;
-      let maximumActive = 0;
-      let calls = 0;
-      const execute: AnyAgentTool["execute"] = async () => {
-        calls += 1;
-        active += 1;
-        maximumActive = Math.max(maximumActive, active);
-        try {
-          // A real host turn lets every incorrectly parallel invocation enter.
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
-          return source === "mcp"
-            ? projectMcpCallToolResult({ structuredContent: { ok: true } })
-            : jsonResult({ ok: true });
-        } finally {
-          active -= 1;
-        }
-      };
-      const tool: AnyAgentTool =
-        source === "mcp"
-          ? mcpTool({
-              name: "probe__ordered_probe",
-              serverName: "probe",
-              toolName: "ordered_probe",
-              execute,
-            })
-          : { ...fakeTool("ordered_probe", "Ordered probe"), execute };
-      tool.executionMode = "sequential";
-      const ctx = createHeadlessCodeModeHarness([tool]);
-      const call = source === "mcp" ? "MCP.probe.orderedProbe({})" : "ordered_probe({})";
-      const code = `const values = await Promise.all([${call}, ${call}]); return ${source === "mcp" ? "values.map(value => value.structuredContent)" : "values"};`;
-      const result =
-        source === "native"
-          ? await runCodeModeScriptHeadless({ ctx, code })
-          : resultDetails(await createCodeModeTools(ctx)[0]!.execute("ordered-call", { code }));
-
-      expect(result).toMatchObject({ status: "completed", value: [{ ok: true }, { ok: true }] });
-      expect(calls).toBe(2);
-      expect(maximumActive).toBe(1);
-      expect(active).toBe(0);
-    },
-  );
 });

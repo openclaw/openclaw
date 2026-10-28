@@ -36,6 +36,8 @@ export function resolveSessionResourceToolPolicy(params: {
     storePath?: string;
   }) => SessionEntry | undefined;
   toolName: string;
+  /** Ownership captured from the selected method and its registered tool factory. */
+  toolMeta?: { pluginId: string };
   /** A thread-owned native App borrow supplies its current binding assertion. */
   assertNativeRuntimeCurrent?: () => void;
 }) {
@@ -109,7 +111,7 @@ export function resolveSessionResourceToolPolicy(params: {
     groupSpace: entry.space,
     sandboxToolPolicy: sandbox.sandboxed ? sandbox.toolPolicy : undefined,
   });
-  if (!isConversationToolAllowed(capability, params.toolName)) {
+  if (!isConversationToolAllowed(capability, params.toolName, params.toolMeta)) {
     denied();
   }
   return { sandboxRequired: sandbox.sandboxRequired, sandboxed: sandbox.sandboxed };

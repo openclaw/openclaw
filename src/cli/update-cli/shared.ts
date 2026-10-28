@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { positiveSecondsToSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
+import {
+  isStandaloneRuntimeExecutable,
+  resolveOpenClawCliInvocation,
+} from "../../../cli-invocation.mjs";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveBrewOpenClawPath } from "../../infra/brew.js";
 import { hasErrnoCode } from "../../infra/errors.js";
@@ -10,15 +15,9 @@ import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
 import { normalizePackageTagInput } from "../../infra/package-tag.js";
 import { parseSemver } from "../../infra/runtime-guard.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "../../infra/runtime-process-url.js";
+import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { fetchNpmTagVersion } from "../../infra/update-check.js";
-import {
-  normalizeUpdateFailureFacts,
-  type UpdateFailureFact,
-} from "../../infra/update-failure-facts.js";
-import {
-  createFreeBsdPkgOwnershipInspection,
-  type FreeBsdPkgOwnershipInspection,
-} from "../../infra/update-freebsd-pkg-ownership.js";
 import {
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
@@ -27,6 +26,7 @@ import {
   type GlobalInstallManager,
 } from "../../infra/update-global.js";
 import { cleanupUpdateTemporaryDirectory } from "../../infra/update-maintenance.js";
+import { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import type { UpdateRecoveryBaselineRef } from "../../infra/update-recovery-baseline-capture.js";
 import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
@@ -38,15 +38,20 @@ import {
 } from "../../infra/update-runner-install-surface.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import {
+  createSystemPackageOwnershipInspection,
+  type SystemPackageOwnershipInspection,
+} from "../../infra/update-system-package-ownership.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
-import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
 import { UPDATE_INSTALL_SKIP_GUIDANCE } from "../../shared/update-outcome.js";
 import { pathExists } from "../../utils.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
+import { throwExpectedCliError } from "../failure-output.js";
 import { resolveNodeRunner } from "./node-runner.js";
 
+export { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
 export { resolveNodeRunner } from "./node-runner.js";
 
 export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"> & {
@@ -66,7 +71,11 @@ export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"
     /** Immutable original bytes for this invocation; never restoration authority. */
     originalRecoveryCapture?: UpdateRecoveryBaselineRef;
     defaultStepTimeoutMs?: number;
+    /** Retain the admitted SQLite writer allowance through finalization. */
+    busyTimeoutMs?: number;
     activationTimeoutMs?: number;
+    /** Explicit operator budget, minted once by this invocation’s admission. */
+    deadline?: import("../daemon-cli/restart-health-deadline.js").GatewayRestartDeadline;
     env: NodeJS.ProcessEnv;
     /** Candidate-reported admission checks; execution authority remains installed-owned. */
     candidateAdmissionChecks?: readonly string[];
@@ -83,6 +92,7 @@ export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"
     sourceArtifactLock?: import("@openclaw/fs-safe/file-lock").FileLockHandle;
   };
   acceptCapabilities?: boolean;
+  fullIntegrityCheck?: boolean;
   admission?: "auto" | "installed";
   json?: boolean;
   restart?: boolean;
@@ -107,7 +117,7 @@ export function usesCandidateUpdateAdmission(
 
 export type UpdateFinalizeOptions = Pick<
   UpdateCommandOptions,
-  "acceptCapabilities" | "json" | "channel" | "timeout" | "yes"
+  "acceptCapabilities" | "fullIntegrityCheck" | "json" | "channel" | "timeout" | "yes"
 > & {
   /** Internal external-supervisor handshake; public repair always leaves this false. */
   deferCompletionCache?: boolean;
@@ -115,44 +125,17 @@ export type UpdateFinalizeOptions = Pick<
 
 export type UpdateWizardOptions = Pick<
   UpdateCommandOptions,
-  "runtimeRecoveryEnv" | "acceptCapabilities" | "timeout"
+  "runtimeRecoveryEnv" | "acceptCapabilities" | "fullIntegrityCheck" | "timeout"
 >;
 
-export class UpdatePreMutationError<Reason extends string = string> extends Error {
-  readonly origin?: "candidate-admission";
-  readonly nextAction?: string;
-  readonly recoverySteps?: readonly UpdateRecoveryStep[];
-  readonly failureFacts: UpdateFailureFact[];
-  readonly #stepResult?: Pick<UpdateRunResult, "steps" | "failedStep">;
-
-  get stepResult(): Pick<UpdateRunResult, "steps" | "failedStep"> | undefined {
-    return this.#stepResult;
-  }
-
-  constructor(
-    readonly reason: Reason,
-    message: string,
-    options?: ErrorOptions & {
-      failureFacts?: readonly UpdateFailureFact[];
-      stepResult?: Pick<UpdateRunResult, "steps" | "failedStep">;
-      recoverySteps?: readonly UpdateRecoveryStep[];
-      origin?: "candidate-admission";
-      nextAction?: string;
-    },
-  ) {
-    super(message, options);
-    this.name = "UpdatePreMutationError";
-    this.origin = options?.origin;
-    this.nextAction = options?.nextAction;
-    this.recoverySteps = options?.recoverySteps;
-    // Completed attempts are diagnostics, never recovery authority or enumerable error output.
-    this.#stepResult = options?.stepResult
-      ? { steps: options.stepResult.steps, failedStep: options.stepResult.failedStep }
-      : undefined;
-    this.failureFacts = normalizeUpdateFailureFacts(
-      options?.failureFacts ?? [{ check: reason, code: reason, message }],
+export function parseUpdateChannel(value?: string) {
+  const channel = normalizeUpdateChannel(value);
+  if (value !== undefined && !channel) {
+    throwExpectedCliError(
+      `--channel must be "stable", "extended-stable", "beta", or "dev" (got ${JSON.stringify(value)})`,
     );
   }
+  return channel;
 }
 
 /** Parse the shared timeout contract without exiting an owning operation. */
@@ -308,7 +291,7 @@ async function cloneGitCheckoutTransactionally(
   const stagingIdentity = await fs.lstat(stagingDir, { bigint: true });
   let cleanupStaging = true;
   let published = false;
-  let result: UpdateStepResult | undefined;
+  let result: UpdateStepResult | null = null;
 
   async function ownsDirectory(
     directory: string,
@@ -333,7 +316,7 @@ async function cloneGitCheckoutTransactionally(
     }
   }
 
-  const runOperation = async (): Promise<GitCheckoutResult> => {
+  const runOperation = async (): Promise<void> => {
     result = await runUpdateStep({
       name: "git-clone",
       argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, UPSTREAM_REPOSITORY_URL, stagingDir],
@@ -342,7 +325,7 @@ async function cloneGitCheckoutTransactionally(
       progress: params.progress,
     });
     if (result.exitCode !== 0) {
-      return { checkoutDir: targetDir, step: result };
+      return;
     }
 
     const publish = async (): Promise<string> => {
@@ -417,18 +400,17 @@ async function cloneGitCheckoutTransactionally(
     } else {
       await publish();
     }
-    return { checkoutDir: targetDir, step: result };
   };
-  let outcome: { result: GitCheckoutResult } | { error: unknown };
+  let operationFailure: { error: unknown } | undefined;
   try {
-    outcome = { result: await runOperation() };
+    await runOperation();
   } catch (error) {
-    outcome = { error };
+    operationFailure = { error };
     if (hasCommandProcessCleanupError(error)) {
       cleanupStaging = false;
     }
   }
-  let cleanupOutcome: { ok: true } | { ok: false; error: unknown } = { ok: true };
+  let cleanupFailure: { error: unknown } | undefined;
   // The container does not confer ownership of a replaced repository child.
   // Only completed publication permits that child to be absent at cleanup.
   if (cleanupStaging) {
@@ -456,27 +438,27 @@ async function cloneGitCheckoutTransactionally(
         },
       });
     } catch (error) {
-      cleanupOutcome = { ok: false, error };
+      cleanupFailure = { error };
     }
   }
-  if (!cleanupOutcome.ok) {
+  if (cleanupFailure) {
     if (
-      "error" in outcome &&
-      outcome.error !== cleanupOutcome.error &&
-      hasCommandProcessCleanupError(cleanupOutcome.error)
+      operationFailure &&
+      operationFailure.error !== cleanupFailure.error &&
+      hasCommandProcessCleanupError(cleanupFailure.error)
     ) {
       throw new AggregateError(
-        [outcome.error, cleanupOutcome.error],
+        [operationFailure.error, cleanupFailure.error],
         "Git clone and cleanup progress both failed",
-        { cause: outcome.error },
+        { cause: operationFailure.error },
       );
     }
-    throw cleanupOutcome.error;
+    throw cleanupFailure.error;
   }
-  if ("error" in outcome) {
-    throw outcome.error;
+  if (operationFailure) {
+    throw operationFailure.error;
   }
-  return outcome.result;
+  return { checkoutDir: targetDir, step: result };
 }
 
 export async function ensureGitCheckout(params: {
@@ -512,11 +494,11 @@ export async function resolveGlobalManager(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
   timeoutMs: number;
-  pkgOwnership?: FreeBsdPkgOwnershipInspection;
+  pkgOwnership?: SystemPackageOwnershipInspection;
   serviceUnitTarget?: string;
 }): Promise<GlobalInstallManager> {
   await (
-    params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(params.timeoutMs)
+    params.pkgOwnership ?? createSystemPackageOwnershipInspection(params.timeoutMs)
   ).assertUnowned(params.root);
   if (params.installKind !== "git") {
     if (await resolveBrewOpenClawPath(params.root)) {
@@ -565,23 +547,27 @@ export async function tryWriteCompletionCache(
   timeoutMs = COMPLETION_CACHE_WRITE_TIMEOUT_MS,
   nodeRunner = resolveNodeRunner(),
 ): Promise<"completed" | "failed" | "skipped"> {
-  const binPath = path.join(root, "openclaw.mjs");
-  if (!(await pathExists(binPath))) {
+  const binPath = fileURLToPath(resolveExternalPackageRuntimeEntrypointUrl("cliLauncher", root));
+  const standalone = isStandaloneRuntimeExecutable(nodeRunner);
+  if (!standalone && !(await pathExists(binPath))) {
     return "skipped";
   }
 
   let failure: string;
   try {
-    const result = await runCommandWithTimeout(
-      [nodeRunner, binPath, "completion", "--write-state"],
-      {
-        cwd: root,
-        env: { ...process.env, [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1" },
-        input: "",
-        timeoutMs,
-        killProcessTree: true,
-      },
-    );
+    const invocation = resolveOpenClawCliInvocation({
+      execPath: nodeRunner,
+      entryPath: standalone ? undefined : binPath,
+      execArgv: [],
+      args: ["completion", "--write-state"],
+    });
+    const result = await runCommandWithTimeout([invocation.command, ...invocation.args], {
+      cwd: root,
+      env: { ...process.env, [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1" },
+      input: "",
+      timeoutMs,
+      killProcessTree: true,
+    });
     if (result.code === 0) {
       return "completed";
     }
@@ -590,6 +576,9 @@ export async function tryWriteCompletionCache(
         ? `timed out after ${timeoutMs / 1000}s`
         : result.stderr.trim();
   } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
     failure = String(error);
   }
   if (!jsonMode) {
@@ -644,7 +633,7 @@ export async function confirmUpdateDowngrade(params: {
       status: "skipped",
       reason: decision === "cancelled" ? "cancelled" : "downgrade-confirmation-required",
     },
-    { env: run.env },
+    run,
   );
   if (decision === "confirmation-required") {
     defaultRuntime.error(

@@ -1,11 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isEmbeddedStandaloneModule } from "../../cli-invocation.mjs";
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { registerSignalExitFinalizer } from "../cli/signal-exit-barrier.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 export type RuntimeWorkerGeneration = {
   resolve(url: URL): URL;
-  /** Only the returned native termination may be bounded; settlement must finish. */
+  /** Join accepted work before native termination; a slow close warning never releases custody. */
   retain(owner: object, settle: () => Promise<void | (() => Promise<void>)>): void;
 };
 
@@ -14,14 +15,28 @@ const scope = resolveGlobalSingleton(
   Symbol.for("openclaw.runtimeWorkerGeneration"),
   () => new AsyncLocalStorage<GenerationScope>(),
 );
+/** Carry worker-code ownership through background work without retaining its originating turn. */
+export function captureRuntimeWorkerGenerationContext() {
+  const captured: GenerationScope = { generation: scope.getStore()?.generation };
+  return <T>(operation: () => T): T => scope.run(captured, operation);
+}
+
+/** Resolve through the carried generation; an absent generation stays unbound. */
+export function resolveRuntimeWorkerGenerationUrl(
+  url: URL,
+  generation: RuntimeWorkerGeneration | undefined,
+): URL {
+  return isEmbeddedStandaloneModule(url.href) ? url : (generation?.resolve(url) ?? url);
+}
+
 /** Capture before queues or detached pool contexts discard the caller's scope. */
 export function captureRuntimeWorkerSource(url: URL): {
   moduleUrl: URL;
   runtimeGeneration?: RuntimeWorkerGeneration;
 } {
   const generation = scope.getStore()?.generation;
-  const bound = generation?.resolve(url);
-  return bound && bound.href !== url.href
+  const bound = resolveRuntimeWorkerGenerationUrl(url, generation);
+  return bound.href !== url.href
     ? { moduleUrl: bound, runtimeGeneration: generation }
     : { moduleUrl: url };
 }
@@ -33,12 +48,10 @@ export async function withRuntimeWorkerGeneration<T>(
 ): Promise<T> {
   const current: GenerationScope = {};
   const resources = new Map<object, Parameters<RuntimeWorkerGeneration["retain"]>[1]>();
-  let closing = false;
   return await scope.run(current, async () => {
     let outcome: { value: T } | { error: unknown };
     let settlement: Promise<void> | undefined;
     const settleGeneration = () => {
-      closing = true;
       return (settlement ??= (async () => {
         const settled = await Promise.allSettled(
           [...resources.values()].map((settle) => Promise.resolve().then(settle)),
@@ -46,6 +59,21 @@ export async function withRuntimeWorkerGeneration<T>(
         const failures = settled.flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],
         );
+        const terminate = settled.flatMap((result) =>
+          result.status === "fulfilled" && result.value ? [result.value] : [],
+        );
+        const termination = Promise.allSettled(
+          terminate.map((close) => Promise.resolve().then(close)),
+        );
+        const observed = await raceWithTimeout(termination, 10_000, () => undefined);
+        if (!observed) {
+          retainedDirectory?.(
+            "retained updater worker termination is still pending after settlement; waiting for native retirement before releasing the runtime",
+          );
+        }
+        // The grace period bounds diagnostics, not ownership. Even a sibling
+        // settlement failure must join the native retirement already accepted.
+        const terminated = observed ?? (await termination);
         if (failures.length) {
           const reason = "retained updater workers did not settle; keep it until the workers stop";
           const directory = retainedDirectory?.(reason);
@@ -55,17 +83,9 @@ export async function withRuntimeWorkerGeneration<T>(
               (directory ? `. Runtime retained at ${directory}: ${reason}.` : ""),
           );
         }
-        const terminate = settled.flatMap((result) =>
-          result.status === "fulfilled" && result.value ? [result.value] : [],
-        );
-        const terminated = await raceWithTimeout(
-          Promise.allSettled(terminate.map((close) => Promise.resolve().then(close))),
-          10_000,
-          () => undefined,
-        );
-        if (!terminated || terminated.some((result) => result.status === "rejected")) {
+        if (terminated.some((result) => result.status === "rejected")) {
           retainedDirectory?.(
-            `retained updater worker termination ${terminated ? "failed" : "timed out"} after settlement; retry openclaw update cleanup after this process exits`,
+            "retained updater worker termination failed after settlement; retry openclaw update cleanup after this process exits",
           );
           return;
         }
@@ -77,20 +97,9 @@ export async function withRuntimeWorkerGeneration<T>(
     try {
       outcome = {
         value: await operation((resolve) => {
-          if (closing || current.generation) {
-            throw new Error("The updater already retained its worker generation");
-          }
           current.generation = Object.freeze({
-            resolve(url: URL) {
-              if (closing) {
-                throw new Error("The updater's retained worker generation is closing");
-              }
-              return resolve(url);
-            },
+            resolve,
             retain(owner: object, settle: Parameters<RuntimeWorkerGeneration["retain"]>[1]) {
-              if (closing) {
-                throw new Error("The updater's retained worker generation is closing");
-              }
               resources.set(owner, settle);
             },
           });

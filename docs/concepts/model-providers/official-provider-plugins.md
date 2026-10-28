@@ -51,7 +51,7 @@ existing explicit primary model; `models auth login --set-default` and
 - Example model: `anthropic/claude-opus-5-5`
 - CLI: `openclaw onboard --auth-choice apiKey`
 - Direct public Anthropic requests support the shared `/fast` toggle and `params.fastMode`, including API-key and OAuth-authenticated traffic sent to `api.anthropic.com`; OpenClaw maps that to Anthropic `service_tier` (`auto` vs `standard_only`)
-- Preferred Claude CLI config keeps the model ref canonical and selects the CLI
+- Preferred Claude CLI config keeps the model ref in its standard form and selects the CLI
   backend separately: `anthropic/claude-opus-5-5` with
   model-scoped `agentRuntime.id: "claude-cli"`. Legacy
   `claude-cli/claude-opus-4-7` refs still work for compatibility.
@@ -86,7 +86,7 @@ Claude CLI reuse (`claude -p`) is a sanctioned OpenClaw integration path. Anthro
 - `openai/gpt-5.5` uses the Codex catalog native `contextWindow = 400000` and default runtime `contextTokens = 272000`; override the runtime cap with `models.providers.openai.models[].contextTokens`
 - Sign in with `openai` auth and use `openai/gpt-6-astra` for a fresh subscription-backed setup. Select `openai/gpt-5.5` explicitly if that Codex workspace does not expose Astra.
 - Use provider/model `agentRuntime.id: "openclaw"` to keep an otherwise eligible route on the built-in runtime. With runtime unset or `auto`, only an exact official HTTPS Responses/ChatGPT-compatible route with no authored provider request override may select Codex implicitly.
-- Legacy Codex GPT refs are legacy state, not a live provider route. Use canonical `openai/*` refs for new agent config, and run `openclaw doctor --fix` to migrate `codex/*` and `openai-codex/*` refs while preserving their native Codex semantics with model-scoped `agentRuntime.id: "codex"`. Existing explicit canonical `openai/gpt-5.5` selections are not upgraded.
+- Legacy Codex GPT refs are legacy state, not a live provider route. Use standard `openai/*` refs for new agent config, and run `openclaw doctor --fix` to migrate `codex/*` and `openai-codex/*` refs while preserving their native Codex semantics with model-scoped `agentRuntime.id: "codex"`. Existing explicit `openai/gpt-5.5` selections are not upgraded.
 
 ```json5
 {
@@ -130,7 +130,7 @@ Claude CLI reuse (`claude -p`) is a sanctioned OpenClaw integration path. Anthro
 - Auth: `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`)
 - Zen runtime provider: `opencode`
 - Go runtime provider: `opencode-go`
-- Example models: `opencode/claude-opus-4-6`, `opencode-go/kimi-k2.6`
+- Example models: `opencode/claude-opus-4-6`, `opencode-go/kimi-k2.7-code`
 - CLI: `openclaw onboard --auth-choice opencode-zen` or `openclaw onboard --auth-choice opencode-go`
 
 ```json5
@@ -144,7 +144,8 @@ Claude CLI reuse (`claude -p`) is a sanctioned OpenClaw integration path. Anthro
 - Provider: `google`
 - Auth: `GEMINI_API_KEY`
 - Optional rotation: `GEMINI_API_KEYS`, `GEMINI_API_KEY_1`, `GEMINI_API_KEY_2`, `GOOGLE_API_KEY` fallback, and `OPENCLAW_LIVE_GEMINI_KEY` (single override)
-- Example models: `google/gemini-3.1-pro-preview`, `google/gemini-3.5-flash`
+- Default model: `google/gemini-4-argon`
+- Other bundled models include `google/gemini-3.8-flash` and `google/gemini-3.5-flash-lite`
 - Compatibility: legacy OpenClaw config using `google/gemini-3.1-flash-preview` is normalized to `google/gemini-3-flash-preview`
 - Alias: `google/gemini-3.1-pro` is accepted and normalized to Google's live Gemini API id, `google/gemini-3.1-pro-preview`
 - CLI: `openclaw onboard --auth-choice gemini-api-key`
@@ -163,7 +164,7 @@ Claude CLI reuse (`claude -p`) is a sanctioned OpenClaw integration path. Anthro
   as ADC credentials; do not paste an OAuth access token. See
   [Google provider setup](/providers/google).
 - `google-gemini-cli`: optional local runtime for an explicitly configured
-  canonical `google/*` model.
+  standard `google/*` model.
 
 OpenClaw does not create Gemini CLI OAuth or Antigravity OAuth profiles. Connect
 Google through an AI Studio API key or Vertex AI. If you explicitly choose the
@@ -181,7 +182,7 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
 - Auth: `ZAI_API_KEY`
 - Example model: `zai/glm-5.2`
 - CLI: `openclaw onboard --auth-choice zai-api-key`
-  - Model refs use the canonical `zai/*` provider ID.
+  - Model refs use the standard `zai/*` provider ID.
   - `zai-api-key` auto-detects the matching Z.AI endpoint; `zai-coding-global`, `zai-coding-cn`, `zai-global`, and `zai-cn` force a specific surface
 
 ### Vercel AI Gateway
@@ -195,9 +196,10 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
 
 | Provider                                | Id                               | Auth env                                       | Example model                                              |
 | --------------------------------------- | -------------------------------- | ---------------------------------------------- | ---------------------------------------------------------- |
+| [Abliteration](/providers/abliteration) | `abliteration`                   | `ABLITERATION_API_KEY` or `ABLIT_KEY`          | `abliteration/abliterated-model-large-flash`               |
 | [Arcee](/providers/arcee)               | `arcee`                          | `ARCEEAI_API_KEY` or `OPENROUTER_API_KEY`      | `arcee/trinity-large-thinking`                             |
 | BytePlus                                | `byteplus` / `byteplus-plan`     | `BYTEPLUS_API_KEY`                             | `byteplus-plan/ark-code-latest`                            |
-| Cerebras                                | `cerebras`                       | `CEREBRAS_API_KEY`                             | `cerebras/zai-glm-4.7`                                     |
+| Cerebras                                | `cerebras`                       | `CEREBRAS_API_KEY`                             | `cerebras/gpt-oss-120b`                                    |
 | Chutes                                  | `chutes`                         | `CHUTES_API_KEY` or `CHUTES_OAUTH_TOKEN`       | `chutes/zai-org/GLM-5-TEE`                                 |
 | ClawRouter                              | `clawrouter`                     | `CLAWROUTER_API_KEY`                           | `clawrouter/anthropic/claude-sonnet-4-6`                   |
 | Cohere                                  | `cohere`                         | `COHERE_API_KEY`                               | `cohere/command-a-plus-05-2026`                            |
@@ -206,7 +208,7 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
 | Featherless AI                          | `featherless`                    | `FEATHERLESS_API_KEY`                          | `featherless/Qwen/Qwen3-32B`                               |
 | GitHub Copilot                          | `github-copilot`                 | `COPILOT_GITHUB_TOKEN`                         | -                                                          |
 | GMI Cloud                               | `gmi`                            | `GMI_API_KEY`                                  | `gmi/google/gemini-3.1-flash-lite`                         |
-| Groq                                    | `groq`                           | `GROQ_API_KEY`                                 | `groq/llama-3.3-70b-versatile`                             |
+| Groq                                    | `groq`                           | `GROQ_API_KEY`                                 | `groq/openai/gpt-oss-120b`                                 |
 | Hugging Face Inference                  | `huggingface`                    | `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`          | `huggingface/deepseek-ai/DeepSeek-R1`                      |
 | MiniMax                                 | `minimax` / `minimax-portal`     | `MINIMAX_API_KEY` / `MINIMAX_OAUTH_TOKEN`      | `minimax/MiniMax-M3`                                       |
 | Mistral                                 | `mistral`                        | `MISTRAL_API_KEY`                              | `mistral/mistral-large-latest`                             |
@@ -216,6 +218,7 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
 | [Ollama Cloud](/providers/ollama-cloud) | `ollama-cloud`                   | `OLLAMA_API_KEY`                               | `ollama-cloud/kimi-k2.6`                                   |
 | OpenRouter                              | `openrouter`                     | OpenRouter OAuth or `OPENROUTER_API_KEY`       | `openrouter/auto`                                          |
 | Qianfan                                 | `qianfan`                        | `QIANFAN_API_KEY`                              | `qianfan/deepseek-v3.2`                                    |
+| [Requesty](/providers/requesty)         | `requesty`                       | `REQUESTY_API_KEY`                             | `requesty/claude-sonnet-5-5`                               |
 | Tencent TokenHub                        | `tencent-tokenhub`               | `TOKENHUB_API_KEY`                             | `tencent-tokenhub/hy3-preview`                             |
 | Together                                | `together`                       | `TOGETHER_API_KEY`                             | `together/meta-llama/Llama-3.3-70B-Instruct-Turbo`         |
 | Venice                                  | `venice`                         | `VENICE_API_KEY`                               | -                                                          |
@@ -237,7 +240,7 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
     API-key onboarding writes explicit M3 and M2.7 chat model definitions; image understanding stays on the plugin-owned `MiniMax-VL-01` media provider.
   </Accordion>
   <Accordion title="NVIDIA">
-    Model ids use a `nvidia/<vendor>/<model>` namespace (for example `nvidia/nvidia/nemotron-...`); pickers preserve the literal `<provider>/<model-id>` composition while the canonical key sent to the API stays single-prefixed.
+    Model ids use a `nvidia/<vendor>/<model>` namespace (for example `nvidia/nvidia/nemotron-...`); pickers preserve the literal `<provider>/<model-id>` composition while the normalized key sent to the API stays single-prefixed.
   </Accordion>
   <Accordion title="xAI">
     Uses the xAI Responses path. The recommended path is SuperGrok/X Premium OAuth; OAuth and API-key setup use the curated `xai/grok-4.7` default. Existing primary models stay pinned. Run `openclaw doctor --fix` to repair retired `xai/auto` selections on the native API and subscription routes. API keys still work via `XAI_API_KEY` or plugin config. Grok `web_search` reuses the same auth profile before API-key fallback. Older `/fast` and `params.fastMode: true` configurations still resolve through xAI's Grok 4.3 compatibility redirects, but new configurations should select a current model directly. `tool_stream` defaults on; disable via `agents.defaults.models["xai/<model>"].params.tool_stream=false`.

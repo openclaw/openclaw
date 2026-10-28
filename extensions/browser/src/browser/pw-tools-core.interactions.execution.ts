@@ -1,17 +1,10 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import type { Frame, Page } from "playwright-core";
-import {
-  ACT_MAX_BATCH_ACTIONS,
-  ACT_MAX_BATCH_DEPTH,
-  BROWSER_ACTION_NAVIGATION_GRACE_MS,
-} from "./act-policy.js";
+import { BROWSER_ACTION_NAVIGATION_GRACE_MS } from "./act-policy.js";
 import type { BrowserBatchAbort, BrowserBatchActionResult } from "./client-actions-types.js";
 import type { BrowserActRequest } from "./client-actions.types.js";
 import type { BrowserDownloadResult } from "./download-types.js";
-import {
-  assertBrowserNavigationResultAllowed,
-  type BrowserNavigationPolicyOptions,
-} from "./navigation-guard.js";
+import { assertBrowserNavigationResultAllowed } from "./navigation-guard.js";
 import { pageTargetInfo } from "./pw-session-connection.js";
 import {
   beginActionDownloadCaptureOnPage,
@@ -45,21 +38,14 @@ import {
 } from "./pw-tools-core.interactions.navigation.js";
 import { closePageViaPlaywright, resizeViewportViaPlaywright } from "./pw-tools-core.snapshot.js";
 
-const ACT_DOWNLOAD_MAX_DRAIN_MS = 1_000;
-
 type ActionExecutionOptions = GuardedInteractionOptions & {
   evaluateEnabled?: boolean;
-  depth?: number;
 };
 
 async function executeSingleAction(
   action: BrowserActRequest,
   opts: ActionExecutionOptions,
 ): Promise<unknown> {
-  const depth = opts.depth ?? 0;
-  if (depth > ACT_MAX_BATCH_DEPTH) {
-    throw new Error(`Batch nesting depth exceeds maximum of ${ACT_MAX_BATCH_DEPTH}`);
-  }
   const effectiveTargetId = action.targetId ?? opts.targetId;
   const interaction = {
     cdpUrl: opts.cdpUrl,
@@ -78,9 +64,7 @@ async function executeSingleAction(
         ...action,
         ...interaction,
         button: action.button as "left" | "right" | "middle" | undefined,
-        modifiers: action.modifiers as Array<
-          "Alt" | "Control" | "ControlOrMeta" | "Meta" | "Shift"
-        >,
+        modifiers: action.modifiers as Parameters<typeof clickViaPlaywright>[0]["modifiers"],
       });
     case "clickCoords":
       return await clickCoordsViaPlaywright({
@@ -134,7 +118,6 @@ async function executeSingleAction(
         ...action,
         ...interaction,
         evaluateEnabled: opts.evaluateEnabled,
-        depth: depth + 1,
       });
       // A nested batch is one parent action; surface its first failure so each
       // level applies its own stopOnError without discarding the child outcome.
@@ -157,17 +140,6 @@ function actionUsesNavigationRequestGuard(action: BrowserActRequest): boolean {
   return action.kind === "wait"
     ? Boolean(action.fn)
     : action.kind !== "close" && action.kind !== "resize";
-}
-
-function actionNeedsStandaloneDownloadGrace(
-  action: BrowserActRequest,
-  navigationPolicy: BrowserNavigationPolicyOptions,
-): boolean {
-  // Guarded interactions already hold a 250 ms event window while policy is
-  // active. Policy-free internal callers need that window from download capture.
-  return (
-    actionUsesNavigationRequestGuard(action) && !hasInteractionNavigationPolicy(navigationPolicy)
-  );
 }
 
 export async function executeActViaPlaywright(
@@ -207,14 +179,16 @@ export async function executeActViaPlaywright(
       });
     },
   });
-  const downloadGraceMs = actionNeedsStandaloneDownloadGrace(opts.action, navigationPolicy)
-    ? BROWSER_ACTION_NAVIGATION_GRACE_MS
-    : 0;
+  // Guarded interactions already hold a 250 ms event window while policy is
+  // active. Policy-free internal callers need that window from download capture.
+  const downloadGraceMs =
+    actionUsesNavigationRequestGuard(opts.action) &&
+    !hasInteractionNavigationPolicy(navigationPolicy)
+      ? BROWSER_ACTION_NAVIGATION_GRACE_MS
+      : 0;
   const drainDownloads = async (firstEventGraceMs = downloadGraceMs) =>
     await downloadCapture.drain({
       firstEventGraceMs,
-      maxWaitMs: ACT_DOWNLOAD_MAX_DRAIN_MS,
-      quietMs: BROWSER_ACTION_NAVIGATION_GRACE_MS,
     });
   const dialogAbort = createObservedDialogAbortSignalForPage({
     page,
@@ -293,13 +267,6 @@ async function batchViaPlaywright(
   },
 ): Promise<{ results: BrowserBatchActionResult[]; aborted?: BrowserBatchAbort }> {
   const navigationPolicy = interactionNavigationPolicy(opts);
-  const depth = opts.depth ?? 0;
-  if (depth > ACT_MAX_BATCH_DEPTH) {
-    throw new Error(`Batch nesting depth exceeds maximum of ${ACT_MAX_BATCH_DEPTH}`);
-  }
-  if (opts.actions.length > ACT_MAX_BATCH_ACTIONS) {
-    throw new Error(`Batch exceeds maximum of ${ACT_MAX_BATCH_ACTIONS} actions`);
-  }
   const page = opts.page ?? (await getPageForTargetId(opts));
   const results: BrowserBatchActionResult[] = [];
   const finishAborted = (
@@ -341,10 +308,9 @@ async function batchViaPlaywright(
       if (page.isClosed()) {
         return finishAborted("closed", index, page.url(), opts.actions.length - index);
       }
-      navigated = false;
       let result: BrowserBatchActionResult;
       try {
-        await executeSingleAction(action, { ...opts, ...navigationPolicy, depth });
+        await executeSingleAction(action, { ...opts, ...navigationPolicy });
         result = { ok: true };
       } catch (err) {
         if (

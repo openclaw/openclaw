@@ -6,7 +6,7 @@ import type {
   ReportWorkerOperation,
   ReportWorkerResponse,
 } from "./run-worker-contract.js";
-import { createReportSources, generateReportPeriods } from "./run.js";
+import { generateReportPeriods } from "./run.js";
 import type { TeamReportsOperations } from "./store-contract.js";
 import { TeamReportsStore } from "./store.js";
 import type { SummaryLlm } from "./summaries.js";
@@ -38,7 +38,6 @@ serveWorkerTasks(async (value, channel, control) => {
     warn: (message, meta) => logs.push({ level: "warn", message, meta }),
     error: (message, meta) => logs.push({ level: "error", message, meta }),
   };
-  const signal = new AbortController().signal;
   const store = new TeamReportsStore({
     async execute<Key extends keyof TeamReportsOperations>(command: {
       type: Key;
@@ -58,8 +57,7 @@ serveWorkerTasks(async (value, channel, control) => {
     return await generateReportPeriods({
       ...input,
       store,
-      runtime: { logger, signal },
-      sources: (runtime) => createReportSources(runtime, Boolean(input.resolved.discord)),
+      runtime: { logger },
       llm: {
         complete: async ({ signal: _signal, ...params }) => {
           // SAFETY: The service-owned host returns the configured completion result for this request.

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { FileHandle } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { pipeline } from "node:stream/promises";
 import { matchesHttpIfModifiedSince, matchesHttpIfNoneMatch } from "./http-conditional.js";
 
 type FileIdentity = {
@@ -178,7 +179,12 @@ export function createGatewayByteStream(
   return {
     close,
     signal: controller.signal,
-    async pipe(plan: ByteResponsePlan, method: string | undefined, beforeSend?: () => void) {
+    async pipe(
+      plan: ByteResponsePlan,
+      method: string | undefined,
+      beforeSend?: () => void,
+      authority?: { assertCurrent: () => void; signal?: AbortSignal },
+    ) {
       if (method === "HEAD" || plan.kind === "not-modified" || plan.contentLength === 0) {
         await close();
         beforeSend?.();
@@ -206,7 +212,27 @@ export function createGatewayByteStream(
           }
         }
       });
-      stream.pipe(res);
+      if (authority) {
+        try {
+          await pipeline(
+            stream,
+            async function* (source) {
+              for await (const chunk of source) {
+                authority.signal?.throwIfAborted();
+                authority.assertCurrent();
+                yield chunk;
+              }
+            },
+            res,
+            { signal: authority.signal },
+          );
+        } catch {
+          await close();
+          res.destroy();
+        }
+      } else {
+        stream.pipe(res);
+      }
     },
   };
 }

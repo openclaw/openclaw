@@ -63,7 +63,7 @@ function recoverGemmaCalls(text: string): TextToolCallRecoveryPart[] | undefined
         kind: "toolCall",
         name,
         arguments: argumentsValue,
-        partialArgs: JSON.stringify(argumentsValue),
+        partialJson: JSON.stringify(argumentsValue),
       });
     } catch {
       return undefined;

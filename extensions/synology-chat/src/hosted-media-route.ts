@@ -1,5 +1,3 @@
-// Synology Chat plugin module maps one public callback URL to its internal Gateway route.
-
 export const SYNOLOGY_HOSTED_MEDIA_TOKEN_PARAM_PREFIX = "__openclaw_synology_media_token";
 
 function normalizeExactPath(path: string): string {

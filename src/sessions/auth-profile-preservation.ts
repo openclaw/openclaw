@@ -16,6 +16,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { applyModelOverrideToSessionEntry } from "./model-overrides.js";
 
+// Released synchronous SDK callers retain this fallback through 2026-12-31.
 function resolvePinnedAuthProfileProvider(params: {
   cfg: OpenClawConfig;
   agentDir: string;
@@ -122,6 +123,7 @@ export function applyModelOverrideWithAuthProfileCompatibility(
         entry: params.entry,
         currentProvider: params.currentProvider,
         provider: params.selection.provider,
+        recordedProvider: params.recordedProvider,
         ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
       }),
   });

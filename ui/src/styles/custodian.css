@@ -50,8 +50,13 @@ openclaw-custodian-page {
   text-align: center;
 }
 
-.custodian__setup-state openclaw-mascot {
+.custodian__setup-state openclaw-mascot,
+.custodian__mark openclaw-mascot,
+.custodian__mascot-avatar openclaw-mascot {
   display: block;
+}
+
+.custodian__setup-state openclaw-mascot {
   margin-bottom: 4px;
 }
 
@@ -146,10 +151,6 @@ openclaw-custodian-page {
   height: 38px;
   flex: 0 0 38px;
   place-items: center;
-}
-
-.custodian__mark openclaw-mascot {
-  display: block;
 }
 
 .custodian__messages {
@@ -343,10 +344,6 @@ openclaw-custodian-page {
 .custodian__mascot-avatar {
   overflow: visible;
   background: transparent;
-}
-
-.custodian__mascot-avatar openclaw-mascot {
-  display: block;
 }
 
 .custodian-surface > .agent-chat__composer-shell {

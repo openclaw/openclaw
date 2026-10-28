@@ -2,15 +2,15 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-// Cloning a large mirror can outlast fetching it; foreground auto-gc adds unbounded work.
+// Checkout has a separate deadline; foreground auto-gc adds unbounded work.
 const source = readFileSync(new URL("./openclaw-release-deploy", import.meta.url), "utf8");
 
-test("mirror fetch and candidate clone disable foreground auto-gc", () => {
+test("mirror and candidate fetch disable foreground auto-gc", () => {
   assert.match(source, /^mirror_git_config=\(-c gc\.auto=0 -c maintenance\.auto=false\)$/m);
   const fetchLine = source.match(/bounded_build "\$fetch_budget" git "\$\{mirror_git_config\[@\]\}" -C "\$mirror" fetch --prune origin/);
   assert.ok(fetchLine, "mirror fetch carries mirror_git_config");
-  const cloneLine = source.match(/bounded_build "\$clone_budget" git "\$\{mirror_git_config\[@\]\}" clone --no-local --no-hardlinks --no-checkout/);
-  assert.ok(cloneLine, "candidate clone carries mirror_git_config under clone_budget");
+  const cloneLine = source.match(/bounded_build "\$clone_budget" git "\$\{mirror_git_config\[@\]\}" -C "\$build_directory" fetch/);
+  assert.ok(cloneLine, "candidate fetch carries mirror_git_config under clone_budget");
   assert.doesNotMatch(source, /bounded_build "\$fetch_budget" git clone/, "clone no longer shares the fetch budget");
 });
 

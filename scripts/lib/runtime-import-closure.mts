@@ -4,8 +4,9 @@ import { join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { transformSync } from "esbuild";
 import { resolve as resolvePackageImport } from "import-meta-resolve";
-import * as ts from "typescript/unstable/ast";
-import { API } from "typescript/unstable/sync";
+import * as ts from "typescript/ast";
+import { serverFS } from "typescript/fs";
+import { API } from "typescript/sync";
 import { readNativeTypeScriptConfig } from "./native-typescript-config.mts";
 import { createNativeTypeScriptProject } from "./native-typescript.mts";
 import { visitModuleSpecifiers } from "./ts-guard-utils.mts";
@@ -91,7 +92,13 @@ export function createRuntimeImportGraph(
   const configText = () =>
     JSON.stringify({
       extends: join(root, "tsconfig.json"),
-      compilerOptions: { allowJs: true, noLib: true, types: [] },
+      compilerOptions: {
+        allowJs: true,
+        noLib: true,
+        types: [],
+        // Source guards follow JSX files without choosing a renderer's emit mode.
+        ...(sourceImports ? { jsx: "preserve" } : {}),
+      },
       files: [...roots],
       include: [],
     });
@@ -130,24 +137,30 @@ export function createRuntimeImportGraph(
       cwd: root,
       configFileName,
       fs: {
+        directoryExists: serverFS.useOS,
+        getAccessibleEntries: serverFS.useOS,
+        realpath: serverFS.useOS,
+        stat: serverFS.useOS,
+        writeFile: serverFS.useOS,
+        removeFile: serverFS.useOS,
         fileExists: (file) =>
           resolve(file) === configFileName
             ? true
             : !sourceImports && isDeclaration(file)
               ? false
-              : undefined,
+              : serverFS.useOS,
         readFile(file) {
           if (resolve(file) === configFileName) {
             return configText();
           }
           if (isDeclaration(file)) {
-            return sourceImports ? undefined : null;
+            return sourceImports ? serverFS.useOS : undefined;
           }
           if (!/\.[cm]?[jt]sx?$/.test(file) || file.split(/[\\/]/).includes("node_modules")) {
-            return undefined;
+            return serverFS.useOS;
           }
           if (!existsSync(file)) {
-            return null;
+            return undefined;
           }
           const text = readFileSync(file, "utf8");
           // Source guards discard explicitly type-only bindings. Runtime capture follows
@@ -167,7 +180,8 @@ export function createRuntimeImportGraph(
                 target: "esnext",
                 tsconfigRaw: transformConfig,
               }).code;
-          const source = parser.createSourceFile(file, sourceText);
+          using retainedSource = parser.createSourceFile(file, sourceText);
+          const source = retainedSource.sourceFile;
           const selected: ImportReference[] = [];
           visitModuleSpecifiers(
             source,
@@ -211,7 +225,7 @@ export function createRuntimeImportGraph(
     parser.close();
   };
   return {
-    compilerOptions: project.compilerOptions,
+    compilerOptions: project.parsedCommandLine.options,
     dependencies(file: string) {
       const absolute = resolve(root, file);
       let source = project.program.getSourceFile(absolute);

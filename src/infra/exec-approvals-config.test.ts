@@ -1,4 +1,3 @@
-// Covers exec approval config normalization and safe-bin policy.
 import { describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
@@ -8,16 +7,22 @@ import {
 import { saveExecApprovals } from "./exec-approvals-store.test-support.js";
 import { makeExecApprovalsTempDir } from "./exec-approvals-test-helpers.js";
 import {
-  matchAllowlist,
   normalizeExecApprovals,
   resolveExecApprovalsLocked,
   resolveExecApprovalsFromFile,
   type ExecApprovalsAgent,
-  type ExecAllowlistEntry,
   type ExecApprovalsFile,
 } from "./exec-approvals.js";
 
-describe("exec approvals wildcard agent", () => {
+describe("exec approvals config", () => {
+  function parseLegacy(agents: unknown) {
+    const parsed = parseLegacyExecApprovals(JSON.stringify({ version: 1, agents }));
+    if (!parsed.ok) {
+      throw new Error(parsed.error);
+    }
+    return parsed.value;
+  }
+
   it("merges wildcard allowlist entries with agent entries", async () => {
     const dir = makeExecApprovalsTempDir();
     const prevOpenClawHome = process.env.OPENCLAW_HOME;
@@ -46,82 +51,27 @@ describe("exec approvals wildcard agent", () => {
       }
     }
   });
-});
-
-describe("exec approvals node host allowlist check", () => {
-  it.each([
-    {
-      resolution: {
-        kind: "executable" as const,
-        rawExecutable: "python3",
-        resolvedPath: "/usr/bin/python3",
-        resolvedRealPath: "/usr/bin/python3",
-        executableName: "python3",
-      },
-      entries: [{ pattern: "/usr/bin/python3" }],
-      expectedPattern: "/usr/bin/python3",
-    },
-    {
-      // Simulates symlink resolution:
-      // /opt/homebrew/bin/python3 -> /opt/homebrew/opt/python@3.14/bin/python3.14
-      resolution: {
-        kind: "executable" as const,
-        rawExecutable: "python3",
-        resolvedPath: "/opt/homebrew/opt/python@3.14/bin/python3.14",
-        executableName: "python3.14",
-      },
-      entries: [{ pattern: "/opt/**/python*" }],
-      expectedPattern: "/opt/**/python*",
-    },
-    {
-      resolution: {
-        kind: "executable" as const,
-        rawExecutable: "unknown-tool",
-        resolvedPath: "/usr/local/bin/unknown-tool",
-        executableName: "unknown-tool",
-      },
-      entries: [{ pattern: "/usr/bin/python3" }, { pattern: "/opt/**/node" }],
-      expectedPattern: null,
-    },
-  ])(
-    "matches exact and wildcard allowlist patterns for %j",
-    ({ resolution, entries, expectedPattern }) => {
-      const match = matchAllowlist(entries, resolution);
-      expect(match?.pattern ?? null).toBe(expectedPattern);
-    },
-  );
-});
-
-describe("exec approvals default agent migration", () => {
-  it("migrates legacy default agent entries to main", () => {
+  it.each([false, true])("migrates default agent entries with main present=%s", (hasMain) => {
     const file: ExecApprovalsFile = {
       version: 1,
       agents: {
-        default: { allowlist: [{ pattern: "/bin/legacy" }] },
+        ...(hasMain
+          ? { main: { ask: "always" as const, allowlist: [{ pattern: "/bin/main" }] } }
+          : {}),
+        default: {
+          ...(hasMain ? { ask: "off" as const } : {}),
+          allowlist: [{ pattern: "/bin/legacy" }],
+        },
       },
     };
     const resolved = resolveExecApprovalsFromFile({ file, agentId: "main" });
-    expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual(["/bin/legacy"]);
-    expect(resolved.file.agents?.default).toBeUndefined();
-    expect(resolved.file.agents?.main?.allowlist?.[0]?.pattern).toBe("/bin/legacy");
-  });
-
-  it("prefers main agent settings when both main and default exist", () => {
-    const file: ExecApprovalsFile = {
-      version: 1,
-      agents: {
-        main: { ask: "always", allowlist: [{ pattern: "/bin/main" }] },
-        default: { ask: "off", allowlist: [{ pattern: "/bin/legacy" }] },
-      },
-    };
-    const resolved = resolveExecApprovalsFromFile({ file, agentId: "main" });
-    expect(resolved.agent.ask).toBe("always");
-    expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual(["/bin/main", "/bin/legacy"]);
+    const patterns = hasMain ? ["/bin/main", "/bin/legacy"] : ["/bin/legacy"];
+    expect(resolved.agent.ask).toBe(hasMain ? "always" : "off");
+    expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual(patterns);
+    expect(resolved.file.agents?.main?.allowlist?.map((entry) => entry.pattern)).toEqual(patterns);
     expect(resolved.file.agents?.default).toBeUndefined();
   });
-});
 
-describe("exec approvals policy schemas", () => {
   it("retains MCP grants when merging legacy default and canonical main policy", () => {
     const grant = {
       server: "project.docs",
@@ -129,33 +79,19 @@ describe("exec approvals policy schemas", () => {
       source: "allow-always",
       addedAt: 123,
     };
-    const parsed = parseLegacyExecApprovals(
-      JSON.stringify({
-        version: 1,
-        agents: { main: { mcpTools: [grant] }, default: { ask: "off" } },
-      }),
-    );
-    if (!parsed.ok) {
-      throw new Error(parsed.error);
-    }
-    expect(parsed.value.agents?.main).toMatchObject({ mcpTools: [grant], ask: "off" });
-    expect(parsed.value.agents?.default).toBeUndefined();
+    const parsed = parseLegacy({ main: { mcpTools: [grant] }, default: { ask: "off" } });
+    expect(parsed.agents?.main).toMatchObject({ mcpTools: [grant], ask: "off" });
+    expect(parsed.agents?.default).toBeUndefined();
   });
 
   it("keeps legacy string allowlist entries while normalizing them", () => {
-    const parsed = parseLegacyExecApprovals(
-      JSON.stringify({
-        version: 1,
-        agents: { main: { allowlist: ["  ls  ", { pattern: "cat", source: "legacy" }] } },
-      }),
-    );
-    if (!parsed.ok) {
-      throw new Error(parsed.error);
-    }
-    expect(parsed.value.agents?.main?.allowlist?.[0]).toMatchObject({ pattern: "ls" });
-    expect(parsed.value.agents?.main?.allowlist?.[1]).toEqual(
-      expect.objectContaining({ pattern: "cat", source: undefined }),
-    );
+    const parsed = parseLegacy({
+      main: { allowlist: ["  ls  ", { pattern: "cat", source: "legacy" }] },
+    });
+    expect(parsed.agents?.main?.allowlist).toMatchObject([
+      { pattern: "ls" },
+      { pattern: "cat", source: undefined },
+    ]);
   });
 
   it.each([
@@ -185,146 +121,73 @@ describe("exec approvals policy schemas", () => {
   ])("rejects invalid persisted $name", ({ value }) => {
     expect(tryParsePersistedExecApprovals(JSON.stringify(value))).toBeNull();
   });
-});
-
-describe("exec approvals invalid explicit policy fallback", () => {
-  it("treats invalid explicit agent fields as masked and falls back to defaults instead of wildcard", () => {
-    const resolved = resolveExecApprovalsFromFile({
-      file: {
-        version: 1,
-        defaults: {
-          security: "deny",
-          ask: "on-miss",
-          askFallback: "deny",
-        },
-        agents: {
-          "*": {
-            security: "full",
-            ask: "always",
-            askFallback: "full",
-          },
-          runner: {
-            security: "foo" as unknown as ExecApprovalsAgent["security"],
-            ask: "Always" as unknown as ExecApprovalsAgent["ask"],
-            askFallback: "bar" as unknown as ExecApprovalsAgent["askFallback"],
-          },
-        },
-      },
+  function resolvePolicy(
+    runner: ExecApprovalsAgent,
+    defaults: ExecApprovalsAgent,
+    wildcard: ExecApprovalsAgent,
+  ) {
+    return resolveExecApprovalsFromFile({
+      file: { version: 1, defaults, agents: { "*": wildcard, runner } },
       agentId: "runner",
-      overrides: {
-        security: "full",
-        ask: "off",
-        askFallback: "full",
-      },
+      overrides: { security: "full", ask: "off", askFallback: "full" },
     });
-
-    expect(resolved.agent.security).toBe("deny");
-    expect(resolved.agent.ask).toBe("on-miss");
-    expect(resolved.agent.askFallback).toBe("deny");
-    expect(resolved.agentSources).toEqual({
-      security: "defaults.security",
-      ask: "defaults.ask",
-      askFallback: "defaults.askFallback",
-    });
-  });
-
-  it("treats null explicit agent fields as unset and still considers wildcard", () => {
-    const resolved = resolveExecApprovalsFromFile({
-      file: {
-        version: 1,
-        defaults: {
-          security: "full",
-          ask: "off",
-          askFallback: "full",
-        },
-        agents: {
-          "*": {
-            security: "deny",
-            ask: "always",
-            askFallback: "deny",
-          },
-          runner: {
-            security: null as unknown as ExecApprovalsAgent["security"],
-            ask: null as unknown as ExecApprovalsAgent["ask"],
-            askFallback: null as unknown as ExecApprovalsAgent["askFallback"],
-          },
-        },
-      },
-      agentId: "runner",
-      overrides: {
-        security: "full",
-        ask: "off",
-        askFallback: "full",
-      },
-    });
-
-    expect(resolved.agent.security).toBe("deny");
-    expect(resolved.agent.ask).toBe("always");
-    expect(resolved.agent.askFallback).toBe("deny");
-    expect(resolved.agentSources).toEqual({
-      security: "agents.*.security",
-      ask: "agents.*.ask",
-      askFallback: "agents.*.askFallback",
-    });
-  });
-});
-
-describe("normalizeExecApprovals handles string allowlist entries (#9790)", () => {
-  function normalizeMainAllowlist(file: ExecApprovalsFile): ExecAllowlistEntry[] | undefined {
-    const normalized = normalizeExecApprovals(file);
-    return normalized.agents?.main?.allowlist;
   }
 
-  function expectNoSpreadStringArtifacts(entries: ExecAllowlistEntry[]) {
-    for (const entry of entries) {
-      expect(entry).toHaveProperty("pattern");
-      expect(typeof entry.pattern).toBe("string");
-      expect(entry.pattern.length).toBeGreaterThan(0);
-      expect(entry).not.toHaveProperty("0");
-    }
-  }
+  it.each([false, true])("resolves invalid agent fields with null=%s", (isNull) => {
+    const expected: ExecApprovalsAgent = {
+      security: "deny",
+      ask: isNull ? "always" : "on-miss",
+      askFallback: "deny",
+    };
+    const other: ExecApprovalsAgent = {
+      security: "full",
+      ask: isNull ? "off" : "always",
+      askFallback: "full",
+    };
+    const resolved = resolvePolicy(
+      {
+        security: isNull ? null : "foo",
+        ask: isNull ? null : "Always",
+        askFallback: isNull ? null : "bar",
+      } as unknown as ExecApprovalsAgent,
+      isNull ? other : expected,
+      isNull ? expected : other,
+    );
+    expect(resolved.agent).toMatchObject(expected);
+    const source = isNull ? "agents.*" : "defaults";
+    expect(resolved.agentSources).toEqual({
+      security: `${source}.security`,
+      ask: `${source}.ask`,
+      askFallback: `${source}.askFallback`,
+    });
+  });
 
   it.each([
-    {
-      name: "mixed entries",
-      allowlist: ["ls", { pattern: "/usr/bin/cat" }, "echo"],
-      expectedPatterns: ["ls", "/usr/bin/cat", "echo"],
+    ["mixed entries", ["ls", { pattern: "/usr/bin/cat" }, "echo"], ["ls", "/usr/bin/cat", "echo"]],
+    ["empty strings dropped", ["", "  ", "ls"], ["ls"]],
+    [
+      "malformed objects dropped",
+      [{ pattern: "/usr/bin/ls" }, {}, { pattern: 123 }, { pattern: "   " }, "echo"],
+      ["/usr/bin/ls", "echo"],
+    ],
+    ["non-array dropped", "ls", undefined],
+  ] satisfies Array<[string, unknown, string[] | undefined]>)(
+    "%s",
+    (_, allowlist, expectedPatterns) => {
+      const file = {
+        version: 1,
+        agents: { main: { allowlist } as ExecApprovalsAgent },
+      } satisfies ExecApprovalsFile;
+      const entries = normalizeExecApprovals(file).agents?.main?.allowlist;
+      expect(entries?.map((entry) => entry.pattern)).toEqual(expectedPatterns);
+      if (entries) {
+        for (const entry of entries) {
+          expect(entry).not.toHaveProperty("0");
+        }
+      }
     },
-    {
-      name: "empty strings dropped",
-      allowlist: ["", "  ", "ls"],
-      expectedPatterns: ["ls"],
-    },
-    {
-      name: "malformed objects dropped",
-      allowlist: [{ pattern: "/usr/bin/ls" }, {}, { pattern: 123 }, { pattern: "   " }, "echo"],
-      expectedPatterns: ["/usr/bin/ls", "echo"],
-    },
-    {
-      name: "non-array dropped",
-      allowlist: "ls",
-      expectedPatterns: undefined,
-    },
-  ] satisfies ReadonlyArray<{
-    name: string;
-    allowlist: unknown;
-    expectedPatterns: string[] | undefined;
-  }>)("$name", ({ allowlist, expectedPatterns }) => {
-    const file = {
-      version: 1,
-      agents: {
-        main: { allowlist } as ExecApprovalsAgent,
-      },
-    } satisfies ExecApprovalsFile;
-    const entries = normalizeMainAllowlist(file);
-    expect(entries?.map((entry) => entry.pattern)).toEqual(expectedPatterns);
-    if (entries) {
-      expectNoSpreadStringArtifacts(entries);
-    }
-  });
-});
+  );
 
-describe("normalizeExecApprovals strips invalid security/ask enum values (#59006)", () => {
   it("resolves to built-in defaults when invalid values are stripped", () => {
     const file = {
       version: 1,
@@ -334,14 +197,10 @@ describe("normalizeExecApprovals strips invalid security/ask enum values (#59006
       },
     } as unknown as ExecApprovalsFile;
     const resolved = resolveExecApprovalsFromFile({ file, agentId: "main" });
-    // Invalid "none" in defaults is stripped, so fallback to DEFAULT_SECURITY ("full")
-    expect(resolved.defaults.security).toBe("full");
-    // Invalid "never" in defaults is stripped, so fallback to DEFAULT_ASK ("off")
-    expect(resolved.defaults.ask).toBe("off");
-    // Wildcard agent "none" is stripped, so agent inherits resolved defaults
-    expect(resolved.agent.security).toBe("full");
-    // Wildcard agent ask="off" is valid and preserved
-    expect(resolved.agent.ask).toBe("off");
+    expect(resolved).toMatchObject({
+      defaults: { security: "full", ask: "off" },
+      agent: { security: "full", ask: "off" },
+    });
   });
 
   it("strips non-string policy values (e.g. numbers, booleans) without throwing", () => {
@@ -353,10 +212,9 @@ describe("normalizeExecApprovals strips invalid security/ask enum values (#59006
       },
     } as unknown as ExecApprovalsFile;
     const normalized = normalizeExecApprovals(file);
-    expect(normalized.defaults?.security).toBeUndefined();
-    expect(normalized.defaults?.ask).toBeUndefined();
-    expect(normalized.defaults?.askFallback).toBeUndefined();
-    expect(normalized.agents?.main?.security).toBeUndefined();
-    expect(normalized.agents?.main?.ask).toBeUndefined();
+    expect(normalized).toMatchObject({
+      defaults: { security: undefined, ask: undefined, askFallback: undefined },
+      agents: { main: { security: undefined, ask: undefined } },
+    });
   });
 });

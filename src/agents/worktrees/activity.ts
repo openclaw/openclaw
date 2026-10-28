@@ -15,7 +15,6 @@ import type { ManagedWorktreeRecord, WorktreeMutationGuard } from "./types.js";
 export async function acquireManagedWorktree(
   env: NodeJS.ProcessEnv,
   id: string,
-  now: () => number,
   params: WorktreeMutationGuard = {},
 ): Promise<ManagedWorktreeRecord> {
   const assertCurrent = () => {
@@ -55,7 +54,7 @@ export async function acquireManagedWorktree(
           });
           try {
             guard.commitGuard();
-            const lastActiveAt = now();
+            const lastActiveAt = Date.now();
             await updateRegistryWorktree(
               env,
               id,

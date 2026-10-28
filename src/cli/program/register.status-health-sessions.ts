@@ -7,6 +7,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { throwExpectedCliError } from "../failure-output.js";
 import { formatDocsHelp, formatHelpExamples } from "../help-format.js";
+import { parseOptionalPositiveInteger } from "../parse-positive-integer.js";
 import type { SessionsImportOptions } from "../sessions-import.js";
 
 type SessionsListCliOptions = Omit<Parameters<typeof sessionsCommand>[0], "limit"> & {
@@ -64,21 +65,6 @@ function addSessionsGatewayOptions(command: Command): Command {
     .option("--password <password>", "Gateway password (password auth)")
     .option("--timeout <ms>", "RPC timeout in milliseconds")
     .option("--json", "Output JSON", false);
-}
-
-function mergeSessionsListOptions(
-  opts: SessionsListCliOptions,
-  parentOpts?: SessionsListCliOptions,
-): SessionsListCliOptions {
-  return {
-    json: Boolean(opts.json || parentOpts?.json),
-    verbose: Boolean(opts.verbose || parentOpts?.verbose),
-    store: opts.store ?? parentOpts?.store,
-    agent: opts.agent ?? parentOpts?.agent,
-    allAgents: Boolean(opts.allAgents || parentOpts?.allAgents),
-    active: opts.active ?? parentOpts?.active,
-    limit: opts.limit ?? parentOpts?.limit,
-  };
 }
 
 async function runSessionsListCli(opts: SessionsListCliOptions): Promise<void> {
@@ -205,10 +191,7 @@ async function runWithVerboseAndTimeout(
   const verbose = Boolean(opts.verbose || opts.debug);
   setVerbose(verbose);
   await runCommandWithRuntime(defaultRuntime, async () => {
-    const timeoutMs = parseStrictPositiveInteger(opts.timeout);
-    if (opts.timeout !== undefined && timeoutMs === undefined) {
-      throw new Error("--timeout must be a positive integer (milliseconds)");
-    }
+    const timeoutMs = parseOptionalPositiveInteger(opts.timeout, "--timeout", " (milliseconds)");
     await action({ verbose, timeoutMs });
   });
 }
@@ -306,9 +289,17 @@ export function registerStatusHealthSessionsCommands(program: Command) {
 
   addSessionsListOptions(
     sessionsCmd.command("list").description("List stored conversation sessions"),
-  ).action(async (opts, command) => {
-    const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined;
-    await runSessionsListCli(mergeSessionsListOptions(opts as SessionsListCliOptions, parentOpts));
+  ).action(async (opts: SessionsListCliOptions, command: Command) => {
+    const parentOpts = command.parent?.opts<SessionsListCliOptions>();
+    await runSessionsListCli({
+      json: Boolean(opts.json || parentOpts?.json),
+      verbose: Boolean(opts.verbose || parentOpts?.verbose),
+      store: opts.store ?? parentOpts?.store,
+      agent: opts.agent ?? parentOpts?.agent,
+      allAgents: Boolean(opts.allAgents || parentOpts?.allAgents),
+      active: opts.active ?? parentOpts?.active,
+      limit: opts.limit ?? parentOpts?.limit,
+    });
   });
 
   sessionsCmd

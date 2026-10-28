@@ -164,11 +164,12 @@ export function splitTelegramRichMessageTextChunks(params: {
   return splitTelegramRichBlocks(plan.richMessage.blocks, {
     blockLimit: TELEGRAM_RICH_BLOCK_LIMIT,
     textLimit: params.textLimit,
-  }).map((blocks, index) => {
-    const chunk = buildTelegramRichBlocksPlan(blocks, chunkOptions);
-    if (index === 0) {
-      chunk.degradationReasons = plan.degradationReasons;
-    }
-    return chunk;
-  });
+  }).map((blocks, index) =>
+    buildRichMessagePlan(
+      blocks,
+      inputRichBlocksToPlainText(blocks),
+      chunkOptions,
+      index === 0 ? plan.degradationReasons : [],
+    ),
+  );
 }

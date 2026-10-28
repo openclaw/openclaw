@@ -19,13 +19,13 @@ export async function resolveDiscordNativeInteractionChannelContext(
   const channelType = channelContext.channelType;
 
   return {
-    channelType,
     isDirectMessage: channelType === ChannelType.DM,
     isGroupDm: channelType === ChannelType.GroupDM,
     isThreadChannel: channelContext.isThreadChannel,
     channelName: channelContext.channelName,
     channelSlug: channelContext.channelSlug,
     rawChannelId: channelContext.channelId,
+    memberRoleIds: interaction.rawData.member?.roles ?? [],
     threadParentId: hasGuild ? channelContext.threadParentId : undefined,
     threadParentName: hasGuild ? channelContext.threadParentName : undefined,
     threadParentSlug: hasGuild ? channelContext.threadParentSlug : "",

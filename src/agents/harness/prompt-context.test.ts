@@ -3,13 +3,13 @@ import { describe, expect, it } from "vitest";
 import {
   resolveAgentWorkspaceMemoryRouting,
   shouldIncludeAgentHarnessRuntimeContext,
-} from "./prompt-context.js";
+} from "../../plugin-sdk/agent-harness-attempt-runtime.js";
 
 describe("harness runtime context inclusion", () => {
   it.each([
     { bootstrapContextMode: "lightweight", bootstrapContextRunKind: "cron", included: false },
     { bootstrapContextMode: "full", bootstrapContextRunKind: "cron", included: true },
-    { bootstrapContextMode: "lightweight", bootstrapContextRunKind: "heartbeat", included: true },
+    { bootstrapContextMode: "lightweight", bootstrapContextRunKind: "default", included: true },
   ] as const)("$bootstrapContextMode / $bootstrapContextRunKind", ({ included, ...params }) => {
     expect(shouldIncludeAgentHarnessRuntimeContext(params)).toBe(included);
   });

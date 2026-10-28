@@ -60,7 +60,10 @@ struct VoiceOwnerLifecycleTests {
             await wake.pauseForPushToTalk(lease: second)
             do {
                 try await wake.startDiagnostic(
-                    id: first, triggers: ["openclaw"], micID: nil, localeID: nil,
+                    id: first,
+                    triggers: ["openclaw"],
+                    micID: nil,
+                    localeID: nil,
                     onUpdate: { _ in Issue.record("A diagnostic cannot acquire an occupied microphone") })
                 Issue.record("A diagnostic cannot steal a Talk or push-to-talk lease")
             } catch {
@@ -84,7 +87,10 @@ struct VoiceOwnerLifecycleTests {
                 withUnsafeCurrentTask { $0?.cancel() }
                 await #expect(throws: CancellationError.self) {
                     try await state.voiceRuntime.wake.startDiagnostic(
-                        id: UUID(), triggers: ["openclaw"], micID: nil, localeID: nil,
+                        id: UUID(),
+                        triggers: ["openclaw"],
+                        micID: nil,
+                        localeID: nil,
                         onUpdate: { _ in Issue.record("Cancelled diagnostic published a result") })
                 }
             }
@@ -214,11 +220,11 @@ struct VoiceOwnerLifecycleTests {
     @Test func `stale originating dismissal cannot hide replacement`() async throws {
         try await withVoiceOwnerFixture { fixture, state, _ in
             let voice = state.voiceRuntime
-            let first = voice.sessions.startSession(source: .pushToTalk, text: "first draft")
+            let first = voice.sessions.startSession(text: "first draft")
             let blink = state.blinkTick
             voice.overlay.dismiss(token: first)
             #expect(fixture.log.count("overlay.request:\(first)") == 1)
-            let second = voice.sessions.startSession(source: .pushToTalk, text: "second draft")
+            let second = voice.sessions.startSession(text: "second draft")
             fixture.completeDismissal(first)
             #expect(voice.sessions.snapshot().token == second)
             #expect(voice.overlay.snapshot().text == "second draft")
@@ -236,17 +242,18 @@ struct VoiceOwnerLifecycleTests {
         }
     }
 
-    @Test func `overlay send uses owned coordinator and originating completion`() async throws {
+    @Test(.testWaitLimit) func `overlay send uses owned coordinator and originating completion`() async throws {
         try await withVoiceOwnerFixture(activate: false) { fixture, state, _ in
             let voice = state.voiceRuntime
             let celebration = state.sendCelebrationTick
-            let token = voice.sessions.startSession(source: .pushToTalk, text: "owned transcript")
+            let token = voice.sessions.startSession(text: "owned transcript")
             voice.overlay.updateText("edited owned transcript")
             #expect(voice.sessions.snapshot().text == "edited owned transcript")
             voice.overlay.requestSend(token: token)
-            try await waitForVoiceOwner("owned forward and send dismissal") { [log = fixture.log] in
-                log.count("forward:edited owned transcript") == 1 && log.count("overlay.request:\(token)") == 1
-            }
+            try await fixture.log.wait(for: "forward:edited owned transcript")
+            try await fixture.log.wait(for: "overlay.request:\(token)")
+            #expect(fixture.log.count("forward:edited owned transcript") == 1)
+            #expect(fixture.log.count("overlay.request:\(token)") == 1)
             #expect(voice.sessions.snapshot().token == token)
             fixture.completeDismissal(token)
             #expect(voice.sessions.snapshot().token == nil)

@@ -1,5 +1,5 @@
-import type { Project as AsyncProject } from "typescript/unstable/async";
-import { DiagnosticCategory, type Diagnostic, type Project } from "typescript/unstable/sync";
+import type { Project as AsyncProject } from "typescript/async";
+import { DiagnosticCategory, type Diagnostic, type Project } from "typescript/sync";
 
 type DiagnosticOptions = { includeSemantic?: boolean };
 

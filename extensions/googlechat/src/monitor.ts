@@ -1,5 +1,6 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
+  createChannelPartialDeliveryError,
   formatInboundMediaUnavailableText,
   recordChannelBotPairLoopAndCheckSuppression,
   createChannelInboundEnvelopeBuilderAsync,
@@ -7,27 +8,30 @@ import {
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { parseDateStringTimestampMs as resolveGoogleChatTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
+import {
+  deleteGoogleChatMessage,
+  downloadGoogleChatMedia,
+  GoogleChatApiError,
+  sendGoogleChatMessage,
+  updateGoogleChatMessage,
+} from "./api.js";
 import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js";
+import { formatGoogleChatMediaText, formatGoogleChatTextChunks } from "./format.js";
 import { applyGoogleChatInboundAccessPolicy } from "./monitor-access.js";
-import { resolveGoogleChatDurableReplyOptions } from "./monitor-durable.js";
 import {
   createGoogleChatIngressMonitor,
   type GoogleChatIngressLifecycle,
 } from "./monitor-ingress.js";
-import {
-  createGoogleChatTypingMessage,
-  deliverGoogleChatReply,
-  type GoogleChatTypingMessage,
-} from "./monitor-reply-delivery.js";
 import { normalizeGoogleChatReplyTarget } from "./monitor-reply-target.js";
 import {
   registerGoogleChatWebhookTarget,
@@ -46,26 +50,30 @@ import type { GoogleChatAttachment, GoogleChatEvent } from "./types.js";
 
 setGoogleChatWebhookEventProcessor(processGoogleChatEvent);
 
+type GoogleChatTypingMessage = ReturnType<typeof createGoogleChatTypingMessage>;
+
+function createGoogleChatTypingMessage(params: {
+  messageName: string;
+  requestedThreadName?: string;
+  deliveredThreadName?: string;
+}) {
+  const name = params.messageName.trim();
+  const requestedThreadName = params.requestedThreadName?.trim();
+  if (!requestedThreadName) {
+    return { placement: "top-level" as const, name };
+  }
+  return {
+    placement: "thread" as const,
+    name,
+    requestedThreadName,
+    deliveredThreadName: params.deliveredThreadName?.trim() || requestedThreadName,
+  };
+}
+
 function logVerbose(core: GoogleChatCoreRuntime, runtime: GoogleChatRuntimeEnv, message: string) {
   if (core.logging.shouldLogVerbose()) {
     runtime.log?.(`[googlechat] ${message}`);
   }
-}
-
-function resolveBotDisplayName(params: {
-  accountName?: string;
-  agentId: string;
-  config: OpenClawConfig;
-}): string {
-  const { accountName, agentId, config } = params;
-  if (accountName?.trim()) {
-    return accountName.trim();
-  }
-  const agent = resolveAgentConfig(config, agentId);
-  if (agent?.name?.trim()) {
-    return agent.name.trim();
-  }
-  return agent?.identity?.name?.trim() || "OpenClaw";
 }
 
 async function processGoogleChatEvent(
@@ -97,7 +105,7 @@ async function processGoogleChatEvent(
   const sender = message.sender ?? event.user;
   const senderId = sender?.name ?? "";
   const senderName = sender?.displayName ?? "";
-  const senderEmail = sender?.email ?? undefined;
+  const senderEmail = sender?.email;
   const isBotSender = sender?.type?.toUpperCase() === "BOT";
   const appUserId = account.config.botUser?.trim() || "users/app";
 
@@ -175,41 +183,46 @@ async function processGoogleChatEvent(
   const mediaInputs: ChannelInboundMediaInput[] = attachments.map((attachment) => ({
     contentType: attachment.contentType,
   }));
-  const first = attachments.at(0);
-  if (first) {
+  const attachmentNotices = new Set<string>();
+  const reportAttachmentUnavailable = (notice: string, hint = "") => {
+    if (attachmentNotices.has(notice)) {
+      return;
+    }
+    attachmentNotices.add(notice);
+    rawBody = formatInboundMediaUnavailableText({ body: rawBody, notice });
+    runtime.error?.(`[${account.accountId}] ${notice}${hint}`);
+  };
+  for (const [index, attachment] of attachments.entries()) {
     try {
-      const attachmentData = await downloadAttachment(first, account, mediaMaxMb, core);
+      const attachmentData = await downloadAttachment(attachment, account, mediaMaxMb, core);
       if (attachmentData) {
-        mediaInputs[0] = {
+        mediaInputs[index] = {
           path: attachmentData.path,
           url: attachmentData.path,
-          contentType: attachmentData.contentType ?? first.contentType,
+          contentType: attachmentData.contentType ?? attachment.contentType,
         };
       } else {
-        const reason = first.driveDataRef
+        const reason = attachment.driveDataRef
           ? "Google Drive files are not downloadable"
           : "unsupported attachment source";
         const notice = `[Google Chat attachment unavailable: ${reason}; upload the file directly]`;
-        rawBody = formatInboundMediaUnavailableText({ body: rawBody, notice });
-        runtime.error?.(`[${account.accountId}] ${notice}`);
+        reportAttachmentUnavailable(notice);
       }
     } catch (error) {
-      if (!(error instanceof MediaFetchError) || error.code !== "max_bytes") {
+      const missing = error instanceof GoogleChatApiError && error.status === 404;
+      if (!missing && (!(error instanceof MediaFetchError) || error.code !== "max_bytes")) {
         throw error;
       }
-      // Adopt permanent size failures after authorizing the original text; retrying
+      // Adopt permanent attachment failures after authorizing the original text; retrying
       // them would block every later durable message in the same conversation.
-      const notice = `[Google Chat attachment too large; maximum ${mediaMaxMb} MB]`;
-      rawBody = formatInboundMediaUnavailableText({ body: rawBody, notice });
-      runtime.error?.(
-        `[${account.accountId}] ${notice} Increase channels.googlechat.mediaMaxMb to process larger attachments.`,
+      const notice = missing
+        ? "[Google Chat attachment unavailable: file not found; upload the file directly]"
+        : `[Google Chat attachment too large; maximum ${mediaMaxMb} MB]`;
+      reportAttachmentUnavailable(
+        notice,
+        missing ? "" : " Increase channels.googlechat.mediaMaxMb to process larger attachments.",
       );
     }
-  }
-  const additionalCount = attachments.length - 1;
-  if (additionalCount > 0) {
-    const notice = `[Google Chat: ${additionalCount} additional ${additionalCount === 1 ? "attachment was" : "attachments were"} not processed; only the first attachment is supported]`;
-    rawBody = formatInboundMediaUnavailableText({ body: rawBody, notice });
   }
   const media = mediaInputs.length === 0 ? [] : await toInboundMediaFactsWithMetadata(mediaInputs);
 
@@ -272,7 +285,7 @@ async function processGoogleChatEvent(
       WasMentioned: isGroup ? effectiveWasMentioned : undefined,
       CommandAuthorized: commandAuthorized,
       GroupSubject: undefined,
-      GroupSpace: isGroup ? (space.displayName ?? undefined) : undefined,
+      GroupSpace: isGroup ? space.displayName : undefined,
     },
   });
 
@@ -291,11 +304,17 @@ async function processGoogleChatEvent(
 
   if (typingIndicator === "message") {
     try {
-      const botName = resolveBotDisplayName({
-        accountName: account.config.name,
-        agentId: route.agentId,
-        config,
-      });
+      const accountName = account.config.name;
+      const agentId = route.agentId;
+      let botName: string;
+      if (accountName?.trim()) {
+        botName = accountName.trim();
+      } else {
+        const agent = resolveAgentConfig(config, agentId);
+        botName = agent?.name?.trim()
+          ? agent.name.trim()
+          : agent?.identity?.name?.trim() || "OpenClaw";
+      }
       const result = await sendGoogleChatMessage({
         account,
         space: spaceId,
@@ -314,74 +333,229 @@ async function processGoogleChatEvent(
     }
   }
 
-  await core.channel.inbound.run({
-    channel: "googlechat",
-    accountId: route.accountId,
-    raw: message,
-    ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
-    adapter: {
-      ingest: () => ({
-        id: message.name ?? spaceId,
-        timestamp: timestampMs,
-        rawText: rawBody,
-        textForAgent: rawBody,
-        textForCommands: rawBody,
-        raw: message,
-      }),
-      resolveTurn: () => ({
-        cfg: config,
-        channel: "googlechat",
-        accountId: route.accountId,
-        route: { agentId: route.agentId, sessionKey: route.sessionKey },
-        ctxPayload,
-        delivery: {
-          durable: (payload, info) =>
-            resolveGoogleChatDurableReplyOptions({
-              payload: normalizeGoogleChatReplyTarget({
+  const cleanupTypingMessage = async () => {
+    const placeholder = typingMessage;
+    typingMessage = undefined;
+    if (!placeholder) {
+      return;
+    }
+    try {
+      await deleteGoogleChatMessage({ account, messageName: placeholder.name });
+    } catch (error) {
+      runtime.error?.(`Google Chat typing cleanup failed: ${String(error)}`);
+    }
+  };
+  let deferred = false;
+  const typingTurnLifecycle: Parameters<
+    GoogleChatCoreRuntime["channel"]["inbound"]["run"]
+  >[0]["turnAdoptionLifecycle"] = typingMessage
+    ? {
+        ...turnAdoptionLifecycle,
+        onAdopted: () => turnAdoptionLifecycle?.onAdopted(),
+        onDeferred: () => {
+          turnAdoptionLifecycle?.onDeferred();
+          deferred = true;
+        },
+        // Immediate agent settlement precedes buffered final delivery.
+        onSettled: () => (deferred ? cleanupTypingMessage() : undefined),
+      }
+    : turnAdoptionLifecycle;
+
+  try {
+    await core.channel.inbound.run({
+      channel: "googlechat",
+      accountId: route.accountId,
+      raw: message,
+      ...(typingTurnLifecycle ? { turnAdoptionLifecycle: typingTurnLifecycle } : {}),
+      adapter: {
+        ingest: () => ({
+          id: message.name ?? spaceId,
+          timestamp: timestampMs,
+          rawText: rawBody,
+          textForAgent: rawBody,
+          textForCommands: rawBody,
+          raw: message,
+        }),
+        resolveTurn: () => ({
+          cfg: config,
+          channel: "googlechat",
+          accountId: route.accountId,
+          route: { agentId: route.agentId, sessionKey: route.sessionKey },
+          ctxPayload,
+          delivery: {
+            durable: (payload, info) => {
+              const normalizedPayload = normalizeGoogleChatReplyTarget({
                 payload,
                 sourceMessageName: message.name,
                 replyThreadName: effectiveReplyThreadName,
-              }),
-              infoKind: info.kind,
-              spaceId,
-              hasTypingMessage: Boolean(typingMessage),
-            }),
-          deliver: async (payload) => {
-            await deliverGoogleChatReply({
-              payload: normalizeGoogleChatReplyTarget({
+              });
+              if (info.kind !== "final" || Boolean(typingMessage)) {
+                return false;
+              }
+              const threadId = normalizedPayload.replyToId?.trim() || undefined;
+              if (!threadId) {
+                return { to: spaceId, replyToId: null };
+              }
+              return {
+                to: spaceId,
+                replyToId: threadId,
+                threadId,
+              };
+            },
+            deliver: async (payload) => {
+              const normalizedPayload = normalizeGoogleChatReplyTarget({
                 payload,
                 sourceMessageName: message.name,
                 replyThreadName: effectiveReplyThreadName,
-              }),
-              account,
-              spaceId,
-              runtime,
-              core,
-              config,
-              statusSink,
-              typingMessage,
-            });
-            // Only use typing message for first delivery
-            typingMessage = undefined;
+              });
+              // Clear this whenever the typing message is deleted or unavailable; otherwise
+              // text delivery can keep retrying a dead message and drop content.
+              let deliveryTypingMessage = typingMessage;
+              const targetThreadName = normalizedPayload.replyToId?.trim() || undefined;
+              const reply = resolveSendableOutboundReplyParts(normalizedPayload);
+              let deliveryThreadName = targetThreadName;
+              const acceptedText: Array<{ id?: string; text: string }> = [];
+              const runTextOperation = async <T>(operation: Promise<T>): Promise<T> =>
+                await operation.catch((error: unknown) => {
+                  if (acceptedText.length === 0) {
+                    throw error;
+                  }
+                  throw createChannelPartialDeliveryError(error, {
+                    messageIds: acceptedText.flatMap(({ id }) => (id ? [id] : [])),
+                    content: acceptedText.map(({ text }) => text).join("\n"),
+                    visibleReplySent: true,
+                  });
+                });
+
+              const typingMatchesReply =
+                deliveryTypingMessage?.placement === "thread"
+                  ? deliveryTypingMessage.requestedThreadName === targetThreadName
+                  : deliveryTypingMessage?.placement === "top-level"
+                    ? targetThreadName === undefined
+                    : false;
+              if (deliveryTypingMessage && !typingMatchesReply) {
+                // Typing starts before reply directives are resolved. Never edit a placeholder
+                // from one thread into a final reply targeted at another conversation surface.
+                await cleanupTypingMessage();
+                deliveryTypingMessage = undefined;
+              } else if (deliveryTypingMessage?.placement === "thread") {
+                // The requested thread decides whether the placeholder still belongs to this reply;
+                // the provider-returned thread owns every later physical send after fallback.
+                deliveryThreadName = deliveryTypingMessage.deliveredThreadName;
+              }
+
+              let text: string;
+              try {
+                text = formatGoogleChatMediaText(reply.text, reply.mediaUrls);
+              } catch (cause) {
+                await cleanupTypingMessage();
+                throw new PlatformMessageNotDispatchedError(
+                  cause instanceof Error ? cause.message : String(cause),
+                  { cause, retryable: false },
+                );
+              }
+
+              const chunkLimit = account.config.textChunkLimit ?? 4000;
+              const chunkMode = core.channel.text.resolveChunkMode(
+                config,
+                "googlechat",
+                account.accountId,
+              );
+              const chunks = formatGoogleChatTextChunks(text, chunkLimit).flatMap((chunk) =>
+                core.channel.text.chunkMarkdownTextWithMode(chunk, chunkLimit, chunkMode),
+              );
+              const rejection =
+                text && !chunks.some((chunk) => chunk)
+                  ? "Google Chat reply has no visible text after formatting."
+                  : undefined;
+              if (rejection) {
+                await cleanupTypingMessage();
+                // Permanent policy rejection before any recipient-visible send; the typed
+                // contract keeps delivery custody from recording a false ambiguous attempt.
+                throw new PlatformMessageNotDispatchedError(rejection, {
+                  cause: undefined,
+                  retryable: false,
+                });
+              }
+
+              const recordOutboundStatus = () => {
+                try {
+                  statusSink?.({ lastOutboundAt: Date.now() });
+                } catch (err) {
+                  runtime.error?.(`Google Chat outbound status update failed: ${String(err)}`);
+                }
+              };
+              const sendTextMessage = async (chunk: string) => {
+                const sent = await runTextOperation(
+                  sendGoogleChatMessage({
+                    account,
+                    space: spaceId,
+                    text: chunk,
+                    thread: deliveryThreadName,
+                  }),
+                );
+                if (sent) {
+                  acceptedText.push({ id: sent.messageName?.trim() || undefined, text: chunk });
+                }
+                if (targetThreadName) {
+                  deliveryThreadName = sent?.threadName?.trim() || deliveryThreadName;
+                }
+              };
+              for (const chunk of chunks) {
+                if (!chunk) {
+                  continue;
+                }
+                if (deliveryTypingMessage) {
+                  // PATCH can apply before its response fails. Cleanup must never delete a possible answer.
+                  typingMessage = undefined;
+                  try {
+                    const updated = await updateGoogleChatMessage({
+                      account,
+                      messageName: deliveryTypingMessage.name,
+                      text: chunk,
+                    });
+                    acceptedText.push({
+                      id: updated.messageName?.trim() || deliveryTypingMessage.name,
+                      text: chunk,
+                    });
+                  } catch (error) {
+                    if (!(error instanceof GoogleChatApiError) || error.status !== 404) {
+                      throw error;
+                    }
+                    runtime.error?.(`Google Chat typing update failed: ${String(error)}`);
+                    await sendTextMessage(chunk);
+                  }
+                  deliveryTypingMessage = undefined;
+                  recordOutboundStatus();
+                  continue;
+                }
+                await sendTextMessage(chunk);
+                recordOutboundStatus();
+              }
+            },
+            onDelivered: () => {
+              statusSink?.({ lastOutboundAt: Date.now() });
+            },
+            onError: (err, info) => {
+              runtime.error?.(
+                `[${account.accountId}] Google Chat ${info.kind} reply failed: ${String(err)}`,
+              );
+            },
           },
-          onDelivered: () => {
-            statusSink?.({ lastOutboundAt: Date.now() });
+          replyPipeline: {},
+          record: {
+            onRecordError: (err) => {
+              runtime.error?.(`googlechat: failed updating session meta: ${String(err)}`);
+            },
           },
-          onError: (err, info) => {
-            runtime.error?.(
-              `[${account.accountId}] Google Chat ${info.kind} reply failed: ${String(err)}`,
-            );
-          },
-        },
-        replyPipeline: {},
-        record: {
-          onRecordError: (err) => {
-            runtime.error?.(`googlechat: failed updating session meta: ${String(err)}`);
-          },
-        },
-      }),
-    },
-  });
+        }),
+      },
+    });
+  } finally {
+    if (!deferred) {
+      await cleanupTypingMessage();
+    }
+  }
 }
 
 async function downloadAttachment(
@@ -394,7 +568,7 @@ async function downloadAttachment(
   if (!resourceName) {
     return null;
   }
-  const maxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
+  const maxBytes = mediaMaxMb * 1024 * 1024;
   const downloaded = await downloadGoogleChatMedia({ account, resourceName, maxBytes });
   const saved = await core.channel.media.saveMediaBuffer(
     downloaded.buffer,

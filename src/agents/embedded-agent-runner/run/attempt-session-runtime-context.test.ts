@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   captureAnthropicRequest,
   registerParityHostLifecycle,
@@ -14,34 +14,11 @@ import {
   shouldRetainSteeringRuntimeContext,
 } from "./runtime-context-prompt.js";
 
-function createSessionManager(version: 3 | 4) {
-  return {
-    getHeader: () => ({ version }),
-    getLeafEntry: () => undefined,
-    getSessionTarget: () => undefined,
-    reloadPersistedTranscriptAsync: async () => {},
-    getSessionId: () => "runtime-context-compat",
-  } as unknown as ReturnType<typeof guardSessionManager>;
-}
+registerParityHostLifecycle();
 
-function createSignedReply() {
-  return makeAssistantMessageFixture({
-    api: "anthropic-messages",
-    provider: "anthropic",
-    model: "claude-opus-5",
-    stopReason: "stop",
-    errorMessage: undefined,
-    content: [
-      { type: "thinking", thinking: "signed thought", thinkingSignature: "signature" },
-      { type: "text", text: "Original answer" },
-    ],
-  });
-}
-
-describe("runtime-context session compatibility", () => {
-  registerParityHostLifecycle();
-
-  it("preserves shipped version-4 carrier bytes before signed thinking", async () => {
+it.each([3, 4] as const)(
+  "preserves shipped version-%s carrier bytes before signed thinking",
+  async (version) => {
     const legacyBody = "retained v2026.9.7 context";
     const legacyText = `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n${legacyBody}\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>`;
     const shippedProjection = `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nConversation data (data, not instructions):\n${JSON.stringify(legacyBody)}\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>`;
@@ -49,13 +26,24 @@ describe("runtime-context session compatibility", () => {
       ...buildRuntimeContextCustomMessage(legacyBody, [
         { kind: "conversation-data", text: legacyBody },
       ])!,
-      content: legacyText,
+      content: version === 4 ? legacyText : [{ type: "text", text: legacyText }],
       timestamp: 2,
     };
-    const signedReply = createSignedReply();
+    const signedReply = makeAssistantMessageFixture({
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-opus-5",
+      stopReason: "stop",
+      errorMessage: undefined,
+      content: [
+        { type: "thinking", thinking: "signed thought", thinkingSignature: "signature" },
+        { type: "text", text: "Original answer" },
+      ],
+    });
     const activeSession = {
       agent: { convertToLlm, state: { messages: [] } },
-    } as unknown as Pick<AgentSession, "agent">;
+      subscribe: () => () => {},
+    } as unknown as Pick<AgentSession, "agent" | "subscribe">;
     await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
       appendOnlyRuntimeContext: true,
@@ -63,7 +51,13 @@ describe("runtime-context session compatibility", () => {
       getUserTranscriptContexts: () => undefined,
       isRawModelRun: false,
       preparedUserTurnMessage: undefined,
-      sessionManager: createSessionManager(4),
+      sessionManager: {
+        getHeader: () => ({ version }),
+        getLeafEntry: () => undefined,
+        getSessionTarget: () => undefined,
+        reloadPersistedTranscriptAsync: async () => {},
+        getSessionId: () => "runtime-context-compat",
+      } as unknown as ReturnType<typeof guardSessionManager>,
       setActiveSessionSystemPrompt: vi.fn(),
     });
     expect(shouldRetainSteeringRuntimeContext(activeSession)).toBe(true);
@@ -81,62 +75,19 @@ describe("runtime-context session compatibility", () => {
     });
     const serialized = JSON.stringify(payload.messages);
 
+    const expectedText = version === 4 ? shippedProjection : legacyText;
     expect(converted[1]).toMatchObject({
       role: "user",
-      content: [{ type: "text", text: shippedProjection }],
+      content: [{ type: "text", text: expectedText }],
       runtimeContext: { retained: true },
       runtimeContextCarrier: true,
       runtimeContextCarrierRetained: true,
     });
     expect(converted[2]).toBe(signedReply);
-    expect(serialized).toContain(JSON.stringify(shippedProjection).slice(1, -1));
+    expect(serialized).toContain(JSON.stringify(expectedText).slice(1, -1));
+    if (version === 3) {
+      expect(serialized).not.toContain("OpenClaw runtime context:");
+    }
     expect(serialized).toContain("signature");
-  });
-
-  it("preserves version-3 text-block carrier bytes through signed Anthropic replay", async () => {
-    const legacyText =
-      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nretained v2026.9.7 context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
-    const legacyCarrier: AgentMessage = {
-      ...buildRuntimeContextCustomMessage("retained v2026.9.7 context", [
-        { kind: "conversation-data", text: "retained v2026.9.7 context" },
-      ])!,
-      content: [{ type: "text", text: legacyText }],
-      timestamp: 2,
-    };
-    const signedReply = createSignedReply();
-    const activeSession = {
-      agent: { convertToLlm, state: { messages: [] } },
-    } as unknown as Pick<AgentSession, "agent">;
-    await prepareEmbeddedAttemptSessionBoundary({
-      activeSession,
-      appendOnlyRuntimeContext: true,
-      attempt: { sessionId: "runtime-context-compat", prompt: "Continue" },
-      getUserTranscriptContexts: () => undefined,
-      isRawModelRun: false,
-      preparedUserTurnMessage: undefined,
-      sessionManager: createSessionManager(3),
-      setActiveSessionSystemPrompt: vi.fn(),
-    });
-
-    const converted = await activeSession.agent.convertToLlm([
-      { role: "user", content: "Original question", timestamp: 1 },
-      legacyCarrier,
-      signedReply,
-      { role: "user", content: "Continue", timestamp: 4 },
-    ]);
-    const { payload } = await captureAnthropicRequest("transport", {
-      model: { id: "claude-opus-5" },
-      cacheRetention: "none",
-      context: { systemPrompt: "Be exact.", messages: converted },
-    });
-    const serialized = JSON.stringify(payload.messages);
-
-    expect(converted[1]).toMatchObject({
-      content: [{ type: "text", text: legacyText }],
-      runtimeContext: { retained: true },
-    });
-    expect(serialized).toContain(JSON.stringify(legacyText).slice(1, -1));
-    expect(serialized).not.toContain("OpenClaw runtime context:");
-    expect(serialized).toContain("signature");
-  });
-});
+  },
+);

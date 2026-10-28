@@ -5,6 +5,12 @@
     "onStartup": false,
     "onConfigPaths": ["plugins.entries.beam"]
   },
+  "configContracts": {
+    "secretInputs": {
+      "bundledDefaultEnabled": false,
+      "paths": [{ "path": "mirror.token", "expected": "string", "ownerKind": "capability" }]
+    }
+  },
   "uiHints": {
     "mirror.endpoint": {
       "label": "Mirror Endpoint",

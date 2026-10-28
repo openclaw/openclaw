@@ -1,54 +1,35 @@
 import path from "node:path";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, assert, beforeEach, describe, expect, it } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
-import { resolveSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { contextBudgetStatusFixture } from "../../config/sessions/context-budget.test-support.js";
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
-import { enqueueCommandInLane } from "../../process/command-queue.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
-import {
-  loadRunCronIsolatedAgentTurn,
-  loadSessionEntryMock,
-  mockRunCronFallbackPassthrough,
-  patchSessionEntryMock,
-  resetRunCronIsolatedAgentTurnHarness,
-  resolveCronSessionMock,
-  runEmbeddedAgentMock,
-} from "./run.test-harness.js";
+import { realCronSession } from "./run.session.test-support.js";
+import * as harness from "./run.test-harness.js";
 
-const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
-const accessor = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
-  "../../config/sessions/session-accessor.js",
-);
-const actualSession = await vi.importActual<typeof import("./session.js")>("./session.js");
+const runCron = await harness.loadRunCronIsolatedAgentTurn();
+const realSession = await realCronSession();
+const { accessor } = realSession;
 
+const model = { provider: "openai", model: "gpt-5.4" };
+const agentMeta = { ...model, agentHarnessId: "openclaw", contextTokens: 128_000 };
 function completedTurn() {
-  return {
-    payloads: [{ text: "Scheduled turn completed" }],
-    meta: {
-      agentMeta: {
-        agentHarnessId: "openclaw",
-        provider: "openai",
-        model: "gpt-5.4",
-        contextTokens: 128_000,
-      },
-    },
-  };
+  return { payloads: [{ text: "Done" }], meta: { agentMeta: { ...agentMeta } } };
 }
 
 function startCron(
   target: { sessionKey: string; storePath: string },
   options: Pick<RunCronAgentTurnParams, "abortSignal" | "onLaneWait"> & { name?: string } = {},
 ) {
-  return runCronIsolatedAgentTurn(
+  return runCron(
     makeIsolatedAgentParamsFixture({
       agentId: "main",
       sessionKey: target.sessionKey,
@@ -84,218 +65,146 @@ describe("session-bound cron lane admission", () => {
       ...(stale ? { lifecycleRevision: "occupied-generation" } : {}),
     };
     await accessor.replaceSessionEntry(target, entry);
-    return { target, entry, lane: resolveSessionLane(target.sessionKey) };
+    return { target, entry };
   }
 
   beforeEach(() => {
-    resetRunCronIsolatedAgentTurnHarness();
-    mockRunCronFallbackPassthrough();
-    resolveCronSessionMock.mockImplementation(actualSession.prepareCronSession);
-    loadSessionEntryMock.mockImplementation(actualSession.loadCronSessionEntryLatest);
-    patchSessionEntryMock.mockImplementation(accessor.patchSessionEntryCore);
-    runEmbeddedAgentMock.mockImplementation((params: RunEmbeddedAgentParams) =>
-      enqueueCommandInLane(
-        resolveSessionLane(params.sessionKey ?? params.sessionId),
-        async () => completedTurn(),
-        {
-          abortSignal: params.abortSignal,
-          onQueued: () => params.onLaneWait?.({ waiting: true, waitMs: 0, queuedAhead: 1 }),
-        },
-      ),
-    );
+    harness.resetRunCronIsolatedAgentTurnHarness();
+    harness.mockRunCronFallbackPassthrough();
+    realSession.install();
+    harness.runEmbeddedAgentMock.mockImplementation(async () => completedTurn());
   });
 
   it.for([
-    { name: "legacy row", stale: false, cancel: false, settle: false },
-    { name: "stale row", stale: true, cancel: false, settle: false },
-    { name: "cancelled lane wait", stale: false, cancel: true, settle: false },
-    { name: "post-lane settlement", stale: false, cancel: false, settle: true },
-    { name: "cancelled settlement wait", stale: false, cancel: true, settle: true },
-  ])("preserves the generation through $name", async ({ stale, cancel, settle }, { signal }) => {
-    const { target, entry, lane } = await seedSession(stale);
-    const previous = settle
-      ? await beginSessionWorkAdmission({
-          scope: target.storePath,
-          identities: [target.sessionKey, target.sessionId],
-          assertAllowed: () => {},
-        })
-      : undefined;
+    { name: "legacy row", stale: false, cancel: false },
+    { name: "stale row", stale: true, cancel: false },
+    { name: "cancelled wait", stale: false, cancel: true },
+  ])("preserves the generation through $name", async ({ stale, cancel }, { signal }) => {
+    const { target, entry } = await seedSession(stale);
     const occupied = createDeferred();
-    const releaseLane = createDeferred();
-    const laneWait = createDeferred();
-    const settlementWait = createDeferred();
-    let laneReleased = false;
-    const blocker = enqueueCommandInLane(lane, async () => {
+    const release = createDeferred();
+    const waiting = createDeferred();
+    const laneSignals: Parameters<NonNullable<RunCronAgentTurnParams["onLaneWait"]>>[0][] = [];
+    const terminal: Partial<SessionEntry> = {
+      lastInteractionAt: Date.now(),
+      modelProvider: model.provider,
+      model: model.model,
+      agentHarnessId: agentMeta.agentHarnessId,
+      contextTokens: agentMeta.contextTokens,
+      contextTokensSource: "resolved",
+      contextBudgetStatus: contextBudgetStatusFixture(model),
+      inputTokens: 240,
+      outputTokens: 16,
+      compactionCount: 1,
+      totalTokens: 256,
+      totalTokensFresh: true,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+    };
+    const previous = withSessionTurn(target, async () => {
       occupied.resolve();
-      await releaseLane.promise;
+      await release.promise;
+      await accessor.patchSessionEntryCore(target, () => terminal);
     });
     await occupied.promise;
     const controller = new AbortController();
     const run = startCron(target, {
       abortSignal: controller.signal,
       onLaneWait: (info) => {
+        laneSignals.push(info);
         if (info?.waiting) {
-          (laneReleased ? settlementWait : laneWait).resolve();
+          waiting.resolve();
         }
       },
     });
     try {
       await withinTest(
-        awaitGateBeforeSettlement(laneWait.promise, run, "Cron missed the busy lane"),
+        awaitGateBeforeSettlement(waiting.promise, run, "Cron missed controller admission"),
         signal,
       );
-      expect(accessor.loadSessionEntry(target)?.lifecycleRevision).toBe(entry.lifecycleRevision);
-      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-      if (previous) {
-        laneReleased = true;
-        releaseLane.resolve();
-        await withinTest(
-          awaitGateBeforeSettlement(
-            settlementWait.promise,
-            run,
-            "Cron overtook post-lane settlement",
-          ),
-          signal,
-        );
-        expect(resolveCronSessionMock).not.toHaveBeenCalled();
-      }
+      expect(accessor.loadSessionEntry(target)).toMatchObject(entry);
+      expect(harness.resolveCronSessionMock).not.toHaveBeenCalled();
+      expect(harness.runEmbeddedAgentMock).not.toHaveBeenCalled();
       if (cancel) {
-        controller.abort(new Error("Scheduled turn cancelled"));
-        await expect(run).rejects.toThrow("Scheduled turn cancelled");
-        expect(accessor.loadSessionEntry(target)?.lifecycleRevision).toBeUndefined();
-        expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-        if (previous) {
-          expect(previous.isActive()).toBe(true);
-        }
+        controller.abort(new Error("cancel queued cron"));
+        await expect(withinTest(run, signal)).rejects.toThrow("cancel queued cron");
+        expect(accessor.loadSessionEntry(target)).toMatchObject(entry);
       } else {
-        const terminal: Partial<SessionEntry> = {
-          lastInteractionAt: Date.now(),
-          modelProvider: "openai",
-          model: "gpt-5.4",
-          agentHarnessId: "openclaw",
-          contextTokens: 128_000,
-          contextTokensSource: "resolved",
-          contextBudgetStatus: contextBudgetStatusFixture({ provider: "openai", model: "gpt-5.4" }),
-          inputTokens: 240,
-          outputTokens: 16,
-          compactionCount: 1,
-          totalTokens: 256,
-          totalTokensFresh: true,
-          totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
-        };
-        if (previous) {
-          await previous.run(() => accessor.patchSessionEntryCore(target, () => terminal));
-          previous.release();
-        }
-        releaseLane.resolve();
+        release.resolve();
+        await previous;
         await expect(withinTest(run, signal)).resolves.toMatchObject({ status: "ok" });
-        const committed = accessor.loadSessionEntry(target);
-        expect(committed?.lifecycleRevision).toEqual(expect.any(String));
-        expect(committed?.lifecycleRevision).not.toBe(entry.lifecycleRevision);
-        expect(committed?.sessionId).toBe(target.sessionId);
-        if (previous) {
-          expect(committed).toMatchObject(terminal);
-        }
+        expect(laneSignals).toContainEqual({ waiting: false, stage: "session-preparation" });
+        expect(laneSignals.filter((info) => info?.stage !== "session-preparation")).toEqual([]);
+        expect(accessor.loadSessionEntry(target)).toMatchObject({
+          sessionId: target.sessionId,
+          ...terminal,
+        });
       }
     } finally {
       controller.abort();
-      releaseLane.resolve();
-      previous?.release();
-      await Promise.allSettled([blocker, run]);
+      release.resolve();
+      await Promise.allSettled([previous, run]);
     }
   });
 
-  it("does not wait on an inherited admission", async ({ signal }) => {
+  it.for([false, true])("borrowed controller cancellation=%s", async (cancel, { signal }) => {
     const { target } = await seedSession();
-    const inherited = await beginSessionWorkAdmission({
-      scope: target.storePath,
-      identities: [target.sessionKey, target.sessionId],
-      assertAllowed: () => {},
-    });
-    const run = inherited.run(() => startCron(target, { abortSignal: signal }));
-    try {
-      await expect(withinTest(run, signal)).resolves.toMatchObject({ status: "ok" });
-      expect(inherited.isActive()).toBe(true);
-    } finally {
-      inherited.release();
-      await run.catch(() => {});
+    const caller = new AbortController();
+    await withinTest(
+      withSessionTurn(target, async (operation) => {
+        assert(operation, "Expected an admitted outer operation");
+        if (cancel) {
+          harness.runEmbeddedAgentMock.mockImplementationOnce(
+            async (params: RunEmbeddedAgentParams) => {
+              expect(params.abortSignal?.aborted).toBe(false);
+              caller.abort(new Error("cancel nested cron"));
+              expect(params.abortSignal?.aborted).toBe(true);
+              expect(operation.abortSignal.aborted).toBe(false);
+              throw params.abortSignal?.reason;
+            },
+          );
+        }
+        const result = await startCron(target, cancel ? { abortSignal: caller.signal } : {});
+        expect(result.status).toBe(cancel ? "error" : "ok");
+        if (cancel) {
+          expect(operation.abortSignal.aborted).toBe(false);
+        }
+      }),
+      signal,
+    );
+    if (!cancel) {
+      expect(harness.runEmbeddedAgentMock).toHaveBeenCalledOnce();
     }
   });
 
-  it("keeps queued cron turns in order when their predecessor set changes", async ({ signal }) => {
-    const { target, lane } = await seedSession();
-    const previous = await beginSessionWorkAdmission({
-      scope: target.storePath,
-      identities: [target.sessionKey, target.sessionId],
-      assertAllowed: () => {},
-    });
-    const firstWaiting = createDeferred();
-    const firstRequeued = createDeferred();
-    const secondWaiting = createDeferred();
+  it("serializes cron turns through model settlement", async ({ signal }) => {
+    const { target } = await seedSession();
     const firstStarted = createDeferred();
     const releaseFirst = createDeferred();
+    const secondWaiting = createDeferred();
     const order: string[] = [];
-    runEmbeddedAgentMock.mockImplementation((params: RunEmbeddedAgentParams) =>
-      enqueueCommandInLane(lane, async () => {
-        const name = params.prompt.includes("fifo-first") ? "first" : "second";
-        order.push(name);
-        if (name === "first") {
-          firstStarted.resolve();
-          await releaseFirst.promise;
-        }
-        return completedTurn();
-      }),
-    );
-    const first = startCron(target, {
-      name: "fifo-first",
-      abortSignal: signal,
-      onLaneWait: (info) => {
-        if (info?.waiting) {
-          (previous.isActive() ? firstWaiting : firstRequeued).resolve();
-        }
-      },
+    harness.runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentParams) => {
+      const name = params.prompt.includes("fifo-first") ? "first" : "second";
+      order.push(name);
+      if (name === "first") {
+        firstStarted.resolve();
+        await releaseFirst.promise;
+      }
+      return completedTurn();
     });
-    let second: ReturnType<typeof startCron> | undefined;
-    let later: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+    const first = startCron(target, { name: "fifo-first", abortSignal: signal });
+    await withinTest(firstStarted.promise, signal);
+    const second = startCron(target, {
+      name: "fifo-second",
+      abortSignal: signal,
+      onLaneWait: (info) => info?.waiting && secondWaiting.resolve(),
+    });
     try {
       await withinTest(
-        awaitGateBeforeSettlement(
-          firstWaiting.promise,
-          Promise.race([first, firstStarted.promise]),
-          "First cron executed before prior settlement",
-        ),
-        signal,
-      );
-      later = await beginSessionWorkAdmission({
-        scope: target.storePath,
-        identities: [target.sessionKey, target.sessionId],
-        assertAllowed: () => {},
-      });
-      second = startCron(target, {
-        name: "fifo-second",
-        abortSignal: signal,
-        onLaneWait: (info) => info?.waiting && secondWaiting.resolve(),
-      });
-      await withinTest(
-        awaitGateBeforeSettlement(secondWaiting.promise, second, "Second cron skipped settlement"),
-        signal,
-      );
-      expect(order).toEqual([]);
-      previous.release();
-      await withinTest(
-        awaitGateBeforeSettlement(
-          firstRequeued.promise,
-          first,
-          "First cron skipped the later admission",
-        ),
-        signal,
-      );
-      later.release();
-      await withinTest(
-        awaitGateBeforeSettlement(firstStarted.promise, first, "First cron did not start"),
+        awaitGateBeforeSettlement(secondWaiting.promise, second, "Second cron skipped admission"),
         signal,
       );
       expect(order).toEqual(["first"]);
+      expect(harness.resolveCronSessionMock).toHaveBeenCalledOnce();
       releaseFirst.resolve();
       await expect(withinTest(Promise.all([first, second]), signal)).resolves.toEqual([
         expect.objectContaining({ status: "ok" }),
@@ -303,10 +212,8 @@ describe("session-bound cron lane admission", () => {
       ]);
       expect(order).toEqual(["first", "second"]);
     } finally {
-      previous.release();
-      later?.release();
       releaseFirst.resolve();
-      await Promise.allSettled([first, ...(second ? [second] : [])]);
+      await Promise.allSettled([first, second]);
     }
   });
 });

@@ -1,8 +1,9 @@
 // Whatsapp tests cover the source-safe channel runtime loading boundary.
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as ts from "typescript/unstable/ast";
+import { listDirectoryTreeStrictSync } from "openclaw/plugin-sdk/file-access-runtime";
+import * as ts from "typescript/ast";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createNativeTypeScriptParser } from "../../../scripts/lib/native-typescript.mts";
 import {
@@ -31,7 +32,9 @@ afterAll(() => parser.close());
 
 function listChannelRuntimeImportOwners(): string[] {
   const owners: string[] = [];
-  for (const relativePath of readdirSync(sourceDir, { encoding: "utf8", recursive: true })) {
+  for (const relativePath of listDirectoryTreeStrictSync(sourceDir).map(
+    (walkEntry) => walkEntry.relativePath,
+  )) {
     if (!relativePath.endsWith(".ts") || relativePath.includes(".test")) {
       continue;
     }

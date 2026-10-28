@@ -22,9 +22,6 @@ export async function listAcpSessionEntries(params: {
   if (!result) {
     return [];
   }
-  if (!result.ok || result.type !== "acpSessions.list") {
-    throw new Error("Unexpected ACP session list read result");
-  }
   const entries: AcpSessionStoreEntry[] = [];
   for (const row of result.rows) {
     const identity = parseAcpDatabaseSessionKey(row.session_key);

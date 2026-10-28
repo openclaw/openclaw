@@ -11,10 +11,3 @@ export const deferredPluginMigrationSchema = z.object({
 });
 
 export type DeferredPluginMigration = z.infer<typeof deferredPluginMigrationSchema>;
-
-export type DeferredPluginMigrationReadOperations = {
-  "plugins.deferredMigrations.read": {
-    input: undefined;
-    output: { type: "plugins.deferredMigrations.read"; pending: DeferredPluginMigration[] };
-  };
-};

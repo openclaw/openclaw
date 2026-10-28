@@ -135,7 +135,7 @@ async function resolveGuildIdForGuildAdminAction(
     channelLikeId,
     createDiscordActionOptions({ cfg: params.cfg, accountId: params.accountId }),
   );
-  return "guild_id" in channel ? (channel.guild_id ?? undefined) : undefined;
+  return "guild_id" in channel ? channel.guild_id : undefined;
 }
 
 async function resolveGuildAdminActionPermissions(
@@ -271,9 +271,6 @@ export async function handleDiscordGuildAction(
   options?: DiscordMessagingActionOptions,
 ): Promise<AgentToolResult<unknown>> {
   const accountId = readStringParam(params, "accountId");
-  if (!cfg) {
-    throw new Error("Discord guild actions require a resolved runtime config.");
-  }
   const assertActionEnabled = () => {
     const guard = guildActionGuards[action];
     if (guard && !isActionEnabled(guard.gate, guard.defaultEnabled)) {
@@ -334,8 +331,8 @@ export async function handleDiscordGuildAction(
         createDiscordActionOptions({ cfg, accountId: effectiveAccountId }),
       );
       const presence = getPresence(effectiveAccountId, userId);
-      const activities = presence?.activities ?? undefined;
-      const status = presence?.status ?? undefined;
+      const activities = presence?.activities;
+      const status = presence?.status;
       return jsonResult({ ok: true, member, ...(presence ? { status, activities } : {}) });
     }
     case "roleInfo":
@@ -548,8 +545,8 @@ export async function handleDiscordGuildAction(
           channelId,
           targetId,
           targetType,
-          allow: allow ?? undefined,
-          deny: deny ?? undefined,
+          allow,
+          deny,
         },
         withOpts(),
       );

@@ -18,7 +18,7 @@ export class CodexServerRequestResolvedError extends Error {
 export type CodexServerRequestHandler = (
   request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
   signal?: AbortSignal,
-  setExecutionTimeoutMs?: (timeoutMs: number) => void,
+  setExecutionTimeoutMs?: (timeoutMs: number | null) => void,
 ) => Promise<JsonValue | undefined> | JsonValue | undefined;
 
 type ServerRequest = Parameters<CodexServerRequestHandler>[0];
@@ -98,18 +98,22 @@ export class CodexServerRequests {
       }, timeoutMs);
       timeout.unref?.();
     };
-    const setExecutionTimeoutMs = (executionTimeoutMs: number) => {
+    const setExecutionTimeoutMs = (executionTimeoutMs: number | null) => {
       if (
         settled ||
         controller.signal.aborted ||
         executionTimeoutResolved ||
-        !Number.isFinite(executionTimeoutMs) ||
-        executionTimeoutMs <= 0
+        (executionTimeoutMs !== null &&
+          (!Number.isFinite(executionTimeoutMs) || executionTimeoutMs <= 0))
       ) {
         return;
       }
       // The admitted owner sets one execution budget; later progress cannot reset it.
       executionTimeoutResolved = true;
+      if (executionTimeoutMs === null) {
+        clearTimeout(timeout);
+        return;
+      }
       timeoutMs = addSafeTimeoutDelayGraceMs(executionTimeoutMs, 30_000);
       armTimeout();
     };

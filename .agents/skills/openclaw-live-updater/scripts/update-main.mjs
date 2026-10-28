@@ -24,6 +24,7 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as defaultSleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "../../../../gateway-shutdown-budget.mjs";
 import { detectChangedScope } from "../../../../scripts/ci-changed-scope.mjs";
 import { isDirectRunUrl } from "../../../../scripts/lib/direct-run.mjs";
 import {
@@ -39,6 +40,8 @@ import {
   resolveBuildRequirement,
   resolveRuntimePostBuildRequirement,
 } from "../../../../scripts/run-node.mts";
+import { isGeneratedLaunchAgentEnvironmentWrapper } from "../../../../src/daemon/launchd-env-wrapper.js";
+import { resolveRuntimeScriptPosition } from "../../../../src/daemon/runtime-binary.js";
 
 const DEFAULT_EXPECTED_ORIGIN = "openclaw/openclaw";
 const FULL_SHA_RE = /^[0-9a-f]{40}$/u;
@@ -46,7 +49,6 @@ const GATEWAY_READINESS_ATTEMPTS = 7;
 const GATEWAY_READINESS_RETRY_DELAY_MS = 5_000;
 const GATEWAY_CLI_TIMEOUT_MS = 30_000;
 const DEFAULT_LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS = 20;
-const MAX_LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS = 300;
 const LAUNCHD_TEARDOWN_MARGIN_MS = 15_000;
 const GATEWAY_STOP_PROOF_RETRY_DELAY_MS = 250;
 const GATEWAY_PROCESS_START_TIMEOUT_MS = 20_000;
@@ -82,15 +84,6 @@ const SAFE_INVARIANT_DETAIL_KEYS = [
 // CLI diagnostics stay typed and bounded because child-process errors can
 // retain argv, environment, and output that must never enter the JSON result.
 const aggregateDiagnosticMembers = new WeakMap();
-const GENERATED_LAUNCH_AGENT_ENV_WRAPPER = `#!/bin/sh
-set -eu
-env_file="$1"
-shift
-if [ -f "$env_file" ]; then
-  . "$env_file"
-fi
-exec "$@"
-`;
 const DEPENDENCY_INPUT_RE =
   /^(?:\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|patches\/)|(?:^|\/)package\.json$/u;
 
@@ -479,6 +472,7 @@ function git(checkout, args, options = {}) {
   return execFileSync("git", ["-C", checkout, ...args], {
     ...boundedSyncOptions({}, options.timeoutMs),
     encoding: options.encoding ?? "utf8",
+    maxBuffer: 32 * 1024 * 1024,
     stdio: options.stdio ?? ["ignore", "pipe", "pipe"],
   });
 }
@@ -1235,8 +1229,14 @@ function resolveManagedGatewayCommand(
     prefix = [envFilePath];
   }
   const runtime = programArguments[commandStartIndex];
-  const entrypoint = programArguments[commandStartIndex + 1];
-  const command = programArguments[commandStartIndex + 2];
+  const runtimeArguments = programArguments.slice(commandStartIndex);
+  const { position } = resolveRuntimeScriptPosition(runtimeArguments);
+  if (typeof position !== "number") {
+    return null;
+  }
+  const entrypointIndex = commandStartIndex + position;
+  const entrypoint = programArguments[entrypointIndex];
+  const command = programArguments[entrypointIndex + 1];
   // Arbitrary --wrapper executables contain no checkout entrypoint, so their
   // ownership cannot be proven and conversion must remain a manual operation.
   return typeof runtime === "string" &&
@@ -1245,10 +1245,12 @@ function resolveManagedGatewayCommand(
     command === "gateway"
     ? {
         entrypoint,
-        entrypointIndex: commandStartIndex + 1,
+        entrypointIndex,
         envFilePath,
         executable,
-        invocationPrefix: wrapperPath ? [...prefix, runtime, entrypoint] : [entrypoint],
+        invocationPrefix: wrapperPath
+          ? [...prefix, ...runtimeArguments.slice(0, position + 1)]
+          : runtimeArguments.slice(1, position + 1),
         runtime,
         stateDir: path.dirname(envDir),
         wrapperPath,
@@ -1279,7 +1281,7 @@ function isTrustedGeneratedEnvironmentWrapper(command) {
       (envFileStat.mode & 0o077) === 0 &&
       realpathSync(command.wrapperPath) === command.wrapperPath &&
       realpathSync(command.envFilePath) === command.envFilePath &&
-      readFileSync(command.wrapperPath, "utf8") === GENERATED_LAUNCH_AGENT_ENV_WRAPPER
+      isGeneratedLaunchAgentEnvironmentWrapper(readFileSync(command.wrapperPath, "utf8"))
     );
   } catch {
     return false;
@@ -1296,7 +1298,7 @@ function isTrustedOwnedRegularFile(fileStat) {
 }
 
 export function resolveLaunchAgentExitTimeoutSeconds(value) {
-  if (value === 0 || (Number.isInteger(value) && value > MAX_LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS)) {
+  if (value === 0 || (Number.isInteger(value) && value > LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS)) {
     throw new UpdateInvariantError(
       "gateway_launchagent_failed",
       `managed Gateway LaunchAgent ExitTimeOut=${value} prevents bounded stopped proof`,
@@ -1830,7 +1832,6 @@ export function runBuiltGatewayCli(checkout, args, deployment, options = {}) {
     executable,
     invocationPrefix,
     port,
-    runtime,
     serviceEnvironment = {},
     workingDirectory,
     wrapperPath,
@@ -1891,8 +1892,7 @@ export function runBuiltGatewayCli(checkout, args, deployment, options = {}) {
             "-u",
             "OPENCLAW_GATEWAY_URL",
             ...envOverrides,
-            runtime,
-            entrypoint,
+            ...invocationPrefix.slice(executable === "/bin/sh" ? 2 : 1),
             ...args,
           ]
         : [...invocationPrefix, ...args];
@@ -1950,6 +1950,7 @@ export function prepareGatewaySuspension(
   const callPrepare = (params) =>
     JSON.parse(callGateway(checkout, "gateway.suspend.prepare", params, deployment));
   let result;
+  let controlledDrainSupported = true;
   try {
     try {
       result = callPrepare({ requestId, terminalPolicy: "terminate" });
@@ -1959,6 +1960,7 @@ export function prepareGatewaySuspension(
       }
       // Older closed schemas reject the new field before acquiring a lease.
       // Retry once with preserve semantics so mixed-version updates remain safe.
+      controlledDrainSupported = false;
       result = callPrepare({ requestId });
     }
   } catch (error) {
@@ -1973,11 +1975,119 @@ export function prepareGatewaySuspension(
     return result;
   }
   if (result?.status === "busy" && Array.isArray(result.blockers)) {
-    return result;
+    return controlledDrainSupported ? result : { ...result, controlledDrainSupported: false };
   }
   throw new UpdateInvariantError(
     "gateway_suspend_prepare_invalid",
     `Gateway returned an invalid suspension result: ${JSON.stringify(result)}`,
+  );
+}
+
+async function drainManagedGatewayForMaintenance(
+  checkout,
+  deployment,
+  controlDeployment,
+  stop,
+  assertAuthority,
+) {
+  if (!deployment) {
+    throw new UpdateInvariantError(
+      "gateway_suspend_prepare_failed",
+      "Managed Gateway inspection is required for controlled interruption",
+    );
+  }
+  const [{ withGatewayMaintenanceDrain }, { readGatewayServiceState }, { resolveGatewayService }] =
+    await Promise.all([
+      import("../../../../src/cli/update-cli/update-command-service-drain.js"),
+      import("../../../../src/daemon/service-state.js"),
+      import("../../../../src/daemon/service.js"),
+    ]);
+  const env = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: deployment.stateDir,
+    OPENCLAW_CONFIG_PATH: deployment.configPath,
+    OPENCLAW_GATEWAY_PORT: String(deployment.port),
+  };
+  delete env.OPENCLAW_GATEWAY_URL;
+  delete env.OPENCLAW_GATEWAY_TOKEN;
+  delete env.OPENCLAW_GATEWAY_PASSWORD;
+  const state = await readGatewayServiceState(resolveGatewayService(), {
+    env,
+    requireEffective: true,
+    timeoutMs: GATEWAY_CLI_TIMEOUT_MS,
+  });
+  const commandEntrypoint = resolveManagedGatewayEntrypoint(
+    state.command?.programArguments,
+    process.env.HOME,
+    deployment.stateDir,
+  );
+  if (
+    !state.running ||
+    !Number.isInteger(state.runtime?.pid) ||
+    commandEntrypoint !== deployment.entrypoint ||
+    state.command?.sourcePath !== deployment.plistPath
+  ) {
+    throw new UpdateInvariantError(
+      "gateway_runtime_mismatch",
+      "Managed Gateway changed before controlled maintenance",
+    );
+  }
+  const binding = JSON.stringify(deployment);
+  const envBytes = deployment.envFilePath ? readFileSync(deployment.envFilePath) : null;
+  let stopCommitted = false;
+  const assertCurrent = () => {
+    assertAuthority();
+    if (
+      JSON.stringify(readManagedGatewayLaunchAgent(checkout)) !== binding ||
+      (envBytes && !readFileSync(deployment.envFilePath).equals(envBytes))
+    ) {
+      throw new UpdateInvariantError(
+        "gateway_runtime_mismatch",
+        "Managed Gateway binding changed during maintenance drain",
+      );
+    }
+    if (!stopCommitted) {
+      const loaded = spawnSync(
+        "/bin/launchctl",
+        ["print", `gui/${process.getuid()}/${deployment.label}`],
+        boundedSyncOptions({ encoding: "utf8" }),
+      );
+      const pid = Number(
+        loaded.status === 0 ? loaded.stdout.match(/\bpid = (\d+)\b/u)?.[1] : Number.NaN,
+      );
+      if (pid !== state.runtime.pid) {
+        throw new UpdateInvariantError(
+          "gateway_runtime_mismatch",
+          "Managed Gateway process changed during maintenance drain",
+        );
+      }
+    }
+  };
+  assertCurrent();
+  return withGatewayMaintenanceDrain(
+    {
+      state,
+      drainPolicy: "interrupt-after-drain",
+      assertCurrent,
+      warn: (message) => process.stderr.write(`${message}\n`),
+      control: {
+        stopTimeoutMs: deployment.exitTimeoutSeconds * 1_000,
+        async call(method, params, beforeDispatch) {
+          assertCurrent();
+          beforeDispatch?.();
+          const result = JSON.parse(
+            runBuiltGatewayCall(checkout, method, params, controlDeployment),
+          );
+          if (method === "gateway.suspend.handoff" && result.status === "committed") {
+            // The serving owner has committed one-way shutdown; it may exit before bootout.
+            stopCommitted = true;
+          }
+          assertCurrent();
+          return result;
+        },
+      },
+    },
+    ({ prepareEffect }) => stop(() => prepareEffect(assertCurrent)),
   );
 }
 
@@ -3462,6 +3572,52 @@ export async function maintainMain(options, dependencies = {}) {
           }
         }
       }
+      if (
+        gatewaySuspension.status === "busy" &&
+        gatewaySuspension.controlledDrainSupported !== false &&
+        gatewayControlDeployment
+      ) {
+        const stopped = await drainManagedGatewayForMaintenance(
+          update.checkout,
+          gatewayDeploymentBefore,
+          gatewayControlDeployment,
+          async (commitStop) => {
+            if (gatewayDeploymentBefore) {
+              await assertSystemOwnership(gatewayDeploymentBefore.label);
+            }
+            if (gatewayRuntimeRepointRequired) {
+              preparedGatewayReplacement = prepareGatewayEntrypointReplacement(
+                gatewayDeploymentBefore,
+                path.join(update.checkout, "dist/index.js"),
+              );
+            }
+            await commitStop();
+            return stopManagedGatewayAndProve(
+              runCommand,
+              update.checkout,
+              gatewayDeploymentBefore,
+              proveGatewayStopped,
+              sleep,
+              now,
+            );
+          },
+          () => {
+            const owner = JSON.parse(readFileSync(path.join(lock.lockPath, "owner.json"), "utf8"));
+            if (
+              owner.pid !== process.pid ||
+              owner.startedAt !== lock.owner.startedAt ||
+              gitText(update.checkout, ["rev-parse", "HEAD"]) !== update.afterSha
+            ) {
+              throw new UpdateInvariantError(
+                "lock_owner_changed",
+                "Maintenance authority changed during Gateway drain",
+              );
+            }
+          },
+        );
+        gatewayTiming = stopped.timing;
+        gatewaySuspension = { status: "offline", proof: stopped.proof };
+      }
       if (gatewaySuspension.status === "busy") {
         return {
           schemaVersion: 1,
@@ -3726,8 +3882,8 @@ export async function maintainMain(options, dependencies = {}) {
           "mac.restart",
           "env",
           [
-            "SKIP_TSC=1",
-            "SKIP_UI_BUILD=1",
+            "OPENCLAW_MAC_REUSE_BUILD=1",
+            "SKIP_PNPM_INSTALL=1",
             "bash",
             "scripts/restart-mac.sh",
             "--sign",
