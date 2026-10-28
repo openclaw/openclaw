@@ -4,6 +4,7 @@ import {
   type MigrationArtifactIdentity,
 } from "./session-sqlite-migration-artifact.js";
 import {
+  canonicalMigrationFilePath,
   filterRestoreManifestTargets,
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
@@ -66,17 +67,19 @@ export function collectArchivedSources(
   retainedOnly = false,
 ): ArchivedSessionSources {
   const manifestPaths = listSessionSqliteMigrationManifestPaths(env);
-  // Runs directory, target and filter shape decide the answer; the signature says whether
-  // the recorded manifests still describe it.
+  // Runs directory, full target and filter shape decide the answer; the signature says
+  // whether the recorded manifests still describe it. Store path alone is not the target:
+  // the restore filter also matches on the selected SQLite path.
   const cacheKey = [
     resolveSessionSqliteMigrationRunsDir(env),
     sessionSqliteMigrationTargetKey(target),
+    canonicalMigrationFilePath(target.sqlitePath),
     retainedOnly ? "retained" : "all",
   ].join("\u0001");
   const signature = archiveScanSignature(manifestPaths);
   const cached = archiveScanCache.get(cacheKey);
   if (cached?.signature === signature) {
-    return new Map(cached.archives);
+    return cached.archives;
   }
   const archives = scanArchivedSources(target, manifestPaths, retainedOnly);
   archiveScanCache.delete(cacheKey);
@@ -87,7 +90,7 @@ export function collectArchivedSources(
       archiveScanCache.delete(oldestKey.value);
     }
   }
-  return new Map(archives);
+  return archives;
 }
 
 

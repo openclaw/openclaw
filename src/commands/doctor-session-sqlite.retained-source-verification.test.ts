@@ -457,13 +457,20 @@ it("reads each archive manifest once when verifying 32 retained transcripts", as
       reads.mock.calls.flatMap(([file]) =>
         typeof file === "string" && manifestPaths.includes(file) ? [file] : [],
       );
-    for (let pass = 0; pass < 2; pass++) {
-      reads.mockClear();
-      expect(read()?.sources).toHaveLength(32 + 1);
-      const readPaths = manifestsRead();
-      expect(readPaths.length).toBeGreaterThan(0);
-      expect(readPaths.length).toBe(new Set(readPaths).size);
-    }
+    reads.mockClear();
+    expect(read()?.sources).toHaveLength(32 + 1);
+    const firstPassReads = manifestsRead();
+    expect(firstPassReads.length).toBeGreaterThan(0);
+    expect(firstPassReads.length).toBe(new Set(firstPassReads).size);
+    // Unchanged manifests are reused rather than re-parsed per verification pass.
+    reads.mockClear();
+    expect(read()?.sources).toHaveLength(32 + 1);
+    expect(manifestsRead()).toEqual([]);
+    // A manifest rewritten on disk is discovered again (the listing signature gates the scan).
+    fs.writeFileSync(manifestPath, manifestBytes);
+    reads.mockClear();
+    expect(read()?.sources).toHaveLength(32 + 1);
+    expect(manifestsRead()).toContain(manifestPath);
     // A retained index can coexist with archived transcripts after interrupted archival.
     const moves = manifest.targets.flatMap((target) => target.plannedMoves);
     const indexMove = moves.find((move) => move.sourcePath === storePath)!;
@@ -472,22 +479,21 @@ it("reads each archive manifest once when verifying 32 retained transcripts", as
       .map((move) => move.archivePath);
     fs.renameSync(indexMove.archivePath, storePath);
     const hashes = vi.spyOn(migrationArtifact, "readMigrationArtifactIdentity");
-    for (let pass = 0; pass < 2; pass++) {
-      reads.mockClear();
-      hashes.mockClear();
-      const validated = await run("validate");
-      expect(validated.totals.importedEntries).toBe(0);
-      expect(validated.totals.validatedEntries).toBe(32);
-      const verifiedArchives = hashes.mock.calls
-        .map(([file]) => file)
-        .filter((file) => transcriptArchives.includes(file));
-      expect(verifiedArchives.toSorted()).toEqual(transcriptArchives.toSorted());
-      const readPaths = manifestsRead();
-      expect(readPaths.length).toBeGreaterThan(0);
-      // History discovery and receipt verification each read one copy per run.
-      for (const file of manifestPaths) {
-        expect(readPaths.filter((readPath) => readPath === file)).toHaveLength(2);
-      }
+    reads.mockClear();
+    hashes.mockClear();
+    const validated = await run("validate");
+    expect(validated.totals.importedEntries).toBe(0);
+    expect(validated.totals.validatedEntries).toBe(32);
+    const verifiedArchives = hashes.mock.calls
+      .map(([file]) => file)
+      .filter((file) => transcriptArchives.includes(file));
+    expect(verifiedArchives.toSorted()).toEqual(transcriptArchives.toSorted());
+    const validateReads = manifestsRead();
+    expect(validateReads.length).toBeGreaterThan(0);
+    // Discovery and receipt verification share a scan, so reads no longer scale with the
+    // number of verified transcripts.
+    for (const file of manifestPaths) {
+      expect(validateReads.filter((readPath) => readPath === file).length).toBeLessThanOrEqual(2);
     }
     hashes.mockRestore();
     fs.renameSync(storePath, indexMove.archivePath);
