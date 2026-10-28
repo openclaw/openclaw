@@ -64,20 +64,41 @@ struct StaleGatewayServiceReplacement {
               !previous.matchesBundledRuntime(BundledRuntime(root: runtimes.appendingPathComponent(buildID))),
               let runtime = try? await BundledRuntime.seed(bundle: bundle, profile: profile)
         else { return nil }
+        return Self.replacing(previous, with: runtime)
+    }
+
+    /// Every lifecycle call keeps the service custody captured at detection, so a service the
+    /// operator reassigns while this build seeds or migrates is refused before dispatch.
+    static func replacing(
+        _ previous: GatewayLaunchAgentManager.InstalledServiceCLI, with runtime: BundledRuntime) -> Self?
+    {
+        guard let authority = previous.serviceAuthority else { return nil }
+        let checkCurrent: @MainActor @Sendable () async throws -> Void = {
+            if let error = GatewayLaunchAgentManager.serviceUpdateAuthorityError(for: previous) {
+                throw GatewayHostingError(message: error)
+            }
+        }
         return Self(
             stop: {
                 // The app owns this service; --force only answers the CLI's non-interactive guard.
-                await GatewayLaunchAgentManager.runDaemonCommand(["stop", "--force"], runtime: runtime)
+                await GatewayLaunchAgentManager.runDaemonCommand(
+                    ["stop", "--force"],
+                    runtime: runtime,
+                    expectedServiceAuthority: authority,
+                    checkCurrent: checkCurrent)
             },
             restore: {
-                _ = await GatewayLaunchAgentManager.runDaemonCommand(["start"], installedCLI: previous)
+                _ = await GatewayLaunchAgentManager.runDaemonCommand(
+                    ["start"], installedCLI: previous, expectedServiceAuthority: authority, checkCurrent: checkCurrent)
             },
             install: {
                 await GatewayLaunchAgentManager.reinstallBundledRuntime(
                     runtime: runtime,
                     port: GatewayEnvironment.gatewayPort(),
                     environment: try? GatewayProcessManager.shared.appHostedEnvironment(
-                        runtime: runtime, capturedServiceEnvironment: previous.environment))
+                        runtime: runtime, capturedServiceEnvironment: previous.environment),
+                    expectedServiceAuthority: authority,
+                    checkCurrent: checkCurrent)
             })
     }
 }
