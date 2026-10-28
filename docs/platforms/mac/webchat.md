@@ -29,6 +29,10 @@ Dashboard window is active to reload its current page. Gateway HTTP errors with
 plain-text or JSON bodies use the recovery page; HTML sign-in pages from an
 authenticated proxy remain available in the window.
 
+Paste in the Dashboard and the full chat window converts clipboard images that
+WebKit cannot paste, such as HDR screenshots that macOS copies as HEIC, to PNG,
+as Chrome does. If the clipboard also holds text, only the text is pasted.
+
 The native chat features below connect to the Gateway and default to the primary
 session for the selected agent (`main`, or `global` when `session.scope` is
 `global`). Quick Chat remains a native floating composer in either experience.
