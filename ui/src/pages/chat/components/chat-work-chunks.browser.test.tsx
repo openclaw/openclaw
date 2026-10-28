@@ -138,6 +138,7 @@ it.each([
         await waitForSolid(() =>
           expect(view.container.textContent).toContain("Final visible answer."),
         );
+        expect(view.container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(1);
         const visibleText = () =>
           [...view.container.querySelectorAll<HTMLElement>(".chat-text")].map((node) =>
             node.textContent?.trim(),
