@@ -88,7 +88,11 @@ import {
 } from "./tool-error-summary.js";
 import { resolveFileMutationToolName } from "./tool-mutation-names.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
-import { isToolResultError, readToolResultDetails } from "./tool-result-error.js";
+import {
+  isToolResultError,
+  readToolResultDetails,
+  resolveToolResultHookOutcome,
+} from "./tool-result-error.js";
 import { cancelAskUserPromptDelivery } from "./tools/ask-user-tool.js";
 import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 
@@ -439,6 +443,7 @@ export async function prepareToolExecutionEnd(
   const hookRunnerAfter = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();
   if (hookRunnerAfter?.hasHooks("after_tool_call")) {
     const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
+    const outcome = resolveToolResultHookOutcome(sanitizedResult);
     const hookEvent: PluginHookAfterToolCallEvent = {
       toolName,
       params: adjustedArgs === undefined ? startArgs : structuredClone(startArgs),
@@ -447,6 +452,7 @@ export async function prepareToolExecutionEnd(
       result: sanitizedResult,
       error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
       durationMs,
+      ...(outcome ? { outcome } : {}),
     };
     void hookRunnerAfter
       .runAfterToolCall(hookEvent, {

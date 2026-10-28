@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import type { PluginHookAfterToolCallEvent } from "../plugins/hook-after-tool-call.types.js";
 
 const TOOL_RESULT_FAILURE_STATUSES = new Map<string, ToolResultFailureKind>([
   ["error", "failed"],
@@ -81,4 +82,19 @@ export function resolveToolResultFailureKind(result: unknown): ToolResultFailure
     return "blocked";
   }
   return timedOut ? "timed_out" : (statusKind ?? "failed");
+}
+
+/**
+ * Project the canonical failure classifier onto the `after_tool_call` contract
+ * exactly as `resolveToolResultTerminalDiagnostic` maps it; detail-less results
+ * stay unknown rather than reading as success.
+ */
+export function resolveToolResultHookOutcome(
+  result: unknown,
+): PluginHookAfterToolCallEvent["outcome"] {
+  if (!readToolResultDetails(result)) {
+    return undefined;
+  }
+  const failureKind = resolveToolResultFailureKind(result);
+  return failureKind === undefined ? "completed" : failureKind === "blocked" ? "blocked" : "error";
 }
