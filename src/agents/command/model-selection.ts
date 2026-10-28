@@ -1,4 +1,7 @@
-import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import {
+  buildModelCatalogRef,
+  parseProviderModelRef,
+} from "@openclaw/model-catalog-core/model-catalog-refs";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import {
   formatThinkingLevels,
@@ -33,6 +36,7 @@ import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import {
   assertAdmittedRunOperatorAuthority,
   assertOperatorModelAllowed,
+  type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
@@ -58,6 +62,7 @@ import {
   resolveConfiguredThinkingDefault,
   resolveThinkingSelection,
 } from "../model-thinking-default.js";
+import type { ModelVisibilityPolicy } from "../model-visibility-policy.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
 import { resolveOperatorModelDefault } from "../operator-model-policy.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
@@ -101,6 +106,34 @@ export function withCommandThinkingClamp(
         },
       }
     : result;
+}
+
+/**
+ * Request-supplied fallback chains may only name models the agent can already use. The
+ * pinned primary is checked the same way, so a caller cannot widen model access by naming
+ * extra chain entries.
+ */
+function assertRequestedModelFallbacksVisible(params: {
+  fallbacks: string[];
+  agentId: string;
+  operatorAuthority: AdmittedRunOperatorAuthority | undefined;
+  visibilityPolicy: ModelVisibilityPolicy;
+}): void {
+  for (const raw of params.fallbacks) {
+    const ref = parseProviderModelRef(raw);
+    if (!ref) {
+      throw new Error(
+        `Invalid model fallback "${sanitizeForLog(raw)}". Use a provider/model reference such as "provider/model".`,
+      );
+    }
+    assertOperatorModelAllowed(params.operatorAuthority, ref);
+    if (!params.visibilityPolicy.allows(ref)) {
+      const policyPath = params.visibilityPolicy.allowConfigPath ?? "modelPolicy.allow";
+      throw new Error(
+        `Model fallback "${sanitizeForLog(raw)}" is not allowed for agent "${params.agentId}" by ${policyPath}.`,
+      );
+    }
+  }
 }
 
 export async function resolveEmbeddedModelSelection(params: {
@@ -398,6 +431,14 @@ export async function resolveEmbeddedModelSelection(params: {
     }
     provider = explicitRef.provider;
     model = explicitRef.model;
+  }
+  if (params.opts.modelFallbacksOverrideSource === "request") {
+    assertRequestedModelFallbacksVisible({
+      fallbacks: params.opts.modelFallbacksOverride ?? [],
+      agentId: params.sessionAgentId,
+      operatorAuthority,
+      visibilityPolicy,
+    });
   }
   const allowedInitialSelection =
     isModelSelectionLocked(sessionEntry) ||

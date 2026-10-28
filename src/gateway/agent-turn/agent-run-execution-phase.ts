@@ -462,6 +462,8 @@ async function executeAgentRun(
                 agentId: ingressAgentId,
                 provider: prepared.effectiveProviderOverride,
                 model: prepared.effectiveModelOverride,
+                modelFallbacksOverride: prepared.effectiveModelFallbacksOverride,
+                modelFallbacksOverrideSource: prepared.effectiveModelFallbacksOverrideSource,
                 to: params.delivery.resolvedTo,
                 sessionId: params.resolvedSessionId,
                 sessionKey: params.resolvedSessionKey,

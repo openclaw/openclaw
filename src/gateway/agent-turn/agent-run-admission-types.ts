@@ -45,6 +45,8 @@ export type PreparedAgentRunDispatch = PreparedAgentRunModelRuntime & {
   timeoutSeconds?: number;
   effectiveProviderOverride?: string;
   effectiveModelOverride?: string;
+  effectiveModelFallbacksOverride?: string[];
+  effectiveModelFallbacksOverrideSource?: "request";
   effectiveThinking?: string;
   effectiveAllowModelOverride: boolean;
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
@@ -89,6 +91,8 @@ export type PrepareAgentRunDispatchParams = Omit<
   >;
   providerOverride?: string;
   modelOverride?: string;
+  modelFallbacksOverride?: string[];
+  modelFallbacksOverrideSource?: "request";
   allowModelOverride: boolean;
   lifecycleGeneration: string;
   getAdmittedSessionId: () => string;

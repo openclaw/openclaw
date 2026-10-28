@@ -77,6 +77,11 @@ export type AgentCommandOpts = {
   model?: string;
   /** Explicit ordered fallback chain for this run. Undefined uses normal selection policy. */
   modelFallbacksOverride?: string[];
+  /**
+   * Marks a request-supplied fallback chain. Request chains are checked against the agent's
+   * visible model set before the run uses them.
+   */
+  modelFallbacksOverrideSource?: "request";
   to?: string;
   sessionId?: string;
   sessionKey?: string;

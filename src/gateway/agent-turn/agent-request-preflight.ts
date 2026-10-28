@@ -51,6 +51,31 @@ export type AgentRequestPreflight = NonNullable<
   Awaited<ReturnType<typeof prepareAgentRequestPreflight>>
 >;
 
+/** Maximum fallback entries one agent.run request may carry. */
+const MAX_REQUESTED_MODEL_FALLBACKS = 16;
+
+/**
+ * Normalizes a caller-supplied fallback ladder. Blank and duplicate entries are dropped so
+ * the chain matches what the caller asked for.
+ */
+function normalizeRequestedModelFallbacks(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return undefined;
+  }
+  const fallbacks: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const trimmed = entry.trim();
+    if (!trimmed || fallbacks.includes(trimmed)) {
+      continue;
+    }
+    fallbacks.push(trimmed);
+  }
+  return fallbacks.length > 0 ? fallbacks.slice(0, MAX_REQUESTED_MODEL_FALLBACKS) : undefined;
+}
+
 export async function prepareAgentRequestPreflight(params: {
   request: AgentRunRequest;
   context: AgentTurnContext;
@@ -189,6 +214,7 @@ export async function prepareAgentRequestPreflight(params: {
   const requestedPromptPersistenceSuppression = request.suppressPromptPersistence === true;
   const requestedInternalSessionEffects = request.sessionEffects === "internal";
   const requestedModelOverride = Boolean(request.provider || request.model);
+  const requestedModelFallbacks = normalizeRequestedModelFallbacks(request.fallbacks);
   const isOneShotModelRun = request.modelRun === true;
   const isRawModelRun = isOneShotModelRun || request.promptMode === "none";
   if (request.promptMode === "none" && !isOneShotModelRun) {
@@ -198,6 +224,9 @@ export async function prepareAgentRequestPreflight(params: {
   }
   if (requestedModelOverride && !allowModelOverride) {
     return rejectInvalidRequest("provider/model overrides are not authorized for this caller.");
+  }
+  if (requestedModelFallbacks && !allowModelOverride) {
+    return rejectInvalidRequest("model fallback overrides are not authorized for this caller.");
   }
   if (
     (requestedInternalSessionEffects || requestedPromptPersistenceSuppression) &&
@@ -307,6 +336,9 @@ export async function prepareAgentRequestPreflight(params: {
     expectedExistingSessionId: expectedSessionResult.constraint?.sessionId,
     providerOverride: allowModelOverride ? request.provider : undefined,
     modelOverride: allowModelOverride ? request.model : undefined,
+    modelFallbacksOverride: allowModelOverride ? requestedModelFallbacks : undefined,
+    modelFallbacksOverrideSource:
+      allowModelOverride && requestedModelFallbacks ? ("request" as const) : undefined,
     execApprovalFollowupApprovalId,
     normalizedSpawned: normalizeSpawnedRunMetadata({
       groupId: request.groupId,
