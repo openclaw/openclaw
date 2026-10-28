@@ -91,6 +91,8 @@
 | **HTML5** | Xây dựng cấu trúc trang |
 | **CSS3** | Tạo kiểu giao diện và bố cục |
 | **JavaScript** | Xử lý nghiệp vụ và tương tác |
+| **Node.js** | Máy chủ cục bộ làm cầu nối an toàn tới OpenClaw Gateway |
+| **OpenClaw Gateway** | Cung cấp phản hồi AI cho quản lý và tư vấn khách hàng |
 | **localStorage** | Lưu dữ liệu trong trình duyệt |
 | **CSV** | Xuất dữ liệu để xem và xử lý bằng bảng tính |
 | **Visual Studio Code** | Môi trường chỉnh sửa mã nguồn được khuyến nghị |
@@ -118,6 +120,33 @@ git pull origin feature/shopmini-mvp
 \`\`\`
 
 > Nếu nhánh trên máy chưa được tạo, chạy \`git fetch origin\` rồi \`git switch --track origin/feature/shopmini-mvp\`.
+
+### Cách chạy kèm trợ lý OpenClaw AI
+
+1. Cài Node.js 20 trở lên và bật endpoint Chat Completions trong cấu hình OpenClaw Gateway:
+
+   ```json5
+   {
+     gateway: {
+       http: {
+         endpoints: { chatCompletions: { enabled: true } },
+       },
+     },
+   }
+   ```
+
+   Khởi động lại Gateway sau khi chỉnh cấu hình. Endpoint này mặc định đang tắt.
+2. Sao chép `.env.example` thành `.env` trong thư mục `projects/shopmini`.
+3. Điền `OPENCLAW_GATEWAY_TOKEN` bằng Gateway token của bạn. Nếu Gateway dùng địa chỉ khác, cập nhật `OPENCLAW_GATEWAY_URL`; model mặc định là `openclaw/default`.
+4. Chạy trong terminal:
+
+   ```bash
+   npm start
+   ```
+
+5. Mở `http://127.0.0.1:4173`.
+
+**Bảo mật:** Gateway token tương đương quyền operator của OpenClaw. Giữ Gateway và ShopMini trên máy cá nhân/mạng riêng; không đưa token vào `app.js`, không commit file `.env`, và không mở cổng Gateway ra Internet. Chỉ dùng dữ liệu thử nghiệm cho bản demo. Nếu chỉ muốn xem giao diện không có AI, có thể mở `index.html`, nhưng tính năng AI cần chạy server qua `npm start`.
 
 ### Mở website
 
@@ -168,7 +197,7 @@ ShopMini chưa phải hệ thống quản lý bán hàng hoàn chỉnh để tri
 - Chưa có đăng nhập, phân quyền, máy chủ hoặc cơ sở dữ liệu trung tâm.
 - Chưa có quản lý nhà cung cấp, phiếu nhập hàng đầy đủ, công nợ và chi phí vận hành.
 - Chưa tích hợp thanh toán trực tuyến, hóa đơn điện tử, vận chuyển hoặc sàn thương mại điện tử.
-- Chưa có chatbot AI kết nối với dữ liệu cửa hàng.
+- Đã có giao diện AI kết nối OpenClaw Gateway qua máy chủ cục bộ; cần cấu hình token và bật endpoint để sử dụng.
 - Dữ liệu trong trình duyệt có thể bị mất khi người dùng xóa dữ liệu website; nên chỉ dùng dữ liệu giả để thử nghiệm.
 
 **Không lưu thông tin thanh toán hoặc dữ liệu cá nhân nhạy cảm của khách hàng trong bản demo này.**
