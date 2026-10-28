@@ -453,7 +453,7 @@ async function* readTranscriptRecords(filePath: string): AsyncGenerator<Record<s
   }
   // Durable byte-offset scans own their checkpoint reader. Diagnostic history
   // shares the canonical transcript stream and materializes archive bytes once.
-  const transcriptPath = materializeSessionArchiveForRead(filePath);
+  const transcriptPath = await materializeSessionArchiveForRead(filePath);
   for await (const line of streamSessionTranscriptLines(transcriptPath)) {
     try {
       const parsed: unknown = JSON.parse(line);

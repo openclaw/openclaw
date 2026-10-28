@@ -536,14 +536,12 @@ async function buildSessionEntryFromSource(
         sessionKind: opts.sessionKind ?? "unknown",
       };
     }
+    const resolvedTranscriptPath = isUsageCountedSessionArchiveTranscriptPath(absPath)
+      ? await materializeSessionArchiveForRead(absPath)
+      : absPath;
     const raw = (
       await retryTransientMemoryRead(
-        () =>
-          readRegularFile({
-            filePath: isUsageCountedSessionArchiveTranscriptPath(absPath)
-              ? materializeSessionArchiveForRead(absPath)
-              : absPath,
-          }),
+        () => readRegularFile({ filePath: resolvedTranscriptPath }),
         `read session transcript ${absPath}`,
       )
     ).buffer.toString("utf-8");

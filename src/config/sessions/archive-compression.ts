@@ -4,9 +4,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import { walkDirectorySync } from "@openclaw/fs-safe/walk";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
+import {
+  MAX_SESSION_ARCHIVE_STREAM_BYTES,
+  SessionArchivePlaintextLimitError,
+} from "./archive-limits.js";
 import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "./transcript-file-names.js";
 export { SESSION_ARCHIVE_ZSTD_SUFFIX } from "./transcript-file-names.js";
 
@@ -36,8 +41,14 @@ export function readSessionArchiveContentSync(filePath: string): string {
  * Materializes a compressed archive as a plain JSONL cache file and returns
  * the readable path; plain archives pass through untouched. Source identity
  * validates cached bytes so downstream readers need not handle compression.
+ *
+ * Decoding streams straight into the cache file, so peak memory stays at one
+ * chunk regardless of how far the archive expands. Only the decoded byte count
+ * is bounded, and only past the largest plaintext a producer can create. This
+ * budget belongs to the stream: the synchronous string reader above keeps its
+ * original unchecked behavior, since its result has to fit in memory anyway.
  */
-export function materializeSessionArchiveForRead(filePath: string): string {
+export async function materializeSessionArchiveForRead(filePath: string): Promise<string> {
   if (!filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
     return filePath;
   }
@@ -60,15 +71,45 @@ export function materializeSessionArchiveForRead(filePath: string): string {
   if (fs.existsSync(cachePath)) {
     return cachePath;
   }
-  const content = readSessionArchiveContentSync(filePath);
   removeMaterializedArchiveCacheEntries(cacheDir, pathKey, path.basename(cachePath));
   fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
   const tempPath = `${cachePath}.${process.pid}.${randomUUID()}.tmp`;
-  fs.writeFileSync(tempPath, content, { encoding: "utf8", mode: 0o600 });
+  try {
+    await streamArchivePlaintext(filePath, sourceStat.size, tempPath);
+  } catch (error) {
+    fs.rmSync(tempPath, { force: true });
+    throw error;
+  }
   // Concurrent readers may race to the same identity; last rename wins with
   // identical content, so neither can observe a torn or missing cache file.
   fs.renameSync(tempPath, cachePath);
   return cachePath;
+}
+
+async function streamArchivePlaintext(
+  archivePath: string,
+  storedBytes: number,
+  destinationPath: string,
+): Promise<void> {
+  const decoder = zstdCodec.createDecompressStream();
+  let decodedBytes = 0;
+  decoder.on("data", (chunk: Buffer) => {
+    decodedBytes += chunk.byteLength;
+    if (decodedBytes > MAX_SESSION_ARCHIVE_STREAM_BYTES) {
+      decoder.destroy(
+        new SessionArchivePlaintextLimitError({
+          source: archivePath,
+          storedBytes,
+          limitBytes: MAX_SESSION_ARCHIVE_STREAM_BYTES,
+        }),
+      );
+    }
+  });
+  await pipeline(
+    fs.createReadStream(archivePath),
+    decoder,
+    fs.createWriteStream(destinationPath, { mode: 0o600 }),
+  );
 }
 
 // Bounded plaintext exposure: cache entries expire on age so archives deleted

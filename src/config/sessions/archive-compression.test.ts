@@ -22,18 +22,18 @@ describe("archive compression", () => {
     expect(zstdDecompressSync(encoded.bytes).toString("utf8")).toBe(content);
   });
 
-  it("invalidates a materialized cache when its source archive is removed", () => {
+  it("invalidates a materialized cache when its source archive is removed", async () => {
     const encoded = encodeSessionArchiveContent("cached archive contents\n");
     expect(encoded.suffix).toBe(SESSION_ARCHIVE_ZSTD_SUFFIX);
     const dir = tempDirs.make("openclaw-archive-zstd-");
     const archivePath = path.join(dir, `removed.jsonl.deleted.2026-07-11${encoded.suffix}`);
     fs.writeFileSync(archivePath, encoded.bytes);
-    const cachePath = materializeSessionArchiveForRead(archivePath);
+    const cachePath = await materializeSessionArchiveForRead(archivePath);
     expect(fs.existsSync(cachePath)).toBe(true);
 
     fs.rmSync(archivePath);
 
-    expect(() => materializeSessionArchiveForRead(archivePath)).toThrow();
+    await expect(materializeSessionArchiveForRead(archivePath)).rejects.toThrow();
     expect(fs.existsSync(cachePath)).toBe(false);
   });
 
@@ -45,7 +45,7 @@ describe("archive compression", () => {
     expect(readSessionArchiveContentSync(archivePath)).toBe("plain\n");
   });
 
-  it("materializes compressed archives to a stable plain JSONL cache path", () => {
+  it("materializes compressed archives to a stable plain JSONL cache path", async () => {
     const content = `${JSON.stringify({ type: "message", body: "cold" })}\n`;
     const encoded = encodeSessionArchiveContent(content);
     const dir = tempDirs.make("openclaw-archive-zstd-");
@@ -55,11 +55,23 @@ describe("archive compression", () => {
     );
     fs.writeFileSync(archivePath, encoded.bytes);
 
-    const first = materializeSessionArchiveForRead(archivePath);
-    const second = materializeSessionArchiveForRead(archivePath);
+    const first = await materializeSessionArchiveForRead(archivePath);
+    const second = await materializeSessionArchiveForRead(archivePath);
 
     expect(second).toBe(first);
     expect(fs.readFileSync(first, "utf8")).toBe(content);
     expect(first.endsWith(".jsonl")).toBe(true);
+  });
+
+  it("rejects a corrupt compressed archive without caching plaintext", async () => {
+    const corruptDir = tempDirs.make("openclaw-archive-zstd-");
+    const archivePath = path.join(
+      corruptDir,
+      `corrupt.jsonl.deleted.2026-07-11T00-00-00.000Z${SESSION_ARCHIVE_ZSTD_SUFFIX}`,
+    );
+    fs.writeFileSync(archivePath, Buffer.from("not a zstd frame"));
+
+    await expect(materializeSessionArchiveForRead(archivePath)).rejects.toThrow();
+    await expect(materializeSessionArchiveForRead(archivePath)).rejects.toThrow();
   });
 });
