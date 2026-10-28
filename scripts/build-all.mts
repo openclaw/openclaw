@@ -134,6 +134,11 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
   tsxStep("external-plugins:local-dist", "scripts/build-external-plugin-local-dist.mts"),
   tsxStep("check-cli-bootstrap-imports", "scripts/check-cli-bootstrap-imports.mts"),
   pluginAssetStep("copy"),
+  tsxStep(
+    "agent-database-contention-markers",
+    "scripts/check-agent-database-contention-markers.mts",
+    "--require-dist",
+  ),
   tsxStep("runtime-postbuild", "scripts/runtime-postbuild.mts"),
   tsxStep("build-stamp", "scripts/build-stamp.mts"),
   tsxStep("runtime-postbuild-stamp", "scripts/runtime-postbuild-stamp.mts"),
@@ -168,6 +173,7 @@ const RUNTIME_SETUP_STEP_LABELS = [
   "check-cli-bootstrap-imports",
 ] as const;
 const RUNTIME_FINALIZE_STEP_LABELS = [
+  "agent-database-contention-markers",
   "runtime-postbuild",
   "build-stamp",
   "runtime-postbuild-stamp",

@@ -19,6 +19,7 @@ export const PREFLIGHT_CHECKS: CheckCommand[] = [
   { name: "first-party mock export ratchet", args: ["check:test-mock-exports"], usesBase: true },
   { name: "changelog attributions", args: ["check:changelog-attributions"] },
   { name: "AGENTS.md bootstrap size", args: ["check:agents-md-size"] },
+  { name: "agent database contention markers", args: ["check:agent-database-contention-markers"] },
   { name: "database-first legacy-store guard", args: ["check:database-first-legacy-stores"] },
   { name: "doctor deprecation registry", args: ["check:doctor-deprecation-registry"] },
   {

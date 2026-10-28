@@ -117,6 +117,45 @@ export function retainAgentDatabaseStartupWorker(
   return true;
 }
 
+/**
+ * A transient SQLite lock is contention, not damage.
+ *
+ * `isSqliteLockError` only inspects the error it is handed, so a lock that
+ * arrives wrapped in a `cause` or reported by message alone is invisible to
+ * it. Both shapes are common: the state write path reports contention as a
+ * generic `ERR_SQLITE_ERROR` whose message carries `sqliteErrcode=5`, and the
+ * startup path wraps the failure before it surfaces.
+ *
+ * A mixed failure stays out. An `AggregateError` carries more than one cause,
+ * so its outcome is uncertain, and replaying a preparation on an uncertain
+ * outcome can apply a migration twice.
+ */
+export function isTransientAgentDatabaseContention(error: unknown): boolean {
+  // The depth cap bounds cyclic causes; the state write path nests at most a few.
+  for (let current = error, depth = 0; depth < 8; depth += 1) {
+    if (isSqliteLockError(current)) {
+      return true;
+    }
+    // A mixed failure carries more than one cause, and its message folds the
+    // causes together, so it is checked before the message forms.
+    if (current instanceof AggregateError) {
+      return false;
+    }
+    const message = formatErrorMessage(current).toLowerCase();
+    if (
+      message.includes("database is locked") ||
+      message.includes("database table is locked") ||
+      message.includes("sqlite_busy") ||
+      message.includes("sqlite_locked") ||
+      /sqliteerrcode=(?:5|6)\b/u.test(message)
+    ) {
+      return true;
+    }
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return false;
+}
+
 export function createAgentDatabaseInspectionRefusal(params: {
   agentId: string;
   paths: string[];
@@ -132,14 +171,14 @@ export function createAgentDatabaseInspectionRefusal(params: {
   const serializationFailure = collectNestedErrorCandidates(params.cause).some(
     (error) => error instanceof Error && error.name === "DataCloneError",
   );
-  const locked = !params.pending && isSqliteLockError(params.cause);
+  const locked = !params.pending && isTransientAgentDatabaseContention(params.cause);
   const refusal: AgentDatabaseAdmissionRefusal = {
     agentId: params.agentId,
     paths: params.paths,
     code: params.pending ? "agent-database-inspection-pending" : "agent-database-inspection-failed",
     reason: locked ? "database locked by another process" : params.reason,
     repairHint: locked
-      ? "Close other processes accessing this database, then restart the Gateway to retry admission. Lock contention does not require database repair."
+      ? "A SQLite write was blocked by another connection (SQLITE_BUSY) while the Gateway prepared this agent. This is lock contention, not damage, and the file that was locked is often the Gateway shared state database rather than this agent database, so repairing the agent database usually finds nothing. The Gateway retries preparation on its own; if the contention survives repeated Gateway starts, restart the Gateway to retry admission."
       : candidateSnapshotCapacity
         ? "Free space in the reported snapshot cache, then retry the update. This candidate snapshot failure does not require repairing the serving database."
         : serializationFailure
