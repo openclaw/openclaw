@@ -30,16 +30,16 @@ import type { CodexAttemptContext } from "./run-attempt-context.js";
 import { estimateCodexAppServerProjectedTurnTokens } from "./run-attempt-lifecycle.js";
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
+import { buildContextEngineBinding } from "./thread-context-engine.js";
 import {
-  buildContextEngineBinding,
-  buildTurnCollaborationMode,
   codexDynamicToolsFingerprint,
   codexLegacyDynamicToolsFingerprint,
-} from "./thread-lifecycle.js";
+} from "./thread-fingerprints.js";
 import { hasCodexMirrorOrigin } from "./transcript-mirror-attestation.js";
 import {
   buildCodexHistoryProvenancePrefix,
   buildCodexParentLocalInstructions,
+  buildTurnCollaborationMode,
 } from "./turn-params.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 

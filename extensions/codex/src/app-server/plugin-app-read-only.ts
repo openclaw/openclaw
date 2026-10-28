@@ -1,9 +1,9 @@
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CodexPluginOwnedApp } from "./plugin-inventory.js";
 import {
   normalizeAppToolApprovalMode,
   type CodexAppToolApprovalMode,
-} from "./scheduled-app-tool-policy.js";
+} from "./app-tool-approval-mode.js";
+import type { CodexPluginOwnedApp } from "./plugin-inventory.js";
 
 export type CodexAppReadOnlyTools = Record<
   string,

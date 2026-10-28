@@ -19,6 +19,7 @@ import {
   type CodexServerNotification,
 } from "./protocol.js";
 import {
+  type writeCodexAppServerBinding as writeRawCodexAppServerBinding,
   registerCodexTestSessionIdentity,
   testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
@@ -29,6 +30,24 @@ import {
 } from "./shared-client.js";
 import { createClientHarness, createCodexTestModel } from "./test-support.js";
 import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
+
+export type CodexThreadLifecycleTimingLogger = NonNullable<
+  NonNullable<Parameters<typeof startOrResumeThreadImpl>[0]["timing"]>["log"]
+>;
+
+type StartParams = CodexAttemptThreadInput;
+
+export type PolicyRefreshFixtures = {
+  createParams: (sessionFile: string, workspaceDir: string) => StartParams["params"];
+  createThreadLifecycleAppServerOptions: () => StartParams["appServer"];
+  createLeasedLifecycleWireClient: (
+    agentDir: string,
+    respond: (request: RpcRequest) => unknown,
+    transport: "stdio" | "websocket" | "unix" | "proxy",
+  ) => Promise<ReturnType<typeof createClientHarness>>;
+  startOrResumeThread: (params: StartParams) => ReturnType<typeof startOrResumeThreadImpl>;
+  writeCodexAppServerBinding: typeof writeRawCodexAppServerBinding;
+};
 
 type NativeFixtureThread = {
   response: Record<string, unknown>;

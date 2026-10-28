@@ -307,7 +307,7 @@ export function registerSharedClientLifetimeTests(
       },
       { retainClient },
     );
-    await monitor.registerParent({
+    const parent = await monitor.registerParent({
       parentThreadId: "parent-thread",
       requesterSessionKey: "agent:main:main",
       completionScope: { requesterSessionKey: "agent:main:main", requesterAgentId: "main" },
@@ -335,6 +335,8 @@ export function registerSharedClientLifetimeTests(
     });
     await vi.waitFor(() => expect(retainClient).toHaveBeenCalledTimes(1));
 
+    // The foreground turn ends before its detached child's completion arrives.
+    await parent.unregister();
     expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
     expect(retireSharedCodexAppServerClientIfCurrent(client)).toEqual({
       activeLeases: 1,

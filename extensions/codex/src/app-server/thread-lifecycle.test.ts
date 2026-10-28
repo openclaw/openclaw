@@ -41,14 +41,15 @@ import {
   withLeasedCodexTestClient,
 } from "./test-support.js";
 import {
-  buildDeveloperInstructions,
-  buildTurnCollaborationMode,
-  buildTurnStartParams,
-  buildThreadResumeParams,
-  buildThreadStartParams,
   areCodexDynamicToolFingerprintsCompatible,
   codexDynamicToolsFingerprint,
   codexLegacyDynamicToolsFingerprint,
+} from "./thread-fingerprints.js";
+import {
+  buildDeveloperInstructions,
+  buildTurnStartParams,
+  buildThreadResumeParams,
+  buildThreadStartParams,
   startOrResumeThread as startOrResumeThreadImpl,
 } from "./thread-lifecycle.js";
 import {
@@ -57,8 +58,10 @@ import {
   createThreadRequestAttemptParams as createAttemptParams,
   disabledMcpServerStatus,
   writeNativeCatalogFixture,
+  type CodexThreadLifecycleTimingLogger,
 } from "./thread-lifecycle.test-fixtures.js";
 import { attestCodexRestrictedToolSurfaceMcpServersDisabled } from "./thread-requests.js";
+import { buildTurnCollaborationMode } from "./turn-params.js";
 
 it("uses direct OpenClaw functions and hosted web search for subscription sharing", () => {
   const params = createAttemptParams({ provider: "openai", authProfileId: "openai:sharing" });
@@ -120,10 +123,6 @@ it("uses direct OpenClaw functions and hosted web search for subscription sharin
   expect(restricted.config?.["features.apps"]).toBe(false);
   expect(restricted.config?.["orchestrator.mcp.enabled"]).toBe(false);
 });
-
-type CodexThreadLifecycleTimingLogger = NonNullable<
-  NonNullable<Parameters<typeof startOrResumeThreadImpl>[0]["timing"]>["log"]
->;
 
 describe("Codex usage attribution", () => {
   it.each(["user"] as const)("preserves the %s run trigger on each new turn", (trigger) => {

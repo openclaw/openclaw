@@ -30,7 +30,6 @@ import type { CodexNativeSubagentSubmissionStore } from "./native-subagent-submi
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
 import { reportCodexBackgroundCleanupFailure } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptPrompt } from "./run-attempt-prompt.js";
-import type { CodexRecoveryClientLease } from "./run-attempt-recovery.js";
 import {
   releaseCodexSandboxExecServerEnvironment,
   type CodexSandboxExecEnvironment,
@@ -43,10 +42,10 @@ import {
   retainSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
 import type {
+  CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
   CodexThreadFinalConfigPatchDecision,
 } from "./thread-lifecycle-types.js";
-import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle.js";
 import {
   isSameCodexAppServerThreadOwner,
   retainCodexAppServerBindingSubscription,
@@ -54,6 +53,11 @@ import {
 import { isCodexNativeDelegationDisabledForRun } from "./thread-requests.js";
 import { createCodexTrajectoryRecorder } from "./trajectory.js";
 import type { CodexAppServerTurnRouter, CodexThreadRouteReservation } from "./turn-router.js";
+
+type CodexRecoveryClientLease = {
+  client: CodexAppServerClient;
+  release: () => void;
+};
 
 export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   const { context } = prompt;

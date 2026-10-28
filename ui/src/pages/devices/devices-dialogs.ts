@@ -1,6 +1,7 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { showConfirmDialog, type ConfirmDialogOptions } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
+import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type {
   DevicesPageDataState,
@@ -14,6 +15,8 @@ import {
   renameDevice,
   revokeDeviceToken,
 } from "../../lib/nodes/page-operations.ts";
+
+registerDevicesEnglish();
 
 type DeviceAliasTarget = {
   id: string;

@@ -48,7 +48,7 @@ import {
   prepareCodexThreadFinalConfigPatch,
   resolveCodexThreadAgentDir,
 } from "./thread-lifecycle-preflight.js";
-import { recordCodexThreadReady } from "./thread-lifecycle-timing.js";
+import { recordCodexThreadReady } from "./thread-lifecycle-ready.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,

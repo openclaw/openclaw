@@ -51,6 +51,11 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
   "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
   "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
+  // The recovery README invokes this opt-in native/Gateway fault-injection driver.
+  "test/e2e/codex-recovery/repro.mjs!",
+  // The driver launches these through paths computed for the selected source checkout.
+  "test/e2e/codex-recovery/repro-dns.mjs!",
+  "test/e2e/codex-recovery/gateway-entry.mts!",
   // The PR artifact Vitest suite launches this standalone Node regression by path.
   "test/scripts/pr-review-artifacts.node.mjs!",
   // SHA-pinned dispatch tests load this admission transport by a generated file URL.

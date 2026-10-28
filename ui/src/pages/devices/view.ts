@@ -10,11 +10,14 @@ import {
   renderSettingsSection,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import "../../styles/devices.css";
 import { renderExecApprovals, resolveExecApprovalsState } from "./view-exec-approvals.ts";
 import { renderDeviceInventory } from "./view-inventory.ts";
 import { resolveConfigAgents, resolveNodeTargets } from "./view-shared.ts";
 import type { DevicesProps } from "./view.types.ts";
+
+registerDevicesEnglish();
 
 export function renderDevices(props: DevicesProps) {
   const bindingState = resolveBindingsState(props);

@@ -2,7 +2,6 @@ import { isDeepStrictEqual } from "node:util";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isTerminalTurnStatus } from "./attempt-notifications.js";
 import { claimCodexAppServerLiveThread } from "./client-runtime.js";
-import type { CodexAppServerClient } from "./client.js";
 import {
   assertCodexThreadAcceptsDirectInput,
   assertCodexThreadResumeResponse,
@@ -14,11 +13,6 @@ import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { CodexServerRequestResolvedError } from "./server-requests.js";
 import { isSameCodexAppServerThreadOwner } from "./thread-ownership.js";
 import { getCodexAppServerTurnRouter, type CodexThreadRouteReservation } from "./turn-router.js";
-
-export type CodexRecoveryClientLease = {
-  client: CodexAppServerClient;
-  release: () => void;
-};
 
 /** Rejoin a transport-lost turn only while its original attempt still owns execution. */
 export async function recoverCodexAttemptConnection(
