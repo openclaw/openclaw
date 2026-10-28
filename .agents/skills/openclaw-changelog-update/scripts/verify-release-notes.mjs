@@ -1983,20 +1983,23 @@ function resolvePullRequestCoauthors(nodes) {
 
 function resolveCommitCoauthors(commits) {
   const resolved = new Map();
-  const commitsWithCoauthors = commits.filter((commit) => commit.coauthorEmails.length > 0);
-  for (let index = 0; index < commitsWithCoauthors.length; index += 40) {
-    const chunk = commitsWithCoauthors.slice(index, index + 40);
+  const pending = commits
+    .filter((commit) => commit.coauthorEmails.length > 0)
+    .map((commit) => ({ commit, cursor: null }));
+  while (pending.length > 0) {
+    const chunk = pending.splice(0, 40);
     const fields = chunk
       .map(
-        (commit, offset) =>
-          `c${index + offset}: repository(owner: "openclaw", name: "openclaw") {
+        ({ commit, cursor }, offset) =>
+          `c${offset}: repository(owner: "openclaw", name: "openclaw") {
             object(expression: ${JSON.stringify(commit.hash)}) {
               ... on Commit {
-                authors(first: 20) {
+                authors(first: 20, after: ${JSON.stringify(cursor)}) {
                   nodes {
                     email
                     user { login }
                   }
+                  pageInfo { hasNextPage endCursor }
                 }
               }
             }
@@ -2005,15 +2008,20 @@ function resolveCommitCoauthors(commits) {
       .join("\n");
     const { data } = graphql(`query { ${fields} }`);
     for (let offset = 0; offset < chunk.length; offset += 1) {
-      const coauthorEmails = new Set(
-        chunk[offset].coauthorEmails.map((email) => email.toLowerCase()),
-      );
-      const handles =
-        data[`c${index + offset}`]?.object?.authors?.nodes
-          .filter((author) => coauthorEmails.has(author.email?.toLowerCase()))
-          .map((author) => author.user?.login)
-          .filter(isEligibleHandle) ?? [];
-      resolved.set(chunk[offset].hash, handles);
+      const { commit, cursor } = chunk[offset];
+      const coauthorEmails = new Set(commit.coauthorEmails.map((email) => email.toLowerCase()));
+      const connection = data[`c${offset}`]?.object?.authors;
+      const handles = (connection?.nodes ?? [])
+        .filter((author) => coauthorEmails.has(author.email?.toLowerCase()))
+        .map((author) => author.user?.login);
+      resolved.set(commit.hash, addHandles(resolved.get(commit.hash) ?? [], handles));
+      if (connection?.pageInfo?.hasNextPage) {
+        const nextCursor = connection.pageInfo.endCursor;
+        if (typeof nextCursor !== "string" || !nextCursor || nextCursor === cursor) {
+          fail(`GitHub returned an invalid authors cursor for commit ${commit.hash}`);
+        }
+        pending.push({ commit, cursor: nextCursor });
+      }
     }
   }
   return resolved;
