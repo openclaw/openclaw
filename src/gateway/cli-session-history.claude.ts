@@ -22,7 +22,6 @@ import {
   getCliSessionBinding,
   normalizeCliSessionReseedReceipt,
 } from "../config/sessions/cli-session-binding.js";
-import { stripCliPromptDecorations } from "./cli-session-history.prompt-text.js";
 import { attachOpenClawTranscriptMeta } from "./session-transcript-entry-message.js";
 
 const CLAUDE_CLI_PROVIDER = "claude-cli";
@@ -289,43 +288,6 @@ export function resolveClaudeCliPromptTextCandidates(
       ? [{ text: item.text, blockIndex }]
       : [],
   );
-}
-
-/**
- * Display copy of an imported user row that survived the history merge. The merge
- * matches on the original text first, so this must not run before it.
- */
-export function cleanClaudeCliImportedUserDisplay(message: unknown): unknown {
-  const meta = isRecord(message) ? message["__openclaw"] : undefined;
-  if (
-    !isRecord(message) ||
-    message.role !== "user" ||
-    message.display === false ||
-    !isRecord(meta) ||
-    meta.importedFrom !== CLAUDE_CLI_PROVIDER
-  ) {
-    return message;
-  }
-  const { content } = message;
-  if (typeof content === "string") {
-    return { ...message, content: stripCliPromptDecorations(content) };
-  }
-  if (!Array.isArray(content) || content.some((block) => isToolResultBlock(block))) {
-    return message;
-  }
-  // Generated prefixes belong to the beginning of the whole turn. Later text
-  // blocks may quote the same frame and must retain the sender's evidence.
-  const firstTextIndex = content.findIndex(
-    (block) => isRecord(block) && block.type === "text" && typeof block.text === "string",
-  );
-  return {
-    ...message,
-    content: content.map((block, index) =>
-      index === firstTextIndex && isRecord(block) && typeof block.text === "string"
-        ? Object.assign({}, block, { text: stripCliPromptDecorations(block.text) })
-        : block,
-    ),
-  };
 }
 
 function resolveClaudeCliInternalSourceTool(text: string): string | undefined {
