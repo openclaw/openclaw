@@ -444,19 +444,11 @@ it("preserves rollups and aborts when the transcript directory cannot be read", 
 });
 
 it("includes sessions outside the refreshed range in the first aggregate read", async () => {
-  const oldSessionFile = await writeTranscript(
-    "sess-cache-cold-sync-old",
-    assistant("2026-02-05T12:00:00.000Z", billed(100, 100, 200, 0.2)),
-  );
-  await writeTranscript(
-    "sess-cache-cold-sync-current",
-    assistant("2026-02-05T12:00:00.000Z", billed(10, 20, 30, 0.03)),
-  );
-  await fs.utimes(
-    oldSessionFile,
-    new Date("2025-12-05T12:00:00.000Z"),
-    new Date("2025-12-05T12:00:00.000Z"),
-  );
+  const timestamp = "2026-02-05T12:00:00.000Z";
+  const oldSessionFile = await writeTranscript("cache-old", modelMessage(timestamp, 200));
+  await writeTranscript("cache-current", modelMessage(timestamp, 30));
+  const old = new Date("2025-12-05T12:00:00.000Z");
+  await fs.utimes(oldSessionFile, old, old);
 
   await refreshCostUsageCacheForAgent({
     config: defaultConfig,
@@ -472,19 +464,12 @@ it("includes sessions outside the refreshed range in the first aggregate read", 
 });
 
 it("waits for a busy refresh before loading a direct session summary", async () => {
-  const sessionFile = await writeTranscript(
-    "cost-session-busy-refresh",
-    assistant("2026-02-01T10:00:00.000Z", billed(7, 5, 12, 0.012)),
-    root,
-  );
-
+  const sessionFile = await writeMessages(modelMessage("2026-02-01T10:00:00.000Z", 12));
   const lock = prepareSessionCostUsageRefreshLock("main");
-  let released: Promise<void> | undefined;
+  expect(await lock.acquire()).toBe(true);
+  const released = delay(40).then(lock.release);
   try {
-    expect(await lock.acquire()).toBe(true);
-    released = delay(40).then(lock.release);
-    const [summary] = await Promise.all([readSummary({ sessionFile }), released]);
-    expect(summary?.totalTokens).toBe(12);
+    expect((await readSummary({ sessionFile }))?.totalTokens).toBe(12);
   } finally {
     await released;
     await lock.release();

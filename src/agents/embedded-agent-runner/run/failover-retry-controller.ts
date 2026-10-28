@@ -108,6 +108,10 @@ export function createEmbeddedRunFailoverRetryController(input: {
 }) {
   const { runInput, preparedRuntime } = input;
   const { runParams: params, globalLane, agentDir, fallbackConfigured } = runInput;
+  // Project the epoch-valued run origin once, before later wall-clock corrections.
+  const fallbackRunStartMonotonicMs = fallbackConfigured
+    ? performance.now() - (Date.now() - runInput.startedAtMs)
+    : 0;
   const { provider, modelId } = preparedRuntime;
   const advanceAttemptAuthProfile = preparedRuntime.advanceAttemptAuthProfile;
   let rateLimitProfileRotations = 0;
@@ -426,7 +430,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
         });
         return false;
       }
-      const nowMs = Date.now();
+      const nowMs = performance.now();
       const retryWindowStartMs = transientRetryWindowStartMs ?? nowMs;
       if (retry.reason !== "output_limit") {
         transientRetryWindowStartMs = retryWindowStartMs;
@@ -456,7 +460,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
         params.timeoutMs > 0 &&
         params.timeoutMs < MAX_TIMER_TIMEOUT_MS;
       const remainingRetryMs = reserveFallback
-        ? params.timeoutMs / 2 - (nowMs - runInput.startedAtMs)
+        ? params.timeoutMs / 2 - (nowMs - fallbackRunStartMonotonicMs)
         : Infinity;
       if (delayMs === undefined || delayMs >= remainingRetryMs) {
         recordDecision("rejected", "retry_delay_unavailable");

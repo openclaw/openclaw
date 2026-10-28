@@ -46,6 +46,8 @@ const repositoryScriptEntries = [
   "scripts/perf/session-patch-response-measure.ts!",
   "scripts/perf/transcript-pool-idle-measure.ts!",
   "scripts/perf/worktree-creation-measure.ts!",
+  // The source header documents this matched Code Mode engine probe by path.
+  "scripts/perf/code-mode-engine-measure.ts!",
   // The prepublish registry executes this shared build-and-pack lifetime by path.
   "scripts/lib/plugin-npm-build-and-pack.mts!",
   // Package scripts execute the PostgreSQL schema generator, which consumes state declarations.
@@ -2053,6 +2055,10 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/cloudflare-ai-gateway`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/chutes`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/clawrouter`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/code-mode-quickjs`]: bundledPluginWorkspace([
+      // The source header documents this opt-in engine attribution probe by path.
+      "bench/engine-attribution.ts!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/cohere`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/comfy`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/copilot`]: bundledPluginWorkspace([
