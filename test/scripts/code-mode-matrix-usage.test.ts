@@ -7,13 +7,201 @@ import {
   captureMatrixLedgerBoundary,
   collectMatrixUsage,
   readMatrixSessionLedger,
+  readMatrixModelAccounting,
   type MatrixSessionLedger,
 } from "../../scripts/lib/code-mode-matrix-usage.js";
+import { emitTrustedDiagnosticEvent } from "../../src/infra/diagnostic-events.js";
+import {
+  emitDiagnosticsTimelineEvent,
+  finishDiagnosticsTimeline,
+  flushDiagnosticsTimeline,
+} from "../../src/infra/diagnostics-timeline.js";
+import { withEnvAsync } from "../../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const ROOT = "agent:qa:matrix:root";
 const CHILD = "agent:worker:subagent:child";
+
+describe("matrix logical model accounting", () => {
+  type TimelineRow = Record<string, unknown> & { attributes: Record<string, unknown> };
+  function timeline(extra: Record<string, unknown>[] = []) {
+    return [
+      { name: "timeline.capture.started", attributes: { exclusiveProcess: true } },
+      { name: "provider.request.started", runId: "task", spanId: "call" },
+      {
+        name: "provider.request",
+        type: "provider.request",
+        runId: "task",
+        spanId: "call",
+        ok: true,
+        attributes: { usageState: "available", input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+      ...extra,
+      { name: "timeline.capture.completed", attributes: { complete: true } },
+    ].map<TimelineRow>((row, index) => ({
+      schemaVersion: "openclaw.diagnostics.v1",
+      pid: 123,
+      provider: "fixture",
+      type: "mark",
+      ...row,
+      attributes: {
+        captureId: "capture",
+        sequence: index + 1,
+        failedWrites: 0,
+        model: "model",
+        observationUnit: "logical-call",
+        ...(typeof row.attributes === "object" && row.attributes ? row.attributes : {}),
+      },
+    }));
+  }
+  async function read(rows: unknown[], suffix = "\n", joined = true) {
+    const file = path.join(tempDirs.make("matrix-model-accounting-"), "timeline.jsonl");
+    fs.writeFileSync(file, rows.map((row) => JSON.stringify(row)).join("\n") + suffix);
+    return readMatrixModelAccounting({ file, joined, foregroundRunIds: ["task"] });
+  }
+
+  it("counts billed-zero once and keeps mirrored usage and non-foreground calls separate", async () => {
+    const result = await read(
+      timeline([
+        { name: "model.usage", attributes: { completionId: "mirror", input: 999 } },
+        { name: "provider.request.started", runId: "summary", spanId: "summary-call" },
+        {
+          name: "provider.request",
+          type: "provider.request",
+          runId: "summary",
+          spanId: "summary-call",
+          ok: false,
+          attributes: { usageState: "unavailable" },
+        },
+      ]),
+    );
+    expect(result).toMatchObject({
+      complete: true,
+      issues: [],
+      foreground: { observedCalls: 1, completed: 1, tokens: { input: 0, output: 0 } },
+      other: { observedCalls: 1, errors: 1, tokens: { input: null, output: null } },
+      physicalHttpAttempts: null,
+      internalRetries: null,
+      providerBilling: null,
+    });
+    expect(result.usageObservations).toHaveLength(1);
+  });
+
+  it("reads the canonical writer and metadata-only usage projection through final close", async () => {
+    const file = path.join(tempDirs.make("matrix-model-accounting-writer-"), "timeline.jsonl");
+    await withEnvAsync(
+      { OPENCLAW_DIAGNOSTICS: "timeline", OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: file },
+      async () => {
+        for (const row of timeline().slice(0, -1)) {
+          emitDiagnosticsTimelineEvent({
+            type: row.type === "provider.request" ? "provider.request" : "mark",
+            name: String(row.name),
+            runId: typeof row.runId === "string" ? row.runId : undefined,
+            spanId: typeof row.spanId === "string" ? row.spanId : undefined,
+            provider: "fixture",
+            ok: row.ok === true,
+            attributes: {
+              exclusiveProcess: true,
+              model: "model",
+              observationUnit: "logical-call",
+              usageState: "available",
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+            },
+          });
+        }
+        emitTrustedDiagnosticEvent({
+          type: "model.usage",
+          provider: "fixture",
+          model: "model",
+          sessionKey: "private-session-key",
+          channel: "private-channel",
+          agentId: "private-agent",
+          usage: { input: 999 },
+          costUsd: 0.000006,
+        });
+        finishDiagnosticsTimeline(true);
+      },
+    );
+    const result = await readMatrixModelAccounting({
+      file,
+      joined: true,
+      foregroundRunIds: ["task"],
+    });
+    expect(result).toMatchObject({
+      complete: true,
+      foreground: { observedCalls: 1, tokens: { input: 0 } },
+    });
+    expect(result.usageObservations).toEqual([
+      expect.objectContaining({
+        provider: "fixture",
+        model: "model",
+        input: 999,
+        costUsd: 0.000006,
+      }),
+    ]);
+    expect(fs.readFileSync(file, "utf8")).not.toContain("private-");
+    await withEnvAsync(
+      { OPENCLAW_DIAGNOSTICS: "timeline", OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: file },
+      async () => {
+        emitTrustedDiagnosticEvent({ type: "model.usage", usage: { input: 1 } });
+        flushDiagnosticsTimeline();
+      },
+    );
+    expect(
+      (await readMatrixModelAccounting({ file, joined: true, foregroundRunIds: ["task"] }))
+        .complete,
+    ).toBe(false);
+  });
+
+  it.each([
+    "close",
+    "start",
+    "terminal",
+    "unmatched",
+    "duplicate",
+    "conflict",
+    "loss",
+    "sequence",
+    "process",
+    "retained",
+    "late",
+    "schema",
+  ])("does not certify %s damage", async (damage) => {
+    const rows = timeline();
+    if (damage === "close") rows.pop();
+    if (damage === "start") rows.shift();
+    if (damage === "terminal") rows.splice(2, 1);
+    if (damage === "unmatched") rows.splice(1, 1);
+    if (damage === "duplicate") rows.splice(3, 0, rows[2]!);
+    if (damage === "conflict") rows[2]!.provider = "other";
+    if (damage === "loss") rows[3]!.attributes.failedWrites = 1;
+    if (damage === "sequence") rows[2]!.attributes.sequence = 20;
+    if (damage === "process") rows[2]!.pid = 456;
+    if (damage === "retained") rows[3]!.attributes.complete = false;
+    if (damage === "late") rows.push({ ...rows[2]!, name: "model.usage", type: "mark" });
+    if (damage === "schema") rows[2]!.schemaVersion = "unrecognized";
+    const damaged = rows.map((row, index) => ({
+      ...row,
+      attributes: {
+        ...row.attributes,
+        ...(damage === "sequence" ? {} : { sequence: index + 1 }),
+      },
+    }));
+    expect(await read(damaged)).toMatchObject({
+      complete: false,
+      foreground: { tokens: { input: null } },
+    });
+  });
+
+  it("requires a complete final line and joined child even with valid terminal records", async () => {
+    expect((await read(timeline(), "")).complete).toBe(false);
+    expect((await read(timeline(), "\n", false)).complete).toBe(false);
+  });
+});
 const rootIdentity = { storeId: "qa", sessionId: "root", sessionKey: ROOT };
 
 function usage(scale = 1, total = 0.012, totalOrigin?: "provider-billed") {

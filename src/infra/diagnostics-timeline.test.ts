@@ -6,11 +6,14 @@ import { dirname, join } from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import { makeZeroUsageSnapshot, normalizeUsage } from "../agents/usage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   emitDiagnosticsTimelineEvent as emit,
   flushDiagnosticsTimeline as flush,
+  finishDiagnosticsTimeline as finish,
   isDiagnosticsTimelineEnabled as isEnabled,
+  modelUsageTimelineAttributes,
   measureDiagnosticsTimelineSpan as span,
   measureDiagnosticsTimelineSpanSync as spanSync,
 } from "./diagnostics-timeline.js";
@@ -46,6 +49,34 @@ afterEach(async () => {
   flush();
   vi.restoreAllMocks();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
+
+it.each(["synthetic", "reported", "billed", "unavailable"] as const)(
+  "preserves %s zero-usage provenance",
+  (kind) => {
+    const usage = makeZeroUsageSnapshot();
+    if (kind === "reported") usage.usageReport = { state: "available" };
+    if (kind === "billed") usage.cost.totalOrigin = "provider-billed";
+    if (kind === "unavailable") usage.usageReport = { state: "unavailable" };
+    const attributes = modelUsageTimelineAttributes(normalizeUsage(usage));
+    expect(attributes).toMatchObject({
+      usageState:
+        kind === "synthetic" ? "unreported" : kind === "unavailable" ? "unavailable" : "available",
+      ...(kind === "unavailable" ? {} : { input: 0, output: 0 }),
+    });
+    if (kind === "unavailable") {
+      expect(attributes).not.toHaveProperty("input");
+      expect(attributes).not.toHaveProperty("output");
+    }
+  },
+);
+
+it("preserves sub-millidollar scalar metadata without rounding it to zero", async () => {
+  const { env, path } = await createTimelineEnv();
+  emit({ type: "mark", name: "model.usage", attributes: { costUsd: 0.000006 } }, { env });
+  expect(await readTimeline(path)).toEqual([
+    expect.objectContaining({ attributes: expect.objectContaining({ costUsd: 0.000006 }) }),
+  ]);
 });
 
 it("defers a timeline burst and writes its ordered events in one safe append", async () => {
@@ -220,6 +251,27 @@ it("routes timeline write failures through the captured console boundary once", 
   expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("failed to write timeline event"));
   emit({ type: "mark", name: "recovered" }, { env });
   expect((await readTimeline(path)).map((event) => event.name)).toEqual(["recovered"]);
+});
+
+it("retains whole-batch loss after writing recovers and flushes it before the close receipt", async () => {
+  const { env, path } = await createTimelineEnv();
+  vi.spyOn(fs, "appendFileSync").mockImplementationOnce(() => {
+    throw new Error("fixture write failure");
+  });
+  emit({ type: "mark", name: "lost-start" }, { env });
+  emit({ type: "mark", name: "lost-terminal" }, { env });
+  finish(true, { env });
+  expect(await readTimeline(path)).toEqual([
+    expect.objectContaining({
+      name: "timeline.capture.completed",
+      attributes: {
+        complete: true,
+        captureId: expect.any(String),
+        sequence: 3,
+        failedWrites: 1,
+      },
+    }),
+  ]);
 });
 
 it.each(["symlink", "hardlink", "directory"])(

@@ -1,4 +1,14 @@
+export type DiagnosticModelCallPromptStats = Readonly<{
+  inputMessagesCount?: number;
+  inputMessagesChars?: number;
+  systemPromptChars?: number;
+  toolDefinitionsCount?: number;
+  toolDefinitionsChars?: number;
+  totalChars?: number;
+}>;
+
 export type DiagnosticModelCallUsage = Readonly<{
+  usageReport?: { state: "available" | "unavailable" };
   input?: number;
   output?: number;
   cacheRead?: number;

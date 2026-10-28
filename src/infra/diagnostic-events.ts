@@ -29,6 +29,7 @@ import {
   createDiagnosticValueForListeners,
 } from "./diagnostic-event-snapshot.js";
 import type {
+  DiagnosticModelCallPromptStats,
   DiagnosticModelCallTerminalFields,
   DiagnosticModelCallUsage,
 } from "./diagnostic-model-call-types.js";
@@ -70,6 +71,7 @@ import {
   resetDiagnosticTracePropagationForTest,
   shouldPrepareDiagnosticTracePropagation,
 } from "./diagnostic-trace-propagation.js";
+import { recordDiagnosticModelUsageTimeline } from "./diagnostics-timeline.js";
 import {
   MAX_DIAGNOSTIC_WORKER_SLOTS,
   normalizeDiagnosticWorkerScript,
@@ -641,15 +643,6 @@ type DiagnosticModelResponseObservedEvent = Omit<
   usageScope: "response";
   usage?: DiagnosticModelCallUsage;
 };
-
-type DiagnosticModelCallPromptStats = Readonly<{
-  inputMessagesCount?: number;
-  inputMessagesChars?: number;
-  systemPromptChars?: number;
-  toolDefinitionsCount?: number;
-  toolDefinitionsChars?: number;
-  totalChars?: number;
-}>;
 
 type DiagnosticContextAssembledEvent = DiagnosticSessionEvent & {
   type: "context.assembled";
@@ -1305,6 +1298,7 @@ export function getInternalDiagnosticEventSequence(): number {
 
 /** Emits a trusted diagnostic event from core/runtime-owned instrumentation. */
 export function emitTrustedDiagnosticEvent(event: DiagnosticEventInput) {
+  recordDiagnosticModelUsageTimeline(event);
   const toolExecutionLiveness = consumeToolExecutionLivenessDiagnosticEvent(event);
   const hostPluginId = consumeHostPluginUsageDiagnosticEvent(event);
   const coreSemanticRunProgress = consumeCoreSemanticRunProgressDiagnosticEvent(event);

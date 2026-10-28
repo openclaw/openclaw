@@ -1,9 +1,16 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { reasoningTagTextPolicy } from "@openclaw/ai/internal/openai";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { hasInternalDiagnosticEventListeners } from "../infra/diagnostic-events.js";
+import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { bindModelCompletionOwner } from "../llm/model-runtime-binding.js";
 import type { Model } from "../llm/types.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { completionContext, completionModel } from "./simple-completion.test-support.js";
+import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
 const mocks = vi.hoisted(() => ({
   complete: vi.fn(),
@@ -23,6 +30,7 @@ type CompletionParams = Parameters<typeof completeWithPreparedSimpleCompletionMo
 type Options = NonNullable<CompletionParams["options"]>;
 type ReasoningCase = [Options["reasoning"], string | undefined, Partial<Model>?, string?];
 const context = completionContext("pong");
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const auth = { apiKey: "test-key", source: "test", mode: "api-key" } as const;
 const baseModel = completionModel({
   provider: "openai",
@@ -57,6 +65,48 @@ beforeEach(() => {
   mocks.complete.mockReset().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
   mocks.prepareModel.mockReset().mockImplementation((params) => params.model);
 });
+
+it.each(["success", "returned-error", "thrown"])(
+  "records a timeline-only %s completion without diagnostic listeners",
+  async (outcome) => {
+    const file = path.join(tempDirs.make("simple-completion-timeline-"), "timeline.jsonl");
+    expect(hasInternalDiagnosticEventListeners()).toBe(false);
+    const message = makeAssistantMessageFixture({
+      stopReason: outcome === "success" ? "stop" : "error",
+      errorMessage: outcome === "success" ? undefined : "fixture error",
+    });
+    message.usage.usageReport = { state: "available" };
+    if (outcome === "thrown") mocks.complete.mockRejectedValueOnce(new Error("before usage"));
+    else mocks.complete.mockResolvedValueOnce(message);
+    await withEnvAsync(
+      {
+        OPENCLAW_DIAGNOSTICS: "timeline",
+        OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: file,
+      },
+      async () => {
+        const result = complete({ model: baseModel });
+        if (outcome === "thrown") await expect(result).rejects.toThrow("before usage");
+        else await expect(result).resolves.toBe(message);
+        flushDiagnosticsTimeline();
+      },
+    );
+    const events = readFileSync(file, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(events.filter((event) => event.name === "provider.request.started")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "provider.request")).toEqual([
+      expect.objectContaining({
+        ok: outcome === "success",
+        attributes: expect.objectContaining({
+          observationUnit: "logical-call",
+          usageState: outcome === "thrown" ? "unreported" : "available",
+          ...(outcome === "thrown" ? {} : { input: 0, output: 0 }),
+        }),
+      }),
+    ]);
+  },
+);
 
 it.each([
   "src/agents/host-prepared-isolated-completion.ts",
