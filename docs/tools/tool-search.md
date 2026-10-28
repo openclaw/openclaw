@@ -317,9 +317,12 @@ Deferred names are catalog entries, not directly callable functions in this
 mode. Put the result ID or name in `dispatch_action.id` and all target parameters in
 `dispatch_action.args`, including when other instructions refer to the deferred tool
 by name. A compact search signature may be enough to call it; use
-`tool_describe` when the full schema is needed. A direct call to an authorized
-deferred name does not run the tool; it returns an error telling the model to
-call `dispatch_action` with that name as `id`.
+`tool_describe` when the full schema is needed. In the embedded harness, a direct
+call to a deferred name that matches exactly one entry in the current catalog does
+not run the tool; it returns an error telling the model to call `dispatch_action`
+with that name as `id`. Names shared by several entries, entries that require an
+exact ID, and direct calls in the [Copilot harness](/plugins/copilot) still get the
+plain not-found result.
 
 ### Batch search
 
