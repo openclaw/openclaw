@@ -9,6 +9,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
+import { UserProfileNotFoundError } from "../state/user-profiles.js";
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import type { GatewayClient, GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 
@@ -161,11 +162,32 @@ export function resolveCreatorSandbox(
   creation: { actor?: SessionCreatedActor } | undefined,
 ): "required" | undefined {
   const actor = creation?.actor;
-  return actor?.type === "human" &&
-    actor.id &&
-    resolveOperatorRolePolicyForProfile(actor.id, cfg)?.sandbox === "required"
-    ? "required"
-    : undefined;
+  if (actor?.type !== "human" || !actor.id) {
+    return undefined;
+  }
+  try {
+    return resolveOperatorRolePolicyForProfile(actor.id, cfg)?.sandbox === "required"
+      ? "required"
+      : undefined;
+  } catch (error) {
+    // Channel senders and other non-profile human creators carry their channel-native id,
+    // not a user-profile id, so the role policy cannot resolve an assignment for them.
+    // Treat only those sources like a missing assignment so the configured default role
+    // (or the denied role) still decides sandboxing; this must not fail the scheduled
+    // run, and it must not bypass a default-role sandbox requirement. A verified profile
+    // creator whose profile no longer exists keeps failing closed: its job must not
+    // resume under a default role that may drop the profile's required sandbox.
+    if (
+      error instanceof UserProfileNotFoundError &&
+      (actor.source === "channel" || actor.source === "unknown")
+    ) {
+      return resolveOperatorRolePolicyForAssignment(actor.id, null, cfg, null)?.sandbox ===
+        "required"
+        ? "required"
+        : undefined;
+    }
+    throw error;
+  }
 }
 
 /** Resolves the current named policy from the connection's verified profile identity. */

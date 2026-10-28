@@ -25,7 +25,7 @@ import {
   setUserProfileRole,
   syncGitHubIdentity,
 } from "../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { ensureProfileForEmail, UserProfileNotFoundError } from "../state/user-profiles.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveChannelOperatorAdminAuthority } from "./channel-operator-authority.js";
@@ -550,6 +550,38 @@ describe("operator role policy", () => {
       setUserProfileRole(profile.id, "maintainer");
       invalidateOperatorRolePolicy(profile.id);
       expect(sandbox(human)).toBeUndefined();
+    }));
+
+  it("treats a human creator whose id is not a user profile according to the default role sandbox", () =>
+    inState(async () => {
+      const { cfg } = roleFixture();
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      guestDefinition(cfg).sandbox = "required";
+      const sandbox = (
+        actor: NonNullable<Parameters<typeof resolveCreatorSandbox>[1]>["actor"],
+        config = cfg,
+      ) => resolveCreatorSandbox(config, { actor });
+
+      // A channel sender (e.g. Slack) is stamped with its channel-native id, which is not
+      // a user-profile id. Role resolution for such a creator must not throw and must not
+      // bypass a default-role sandbox requirement: it falls back to the default role (or
+      // the denied role) exactly like a missing assignment.
+      expect(sandbox({ type: "human", source: "channel", id: "U-CHANNEL-SENDER" })).toBe(
+        "required",
+      );
+      expect(sandbox({ type: "human", source: "unknown", id: "U-UNKNOWN-SENDER" })).toBe(
+        "required",
+      );
+
+      // Without a sandbox requirement on the default role the run is not stamped.
+      delete guestDefinition(cfg).sandbox;
+      expect(sandbox({ type: "human", source: "channel", id: "U-CHANNEL-SENDER" })).toBeUndefined();
+
+      // A verified profile creator whose profile was removed must keep failing closed:
+      // resuming its job under the default role could drop the profile's required sandbox.
+      expect(() => sandbox({ type: "human", source: "profile", id: "U-REMOVED-PROFILE" })).toThrow(
+        UserProfileNotFoundError,
+      );
     }));
 
   it("authorizes only configured agents and rejects unidentified operators", () =>
