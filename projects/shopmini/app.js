@@ -1,244 +1,40 @@
 (() => {
-  "use strict";
-
-  const STORAGE_KEY = "shopmini-mvp-v1";
-  const $ = (selector) => document.querySelector(selector);
-  const money = (value) => new Intl.NumberFormat("vi-VN", {
-    style: "currency", currency: "VND", maximumFractionDigits: 0
-  }).format(Number(value) || 0);
-  const safeText = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
-  })[char]);
-  const makeId = () => "DH" + Date.now().toString().slice(-8);
-
-  const starterData = {
-    products: [
-      { id: "SP01", name: "Bình giữ nhiệt", price: 129000, stock: 18, emoji: "🥤" },
-      { id: "SP02", name: "Túi tote canvas", price: 89000, stock: 24, emoji: "👜" },
-      { id: "SP03", name: "Đèn bàn mini", price: 159000, stock: 9, emoji: "💡" }
-    ],
-    orders: [
-      { id: "DH240101", customer: "Nguyễn Minh Anh", productId: "SP01", productName: "Bình giữ nhiệt", quantity: 2, unitPrice: 129000, status: "Đã giao", createdAt: "Hôm nay" },
-      { id: "DH240102", customer: "Trần Gia Huy", productId: "SP03", productName: "Đèn bàn mini", quantity: 1, unitPrice: 159000, status: "Đang giao", createdAt: "Hôm nay" },
-      { id: "DH240103", customer: "Lê Thu Hà", productId: "SP02", productName: "Túi tote canvas", quantity: 3, unitPrice: 89000, status: "Mới", createdAt: "Hôm nay" }
-    ]
-  };
-
-  let state;
-  try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    state = saved && Array.isArray(saved.products) && Array.isArray(saved.orders) ? saved : structuredClone(starterData);
-  } catch {
-    state = JSON.parse(JSON.stringify(starterData));
-  }
-
-  function persist() {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch {
-      notify("Không thể lưu dữ liệu trên trình duyệt này.");
-    }
-  }
-
-  let toastTimer;
-  function notify(message) {
-    const toast = $("#toast");
-    toast.textContent = message;
-    toast.classList.add("show");
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => toast.classList.remove("show"), 2600);
-  }
-
-  function getProduct(id) {
-    return state.products.find((product) => product.id === id);
-  }
-
-  function renderStats() {
-    const revenue = state.orders
-      .filter((order) => order.status === "Đã giao")
-      .reduce((sum, order) => sum + order.unitPrice * order.quantity, 0);
-    $("#stat-revenue").textContent = money(revenue);
-    $("#stat-orders").textContent = state.orders.length;
-    $("#stat-pending").textContent = state.orders.filter((order) => ["Mới", "Đang giao"].includes(order.status)).length;
-    $("#stat-products").textContent = state.products.length;
-    $("#product-count-label").textContent = state.products.length + " sản phẩm";
-  }
-
-  function renderProducts() {
-    const list = $("#product-list");
-    if (!state.products.length) {
-      list.innerHTML = '<div class="empty-state"><strong>Chưa có sản phẩm</strong><p>Thêm sản phẩm ở biểu mẫu phía trên.</p></div>';
-    } else {
-      list.innerHTML = state.products.map((product) => `
-        <div class="product-item">
-          <span class="product-emoji" aria-hidden="true">${product.emoji || "📦"}</span>
-          <div class="product-info"><strong>${safeText(product.name)}</strong><small class="${product.stock <= 3 ? "stock-warning" : ""}">Còn ${product.stock} sản phẩm</small></div>
-          <span class="product-price">${money(product.price)}</span>
-          <button class="product-delete" type="button" data-delete-product="${safeText(product.id)}" aria-label="Xóa ${safeText(product.name)}" title="Xóa sản phẩm">×</button>
-        </div>`).join("");
-    }
-
-    const select = $("#order-product");
-    const current = select.value;
-    select.innerHTML = state.products.length
-      ? state.products.map((product) => `<option value="${safeText(product.id)}" ${product.stock < 1 ? "disabled" : ""}>${safeText(product.name)} — ${money(product.price)} (còn ${product.stock})</option>`).join("")
-      : '<option value="">Hãy thêm sản phẩm trước</option>';
-    if (state.products.some((product) => product.id === current && product.stock > 0)) select.value = current;
-    updateOrderPreview();
-  }
-
-  function renderOrders() {
-    const search = $("#order-search").value.trim().toLocaleLowerCase("vi");
-    const filter = $("#order-filter").value;
-    const orders = state.orders.filter((order) => {
-      const matchesSearch = (order.id + " " + order.customer + " " + order.productName).toLocaleLowerCase("vi").includes(search);
-      return matchesSearch && (filter === "all" || order.status === filter);
-    });
-    $("#orders-body").innerHTML = orders.map((order) => {
-      const nextStatus = { "Mới": "Đang giao", "Đang giao": "Đã giao", "Đã giao": "Đã giao", "Đã hủy": "Đã hủy" }[order.status];
-      const canAdvance = order.status === "Mới" || order.status === "Đang giao";
-      return `<tr>
-        <td><div class="order-id">#${safeText(order.id)}</div><div class="customer-name">${safeText(order.customer)}</div></td>
-        <td class="product-cell">${safeText(order.productName)} × ${order.quantity}</td>
-        <td class="money">${money(order.unitPrice * order.quantity)}</td>
-        <td><span class="status-pill status-${safeText(order.status).replaceAll(" ", "-")}">${safeText(order.status)}</span></td>
-        <td><div class="row-actions">${canAdvance ? `<button class="mini-button" type="button" data-advance-order="${safeText(order.id)}" title="Chuyển sang trạng thái tiếp theo">Cập nhật</button>` : ""}${order.status !== "Đã giao" && order.status !== "Đã hủy" ? `<button class="mini-button danger" type="button" data-cancel-order="${safeText(order.id)}" title="Hủy đơn">Hủy</button>` : ""}</div></td>
-      </tr>`;
-    }).join("");
-    $("#orders-empty").hidden = orders.length > 0;
-  }
-
-  function render() {
-    renderStats();
-    renderProducts();
-    renderOrders();
-  }
-
-  function updateOrderPreview() {
-    const product = getProduct($("#order-product").value);
-    const quantity = Math.max(1, Number($("#order-quantity").value) || 1);
-    $("#order-total-preview").textContent = money(product ? product.price * quantity : 0);
-  }
-
-  function resetDemo() {
-    state = JSON.parse(JSON.stringify(starterData));
-    persist();
-    render();
-    notify("Đã khôi phục dữ liệu demo ban đầu.");
-  }
-
-  $("#product-form").addEventListener("submit", (event) => {
-    event.preventDefault();
-    const name = $("#product-name").value.trim();
-    const price = Number($("#product-price").value);
-    const stock = Number($("#product-stock").value);
-    if (!name || !Number.isFinite(price) || price < 1000 || !Number.isInteger(stock) || stock < 0) {
-      notify("Vui lòng kiểm tra tên, giá và số lượng sản phẩm.");
-      return;
-    }
-    state.products.unshift({
-      id: "SP" + Date.now().toString().slice(-7),
-      name, price, stock, emoji: ["📦", "🎁", "🛍️", "✨"][state.products.length % 4]
-    });
-    persist();
-    render();
-    event.target.reset();
-    $("#product-stock").value = "10";
-    notify("Đã thêm sản phẩm.");
-  });
-
-  $("#product-list").addEventListener("click", (event) => {
-    const button = event.target.closest("[data-delete-product]");
-    if (!button) return;
-    const product = getProduct(button.dataset.deleteProduct);
-    if (!product) return;
-    if (state.orders.some((order) => order.productId === product.id && order.status !== "Đã hủy")) {
-      notify("Không thể xóa sản phẩm đã có trong đơn hàng chưa hủy.");
-      return;
-    }
-    state.products = state.products.filter((item) => item.id !== product.id);
-    persist();
-    render();
-    notify("Đã xóa sản phẩm.");
-  });
-
-  $("#orders-body").addEventListener("click", (event) => {
-    const advance = event.target.closest("[data-advance-order]");
-    const cancel = event.target.closest("[data-cancel-order]");
-    if (advance) {
-      const order = state.orders.find((item) => item.id === advance.dataset.advanceOrder);
-      if (!order) return;
-      if (order.status === "Mới") order.status = "Đang giao";
-      else if (order.status === "Đang giao") order.status = "Đã giao";
-      persist();
-      render();
-      notify("Đã cập nhật trạng thái đơn hàng.");
-    }
-    if (cancel) {
-      const order = state.orders.find((item) => item.id === cancel.dataset.cancelOrder);
-      if (!order) return;
-      if (!confirm("Bạn có chắc muốn hủy đơn " + order.id + "?")) return;
-      order.status = "Đã hủy";
-      const product = getProduct(order.productId);
-      if (product) product.stock += order.quantity;
-      persist();
-      render();
-      notify("Đã hủy đơn hàng và hoàn lại số lượng demo.");
-    }
-  });
-
-  $("#order-search").addEventListener("input", renderOrders);
-  $("#order-filter").addEventListener("change", renderOrders);
-  $("#order-product").addEventListener("change", updateOrderPreview);
-  $("#order-quantity").addEventListener("input", updateOrderPreview);
-
-  const dialog = $("#order-dialog");
-  $("#open-order-form").addEventListener("click", () => {
-    if (!state.products.some((product) => product.stock > 0)) {
-      notify("Hãy thêm sản phẩm còn hàng trước khi tạo đơn.");
-      return;
-    }
-    renderProducts();
-    dialog.showModal();
-    $("#customer-name").focus();
-  });
-  function closeDialog() {
-    dialog.close();
-    $("#order-form").reset();
-    $("#order-quantity").value = "1";
-    updateOrderPreview();
-  }
-  $("#close-order-form").addEventListener("click", closeDialog);
-  $("#cancel-order-form").addEventListener("click", closeDialog);
-  dialog.addEventListener("click", (event) => {
-    if (event.target === dialog) closeDialog();
-  });
-
-  $("#order-form").addEventListener("submit", (event) => {
-    event.preventDefault();
-    const customer = $("#customer-name").value.trim();
-    const product = getProduct($("#order-product").value);
-    const quantity = Number($("#order-quantity").value);
-    if (!customer || !product || !Number.isInteger(quantity) || quantity < 1) {
-      notify("Vui lòng điền đầy đủ thông tin đơn hàng.");
-      return;
-    }
-    if (quantity > product.stock) {
-      notify("Số lượng đặt vượt quá số lượng tồn kho.");
-      return;
-    }
-    product.stock -= quantity;
-    state.orders.unshift({
-      id: makeId(), customer, productId: product.id, productName: product.name,
-      quantity, unitPrice: product.price, status: "Mới", createdAt: new Date().toLocaleDateString("vi-VN")
-    });
-    persist();
-    render();
-    closeDialog();
-    notify("Tạo đơn hàng thành công.");
-  });
-
-  // Chạy nhanh khi demo: khôi phục dữ liệu mẫu bằng ShopMini.resetDemo() trong console.
-  window.ShopMini = { resetDemo };
-  render();
+"use strict";
+const KEY="shopmini-manager-v2",$=s=>document.querySelector(s);
+const money=n=>new Intl.NumberFormat("vi-VN",{style:"currency",currency:"VND",maximumFractionDigits:0}).format(Number(n)||0);
+const safe=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const today=()=>new Date().toISOString().slice(0,10);
+const starter={products:[{id:"SP01",name:"Bình giữ nhiệt",price:129000,cost:65000,stock:18,reorder:5,emoji:"🥤"},{id:"SP02",name:"Túi tote canvas",price:89000,cost:38000,stock:24,reorder:5,emoji:"👜"},{id:"SP03",name:"Đèn bàn mini",price:159000,cost:92000,stock:9,reorder:5,emoji:"💡"}],orders:[{id:"DH240101",customer:"Nguyễn Minh Anh",productId:"SP01",productName:"Bình giữ nhiệt",quantity:2,unitPrice:129000,unitCost:65000,status:"Đã giao",date:today()},{id:"DH240102",customer:"Trần Gia Huy",productId:"SP03",productName:"Đèn bàn mini",quantity:1,unitPrice:159000,unitCost:92000,status:"Đang giao",date:today()},{id:"DH240103",customer:"Lê Thu Hà",productId:"SP02",productName:"Túi tote canvas",quantity:3,unitPrice:89000,unitCost:38000,status:"Mới",date:today()}],stockHistory:[]};
+let state;try{const v=JSON.parse(localStorage.getItem(KEY));state=v&&Array.isArray(v.products)&&Array.isArray(v.orders)?v:JSON.parse(JSON.stringify(starter));state.stockHistory ||= [];state.products.forEach(p=>{p.cost=Number(p.cost)||0;p.reorder=Number(p.reorder??5);});state.orders.forEach(o=>{o.date ||= today();o.unitCost=Number(o.unitCost)||0;});}catch{state=JSON.parse(JSON.stringify(starter));}
+let timer;function toast(s){const t=$("#toast");t.textContent=s;t.classList.add("show");clearTimeout(timer);timer=setTimeout(()=>t.classList.remove("show"),2500);}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(state));}catch{toast("Không thể lưu vào bộ nhớ trình duyệt.");}}
+const product=id=>state.products.find(p=>p.id===id);
+const delivered=()=>state.orders.filter(o=>o.status==="Đã giao");
+const revenue=()=>delivered().reduce((s,o)=>s+o.unitPrice*o.quantity,0);
+const csv=(name,rows)=>{const text="\ufeff"+rows.map(r=>r.map(v=>'"'+String(v??"").replace(/"/g,'""')+'"').join(",")).join("\r\n");const url=URL.createObjectURL(new Blob([text],{type:"text/csv;charset=utf-8"}));const a=document.createElement("a");a.href=url;a.download=name;a.click();URL.revokeObjectURL(url);};
+function renderStats(){const cost=delivered().reduce((s,o)=>s+o.unitCost*o.quantity,0),stock=state.products.reduce((s,p)=>s+p.cost*p.stock,0);$("#stat-revenue").textContent=money(revenue());$("#stat-orders").textContent=state.orders.length;$("#stat-pending").textContent=state.orders.filter(o=>["Mới","Đang giao"].includes(o.status)).length;$("#stat-products").textContent=state.products.length;$("#product-count-label").textContent=state.products.length+" sản phẩm";$("#report-cost").textContent=money(cost);$("#report-profit").textContent=money(revenue()-cost);$("#report-stock").textContent=money(stock);}
+function renderProducts(){const list=$("#product-list");list.innerHTML=state.products.length?state.products.map(p=>'<div class="product-item"><span class="product-emoji">'+safe(p.emoji||"📦")+'</span><div class="product-info"><strong>'+safe(p.name)+'</strong><small class="'+(p.stock<=p.reorder?"stock-low":"")+'">'+(p.stock===0?'<span class="stock-out">Hết hàng</span>':"Còn "+p.stock+" sản phẩm")+' · Giá vốn '+money(p.cost)+'</small></div><span class="product-price">'+money(p.price)+'</span><button class="product-delete" data-delete-product="'+safe(p.id)+'" type="button" aria-label="Xóa sản phẩm">×</button></div>').join(""):'<div class="empty-state">Chưa có sản phẩm.</div>';
+const select=$("#order-product"),old=select.value;select.innerHTML=state.products.filter(p=>p.stock>0).map(p=>'<option value="'+safe(p.id)+'">'+safe(p.name)+' — '+money(p.price)+' (còn '+p.stock+')</option>').join("")||'<option value="">Hãy nhập kho sản phẩm trước</option>';if([...select.options].some(o=>o.value===old))select.value=old;
+const stock=$("#stock-product"),oldStock=stock.value;stock.innerHTML=state.products.map(p=>'<option value="'+safe(p.id)+'">'+safe(p.name)+' (còn '+p.stock+')</option>').join("");if([...stock.options].some(o=>o.value===oldStock))stock.value=oldStock;updatePreview();}
+function renderOrders(){const q=$("#order-search").value.trim().toLocaleLowerCase("vi"),filter=$("#order-filter").value;const rows=state.orders.filter(o=>(o.id+" "+o.customer+" "+o.productName).toLocaleLowerCase("vi").includes(q)&&(filter==="all"||o.status===filter));$("#orders-body").innerHTML=rows.map(o=>'<tr><td><div class="order-id">#'+safe(o.id)+'</div><div class="customer-name">'+safe(o.customer)+'</div></td><td>'+safe(o.productName)+' × '+o.quantity+'</td><td class="money">'+money(o.unitPrice*o.quantity)+'</td><td><span class="status-pill status-'+safe(o.status).replaceAll(" ","-")+'">'+safe(o.status)+'</span></td><td><div class="row-actions">'+(["Mới","Đang giao"].includes(o.status)?'<button class="mini-button" data-advance="'+safe(o.id)+'" type="button">Cập nhật</button><button class="mini-button danger" data-cancel="'+safe(o.id)+'" type="button">Hủy</button>':"")+'</div></td></tr>').join("");$("#orders-empty").hidden=rows.length>0;}
+function renderExtra(){const lows=state.products.filter(p=>p.stock<=p.reorder);$("#stock-history-body").innerHTML=state.stockHistory.slice(0,20).map(h=>'<tr><td>'+safe(new Date(h.date).toLocaleString("vi-VN"))+'</td><td>'+safe(h.name)+'</td><td>'+((h.qty>0?"+":"")+h.qty)+'</td><td>'+safe(h.note)+'</td></tr>').join("");const customers={};state.orders.filter(o=>o.status!=="Đã hủy").forEach(o=>{customers[o.customer] ||= {count:0,total:0};customers[o.customer].count++;if(o.status==="Đã giao")customers[o.customer].total+=o.unitPrice*o.quantity;});const q=$("#customer-search").value.trim().toLocaleLowerCase("vi");$("#customers-body").innerHTML=Object.entries(customers).filter(([n])=>n.toLocaleLowerCase("vi").includes(q)).map(([n,c])=>'<tr><td>'+safe(n)+'</td><td>'+c.count+'</td><td class="money">'+money(c.total)+'</td></tr>').join("");}
+function render(){renderStats();renderProducts();renderOrders();renderExtra();}
+function updatePreview(){const p=product($("#order-product").value),q=Math.max(1,Number($("#order-quantity").value)||1);$("#order-total-preview").textContent=money(p?p.price*q:0);}
+$("#product-form").addEventListener("submit",e=>{e.preventDefault();const name=$("#product-name").value.trim(),price=Number($("#product-price").value),stock=Number($("#product-stock").value);if(!name||!Number.isFinite(price)||price<0||!Number.isInteger(stock)||stock<0){toast("Kiểm tra tên, giá và số lượng.");return;}state.products.unshift({id:"SP"+Date.now().toString().slice(-7),name,price,cost:price,stock,reorder:5,emoji:"📦"});save();render();e.target.reset();$("#product-stock").value="10";toast("Đã thêm sản phẩm.");});
+$("#product-list").addEventListener("click",e=>{const b=e.target.closest("[data-delete-product]");if(!b)return;const p=product(b.dataset.deleteProduct);if(state.orders.some(o=>o.productId===p.id&&o.status!=="Đã hủy")){toast("Không thể xóa sản phẩm có đơn hàng liên quan.");return;}state.products=state.products.filter(x=>x.id!==p.id);save();render();toast("Đã xóa sản phẩm.");});
+$("#open-order-form").addEventListener("click",()=>{if(!state.products.some(p=>p.stock>0)){toast("Hãy thêm sản phẩm còn hàng trước.");return;}renderProducts();$("#order-dialog").showModal();});
+function closeOrder(){if($("#order-dialog").open)$("#order-dialog").close();$("#order-form").reset();$("#order-quantity").value="1";updatePreview();}
+$("#close-order-form").addEventListener("click",closeOrder);$("#cancel-order-form").addEventListener("click",closeOrder);$("#order-dialog").addEventListener("click",e=>{if(e.target===$("#order-dialog"))closeOrder();});
+$("#order-product").addEventListener("change",updatePreview);$("#order-quantity").addEventListener("input",updatePreview);
+$("#order-form").addEventListener("submit",e=>{e.preventDefault();const customer=$("#customer-name").value.trim(),p=product($("#order-product").value),qty=Number($("#order-quantity").value);if(!customer||!p||!Number.isInteger(qty)||qty<1){toast("Vui lòng điền đủ thông tin.");return;}if(qty>p.stock){toast("Tồn kho không đủ.");return;}p.stock-=qty;state.orders.unshift({id:"DH"+Date.now().toString().slice(-8),customer,productId:p.id,productName:p.name,quantity:qty,unitPrice:p.price,unitCost:p.cost,status:"Mới",date:today()});state.stockHistory.unshift({date:new Date().toISOString(),name:p.name,qty:-qty,note:"Bán hàng tạo đơn"});save();render();closeOrder();toast("Tạo đơn hàng thành công.");});
+$("#orders-body").addEventListener("click",e=>{const a=e.target.closest("[data-advance]"),c=e.target.closest("[data-cancel]");if(a){const o=state.orders.find(x=>x.id===a.dataset.advance);o.status=o.status==="Mới"?"Đang giao":"Đã giao";save();render();toast("Đã cập nhật trạng thái.");}if(c){const o=state.orders.find(x=>x.id===c.dataset.cancel);if(!o||!confirm("Hủy đơn và hoàn lại tồn kho?"))return;o.status="Đã hủy";const p=product(o.productId);if(p){p.stock+=o.quantity;state.stockHistory.unshift({date:new Date().toISOString(),name:p.name,qty:o.quantity,note:"Hoàn hàng do hủy đơn"});}save();render();toast("Đã hủy đơn và hoàn kho.");}});
+$("#order-search").addEventListener("input",renderOrders);$("#order-filter").addEventListener("change",renderOrders);$("#customer-search").addEventListener("input",renderExtra);
+$("#stock-form").addEventListener("submit",e=>{e.preventDefault();const p=product($("#stock-product").value),qty=Number($("#stock-quantity").value),note=$("#stock-note").value.trim();if(!p||!Number.isInteger(qty)||qty===0||!note){toast("Nhập số lượng khác 0 và ghi chú.");return;}if(p.stock+qty<0){toast("Tồn kho không thể âm.");return;}p.stock+=qty;state.stockHistory.unshift({date:new Date().toISOString(),name:p.name,qty,note});save();render();e.target.reset();toast("Đã cập nhật tồn kho.");});
+$("#export-orders").addEventListener("click",()=>csv("shopmini-don-hang.csv",[["Mã đơn","Ngày","Khách hàng","Sản phẩm","Số lượng","Đơn giá","Tổng tiền","Trạng thái"],...state.orders.map(o=>[o.id,o.date,o.customer,o.productName,o.quantity,o.unitPrice,o.unitPrice*o.quantity,o.status])]));
+$("#export-customers").addEventListener("click",()=>{const c={};state.orders.forEach(o=>{c[o.customer] ||= {n:0,t:0};c[o.customer].n++;if(o.status==="Đã giao")c[o.customer].t+=o.unitPrice*o.quantity;});csv("shopmini-khach-hang.csv",[["Khách hàng","Số đơn","Tổng chi tiêu"],...Object.entries(c).map(([n,v])=>[n,v.n,v.t])]);});
+$$(".nav-link").forEach(a=>a.addEventListener("click",()=>{$$(".nav-link").forEach(x=>x.classList.remove("active"));a.classList.add("active");}));
+$("#global-search").addEventListener("keydown",e=>{if(e.key==="Enter"){ $("#order-search").value=e.currentTarget.value;renderOrders();location.hash="#orders";$("#orders").scrollIntoView({behavior:"smooth"});}});
+function $$(s){return [...document.querySelectorAll(s)];}
+window.ShopMini={resetDemo:()=>{if(confirm("Khôi phục dữ liệu demo?")){state=JSON.parse(JSON.stringify(starter));save();render();toast("Đã khôi phục demo.");}}};
+render();
 })();
