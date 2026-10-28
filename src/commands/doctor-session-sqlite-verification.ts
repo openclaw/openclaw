@@ -17,6 +17,7 @@ import {
 import {
   canonicalMigrationFilePath,
   uniqueRestoreMoves,
+  writeSessionSqliteMigrationManifest,
   type SessionSqliteMigrationMove,
   type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
@@ -29,28 +30,26 @@ import {
   verifyTranscriptEvents,
   verifyCanonicalSessionTranscriptSources,
 } from "../infra/session-sqlite-transcript-verification.js";
-import {
-  parseSqliteFileGeneration,
-  type SqliteFileGeneration,
-} from "../infra/sqlite-file-generation.js";
+import { readSqliteFileGenerationSync } from "../infra/sqlite-file-generation-worker.js";
+import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
-import { runSqliteReadOnlyWorkerSync } from "../infra/sqlite-readonly-worker.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { inspectOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db.js";
 import type { LegacySessionRecord } from "./doctor-session-sqlite-discovery.js";
+import type { RecoveryArtifactReference } from "./doctor-session-sqlite-recovery-inventory.js";
 import type { DoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
 
 /** Keep one owner proof per database; fence in-place writes and sidecar changes after awaits. */
-export function createRecoveryDestinationVerifier(stateDir: string) {
+export function createRecoveryDestinationVerifier(stateDir: string, assertCurrent: () => void) {
   const destinations = new Map<
     string,
     { agentId?: string; files: (fs.BigIntStats | undefined)[]; generation: SqliteFileGeneration }
   >();
-  return (refs: Iterable<{ target: SessionSqliteMigrationTargetManifest }>) => {
-    for (const { target } of refs) {
+  return (refs: Iterable<Pick<RecoveryArtifactReference, "target" | "run" | "move">>) => {
+    for (const { target, run, move } of refs) {
       const paths = resolveSqliteDatabaseFilePaths(target.sqlitePath);
       assertDoctorSqliteMaintenancePathsNotAliased("update recovery cleanup", paths, [stateDir]);
       const expected = destinations.get(target.sqlitePath);
@@ -81,13 +80,9 @@ export function createRecoveryDestinationVerifier(stateDir: string) {
       ) {
         throw new Error("Recovery destination database changed; preview cleanup again.");
       }
-      // Shipped manifests record no destination digest, only dev/ino. APFS dev can change
-      // after remount, so retain the recorded inode and bind this run to the current bytes.
       // Ignore SHM reader bookkeeping, but freshly fingerprint WAL/journal contents even
       // on coarse filesystem clocks. Raw descriptor closes stay outside the serving process.
-      const generation = parseSqliteFileGeneration(
-        runSqliteReadOnlyWorkerSync(target.sqlitePath, undefined, "file-generation"),
-      );
+      const generation = readSqliteFileGenerationSync(target.sqlitePath);
       if (
         (
           [
@@ -97,12 +92,41 @@ export function createRecoveryDestinationVerifier(stateDir: string) {
           ] as const
         ).some(
           ([key, index]) =>
+            generation[key]?.dev !== files[index]?.dev ||
             generation[key]?.ino !== files[index]?.ino ||
             generation[key]?.size !== files[index]?.size ||
             (expected && generation[key]?.sha256 !== expected.generation[key]?.sha256),
         )
       ) {
         throw new Error("Recovery destination database changed; preview cleanup again.");
+      }
+      const identity = target.databaseIdentity;
+      if (identity && identity.dev !== String(files[0]!.dev)) {
+        // An inode can collide across volumes. Older manifests can only be re-certified
+        // when a full producer-verified original proves the entire closed destination image.
+        const original =
+          move.kind === "database-backup" &&
+          move.sourcePath === target.sqlitePath &&
+          !move.archivePath.endsWith(".scoped.bak") &&
+          move.artifact?.classification === "repair-original"
+            ? move.artifact.identity
+            : undefined;
+        if (
+          (generation.wal?.size ?? 0n) > 32n ||
+          (generation.journal?.size ?? 0n) > 0n ||
+          generation.database.sha256 !== (identity.sha256 ?? original?.sha256)
+        ) {
+          throw new Error(
+            `Recovery destination device changed from ${identity.dev} to ${files[0]!.dev}; destination contents could not be verified against recorded recovery evidence. Originals retained. Run openclaw doctor --fix to check current state; retain the originals for manual verification.`,
+          );
+        }
+        assertCurrent();
+        target.databaseIdentity = {
+          ...identity,
+          dev: String(files[0]!.dev),
+          sha256: generation.database.sha256,
+        };
+        writeSessionSqliteMigrationManifest(run);
       }
       destinations.set(target.sqlitePath, { agentId, files, generation });
     }

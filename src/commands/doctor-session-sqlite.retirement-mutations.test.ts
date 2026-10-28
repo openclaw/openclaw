@@ -11,7 +11,6 @@ import {
 } from "../infra/session-sqlite-migration-manifest.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
-import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { retireRecovery as retire } from "./doctor-session-sqlite.fixtures.test-support.js";
 import {
   isDirectoryDescriptor,
@@ -27,46 +26,34 @@ describe("runDoctorSessionSqlite", () => {
   it.each([false, true])(
     "checks shared manifests once and preserves confirmation changes: %s",
     async (changed) => {
-      const { store, imported, archivePath } = await createVerifiedRecoveryStore();
-      const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
-      const manifest = readMigrationManifest(manifestPath);
+      const { store, manifestPath, manifest, archivePath } = await createVerifiedRecoveryStore();
       const duplicate = createSessionSqliteMigrationRun(store.env, []);
       duplicate.manifest.targets = structuredClone(manifest.targets);
       duplicate.manifest.completedAt = manifest.completedAt;
       writeSessionSqliteMigrationManifest(duplicate);
-      const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
       const original = fs.readFileSync(archivePath);
-      const reads = vi.spyOn(fs, "readFileSync");
-      try {
-        const cleanup = retireSessionSqliteRecovery({
-          env: store.env,
-          preview,
-          readConfig: async () => ({}),
-          confirm: async () => {
-            if (changed) {
-              duplicate.manifest.startedAt = "2026-01-01T00:00:00.000Z";
-              writeSessionSqliteMigrationManifest(duplicate);
-            }
-            reads.mockClear();
-            return true;
-          },
-        });
+      using reads = vi.spyOn(fs, "readFileSync");
+      const cleanup = retire(store, async () => {
         if (changed) {
-          await expect(cleanup).rejects.toThrow("Recovery manifest changed during confirmation");
-          expect(fs.readFileSync(archivePath)).toEqual(original);
-        } else {
-          const result = await cleanup;
-          expect(result.status).toBe("complete");
-          expect(result.totals.removedFiles).toBe(2);
-          expect(fs.existsSync(archivePath)).toBe(false);
-          expect(result.artifacts.filter((item) => item.outcome === "protected")).toHaveLength(2);
-          // The post-confirmation inventory supplies each manifest's only read.
-          for (const file of [manifestPath, duplicate.manifestPath]) {
-            expect(reads.mock.calls.filter(([input]) => input === file)).toHaveLength(1);
-          }
+          duplicate.manifest.startedAt = "2026-01-01T00:00:00.000Z";
+          writeSessionSqliteMigrationManifest(duplicate);
         }
-      } finally {
-        reads.mockRestore();
+        reads.mockClear();
+        return true;
+      });
+      if (changed) {
+        await expect(cleanup).rejects.toThrow("Recovery manifest changed during confirmation");
+        expect(fs.readFileSync(archivePath)).toEqual(original);
+      } else {
+        const result = await cleanup;
+        expect(result.status).toBe("complete");
+        expect(result.totals.removedFiles).toBe(2);
+        expect(fs.existsSync(archivePath)).toBe(false);
+        expect(result.artifacts.filter((item) => item.outcome === "protected")).toHaveLength(2);
+        // The post-confirmation inventory supplies each manifest's only read.
+        for (const file of [manifestPath, duplicate.manifestPath]) {
+          expect(reads.mock.calls.filter(([input]) => input === file)).toHaveLength(1);
+        }
       }
     },
   );
@@ -92,14 +79,13 @@ describe("runDoctorSessionSqlite", () => {
   it.each(["new-manifest", "replacement", "symlink", "hardlink"])(
     "refuses a recovery ownership change during confirmation: %s",
     async (kind) => {
-      const { store, imported, archivePath } = await createVerifiedRecoveryStore();
-      const databasePath = imported.targets[0]!.sqlitePath;
+      const { store, target, manifest, archivePath } = await createVerifiedRecoveryStore();
+      const databasePath = target.sqlitePath;
       const saved = path.join(store.tempDir, "saved-destination.sqlite");
       const original = fs.readFileSync(archivePath);
       await expect(
         retire(store, async () => {
           if (kind === "new-manifest") {
-            const manifest = readMigrationManifest(imported.migrationRun?.manifestPath);
             const added = createSessionSqliteMigrationRun(store.env, []);
             added.manifest.targets = manifest.targets;
             added.manifest.completedAt = manifest.completedAt;
@@ -126,10 +112,9 @@ describe("runDoctorSessionSqlite", () => {
   it.each(["replacement", "symlink", "hardlink", "same-size edit"])(
     "preserves every recovery dependency after a transcript %s during confirmation",
     async (change) => {
-      const { store, imported } = await createVerifiedRecoveryStore();
-      const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
+      const { store, target, manifestPath } = await createVerifiedRecoveryStore();
       const manifestBefore = fs.readFileSync(manifestPath);
-      const moves = readMigrationManifest(manifestPath).targets[0]!.completedMoves;
+      const moves = target.completedMoves;
       const archivePath = expectDefined(
         moves.find((move) => move.kind === "transcript"),
         "confirmation mutation archive",
@@ -178,9 +163,7 @@ describe("runDoctorSessionSqlite", () => {
       phase,
     })),
   ])("retains originals after destination $change during $phase", async ({ change, phase }) => {
-    const { store, imported } = await createVerifiedRecoveryStore();
-    const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
-    const target = readMigrationManifest(manifestPath).targets[0]!;
+    const { store, manifestPath, target } = await createVerifiedRecoveryStore();
     const originals = target.completedMoves.map((move) => fs.readFileSync(move.archivePath));
     const databasePath = target.sqlitePath;
     let writer: DatabaseSync | undefined;

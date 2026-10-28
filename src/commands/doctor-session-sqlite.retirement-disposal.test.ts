@@ -33,7 +33,6 @@ import {
   isDirectoryDescriptor,
   importLegacyStore,
   readMigrationManifest as readManifest,
-  requireMigrationManifestPath,
   useDoctorSessionSqliteTestFixture,
 } from "./doctor-session-sqlite.test-support.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
@@ -88,13 +87,11 @@ it.each([
   "recreated",
   "shared-receipt",
 ])("resumes %s disposal without overclaiming bytes", async (phase) => {
-  const { store, imported, archivePath } = await createVerifiedRecoveryStore();
-  const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
+  const { store, manifestPath, manifest, archivePath } = await createVerifiedRecoveryStore();
   const manifestDir = path.dirname(manifestPath);
   const duplicate =
     phase === "shared-receipt" ? createSessionSqliteMigrationRun(store.env, []) : undefined;
   if (duplicate) {
-    const manifest = readManifest(manifestPath);
     duplicate.manifest.targets = structuredClone(manifest.targets);
     duplicate.manifest.completedAt = manifest.completedAt;
     writeSessionSqliteMigrationManifest(duplicate);
@@ -190,8 +187,7 @@ it.each([
 ] as const)(
   "applies directory-sync policy for $platform $syncFailure",
   async ({ platform, syncFailure, retires }) => {
-    const { store, imported, archivePath } = await createVerifiedRecoveryStore();
-    const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
+    const { store, manifestPath, archivePath } = await createVerifiedRecoveryStore();
     const original = fs.readFileSync(archivePath);
     const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
     const fsync = fs.fsyncSync;
