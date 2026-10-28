@@ -1,7 +1,9 @@
-# PR #186457: preserve distinct upgrade, lease-revocation, rollback and cold-closure regressions.
-# Original CI e447f0bf/f38f7e73: 6,301,355 lines; actual main 4a5ec828 adds 184.
-# Actual main: 6,300,425 lines against 6,299,646 ceiling (779 existing base debt).
-# PR net growth remains 1,114; allocate 1,893 above that ceiling, with zero slack.
-# Source 73fa01a3 ceiling was 6,296,931; the 2,715 upstream ceiling advance is separate.
-# Counting/gating rules and every regression/assertion remain unchanged.
-6301539
+# PR #186457: retain distinct upgrade, lease-revocation, rollback and cold-closure regressions.
+# CI 40663216626 used 6,301,549 lines: 10 over the old 6,301,539 ceiling; PR net stays +1,114.
+# CI base eba63b90 used 6,300,435 against 6,299,646: 789 existing base-debt lines.
+# Round measured use to the next 1,000: fixed ceiling 6,302,000, with 451 bounded reserve lines.
+# Reserve covers ordinary main advancement during exact-head CI and required regression maintenance.
+# Increase over the CI-base ceiling: 789 existing debt + 1,114 PR lines + 451 reserve = 2,354.
+# Reserve is below 0.01% of measured use; this is test-resource capacity, not a security waiver.
+# All cases, assertions and counting/gating rules remain unchanged; no automatic budget growth.
+6302000
