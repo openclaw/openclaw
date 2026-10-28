@@ -12,7 +12,10 @@ import {
   createOwnedKeychain,
   probeOwnedKeychain,
 } from "../../.github/actions/ios-signing-keychain/keychain.mjs";
-import { collectReleaseInventory } from "../../scripts/lib/mobile-release-evidence.js";
+import {
+  collectReleaseInventory,
+  collectSelectedReleaseEvidence,
+} from "../../scripts/lib/mobile-release-evidence.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { cleanupTempDirs, makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { runVitestShutdownCommand } from "../helpers/vitest-shutdown-command.js";
@@ -316,8 +319,11 @@ describe("mobile release CI tools", () => {
     const wearFile = "apps/android/wear/src/main/Notifications.kt";
     writeFile(seed, phoneFile, "initial phone\n");
     writeFile(seed, wearFile, "initial watch\n");
+    writeFile(seed, "unrelated-history.txt", "obsolete file content\n");
     const phoneBaseline = commit(seed, "Initial release");
+    const historicalBlob = git(seed, "rev-parse", `${phoneBaseline}:unrelated-history.txt`);
     writeFile(seed, phoneFile, "phone chat\n");
+    writeFile(seed, "unrelated-history.txt", "current file content\n");
     commit(seed, "Improve phone chat");
     writeFile(seed, wearFile, "watch notifications\n");
     const source = commit(seed, "Improve watch notifications");
@@ -331,6 +337,7 @@ describe("mobile release CI tools", () => {
     const unrelated = commit(seed, "Unrelated branch");
     git(seed, "tag", "unrelated-tag");
     git(root, "clone", "--bare", seed, remote);
+    git(remote, "config", "uploadpack.allowFilter", "true");
     const baselines = [
       { sha: phoneBaseline, ref: "refs/openclaw/mobile-releases/android/2026.10.70-1" },
       { sha: wearBaseline, ref: "refs/openclaw/mobile-releases/android/2026.10.70-2" },
@@ -352,7 +359,13 @@ describe("mobile release CI tools", () => {
     expect(git(checkout, "rev-parse", "--is-shallow-repository")).toBe("false");
     expect(git(checkout, "for-each-ref", "--format=%(refname)")).toBe("refs/remotes/origin/main");
     expect(git(checkout, "rev-parse", "origin/main")).toBe(source);
-    expect(() => git(checkout, "cat-file", "-e", unrelated)).toThrow();
+    const objectStatus = (object: string) =>
+      spawnSync("git", ["cat-file", "-e", object], {
+        cwd: checkout,
+        env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
+      }).status;
+    expect(objectStatus(unrelated)).not.toBe(0);
+    expect(objectStatus(historicalBlob)).not.toBe(0);
     git(checkout, "fetch", "--no-tags", "origin", "refs/heads/main");
     expect(git(checkout, "rev-parse", "FETCH_HEAD")).toBe(currentMain);
     expect(git(checkout, "rev-parse", "origin/main")).toBe(currentMain);
@@ -371,7 +384,12 @@ describe("mobile release CI tools", () => {
       const expected = collectReleaseInventory({ ...options, rootDir: seed });
       expect(expected.commits).toEqual(["Improve watch notifications", "Improve phone chat"]);
       expect(collectReleaseInventory({ ...options, rootDir: staged })).toEqual(expected);
+      const selected = expected.files.map(({ id }) => ({ id, focus: [] }));
+      expect(
+        collectSelectedReleaseEvidence({ ...options, rootDir: staged }, expected, selected),
+      ).toEqual(collectSelectedReleaseEvidence({ ...options, rootDir: seed }, expected, selected));
     }
+    expect(objectStatus(historicalBlob)).not.toBe(0);
     expect(git(staged, "rev-parse", "HEAD")).toBe(source);
     expect(git(checkout, "rev-parse", "HEAD")).toBe(source);
     expect(git(staged, "status", "--porcelain")).toBe("");

@@ -34,6 +34,7 @@ const repositoryScriptEntries = [
   // Spawned directly by native-allocation-profile.test.ts.
   "test/scripts/fixtures/native-profile-census.mjs!",
   // Their source headers document standalone benchmark and measurement commands.
+  "scripts/bench-android-release-history.mts!",
   "scripts/bench-duplicate-paragraphs.mts!",
   "scripts/perf/anthropic-request-construction.ts!",
   "scripts/perf/auth-file-watch-events-measure.ts!",
