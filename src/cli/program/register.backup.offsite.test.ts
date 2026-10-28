@@ -91,7 +91,8 @@ function createCliHarness() {
       if (!isExpectedCliError(error)) {
         throw error;
       }
-      defaultRuntime.error(formatCliFailureLines({ error }).join("\n"));
+      const lines = formatCliFailureLines({ title: "The CLI command failed.", error });
+      defaultRuntime.error(lines.join("\n"));
       defaultRuntime.exit(1);
     });
     return writeJson.mock.calls.at(-1)?.[0];
