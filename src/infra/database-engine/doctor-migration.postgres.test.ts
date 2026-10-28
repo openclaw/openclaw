@@ -98,6 +98,7 @@ const dirs = useAutoCleanupTempDirTracker(afterAll);
 
 describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
   const client = new Client({ connectionString: connection });
+  const rows = async (sql: string, values?: unknown[]) => (await client.query(sql, values)).rows;
   const namespaces = new Set<string>();
   const target = stateEngineSchema.version;
   const originalMigrations = stateEngineSchema.postgresMigrations;
@@ -111,15 +112,12 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
   const config = {
     database: { engine: "postgres" as const, postgres: { connection: connection! } },
   };
-  const readRows = async () =>
-    (
-      await client.query(
-        `SELECT value_json FROM "${namespace}".config_machine_state WHERE state_key = 'doctor.fixture'`,
-      )
-    ).rows;
+  const readRows = () =>
+    rows(
+      `SELECT value_json FROM "${namespace}".config_machine_state WHERE state_key = 'doctor.fixture'`,
+    );
   const readMeta = async () =>
-    (await client.query(`SELECT version, fingerprint FROM "${namespace}".openclaw_schema_meta`))
-      .rows[0];
+    (await rows(`SELECT version, fingerprint FROM "${namespace}".openclaw_schema_meta`))[0];
   const archives = () =>
     fs.readdirSync(path.dirname(pathname)).filter((name) => name.endsWith(".postgres.bak"));
 
@@ -147,7 +145,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
 
   // Fingerprints include namespace-qualified definitions; compare catalogs after relocation.
   const readAgentCatalog = async (schema: string) =>
-    readPostgresCatalog((await client.query(postgresCatalogQuery(schema, true))).rows[0].catalog)
+    readPostgresCatalog((await rows(postgresCatalogQuery(schema, true)))[0].catalog)
       .map((fact) => JSON.stringify(fact).replaceAll(schema, "fixture_namespace"))
       .toSorted();
 
@@ -354,15 +352,13 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
       namespaces.add(restored.namespace);
       expect(admit(sourceSchema, restoredPath)?.version).toBe(sourceVersion);
       expect(
-        (
-          await client.query(
-            `SELECT last_sequence, pruned_max_sequence FROM "${restored.namespace}".session_state_heads`,
-          )
-        ).rows,
+        await rows(
+          `SELECT last_sequence, pruned_max_sequence FROM "${restored.namespace}".session_state_heads`,
+        ),
       ).toEqual([{ last_sequence: "81", pruned_max_sequence: "7" }]);
-      expect(
-        (await client.query(`SELECT schema_version FROM "${restored.namespace}".schema_meta`)).rows,
-      ).toEqual([{ schema_version: String(sourceVersion) }]);
+      expect(await rows(`SELECT schema_version FROM "${restored.namespace}".schema_meta`)).toEqual([
+        { schema_version: String(sourceVersion) },
+      ]);
     },
   );
 
@@ -461,11 +457,9 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
       target - 1,
     );
     expect(
-      (
-        await client.query(
-          `SELECT value_json FROM "${restored.namespace}".config_machine_state WHERE state_key = 'doctor.fixture'`,
-        )
-      ).rows,
+      await rows(
+        `SELECT value_json FROM "${restored.namespace}".config_machine_state WHERE state_key = 'doctor.fixture'`,
+      ),
     ).toEqual([{ value_json: '"before"' }]);
   });
 
@@ -585,11 +579,9 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
           expect(await readRows()).toEqual([{ value_json: '"after"' }]);
           expect(await readMeta()).toMatchObject({ version: String(target + 1) });
           expect(
-            (
-              await client.query(
-                `SELECT last_value, is_called FROM "${namespace}".audit_events_sequence_seq`,
-              )
-            ).rows,
+            await rows(
+              `SELECT last_value, is_called FROM "${namespace}".audit_events_sequence_seq`,
+            ),
           ).toEqual([{ last_value: "72", is_called: true }]);
           if (foreignWrite) {
             await client.query(
@@ -643,11 +635,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
         // Relocation reseals the catalog for its new namespace under the installed schema.
         expect(admit(installed)?.version).toBe(target);
         expect(
-          (
-            await client.query(
-              `SELECT last_value, is_called FROM "${namespace}".audit_events_sequence_seq`,
-            )
-          ).rows,
+          await rows(`SELECT last_value, is_called FROM "${namespace}".audit_events_sequence_seq`),
         ).toEqual([{ last_value: "71", is_called: true }]);
       } finally {
         vi.unstubAllEnvs();
@@ -756,25 +744,19 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
         );
       });
       closeOpenClawStateDatabaseForTest();
-      const readAgent = async () =>
-        (
-          await client.query(`SELECT value_json FROM "${agentNamespace}".cache_entries
-          WHERE scope = 'fixture' AND key = 'migration'`)
-        ).rows;
-      const readAllocation = async () =>
-        (
-          await client.query(`SELECT last_value, is_called
-          FROM "${agentNamespace}".context_engine_turn_outbox_enqueue_sequence_seq`)
-        ).rows;
-      const readNavigationFunction = async () =>
-        (
-          await client.query(
-            `SELECT p.proisstrict, p.proconfig FROM pg_proc p
+      const readAgent = () =>
+        rows(`SELECT value_json FROM "${agentNamespace}".cache_entries
+          WHERE scope = 'fixture' AND key = 'migration'`);
+      const readAllocation = () =>
+        rows(`SELECT last_value, is_called
+          FROM "${agentNamespace}".context_engine_turn_outbox_enqueue_sequence_seq`);
+      const readNavigationFunction = () =>
+        rows(
+          `SELECT p.proisstrict, p.proconfig FROM pg_proc p
               JOIN pg_namespace n ON n.oid = p.pronamespace
               WHERE n.nspname = $1 AND p.proname = 'openclaw_transcript_navigation_check'`,
-            [agentNamespace],
-          )
-        ).rows;
+          [agentNamespace],
+        );
       const readIndexes = async () =>
         (
           await client.query<{ indexname: string; indexdef: string }>(
@@ -845,9 +827,9 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
           }),
         ).resolves.toEqual({ found: 0, repaired: 0, scannedStores: 1 });
         expect(inspected).toEqual([]);
-        expect(
-          (await client.query(`SELECT version FROM "${agentNamespace}".openclaw_schema_meta`)).rows,
-        ).toEqual([{ version: "32" }]);
+        expect(await rows(`SELECT version FROM "${agentNamespace}".openclaw_schema_meta`)).toEqual([
+          { version: "32" },
+        ]);
       }
       const lock = await acquireGatewayLock({
         env: updateEnv,
@@ -998,31 +980,27 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
           namespaces.add(namespace);
         }
         expect(await readAgent()).toEqual([{ value_json: '"before"' }]);
-        expect(
-          (await client.query(`SELECT version FROM "${agentNamespace}".openclaw_schema_meta`)).rows,
-        ).toEqual([{ version: String(installed.version) }]);
+        expect(await rows(`SELECT version FROM "${agentNamespace}".openclaw_schema_meta`)).toEqual([
+          { version: String(installed.version) },
+        ]);
         expect(await readAllocation()).toEqual([{ last_value: "71", is_called: true }]);
         expect(await readNavigationFunction()).toEqual(beforeNavigation);
         expect(await readIndexes()).toEqual(beforeIndexes);
         expect(
-          (
-            await client.query(`SELECT enqueue_sequence, advancement_key
-          FROM "${agentNamespace}".context_engine_turn_outbox`)
-          ).rows,
+          await rows(`SELECT enqueue_sequence, advancement_key
+          FROM "${agentNamespace}".context_engine_turn_outbox`),
         ).toEqual([{ enqueue_sequence: "9", advancement_key: "retained" }]);
         expect(
-          (
-            await client.query(
-              `SELECT entry_key, origin_class FROM "${agentNamespace}".memory_entry_origins`,
-            )
-          ).rows,
+          await rows(
+            `SELECT entry_key, origin_class FROM "${agentNamespace}".memory_entry_origins`,
+          ),
         ).toEqual([{ entry_key: "retained-memory", origin_class: "owner" }]);
         expect(admit(installed, agentPath)?.version).toBe(sourceVersion);
         await client.query(`INSERT INTO "${agentNamespace}".memory_index_sources (path, source, hash, mtime, size)
             VALUES ('restored.md', 'memory', 'hash', 1, 1);`);
-        expect(
-          (await client.query(`SELECT revision FROM "${agentNamespace}".memory_index_state`)).rows,
-        ).toEqual([{ revision: sourceVersion < 31 ? "1" : "0" }]);
+        expect(await rows(`SELECT revision FROM "${agentNamespace}".memory_index_state`)).toEqual([
+          { revision: sourceVersion < 31 ? "1" : "0" },
+        ]);
       } finally {
         Object.assign(agentEngineSchema, candidate);
         vi.unstubAllEnvs();

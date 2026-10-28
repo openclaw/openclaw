@@ -7,6 +7,7 @@ import { finishUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-le
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { withSystemPackageOwnershipRun } from "../../infra/update-system-package-ownership.js";
 import { resolveDebugProxySettings } from "../../proxy-capture/env.js";
 import { withDeferredDebugProxyCapture } from "../../proxy-capture/runtime-deferral.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -56,18 +57,20 @@ export async function updateCommand(
   inputOpts: UpdateCommandOptions,
   executorOptions?: UpdateCommandExecutorOptions,
 ): Promise<void> {
-  return await withDeferredDebugProxyCapture(async () => {
-    const { tryRunImmutableUpdateCommand } = await import("./update-command-immutable.js");
-    if (await tryRunImmutableUpdateCommand(inputOpts)) {
-      return;
-    }
-    const { preparePostgresPoolForUpdate } = await import("../../infra/postgres-sync/pool.js");
-    await preparePostgresPoolForUpdate("openclaw update repair");
-    const { withRetainedUpdateRuntime } = await import("../../infra/update-retained-runtime.js");
-    return await withRetainedUpdateRuntime(import.meta.url, (retainRuntime) =>
-      updateCommandWithRuntime(inputOpts, retainRuntime, executorOptions),
-    );
-  });
+  return await withSystemPackageOwnershipRun(() =>
+    withDeferredDebugProxyCapture(async () => {
+      const { tryRunImmutableUpdateCommand } = await import("./update-command-immutable.js");
+      if (await tryRunImmutableUpdateCommand(inputOpts)) {
+        return;
+      }
+      const { preparePostgresPoolForUpdate } = await import("../../infra/postgres-sync/pool.js");
+      await preparePostgresPoolForUpdate("openclaw update repair");
+      const { withRetainedUpdateRuntime } = await import("../../infra/update-retained-runtime.js");
+      return await withRetainedUpdateRuntime(import.meta.url, (retainRuntime) =>
+        updateCommandWithRuntime(inputOpts, retainRuntime, executorOptions),
+      );
+    }),
+  );
 }
 
 async function withUpdateDatabaseEngine<T>(

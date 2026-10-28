@@ -780,6 +780,10 @@ group-targeted New Session remains immediate.
 
 Panes share outbox recovery for the same conversation. Activity in another
 conversation does not restart that recovery; reconnecting checks every saved outbox.
+Messages refused while an agent prepares after a Gateway restart stay queued and
+retry automatically, including after the five-minute request deadline. Retries
+keep the original conversation and message identity. Remove the queued message
+to cancel delivery.
 Memory-only messages retained after a storage failure share that conversation queue
 and remain available when you leave and reopen the conversation in the same tab.
 They also hold automatic update reloads until sent, saved, or discarded. If Refresh

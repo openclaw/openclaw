@@ -177,7 +177,7 @@ export class DraftGatewayState {
           })
         : requestPlaceCatalog(client, runtimeId).then((placeCatalog) => ({
             ...placeCatalog,
-            profiles: isAdmin ? placeCatalog.profiles : [],
+            profiles: placeCatalog.profiles,
             suggestedProfile: isAdmin ? placeCatalog.suggestedProfile : undefined,
           }));
     this.cloudProfileComplete = result

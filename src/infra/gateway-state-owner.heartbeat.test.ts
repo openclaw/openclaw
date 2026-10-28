@@ -633,13 +633,11 @@ it("renews retained custody during synchronous work and never touches a successo
 it("never renews a successor after suspension between verification and the timestamp syscall", async () => {
   const pause = new Int32Array(new SharedArrayBuffer(4));
   const { workers, ready } = observeHeartbeatWorkers(pause.buffer);
-  const { gateway } = await acquireGateway("openclaw-owner-paused-");
+  const { root, gateway } = await acquireGateway("openclaw-owner-paused-");
   try {
     expect(await Promise.all(ready)).toEqual([["paused"]]);
-    const worker = workers[0];
-    if (!worker) {
-      throw new Error("Expected the paused heartbeat worker");
-    }
+    const worker = workers[0]!;
+    const owner = captureGatewayStateOwner(path.join(root, "state", "openclaw.sqlite"))!;
     const exited = once(worker, "exit");
     const held = fs.statSync(gateway.lockPath, { bigint: true });
     fs.renameSync(gateway.lockPath, `${gateway.lockPath}.retired`);
@@ -651,6 +649,8 @@ it("never renews a successor after suspension between verification and the times
     Atomics.store(pause, 0, 1);
     Atomics.notify(pause, 0);
     await exited;
+    expect(owner.signal.aborted).toBe(true);
+    expect(owner.signal.reason.message).toContain("owner lock was removed or replaced");
     expect(fs.statSync(gateway.lockPath, { bigint: true }).mtimeNs).toBe(successor.mtimeNs);
     expect(fs.readFileSync(gateway.lockPath, "utf8")).toBe("successor");
   } finally {

@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { REPEATED_TOOL_ERROR_CODE } from "../../../../packages/agent-core/src/errors.js";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import { buildProviderLoginRecovery } from "../../../auto-reply/provider-login-recovery.js";
 import {
@@ -247,9 +248,9 @@ export function buildEmbeddedRunPayloads(params: {
     const rawErrorMessage = lastAssistantNeedsErrorSurface
       ? normalizeOptionalString(assistantForPayload?.errorMessage)
       : undefined;
-    const oauthRefreshFailure = rawErrorMessage
-      ? classifyOAuthRefreshFailure(rawErrorMessage)
-      : null;
+    const repeatedToolError = assistantForPayload?.errorCode === REPEATED_TOOL_ERROR_CODE;
+    const oauthRefreshFailure =
+      rawErrorMessage && !repeatedToolError ? classifyOAuthRefreshFailure(rawErrorMessage) : null;
     const providerLoginRecovery = buildProviderLoginRecovery({
       provider: oauthRefreshFailure?.provider ?? params.provider,
       oauthReason: oauthRefreshFailure?.reason,
@@ -269,9 +270,11 @@ export function buildEmbeddedRunPayloads(params: {
         ? suppressFailureArtifacts
           ? undefined
           : lastAssistantErrored || rawErrorMessage
-            ? (providerLoginRecovery?.hint ??
-              renderRateLimitRetryExhaustion(rateLimitRetriesExhausted) ??
-              formatUserFacingAssistantErrorText(assistantForPayload, errorContext))
+            ? repeatedToolError
+              ? formatUserFacingAssistantErrorText(assistantForPayload, errorContext)
+              : (providerLoginRecovery?.hint ??
+                renderRateLimitRetryExhaustion(rateLimitRetriesExhausted) ??
+                formatUserFacingAssistantErrorText(assistantForPayload, errorContext))
             : formatAssistantErrorText(assistantForPayload, errorContext)
         : undefined;
     const deferAssistantTimeoutError =

@@ -163,6 +163,7 @@ describe("device worker placement dispatch", () => {
       idempotencyKey: expect.stringMatching(/^session-dispatch:/u),
       executionMode: REQUEST.executionMode,
       projectPath: "/gateway/workspace",
+      beforeProvision: expect.any(Function),
       inheritedProfile: request.inheritedProfile,
     });
     expect(harness.environments.startTunnel).toHaveBeenCalledWith({
@@ -236,6 +237,7 @@ describe("device worker placement dispatch", () => {
       idempotencyKey: expect.stringMatching(/^session-dispatch:/u),
       executionMode: "remote-exec",
       projectPath: "/gateway/workspace",
+      beforeProvision: expect.any(Function),
       inheritedProfile: request.inheritedProfile,
     });
     const workspaceTunnel = await vi.mocked(harness.environments.startTunnel).mock.results[0]
@@ -271,6 +273,7 @@ describe("device worker placement dispatch", () => {
       idempotencyKey: expect.stringMatching(/^session-dispatch:/u),
       executionMode: "remote-exec",
       projectPath: "/gateway/workspace",
+      beforeProvision: expect.any(Function),
       admittedIntent: {
         providerId: harness.ready.providerId,
         profileSnapshot: harness.ready.profileSnapshot,

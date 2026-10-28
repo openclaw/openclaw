@@ -139,8 +139,10 @@ first match.
 
 Inside each store, owner-direct turns read and write the store's private
 partition. Group and other conversation turns are confined to their own
-conversation partition. Operators can manage membership from **Settings → Stores
-& sharing** in the Knowledge page (requires `operator.admin`).
+conversation partition unless an owner grants the conversation read, or read and
+save, access to the private partition. Operators can manage membership and
+conversation access from **Settings → Stores & sharing** in the Knowledge page
+(requires `operator.admin`).
 
 See [Stores and access](/plugins/knowledge/stores-and-access) for the storage
 layout, authority table, and limits.

@@ -88,7 +88,12 @@ async function createPluginToolPermissionHandler(params: {
     if (!toolName) {
       return denyTool("OpenClaw denied an unnamed native tool.");
     }
-    if (run.cliToolAvailability && !run.cliToolAvailability.native.includes(toolName)) {
+    const discoveryOnly = run.cliToolAvailability?.discovery?.includes(toolName) === true;
+    if (
+      run.cliToolAvailability &&
+      !run.cliToolAvailability.native.includes(toolName) &&
+      !discoveryOnly
+    ) {
       return denyTool(`OpenClaw denied native tool ${toolName}: it is unavailable to this run.`);
     }
 
@@ -208,6 +213,13 @@ async function createPluginToolPermissionHandler(params: {
           }
         }
       }
+    }
+
+    // Schema discovery has no file, shell, or remote execution authority. Tool calls
+    // discovered this way still return through the MCP grant and normal tool policy.
+    if (discoveryOnly) {
+      assertActive();
+      return { behavior: "allow", updatedInput: toolInput };
     }
 
     const plan = resolveCliNativeToolApprovalPlan(permission);

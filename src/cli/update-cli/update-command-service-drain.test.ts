@@ -27,7 +27,8 @@ vi.mock("../../infra/gateway-lock-legacy.js", () => ({
   readLegacyGatewayLockIdentity: mocks.legacyLock,
 }));
 vi.mock("../../infra/ports-inspect.js", () => ({ inspectPortUsage: mocks.portUsage }));
-vi.mock("../../daemon/systemd-maintenance.js", () => ({
+vi.mock("../../daemon/systemd-stop-policy.js", async (actual) => ({
+  ...(await actual<typeof import("../../daemon/systemd-stop-policy.js")>()),
   readSystemdGatewayStopTimeout: mocks.managerTimeout,
 }));
 vi.mock("../../gateway/local-http-probe.js", () => ({

@@ -597,7 +597,10 @@ export async function executeLocalWorkspaceManifestRead(
     preparations:
       treeRoot === previousTreeRoot
         ? []
-        : prepareLocalWorkspaceTreePacks(records, replace ? records.values() : delta.records),
+        : prepareLocalWorkspaceTreePacks(
+            records,
+            replace ? undefined : [...delta.records.map(({ node }) => node.path), ...delta.removed],
+          ),
     records: [],
     observation,
     removed: [],

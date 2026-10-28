@@ -25,8 +25,8 @@ import { registerIdentity, SqliteIdentityStore } from "./identity-store.js";
 import { registrySchema, type RegistryTables } from "./registry-schema.js";
 import { ensureKnowledgeSchema, UnrecognizedSchema } from "./storage-schema.js";
 import { Manifest, checkpointKey } from "./store-manifest.js";
-import { canonicalJson } from "./stores-config.js";
-import type { StoreState } from "./stores-contract.js";
+import { canonicalJson, grantsRevision, type ConversationGrants } from "./stores-config.js";
+import type { GrantAccess, StoreState } from "./stores-contract.js";
 
 const BUSY_TIMEOUT_MS = 5000;
 
@@ -59,6 +59,8 @@ export type RegistrySnapshot = {
   labels: Record<string, string>;
   reconciled: { section: string; revision: string } | null;
   pending: OperationRow | null;
+  /** Owner conversation grants, keyed by conversation session key. */
+  grants: ConversationGrants;
 };
 export class RegistryRecoveryRequired extends Error {}
 
@@ -236,7 +238,35 @@ export class StoreRegistry {
             .prepare("SELECT * FROM operations WHERE state='pending' ORDER BY updated_at LIMIT 1")
             .get(),
         ) ?? null,
+      grants: this.grants(),
     };
+  }
+  // Only grant() writes this value, so it is trusted as written.
+  private grants(): ConversationGrants {
+    const raw = this.meta("conversation_grants");
+    return raw ? JSON.parse(raw) : {};
+  }
+
+  /** Set or remove ("none") one conversation's grant, only if the grants are
+   * still at `expectedRevision`. A caller detects a conflict by the returned
+   * grants' revision. */
+  grant(sessionKey: string, access: GrantAccess | "none", expectedRevision: string) {
+    this.tx(() => {
+      const grants = this.grants();
+      if (grantsRevision(grants) !== expectedRevision) {
+        return;
+      }
+      if (access === "none") {
+        delete grants[sessionKey];
+      } else {
+        grants[sessionKey] = access;
+      }
+      this.setMeta(
+        "conversation_grants",
+        Object.keys(grants).length ? canonicalJson(grants) : null,
+      );
+    });
+    return this.snapshot();
   }
 
   /** Lazily create the store behind a logical binding (spec §5.2). The

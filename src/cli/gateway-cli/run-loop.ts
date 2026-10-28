@@ -882,7 +882,7 @@ export async function runGatewayLoop(params: {
         }
         // Keep deadlines through final cleanup and updater handoff, not merely
         // server close. The next iteration also joins native watchdog retirement.
-        if (!forcedExitStarted) {
+        if (!forcedExitStarted && !(params.ownsProcessLifecycle && cleanup.failed)) {
           clearForceExitTimer();
           requestWatchdogs.delete(clearForceExitTimer);
         }
