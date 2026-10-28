@@ -17,7 +17,6 @@ import {
   isSilentOverflowProneModel,
   resolveEffectiveCompactionMode,
 } from "../../agent-settings.js";
-import { toToolDefinitions } from "../../agent-tool-definition-adapter.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import { resolveUserTimezone } from "../../date-time.js";
 import { bootstrapHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
@@ -35,8 +34,6 @@ import { withSessionManagerAppend } from "../../sessions/session-manager-append-
 import { isOutOfTurnHistoryEntry } from "../../sessions/session-manager-codec.js";
 import { sessionManagerOpenTranscriptCohort } from "../../sessions/session-manager-core.js";
 import { sessionManagerReadInitialContext } from "../../sessions/session-manager-current-turn.js";
-import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
-import { resolveToolSearchCatalogTool } from "../../tool-search.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { log } from "../logger.js";
@@ -45,6 +42,7 @@ import { recordRuntimeContextProjection } from "../session-prompt-state.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
 import { createAttemptCompactionThinkingResolver } from "./attempt-compaction-thinking.js";
+import { createAttemptDeferredToolResolver } from "./attempt-deferred-tool-resolver.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import type { LlmBoundaryOptions } from "./attempt-llm-boundary.types.js";
 import {
@@ -76,7 +74,6 @@ import {
 } from "./runtime-context-prompt.js";
 import { resolveSessionBoundaryPromptCacheKey } from "./session-boundary-prompt-cache-key.js";
 import { resolveEmbeddedSessionContextLimits } from "./session-context-limits.js";
-import { withEmbeddedAttemptToolActivity } from "./tool-activity-heartbeat.js";
 import {
   createToolLoopBatchAdmission,
   installToolLoopRecoveryCleanup,
@@ -173,42 +170,12 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     sessionManager: input.sessionManager,
     settingsManager,
     resourceLoader,
-    resolveDeferredTool: input.clientToolPreparation.deferredDirectoryToolsCallable
-      ? ({ toolCall }) => {
-          const toolAbortSignal =
-            input.clientToolPreparation.getToolAbortSignal?.() ?? input.runAbortSignal;
-          const tool = resolveToolSearchCatalogTool(
-            {
-              config: attempt.config,
-              runtimeConfig: attempt.config,
-              agentId: input.sessionAgentId,
-              sessionKey: input.clientToolPreparation.sandboxSessionKey,
-              sessionId: attempt.sessionId,
-              runId: attempt.runId,
-              catalogRef: input.clientToolPreparation.toolSearchCatalogRef,
-              abortSignal: toolAbortSignal,
-            },
-            toolCall.name,
-          );
-          // Catalog entries own hooks; the adapter must carry the captured
-          // generation into them so approvals cannot outlive a permission change.
-          const definition = tool
-            ? toToolDefinitions(
-                [tool],
-                input.clientToolPreparation.catalogToolHookContext,
-                toolAbortSignal,
-              )[0]
-            : undefined;
-          const hydratedTool = definition ? wrapToolDefinition(definition) : undefined;
-          if (hydratedTool) {
-            log.info(`tool-search: hydrated deferred directory tool ${toolCall.name}`);
-            const originalExecute = hydratedTool.execute;
-            hydratedTool.execute = (...args: Parameters<typeof originalExecute>) =>
-              withEmbeddedAttemptToolActivity(attempt.runId, () => originalExecute(...args));
-          }
-          return hydratedTool;
-        }
-      : undefined,
+    resolveDeferredTool: createAttemptDeferredToolResolver({
+      attempt,
+      clientToolPreparation: input.clientToolPreparation,
+      runAbortSignal: input.runAbortSignal,
+      sessionAgentId: input.sessionAgentId,
+    }),
     withSessionWriteSettlement: (operation) =>
       input.transcriptLifecycle.withTranscriptWrite(operation),
     cleanupProviderSessionResourcesOnDispose: false,

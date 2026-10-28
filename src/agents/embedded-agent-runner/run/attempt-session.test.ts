@@ -201,6 +201,7 @@ function createInput(options?: { terminalHookError?: Error }) {
       clientToolPreparation: {
         codeModeControlsEnabledForRun: true,
         deferredDirectoryToolsCallable: false,
+        effectiveTools: [],
       } as never,
       effectiveCwd: "/workspace",
       effectiveWorkspace: "/workspace",
@@ -371,6 +372,25 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       setEmbeddedPluginApprovalBroker(previousBroker);
       setEmbeddedMode(previousMode);
     }
+  });
+
+  it("points a direct call to a deferred tool at dispatch_action in Tool Search tools mode", async () => {
+    const fixture = createInput();
+    fixture.input.clientToolPreparation = {
+      codeModeControlsEnabledForRun: false,
+      deferredDirectoryToolsCallable: false,
+      effectiveTools: [{ name: "dispatch_action" }],
+    } as never;
+    hoisted.resolveToolSearchCatalogTool.mockImplementation((_ctx, name: string) =>
+      name === "sessions_list" ? { name } : undefined,
+    );
+    await prepareEmbeddedAttemptAgentSession(fixture.input);
+    const resolveDeferredTool = hoisted.createAgentSession.mock.calls[0]![0].resolveDeferredTool;
+
+    expect(() => resolveDeferredTool({ toolCall: { name: "sessions_list" } })).toThrow(
+      'Tool sessions_list is deferred and not directly callable. Call dispatch_action with id "sessions_list" and its parameters in args.',
+    );
+    expect(resolveDeferredTool({ toolCall: { name: "no_such_tool" } })).toBeUndefined();
   });
 
   it.each(["live", "closed"] as const)(

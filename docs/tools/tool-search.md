@@ -317,7 +317,9 @@ Deferred names are catalog entries, not directly callable functions in this
 mode. Put the result ID or name in `dispatch_action.id` and all target parameters in
 `dispatch_action.args`, including when other instructions refer to the deferred tool
 by name. A compact search signature may be enough to call it; use
-`tool_describe` when the full schema is needed.
+`tool_describe` when the full schema is needed. A direct call to an authorized
+deferred name does not run the tool; it returns an error telling the model to
+call `dispatch_action` with that name as `id`.
 
 ### Batch search
 
