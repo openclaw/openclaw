@@ -66,7 +66,9 @@ export function collectRedactPatternWarnings(config: OpenClawConfig): ConfigVali
       const repair =
         compiled.reason === "invalid-regex"
           ? "Fix the regex syntax"
-          : "Rewrite the nested repetition, for example (a+)+ as a+";
+          : compiled.reason === "unsafe-ambiguous-alternation"
+            ? "Remove the duplicate alternatives, for example (a|a)* as a*"
+            : "Rewrite the nested repetition, for example (a+)+ as a+";
       warnings.push({
         path: `logging.redactPatterns.${index}`,
         message: `Redaction pattern is ignored (${compiled.reason}); values it should mask stay visible in logs and diagnostics. ${repair}, then run openclaw config validate again.`,
