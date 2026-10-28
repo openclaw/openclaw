@@ -23,6 +23,17 @@ const SKIPPED_UPDATE_RUN_HEADLINES = new Map<string | null, string>([
   ],
 ]);
 
+const FAILED_PHASE_DESCRIPTIONS = new Map<string, string>([
+  ["requested", "before the update started"],
+  ["staging", "while preparing the update"],
+  ["validating", "while validating the update"],
+  ["repairing", "while repairing the installation"],
+  ["activating", "while activating"],
+  ["restarting", "while restarting the Gateway"],
+  ["verifying", "while checking Gateway readiness"],
+]);
+const UNKNOWN_FAILED_PHASE = "before completion";
+
 /** Chat shows the outcome; the update views keep diagnostics and recovery instructions. */
 export function renderUpdateRunSummary(
   run: NoticeRun,
@@ -47,19 +58,29 @@ export function renderUpdateRunSummary(
     const reason = run.reason ?? "update-failed";
     const observation = run.steps.findLast((step) => step.step === "gateway recovery verification");
     const recovery = run.verification?.recovery;
+    // The request receipt proves continued service only before activation can stop it.
+    const keptServing =
+      phase === "requested" &&
+      !run.steps.some((step) => ["activating", "restarting", "verifying"].includes(step.step));
     const serving =
       run.verification &&
       (observation
         ? resolveUpdateRunVerifiedServingVersion(run.verification, observation)
         : recovery?.serviceRestartSafe && recovery.service === "healthy"
           ? recovery.version
-          : undefined);
+          : keptServing && run.verification.serviceRunning
+            ? run.verification.runningVersion
+            : undefined);
     return [
       headline,
       ...(serving && serving === run.before?.version
-        ? [`The previous version (${serving}) is still serving.`]
+        ? [
+            keptServing
+              ? `The current version (${serving}) is still running.`
+              : `The previous version (${serving}) is still serving.`,
+          ]
         : []),
-      `Update failed during ${phase} (${reason}).`,
+      `Update failed ${FAILED_PHASE_DESCRIPTIONS.get(phase) ?? UNKNOWN_FAILED_PHASE} (${reason}).`,
       run.origin?.nextAction && !options.manualCommand
         ? `Next: ${run.origin.nextAction.replace(/\s+/gu, " ")}`
         : nextStep,
@@ -75,8 +96,14 @@ export function isUpdateRunTerminalNoticeText(text: string): boolean {
     const failure = (lines.length === 4 ? lines[2] : lines[1]) ?? "";
     if (
       (lines.length === 3 ||
-        /^The previous version \(.+\) is still serving\.$/u.test(lines[1] ?? "")) &&
-      /^Update failed during [a-z-]+ \([a-z0-9-]+\)\.$/u.test(failure)
+        /^(?:The previous version \(.+\) is still serving|The current version \(.+\) is still running)\.$/u.test(
+          lines[1] ?? "",
+        )) &&
+      [...FAILED_PHASE_DESCRIPTIONS.values(), UNKNOWN_FAILED_PHASE].some(
+        (description) =>
+          failure.startsWith(`Update failed ${description} (`) &&
+          /\([a-z0-9-]+\)\.$/u.test(failure),
+      )
     ) {
       return true;
     }

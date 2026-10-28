@@ -331,7 +331,7 @@ async function stopFixture(latency = 0, failedAttempts = 0, scope: "user" | "sys
     timeouts: new Array<number | undefined>(),
     warn: vi.fn(),
     // A custody read can legitimately spend the lease database's five-second busy wait.
-    guard: vi.fn(() => (f.clock.now += 6000)),
+    guard: vi.fn<() => void>(() => (f.clock.now += 6000)),
     stop: (custodyMs = 0) =>
       withGatewayServiceUpdateAuthority(
         () => (f.clock.now += custodyMs),

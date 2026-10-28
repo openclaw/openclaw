@@ -48,7 +48,17 @@ describe("host-owned update notices", () => {
       lifecycleRevision,
     });
 
-  it.each(["succeeded", "failed", "recovered"] as const)("delivers %s outcome", async (kind) => {
+  it.each([
+    ["succeeded", "verifying", ""],
+    ["failed", "requested", "before the update started"],
+    ["failed", "staging", "while preparing the update"],
+    ["failed", "validating", "while validating the update"],
+    ["failed", "repairing", "while repairing the installation"],
+    ["failed", "activating", "while activating"],
+    ["recovered", "activating", "while activating"],
+    ["failed", "restarting", "while restarting the Gateway"],
+    ["failed", "verifying", "while checking Gateway readiness"],
+  ] as const)("delivers %s outcome in %s", async (kind, phase, description) => {
     const recovered = kind === "recovered";
     const status = kind === "succeeded" ? "succeeded" : "failed";
     const version = "2026.10.4";
@@ -59,7 +69,7 @@ describe("host-owned update notices", () => {
       before: { version },
       origin: { sessionKey: target().sessionKey, nextAction: advice },
     });
-    recordUpdateRunPhase(initial.runId, "activating");
+    recordUpdateRunPhase(initial.runId, phase);
     recordUpdateRunVerification(initial.runId, {
       port: 19123,
       versionMatch: false,
@@ -83,7 +93,7 @@ describe("host-owned update notices", () => {
           ? [
               headline,
               ...(recovered ? ["The previous version (2026.10.4) is still serving."] : []),
-              "Update failed during activating (restart-unhealthy).",
+              `Update failed ${description} (restart-unhealthy).`,
               `Next: ${advice}`,
             ].join("\n")
           : `${headline}\nFor details, open Settings → Updates in the Control UI or run \`openclaw update status\` in your terminal.`,
@@ -144,7 +154,7 @@ describe("host-owned update notices", () => {
     expect(getUpdateRun(run.runId)).toEqual(skipped);
   });
 
-  it.each(["legacy", "recovered", "pending"] as const)(
+  it.each(["legacy", "recovered", "kept-serving", "pending"] as const)(
     "reconciles only a previously admitted terminal completion (%s)",
     async (kind) => {
       const terminal = kind !== "pending";
@@ -159,10 +169,12 @@ describe("host-owned update notices", () => {
       );
       const previousText =
         kind === "recovered"
-          ? "⚠️ OpenClaw couldn't finish updating.\nThe previous version (2026.10.4) is still serving.\nUpdate failed during activating (managed-service-stop-failed).\nNext: Retry openclaw update."
-          : terminal
-            ? "⚠️ OpenClaw couldn't finish updating.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal."
-            : "🔁 Checking that OpenClaw is ready…";
+          ? "⚠️ OpenClaw couldn't finish updating.\nThe previous version (2026.10.4) is still serving.\nUpdate failed while activating (managed-service-stop-failed).\nNext: Retry openclaw update."
+          : kind === "kept-serving"
+            ? "⚠️ OpenClaw couldn't finish updating.\nThe current version (2026.10.4) is still running.\nUpdate failed before the update started (managed-service-handoff-failed).\nNext: Retry openclaw update."
+            : terminal
+              ? "⚠️ OpenClaw couldn't finish updating.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal."
+              : "🔁 Checking that OpenClaw is ready…";
       expect(
         await appendAssistantMessageToSessionTranscript({
           ...target(),
