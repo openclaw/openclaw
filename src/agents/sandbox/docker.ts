@@ -360,7 +360,7 @@ async function ensureSandboxContainerLifecycle(
       }
       params.assertCurrent?.();
       phases.mark("attempt.setup.sandbox.backend.container_start");
-      await execContainer(engine, ["start", containerId]);
+      await execContainer(engine, ["start", containerId], { assertCurrent: params.assertCurrent });
       const setupCommand = params.cfg.docker.setupCommand;
       if (setupCommand?.trim()) {
         params.assertCurrent?.();
@@ -381,6 +381,7 @@ async function ensureSandboxContainerLifecycle(
       return {
         containerName,
         containerId,
+        ...(podmanRuntimeInfo ? { podmanTarget: podmanRuntimeInfo.target } : {}),
         configHash: expectedHash,
         mountPlan,
         currentConfig: true,
@@ -424,7 +425,7 @@ async function ensureSandboxContainerLifecycle(
     params.assertCurrent?.();
     if (!running) {
       phases.mark("attempt.setup.sandbox.backend.container_start");
-      await execContainer(engine, ["start", containerId]);
+      await execContainer(engine, ["start", containerId], { assertCurrent: params.assertCurrent });
     }
   }
   phases.mark("attempt.setup.sandbox.backend.registry_publish");
@@ -437,6 +438,7 @@ async function ensureSandboxContainerLifecycle(
   return {
     containerName,
     containerId,
+    ...(podmanRuntimeInfo ? { podmanTarget: podmanRuntimeInfo.target } : {}),
     configHash: hashMismatch ? currentHash : expectedHash,
     mountPlan,
     currentConfig: !hashMismatch,

@@ -105,9 +105,7 @@ it("does not restore deleted diary content from an update already in progress", 
 });
 
 it("reads and removes backfill entries", async () => {
-  const written = await writeBackfill(undefined, {
-    sourcePath: "memory/2026-04-05.md",
-  });
+  const written = await writeBackfill(undefined, { sourcePath: "memory/2026-04-05.md" });
   expect(written.written).toBe(1);
 
   await expect(readRecentDreamDiaryEntries({ workspaceDir })).resolves.toHaveLength(1);
@@ -123,30 +121,27 @@ it("refuses to overwrite a symlinked DREAMS.md", async () => {
   await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("outside\n");
 });
 
-it("leaves DREAMS.md unchanged when it contains invalid UTF-8", async () => {
-  const bytes = Buffer.concat([Buffer.from("# Diary\n\nprior entry\n\n"), Buffer.from([0xff])]);
-  await fs.writeFile(dreamsPath, bytes);
-
-  await expect(
-    updateDreamsFile({
-      workspaceDir,
-      updater: () => ({ content: "# Rewritten\n", result: undefined }),
-    }),
-  ).rejects.toThrow(/must be valid UTF-8/);
-
-  expect(await fs.readFile(dreamsPath)).toEqual(bytes);
-});
-
-it("degrades malformed diary context to empty history so dreaming continues", async () => {
-  const bytes = Buffer.concat([
-    Buffer.from(renderDiary("*April 5, 2026*\n\nPrior diary entry")),
-    Buffer.from([0xff]),
-  ]);
-  await fs.writeFile(dreamsPath, bytes);
-
-  await expect(readRecentDreamDiaryEntries({ workspaceDir })).resolves.toEqual([]);
-  expect(await fs.readFile(dreamsPath)).toEqual(bytes);
-});
+it.each(["diary", "daily", "context"] as const)(
+  "preserves invalid UTF-8 bytes for %s",
+  async (kind) => {
+    const file = kind === "daily" ? path.join(workspaceDir, "memory/2026-04-05.md") : dreamsPath;
+    const entry = renderDiary("*April 5, 2026*\n\nPrior diary entry");
+    const bytes = Buffer.concat([Buffer.from(entry), Buffer.from([0xff])]);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, bytes);
+    const operation = {
+      context: () => readRecentDreamDiaryEntries({ workspaceDir }),
+      daily: writePhase,
+      diary: writeBackfill,
+    }[kind]();
+    if (kind === "context") {
+      await expect(operation).resolves.toEqual([]);
+    } else {
+      await expect(operation).rejects.toThrow(/must be valid UTF-8/);
+    }
+    expect(await fs.readFile(file)).toEqual(bytes);
+  },
+);
 
 it("publishes unchanged truncated context ending in an emoji", async () => {
   const prefix = "a".repeat(359);
@@ -217,6 +212,32 @@ it("preserves restrictive DREAMS.md permissions across atomic replace", async ()
   }
 });
 
+it.each([false, true])("keeps the workspace directory policy (new=%s)", async (fresh) => {
+  if (fresh) {
+    workspaceDir = path.join(workspaceDir, "fresh");
+    dreamsPath = path.join(workspaceDir, "DREAMS.md");
+  } else if (process.platform !== "win32") {
+    await fs.chmod(workspaceDir, 0o770);
+    const open = fs.open.bind(fs);
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (args[0] === workspaceDir) {
+        vi.spyOn(handle, "chmod").mockRejectedValue(
+          Object.assign(new Error("shared workspace chmod denied"), { code: "EPERM" }),
+        );
+      }
+      return handle;
+    });
+  }
+
+  await writeBackfill();
+
+  expect(await readDiary()).toContain("The archive remembered a durable fact.");
+  if (process.platform !== "win32") {
+    expect((await fs.stat(workspaceDir)).mode & 0o7777).toBe(fresh ? 0o700 : 0o770);
+  }
+});
+
 it("serializes concurrent writes and deduplication", async () => {
   const entry = "*April 11, 2026, 8:00 AM*\n\nThe server room smelled like rain.";
   await fs.writeFile(dreamsPath, renderDiary(entry, entry));
@@ -237,14 +258,8 @@ describe("dreaming markdown storage", () => {
   it("replaces the managed deep summary while preserving the diary block", async () => {
     await fs.writeFile(
       dreamsPath,
-      `<!-- openclaw:dreaming:diary:start -->
-The old diary entry stays.
-<!-- openclaw:dreaming:diary:end -->
-## Deep Sleep
-<!-- openclaw:dreaming:deep:start -->
-- Old summary.
-<!-- openclaw:dreaming:deep:end -->
-`,
+      `${renderDiary("The old diary entry stays.")}## Deep Sleep\n` +
+        "<!-- openclaw:dreaming:deep:start -->\n- Old summary.\n<!-- openclaw:dreaming:deep:end -->\n",
       "utf-8",
     );
 
@@ -304,17 +319,6 @@ The old diary entry stays.
         storage: { mode: "both", separateReports: false },
       }),
     ).rejects.toBe(failure);
-  });
-
-  it("leaves an inline daily file unchanged when it contains invalid UTF-8", async () => {
-    const targetPath = path.join(workspaceDir, "memory", "2026-04-05.md");
-    await fs.mkdir(path.dirname(targetPath), { recursive: true });
-    const bytes = Buffer.concat([Buffer.from("# Daily\n\nprior entry\n\n"), Buffer.from([0xff])]);
-    await fs.writeFile(targetPath, bytes);
-
-    await expect(writePhase()).rejects.toThrow(/must be valid UTF-8/);
-
-    expect(await fs.readFile(targetPath)).toEqual(bytes);
   });
 });
 

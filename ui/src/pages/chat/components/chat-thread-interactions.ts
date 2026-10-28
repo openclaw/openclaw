@@ -2,7 +2,11 @@ import type { MessageReactionSummary } from "../../../../../packages/gateway-pro
 import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
+import type {
+  GatewaySessionRow,
+  ModelCatalogEntry,
+  SessionsListResult,
+} from "../../../api/types.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
@@ -111,6 +115,7 @@ export type ChatThreadProps = Omit<
     transcriptVisible?: PresentationValue;
     gatewayClient?: GatewayBrowserClient | null;
     selectedSession: GatewaySessionRow | undefined;
+    modelCatalog?: ModelCatalogEntry[];
     transcriptMetadata?: ChatTranscriptMetadata;
     announceTranscript?: boolean;
     loading: boolean;

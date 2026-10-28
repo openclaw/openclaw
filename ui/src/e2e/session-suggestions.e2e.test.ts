@@ -472,6 +472,7 @@ suite.define(() => {
       await expect(typingRow).toHaveCount(0);
       const sentText = page.locator(".chat-group--peer .chat-text").filter({ hasText: draft });
       await expect(sentText).toHaveCount(1);
+      await waitForLayoutSettled(page, ".chat-group--peer .chat-text");
       const afterSend = await bubbleGeometry(sentText);
       expect(afterSend).toMatchObject({
         padding: beforeSend.padding,

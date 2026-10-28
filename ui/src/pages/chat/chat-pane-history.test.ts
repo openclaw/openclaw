@@ -209,11 +209,13 @@ it.each(["pending", "resolved"] as const)(
         textarea.dispatchEvent(new InputEvent("input", input));
       }
       await vi.advanceTimersByTimeAsync(150);
-      expect(request).toHaveBeenCalledExactlyOnceWith("users.mentionable", {
-        sessionKey: state.sessionKey,
-        agentId: "main",
-        query: "Bo",
-      });
+      await waitForSolid(() =>
+        expect(request).toHaveBeenCalledExactlyOnceWith("users.mentionable", {
+          sessionKey: state.sessionKey,
+          agentId: "main",
+          query: "Bo",
+        }),
+      );
       const selectedName = () =>
         container.querySelector('[role="option"] .slash-menu-name')?.textContent;
       if (replyState === "resolved") {

@@ -84,6 +84,11 @@ export function projectReplyToolAuthorityInput(
   ) {
     throw new MessageInjectionRequesterMismatchError();
   }
+  if (continuation && isSameReplyToolAuthorityConversation(snapshot, continuation.caller)) {
+    // Guidance continues this execution; it does not grant a new set of tools or destinations.
+    // The caller binding still checks both live authorities and the incumbent policy.
+    return snapshot;
+  }
   return continuation
     ? {
         ...incoming,
@@ -271,7 +276,15 @@ export function resolveInboundConversationToolPolicy(params: {
 /** Session sharing alone does not establish that two inputs belong to the same conversation. */
 function isSameReplyToolAuthorityConversation(
   snapshot: ReplyToolAuthorityInput,
-  caller: ReplyToolAuthorityOverlay,
+  caller: Pick<
+    ReplyToolAuthorityOverlay,
+    | "messageProvider"
+    | "originatingChannel"
+    | "conversationId"
+    | "sessionKey"
+    | "agentAccountId"
+    | "messageThreadId"
+  >,
 ): boolean {
   const execution = snapshot.run;
   const channel = normalizeMessageChannel(execution.messageProvider ?? snapshot.originatingChannel);

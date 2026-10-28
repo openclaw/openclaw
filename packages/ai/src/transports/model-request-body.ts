@@ -69,6 +69,7 @@ class ModelRequestJson {
 }
 type ModelRequestBodyState = {
   enabled?: boolean;
+  reportsBytes?: boolean;
   encode?: (payload: unknown) => Promise<EncodedModelRequestBody>;
   onEncoded?: (body: Blob, payload: unknown) => void;
   onBytes?: (bytes: number) => void;
@@ -85,6 +86,21 @@ export function modelRequestBodyState(
   const state = (value as ModelRequestBodyState | undefined) ?? {};
   Reflect.set(options, REQUEST_BODY, state);
   return state;
+}
+
+/** Observe JSON fetch bodies without opting into host-owned request encoding. */
+export function withModelRequestBodyBytes(
+  options: object | undefined,
+  fetch: typeof globalThis.fetch,
+): typeof globalThis.fetch {
+  const state = modelRequestBodyState(options ?? {});
+  state.reportsBytes = true;
+  return (input, init) => {
+    if (typeof init?.body === "string") {
+      state.onBytes?.(Buffer.byteLength(init.body, "utf8"));
+    }
+    return fetch(input, init);
+  };
 }
 
 export function serializeModelRequestBody(

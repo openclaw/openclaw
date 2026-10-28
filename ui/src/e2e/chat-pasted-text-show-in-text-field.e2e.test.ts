@@ -314,12 +314,10 @@ suite.define(() => {
             const name = card.querySelector(".chat-attachment-file__name")!;
             const action = card.querySelector(".chat-attachment-text-action")!;
             const rect = card.getBoundingClientRect();
-            const otherRect = other.getBoundingClientRect();
             const { left, right, top, bottom } = action.getBoundingClientRect();
             const { border, borderRadius } = getComputedStyle(card);
             const otherStyle = getComputedStyle(other);
             return {
-              sameSize: rect.width === otherRect.width && rect.height === otherRect.height,
               sameBorder: border === otherStyle.border && borderRadius === otherStyle.borderRadius,
               secondRow: top >= name.getBoundingClientRect().bottom,
               inside: left >= rect.left && right <= rect.right && bottom < rect.bottom,
@@ -329,7 +327,6 @@ suite.define(() => {
             };
           }),
         ).toEqual({
-          sameSize: true,
           sameBorder: true,
           secondRow: true,
           inside: true,

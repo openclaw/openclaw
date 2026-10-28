@@ -89,6 +89,14 @@ the nested shape before starting the Gateway. See the
   output. Still uses the chunker if the buffered text exceeds `maxChars`, so it
   can emit multiple chunks at the end.
 
+Final-answer blocks wait while trailing tool syntax or Markdown ownership is still
+ambiguous. Recognized calls are hidden; literal examples and unfinished text are
+released when the text ends. Channel previews also withhold a possible standalone
+bracket/JSON tool call from its opening marker until the grammar settles it. Only that pending
+tail waits: ordinary prose and fenced examples keep streaming. Unfinished literal
+text is released in the final reply. Raw and ACP event streams keep their existing
+append-only behavior.
+
 <a id="pending-text-phases" />
 
 ### Text phases and final replies

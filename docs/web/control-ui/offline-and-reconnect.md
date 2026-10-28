@@ -14,6 +14,19 @@ stale connection. These signals do not retry a connection that requires a page
 reload, corrected credentials, or a new pairing request. Follow the displayed
 recovery instructions; automatic document refresh remains available after an update.
 
+While a visible tab is connecting or reconnecting, it checks same-origin Gateway
+reachability at randomized intervals. A fresh response can resume a retry sooner
+or replace an opening attempt stuck for at least eight seconds, even when airplane
+Wi-Fi never reports an offline/online change. Young opening attempts and opened
+sockets keep their normal handshake. Announced startup, restart, suspension, and
+busy-Gateway waits keep their existing retry pacing; hidden tabs do not poll.
+Expected reachability failures do not trigger sign-in recovery notifications.
+
+An unanswered send starts a liveness check after about five seconds. Any inbound
+frame proves the connection is alive; otherwise, ten more seconds without a
+response moves the UI into reconnecting so queued input can recover. Idle
+connections keep their longer heartbeat window.
+
 If an update or rollback leaves a tab using an incompatible connection protocol,
 the Control UI stops reconnecting and reloads the document served by the same
 Gateway. The tab records the attempt in session storage: it reloads once for a
@@ -96,6 +109,10 @@ sign-ins also support warm reload when the Gateway supplies a stable recovery
 identity. A one-time bootstrap credential is never retained for offline admission;
 a successful pairing can use the reusable device grant already issued and stored
 by the browser client.
+
+The cached agent roster supplies the conversation's agent name and text avatar
+on the first render, including when the offline shell cannot fetch bootstrap
+config. Reconnecting keeps the displayed identity until a live refresh replaces it.
 
 The retained identity is for local display and storage, not permission to call
 the Gateway. Reading, drafting, and queuing input remain available offline;
