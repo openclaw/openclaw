@@ -22,6 +22,9 @@ const mocks = vi.hoisted(() => ({
     vi.fn<(key: string, options?: { agentId?: string }) => SessionRead | Promise<SessionRead>>(),
   roleScopes: undefined as string[] | undefined,
   roleReads: 0,
+  sessionCap: undefined as "invited" | undefined,
+  prepareSharing:
+    vi.fn<typeof import("../session-sharing-target-read.js").prepareSessionSharingRead>(),
 }));
 
 // mock-isolation: Reject legacy synchronous reads to enforce the async storage boundary.
@@ -82,7 +85,7 @@ vi.mock("../operator-role-policy.js", () => {
     return mocks.roleScopes ? { scopes: mocks.roleScopes } : null;
   };
   return {
-    operatorSessionCap: () => undefined,
+    operatorSessionCap: () => mocks.sessionCap,
     resolveOperatorRolePolicy: resolve,
     resolveOperatorRolePolicyForProfile: resolve,
     resolveOperatorRolePolicyForAssignment: resolve,
@@ -91,6 +94,11 @@ vi.mock("../operator-role-policy.js", () => {
 // mock-isolation: Supply selected-session access without initializing sharing storage.
 vi.mock("../session-sharing.js", () => ({
   createSessionListEntryFilter: () => undefined,
+}));
+
+// mock-isolation: Supply the separately selected sharing target without opening session stores.
+vi.mock("../session-sharing-target-read.js", () => ({
+  prepareSessionSharingRead: mocks.prepareSharing,
 }));
 
 // mock-isolation: Admit sharing independently of the live personal grant under test.
@@ -153,6 +161,8 @@ beforeEach(() => {
   setRuntimeConfigSnapshot({});
   mocks.roleScopes = undefined;
   mocks.roleReads = 0;
+  mocks.sessionCap = undefined;
+  mocks.prepareSharing.mockReset();
   mocks.loadSession.mockReset();
   mocks.loadSession.mockReturnValue(sessionRead());
 });
@@ -198,6 +208,37 @@ it("prepares the new session store after an in-place config publication", async 
   using reloaded = await second;
   expect(reloaded.currentSession().sessionId).toBe("reloaded-session");
   expect(mocks.loadSession).toHaveBeenCalledTimes(2);
+});
+
+it("rejects invited publication metadata when sharing selects a replacement store", async () => {
+  const config = getRuntimeConfigSnapshot()!;
+  const request = createRequest();
+  request.context.getRuntimeConfig = () => getRuntimeConfigSnapshot()!;
+  mocks.sessionCap = "invited";
+  const { snapshot, pending, entered } = holdSessionRead();
+  const replacement = {
+    ...sessionRead("main", { sessionId: "replacement-session" }),
+    storePath: "/test/reloaded/sessions.json",
+  };
+  const release = vi.fn();
+  mocks.prepareSharing.mockResolvedValue({
+    storageTarget: replacement,
+    readCurrent: () => ({
+      target: { ...replacement, storeKey: replacement.canonicalKey },
+      membership: new Set(["profile-cache-test"]),
+      sourcePath: replacement.storePath,
+      sourceAgentId: replacement.agentId,
+    }),
+    release,
+  });
+  const first = prepare(request);
+  const rejected = expect(first).rejects.toThrow("session lifecycle changed");
+  await entered.promise;
+  config.session = { store: replacement.storePath };
+  setRuntimeConfigSnapshot(config);
+  pending.resolve(snapshot);
+  await rejected;
+  expect(release).toHaveBeenCalledOnce();
 });
 
 it("keeps origin-free personal reads and publication bound to the live ingress grant", async () => {

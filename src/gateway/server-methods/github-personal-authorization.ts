@@ -239,10 +239,24 @@ export async function prepareGitHubPublicationOptionsRead(
       const current = currentClient();
       const loaded = preparedSession.readCurrent();
       const cfg = options.context.getRuntimeConfig();
+      const sharingRead = sharing?.readCurrent(cfg);
+      const target = sharingRead?.target;
+      // Separately prepared membership must authorize the retained publication target.
+      if (
+        sharingRead &&
+        (!target ||
+          target.agentId !== loaded.agentId ||
+          target.canonicalKey !== loaded.canonicalKey ||
+          target.storePath !== loaded.storePath ||
+          target.entry.sessionId !== loaded.entry?.sessionId ||
+          target.entry.lifecycleRevision !== loaded.entry?.lifecycleRevision)
+      ) {
+        throw new GitHubPublicationSessionChangedError();
+      }
       const filter = createSessionListEntryFilter({
         cfg,
         client: current,
-        membership: sharing?.readCurrent(cfg).membership,
+        membership: sharingRead?.membership,
       });
       return loaded.entry && filter?.(loaded.canonicalKey, loaded.entry) !== false
         ? {
