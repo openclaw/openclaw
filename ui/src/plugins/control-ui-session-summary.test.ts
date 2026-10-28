@@ -390,14 +390,17 @@ it("keeps the saved plan but reports unknown runtime during a failed history ref
     updatedAt: 101,
     steps: [{ step: "Collect findings", status: "in_progress" }],
   };
+  const sessionInfo = {
+    key: card.sessionKey,
+    sessionId: "one",
+    kind: "direct" as const,
+    startedAt: 100,
+  };
   const { element, reply, emit, requests } = setup(undefined, async () => ({ card }));
   await reply(0, "Working reply", {
     ...history("Working reply"),
     sessionInfo: {
-      key: card.sessionKey,
-      sessionId: "one",
-      kind: "direct",
-      startedAt: 100,
+      ...sessionInfo,
       hasActiveRun: true,
     },
   });
@@ -419,10 +422,7 @@ it("keeps the saved plan but reports unknown runtime during a failed history ref
   await reply(2, "Delegated reply", {
     ...history("Delegated reply"),
     sessionInfo: {
-      key: card.sessionKey,
-      sessionId: "one",
-      kind: "direct",
-      startedAt: 100,
+      ...sessionInfo,
       endedAt: 110,
       status: "done",
       hasActiveRun: false,

@@ -1,9 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import type { ControlUiSessionFixture } from "../test-helpers/control-ui-session-fixtures.ts";
 import { openChatTaskProgress } from "./chat-details.test-support.ts";
 import {
@@ -18,7 +14,6 @@ type RuntimeSessionFixture = GatewaySessionRow & ControlUiSessionFixture;
 const suite = createSessionManagementE2eSuite(true);
 suite.define(() => {
   it("updates a retained card on child lifecycle events, including after reload", async () => {
-    const artifactDir = createControlUiE2eArtifactDir("progress-card-runtime");
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1100, height: 850 } },
       async ({ page }) => {
@@ -77,23 +72,11 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
         const card = await openChatTaskProgress(page);
 
-        const capture = async (name: string) => {
-          const frame = await takeControlUiScreenshotFrame(page, card, [card.locator("summary")], {
-            elements: [card],
-            animations: "disabled",
-            viewport: { width: 1100, height: 850 },
-          });
-          await writeFile(path.join(artifactDir, `${name}.png`), frame.png);
-          await writeFile(path.join(artifactDir, `${name}-card.png`), frame.elements[0]!.png);
-        };
-
-        await capture("00-initial");
         await expect
           .poll(async () =>
             (await card.locator(".session-progress-card__runtime").allTextContents()).join(" "),
           )
           .toContain("2 running · 3 queued");
-        await capture("01-delegated");
         expect(await card.locator(".session-progress-card__step--completed").count()).toBe(1);
         expect(await card.locator('[data-outcome="done"]').count()).toBe(0);
 
@@ -118,9 +101,7 @@ suite.define(() => {
         await expect
           .poll(() => card.locator(".session-progress-card__runtime").textContent())
           .toContain("1 running · 3 queued · 1 failed");
-        await capture("02-child-failed");
         await card.locator("summary").click();
-        await capture("03-collapsed");
         await page.reload();
         await openChatTaskProgress(page);
         await expect
@@ -131,13 +112,6 @@ suite.define(() => {
         await expect
           .poll(() => mobile.locator(".session-progress-card__runtime").textContent())
           .toContain("1 running · 3 queued · 1 failed");
-        const mobileFrame = await takeControlUiScreenshotFrame(
-          page,
-          mobile,
-          [mobile.locator(".session-progress-card__runtime")],
-          { elements: [mobile], animations: "disabled" },
-        );
-        await writeFile(path.join(artifactDir, "04-mobile.png"), mobileFrame.png);
         expect(await gateway.getRequests("progressCard.refresh")).toHaveLength(0);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       },

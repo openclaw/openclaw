@@ -62,6 +62,15 @@ suite.define(() => {
   ])("keeps unowned progress paused on $name", async (viewport) => {
     await suite.withPage({ locale: "en-US", viewport }, async ({ page }) => {
       const now = Date.now();
+      const activeSession = {
+        hasActiveRun: true,
+        key: sessionKey,
+        kind: "direct" as const,
+        label: "Later active run",
+        startedAt: now - 60_000,
+        status: "running" as const,
+        updatedAt: now,
+      };
       const gateway = await installMockGateway(page, {
         sessionKey,
         controlUiWidgetKinds: widgetKinds,
@@ -81,28 +90,8 @@ suite.define(() => {
               ],
             },
           },
-          "sessions.describe": {
-            session: {
-              hasActiveRun: true,
-              key: sessionKey,
-              kind: "direct",
-              label: "Later active run",
-              startedAt: now - 60_000,
-              status: "running",
-              updatedAt: now,
-            },
-          },
-          "sessions.list": chatSessionListResponse([
-            {
-              hasActiveRun: true,
-              key: sessionKey,
-              kind: "direct",
-              label: "Later active run",
-              startedAt: now - 60_000,
-              status: "running",
-              updatedAt: now,
-            },
-          ]),
+          "sessions.describe": { session: activeSession },
+          "sessions.list": chatSessionListResponse([activeSession]),
         },
       });
       const expanded = viewport.name === "expanded-side";
