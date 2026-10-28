@@ -141,7 +141,8 @@ function SentComments(props: {
       return source.snapshot?.value?.preview ?? previous?.[index];
     });
     if (!inline() && !revealed()) {
-      return values;
+      // A warm preview does not open the contents of a collapsed comment chip.
+      return values.map((value) => (value === null ? null : undefined));
     }
     const controller = new AbortController();
     onCleanup(() => controller.abort());

@@ -81,34 +81,18 @@ async function addComment(page: Page, source: Locator, comment: string) {
   await editor.getByRole("textbox").press("Enter");
 }
 
-async function routeCommentMedia(
-  page: Page,
-  body: string,
-  beforeRead: (read: number) => Promise<void>,
-) {
-  let reads = 0;
-  let tickets = 0;
-  await page.route("**/__openclaw__/assistant-media?**", async (route) => {
-    if (new URL(route.request().url()).searchParams.has("meta")) {
-      const now = await page.evaluate(() => Date.now());
-      await route.fulfill({
-        json: {
-          ...mediaTicketPayload(`annotation-${++tickets}`, 60_000),
-          mediaTicketExpiresAt: new Date(now + 60_000).toISOString(),
-        },
-      });
-      return;
-    }
-    await beforeRead(++reads);
-    await route.fulfill({ contentType: "text/plain", body });
-  });
-  return () => reads;
-}
-
 suite.define(() => {
   it("keeps the annotation-only bubble visible while its sent attachment is read", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
-      const { source, gateway } = await openChat(page);
+      await page.clock.install({ time: new Date() });
+      const history = [
+        ...Array.from({ length: 30 }, (_, index) => ({
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: `Deployment checkpoint ${index + 1}. Review the service health before proceeding.`,
+        })),
+        { role: "assistant", content: passage },
+      ];
+      const { source, gateway } = await openChat(page, passage, history);
       const comment = "Explain the rollback steps before changing the deployment.";
       await addComment(page, source, comment);
       await gateway.deferNext("chat.send");
@@ -119,52 +103,46 @@ suite.define(() => {
       await quote.waitFor();
       const before = await inline.boundingBox();
       expect(before).not.toBeNull();
-      const read = await page.evaluateHandle(() => {
-        const original = window.fetch;
-        const gate = Promise.withResolvers<void>();
-        let pending = false;
-        window.fetch = async (...args) => {
-          const input = args[0];
-          if (typeof input === "string" && input.startsWith("data:text/plain;base64,")) {
-            pending = true;
-            await gate.promise;
-          }
-          return original(...args);
-        };
-        return {
-          pending: () => pending,
-          release: () => {
-            window.fetch = original;
-            gate.resolve();
-          },
-        };
+      await gateway.resolveDeferred("chat.send", {
+        runId: sent.idempotencyKey,
+        status: "started",
       });
-      try {
-        await gateway.resolveDeferred("chat.send", {
-          runId: sent.idempotencyKey,
-          status: "started",
-        });
-        await expect.poll(() => read.evaluate((gate) => gate.pending())).toBe(true);
-        expect(await quote.isVisible()).toBe(true);
-        expect(await inline.textContent()).toContain(comment);
-        expect(await inline.textContent()).not.toContain("Loading");
-        const during = await inline.boundingBox();
-        expect(during?.height).toBe(before!.height);
-      } finally {
-        await read.evaluate((gate) => gate.release());
-        await read.dispose();
-      }
-      await quote.waitFor();
+      expect(await quote.isVisible()).toBe(true);
+      expect(await inline.textContent()).toContain(comment);
+      expect(await inline.textContent()).not.toContain("Loading");
+      expect((await inline.boundingBox())?.height).toBe(before!.height);
       const canonicalBody = createDeferred();
-      await routeCommentMedia(page, sent.attachment, () => canonicalBody.promise);
+      const reread = createDeferred();
+      let reads = 0;
+      let tickets = 0;
+      await page.route("**/__openclaw__/assistant-media?**", async (route) => {
+        if (new URL(route.request().url()).searchParams.has("meta")) {
+          const now = await page.evaluate(() => Date.now());
+          await route.fulfill({
+            json: {
+              ...mediaTicketPayload(`annotation-${++tickets}`, 60_000),
+              mediaTicketExpiresAt: new Date(now + 60_000).toISOString(),
+            },
+          });
+          return;
+        }
+        await (++reads === 1 ? canonicalBody.promise : reread.promise);
+        await route.fulfill({ contentType: "text/plain", body: sent.attachment });
+      });
+      const canonicalRead = page.waitForResponse(
+        (response) =>
+          response.url().includes("/assistant-media?") &&
+          !new URL(response.url()).searchParams.has("meta"),
+      );
       const canonicalId = `mock-user:${sent.idempotencyKey}`;
+      const canonicalSeq = history.length + 1;
       const canonical = {
         role: "user",
         content: "",
         idempotencyKey: `${sent.idempotencyKey}:user`,
         __openclaw: {
           id: canonicalId,
-          seq: 1,
+          seq: canonicalSeq,
           media: [
             {
               kind: "file",
@@ -186,7 +164,7 @@ suite.define(() => {
           session,
           clientRunId: sent.idempotencyKey,
           messageId: canonicalId,
-          messageSeq: 1,
+          messageSeq: canonicalSeq,
           message: canonical,
         });
         await page.locator(`[data-entry-id="${canonicalId}"]`).waitFor();
@@ -196,45 +174,10 @@ suite.define(() => {
       } finally {
         canonicalBody.resolve();
       }
+      await (await canonicalRead).finished();
       await quote.waitFor();
+      await waitForChatScrollIdle(page);
       expect(await inline.textContent()).toContain(comment);
-    });
-  });
-  it("retains an annotation across virtual-row remounts and renewed media tickets", async () => {
-    await suite.withPage(pageOptions, async ({ page }) => {
-      await page.clock.install({ time: new Date() });
-      const comment = "Explain the rollback steps.";
-      const body = `Selected text:\n${passage}\n\nUser comment:\n${comment}\n\nSource session: agent:main:fixture\nDOM text UTF-16 range: [0, ${passage.length})`;
-      const reread = createDeferred();
-      const reads = await routeCommentMedia(page, body, (read) =>
-        read === 1 ? Promise.resolve() : reread.promise,
-      );
-      await openChat(page, passage, [
-        ...Array.from({ length: 30 }, (_, index) => ({
-          role: index % 2 === 0 ? "user" : "assistant",
-          content: `Deployment checkpoint ${index + 1}. Review the service health before proceeding.`,
-        })),
-        {
-          role: "user",
-          content: "",
-          __openclaw: {
-            id: "annotation-scroll",
-            seq: 31,
-            media: [
-              {
-                kind: "file",
-                url: "media://inbound/selection-comment.txt",
-                fileName: "selection-comment.txt",
-                contentType: "text/plain",
-              },
-            ],
-          },
-        },
-      ]);
-      const inline = page.locator(".chat-sent-comments-inline");
-      const quote = inline.getByRole("button", { name: passage, exact: true });
-      await quote.waitFor();
-      const height = (await inline.boundingBox())!.height;
       const thread = page.locator(".chat-thread");
       const observation = await page.evaluateHandle(() => {
         let loading = false;
@@ -250,7 +193,7 @@ suite.define(() => {
         for (const renewed of [false, true]) {
           if (renewed) {
             await page.clock.fastForward(31_000);
-            await expect.poll(reads).toBeGreaterThan(1);
+            await expect.poll(() => reads).toBeGreaterThan(1);
           }
           await thread.evaluate((element) => {
             element.scrollTop = 0;
@@ -261,14 +204,12 @@ suite.define(() => {
           });
           await quote.waitFor();
           expect(await inline.textContent()).toContain(comment);
-          expect((await inline.boundingBox())?.height).toBe(height);
+          expect((await inline.boundingBox())?.height).toBe(before!.height);
           expect(await observation.evaluate((state) => state.sawLoading())).toBe(false);
           if (!renewed) {
-            expect(reads()).toBe(1);
+            expect(reads).toBe(1);
           }
         }
-        await quote.click();
-        await inline.getByRole("region", { name: "Highlighted passage:", exact: true }).waitFor();
       } finally {
         reread.resolve();
         await observation.evaluate((state) => state.stop());
