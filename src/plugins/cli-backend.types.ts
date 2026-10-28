@@ -129,6 +129,8 @@ export type CliBackendExecutionMode = "agent" | "side-question";
 /** Exact backend-native plus canonical OpenClaw tool surface for one CLI run. */
 export type CliBackendToolAvailability = {
   native: readonly string[];
+  /** Read-only native discovery of the already-authorized catalog; grants no execution authority. */
+  discovery?: readonly string[];
   /** Canonical OpenClaw tool names served through the host-isolated transport. */
   openClaw: readonly string[];
 };
@@ -537,6 +539,8 @@ type CliBackendPluginBase = {
    * Core rejects other names before grant/capture and excludes node/tool-disabled runs.
    */
   projectNativeToolAuthority?: (nativeTools: readonly string[]) => readonly string[];
+  /** Native tool that only discovers schemas from the authorized MCP catalog. */
+  nativeToolSearch?: string;
   /**
    * Operator-selected native tools kept on OpenClaw-mediated agent turns, which
    * otherwise expose no native tools. Core applies the same list to ordinary and
