@@ -343,9 +343,9 @@ describe("runMemoryFlushIfNeeded", () => {
   async function seedBytePressure(fileName: string) {
     const scope = sessionScope("agent:main:main", fileName);
     await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
-    await replaceTranscriptEvents(scope, [
-      { type: "message", message: { role: "user", content: "x".repeat(256) } },
-    ]);
+    const manager = await SessionManager.openAsync(scope, rootDir);
+    await manager.appendMessageAsync(makeUserMessage("x".repeat(256), 1));
+    await waitForSessionTranscriptProjection(scope);
     expect(readTranscriptStatsSync(scope).sizeBytes).toBeGreaterThan(10);
     return {
       ...scope,

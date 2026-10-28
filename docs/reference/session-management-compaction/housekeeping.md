@@ -35,8 +35,8 @@ the original conversation has a separate compaction step.
 When a provider rejects an oversized prompt, the reply owner also attempts this
 checkpoint before recovery compaction, unless preflight already attempted it in
 the same turn. It uses the active session model and the same context budget. This
-recovery checkpoint cannot compact its own input: if the preserved conversation
-does not fit, it fails and recovery continues. Gateway logs record completed,
+recovery checkpoint cannot start another overflow-recovery cycle: if the preserved
+conversation does not fit, it fails and recovery continues. Gateway logs record completed,
 skipped, and failed checkpoint outcomes before compaction.
 
 Config (`agents.defaults.compaction.memoryFlush`), full reference at [/gateway/config-agents](/gateway/config-agents/heartbeat-compaction-and-streaming#agents-defaults-compaction):
