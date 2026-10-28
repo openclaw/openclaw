@@ -378,6 +378,7 @@ suite.define(() => {
         expect(await sentChip.textContent()).toContain("2 comments");
         await sentChip.hover();
         await expectPreview(preview, "Explain the rollback checks. 🦞");
+        await preview.focus();
         expect(await preview.locator("li").count()).toBe(2);
         expect(await preview.locator("button").count()).toBe(0);
         await bounded(preview);
