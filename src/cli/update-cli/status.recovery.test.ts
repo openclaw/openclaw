@@ -4,6 +4,10 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
+import {
+  UPDATE_CAPTURE_PRIVACY_MARKER,
+  UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
+} from "../../infra/update-capture-privacy-marker.js";
 import { createUpdateRunRecordFixture } from "../../infra/update-run-record.test-support.js";
 import { updateStatusCommand as updateStatus } from "./status.js";
 // Prepare the lazy production graph during collection, not inside the first test timeout.
@@ -129,6 +133,10 @@ async function capture(runId = firstId) {
   const directory = `${stateDir}.update-captures/${runId}`;
   const manifestPath = path.join(directory, "manifest.json");
   await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(
+    path.join(directory, UPDATE_CAPTURE_PRIVACY_MARKER),
+    UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
+  );
   const raw = JSON.stringify(manifest);
   await fs.writeFile(manifestPath, raw);
   return { manifest, directory, manifestPath, raw, manifestSha256: digest(raw) };
@@ -184,7 +192,7 @@ it("reports standalone Doctor captures as manual evidence", async () => {
   expect(output).not.toContain("no matching update run");
   expect(output).not.toContain("unresolved after a failed update");
   expect(await text(c.manifestPath)).toBe(c.raw);
-  expect(await fs.readdir(c.directory)).toEqual(["manifest.json"]);
+  expect(await fs.readdir(c.directory)).toEqual([UPDATE_CAPTURE_PRIVACY_MARKER, "manifest.json"]);
 });
 it.each([
   ["partial", false],
@@ -194,6 +202,17 @@ it.each([
   await terminal(c, "committed");
   const directory = path.join(path.dirname(c.directory), secondId);
   await fs.mkdir(directory);
+  await fs.writeFile(
+    path.join(directory, UPDATE_CAPTURE_PRIVACY_MARKER),
+    UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
+  );
+  const store = path.dirname(directory);
+  for (const name of [".DS_Store", "._capture", "Thumbs.db", "desktop.ini", "operator-notes.txt"]) {
+    await fs.writeFile(path.join(store, name), "unrelated metadata");
+  }
+  // An unmarked directory is not a capture, even with a capture-like name or manifest.
+  await fs.mkdir(path.join(store, "unmarked"));
+  await fs.writeFile(path.join(store, "unmarked", "manifest.json"), "{");
   const partialPath = path.join(directory, "manifest.json.partial");
   await fs.writeFile(
     partialPath,
@@ -417,7 +436,7 @@ it("validates forward resolution against retained generations without writing", 
   };
   mocks.readRun.mockResolvedValue(row);
   expect((await inspect()).recoverySets[0]).toMatchObject({ status: "forward-resolved" });
-  expect(await fs.readdir(c.directory)).toEqual(["manifest.json"]);
+  expect(await fs.readdir(c.directory)).toEqual([UPDATE_CAPTURE_PRIVACY_MARKER, "manifest.json"]);
   const candidate = {
     ...c.manifest,
     generation: { kind: "candidate", baselineSha256: c.manifestSha256 },
