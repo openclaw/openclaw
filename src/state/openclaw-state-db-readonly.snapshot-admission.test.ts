@@ -573,6 +573,37 @@ it("preserves discovery capture failure without preparing bytes", async () => {
   expectCalls(0, mocks.prepare, operation);
 });
 
+it.each([
+  { code: "EACCES", message: "snapshot directory is not writable" },
+  { code: "EPERM", message: "snapshot directory creation refused" },
+  { code: "ENOSPC", message: "snapshot disk is full" },
+  { code: "ERR_SQLITE_ERROR", errcode: 14, message: "unable to open database file" },
+])("preserves $code without promising maintenance will fix it", async (fields) => {
+  const failure = Object.assign(new Error(fields.message), fields);
+  mocks.prepare.mockRejectedValue(failure);
+  const operation = vi.fn();
+  const outcome = await settle(withSnapshot(operation, options));
+  expect(outcome).toMatchObject({ error: { cause: failure } });
+  if (!("error" in outcome) || !(outcome.error instanceof Error)) {
+    throw new Error("Expected snapshot preparation failure");
+  }
+  expect(outcome.error.message).toContain(fields.message);
+  expect(outcome.error.message).toContain(`code=${fields.code}`);
+  expect(outcome.error.message).not.toContain("Retry after the current state operation");
+  expect(operation).not.toHaveBeenCalled();
+});
+
+it("keeps retry advice for a real maintenance refusal", async () => {
+  const failure = new StateDatabaseOfflineMaintenanceError(source, "offline maintenance");
+  mocks.assertFresh.mockImplementation(() => {
+    throw failure;
+  });
+  await expect(withSnapshot(vi.fn(), options)).rejects.toMatchObject({
+    cause: failure,
+    message: expect.stringContaining("Retry after the current state operation completes"),
+  });
+});
+
 it.each([false, true])(
   "retires snapshot admission even when discovery cleanup fails (lazy=%s)",
   async (lazy) => {

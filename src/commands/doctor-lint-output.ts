@@ -6,6 +6,7 @@ import {
   type HealthFinding,
   type HealthFindingSeverity,
 } from "../flows/health-checks.js";
+import { formatSqliteErrorCodeSuffix } from "../infra/sqlite-error-diagnostics.js";
 import { formatUpdateDoctorLintFinding } from "../infra/update-doctor-lint.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorLintCliOptions } from "./doctor-lint-options.js";
@@ -51,6 +52,10 @@ export function writeJsonResult(result: Parameters<typeof formatJsonResult>[0]):
 /** Shipped updaters parse failed lint output too; retain its readiness envelope. */
 export function formatDoctorLintFailure(error: unknown) {
   const failure = formatCliJsonFailure(error);
+  const suffix = formatSqliteErrorCodeSuffix(error);
+  const inspectionMessage = failure.error.message.endsWith(suffix)
+    ? failure.error.message
+    : `${failure.error.message}${suffix}`;
   return {
     ...failure,
     ...formatJsonResult({
@@ -62,7 +67,7 @@ export function formatDoctorLintFailure(error: unknown) {
           checkId: "core/doctor/lint-inspection",
           severity: "error",
           source: "doctor",
-          message: failure.error.message,
+          message: inspectionMessage,
           fixHint: "Resolve this inspection error, then rerun `openclaw doctor --lint`.",
         },
       ],
@@ -129,6 +134,9 @@ export function createDeferredInspectionExecution(
 }
 
 export function createStateSnapshotFailureFinding(error: Error): HealthFinding {
+  const cause = error.cause ?? error;
+  const suffix = formatSqliteErrorCodeSuffix(cause);
+  const detail = scrubDoctorErrorMessage(cause);
   return {
     checkId: "core/doctor/lint-state-inspection",
     severity: "error",
@@ -137,7 +145,7 @@ export function createStateSnapshotFailureFinding(error: Error): HealthFinding {
     requirement: "read-only-plugin-state-inspection",
     message:
       "Doctor lint could not inspect plugin state without mutating the live state database " +
-      `(${scrubDoctorErrorMessage(error.cause ?? error)}).`,
+      `(${detail.endsWith(suffix) ? detail : `${detail}${suffix}`}).`,
     fixHint:
       "Keep the current Gateway running, resolve the state database inspection error, then rerun this check.",
   };
