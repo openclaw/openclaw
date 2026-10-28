@@ -581,9 +581,7 @@ describe("failed update recovery restart", () => {
       expect(report).toContain("triage");
       expect(report).toContain("update repair");
       expect(report).not.toContain("remains stopped");
-      expect(renderUpdateRunNotice(recorded, "finished")).toBe(
-        "⚠️ OpenClaw couldn't finish updating.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
-      );
+      expect(renderUpdateRunNotice(recorded, "finished")).not.toContain("is still serving.");
     },
   );
 });

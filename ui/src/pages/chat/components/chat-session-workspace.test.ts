@@ -464,11 +464,15 @@ describe("openSessionWorkspaceFile", () => {
     const workspace = state.sessionWorkspaceState;
     expect(getFile).toHaveBeenCalledExactlyOnceWith(owner, path, { agentId: "research" });
     expect(workspace?.sessionKey).toBe(state.sessionKey);
-    expect(file.sessionFileSource).toEqual({ sessionKey: owner, agentId: "research", path });
+    expect(file.sessionFileSource).toEqual({
+      sessionKey: owner,
+      agentId: "research",
+      path: "/shared/index.html",
+    });
     await file.edit.fetchLatest();
-    expect(getFile).toHaveBeenLastCalledWith(owner, path, { agentId: "research" });
+    expect(getFile).toHaveBeenLastCalledWith(owner, "/shared/index.html", { agentId: "research" });
     await file.edit.save({ content: "changed", expectedHash: "old" });
-    expect(setFile).toHaveBeenCalledExactlyOnceWith(owner, path, "changed", {
+    expect(setFile).toHaveBeenCalledExactlyOnceWith(owner, "/shared/index.html", "changed", {
       agentId: "research",
       expectedHash: "old",
     });

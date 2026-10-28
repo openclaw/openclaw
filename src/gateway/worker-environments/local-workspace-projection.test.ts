@@ -197,6 +197,13 @@ it.each([false, true])(
   },
 );
 
+it("recovers an aggregate payload of individually valid artifacts without losing edits", async () => {
+  await archiveFixture();
+  const { proveAggregateWorkspaceRecovery } =
+    await import("./local-workspace-recovery.test-support.js");
+  await proveAggregateWorkspaceRecovery({ owner, canonical, stateRoot });
+});
+
 it.each([false, true])(
   "settles old runtime-file results (source already copied: %s)",
   async (copied) => {

@@ -34,6 +34,19 @@ visibility alone does not let a sandbox-required reader browse an unsandboxed
 shared host workspace. Ordinary nonsandbox-required read-only readers keep
 their existing in-root access.
 
+Recognized file references in chat can also use absolute paths under the local
+sandbox's workspace mount, including a custom container workdir. Previews and downloads resolve them
+through the sending conversation's admitted workspace and verify that its
+existing Docker or Podman runtime exposes the same file backing. A nested bind,
+container-only mount, or unrelated host path does not grant additional access.
+With `ro` access, `/agent` names the admitted agent workspace; the private
+container workdir is a different source and does not alias that workspace.
+Managed project references read the canonical worktree after its normal
+checkpoint. If the original runtime or its namespace mapping is unavailable,
+an absolute alias can fail even when the saved file remains readable through an
+admitted workspace-relative reference. Reading never creates a sandbox or
+reconstructs an unavailable historical mapping.
+
 The Changes view requires an admitted project checkout. An unmanaged private
 sandbox remains available in Files, but Changes returns the existing `not_git`
 notice instead of running host Git against private sandbox metadata. Managed

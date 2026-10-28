@@ -46,7 +46,19 @@ it("migrates the Claws preference through candidate Doctor with a rollback origi
       });
       const original = await readText(state.configPath);
       const backupRoot = state.path("templates-recovery", "native");
+      const progress = vi.spyOn(process.stderr, "write");
       await updateMigrateCommand(backupRoot);
+      expect(
+        progress.mock.calls
+          .map(([line]) => String(line))
+          .filter((line) => /^Doctor: Update (migration [\w ]+|schema admission)\n$/.test(line)),
+      ).toEqual([
+        "Doctor: Update migration config admission\n",
+        "Doctor: Update migration schema preflight\n",
+        "Doctor: Update migration database backup\n",
+        "Doctor: Update schema admission\n",
+        "Doctor: Update migration schema verification\n",
+      ]);
       const receipt = JSON.parse(await readText(`${backupRoot}.receipt.json`));
       expect(receipt.status).toBe("migrated");
       expect(receipt.configFiles).toContainEqual(

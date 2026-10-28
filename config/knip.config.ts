@@ -47,6 +47,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-membership-retention-measure.ts!",
   "scripts/perf/session-message-custody-payload-measure.mjs!",
   "scripts/perf/session-patch-response-measure.ts!",
+  "scripts/perf/transcript-json-array-measure.mjs!",
   "scripts/perf/transcript-pool-idle-measure.ts!",
   "scripts/perf/worktree-creation-measure.ts!",
   // The source header documents this matched Code Mode engine probe by path.

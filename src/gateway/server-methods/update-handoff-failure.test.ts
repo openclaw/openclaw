@@ -373,22 +373,16 @@ describe("update.run handoff refusal diagnostics", () => {
         expect(report.body).not.toContain("Recovery outcome: Gateway kept serving");
         expect.soft(report.body).toContain(`Failed phase requested: ${message}`);
       }
+      const failedStep = { failureFacts: expect.arrayContaining(failureFacts) };
       expect(run.steps).toContainEqual(
-        expect.objectContaining({
-          step: "requested",
-          status: "failed",
-          failureFacts: expect.arrayContaining(failureFacts),
-        }),
+        expect.objectContaining({ step: "requested", status: "failed", ...failedStep }),
       );
       expect(payload?.result).toMatchObject({
-        steps: expect.arrayContaining([
-          expect.objectContaining({ failureFacts: expect.arrayContaining(failureFacts) }),
-        ]),
+        steps: expect.arrayContaining([expect.objectContaining(failedStep)]),
       });
       expect(sendNotice).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          message:
-            "⚠️ OpenClaw couldn't finish updating.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
+          message: `⚠️ OpenClaw couldn't finish updating.\nThe current version (${run.before.version}) is still running.\nUpdate failed before the update started (managed-service-handoff-failed).\nFor details, open Settings → Updates in the Control UI or run \`openclaw update status\` in your terminal.`,
         }),
         expect.any(Object),
       );
@@ -449,20 +443,13 @@ describe("update.run handoff refusal diagnostics", () => {
       expect.soft(report.body).not.toContain("exit unknown");
       const failureFacts =
         error instanceof UpdatePreMutationError ? error.failureFacts : [errorFact(message)];
+      const failedStep = { failureFacts: expect.arrayContaining(failureFacts) };
       expect(run.steps).toContainEqual(
-        expect.objectContaining({
-          step: "requested",
-          status: "failed",
-          failureFacts: expect.arrayContaining(failureFacts),
-        }),
+        expect.objectContaining({ step: "requested", status: "failed", ...failedStep }),
       );
-      expect(payload?.result).toMatchObject({
-        steps: [expect.objectContaining({ failureFacts: expect.arrayContaining(failureFacts) })],
-      });
+      expect(payload?.result).toMatchObject({ steps: [expect.objectContaining(failedStep)] });
       const sentinel = expectDefined(sentinelState.capturedPayload, "restart sentinel");
-      expect(sentinel.stats?.steps).toContainEqual(
-        expect.objectContaining({ failureFacts: expect.arrayContaining(failureFacts) }),
-      );
+      expect(sentinel.stats?.steps).toContainEqual(expect.objectContaining(failedStep));
       expect(formatUpdateRestartStatusValue(sentinel)).toContain(statusMessage);
       expect(await buildStatusUpdateRows(sentinel)).toContainEqual({
         Item: "Update run",

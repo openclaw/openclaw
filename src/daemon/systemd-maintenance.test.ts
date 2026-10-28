@@ -15,11 +15,9 @@ import {
   type GatewayServiceNativeCommand,
 } from "./service-update-authority.js";
 import { nativeExit } from "./systemd-exec.test-support.js";
-import {
-  prepareSystemdGatewayMaintenance,
-  readSystemdGatewayStopTimeout,
-} from "./systemd-maintenance.js";
+import { prepareSystemdGatewayMaintenance } from "./systemd-maintenance.js";
 import * as systemdScope from "./systemd-scope.js";
+import { readSystemdGatewayStopTimeout } from "./systemd-stop-policy.js";
 import { buildSystemdUnit } from "./systemd-unit.js";
 
 vi.mock("./service-layout.js", async (original) => ({
