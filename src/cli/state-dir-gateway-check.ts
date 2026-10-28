@@ -63,6 +63,14 @@ export async function inspectInstalledGatewayStatePaths(
   }
 }
 
+function isSamePathIdentity(left: string, right: string): boolean {
+  // Windows path identity is case-insensitive; a byte-for-byte comparison would
+  // split one physical directory into two identities when separate sources
+  // spell the path with different case (for example, a service environment
+  // captured at install time versus the default resolved from HOME).
+  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
 export function compareCliGatewayStateDirs(params: {
   cliStateDir: string;
   cliConfigPath: string;
@@ -79,9 +87,9 @@ export function compareCliGatewayStateDirs(params: {
     params.gatewayConfigPath ?? path.join(gatewayStateDir, "openclaw.json"),
   );
   const differences = [
-    cliStateDir !== gatewayStateDir &&
+    !isSamePathIdentity(cliStateDir, gatewayStateDir) &&
       `state directories (CLI: ${params.cliStateDir}; Gateway: ${gatewayStateDir})`,
-    cliConfigPath !== gatewayConfigPath &&
+    !isSamePathIdentity(cliConfigPath, gatewayConfigPath) &&
       `config paths (CLI: ${params.cliConfigPath}; Gateway: ${gatewayConfigPath})`,
   ].filter((difference): difference is string => Boolean(difference));
   if (differences.length === 0) {
