@@ -115,6 +115,7 @@ const webkitTestFiles = [
   "src/components/modal-dialog.test.ts",
   "src/components/tooltip.test.ts",
   "src/components/tooltip.browser.test.ts",
+  "src/components/tooltip.escape-hover.browser.test.ts",
   "src/components/panel-tab-strip.test.ts",
   "src/components/panel-tab-strip.browser.test.ts",
   "src/components/hub-tabs.browser.test.tsx",

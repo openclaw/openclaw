@@ -77,7 +77,12 @@ export class TooltipOwner {
       !containsComposed(active.#triggerElement ?? undefined, focused)
         ? active.#resolveDescribedElement()
         : null;
+    // Hiding an overlapping popup can expose its trigger under a stationary pointer.
+    active.#suppressHoverUntilLeave = active.#triggerHovered || active.#contentHovered;
     const accepted = active.#close();
+    if (!accepted) {
+      active.#suppressHoverUntilLeave = false;
+    }
     if (accepted && restoreTarget instanceof HTMLElement) {
       active.focusTriggerWithoutOpening(restoreTarget);
     }
@@ -107,6 +112,7 @@ export class TooltipOwner {
   #describedBy: string | null = null;
   #descriptionCaptured = false;
   #suppressNextFocusOpen = false;
+  #suppressHoverUntilLeave = false;
   #descriptionElement: HTMLSpanElement | null = null;
   #richContentNodes: readonly Node[] = [];
   #stopRichContent: (() => void) | undefined;
@@ -213,6 +219,7 @@ export class TooltipOwner {
     }
     this.#restoreDescription();
     this.#triggerElement = null;
+    this.#suppressHoverUntilLeave = false;
   }
 
   previewForAnchor(anchor: HTMLElement | SVGElement, content: string, input: "pointer" | "focus") {
@@ -230,6 +237,9 @@ export class TooltipOwner {
   }
 
   readonly #handlePointerEnter = (event: Event) => {
+    if (this.#suppressHoverUntilLeave) {
+      return;
+    }
     if (!("pointerType" in event) || event.pointerType !== "touch") {
       this.#triggerHovered = true;
       this.#hoverExitPending = false;
@@ -240,6 +250,7 @@ export class TooltipOwner {
 
   readonly #handlePointerLeave = (event: Event) => {
     if (!("pointerType" in event) || event.pointerType !== "touch") {
+      this.#suppressHoverUntilLeave = false;
       this.#triggerHovered = false;
       this.#hoverExitPending = true;
       this.#clearTimers(false);
