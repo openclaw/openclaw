@@ -146,6 +146,8 @@ const repositoryScriptEntries = [
   "scripts/bench-control-ui-cold-load.ts!",
   // scripts/perf/warm-reload-proof.md invokes this real-Gateway visual proof loop.
   "scripts/perf/warm-reload-proof.ts!",
+  // scripts/perf/flaky-network-proof.md invokes this real-Gateway network-fault proof.
+  "scripts/perf/flaky-network-proof.ts!",
   // scripts/control-ui-retention/README.md invokes this opt-in production census.
   "scripts/control-ui-retention/retention-suite.ts!",
   // #179175 invokes this development-loop benchmark CLI by path.
