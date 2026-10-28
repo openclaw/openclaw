@@ -63,7 +63,8 @@ function createExistingSessionProcessFixture(attachElapsedMs = 0) {
   );
   const factory = vi.fn(() => {
     if (attachElapsedMs) {
-      vi.setSystemTime(Date.now() + attachElapsedMs);
+      const now = performance.now.bind(performance);
+      vi.spyOn(performance, "now").mockImplementation(() => now() + attachElapsedMs);
     }
     const pid = nextPid++;
     alive.add(pid);

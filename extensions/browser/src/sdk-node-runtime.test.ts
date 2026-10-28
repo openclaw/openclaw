@@ -17,7 +17,7 @@ describe("withTimeout", () => {
       await gate.promise;
       await waitForBrowserStartup(() => ready.promise);
       return new Promise<string>((resolve, reject) => {
-        signal?.addEventListener("abort", () => reject(signal.reason));
+        signal?.addEventListener("abort", () => reject(new Error(String(signal.reason))));
         void finish.promise.then(resolve);
       });
     }

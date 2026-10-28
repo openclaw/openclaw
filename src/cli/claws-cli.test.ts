@@ -395,9 +395,9 @@ describe("claws cli", () => {
 
   it("reports the last Gateway error after the reload deadline", async () => {
     mocks.callGatewayFromCli.mockRejectedValue(new Error("gateway unavailable"));
-
     await addWithAgentReadiness(() => {
-      vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValue(15_000);
+      let reads = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => (reads++ < 2 ? 0 : 15_000));
     });
     expect(output()).toMatchObject({
       status: "failed",
