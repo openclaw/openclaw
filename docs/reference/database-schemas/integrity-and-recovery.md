@@ -480,7 +480,7 @@ write transaction that protects synchronous publication. Empty historical state
 retains its schema, and absent state remains absent.
 
 Runtime config publication, including model-catalog worker generations, also reads
-Claw consent provenance through the live shared-state reader instead of copying
+Template consent provenance through the live shared-state reader instead of copying
 the database and WAL for every generation. Each publication refreshes committed
 provenance; config-digest checks, failure handling, and publication admission remain
 unchanged. Explicit provenance inspection and inherited artifact-preserving scopes
