@@ -1,13 +1,12 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { getCommandOwnerAuthority } from "../auto-reply/command-owner-authority.js";
-import { buildSessionEventContext } from "../auto-reply/reply/session-event-context.js";
 import type {
   SessionEventOutcome,
   SessionEventReceipt,
 } from "../auto-reply/reply/session-event-contract.js";
 import * as handoff from "../auto-reply/reply/session-event-handoff.js";
+import { readSessionEventTargetCommandOwner } from "../auto-reply/reply/session-event-target.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { stageSessionPendingInput } from "../config/sessions/session-accessor.pending-inputs.js";
@@ -542,45 +541,22 @@ describe("background exec completion obligations", () => {
   });
 
   it.each([
-    ["owner", "456", true],
-    ["guest", "789", false],
+    ["456", true],
+    ["789", false],
   ] as const)(
-    "gives the completion turn the current owner authority of its %s requester",
-    async (_requester, senderId, owner) => {
-      const ownerConfig: OpenClawConfig = {
-        ...initialConfig,
-        channels: { telegram: {} },
-        commands: { ownerAllowFrom: ["456"] },
-      };
+    "retains requester %s's owner authority for its completion: %s",
+    async (senderId, owner) => {
       await withFixture(async ({ background }) => {
-        setRuntimeConfigSnapshot(ownerConfig);
-        const process = await background({
-          requesterOrigin: {
-            sessionKey,
-            messageProvider: "telegram",
-            accountId: route.accountId,
-            senderId,
-          },
-        });
+        const commands = { ownerAllowFrom: ["456"] };
+        setRuntimeConfigSnapshot({ ...initialConfig, channels: { telegram: {} }, commands });
+        const requesterOrigin = { sessionKey, messageProvider: "telegram", senderId };
+        const process = await background({ requesterOrigin });
         process.exitCode = 0;
         await maybeNotifyOnExit(process, "completed", false);
-        const { text, options } = lastNotification();
-        const ctx = buildSessionEventContext({
-          cfg: ownerConfig,
-          agentId: "main",
-          sessionKey: options.sessionKey,
-          text,
-          options,
-          occurrenceId: "completion",
-          target: options.expectedTarget!,
-          assertCurrent() {},
-        });
-        expect(getCommandOwnerAuthority(ctx)?.isCurrent() === true).toBe(owner);
-        if (owner) {
-          // Owner rights are rechecked at use, so removing the owner revokes them.
-          setRuntimeConfigSnapshot({ ...ownerConfig, commands: { ownerAllowFrom: ["789"] } });
-          expect(getCommandOwnerAuthority(ctx)?.isCurrent()).toBe(false);
-        }
+        const target = lastNotification().options.expectedTarget!;
+        expect(readSessionEventTargetCommandOwner(target)?.requester.senderId).toBe(
+          owner ? senderId : undefined,
+        );
       });
     },
   );

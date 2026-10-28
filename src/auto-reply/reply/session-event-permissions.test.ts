@@ -7,10 +7,8 @@ import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
-import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import * as inProcessGateway from "../../agents/tools/in-process-gateway.js";
-import { resolveAttemptWorkspaceSandbox } from "../../agents/workspace-sandbox.js";
 import {
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -53,7 +51,7 @@ import {
 } from "./session-event-handoff.js";
 import {
   configureEventState,
-  createEventManagedTools,
+  openEventToolHost,
   runEventFixture,
   startEmbeddedTurn,
 } from "./session-event.test-support.js";
@@ -334,44 +332,10 @@ it.for([
       runEmbeddedAgentMock
         .mockReset()
         .mockImplementation(async (params: RunEmbeddedAgentParams) => {
-          const admittedRunContext = await startEmbeddedTurn(params, "ordinary reply admission");
-          const workspace = await resolveAttemptWorkspaceSandbox({
-            ...params,
-            admittedRunContext,
-          });
-          const host = createAgentHarnessHostCapabilities({
-            attempt: {
-              admittedRunContext,
-              runId: params.runId,
-              abortSignal: params.abortSignal,
-              config: params.config,
-              agentId: params.agentId,
-              sessionId: params.sessionId,
-              sessionKey: params.sessionKey,
-              sessionTarget: params.sessionTarget,
-              permissionMode: params.permissionMode,
-              requireWorkspaceOnly: params.requireWorkspaceOnly,
-              sessionRoot: workspace.sessionPermissionRoot,
-              workspaceDir: params.workspaceDir,
-              bootstrapWorkspaceDir: params.bootstrapWorkspaceDir,
-              cwd: params.cwd,
-              sandboxAgentId: params.sandboxAgentId,
-              skillsSnapshot: params.skillsSnapshot,
-              toolExecutionAllow: params.toolExecutionAllow,
-              toolsAllow: params.toolsAllow,
-              runtimePluginToolGrant: params.runtimePluginToolGrant,
-              trigger: params.trigger,
-            },
-            pluginId: "openclaw",
-          });
+          const { tools, close } = await openEventToolHost(params, "ordinary reply admission");
           let restoreDatabase: (() => void) | undefined;
           try {
             observedMode = params.permissionMode;
-            const tools = createEventManagedTools(
-              params,
-              workspace,
-              expectDefined(host.capabilities.createToolSurface, "managed tool surface"),
-            );
             const read = expectDefined(
               tools.find((tool) => tool.name === "read"),
               "read tool",
@@ -436,7 +400,7 @@ it.for([
             return { payloads: [{ text: "Completion observed" }], meta: { durationMs: 1 } };
           } finally {
             restoreDatabase?.();
-            host.close();
+            close();
           }
         });
       let creationConflictObserved = false;
@@ -857,7 +821,19 @@ it.for([
   },
 );
 
-it.for(["owner", "guest", "revoked-before-admission", "revoked-after-admission"] as const)(
+const ownerRequesterOutcomes = {
+  owner: { owner: true, restart: { ok: true }, requester: "456", scheduled: 1 },
+  guest: { owner: false, restart: { gated: true }, requester: undefined, scheduled: 0 },
+  "revoked-before-admission": { owner: false, restart: { gated: true }, scheduled: 0 },
+  // Revoking publishes config, which retires the admitted turn's tool host before the call.
+  "revoked-after-admission": {
+    owner: true,
+    restart: "agent harness host capability is no longer active",
+    scheduled: 0,
+  },
+};
+
+it.for(Object.keys(ownerRequesterOutcomes) as Array<keyof typeof ownerRequesterOutcomes>)(
   "runs an owner-only tool from a background completion only for its current owner requester: %s",
   async (requester, { signal, onTestFinished }) => {
     await runEventFixture("session-event-owner-requester", onTestFinished, async (state) => {
@@ -868,51 +844,34 @@ it.for(["owner", "guest", "revoked-before-admission", "revoked-after-admission"]
       const revoke = () =>
         setRuntimeConfigSnapshot({ ...config, commands: { ownerAllowFrom: ["789"] } });
       const scope = { agentId: "main", sessionKey: "agent:main:owner-requester" };
-      await replaceSessionEntry(scope, {
-        sessionId: "owner-requester",
-        updatedAt: Date.now(),
-        sessionStartedAt: Date.now(),
-      });
+      await replaceSessionEntry(scope, { sessionId: "owner-requester", updatedAt: Date.now() });
       // The host-owned exec caller supplies the requester; the producer only asks to retain it.
+      const senderId = requester === "guest" ? "789" : "456";
       const target = await withGatewayToolCallerIdentity(
-        {
-          ...scope,
-          requesterOrigin: {
-            sessionKey: scope.sessionKey,
-            messageProvider: "telegram",
-            senderId: requester === "guest" ? "789" : "456",
-          },
-        },
+        { ...scope, requesterOrigin: { ...scope, messageProvider: "telegram", senderId } },
         () =>
-          captureSessionEventTargetForHost(scope.agentId, scope.sessionKey, {
+          captureSessionEventTargetForHost("main", scope.sessionKey, {
             retainRequesterOwner: true,
           }),
       );
       if (requester === "revoked-before-admission") {
         revoke();
       }
-      // Only the Gateway transport and the final scheduler are replaced: the real restart
-      // handler still rechecks the requester against the current config at the effect.
+      // Only the Gateway transport and final scheduler are stubbed; the real restart handler
+      // still rechecks the projected requester against current config.
       const scheduled = vi
         .spyOn(restartCoordinator, "scheduleSafeGatewayRestart")
-        .mockReturnValue({ ok: true } as ReturnType<
-          typeof restartCoordinator.scheduleSafeGatewayRestart
-        >);
+        .mockReturnValue({ ok: true } as never);
       const gatewayContext = vi
         .spyOn(inProcessGateway, "getInProcessGatewayToolContext")
-        .mockReturnValue({} as ReturnType<typeof inProcessGateway.getInProcessGatewayToolContext>);
+        .mockReturnValue({} as never);
       const gatewayCall = vi
         .spyOn(inProcessGateway, "callInProcessGatewayTool")
         .mockImplementation(async (method, params) => {
           let response: unknown;
-          await expectDefined(
-            restartHandlers[method],
-            method,
-          )({
+          await restartHandlers[method]!({
             params,
-            context: {
-              getRuntimeConfig: () => expectDefined(getRuntimeConfigSnapshot(), "config"),
-            },
+            context: { getRuntimeConfig: () => getRuntimeConfigSnapshot()! },
             respond: (ok, value, error) => {
               if (!ok) {
                 throw new Error(error?.message);
@@ -922,67 +881,30 @@ it.for(["owner", "guest", "revoked-before-admission", "revoked-after-admission"]
           } as GatewayRequestHandlerOptions);
           return response as never;
         });
-      onTestFinished(() => {
-        scheduled.mockRestore();
-        gatewayContext.mockRestore();
-        gatewayCall.mockRestore();
-      });
+      onTestFinished(() =>
+        [scheduled, gatewayContext, gatewayCall].forEach((spy) => spy.mockRestore()),
+      );
       let senderIsOwner: boolean | undefined;
       let restart: unknown;
-      runEmbeddedAgentMock
-        .mockReset()
-        .mockImplementation(async (params: RunEmbeddedAgentParams) => {
-          const admittedRunContext = await startEmbeddedTurn(params, "completion admission");
-          senderIsOwner = params.senderIsOwner;
-          const workspace = await resolveAttemptWorkspaceSandbox({ ...params, admittedRunContext });
-          const host = createAgentHarnessHostCapabilities({
-            attempt: {
-              admittedRunContext,
-              runId: params.runId,
-              abortSignal: params.abortSignal,
-              config: params.config,
-              agentId: params.agentId,
-              sessionId: params.sessionId,
-              sessionKey: params.sessionKey,
-              sessionTarget: params.sessionTarget,
-              permissionMode: params.permissionMode,
-              requireWorkspaceOnly: params.requireWorkspaceOnly,
-              sessionRoot: workspace.sessionPermissionRoot,
-              workspaceDir: params.workspaceDir,
-              cwd: params.cwd,
-              toolExecutionAllow: params.toolExecutionAllow,
-              toolsAllow: params.toolsAllow,
-              trigger: params.trigger,
-              senderIsOwner: params.senderIsOwner,
-              messageChannel: params.messageChannel,
-              messageProvider: params.messageProvider,
-              agentAccountId: params.agentAccountId,
-            },
-            pluginId: "openclaw",
-          });
-          try {
-            // The turn's assembled surface owns the owner-only gate for the model's call.
-            const gateway = expectDefined(
-              createEventManagedTools(
-                params,
-                workspace,
-                expectDefined(host.capabilities.createToolSurface, "managed tool surface"),
-                { includeOpenClawTools: true },
-              ).find((tool) => tool.name === "gateway"),
-              "gateway tool",
-            );
-            if (requester === "revoked-after-admission") {
-              revoke();
-            }
-            restart = await gateway.execute("owner-only-restart", { action: "restart" }).then(
-              (result) => result.details,
-              (error: unknown) => (error instanceof Error ? error.message : String(error)),
-            );
-          } finally {
-            host.close();
-          }
-          return { payloads: [{ text: "Completion observed" }], meta: { durationMs: 1 } };
+      runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
+        // The turn's assembled surface owns the owner-only gate for the model's call.
+        const { tools, close } = await openEventToolHost(params, "completion admission", {
+          includeOpenClawTools: true,
         });
+        senderIsOwner = params.senderIsOwner;
+        if (requester === "revoked-after-admission") {
+          revoke();
+        }
+        restart = await tools
+          .find((tool) => tool.name === "gateway")!
+          .execute("owner-only-restart", { action: "restart" })
+          .then(
+            (result) => result.details,
+            (error: unknown) => (error instanceof Error ? error.message : String(error)),
+          )
+          .finally(close);
+        return { payloads: [{ text: "Completion observed" }], meta: { durationMs: 1 } };
+      });
       const receipt = enqueueSessionEventForHost("Background command finished.", {
         ...scope,
         source: "exec",
@@ -991,28 +913,13 @@ it.for(["owner", "guest", "revoked-before-admission", "revoked-after-admission"]
         deliver: false,
         deliveryContext: { channel: "telegram", to: "456" },
       });
-      await expect(receipt.accepted).resolves.toEqual({ ok: true });
-      const outcome = await receipt.settled;
-      expect(outcome.status, outcome.error).toBe("completed");
-      const owner = requester === "owner" || requester === "revoked-after-admission";
-      expect(senderIsOwner).toBe(owner);
-      if (requester === "owner") {
-        expect(restart).toMatchObject({ ok: true });
-        expect(gatewayCall.mock.calls[0]?.[1]).toMatchObject({
-          requester: { channel: "telegram", senderId: "456" },
-        });
-        expect(scheduled).toHaveBeenCalledOnce();
-      } else if (requester === "revoked-after-admission") {
-        // Revoking the owner publishes config, which retires the admitted turn's tool host
-        // before the call reaches the Gateway.
-        expect(restart).toBe("agent harness host capability is no longer active");
-        expect(gatewayCall).not.toHaveBeenCalled();
-        expect(scheduled).not.toHaveBeenCalled();
-      } else {
-        // Guests and owners revoked before admission are gated before any Gateway request.
-        expect(restart).toEqual({ gated: true });
-        expect(gatewayCall).not.toHaveBeenCalled();
-      }
+      await expect(receipt.settled).resolves.toMatchObject({ status: "completed" });
+      expect({
+        owner: senderIsOwner,
+        restart,
+        requester: gatewayCall.mock.calls[0]?.[1]?.requester?.senderId,
+        scheduled: scheduled.mock.calls.length,
+      }).toEqual(ownerRequesterOutcomes[requester]);
     });
   },
 );

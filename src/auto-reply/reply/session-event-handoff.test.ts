@@ -531,9 +531,7 @@ describe("session event target custody", () => {
     },
   );
 
-  it("does not batch an owner's completion with another requester's", async ({
-    state: { env },
-  }) => {
+  it("batches retained owner authority only for the same requester", async ({ state: { env } }) => {
     setRuntimeConfigSnapshot({
       agents: { entries: { main: {} } },
       channels: { telegram: {} },
@@ -541,23 +539,19 @@ describe("session event target custody", () => {
     });
     const capture = (senderId: string) =>
       withGatewayToolCallerIdentity(
-        {
-          ...eventScope,
-          requesterOrigin: { sessionKey, messageProvider: "telegram", senderId },
-        },
+        { ...eventScope, requesterOrigin: { sessionKey, messageProvider: "telegram", senderId } },
         () => captureTarget("main", sessionKey, { env, retainRequesterOwner: true }),
       );
-    const owner = await capture("456");
-    const guest = await capture("789");
-    expect(() => combineSessionEventTargetsForHost([owner, guest])).toThrow(
-      "different captured destinations or requester authority",
+    const [owner, sameOwner, guest, otherOwner] = await Promise.all(
+      ["456", "456", "789", "457"].map(capture),
     );
+    expect(combineSessionEventTargetsForHost([owner, sameOwner])).toBeDefined();
     // Owners share a source label, but each authority rechecks only its own requester.
-    const otherOwner = await capture("457");
-    expect(() => combineSessionEventTargetsForHost([owner, otherOwner])).toThrow(
-      "different captured destinations or requester authority",
-    );
-    expect(combineSessionEventTargetsForHost([owner, await capture("456")])).toBeDefined();
+    for (const other of [guest, otherOwner]) {
+      expect(() => combineSessionEventTargetsForHost([owner, other])).toThrow(
+        "requester authority",
+      );
+    }
   });
 
   it("retains store, route and producer limits across lookup", async ({
