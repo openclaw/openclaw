@@ -8,6 +8,7 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", () => {
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => {
   throw new Error("Memory retrieval loaded the embedding-provider runtime");
 });
+// mock-isolation: Read kernels must not initialize the host database runtime.
 vi.mock("openclaw/plugin-sdk/sqlite-runtime", () => {
   throw new Error("Memory retrieval loaded the host database runtime");
 });
