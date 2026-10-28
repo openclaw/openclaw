@@ -13,17 +13,21 @@ it("shares certified ancestor rows across histories only within their publicatio
   const prepared = [prepareSessionAncestor(row)];
   const first = new ConnectionSessionRows();
   const second = new ConnectionSessionRows();
-  const publish = (owner: ConnectionSessionRows, revision: string) =>
-    owner.prepareDelivery(child, prepared, revision).ancestor!.ancestorSessions[0]!;
-  const initial = publish(first, "first");
-  expect(publish(second, "first")).toBe(initial);
-  expect(initial).toEqual({ ...row, ancestorRevision: "first" });
-  const next = publish(first, "second");
+  const firstRevision = "00000000-0000-4000-8000-000000000001";
+  const nextRevision = "00000000-0000-4000-8000-000000000002";
+  const publish = (
+    owner: ConnectionSessionRows,
+    revision: Parameters<ConnectionSessionRows["prepareDelivery"]>[2],
+  ) => owner.prepareDelivery(child, prepared, revision).ancestor!.ancestorSessions[0]!;
+  const initial = publish(first, firstRevision);
+  expect(publish(second, firstRevision)).toBe(initial);
+  expect(initial).toEqual({ ...row, ancestorRevision: firstRevision });
+  const next = publish(first, nextRevision);
   expect(next).not.toBe(initial);
-  expect(next).toEqual({ ...row, ancestorRevision: "second" });
-  expect(publish(second, "second")).toBe(next);
-  expect(publish(first, "first")).toEqual(initial);
-  expect(initial.ancestorRevision).toBe("first");
+  expect(next).toEqual({ ...row, ancestorRevision: nextRevision });
+  expect(publish(second, nextRevision)).toBe(next);
+  expect(publish(first, firstRevision)).toEqual(initial);
+  expect(initial.ancestorRevision).toBe(firstRevision);
 });
 
 it("preserves presentation clocks and the delivered baseline when serialization fails", () => {
