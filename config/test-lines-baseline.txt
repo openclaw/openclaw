@@ -1,1 +1,5 @@
-6310560
+# Preserve 502 net lines of Sections regression coverage (#186229): two-step
+# editor scoping, Gateway search, ordering, guest flow and session-menu entry.
+# Current main contributes 6,310,802 lines; this candidate adds exactly 502.
+# Admit the measured 6,311,304 total without extra future allowance.
+6311304
