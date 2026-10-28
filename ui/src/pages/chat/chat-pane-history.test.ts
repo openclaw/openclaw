@@ -41,9 +41,7 @@ import {
 import { agentEvent } from "./tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
-type HistoryPageOverrides = Partial<Omit<ChatHistoryResult, "messages" | "sessionInfo">> & {
-  sessionInfo?: { sessionId: string };
-};
+type HistoryPageOverrides = Partial<Omit<ChatHistoryResult, "messages">>;
 
 function historyPage(seqs = [1, 2], extra: HistoryPageOverrides = {}) {
   return {
@@ -697,7 +695,11 @@ it.each([
   async (kind, seqs, total, expected, hasMore) => {
     const reset = kind.endsWith("reset");
     const older = kind === "replacement" || kind === "older reset";
-    const sessionInfo = { sessionId: "session-current" };
+    const sessionInfo = {
+      key: "agent:main:current",
+      kind: "direct",
+      sessionId: "session-current",
+    } satisfies NonNullable<ChatHistoryResult["sessionInfo"]>;
     const messages = seqs.map((seq) =>
       nativeHistoryMessage(seq, reset ? (seq === 3 ? "current user" : "current reply") : undefined),
     );
