@@ -1,5 +1,6 @@
 import { lazy } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { warmWhenIdle } from "../../lib/idle-warmup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ProjectBrowserFocus } from "./draft-place-browser.ts";
 import { SessionPicker } from "./picker.tsx";
@@ -9,6 +10,7 @@ import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 const ProjectPickerContent = lazy(() => import("./project-picker-content.tsx"), {
   export: "ProjectPickerContent",
 });
+warmWhenIdle(ProjectPickerContent.preload);
 
 export type ProjectChipProps = {
   params: NewSessionPlaceControlsOptions;

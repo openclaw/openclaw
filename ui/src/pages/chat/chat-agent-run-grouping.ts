@@ -297,9 +297,15 @@ export function coalesceAgentRunFrames(
     }
     const candidateBoundaryId = item.kind === "stream-run" ? item.boundaryId : undefined;
     const candidateRunId = itemRunId(item);
-    if (resuming && !candidateRunId && item.kind === "stream-run" && !candidateBoundaryId) {
-      // The resumed run can be working before the pane learns its run id. Its
-      // status belongs here already, so the block does not split and rejoin.
+    if (
+      resuming &&
+      !candidateRunId &&
+      ((item.kind === "stream-run" && !candidateBoundaryId) ||
+        (item.kind === "group" && item.role === "assistant"))
+    ) {
+      // The resumed run can be working before the pane learns its run id, and a
+      // handoff reports its result without one. Both belong to the open answer,
+      // so the block does not split into separate turns.
       addPart(item);
       continue;
     }

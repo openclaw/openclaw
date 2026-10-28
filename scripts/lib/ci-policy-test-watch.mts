@@ -568,9 +568,9 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["src/agents/prepared-model-catalog.worker.ts"],
   })),
   {
-    testFile: "src/cli/claws-authoring-state.process.test.ts",
+    testFile: "src/cli/templates-authoring-state.process.test.ts",
     watchGlobs: [
-      "src/cli/claws-cli.project.ts",
+      "src/cli/templates-cli.project.ts",
       "src/cli/command-startup-policy.ts",
       "src/entry.ts",
     ],

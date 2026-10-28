@@ -34,8 +34,10 @@ const loaders = {
     ),
   sessionGroups: () =>
     import("../gateway/session-group-catalog.kernel.js").then((m) => m.sessionGroupOperations),
-  claws: () =>
-    import("../claws/provenance-runtime-read.worker.js").then((m) => m.clawInstallSchemaOperations),
+  templates: () =>
+    import("../templates/provenance-runtime-read.worker.js").then(
+      (m) => m.templateInstallSchemaOperations,
+    ),
   backup: () => import("./backup-run-records.worker.js").then((m) => m.backupRunOperations),
   machineState: () =>
     import("./config-machine-state.worker.js").then((m) => m.machineStateOperations),

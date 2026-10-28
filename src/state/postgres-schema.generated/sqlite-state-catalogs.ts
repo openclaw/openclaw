@@ -67,11 +67,6 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
     "channel_pairing_requests",
     ["idx_channel_pairing_requests_code", "idx_channel_pairing_requests_created"],
   ],
-  ["claw_cron_refs", []],
-  ["claw_installs", []],
-  ["claw_mcp_server_refs", []],
-  ["claw_package_refs", []],
-  ["claw_workspace_files", []],
   ["clawhub_promotion_claims", []],
   ["config_health_entries", []],
   ["config_machine_state", []],
@@ -273,6 +268,11 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
       "idx_task_runs_runtime_run",
     ],
   ],
+  ["template_cron_refs", []],
+  ["template_installs", []],
+  ["template_mcp_server_refs", []],
+  ["template_package_refs", []],
+  ["template_workspace_files", []],
   ["update_runs", ["idx_update_runs_active", "idx_update_runs_created"]],
   ["user_background_images", []],
   ["user_preferences", []],
@@ -310,6 +310,12 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
   ["worktree_provisioned_file_chunks", []],
   ["worktree_templates", []],
   ["worktrees", ["idx_worktrees_removed_at", "idx_worktrees_repo_fingerprint"]],
+  ["agent_provenance", []],
+  ["claw_cron_refs", []],
+  ["claw_installs", []],
+  ["claw_mcp_server_refs", []],
+  ["claw_package_refs", []],
+  ["claw_workspace_files", []],
   ["local_workspace_projections", []],
   ["local_workspace_projections", []],
   ["acp_replay_events", ["idx_acp_replay_events_session_seq"]],
@@ -358,9 +364,9 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
 ];
 const fingerprints: Readonly<Record<string, CatalogReference>> = {
   // state
-  e623dd3ac0fd66af98e55944ddebe932b483dfece522a6bd4a6aebe5a72428e6: [
+  "08686c3e040fad35ee28e4a6fd4b2332268b2f09ee3e129e935e04249397f2f5": [
     "state",
-    "f4723f017842193571fcdec1cbb5a19e8b6aac892e8269e085fe67a6f5ff6562",
+    "d8719bd4a1247af1f095e5595a9c889d67e497e6fe28d091f1985a8bb5b31344",
     [
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
       26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
@@ -371,16 +377,30 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     ],
     [],
   ],
+  // state-before-v36
+  e623dd3ac0fd66af98e55944ddebe932b483dfece522a6bd4a6aebe5a72428e6: [
+    "state-before-v36",
+    "f4723f017842193571fcdec1cbb5a19e8b6aac892e8269e085fe67a6f5ff6562",
+    [
+      0, 1, 2, 3, 4, 5, 133, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 134, 135, 136, 137, 138,
+      19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41,
+      42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64,
+      65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87,
+      88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 109, 110, 111, 112, 113,
+      114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132,
+    ],
+    [],
+  ],
   // state-before-v35
   b19857fff54cb0da83ad21bbb698cea9170e37889ee7a70b67cceda92da3ea8a: [
     "state-before-v35",
     "02424e756f2c9f338622f96e5a2f350ed4d7fff1e6ecebdd70ac93a72e7e2386",
     [
-      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-      26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
-      49, 50, 51, 52, 53, 54, 133, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73,
-      74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96,
-      97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115,
+      0, 1, 2, 3, 4, 5, 133, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 134, 135, 136, 137, 138,
+      19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41,
+      42, 43, 44, 45, 46, 47, 48, 49, 139, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66,
+      67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89,
+      90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 109, 110, 111, 112, 113, 114, 115,
       116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132,
     ],
     [],
@@ -390,12 +410,12 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     "state-before-v31",
     "526dd7b260a7e1dcd0a134dc027e08a1fcc8c063c333b25bc26f7fecb91de0d8",
     [
-      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-      26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
-      49, 50, 51, 52, 53, 134, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74,
-      75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97,
-      98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116,
-      117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132,
+      0, 1, 2, 3, 4, 5, 133, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 134, 135, 136, 137, 138,
+      19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41,
+      42, 43, 44, 45, 46, 47, 48, 140, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67,
+      68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90,
+      91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 109, 110, 111, 112, 113, 114, 115,
+      116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132,
     ],
     [],
   ],
@@ -404,11 +424,11 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     "state-before-v27",
     "a15c4b9ec380776a1a8d4650ec8baa07b33950ed43cf5c8b4c280a34f7fe9792",
     [
-      135, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-      25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
-      48, 49, 50, 51, 52, 53, 134, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73,
-      74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96,
-      97, 98, 99, 100, 101, 102, 136, 104, 137, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115,
+      141, 1, 2, 3, 4, 5, 133, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 134, 135, 136, 137, 138,
+      19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41,
+      42, 43, 44, 45, 46, 47, 48, 140, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67,
+      68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90,
+      91, 92, 93, 94, 95, 96, 97, 142, 99, 143, 101, 102, 103, 109, 110, 111, 112, 113, 114, 115,
       116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132,
     ],
     [],
@@ -418,11 +438,11 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     "state-before-v26",
     "4057a7dd9b78fc75acda043d7401e7c41cc41e9cd00b0299b3b9f0e7c2606c83",
     [
-      135, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-      25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
-      48, 49, 50, 51, 52, 53, 134, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73,
-      74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 138, 95, 96,
-      97, 98, 99, 100, 101, 102, 136, 104, 137, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115,
+      141, 1, 2, 3, 4, 5, 133, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 134, 135, 136, 137, 138,
+      19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41,
+      42, 43, 44, 45, 46, 47, 48, 140, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67,
+      68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 144, 90,
+      91, 92, 93, 94, 95, 96, 97, 142, 99, 143, 101, 102, 103, 109, 110, 111, 112, 113, 114, 115,
       116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132,
     ],
     [],
@@ -431,140 +451,140 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "54911300fd4efbb44a652d781badc61c60be05619fba7bd6a64b1d1bc2121a81": [
     "fragment-local_workspace_projections",
     "39ab9e54cafe71df0cfcd6b83585693118657dd954cce42b24093e1c4779b497",
-    [54, 55, 56, 57],
+    [49, 50, 51, 52],
     [],
   ],
   // state-feature-local_workspace_projections
   f0e11a6fff0a4b79b69a28a0f2ec4694fa1ee88672cac3b7338bc0a3bb9f8d19: [
     "state-feature-local_workspace_projections",
     "39ab9e54cafe71df0cfcd6b83585693118657dd954cce42b24093e1c4779b497",
-    [54, 55, 56, 57],
+    [49, 50, 51, 52],
     [],
   ],
   // state-feature-local_workspace_manifest_nodes
   e119e5203e18e9fba13d43368408775eca1d809807579a697482ab2b7011e840: [
     "state-feature-local_workspace_manifest_nodes",
     "8db5abfb2c2f4c380c80647305b1e4bb5e6af7ac2fec71205a52a97d86835291",
-    [54],
+    [49],
     [],
   ],
   // state-feature-local_workspace_tree_packs
   "3142caa54d9bd7d285b37ed3338ed9f4307ad3b32469bd88deecb8725301861e": [
     "state-feature-local_workspace_tree_packs",
     "a63984593fd118417812466c9ee0c189fd7d819401af1943a6f9c11730c47d87",
-    [57],
+    [52],
     [],
   ],
   // state-feature-local_workspace_source_path_sets
   e95059f2306c8231ee92ef3d76dfcb434a80885f08cbf39380f88a287f98bade: [
     "state-feature-local_workspace_source_path_sets",
     "ead9623df4d41d649f8e4af2351694db5bc8c4e70edb7d2322ba76c11d0dfddb",
-    [56],
+    [51],
     [],
   ],
   // fragment-user_profiles
   bc86e378ea153c42527b6106b01ba4cb8285cca40378ffa0142656577309723e: [
     "fragment-user_profiles",
     "268e6f3b53eb2048a3edf527da424f8df229a01166befc8137ea94dbb560227e",
-    [139, 112, 140],
+    [145, 112, 146],
     [],
   ],
   // state-feature-user_profiles
   f5b54f0fedd88d94c24add8a1fd987ac8592b05d4615424bab9dbc0d19c9cd4a: [
     "state-feature-user_profiles",
     "2c2611b7d0c64f467494ae3922f763dee7fc023a5ee6b92d5821639b18e825aa",
-    [139, 141, 140],
+    [145, 147, 146],
     [],
   ],
   // state-feature-user_profile_emails
   "9eaae0feb245733106045a2c6766d2a2a729a9bdb22b98ec4434c09d76663264": [
     "state-feature-user_profile_emails",
     "202fadb0df4fc5da385edddbda27e96126d0d7a2db6a63375fa506221163a4fb",
-    [142],
+    [148],
     [],
   ],
   // state-feature-user_profile_identities
   "45451969c6ea5bebf37bbfba310467e482af74731a7cb0f2affb316059e21528": [
     "state-feature-user_profile_identities",
     "3a24e89bd446dffbef50b7bd4b87288abc6eb470c290eaabcb1761fbe5244c06",
-    [141],
+    [147],
     [],
   ],
   // fragment-skill_library_entries
   "561e14603e294368a12a2b5f6ecb0cc509d0b8847a93817286bd5a14d076ad0f": [
     "fragment-skill_library_entries",
     "c04324d292a056ed135e3b5fad5ddf61bd7fa1bfc44ec905aa32cc220956bf8d",
-    [97, 98, 99, 100],
+    [92, 93, 94, 95],
     [],
   ],
   // state-feature-skill_library_entries
   "6b07280274e87ca0fa5bbc1887818497375298fa700b24852dc981f3da1da555": [
     "state-feature-skill_library_entries",
     "c04324d292a056ed135e3b5fad5ddf61bd7fa1bfc44ec905aa32cc220956bf8d",
-    [97, 98, 99, 100],
+    [92, 93, 94, 95],
     [],
   ],
   // state-feature-skill_library_revisions
   "43645abd05379894c2982bcd88b8dff0cd6c9802e5bf2ab6cc54af87a7e6a37d": [
     "state-feature-skill_library_revisions",
     "533218405c3e483d687da824cf15f9ebcb76ba69675946e95c134702dc199890",
-    [99],
+    [94],
     [],
   ],
   // state-feature-skill_library_events
   ea1b1fb7d6d8256ec58bc7c28541312c1a543e88bf9ed7e4366791ea243d8ec0: [
     "state-feature-skill_library_events",
     "e5269a0f2846007c0b3eef62963979fa7a2cdd01ced20906ec4ac407ace66c03",
-    [98],
+    [93],
     [],
   ],
   // state-feature-skill_library_uploads
   "31318a62bdb75dccad514a02adde07df11d26b756f51d1d50d0e6b19d399b26e": [
     "state-feature-skill_library_uploads",
     "ba066e91b42e768b5f705703783cce87eb90fac71a37cad9dfdf308a19ccceb6",
-    [100],
+    [95],
     [],
   ],
   // fragment-operator_approval_standing_grants
   ed3d9e7b13809b3a9b91d48d63816b26354681d727b96e39496d02c775343e1f: [
     "fragment-operator_approval_standing_grants",
     "9d40e9ae6add075aa675521e2664951448cb3c7f360694614c0e39db256ed7fa",
-    [77, 78],
+    [72, 73],
     [],
   ],
   // state-feature-operator_approval_standing_grants
   be37db3a4634164c401b2d8e5ac3c2d712cd9eb973e3f2b39daa578adedff0ae: [
     "state-feature-operator_approval_standing_grants",
     "9d40e9ae6add075aa675521e2664951448cb3c7f360694614c0e39db256ed7fa",
-    [77, 78],
+    [72, 73],
     [],
   ],
   // state-feature-operator_approval_standing_grant_generations
   e23a5880a289da464471db5cfff10b9a6962b4d52c99260a3e366746c023de76: [
     "state-feature-operator_approval_standing_grant_generations",
     "0d525f0400a30f0582698e91e78f63063c08a8c06b3bcfe624dbd2f2fbe7834c",
-    [77],
+    [72],
     [],
   ],
   // fragment-worker_environment_session_attachments, state-feature-worker_environment_session_attachments
   "7b8bf2fd3ae786c589bf138b32270450c1a2582bcb9a825c1eaf7fb3a7bcea06": [
     "fragment-worker_environment_session_attachments",
     "b95d7054311f0f2d1e0885104c66ff243dfe4f68b84ed2d814ae68e748574417",
-    [143],
+    [149],
     [],
   ],
   // fragment-sandbox_persistent_execs
   "6496f80e29da252472af802873996fc3cd761f245f4dcf6fefb1c7aee38e720b": [
     "fragment-sandbox_persistent_execs",
     "f885f117e199277aa5c23a9095f55e742797249d13e2f4e4df8fbef1daba399d",
-    [87],
+    [82],
     [],
   ],
   // state-feature-sandbox_persistent_execs
   "156673e9396f27223073abdbbd2e13269bd7f45f577ed6aff00e017ab232d940": [
     "state-feature-sandbox_persistent_execs",
     "026ac7355b83187c8f7eef5cbd48ab36ba7de1b4fe40413ee1168ebff6c2d67a",
-    [144],
+    [150],
     [],
   ],
   // fragment-user_background_images, state-feature-user_background_images
@@ -585,154 +605,154 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   c3db4ffcf4092146e5d923b60516a00a8db41825f8bffb138b848195576b987b: [
     "state-feature-update_runs",
     "4caad814f837565106a1a17b982bf4ff004bbdba00a6ff05a3b9c5ef2e5a5945",
-    [145],
+    [151],
     [],
   ],
   // fragment-session_repository_workspaces, state-feature-session_repository_workspaces
   "7d47dc1ae79e1c40ab11a56da183af8e8e5dd1435e044ac4e44be2c6595783e0": [
     "fragment-session_repository_workspaces",
     "7f1a1b36d06c7c4cb5e84d6a16ca23de89dbac6b68c97c31897d1d1825a17d01",
-    [92],
+    [87],
     [],
   ],
   // fragment-github_repository_publication_requests, state-indexed-github_repository_publication_requests
   d62b52a34e2626a7983ae5c48268f04567e93170457e63502b7096486a6ce9f7: [
     "fragment-github_repository_publication_requests",
     "1ae034bde6e00a9b919bcbb987df8aebc5856ab6f4c979743355ecb682418a99",
-    [53],
+    [48],
     [],
   ],
   // state-feature-github_repository_publication_requests
   "6d205ed705fcf89e34e2679f192b2dd50e4cbcb9b06b473c3e81dd48c8811102": [
     "state-feature-github_repository_publication_requests",
     "bc5c46f3cc22c0572b25d10344108465509d7189e1d51b0f6fa335b1d86497cf",
-    [146],
+    [152],
     [],
   ],
   // fragment-github_publication_session_lifecycles, state-feature-github_publication_session_lifecycles
   "079ee34fc1ed4ca27e807b01c7456deceacc57fead388917ff1b275b5047ab06": [
     "fragment-github_publication_session_lifecycles",
     "755e9a26722c11b5edd9d4f6bf270bfdc706428593de4216c311f85fad0a8e69",
-    [52],
+    [47],
     [],
   ],
   // fragment-github_personal_publication_requests, state-indexed-github_personal_publication_requests
   fc4d434c6c76c4e5c5b1fb9c54ebe7e98a395fea6370ada7ac4767ad755051ac: [
     "fragment-github_personal_publication_requests",
     "eda486fc6d1c12adfe86012cfa6d0f6afb64906b1d4c75e3785bda082281a4e1",
-    [50],
+    [45],
     [],
   ],
   // state-feature-github_personal_publication_requests
   "8a4a42e9e8549a0f2e73b33b4031673e2e939624d95586693bc2ac43742bf30f": [
     "state-feature-github_personal_publication_requests",
     "aeb05b8ff41f64e5bab165feac6f1abcdb6dfefc2a5bfbbe88e34861cc40922e",
-    [147],
+    [153],
     [],
   ],
   // fragment-cron_job_runtime_authorities, state-feature-cron_job_runtime_authorities
   "0f3d662483be17f95f492157a8ba28b163afab9c52429ab6ff277ebe8b0a27fd": [
     "fragment-cron_job_runtime_authorities",
     "ebce08da69716c0011c0db38decb38e5eaa0069c6f8360e85afdec8c624a360e",
-    [28],
+    [23],
     [],
   ],
   // fragment-cron_run_trigger_state_retirements, state-feature-cron_run_trigger_state_retirements
   e16c741ca5371718cf7d95114ee1043ad33db04c470f268ccbe3130f699998d9: [
     "fragment-cron_run_trigger_state_retirements",
     "0e85a9fecddeef5129569f503fb32cc0d94e9c98877286be10e15eb657e682bb",
-    [32],
+    [27],
     [],
   ],
   // fragment-execution_identity_contexts
   "632466e72325a428d8b4c4dfa1b7a14be9f57236bee791e9412ea07b24fca254": [
     "fragment-execution_identity_contexts",
     "15be6a7de30d2ecb9b15fed1eb13dd65da858f1eb378e95f737f14241c11b3d9",
-    [43],
+    [38],
     [],
   ],
   // state-feature-execution_identity_contexts
   "7683ab1fd0bccb8e29499c3b6df0070d9cc7cd6249c8c103d654b015ce309417": [
     "state-feature-execution_identity_contexts",
     "2dc283d04b315fd0199a9e13653edb03c8614d12be2ca6f005c7e110aab62d2a",
-    [148],
+    [154],
     [],
   ],
   // fragment-mcp_oauth_pending_authorizations, state-feature-mcp_oauth_pending_authorizations
   b796607c50ccb0e85abdec5d76b88b8076596077afe71e238b7831edd061f9e8: [
     "fragment-mcp_oauth_pending_authorizations",
     "39eae7dacb98a3cc36bd7598c4e416fc3f180c95aa78b7fd5a1f11afecf2d5b9",
-    [60],
+    [55],
     [],
   ],
   // fragment-node_worker_launch_containers, state-feature-node_worker_launch_containers
   "15f660904a6ff5b2e08b57e7e1979ae85d7476426da0e6aa8fc35a013d557501": [
     "fragment-node_worker_launch_containers",
     "bae513184057ef120b3b7ff1f08fc0affa1293461353ac060f1c0148346225f5",
-    [70],
+    [65],
     [],
   ],
   // fragment-node_worker_launch_boots, state-feature-node_worker_launch_boots
   "2703e870e99174d91597e44b5619574373f3da7030c4cd9907a8ac341f00802f": [
     "fragment-node_worker_launch_boots",
     "ce110d8dd52daad838b24137dc43979dafe784dd08348e09482093f47dd5d98b",
-    [68],
+    [63],
     [],
   ],
   // fragment-node_worker_launch_cleanup, state-feature-node_worker_launch_cleanup
   "7c1c6d4fbba2f48e6ad4003bbc7d22b3b543034a8c2456fc542d2dac90c46aad": [
     "fragment-node_worker_launch_cleanup",
     "d45196104873c5924d0fddabdce7a4f08b8fab2c68880492de968c978ef031c8",
-    [69],
+    [64],
     [],
   ],
   // fragment-node_worker_launch_process_scopes, state-feature-node_worker_launch_process_scopes
   "16bb8bbf8eb97d4a3895c031f758ca37106c072cd78e18b99e4f68463679c153": [
     "fragment-node_worker_launch_process_scopes",
     "d9ce1d80156505cb99854d410b48f37b0cf82d0259417bd3c64e1ff91d5b05b2",
-    [71],
+    [66],
     [],
   ],
   // fragment-node_worker_launches
   b6d0283d081e77179a54f4e54847168156095e3ec4a487d17feea8dfe26a1626: [
     "fragment-node_worker_launches",
     "cac88014114f03cee09470505617bc58f893efc072306d0b4c6fb48e259fb17c",
-    [72],
+    [67],
     [],
   ],
   // state-feature-node_worker_launches
   "5dc1cf9bb59834e9497e191514c7bfb850e062f7744047c7a4289516b4b0e214": [
     "state-feature-node_worker_launches",
     "f07514c3996f79e89f46d771b58859826342f72a12f024b29726a82f6481d6f9",
-    [149],
+    [155],
     [],
   ],
   // fragment-node_worker_prepared_workspaces, state-feature-node_worker_prepared_workspaces
   "5e238c5c57f8e1bfc2d5fc91ad2a4ad3ae421ca1f36a84f973a8299f99ee7015": [
     "fragment-node_worker_prepared_workspaces",
     "1ab2c378547ad29580b84dcebbc4ed9c99008c8a242446cdad0553a24bf06eec",
-    [73],
+    [68],
     [],
   ],
   // fragment-node_worker_turns
   "865397a51b0e47eda5349293c3fc590226718cdad61afe420c578ab3ec786732": [
     "fragment-node_worker_turns",
     "cb3eaac1dc2492905a55c037ba7c09748bbdbc9c6a13cbb92e3cbec80c94f5d6",
-    [74],
+    [69],
     [],
   ],
   // state-feature-node_worker_turns
   "64cf0d044c7dede24d58a370a2f52cf19616efc9523343a698f7127c4d187f1d": [
     "state-feature-node_worker_turns",
     "d1d9be01c96d9dd47e4e23d0099074f561aedb976de062622daffd173443c17d",
-    [150],
+    [156],
     [],
   ],
   // fragment-operator_approval_execution_identities, state-feature-operator_approval_execution_identities
   eee176fa30fb315a218b50f12be8d9e4e5561441d59250cf7029aac4edd9eb38: [
     "fragment-operator_approval_execution_identities",
     "0f2bc5e4d656eda1ad36b778905e7e55f8685c0b41a68883f6e9fb1b838a874c",
-    [76],
+    [71],
     [],
   ],
   // fragment-web_push_approval_deliveries
@@ -746,62 +766,62 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "74b05c720f6b4a8ff88824c9843816992d5233b93ccd85bea66c2fbd2a3480c5": [
     "state-feature-web_push_approval_deliveries",
     "92bd2e9265be63167980a22960aa201502864ec59e283821ad3eab6e765744ce",
-    [151],
+    [157],
     [],
   ],
   // fragment-execution_decision_facts
   "0b710f9ea230c2d23182de151edebc06dfb2800ad6207647d27ccb2c900b5d6a": [
     "fragment-execution_decision_facts",
     "251fe6aa9c0c1ef726ab36810df59e644d472757b269b7e6ac36a5b7b1864ccc",
-    [42],
+    [37],
     [],
   ],
   // state-feature-execution_decision_facts
   "9cd9f63b1002094a7e0538c52b75f2c8d26664937ff5559f64a004feabe47816": [
     "state-feature-execution_decision_facts",
     "8235ed3d9eb951894768fa49670db7390f7950e96618daded2851a55c2e827ed",
-    [152],
+    [158],
     [],
   ],
   // fragment-execution_owner_lifecycle_bindings, state-feature-execution_owner_lifecycle_bindings
   "49e2b7094b1bf25586bc63b3ce3e971873c26584de40bd96654a31b945b3881f": [
     "fragment-execution_owner_lifecycle_bindings",
     "83228457b7900a349a7a60693f5be9fe5ce2b86f8ea3be6bd1b3bcbae9381c73",
-    [44],
+    [39],
     [],
   ],
   // fragment-outbound_message_execution_bindings
   c222191b2157eb84fae227b67417210870ff546ce38b799805cd32e63e198bcd: [
     "fragment-outbound_message_execution_bindings",
     "90715ffad8419a713baa7a63aa0d15038b16391bba0c3739bdae7c3196cc5fe5",
-    [81],
+    [76],
     [],
   ],
   // state-feature-outbound_message_execution_bindings
   f782e56e1dca81426ff88a94a9702580d0c6bdd1a420e8c1741fef3aa7c18b81: [
     "state-feature-outbound_message_execution_bindings",
     "c29af535c3d6cf16bb31a085c7b68d150c132921b51f560495e75dd1f5451f2d",
-    [153],
+    [159],
     [],
   ],
   // fragment-outbound_message_progress
   "733bbcfcce8373ce968a993fc1f4d3f911d0011c8a60833f613f9cdb7de22d9e": [
     "fragment-outbound_message_progress",
     "07938ecb7fa35203a80bf93cb28900b5eb0c35dcf47bfa476b436fd39d881135",
-    [82],
+    [77],
     [],
   ],
   // state-feature-outbound_message_progress
   "6e2c6c197a77c179716d6ddead9a7226c49db5e8b69c1775ea8808e5e24cf271": [
     "state-feature-outbound_message_progress",
     "b1fdd16f1d29ceeed6d32e873b0ef54831ad693b4e910c1fe55bc59aa60c4709",
-    [154],
+    [160],
     [],
   ],
   // fragment-agent_provenance, state-feature-agent_provenance
-  "25c32be86573d9b5afa4b27c5805e4b97e08bec73b93293431ece50b8c03b5e8": [
+  ab3748daca8019e0908cc9906304f50a26cffd9d5e9ea3ba1ea3a759315737cb: [
     "fragment-agent_provenance",
-    "262097e093ff61e63a2ece1eb7563e8778c825ee5b703365c8b47cb0d11b8034",
+    "da5d017b6840d65ebd1bc234ae3fdf4540bd00256bfc50c599a4195d15066c17",
     [6],
     [],
   ],
@@ -809,42 +829,42 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   be11d3e5a672ca34875c1f06cfc6d5d5a1293a7077302a759c12c2c17b2cdcb6: [
     "fragment-cron_run_receipts",
     "593a0b293257e23cf22f14e308c7f75a7032d5f0bdbba0fa3d307f3382e3bd4c",
-    [31],
+    [26],
     [],
   ],
   // state-feature-cron_run_receipts
   "41824738e9d17ef8abfa9bda96824ab259ca9e81d3ad647b16b407a6bc4dc28f": [
     "state-feature-cron_run_receipts",
     "1c1c9f4b60d18e51e0db6940a6813c5a7a1a14dffbe38921318e61c295597112",
-    [155],
+    [161],
     [],
   ],
   // fragment-config_revision_keys, state-feature-config_revision_keys
   "8b28fd18dffd5b09fb5a09d8e0d04b2dbf1372081b356131f1df2f4c41895745": [
     "fragment-config_revision_keys",
     "8b416bf248c7702519e58249d29725d42d52a95d8a22084964637f3ed57cae9d",
-    [27],
+    [22],
     [],
   ],
   // fragment-secret_store_entries, state-indexed-secret_store_entries
   "443ee39ca023c21d0234f2897e3790e8e9757daf427989b731f97074c5bf28fe": [
     "fragment-secret_store_entries",
     "45f2e66f10baf9470316cb216a91ef6ffa865a2c2f25b181e37f20171348576b",
-    [90],
+    [85],
     [],
   ],
   // state-feature-secret_store_entries
   "10e3ba9552ac35206e3f3d467a44f71602f4b1d3404204836f72106155b5fe6d": [
     "state-feature-secret_store_entries",
     "1eefc2ba0eecf91c8fd96442e750b4e555fb97485569f3bd2bf7205c02466cee",
-    [156],
+    [162],
     [],
   ],
   // fragment-projects, state-feature-projects
   ecb98cd64bfc2fc0828eaaac59c122a4a9381d752dfdc4166d1fe287e9f1cecb: [
     "fragment-projects",
     "9ac5c2cc1d8a72b975287fe40d1f9cf5929671ee033dd68538315e9770df9f36",
-    [86],
+    [81],
     [],
   ],
   // fragment-worktree_templates, state-feature-worktree_templates
@@ -865,28 +885,28 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "1f164add8aeb9d28f7c779f88fe40dc7a344e14479fe9a017181151330bca6fd": [
     "fragment-device_pair_setup_completions",
     "3400a6259bccdb3546a778b36215284bd14c9613a1ece543e9deaf3539e3b288",
-    [36],
+    [31],
     [],
   ],
   // fragment-github_publication_requests
   "54a593978142e9fdd957d9aff2368fd3b9d26702968b4ede856df3a933023139": [
     "fragment-github_publication_requests",
     "81c333517fb89efb345896c6452909c6963d2a049bb8b76a8d8adcb626ad592e",
-    [51],
+    [46],
     [],
   ],
   // state-feature-github_publication_requests
   "4c1eb061476b0ecbfc022fb1bd4c927c7c4b3868f40702507c9911ccd3504b2f": [
     "state-feature-github_publication_requests",
     "0375d1a5a88363e5cd216f3addbf170f8be1098ea8626e0e0f95ebb91768588d",
-    [157],
+    [163],
     [],
   ],
   // fragment-device_pairing_join_codes, state-feature-device_pairing_join_codes
   "1f844843f7e4c042331e07eb663873d85bfb1291db181f98c0834a0d01bbf2e2": [
     "fragment-device_pairing_join_codes",
     "4ada0f17fe210baff80cc7da940a58ef4bd27911312469dd15a3473ef1119ad0",
-    [37],
+    [32],
     [],
   ],
   // fragment-audit_skill_selection_events
@@ -900,21 +920,21 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "4d5f1559c7bbec87a6ef236de2ff5dd8e82ee0fd0a369236f6d09872193fb9d3": [
     "state-feature-audit_skill_selection_events",
     "c1284d077d6d7bcf7027bf78e8aeb3f6b73189357bf90a01314d5b4b436d1a9c",
-    [158],
+    [164],
     [],
   ],
   // fragment-skill_workshop_changes
   ddfc4231357afb56d903eca77fbfebf817ffafa47d491193e6948b5032ccfefe: [
     "fragment-skill_workshop_changes",
     "993cb9d62f11305ca322f0c76e895a37604132572f2f651c635d0d72eb416b85",
-    [104],
+    [99],
     [],
   ],
   // state-feature-skill_workshop_changes
   d3bf805006eb83550c1d4a662610e8897cd41ce52de6e370424d3f3ed26e3d80: [
     "state-feature-skill_workshop_changes",
     "01b83680a33b4f2e7d46a70f3e122ebe40044b44ff733891a29a340bdcbba3fb",
-    [159],
+    [165],
     [],
   ],
   // fragment-worker_environment_ssh_fallback_ports, state-feature-worker_environment_ssh_fallback_ports
@@ -932,50 +952,50 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // state-runtime-0-0
-  "1117810ed18802d66a92c405599df6e2d5011b1a12b5a5617d9b075b10fb5ee2": [
+  a7c0f7e4bc5b70b9b24cf027c0d6b4dc258df90581acddf0ebcef5ed55672c99: [
     "state-runtime-0-0",
-    "2fc16073d1dbd5e14508c5589b238c496c511d420606c2c14f0b3f7de179a7b0",
+    "1f1007124ef4e9db30a71d38092481cada2fdf2aef59351ee8b475b405bd3dee",
     [
-      0, 1, 2, 3, 4, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 29,
-      30, 33, 34, 35, 38, 39, 40, 41, 45, 46, 47, 48, 49, 58, 59, 61, 62, 63, 64, 65, 66, 67, 75,
-      79, 80, 83, 84, 85, 88, 89, 91, 93, 94, 95, 96, 101, 102, 103, 105, 106, 107, 108, 114, 115,
+      0, 1, 2, 3, 4, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 24, 25, 28, 29, 30, 33,
+      34, 35, 36, 40, 41, 42, 43, 44, 53, 54, 56, 57, 58, 59, 60, 61, 62, 70, 74, 75, 78, 79, 80,
+      83, 84, 86, 88, 89, 90, 91, 96, 97, 98, 100, 101, 102, 103, 104, 105, 106, 107, 108, 114, 115,
       117, 118, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 132,
     ],
     [],
   ],
   // state-runtime-0-1
-  "0b0f354d71305da969ec520f787835fc1a1e0d3521f7e8b46c0a07731a4d085c": [
+  "507342a4d380058d5faa780db133743c14c9d7fbec289edc161ca499fd5e2a22": [
     "state-runtime-0-1",
-    "ce2d6f0447febc966212cc6891905d2c3463a32447a8cc6961ec4d53a9a5e998",
+    "741627bdc2f473f47e87dd3b3ca67742bf56a22066820db2c5ed2952d438cdc1",
     [
-      0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 29,
-      30, 33, 34, 35, 38, 39, 40, 41, 45, 46, 47, 48, 49, 58, 59, 61, 62, 63, 64, 65, 66, 67, 75,
-      79, 80, 83, 84, 85, 88, 89, 91, 93, 94, 95, 96, 101, 102, 103, 105, 106, 107, 108, 114, 115,
+      0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 24, 25, 28, 29, 30, 33,
+      34, 35, 36, 40, 41, 42, 43, 44, 53, 54, 56, 57, 58, 59, 60, 61, 62, 70, 74, 75, 78, 79, 80,
+      83, 84, 86, 88, 89, 90, 91, 96, 97, 98, 100, 101, 102, 103, 104, 105, 106, 107, 108, 114, 115,
       117, 118, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 132,
     ],
     [],
   ],
   // state-runtime-1-0
-  "283e14b8463f1ea0206299fb5baf64ffb19dd0ffaecf9a7a704e6330155048c1": [
+  "99cd59a77a69b888ce70683b8e70dd37b4203d65f3bc120e238d600220ce441c": [
     "state-runtime-1-0",
-    "52c4c75036ae43ddcf08b5eb0aa21942eb482ebe8b4200e193f2052421de3010",
+    "a3b6bbb7f5146cef0700ab279666438fb53a1ac5fdc90ded8074dd2911844671",
     [
-      0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
-      27, 29, 30, 31, 33, 34, 35, 36, 37, 38, 39, 40, 41, 45, 46, 47, 48, 49, 51, 58, 59, 61, 62,
-      63, 64, 65, 66, 67, 75, 79, 80, 83, 84, 85, 86, 88, 89, 90, 91, 93, 94, 95, 96, 101, 102, 103,
-      104, 105, 106, 107, 108, 111, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126,
-      127, 128, 129, 130, 131, 132,
+      0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 26, 28,
+      29, 30, 31, 32, 33, 34, 35, 36, 40, 41, 42, 43, 44, 46, 53, 54, 56, 57, 58, 59, 60, 61, 62,
+      70, 74, 75, 78, 79, 80, 81, 83, 84, 85, 86, 88, 89, 90, 91, 96, 97, 98, 99, 100, 101, 102,
+      103, 104, 105, 106, 107, 108, 111, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125,
+      126, 127, 128, 129, 130, 131, 132,
     ],
     [],
   ],
   // state-runtime-1-1
-  "898e141a1b2ef5a09b813c11b42a077c5383319994c54f2e4b9cd4751504b901": [
+  fb2601030bd6adb704ec85c32927ed4e21eb1606f2ef41bd3bc4e826973f29df: [
     "state-runtime-1-1",
-    "e96dc8d5ade055829f27ac20198519a1648b49be1d5802469aa465c517a2e4ce",
+    "fbec3915841f753415c2bdf1a70fa9aeeb62c66ef6bf9c65a70ae90235e0aa54",
     [
-      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-      26, 27, 29, 30, 31, 33, 34, 35, 36, 37, 38, 39, 40, 41, 45, 46, 47, 48, 49, 51, 58, 59, 61,
-      62, 63, 64, 65, 66, 67, 75, 79, 80, 83, 84, 85, 86, 88, 89, 90, 91, 93, 94, 95, 96, 101, 102,
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 26,
+      28, 29, 30, 31, 32, 33, 34, 35, 36, 40, 41, 42, 43, 44, 46, 53, 54, 56, 57, 58, 59, 60, 61,
+      62, 70, 74, 75, 78, 79, 80, 81, 83, 84, 85, 86, 88, 89, 90, 91, 96, 97, 98, 99, 100, 101, 102,
       103, 104, 105, 106, 107, 108, 111, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125,
       126, 127, 128, 129, 130, 131, 132,
     ],
@@ -999,28 +1019,28 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   dc1f04127c4146d414429aba7f0f055680178ac035c1566f8202cb8ba6ba2575: [
     "state-table-config_machine_state",
     "21025ec6d7ee6da8951d3f519c48e44744b0392597ce821984dd3a9e5abb1787",
-    [26],
+    [21],
     [],
   ],
   // state-table-gateway_restart_intent
   "246e73f17e8b92383ee8d6dfe4b657ee3dc3040e8c6398ff36c17ee14222eb37": [
     "state-table-gateway_restart_intent",
     "91a30a8d1423b5d855a975ceb40e2ef07bdfa21f284c59bee6d189679ca8dba9",
-    [48],
+    [43],
     [],
   ],
   // state-table-schema_meta
   df93d6687254de2f31ff263b2dafdd67656caa6ac10180f95801bde2dce8f7f0: [
     "state-table-schema_meta",
     "df4efc2e7d50f8bde377f55f5a020ae5ba98cfda938879054cf02d9b4905b793",
-    [89],
+    [84],
     [],
   ],
   // state-table-state_leases
   cb1f3279e7e3b90290d5ab10856edf532f9c69f278116dd1a8002a4b050f2c1c: [
     "state-table-state_leases",
     "6117e088b6b48fe1007de8ef29868981f820404cc3be99040c2bcd899902b7cc",
-    [160],
+    [166],
     [],
   ],
   // state-table-worker_session_tool_operations
@@ -1041,7 +1061,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "8cbef48665eec155650765377478b38fde1c87ef57fadb423438f85f8c91ad66": [
     "state-indexed-github_publication_requests",
     "81c333517fb89efb345896c6452909c6963d2a049bb8b76a8d8adcb626ad592e",
-    [51],
+    [46],
     [],
   ],
   // state-indexed-update_runs
@@ -1055,42 +1075,42 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   d40fd26bedb861443248d33289dc8d89a1750f3631730dfde2ae285f2c7988ca: [
     "state-existing-state_leases",
     "4289076cebb114b14ac96672941b2be0679f1033e23fe059eedce8dc2b1eea57",
-    [89, 160],
+    [84, 166],
     [],
   ],
   // state-existing-agent_database_leases
   "13150d745ef24ab5e6aafe0b365af15d6c5d471a659e5eb2a1c38e359984a47f": [
     "state-existing-agent_database_leases",
     "9fe50268db674b01265b7e77701aedcfffe36567086fc763de8b89f87f4cb67d",
-    [3, 89, 160],
+    [3, 84, 166],
     [],
   ],
   // state-node-worker-lineage
   "789bdcc904f4b35b57f9cb829909f2c9cda541c86179beb6904977146665c0c9": [
     "state-node-worker-lineage",
     "f235501e3f5767c362c7aebce3e678d33cdb45e3b776391980019cdf7cc0f37d",
-    [69, 149],
+    [64, 155],
     [],
   ],
   // state-node-worker-descendants
   "7c5c2640b3ec45cbac611c07c67f478f0ddc85a4bbfceb9c3576f0d7aa3bd14a": [
     "state-node-worker-descendants",
     "0991532bbc3ca042fc5c1c2026b8aa8d50b24a5bccf26e53675340a4853a665e",
-    [69, 71, 149],
+    [64, 66, 155],
     [],
   ],
   // state-retired-commitments
   "72c354791974ce88794c96c16135a89f07b48b9b03542f968beadf05b76aae1e": [
     "state-retired-commitments",
     "19bef9367d336bb367e75740610741cb67deeef86a7f54065758609d67ae8a38",
-    [161],
+    [167],
     [],
   ],
   // state-retired-commitments-shipped
   "2309aff06f4bac77072697764926a0042e6b6069c9504d5bb8c6a0601e9d1314": [
     "state-retired-commitments-shipped",
     "f4d088664f133eea8b1e83fd342d1effaa86d836f8593e02778531468372a303",
-    [162],
+    [168],
     [],
   ],
 };
