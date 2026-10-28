@@ -51,7 +51,7 @@ type PreparedAncestor = {
   identity: string;
   content: string;
   chars: number;
-  certified?: SessionRow;
+  certified?: WeakRef<SessionRow>;
 };
 const preparedAncestors = new WeakMap<SessionRow, PreparedAncestor>();
 
@@ -249,11 +249,13 @@ export class ConnectionSessionRows {
         });
         continue;
       }
-      // One row per publication lets existing delta/encoding owners share their work.
-      if (prepared.certified?.ancestorRevision !== revision) {
-        prepared.certified = { ...row, ancestorRevision: revision };
+      // Share within synchronous fanout without retaining idle rows' encoded bytes/field vectors.
+      let certified = prepared.certified?.deref();
+      if (certified?.ancestorRevision !== revision) {
+        certified = { ...row, ancestorRevision: revision };
+        prepared.certified = new WeakRef(certified);
       }
-      ancestorSessions.push(prepared.certified);
+      ancestorSessions.push(certified);
       (updates ??= new Map()).set(
         identity,
         snapshotAt !== undefined && chars <= MAX_CONTENT_CHARS
