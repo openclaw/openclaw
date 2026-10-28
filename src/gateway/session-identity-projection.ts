@@ -131,7 +131,9 @@ function projectAgentAvatarUrl(
   const basePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
   if (isAvatarDataUrl(avatar)) {
     const image = prepareGatewayAvatarDataUrl(cfg, agentId, avatar);
-    return image ? { avatarUrl: gatewayAssistantAvatarUrl({ image }, basePath, agentId) } : {};
+    return image
+      ? { avatarUrl: gatewayAssistantAvatarUrl({ resolution: null, image }, basePath, agentId) }
+      : {};
   }
   return looksLikeAvatarPath(avatar)
     ? { avatarUrl: buildControlUiResourcePath("agentAvatar", basePath, agentId) }
