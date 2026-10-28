@@ -11,6 +11,9 @@
  * The first reconnect probes read RPCs immediately after hello, before readiness.
  * Reports file sizes, read latency/errors, startup phases and durable replies.
  * Add --workboard to load the bundled plugin and probe its scoped cards list.
+ * Add --resources to collect three fresh diagnostic memory samples after durable
+ * recovery (120s limit), with list/Workboard reads every 5s. This enables the
+ * bundled Prometheus exporter; heaps are live samples, not forced-GC retention.
  * This is a restart proof, not the canonical steady-state Team stress campaign.
  * Empty plugins and streamed turns do not model plugin work or interrupted tools.
  * A small observed WAL or no deferred admission means the incident was not fully
@@ -51,6 +54,7 @@ const { values } = parseArgs({
     clients: { type: "string", default: "5" },
     plugins: { type: "string", default: "40" },
     workboard: { type: "boolean" },
+    resources: { type: "boolean" },
     "timeout-seconds": { type: "string", default: "600" },
     "wal-mib": { type: "string", default: "16" },
     "prepare-wal-agent": { type: "string" },
@@ -235,7 +239,7 @@ const report: Record<string, unknown> = {
   transcriptMiB: number(values["transcript-mib"]),
   agentCount: scenarios.length,
   clientCount: number(values.clients),
-  pluginCount: number(values.plugins) + (values.workboard ? 1 : 0),
+  pluginCount: number(values.plugins) + (values.workboard ? 1 : 0) + (values.resources ? 1 : 0),
   workboard: values.workboard ?? false,
   offlineWalMiBPerAgent: number(values["wal-mib"]),
   earlyReadProbes,
@@ -244,6 +248,9 @@ const report: Record<string, unknown> = {
     "Empty synthetic startup plugins",
     "Streaming interruption, no tool side effects",
     "No steady-state load metrics",
+    ...(values.resources
+      ? ["Resource samples follow recovery; worker heaps may lag one heartbeat"]
+      : []),
     "One request per early-read method, issued by the first reconnecting client",
     ...(values.workboard ? [] : ["Workboard is not loaded by the empty plugin fixture"]),
     "WAL pressure is produced by an offline cache writer after Gateway death",
@@ -415,11 +422,19 @@ try {
     browser: { enabled: false },
     discovery: { mdns: { mode: "off" } },
     logging: { file: path.join(output, "server.log") },
+    ...(values.resources ? { diagnostics: { enabled: true } } : {}),
     session: { maintenance: { maxEntries: sessionCount * 2 } },
     plugins: {
       enabled: true,
-      allow: [...plugins.pluginIds, ...(values.workboard ? ["workboard"] : [])],
-      ...(values.workboard ? { entries: { workboard: { enabled: true } } } : {}),
+      allow: [
+        ...plugins.pluginIds,
+        ...(values.workboard ? ["workboard"] : []),
+        ...(values.resources ? ["diagnostics-prometheus"] : []),
+      ],
+      entries: {
+        ...(values.workboard ? { workboard: { enabled: true } } : {}),
+        ...(values.resources ? { "diagnostics-prometheus": { enabled: true } } : {}),
+      },
       load: { paths: [plugins.pluginsDir] },
       slots: { memory: "none" },
     },
@@ -682,6 +697,81 @@ try {
   report.backgroundAdmissionRecoveries = restartMessages.filter((message) =>
     message.includes("agent database recovered after background inspection and preparation"),
   ).length;
+  if (values.resources) {
+    const startedAt = Date.now();
+    const samples: Array<Record<string, unknown>> = [];
+    report.resources = { startedAt, samples, scope: "Live post-recovery samples; no forced GC" };
+    let previousCount: number | null = null;
+    let scrape = 0;
+    while (samples.length < 3 && Date.now() - startedAt < 120_000) {
+      await client.request(
+        "sessions.list",
+        { agentId: scenarios[0]!.agentId },
+        { timeoutMs: 5000 },
+      );
+      if (values.workboard) {
+        await client.request(
+          "workboard.cards.list",
+          { sessionKey: scenarios[0]!.key },
+          { timeoutMs: 5000 },
+        );
+      }
+      const response = await fetch(`http://127.0.0.1:${port}/api/diagnostics/prometheus`, {
+        headers: { Authorization: `Bearer ${instance.gatewayToken}` },
+        signal: AbortSignal.timeout(5000),
+      });
+      assert(response.ok, `Resource scrape failed: HTTP ${response.status}`);
+      const prometheus = await response.text();
+      const capturedAt = Date.now();
+      const file = `resources-${scrape++}.prom`;
+      await writeFile(path.join(output, file), prometheus);
+      const lines = prometheus.split("\n");
+      const metric = (key: string): number | null => {
+        const line = lines.find((entry) => entry.startsWith(`${key} `));
+        const value = Number.parseFloat(line?.slice(key.length) ?? "");
+        return Number.isFinite(value) ? value : null;
+      };
+      const count = metric("openclaw_memory_rss_bytes_count");
+      if (
+        count !== null &&
+        previousCount !== null &&
+        count > previousCount &&
+        capturedAt - startedAt <= 120_000
+      ) {
+        const workers = metric("openclaw_worker_count");
+        const sampled = metric("openclaw_worker_heap_sampled_count");
+        const sqlite = '{script="sqlite-store.worker.js"}';
+        const sqliteWorkers = metric(`openclaw_worker_count${sqlite}`);
+        const sqliteSampled = metric(`openclaw_worker_heap_sampled_count${sqlite}`);
+        samples.push({
+          capturedAt,
+          elapsedMs: capturedAt - startedAt,
+          file,
+          hostLoad: os.loadavg(),
+          memorySampleCount: count,
+          rssBytes: metric('openclaw_memory_bytes{kind="rss"}'),
+          mainHeapUsedBytes: metric('openclaw_memory_bytes{kind="heap_used"}'),
+          workerCount: workers,
+          workerHeapSampledCount: sampled,
+          workerHeapUsedBytes:
+            workers !== null && workers === sampled
+              ? metric('openclaw_memory_bytes{kind="worker_heap_used"}')
+              : null,
+          sqliteWorkerCount: sqliteWorkers,
+          sqliteWorkerHeapSampledCount: sqliteSampled,
+          sqliteWorkerHeapUsedBytes:
+            sqliteWorkers !== null && sqliteWorkers === sqliteSampled
+              ? metric(`openclaw_worker_heap_used_bytes${sqlite}`)
+              : null,
+        });
+      }
+      previousCount = count;
+      if (samples.length < 3) {
+        await delay(Math.min(5000, Math.max(0, 120_000 - (Date.now() - startedAt))));
+      }
+    }
+    assert.equal(samples.length, 3, "Three fresh post-recovery memory samples within 120s");
+  }
   restart.hostLoadAtFinish = os.loadavg();
   report.success = true;
 } catch (error) {
