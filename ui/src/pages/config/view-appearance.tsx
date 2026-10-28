@@ -332,7 +332,9 @@ export function AppearanceSection(props: ConfigProps) {
                           ? "true"
                           : "false"
                     }
-                    title={opt().description}
+                    title={
+                      opt().description ? `${opt().label} — ${opt().description}` : opt().label
+                    }
                     data-theme-id={opt().id}
                     onClick={() => {
                       if (opt().id === "custom" && !props.hasCustomTheme) {

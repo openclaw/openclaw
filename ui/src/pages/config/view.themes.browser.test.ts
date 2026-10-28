@@ -1,8 +1,9 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import {
   BUILTIN_THEMES,
   type ThemeCatalogEntry,
 } from "../../../../packages/gateway-protocol/src/theme.ts";
+import { installTitleTooltips } from "../../components/tooltip-title.ts";
 import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
 import "../../styles.css";
 import { renderAppearance } from "./config-view.test-support.tsx";
@@ -38,8 +39,10 @@ it("hides the collection and visit controls without changing their saved prefere
   expect(props.onAppearanceChange).not.toHaveBeenCalled();
 });
 
-it("offers plugin and personal themes from the shared catalog with their descriptions", () => {
+it("offers plugin and personal themes with names in focus and hover hints", async () => {
   const setTheme = vi.fn();
+  const importedName = "Imported Manuscript Theme With A Long Name";
+  const importedDescription = "A palette for long-form writing";
   const { container } = renderAppearance({
     setTheme,
     themeCatalog: catalog(
@@ -52,13 +55,51 @@ it("offers plugin and personal themes from the shared catalog with their descrip
       theme("user/candlelight", "Candlelight", {
         modes: ["light"],
       }),
+      theme("user/long-name", importedName, { description: importedDescription }),
     ),
   });
+  document.body.append(container);
+  const disposeTooltips = installTitleTooltips(document);
+  onTestFinished(() => {
+    disposeTooltips();
+    container.remove();
+  });
+
   const pluginTheme = themeButton(container, "space-pack/xenovessel");
-  expect(pluginTheme?.title).toBe("Alien theme");
   pluginTheme?.click();
   expect(setTheme).toHaveBeenCalledWith("space-pack/xenovessel");
   expect(themeButton(container, "user/candlelight")?.textContent).toContain("Candlelight");
+
+  const manuscript = themeButton(container, "manuscript");
+  if (!manuscript) {
+    throw new Error("Expected the Manuscript theme card");
+  }
+  expect(manuscript.getAttribute("aria-pressed")).toBe("false");
+  manuscript.focus();
+
+  const { page } = await import("vitest/browser");
+  const focusTooltip = page.getByRole("tooltip").last();
+  await expect.element(focusTooltip).toBeVisible();
+  expect(focusTooltip.element().textContent).toContain("Manuscript — Ink on paper");
+  expect(manuscript.getAttribute("aria-pressed")).toBe("false");
+
+  const importedTheme = themeButton(container, "user/long-name");
+  if (!importedTheme) {
+    throw new Error("Expected the imported theme card");
+  }
+  const importedLabel = importedTheme.querySelector<HTMLElement>(".settings-theme-card__label");
+  if (!importedLabel) {
+    throw new Error("Expected the imported theme label");
+  }
+  expect(importedLabel.textContent).toBe(importedName);
+  expect(importedTheme.getAttribute("aria-pressed")).toBe("false");
+
+  manuscript.blur();
+  await page.elementLocator(importedTheme).hover();
+  const hoverTooltip = page.getByRole("tooltip").last();
+  await expect.element(hoverTooltip).toBeVisible();
+  expect(hoverTooltip.element().textContent).toContain(`${importedName} — ${importedDescription}`);
+  expect(importedTheme.getAttribute("aria-pressed")).toBe("false");
 });
 
 it.each(["profile", "device-local"] as const)(
