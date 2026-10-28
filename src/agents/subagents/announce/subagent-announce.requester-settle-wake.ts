@@ -1,6 +1,7 @@
 import { withGoalContinuationSettlement } from "../../../auto-reply/reply/goal-continuation-return.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { isRestartRecoveryTombstone } from "../../../config/sessions/session-work-start.js";
+import type { TrustedAgentToolCaller } from "../../../gateway/server-methods/client-types.js";
 import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
 import { getSharedGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
@@ -601,8 +602,9 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     let delivery: Awaited<ReturnType<typeof deliverSubagentAnnouncement>>;
     try {
       const dispatch = () => {
-        const deliver = () =>
+        const deliver = (agentToolCaller?: TrustedAgentToolCaller) =>
           deliverSubagentAnnouncement({
+            agentToolCaller,
             requesterSessionKey,
             requesterAgentId,
             triggerMessage: wakeMessage,
@@ -660,7 +662,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
                     "Requester completion source changed before continuation admission.",
                   );
                 }
-                return subagentRuns.runWithCompletionBatchAuthority(settledBatch, deliver);
+                return subagentRuns.runWithCompletionBatchRequester(settledBatch, deliver);
               },
             );
       };

@@ -125,8 +125,7 @@ async function sendSubagentAnnounceDirectlyBound(
       params.targetRequesterSessionKey,
       params.requesterAgentId,
     );
-    const requesterEntry = requester.entry;
-    const requesterCanonicalKey = requester.canonicalKey;
+    const { entry: requesterEntry, canonicalKey: requesterCanonicalKey } = requester;
     const requesterAgentId = requester.agentId;
     const requesterStorePath = requester.storePath;
     const requesterSessionId = requesterEntry?.sessionId;
@@ -531,6 +530,7 @@ async function sendSubagentAnnounceDirectlyBound(
             return await runAnnounceAgentCall({
               agentParams: directAgentParams,
               controllerInput: params.controllerInput,
+              agentToolCaller: params.agentToolCaller,
               replyExpectation: inputReplyExpectation,
               // A resumed parent has no inbound channel dispatcher to keep activity visible.
               typing:

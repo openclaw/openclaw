@@ -55,6 +55,7 @@ import {
   operatorFixture,
   retainedOperatorFixture,
   registerCompletedFollowupAuthorityTests,
+  registerSingletonRequesterAuthorityTests,
 } from "./subagent-registry.completed-followup-authority.test-support.js";
 import {
   adoptSubagentRunForRequesterTurn,
@@ -160,6 +161,7 @@ afterEach(async () => {
 describe("registered completion source custody", () => {
   registerSubagentRegistrationOwnershipTests({ registration, updateRun });
   registerCompletedFollowupAuthorityTests({ registration, updateRun });
+  registerSingletonRequesterAuthorityTests({ registration, updateRun });
 
   it.each([
     "current",

@@ -17,6 +17,7 @@ import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { createOperatorInputRecoverySource } from "../../operator-run-recovery-source.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
+import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import {
   prepareTerminatedCollectorLaunch,
   prepareSwarmCollectorCompletion,
@@ -82,6 +83,16 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const cfg = this.options.getRuntimeConfig();
     const requesterAgentId = resolveSubagentRequesterAgentId(cfg, registerParams);
+    const requesterCaller = getGatewayToolCallerIdentity();
+    // Accounting only: never retain the spawning invocation's executable authority.
+    const originalSpawnInstance =
+      requesterCaller?.operationalRunInstance?.runId === registerParams.requesterTurnRunId &&
+      requesterCaller?.sessionKey === requesterSessionKey &&
+      requesterCaller?.agentId === requesterAgentId &&
+      !registerParams.collect &&
+      !registerParams.queued
+        ? requesterCaller.operationalRunInstance
+        : undefined;
     const controllerSessionKey = registerParams.controllerSessionKey?.trim() || requesterSessionKey;
     const childAgentId = resolveSubagentChildAgentId(registerParams);
     if (registerParams.childAgentId === undefined || !childAgentId) {
@@ -219,7 +230,9 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
               settleFailedLaunch,
             }),
       );
-      authority = await captureOperatorToolGatewayContinuationContext();
+      authority = await captureOperatorToolGatewayContinuationContext(undefined, {
+        retainRequester: true,
+      });
       // Direct child turns have no spawning requester turn. Save their own admitted
       // source before launch so a restart never depends on an absent parent claim.
       const recoveryTarget =
@@ -385,7 +398,12 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                 ),
               });
               if (authority && !registerParams.collect) {
-                subagentRuns.bindCompletionAuthority(entry, authority);
+                subagentRuns.bindCompletionAuthority(
+                  entry,
+                  authority,
+                  false,
+                  originalSpawnInstance,
+                );
                 custodyTransferred = true;
               }
             } finally {

@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { revokeGoalContinuationReturn } from "../../../auto-reply/reply/goal-continuation-return.js";
-import type { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
+import type { TrustedAgentToolCaller } from "../../../gateway/server-methods/client-types.js";
 import { prepareGatewayContextBindingOwner } from "../../../plugins/runtime/gateway-context-binding-owner.js";
 import {
   bindGatewayContextResolver,
@@ -8,6 +8,7 @@ import {
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import type { OperationalRunInstanceRef } from "../../admitted-run-context.js";
 import { transferFollowupCohort } from "../completion/session-followup-cohort.js";
 import {
   matchesSubagentChildSessionOwner,
@@ -16,6 +17,13 @@ import {
 } from "./subagent-child-owner-match.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import {
+  runCompletionBatchWithAuthority,
+  runCompletionBatchWithRequester,
+  type CompletionAuthority,
+  type CompletionAuthorityOwner,
+  type CompletionCustody,
+} from "./subagent-registry-completion-authority.js";
 import {
   publishSubagentRunChanges,
   subscribeSubagentRunChanges,
@@ -278,15 +286,6 @@ function completeRetirementPublication(publication: SubagentRetirementPublicatio
   publication.resolve();
 }
 
-type CompletionAuthority = NonNullable<
-  Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>
->;
-type CompletionCustody = {
-  authority: CompletionAuthority;
-  entry: SubagentRunRecord;
-  stop: () => void;
-};
-
 class SubagentRunMap extends Map<string, SubagentRunRecord> {
   readLookup = new SubagentSessionReadLookup();
   readonly workIndex = new SubagentRunWorkIndex();
@@ -315,7 +314,12 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     this.requiredCompletionEntries.set(getSubagentRunRuntimeKey(entry), true);
   }
 
-  bindCompletionAuthority(row: SubagentRunRecord, source: CompletionAuthority, recovered = false) {
+  bindCompletionAuthority(
+    row: SubagentRunRecord,
+    source: CompletionAuthority,
+    recovered = false,
+    originalSpawnInstance?: OperationalRunInstanceRef,
+  ) {
     const entry = this.currentValue(row);
     const key = getSubagentRunRuntimeKey(entry);
     // A committed row with captured custody stays restricted if its source expires before publication.
@@ -333,6 +337,11 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     const custody: CompletionCustody = {
       authority: source,
       entry,
+      ...(!recovered &&
+      originalSpawnInstance &&
+      originalSpawnInstance.runId === entry.requesterTurnRunId
+        ? { originalSpawn: { instance: originalSpawnInstance, entry } }
+        : {}),
       stop: () => source.signal.removeEventListener("abort", revoked),
     };
     const revoked = () => this.releaseCompletionAuthority(custody.entry);
@@ -395,58 +404,29 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     );
   }
 
+  private completionAuthorityOwner(): CompletionAuthorityOwner {
+    return {
+      runs: this,
+      custodies: this.completionAuthorities,
+      required: this.requiredCompletionEntries,
+      currentValue: (entry) => this.currentValue(entry),
+      assertCurrent: (entry) => this.assertCompletionEntryCurrent(entry),
+      isCancellationNotice: (entry) => this.isCancellationNotice(entry),
+      runWithAuthority: (entry, run) => this.runWithCompletionAuthority(entry, run),
+      runWithBatchAuthority: (entries, run) => this.runWithCompletionBatchAuthority(entries, run),
+    };
+  }
+
   runWithCompletionBatchAuthority<T>(observed: readonly SubagentRunRecord[], run: () => T): T {
-    const batch = observed.map((entry) => this.currentValue(entry));
-    batch.forEach((entry) => this.assertCompletionEntryCurrent(entry));
-    const resultEntry = batch.find((entry) => !this.isCancellationNotice(entry));
-    if (!resultEntry) {
-      const sources = batch.map(
-        (entry) => this.completionAuthorities.get(getSubagentRunRuntimeKey(entry))?.authority,
-      );
-      const first = sources[0];
-      const original = first?.operatorAuthority;
-      // A cancellation-only cohort can share its retained requester. Otherwise its
-      // independently admitted cancellation caller still owns the notices.
-      if (
-        !first ||
-        !original ||
-        sources.some(
-          (source) =>
-            source?.operatorAuthority?.source !== original.source ||
-            !isDeepStrictEqual(source?.operatorAuthority?.scopes, original.scopes),
-        )
-      ) {
-        return run();
-      }
-      sources.forEach((source) => source?.assertCurrent());
-      return first.run(run);
-    }
-    const firstCustody = this.completionAuthorities.get(getSubagentRunRuntimeKey(resultEntry));
-    const first = firstCustody?.authority.operatorAuthority;
-    // Mixed waves must still prove the cancelled member's original source is live and identical.
-    // A revoked or unrelated cancellation cannot borrow a successful sibling's authority.
-    for (const entry of batch) {
-      const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
-      if (this.requiredCompletionEntries.has(getSubagentRunRuntimeKey(entry)) && !custody) {
-        throw new Error("Subagent completion authority is no longer active");
-      }
-      custody?.authority.assertCurrent();
-      const source = custody?.authority.operatorAuthority;
-      // Siblings re-admitted independently share durable input evidence, not an old capability.
-      const sameRecoveredSource =
-        this.requiredCompletionEntries.get(getSubagentRunRuntimeKey(resultEntry)) &&
-        this.requiredCompletionEntries.get(getSubagentRunRuntimeKey(entry)) &&
-        resultEntry.operatorRecoverySource !== undefined &&
-        isDeepStrictEqual(resultEntry.operatorRecoverySource, entry.operatorRecoverySource);
-      if (
-        (!sameRecoveredSource && source?.source !== first?.source) ||
-        !isDeepStrictEqual(source?.scopes, first?.scopes) ||
-        !isDeepStrictEqual(custody?.authority.scopes, firstCustody?.authority.scopes)
-      ) {
-        throw new Error("Subagent completion batch has incompatible operator authority");
-      }
-    }
-    return this.runWithCompletionAuthority(resultEntry, run);
+    return runCompletionBatchWithAuthority(this.completionAuthorityOwner(), observed, run);
+  }
+
+  /** Only an original, fully accepted singleton may carry its selected requester. */
+  async runWithCompletionBatchRequester<T>(
+    observed: readonly SubagentRunRecord[],
+    run: (caller?: TrustedAgentToolCaller) => Promise<T>,
+  ): Promise<T> {
+    return runCompletionBatchWithRequester(this.completionAuthorityOwner(), observed, run);
   }
 
   /** Committed replacement transfers custody without reviving a retired source. */

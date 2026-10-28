@@ -79,7 +79,19 @@ export async function runAnnounceAgentCall(params: {
   let stopTyping: (() => void) | undefined;
   const deadline = new AbortController();
   const sourceLifecycle = new AbortController();
-  const isSourceSessionAdmissionAllowed = params.isSourceSessionAdmissionAllowed;
+  const assertRequesterCurrent = params.agentToolCaller?.assertCurrent?.bind(
+    params.agentToolCaller,
+  );
+  const isSourceSessionAdmissionAllowed = assertRequesterCurrent
+    ? () => {
+        try {
+          assertRequesterCurrent();
+        } catch {
+          return false;
+        }
+        return params.isSourceSessionAdmissionAllowed?.() !== false;
+      }
+    : params.isSourceSessionAdmissionAllowed;
   const lifecycleSignal = params.signal
     ? AbortSignal.any([params.signal, sourceLifecycle.signal])
     : sourceLifecycle.signal;
@@ -103,7 +115,7 @@ export async function runAnnounceAgentCall(params: {
         await params.onBeforeDispatch();
       }
       signal.throwIfAborted();
-      if (!params.isExecutionAllowed() || params.isSourceSessionAdmissionAllowed?.() === false) {
+      if (!params.isExecutionAllowed() || isSourceSessionAdmissionAllowed?.() === false) {
         throw new SourceOwnerChangedError();
       }
       return dispatchGatewayMethodInProcess("agent", params.agentParams, {

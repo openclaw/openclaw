@@ -92,6 +92,7 @@ export type SubagentAnnounceDirectParams = {
   onBeforeDispatch?: () => void | Promise<void>;
   resolveGatewayContext?: GatewayContextResolver;
   controllerInput?: SessionControllerInput;
+  agentToolCaller?: import("../../../gateway/server-methods/client-types.js").TrustedAgentToolCaller;
 };
 
 export function sourceOwnerChangedResult(): SubagentAnnounceDeliveryResult {

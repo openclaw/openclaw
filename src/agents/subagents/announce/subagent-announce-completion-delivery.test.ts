@@ -143,6 +143,74 @@ it.each(["commit", "failure", "revocation"] as const)(
   },
 );
 
+it("rechecks a retained caller after the dispatch receipt await", async () => {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  let current = true;
+  const delivery = announce({
+    agentToolCaller: {
+      agentId: "main",
+      sessionKey: "agent:main:requester",
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("original singleton changed");
+        }
+      },
+    },
+    onBeforeDispatch: async () => {
+      entered.resolve();
+      await release.promise;
+    },
+  });
+  try {
+    await entered.promise;
+    current = false;
+    release.resolve();
+    await expect(delivery).rejects.toThrow("subagent source lifecycle changed");
+    expect(dispatch).not.toHaveBeenCalled();
+  } finally {
+    release.resolve();
+  }
+});
+
+it.each(["current", "commit", "accepted owner"] as const)(
+  "rechecks a retained caller at %s before a Gateway effect",
+  async (boundary) => {
+    let current = true;
+    let effects = 0;
+    dispatch.mockImplementation(async (_method, _params, options) => {
+      current = boundary !== "commit";
+      options?.sessionMutationCommitGuard?.();
+      // Admission hands the input to its fresh owner. Retiring the old caller
+      // must not poison that accepted run's independent execution authority.
+      if (boundary === "accepted owner") {
+        current = false;
+      }
+      options?.onExecutionStarted?.();
+      effects += 1;
+      return { status: "ok" };
+    });
+    const delivery = announce({
+      settleWakeSourceSessionKeys: ["agent:main:subagent:only"],
+      agentToolCaller: {
+        agentId: "main",
+        sessionKey: "agent:main:requester",
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("original singleton changed");
+          }
+        },
+      },
+    });
+    if (boundary === "commit") {
+      await expect(delivery).rejects.toThrow("subagent source lifecycle changed");
+    } else {
+      await expect(delivery).resolves.toEqual({ status: "ok" });
+    }
+    expect(effects).toBe(boundary === "commit" ? 0 : 1);
+  },
+);
+
 it.each([
   ["absent", { noVisibleResult: true }, true],
   ["reworded", { noVisibleResult: true, result: "(nothing to report)" }, true],
