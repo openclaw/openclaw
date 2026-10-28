@@ -252,3 +252,52 @@ describe("first-use additive column STRICT migration", () => {
     ).toEqual([{ token_key: "bootstrap", token: "retained-token", setup_id: null }]);
   });
 });
+
+it("repairs legacy v6 profile identities before validating canonical_login", () => {
+  const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("legacy-profile-") } };
+  const databasePath = openOpenClawStateDatabase(options).path;
+  closeOpenClawStateDatabaseForTest();
+  const { DatabaseSync } = requireNodeSqlite();
+  using legacy = new DatabaseSync(databasePath);
+  legacy.exec(`
+    DROP INDEX idx_worker_session_placements_environment;
+    CREATE TABLE user_profiles (id TEXT NOT NULL PRIMARY KEY, display_name TEXT,
+      avatar BLOB, avatar_mime TEXT, avatar_sha256 TEXT, merged_into TEXT,
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL) STRICT;
+    CREATE TABLE user_profile_emails (email TEXT NOT NULL PRIMARY KEY,
+      profile_id TEXT NOT NULL, created_at INTEGER NOT NULL) STRICT;
+    CREATE TABLE user_profile_identities (provider TEXT NOT NULL, subject TEXT NOT NULL,
+      profile_id TEXT NOT NULL, created_at INTEGER NOT NULL,
+      PRIMARY KEY (provider, subject)) STRICT;
+    INSERT INTO user_profiles VALUES ('profile', 'Synthetic', NULL, NULL, NULL, NULL, 1, 1);
+    INSERT INTO user_profile_emails VALUES ('synthetic@example.invalid', 'profile', 1);
+    INSERT INTO user_profile_identities VALUES ('tailscale', 'subject', 'profile', 1);
+    PRAGMA user_version = 6;
+    UPDATE schema_meta SET schema_version = 6 WHERE meta_key = 'primary';
+  `);
+  legacy.close();
+  expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+  const { db } = openOpenClawStateDatabase(options);
+  expect(
+    db
+      .prepare(
+        "SELECT provider, subject, profile_id, created_at, canonical_login FROM user_profile_identities",
+      )
+      .all(),
+  ).toEqual([
+    {
+      provider: "tailscale",
+      subject: "subject",
+      profile_id: "profile",
+      created_at: 1,
+      canonical_login: null,
+    },
+  ]);
+  expect(db.prepare("SELECT id, display_name FROM user_profiles").all()).toEqual([
+    { id: "profile", display_name: "Synthetic" },
+  ]);
+  expect(db.prepare("SELECT * FROM user_profile_emails").all()).toEqual([
+    { email: "synthetic@example.invalid", profile_id: "profile", created_at: 1 },
+  ]);
+  expect(db.prepare("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
+});
