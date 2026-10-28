@@ -64,29 +64,6 @@ function readPayload(result: unknown): Record<string, unknown> {
 }
 
 describe("workboard tools", () => {
-  it("reuses schemas across turns while binding the current store and claim owner", async () => {
-    const previousStore = createWorkboardSqliteTestStore();
-    const currentStore = createWorkboardSqliteTestStore();
-    const previous = toolSet(previousStore, "previous-owner");
-    for (let turn = 0; turn < 3; turn++) {
-      const ownerId = `owner-${turn}`;
-      const current = toolSet(currentStore, ownerId);
-      for (const [name, tool] of current) {
-        expect(tool.parameters, name).toBe(previous.get(name)?.parameters);
-      }
-      const card = await currentStore.create({ title: `Turn ${turn}` });
-      expect((await runTool(current, "claim", { id: card.id })).card).toMatchObject({
-        metadata: { claim: { ownerId } },
-      });
-      await expect(
-        executeTool(toolSet(currentStore, "previous-owner"), "heartbeat", {
-          id: card.id,
-        }),
-      ).rejects.toThrow(`claimed by ${ownerId}`);
-    }
-    expect(await previousStore.list()).toEqual([]);
-  });
-
   it("passes live invocation authority through the default-on Sessions board factory", async () => {
     const store = createWorkboardSqliteTestStore();
     await startEmptySessionsBoardService(store);
@@ -685,35 +662,35 @@ describe("workboard tools", () => {
     expect(Buffer.from(attachment.contentBase64 as string, "base64").toString("utf8")).toBe("done");
   });
 
-  it("moves cards with agent claim scope", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const tools = toolSet(store, "agent-b");
-    const card = await store.create({ title: "Move tool card", status: "todo" });
-
-    const unclaimed = await runTool(tools, "move", {
-      id: card.id,
-      status: "ready",
-    });
-    expect(unclaimed.card).toMatchObject({ status: "ready" });
-
-    await store.claim(card.id, { ownerId: "agent-a", token: "test-auth-token" });
-    await expect(
-      executeTool(tools, "move", {
+  it("reuses schemas across turns with current store and claim scope", async () => {
+    const previousStore = createWorkboardSqliteTestStore();
+    const previous = toolSet(previousStore, "agent-a");
+    for (const ownerId of ["agent-b", "agent-b", "agent-c"]) {
+      const store = createWorkboardSqliteTestStore();
+      const tools = toolSet(store, ownerId);
+      for (const [name, tool] of tools) {
+        expect(tool.parameters, name).toBe(previous.get(name)?.parameters);
+      }
+      const card = await store.create({ title: "Move tool card", status: "todo" });
+      const unclaimed = await runTool(tools, "move", { id: card.id, status: "ready" });
+      expect(unclaimed.card).toMatchObject({ status: "ready" });
+      const claim = await runTool(tools, "claim", { id: card.id });
+      const other = toolSet(store, "agent-a");
+      await expect(executeTool(other, "move", { id: card.id, status: "review" })).rejects.toThrow(
+        `card is claimed by ${ownerId}`,
+      );
+      const claimed = await runTool(other, "move", {
         id: card.id,
         status: "review",
-      }),
-    ).rejects.toThrow("card is claimed by agent-a");
-
-    const claimed = await runTool(tools, "move", {
-      id: card.id,
-      status: "review",
-      token: "test-auth-token",
-    });
-    // Review is not terminal: the claim stays with its owner.
-    expect(claimed.card).toMatchObject({
-      status: "review",
-      metadata: { claim: { ownerId: "agent-a" } },
-    });
+        token: claim.token,
+      });
+      // Review is not terminal: the claim stays with its owner.
+      expect(claimed.card).toMatchObject({
+        status: "review",
+        metadata: { claim: { ownerId } },
+      });
+    }
+    expect(await previousStore.list()).toEqual([]);
   });
 });
 
