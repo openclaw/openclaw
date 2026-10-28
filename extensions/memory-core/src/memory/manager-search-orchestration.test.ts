@@ -3,7 +3,6 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveRuntimeWorkerUrl, WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
-import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it, vi } from "vitest";
 import { recordMemoryEntryOrigins } from "../memory-entry-origins.js";
 import { forgetMemoryEntries } from "../memory-forget.js";
@@ -688,22 +687,13 @@ describe("memory index", () => {
 });
 
 describe("memory search sync warnings", () => {
-  const { createConfig: createCfg, getPersistentManager } = createManagerIndexFixture({
-    getMemorySearchManager,
-    closeAllMemorySearchManagers,
-  });
+  const { createConfig: createCfg, getPersistentManager } = createManagerIndexFixture(memory);
 
-  function captureWarnings() {
-    setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "json" });
-    return vi.spyOn(console, "warn").mockImplementation(() => {});
-  }
-
-  function renderedWarnings(warnSpy: ReturnType<typeof captureWarnings>): string {
-    return warnSpy.mock.calls.map((call) => String(call[0])).join("\n");
+  function renderedWarnings(): string {
+    return memoryWarnings.mock.calls.map((call) => String(call[0])).join("\n");
   }
 
   it("keeps nested causes in the background search sync warning", async () => {
-    const warnSpy = captureWarnings();
     const manager = await getPersistentManager(createCfg({ provider: "none", minScore: 0 }));
     await manager.sync({ reason: "test" });
     const servingFields = manager as unknown as {
@@ -722,22 +712,21 @@ describe("memory search sync warnings", () => {
       );
 
     try {
+      memoryWarnings.mockClear();
       await manager.search("zebra", { maxResults: 5, minScore: 0 });
       await servingFields.awaitManagerIdle();
-      const warning = renderedWarnings(warnSpy);
+      const warning = renderedWarnings();
       expect(warning).toContain("memory sync failed (search)");
       expect(warning).toContain("memory index maintenance failed");
       expect(warning).toContain("database is not open");
       expect(warning).toContain("ERR_INVALID_STATE");
     } finally {
       getSpy.mockRestore();
-      warnSpy.mockRestore();
-      resetLogger();
+      memoryWarnings.mockClear();
     }
   });
 
   it("keeps nested causes in the search-bootstrap sync warning", async () => {
-    const warnSpy = captureWarnings();
     const manager = await getPersistentManager(createCfg({ provider: "none", minScore: 0 }));
     const cause = Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" });
     const syncAdmittedSpy = vi
@@ -750,17 +739,17 @@ describe("memory search sync warnings", () => {
       .mockRejectedValue(new Error("bootstrap sync failed", { cause }));
 
     try {
+      memoryWarnings.mockClear();
       const results = await manager.search("zebra", { maxResults: 5, minScore: 0 });
       expect(results).toEqual([]);
-      const warning = renderedWarnings(warnSpy);
+      const warning = renderedWarnings();
       expect(warning).toContain("memory sync failed (search-bootstrap)");
       expect(warning).toContain("bootstrap sync failed");
       expect(warning).toContain("disk I/O error");
       expect(warning).toContain("SQLITE_IOERR");
     } finally {
       syncAdmittedSpy.mockRestore();
-      warnSpy.mockRestore();
-      resetLogger();
+      memoryWarnings.mockClear();
     }
   });
 });
