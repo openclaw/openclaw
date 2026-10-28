@@ -3624,7 +3624,6 @@
 ["src/commands/doctor-lint.oauth.test.ts","../agents/prepared-model-catalog.js","7372afe503553676b99b80f38ac2228b0b4760f2893ad1e00c83048875cc38ae",1]
 ["src/commands/doctor-lint.oauth.test.ts","../flows/doctor-health-contributions.js","aa16a9a0a32ea603cde9b65e9a8e041fa2420ec44ff4755a5542be71b26ecac9",1]
 ["src/commands/doctor-lint.oauth.test.ts","../plugins/provider-runtime.js","bffb35a9cda72cec66a5b0e1a5d17e348165bccb0b1a8e62a6bff440f64923a0",1]
-["src/commands/doctor-lint.state-isolation.test.ts","../flows/doctor-health-contributions.js","13bfcc37a63f6f4624f561592564a6c34e1b98e3c0c36a82a8388becf284fedd",1]
 ["src/commands/doctor-lint.update-budget.test.ts","../flows/doctor-health-contributions.js","bf820c8c46e503fa54098ccdfaf771fe60185cea3925e333e51a87455314a5ec",1]
 ["src/commands/doctor-maintenance.finish-revalidation.test.ts","../cli/update-cli/update-command-service-drain.js","cb07b7ddfbe7b66def81ca8c4ab100e8cb569fd4031b6146c052c0d19ee04739",1]
 ["src/commands/doctor-maintenance.installation.test.ts","../../packages/terminal-core/src/note.js","f5864cdeb859b12765491a2066778d233cade85ee0bc133481fa4580397b105b",1]
