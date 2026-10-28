@@ -4024,6 +4024,7 @@ class NodeRuntime internal constructor(
     disposition: TalkSessionCloseDisposition = TalkSessionCloseDisposition.Detach,
   ) {
     var startAfterSuppression: VoiceCaptureMode? = null
+    var talkSessionKey: String? = null
     var ownershipEpoch = 0L
     val suppressionUpdate =
       synchronized(voiceCaptureOwnershipLock) {
@@ -4066,6 +4067,8 @@ class NodeRuntime internal constructor(
           }
 
           VoiceCaptureMode.TalkMode -> {
+            // Capture the visible conversation before asynchronous microphone retirement.
+            talkSessionKey = chat.sessionKey.value
             if (persistManualMic) {
               prefs.setVoiceMicEnabled(false)
             }
@@ -4107,7 +4110,7 @@ class NodeRuntime internal constructor(
         if (voiceCaptureOwnershipEpoch.get() != ownershipEpoch || _voiceCaptureMode.value != startAfterSuppression) return@launch
         when (startAfterSuppression) {
           VoiceCaptureMode.ManualMic -> micCapture.setMicEnabled(true)
-          VoiceCaptureMode.TalkMode -> talkMode.setEnabled(true)
+          VoiceCaptureMode.TalkMode -> talkMode.setEnabled(true, sessionKey = talkSessionKey)
           else -> Unit
         }
       }

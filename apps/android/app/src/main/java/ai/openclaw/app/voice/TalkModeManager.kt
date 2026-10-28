@@ -341,6 +341,9 @@ class TalkModeManager internal constructor(
   // TTS creates an audio session conflict on some OEMs. Can be enabled via gateway talk config.
   private val interruptOnSpeech get() = configCache.get().value.interruptOnSpeech ?: false
   private var mainSessionKey: String = "main"
+  private var enabledSessionKey: String = "main"
+  private val activeSessionKey: String
+    get() = if (_isEnabled.value) enabledSessionKey else mainSessionKey
   private val speechLocale get() = configCache.get().value.speechLocale
   private val realtimeRelayModelSupported get() = configCache.get().value.realtimeRelayModelSupported
 
@@ -461,8 +464,13 @@ class TalkModeManager internal constructor(
     mainSessionKey = trimmed
   }
 
-  fun setEnabled(enabled: Boolean) {
+  fun setEnabled(
+    enabled: Boolean,
+    sessionKey: String? = null,
+  ) {
     if (_isEnabled.value == enabled) return
+    // A live call owns its destination; default-session refreshes must not redirect it.
+    if (enabled) enabledSessionKey = sessionKey?.trim()?.takeIf { it.isNotEmpty() } ?: mainSessionKey
     _isEnabled.value = enabled
     if (enabled) {
       Log.d(tag, "enabled")
@@ -888,7 +896,7 @@ class TalkModeManager internal constructor(
     state: String,
     message: JsonElement?,
   ) {
-    val activeSession = mainSessionKey
+    val activeSession = activeSessionKey
     if (sessionKey != null && sessionKey != activeSession) return
 
     // If this is a response we initiated, handle normally below.
@@ -1115,7 +1123,7 @@ class TalkModeManager internal constructor(
     val lease = change?.lease ?: session.captureRequestLease(gatewayStableId()) ?: error("Gateway not connected")
     val supportsVoiceSelection = listOf("talk.voice.get", "talk.voice.set", "talk.voice.complete").all(lease::supportsMethod)
     val transportGeneration = change?.gatewayGeneration ?: gatewayGeneration.get()
-    val sessionKey = change?.sessionKey ?: mainSessionKey
+    val sessionKey = change?.sessionKey ?: activeSessionKey
     val create: suspend (String?) -> String = { requestedLanguage ->
       val params =
         buildJsonObject {
@@ -2571,7 +2579,7 @@ class TalkModeManager internal constructor(
     armPendingRun(runId)
     val params =
       buildJsonObject {
-        put("sessionKey", JsonPrimitive(mainSessionKey))
+        put("sessionKey", JsonPrimitive(activeSessionKey))
         put("message", JsonPrimitive(message))
         // Omit the run deadline so the Gateway's configured agent timeout applies.
         put("idempotencyKey", JsonPrimitive(runId))
@@ -2599,7 +2607,7 @@ class TalkModeManager internal constructor(
 
     consumeRunCompletion(runId)?.let { return it }
 
-    val sessionKey = mainSessionKey
+    val sessionKey = activeSessionKey
     return coroutineScope {
       // History backs up missed events; a slow probe must not delay completion or Stop.
       val observer =
@@ -2681,7 +2689,7 @@ class TalkModeManager internal constructor(
   private suspend fun fetchLatestAssistantText(
     sinceSeconds: Double? = null,
   ): String? {
-    val key = mainSessionKey
+    val key = activeSessionKey
     val params = buildJsonObject { put("sessionKey", JsonPrimitive(key)) }
     val res = requestGateway("chat.history", params.toString())
     val root = json.parseToJsonElement(res).asObjectOrNull() ?: return null
