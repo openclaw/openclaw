@@ -62,6 +62,7 @@ import { startClickClackGatewayAccount } from "./gateway.js";
 import { ClickClackHttpError } from "./http-client.js";
 
 const { client, inbound, resolveAccess } = mocks;
+const transport = { apiBaseUrl: "http://127.0.0.1:8484", reconnectMs: 1 };
 
 let socket: FakeSocket;
 let abort: AbortController;
@@ -152,10 +153,7 @@ describe("ClickClack gateway", () => {
     socket = new FakeSocket();
     client.websocket.mockReturnValue(socket);
     abort = new AbortController();
-    ctx = createGatewayContext(abort.signal, {
-      apiBaseUrl: "http://127.0.0.1:8484",
-      reconnectMs: 1,
-    });
+    ctx = createGatewayContext(abort.signal, transport);
     run = undefined;
     mocks.createClickClackClient.mockReturnValue(client);
     client.me.mockResolvedValue({ id: "bot-user", handle: "bot" });
@@ -458,8 +456,12 @@ describe("ClickClack gateway", () => {
     const paused = pauseFirstDispatch();
     const slowAbort = new AbortController();
     const fastAbort = new AbortController();
-    const slowRun = startClickClackGatewayAccount(createGatewayContext(slowAbort.signal));
-    const fastRun = startClickClackGatewayAccount(createGatewayContext(fastAbort.signal));
+    const slowRun = startClickClackGatewayAccount(
+      createGatewayContext(slowAbort.signal, transport),
+    );
+    const fastRun = startClickClackGatewayAccount(
+      createGatewayContext(fastAbort.signal, transport),
+    );
 
     await waitForState(() => expect(client.websocket).toHaveBeenCalledTimes(2));
 
