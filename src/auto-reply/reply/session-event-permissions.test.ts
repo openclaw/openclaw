@@ -9,6 +9,7 @@ import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import { createGatewayTool } from "../../agents/tools/gateway-tool.js";
 import { resolveAttemptWorkspaceSandbox } from "../../agents/workspace-sandbox.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -846,6 +847,76 @@ it.for([
         observer.mockRestore();
         resetSystemEventsForTest();
       }
+    });
+  },
+);
+
+it.for(["owner", "guest", "revoked-owner"] as const)(
+  "runs an owner-only tool from a background completion only for its current owner requester: %s",
+  async (requester, { signal, onTestFinished }) => {
+    await runEventFixture("session-event-owner-requester", onTestFinished, async (state) => {
+      const config = await configureEventState(state, {
+        channels: { telegram: {} },
+        commands: { ownerAllowFrom: ["456"] },
+      });
+      const scope = { agentId: "main", sessionKey: "agent:main:owner-requester" };
+      await replaceSessionEntry(scope, {
+        sessionId: "owner-requester",
+        updatedAt: Date.now(),
+        sessionStartedAt: Date.now(),
+      });
+      // The host-owned exec caller supplies the requester; the producer only asks to retain it.
+      const target = await withGatewayToolCallerIdentity(
+        {
+          ...scope,
+          requesterOrigin: {
+            sessionKey: scope.sessionKey,
+            messageProvider: "telegram",
+            senderId: requester === "guest" ? "789" : "456",
+          },
+        },
+        () =>
+          captureSessionEventTargetForHost(scope.agentId, scope.sessionKey, {
+            retainRequesterOwner: true,
+          }),
+      );
+      if (requester === "revoked-owner") {
+        // The owner is removed after the command started but before its completion runs.
+        setRuntimeConfigSnapshot({ ...config, commands: { ownerAllowFrom: ["789"] } });
+      }
+      let senderIsOwner: boolean | undefined;
+      let restart: unknown;
+      runEmbeddedAgentMock
+        .mockReset()
+        .mockImplementation(async (params: RunEmbeddedAgentParams) => {
+          await startEmbeddedTurn(params, "completion admission");
+          senderIsOwner = params.senderIsOwner;
+          // The real owner-only gateway action; no in-process Gateway exists to restart here.
+          restart = await createGatewayTool({ senderIsOwner: params.senderIsOwner })
+            .execute("owner-only-restart", { action: "restart" })
+            .then(
+              (result) => result.details,
+              (error: unknown) => (error instanceof Error ? error.message : String(error)),
+            );
+          return { payloads: [{ text: "Completion observed" }], meta: { durationMs: 1 } };
+        });
+      const receipt = enqueueSessionEventForHost("Background command finished.", {
+        ...scope,
+        source: "exec",
+        expectedTarget: target,
+        abortSignal: signal,
+        deliver: false,
+      });
+      await expect(receipt.accepted).resolves.toEqual({ ok: true });
+      const outcome = await receipt.settled;
+      expect(outcome.status, outcome.error).toBe("completed");
+      expect(senderIsOwner).toBe(requester === "owner");
+      // An owner passes the owner gate and reaches the Gateway boundary; others stop before it.
+      expect(restart).toEqual(
+        requester === "owner"
+          ? "Gateway instance unavailable for restart"
+          : expect.objectContaining({ ok: false, code: "owner_required" }),
+      );
     });
   },
 );
