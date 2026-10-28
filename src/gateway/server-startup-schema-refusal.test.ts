@@ -47,7 +47,7 @@ it.each([
         database.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
         database
           .prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'")
-          .run("9999.1.0");
+          .run("9999.1.1");
       }
       const errorLog = vi.fn();
       setLoggerOverride({ level: "silent", consoleLevel: "error", consoleStyle: "json" });
@@ -74,7 +74,7 @@ it.each([
         refusal = error;
       }
       expect(refusal).toBeInstanceOf(Error);
-      const facts = `uses schema ${OPENCLAW_STATE_SCHEMA_VERSION + 1}; this build supports ${OPENCLAW_STATE_SCHEMA_VERSION}; It was written by OpenClaw 9999.1.0; it is newer than this Gateway (${VERSION}).`;
+      const facts = `uses schema ${OPENCLAW_STATE_SCHEMA_VERSION + 1}; this build supports ${OPENCLAW_STATE_SCHEMA_VERSION}; It was written by OpenClaw 9999.1.1; it is newer than this Gateway (${VERSION}).`;
       await expect(handleGatewayStartupMaintenance(refusal)).rejects.toBe(exited);
       const output = runtimeError.mock.calls.flat().join("\n");
       expect(output).toContain(facts);
@@ -88,7 +88,7 @@ it.each([
             path: databasePath,
             foundVersion: OPENCLAW_STATE_SCHEMA_VERSION + 1,
             supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-            writerAppVersion: "9999.1.0",
+            writerAppVersion: "9999.1.1",
           },
         ],
         {

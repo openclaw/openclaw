@@ -59,8 +59,8 @@ describe("readSqliteUserVersion", () => {
   );
 });
 
-it.each(["9999.1.0", VERSION, undefined])("handles schema writer %s", (writer) => {
-  const newer = writer === "9999.1.0";
+it.each(["9999.1.1", VERSION, undefined])("handles schema writer %s", (writer) => {
+  const newer = writer === "9999.1.1";
   const error = createNewerSqliteSchemaVersionError("test", "/tmp/test.sqlite", 12, 11, writer);
 
   expect(error.name).toBe("SqliteSchemaVersionError");

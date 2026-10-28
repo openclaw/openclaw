@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { compareOpenClawVersions } from "../config/version.js";
+import { compareReleaseVersions } from "../../scripts/lib/release-version.mjs";
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "../state/openclaw-state-db-contract.js";
 import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
@@ -67,7 +67,7 @@ export function describeRunningOpenClawBuild(): string {
 }
 
 export function isNewerSqliteWriterVersion(writerAppVersion: string | undefined): boolean {
-  return (compareOpenClawVersions(writerAppVersion, VERSION) ?? 0) > 0;
+  return (compareReleaseVersions(writerAppVersion ?? "", VERSION) ?? 0) > 0;
 }
 
 export function createNewerSqliteSchemaVersionError(

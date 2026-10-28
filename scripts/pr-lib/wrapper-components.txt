@@ -228,6 +228,7 @@ scripts/lib/plain-gh.mjs
 scripts/lib/plain-gh.sh
 scripts/lib/record-shared.mjs
 scripts/lib/release-changelog.mjs
+scripts/lib/release-version.mjs
 scripts/lib/repo-root.mjs
 scripts/lib/test-runtime.mts
 scripts/lib/test-selector-source-facts.mts
