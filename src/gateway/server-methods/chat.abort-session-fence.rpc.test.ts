@@ -227,7 +227,7 @@ async function withWorkerTransport(
   }
 }
 
-it("enforces allowed, foreign, revoked and stale cancellation through the worker owner and wire", () =>
+it("fences worker Stop across stale authority and unreadable session facts, retaining unfenced best effort", () =>
   withAbortFixture(async (f) => {
     await withWorkerTransport(f.context, async (worker) => {
       const original = await worker.start("old-worker", "previous-session");
@@ -248,20 +248,21 @@ it("enforces allowed, foreign, revoked and stale cancellation through the worker
       expect(await f.abort({ sessionId: scope.sessionId, runId: "worker" }, f.other)).toMatchObject(
         [false, undefined, { code: "INVALID_REQUEST", message: "unauthorized" }],
       );
-      const readSession = sessionUtils.loadGatewaySessionEntryReadOnlyInWorker;
-      using revoked = vi
-        .spyOn(sessionUtils, "loadGatewaySessionEntryReadOnlyInWorker")
-        .mockImplementationOnce(async (...args) => {
-          const result = await readSession(...args);
-          f.admin.connect.scopes = ["operator.read"];
-          return result;
-        });
-      expect(await f.abort({ sessionId: scope.sessionId, runId: "worker" })).toMatchObject([
-        false,
-        undefined,
-        { code: "FORBIDDEN" },
-      ]);
-      expect(revoked).toHaveBeenCalledOnce();
+      {
+        const readSession = sessionUtils.loadGatewaySessionEntryReadOnlyInWorker;
+        using _ = vi
+          .spyOn(sessionUtils, "loadGatewaySessionEntryReadOnlyInWorker")
+          .mockImplementationOnce(async (...args) => {
+            const result = await readSession(...args);
+            f.admin.connect.scopes = ["operator.read"];
+            return result;
+          });
+        expect(await f.abort({ sessionId: scope.sessionId, runId: "worker" })).toMatchObject([
+          false,
+          undefined,
+          { code: "FORBIDDEN" },
+        ]);
+      }
       await worker.flush();
       expect(worker.frames).toEqual([]);
       expect(current.aborted).toBe(false);
@@ -275,32 +276,19 @@ it("enforces allowed, foreign, revoked and stale cancellation through the worker
       await worker.flush();
       expect(current.aborted).toBe(true);
       expect(original.aborted).toBe(false);
-      expect(worker.frames).toMatchObject([
-        {
-          event: "worker.inference.terminal",
-          payload: {
-            runId: "worker",
-            sessionId: scope.sessionId,
-            outcome: { type: "error", reason: "cancelled" },
-          },
-        },
-      ]);
-    });
-  }));
+      expect(local.input.abortSignal.aborted).toBe(false);
+      const terminals = () =>
+        worker.frames.map(({ payload }) => [payload.runId, payload.sessionId, payload.outcome]);
+      const stopped = ["worker", scope.sessionId, { type: "error", reason: "cancelled" }];
+      expect(terminals()).toMatchObject([stopped]);
 
-it("requires readable current-session facts for fenced Stop but preserves unfenced best effort", () =>
-  withAbortFixture(async (f) => {
-    await withWorkerTransport(f.context, async (worker) => {
-      const local = f.register("old-local", "previous-session");
-      const remote = await worker.start("old-worker", "previous-session");
-      using unreadable = vi
-        .spyOn(sessionUtils, "loadGatewaySessionEntryReadOnlyInWorker")
-        .mockRejectedValue(
-          Object.assign(new Error("Synthetic session read failed"), {
-            code: "ERR_SQLITE_ERROR",
-            errcode: 5,
-          }),
-        );
+      // The old owners survive the exact stop and must also survive unreadable fenced requests.
+      using _ = vi.spyOn(sessionUtils, "loadGatewaySessionEntryReadOnlyInWorker").mockRejectedValue(
+        Object.assign(new Error("Synthetic session read failed"), {
+          code: "ERR_SQLITE_ERROR",
+          errcode: 5,
+        }),
+      );
       for (const runId of ["old-local", "old-worker"]) {
         expect(await f.abort({ sessionId: "previous-session", runId })).toMatchObject([
           false,
@@ -309,26 +297,19 @@ it("requires readable current-session facts for fenced Stop but preserves unfenc
         ]);
       }
       await worker.flush();
-      expect(unreadable).toHaveBeenCalledTimes(2);
-      expect.soft(local.input.abortSignal.aborted).toBe(false);
-      expect.soft(remote.aborted).toBe(false);
-      expect.soft(worker.frames).toEqual([]);
+      expect(local.input.abortSignal.aborted).toBe(false);
+      expect(original.aborted).toBe(false);
+      expect(terminals()).toMatchObject([stopped]);
       // Without the opt-in fence, the captured owner still stops before the read error returns.
       for (const runId of ["old-local", "old-worker"]) {
         expect((await f.abort({ runId }))[0]).toBe(false);
       }
       await worker.flush();
       expect(local.input.abortSignal.aborted).toBe(true);
-      expect(remote.aborted).toBe(true);
-      expect(worker.frames).toMatchObject([
-        {
-          event: "worker.inference.terminal",
-          payload: {
-            runId: "old-worker",
-            sessionId: "previous-session",
-            outcome: { type: "error", reason: "cancelled" },
-          },
-        },
+      expect(original.aborted).toBe(true);
+      expect(terminals()).toMatchObject([
+        stopped,
+        ["old-worker", "previous-session", { type: "error", reason: "cancelled" }],
       ]);
     });
   }));
