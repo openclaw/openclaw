@@ -236,6 +236,19 @@ describe("renderChatComposer controls", () => {
     expect(button(view.container, t("chat.composer.startVoiceInput")).disabled).toBe(true);
   });
 
+  it.each(["/stop", " /STOP ", "/status", "/approve", "/stop later"])(
+    "admits only exact Stop commands while offline (%s)",
+    (draft) => {
+      const { container, onSend } = renderComposer({ connected: false, draft });
+      const allowed = draft === "/stop" || draft === " /STOP ";
+      const send = primaryButton(container);
+      expect(send.disabled).toBe(!allowed);
+      expect(pressComposerEnter(container).defaultPrevented).toBe(allowed);
+      send.click();
+      expect(onSend).toHaveBeenCalledTimes(allowed ? 2 : 0);
+    },
+  );
+
   it("offers Steer only for eligible queued messages during an active run", async () => {
     const onQueueSteer = vi.fn();
     const { container } = renderComposer({
