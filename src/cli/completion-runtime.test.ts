@@ -547,22 +547,3 @@ it.skipIf(process.platform === "win32").each([
     true,
   );
 });
-
-it("inspects legacy hooks but refuses to rewrite malformed UTF-8", async () => {
-  await withCompletionHome(async () => {
-    const cachePath = await writeCompletionCache("bash");
-    const profilePath = await writeProfile("bash", "");
-    const bytes = Buffer.concat([
-      Buffer.from("# caf"),
-      Buffer.from([0xe9]),
-      Buffer.from(`\n# OpenClaw Completion\n[ -f '${cachePath}' ] && source '${cachePath}'\n`),
-    ]);
-    await fs.writeFile(profilePath, bytes);
-    await expect(isCompletionInstalled("bash")).resolves.toBe(true);
-    await expect(usesSlowDynamicCompletion("bash")).resolves.toBe(false);
-    await expect(installCompletion("bash", true)).rejects.toThrow(
-      /left untouched[\s\S]*load the prepared cache/,
-    );
-    expect(await fs.readFile(profilePath)).toEqual(bytes);
-  });
-});

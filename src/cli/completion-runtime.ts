@@ -29,6 +29,7 @@ class CompletionProfileEncodingError extends Utf8InputError {
     cause: unknown,
   ) {
     super(message, { cause });
+    this.name = "CompletionProfileEncodingError";
   }
 }
 
@@ -635,6 +636,9 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
       );
     }
   } catch (err) {
+    if (err instanceof CompletionProfileEncodingError) {
+      throw err;
+    }
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`Failed to install completion: ${message}`, { cause: err });
   }

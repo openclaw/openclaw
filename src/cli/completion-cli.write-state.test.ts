@@ -9,10 +9,12 @@ import { expectInstalledCompletionProfile } from "./completion-profile.test-supp
 import {
   COMPLETION_SHELLS,
   formatCompletionReloadCommand,
+  isCompletionInstalled,
   resolveCompletionCachePath,
   resolveCompletionProfileHint,
   resolveCompletionProfilePath,
   type CompletionShell,
+  usesSlowDynamicCompletion,
 } from "./completion-runtime.js";
 import { formatCliFailureLines, isExpectedCliError } from "./failure-output.js";
 
@@ -158,12 +160,25 @@ describe("completion-cli write-state", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each(["bash", "zsh"] as const)(
-    "prints the missing-cache recovery command and leaves the %s profile unchanged",
-    async (shell) => {
+  it.each([
+    ["bash", false],
+    ["zsh", false],
+    ["bash", true],
+  ] as const)(
+    "prints recovery and preserves the %s profile (malformed UTF-8=%s)",
+    async (shell, malformed) => {
       const profilePath = resolveCompletionProfilePath(shell);
-      const original = "# existing shell settings\n";
-      await fs.writeFile(profilePath, original, "utf8");
+      if (malformed) {
+        await seedCache(shell);
+      }
+      const hook = `[ -f '${resolveCompletionCachePath(shell, "openclaw")}' ] && source '${resolveCompletionCachePath(shell, "openclaw")}'`;
+      const original = Buffer.from(
+        malformed ? `# caf\xe9\n# OpenClaw Completion\n${hook}\n` : "# existing shell settings\n",
+        "latin1",
+      );
+      await fs.writeFile(profilePath, original);
+      await expect(isCompletionInstalled(shell)).resolves.toBe(malformed);
+      await expect(usesSlowDynamicCompletion(shell)).resolves.toBe(false);
 
       let caught: unknown;
       try {
@@ -178,9 +193,13 @@ describe("completion-cli write-state", () => {
         error: caught,
         argv: ["node", "openclaw", "completion", "--shell", shell, "--install", "--yes"],
       });
-      expect(lines.join("\n")).toContain("openclaw completion --write-state");
+      expect(lines.join("\n")).toMatch(
+        malformed
+          ? /left untouched[\s\S]*load the prepared cache/
+          : /openclaw completion --write-state/,
+      );
       expect(lines.join("\n")).not.toContain("doctor");
-      await expect(fs.readFile(profilePath, "utf8")).resolves.toBe(original);
+      await expect(fs.readFile(profilePath)).resolves.toEqual(original);
       expectNoRegistration();
     },
   );
