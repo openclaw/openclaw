@@ -6,6 +6,10 @@ import {
 } from "../../agents/reply-completion.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import { logVerbose } from "../../globals.js";
+import {
+  assertAgentRunLifecycleGenerationCurrent,
+  getAgentEventLifecycleGeneration,
+} from "../../infra/agent-events.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import {
@@ -114,6 +118,7 @@ export async function runReplyAgent(
   followupRun.abortSignal =
     upstreamSignals.length > 1 ? AbortSignal.any(upstreamSignals) : upstreamSignals[0];
   const preparationResources: { stopBlockReply?: () => void } = {};
+  const inputGeneration = getAgentEventLifecycleGeneration();
   try {
     followupRun.operatorAuthority?.assertCurrent();
     const resolveGatewayContext = providedReplyOperation
@@ -300,7 +305,10 @@ export async function runReplyAgent(
         input: controllerInput,
         followupRun,
         runId,
-        assertCurrent: assertReadCurrent,
+        assertCurrent: () => {
+          assertAgentRunLifecycleGenerationCurrent(inputGeneration);
+          followupRun.operatorAuthority?.assertCurrent();
+        },
         enqueue: () =>
           enqueueFollowupRun(
             queueKey,

@@ -1,11 +1,11 @@
 import { MessageChannel } from "node:worker_threads";
 import { racePromiseWithAbortSignal } from "../../../packages/retry/src/index.js";
 import { measureGatewayCloseStep } from "../../gateway/restart-trace.js";
-import { finishDiagnosticsTimeline } from "../../infra/diagnostics-timeline.js";
 import {
   hasGatewayCleanupRetainedError,
   isGatewayCleanupRetainedError,
 } from "../../gateway/server-shutdown.js";
+import { finishDiagnosticsTimeline } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { cleanupSnapshotOperations } from "../../infra/sqlite-readonly-location-cleanup.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
@@ -153,7 +153,7 @@ export function createGatewayRunCleanup(
       // Final diagnostics follow the actual producer joins, including failed cleanup.
       finishDiagnosticsTimeline(
         ownsProcessLifecycle === true &&
-          processResourcesDrained &&
+          this.drained &&
           !resourcesRetained &&
           !cleanupFailed &&
           errors.length === 0 &&
