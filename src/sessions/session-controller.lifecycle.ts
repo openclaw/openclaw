@@ -662,6 +662,17 @@ export async function beginSessionEffect(
   }
 }
 
+/** Ingress consumes this before reserving a receipt, before asynchronous preparation can yield. */
+export function readSessionControllerAdmissionError(params: TargetInput): Error | undefined {
+  for (const entry of matchingEntries(targetFrom(params))) {
+    const closure = entry.lifecycle?.closures.values().next().value;
+    if (closure) {
+      return closure.reason;
+    }
+  }
+  return undefined;
+}
+
 export function closeSessionControllerAdmission(
   params: TargetInput & { reason: Error; assertCurrent?: () => void },
 ): () => void {

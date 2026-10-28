@@ -24,6 +24,7 @@ import type {
 import {
   beginSessionEffect,
   captureSessionTarget,
+  readSessionControllerAdmissionError,
 } from "../../sessions/session-controller.lifecycle.js";
 import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
 import {
@@ -45,7 +46,10 @@ import {
   prepareChatSendAcpMetadata,
   prepareChatSendAcpRefresh,
 } from "./chat-send-admission-context.js";
-import { respondChatSessionRoutingChanged } from "./chat-send-admission-errors.js";
+import {
+  respondChatSendAdmissionError,
+  respondChatSessionRoutingChanged,
+} from "./chat-send-admission-errors.js";
 import {
   isLocalChatInputAdmission,
   isWorkerGoalChatAdmission,
@@ -139,6 +143,15 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     }
     const retryComparison = consumeChatSendAdmissionRetry(params, preparedRetry);
     if (retryComparison === false) {
+      return undefined;
+    }
+    const admissionError = readSessionControllerAdmissionError({
+      scope: storePath,
+      identities: [sessionKey, rawSessionKey, backingSessionId],
+      agentId,
+    });
+    if (admissionError) {
+      respondChatSendAdmissionError(admissionError, respond);
       return undefined;
     }
     const uploadAdmission = admitChatSendUploads({ params: p, client, context, respond });
