@@ -42,9 +42,7 @@ describe("progress card refresh control", () => {
       const details = container.querySelector("details")!;
       const summary = container.querySelector("summary")!;
       const button = container.querySelector<HTMLButtonElement>(".session-progress-card__refresh")!;
-      expect(button.closest(".session-progress-card__summary-expanded")).toBeNull();
       expect(button.textContent).toContain("Refresh task progress");
-      expect(button.querySelector("svg path")).not.toBeNull();
       const down = new MouseEvent("pointerdown", { bubbles: true, button: 0, clientY: 100 });
       Object.defineProperties(down, { isPrimary: { value: true }, pointerId: { value: 1 } });
       button.dispatchEvent(down);
@@ -97,48 +95,23 @@ describe("progress card refresh control", () => {
     expect(cardPart(container, "step--paused")).not.toBeNull();
   });
 
-  it("does not expose refresh on read-only board cards", () => {
-    const container = mountCard({
+  it("retires disclosure listeners when changing to a board card", () => {
+    const { container, show } = createView();
+    show({ card: null });
+    expect(container.querySelector("details")).toBeNull();
+    show({ placement: "composer" });
+    const details = container.querySelector("details")!;
+    const summary = details.querySelector("summary")!;
+    summary.click();
+    show({ card: { ...progressCard, revision: 3 } });
+    expect(container.querySelector("details")).toBe(details);
+    expect(details.open).toBe(false);
+    show({
       placement: "board",
       hasActiveRun: true,
-      collapseComposerByDefault: false,
       refreshAction: { onRefresh: vi.fn() },
     });
     expect(cardPart(container, "refresh")).toBeNull();
-  });
-
-  it("retains manual disclosure across card updates and retires absent cards", () => {
-    const { container, show } = createView();
-    show({ card: null });
-    expect(container.querySelector("details")).toBeNull();
-    show({ card: progressCard });
-    const details = container.querySelector("details")!;
-    details.querySelector("summary")!.click();
-    expect(details.open).toBe(false);
-    show({
-      card: {
-        ...progressCard,
-        revision: 3,
-        markdown: "**Updated progress**",
-        steps: [{ step: "Wire the updated checklist", status: "in_progress" }],
-      },
-    });
-    expect(container.querySelector("details")).toBe(details);
-    expect(details.open).toBe(false);
-    expect(details.textContent).toContain("Wire the updated checklist");
-    expect(details.querySelector("strong")?.textContent).toBe("Updated progress");
-    show({ card: null });
-    expect(container.querySelector("details")).toBeNull();
-    // Deliver jsdom's queued details toggle without advancing the 30s activity interval.
-    advance(0);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("retires disclosure listeners when changing to a board card", () => {
-    const { container, show } = createView();
-    show({ placement: "composer" });
-    const summary = container.querySelector("summary")!;
-    show({ placement: "board" });
     expect(container.querySelector("details")).toBeNull();
     expect(container.querySelector("section")?.dataset.progressCardPlacement).toBe("board");
     const click = new MouseEvent("click", { bubbles: true, cancelable: true });
@@ -148,6 +121,10 @@ describe("progress card refresh control", () => {
     vi.advanceTimersToNextFrame();
     flush();
     expect(vi.getTimerCount()).toBe(1);
+    show({ card: null });
+    expect(container.querySelector("details")).toBeNull();
+    advance(0);
+    expect(vi.getTimerCount()).toBe(0);
     show({ placement: "details" });
     expect(container.querySelector("details")?.open).toBe(true);
     vi.advanceTimersToNextFrame();

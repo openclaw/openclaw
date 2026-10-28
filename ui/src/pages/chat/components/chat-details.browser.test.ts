@@ -3,6 +3,7 @@ import { createComponent, createSignal, merge } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { phase } from "../../../test-helpers/solid-menu.tsx";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
 import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
@@ -474,8 +475,7 @@ describe("chat Details presentation", () => {
     const menu = progress.querySelector<HTMLElement>(".chat-details-progress__menu")!;
     const menuSurface = menu.querySelector<HTMLElement>('[role="menu"]')!;
     menu.querySelector<HTMLButtonElement>("button")!.click();
-    await expect.poll(() => menuSurface.dataset.phase).toBe("open");
-    expect(menuSurface.matches(":popover-open")).toBe(true);
+    await phase(menuSurface, "open");
     updateChat({ messages: [] });
     flush();
     expect(menuSurface.matches(":popover-open")).toBe(true);
@@ -581,8 +581,7 @@ describe("chat Details presentation", () => {
     const menu = progress.querySelector<HTMLElement>(".chat-details-progress__menu")!;
     const menuSurface = menu.querySelector<HTMLElement>('[role="menu"]')!;
     menu.querySelector<HTMLButtonElement>("button")!.click();
-    await expect.poll(() => menuSurface.dataset.phase).toBe("open");
-    expect(menuSurface.matches(":popover-open")).toBe(true);
+    await phase(menuSurface, "open");
     expect(progress.querySelector<HTMLDetailsElement>(".task-progress-details")!.open).toBe(true);
     const select = async (value: string) => {
       if (trigger.getAttribute("aria-expanded") !== "true") {
@@ -594,7 +593,7 @@ describe("chat Details presentation", () => {
       }
       if (menu.querySelector("button")!.getAttribute("aria-expanded") !== "true") {
         menu.querySelector<HTMLButtonElement>("button")!.click();
-        await expect.poll(() => menuSurface.dataset.phase).toBe("open");
+        await phase(menuSurface, "open");
       }
       menu.querySelector<HTMLButtonElement>(`[data-value="${value}"]`)!.click();
     };
