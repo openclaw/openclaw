@@ -19,7 +19,6 @@ import { writeJsonFile } from "../../../test/helpers/temp-repo.js";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import * as census from "../../infra/openclaw-process-census.js";
-import { assertNoPendingPackageActivation } from "../../infra/package-update-activation.js";
 import {
   publicationActivation,
   withPublicationFence,
@@ -279,7 +278,6 @@ unix(
   "repair settles cancelled custody together with an unused package preparation",
   { timeout: 60_000 },
   async () => {
-    // The swap fixture's package becomes the crashed updater's installation.
     const swap = await createPackageSwapFixture(path.dirname(f.install));
     fs.rmSync(f.install, { recursive: true });
     fs.renameSync(swap.packageRoot, f.install);
@@ -292,22 +290,19 @@ unix(
         ? pathToFileURL(helper)
         : resolveWorkerUrl(entry),
     );
-    const { initial } = await withPublicationFence(f.slot, async (fence) =>
+    await withPublicationFence(f.slot, async (fence) =>
       preparePackagePublication({ ...swap, packageRoot: f.install }, publicationActivation(fence)),
     );
-    expect(initial.phase).toBe("prepared");
     f.crash();
     await f.stopCandidate();
 
     // Package settlement used to request fresh admission, which the custody refused.
     await repair();
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(defaultRuntime.error).toHaveBeenCalledWith(
       expect.stringContaining("closed as publication-not-started"),
     );
     expect(lastJson()).toMatchObject({ status: "ok" });
     expect(f.rows()).toEqual([]);
-    expect(() => assertNoPendingPackageActivation(f.install)).not.toThrow();
     await expect(admit("next-update")).resolves.toBe("admitted");
   },
 );

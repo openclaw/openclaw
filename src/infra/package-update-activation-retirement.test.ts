@@ -111,6 +111,14 @@ describe.skipIf(process.platform === "win32")("verified package cleanup", () => 
       const reported = vi.fn().mockImplementationOnce(() => {
         throw new Error("reporting interrupted before archival");
       });
+      // A lost repair claim stops settlement before any report, journal or file change.
+      const owner = () => {
+        throw new Error("repair claim lost");
+      };
+      await expect(
+        settlePendingPackageActivation(f.packageRoot, reported, undefined, { owner }),
+      ).rejects.toThrow("repair claim lost");
+      expect(openPackageActivationJournal(f.anchor).read().phase).toBe("prepared");
       await expect(settlePendingPackageActivation(f.packageRoot, reported)).rejects.toThrow(
         "reporting interrupted before archival",
       );
