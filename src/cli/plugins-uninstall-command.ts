@@ -1,5 +1,5 @@
 // Terminal preview and confirmation for the shared plugin uninstall owner.
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../config/config.js";
 import type { PreparedPluginUninstall } from "../plugins/management-uninstall.js";
@@ -48,17 +48,16 @@ export async function runPluginUninstallCommand(
     if (preview.plan.directoryRemoval) {
       labels.push(`directory: ${shortenHomePath(preview.plan.directoryRemoval.target)}`);
     }
-    // Manifest-derived ids are untrusted: strip terminal controls before styling.
-    const pluginId = sanitizeTerminalText(preview.pluginId);
+    const pluginId = terminalText`${preview.pluginId}`;
     runtime.log(
-      `Plugin: ${theme.command(sanitizeTerminalText(preview.name))}${preview.name !== preview.pluginId ? theme.muted(` (${pluginId})`) : ""}`,
+      `Plugin: ${theme.command(terminalText`${preview.name}`)}${preview.name !== preview.pluginId ? theme.muted(` (${pluginId})`) : ""}`,
     );
     if (preview.pluginIds.length > 1 || preview.requestedPluginId !== preview.pluginId) {
       runtime.log(
-        `Package owner: ${theme.command(pluginId)}; all entries will be removed: ${preview.pluginIds.map(sanitizeTerminalText).join(", ")}`,
+        `Package owner: ${theme.command(pluginId)}; all entries will be removed: ${terminalText`${preview.pluginIds.join(", ")}`}`,
       );
     }
-    runtime.log(`Will remove: ${labels.length ? labels.join(", ") : "(nothing)"}`);
+    runtime.log(terminalText`Will remove: ${labels.length ? labels.join(", ") : "(nothing)"}`);
   };
   const executeLocal = async (
     targetPluginId: string,
@@ -83,20 +82,20 @@ export async function runPluginUninstallCommand(
           await printPreview(preview);
         }
       },
-      onWarning: (message) => runtime.log(theme.warn(message)),
+      onWarning: (message) => runtime.log(theme.warn(terminalText`${message}`)),
       onComplete: ({ pluginId, requestedPluginId, pluginIds, removed }) => {
         const subject =
           pluginIds.length > 1 || requestedPluginId !== pluginId
             ? `plugin package "${pluginId}" and entries ${pluginIds.join(", ")}`
             : `plugin "${pluginId}"`;
         runtime.log(
-          `Uninstalled ${subject}. Removed: ${removed.length ? removed.join(", ") : "nothing"}.`,
+          terminalText`Uninstalled ${subject}. Removed: ${removed.length ? removed.join(", ") : "nothing"}.`,
         );
         runtime.log("Saved for the next Gateway start.");
       },
     });
     if (!result.ok) {
-      runtime.error(result.error);
+      runtime.error(terminalText`${result.error}`);
       runtime.exit(1);
     }
     return result.ok;
@@ -121,7 +120,7 @@ export async function runPluginUninstallCommand(
   for (const pluginId of ids) {
     const prepared = await preparePluginUninstall({ pluginId, keepFiles, caller: "cli" });
     if (!prepared.ok) {
-      runtime.error(prepared.error);
+      runtime.error(terminalText`${prepared.error}`);
       runtime.exit(1);
       return;
     }
@@ -139,8 +138,8 @@ export async function runPluginUninstallCommand(
       try {
         confirmed = await promptYesNo(
           preview.pluginIds.length > 1
-            ? `Uninstall plugin package "${preview.pluginId}" and all entries?`
-            : `Uninstall plugin "${preview.pluginId}"?`,
+            ? terminalText`Uninstall plugin package "${preview.pluginId}" and all entries?`
+            : terminalText`Uninstall plugin "${preview.pluginId}"?`,
         );
       } catch (error) {
         if (!(error instanceof PromptInputClosedError)) {
@@ -163,10 +162,10 @@ export async function runPluginUninstallCommand(
         { pluginId: preview.pluginId, keepFiles },
       );
       for (const warning of result.warnings ?? []) {
-        runtime.log(theme.warn(warning));
+        runtime.log(theme.warn(terminalText`${warning}`));
       }
       runtime.log(
-        `Uninstalled plugin "${result.pluginId}". Removed: ${result.removed.join(", ") || "nothing"}.`,
+        terminalText`Uninstalled plugin "${result.pluginId}". Removed: ${result.removed.join(", ") || "nothing"}.`,
       );
     } else if (!(await execute(preview.pluginId, true))) {
       return;

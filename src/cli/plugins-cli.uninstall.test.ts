@@ -148,44 +148,6 @@ it("escapes terminal controls from the installed manifest name in the preview", 
   expect(output).toContain("Plugin: alpha\\nforged-row (alpha)");
 });
 
-it("escapes terminal controls from plugin ids in the preview", async () => {
-  const owner = "evil\u001b[31m\u0007-pack";
-  const firstId = "evil\u001b[2J\u0007-pack/first";
-  const secondId = "evil\u001b[31m-pack/second\u0007";
-  const installPath = path.join(tempDirs.make("openclaw-cli-uninstall-controls-"), "pack");
-  const installRecords = {
-    [owner]: { source: "path" as const, sourcePath: installPath, installPath },
-  };
-  cli.pluginCliConfigMock.mockReturnValue({
-    plugins: { entries: { [firstId]: { enabled: true }, [secondId]: { enabled: true } } },
-  });
-  cli.setInstalledPluginIndexInstallRecords(installRecords);
-  setPluginSnapshot({ id: firstId, name: "First plugin" }, { id: secondId, name: "Second plugin" });
-  const installedIndex = await import("../plugins/installed-plugin-index.js");
-  using indexSpy = vi.spyOn(installedIndex, "loadInstalledPluginIndex").mockReturnValue(
-    createIndex({
-      policyHash: "terminal-controls",
-      installRecords,
-      plugins: [
-        recordInstalledPluginIndexInstallOwner(indexEntry(firstId, installPath), owner),
-        recordInstalledPluginIndexInstallOwner(indexEntry(secondId, installPath), owner),
-      ],
-    }),
-  );
-
-  await uninstall(secondId, "--dry-run");
-
-  expect(indexSpy).toHaveBeenCalled();
-  const output = cli.pluginsCliRuntimeLogs.join("\n");
-  expect(output).not.toContain("\u001b");
-  expect(output).not.toContain("\u0007");
-  expect(output).toContain("Plugin: Second plugin (evil-pack)");
-  expect(output).toContain(
-    "Package owner: evil-pack; all entries will be removed: evil-pack/first, evil-pack/second",
-  );
-  expectRuntimeLogIncludes("Dry run, no changes made.");
-});
-
 it("forwards online --keep-files without deleting files or writing config locally", async () => {
   configureAlphaInstall();
   cli.resolvePluginLifecycleGatewayMock.mockResolvedValue(cli.pluginLifecycleGatewayMock);

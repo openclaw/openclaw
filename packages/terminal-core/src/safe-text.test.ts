@@ -18,27 +18,24 @@ describe("hasTerminalControl", () => {
 });
 
 describe("sanitizeTerminalText", () => {
-  it("removes C1 control characters", () => {
-    expect(sanitizeTerminalText("ab\u0085\u008Dc")).toBe("abc");
-  });
-
-  it("strips cursor and erase ANSI sequences", () => {
-    expect(sanitizeTerminalText("\u001b[2K\u001b[1Arewritten")).toBe("rewritten");
-  });
-
-  it("removes OSC clipboard payloads", () => {
-    expect(sanitizeTerminalText("safe\u001b]52;c;YWJj\u0007text")).toBe("safetext");
-  });
-
-  it("escapes line controls while preserving printable text", () => {
-    expect(sanitizeTerminalText("a\tb\nc\rd")).toBe("a\\tb\\nc\\rd");
+  it.each([
+    ["ab\u0085\u008Dc", "abc"],
+    ["\u001b[2K\u001b[1Arewritten", "rewritten"],
+    ["safe\u001b]52;c;YWJj\u0007text", "safetext"],
+    ["a\tb\nc\rd", "a\\tb\\nc\\rd"],
+    [
+      "👩\u200d💻 שלום\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069 Phone",
+      "👩\u200d💻 שלום Phone",
+    ],
+  ])("neutralizes control characters while preserving printable text: %j", (input, expected) => {
+    expect(sanitizeTerminalText(input)).toBe(expected);
   });
 });
 
 describe("terminalText", () => {
   it("escapes only interpolated values before styling, preserving literal layout and colors", () => {
     const value =
-      "café\u001b[31mred\u001b[0m\u001b]8;;https://example.invalid\u0007link\u001b]8;;\u0007\u009b2J\r\n\tend";
+      "café\u202e\u2067\u001b[31mred\u001b[0m\u001b]8;;https://example.invalid\u0007link\u001b]8;;\u0007\u009b2J\r\n\tend\u2069";
     const colors = new Chalk({ level: 1 });
     const report = terminalText`Name:\t${value}\nCount: ${2}`;
     expect(colors.green(report)).toBe(colors.green("Name:\tcaféredlink\\r\\n\\tend\nCount: 2"));

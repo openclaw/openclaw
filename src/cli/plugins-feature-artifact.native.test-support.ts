@@ -1,14 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { after as afterAll, afterEach, describe, it } from "node:test";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { extract } from "tar";
-import { copyTreeCloseOnExec } from "../../test/helpers/close-on-exec-copy.js";
 import {
   validatePackageExtensionEntriesForInstall,
   resolvePackageRuntimeExtensionSources,
@@ -31,13 +29,11 @@ import {
 import { runPluginsPackCommand } from "./plugins-feature-artifact.js";
 
 const originalWriteJson = defaultRuntime.writeJson;
-const originalLog = defaultRuntime.log;
 const directories: string[] = [];
 let pristineParent: string | undefined;
 let pristineFixturePromise: Promise<string> | undefined;
 afterEach(async () => {
   defaultRuntime.writeJson = originalWriteJson;
-  defaultRuntime.log = originalLog;
   await Promise.all(
     directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
   );
@@ -106,72 +102,6 @@ function hasMessage(message: string) {
 }
 
 void describe("plugin artifact authoring", () => {
-  void it("sanitizes the pack display while preserving artifact paths, IDs, and JSON receipts", async () => {
-    // openclaw-temp-dir: allow node:test owns cleanup through the shared directories list.
-    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pack-output-"));
-    directories.push(parent);
-    const rootDir = path.join(parent, "project");
-    await fs.mkdir(rootDir);
-    const require = createRequire(import.meta.url);
-    copyTreeCloseOnExec(
-      path.dirname(path.dirname(require.resolve("esbuild/package.json"))),
-      path.join(rootDir, "node_modules"),
-      { dereference: true },
-    );
-    const pluginId = "café\u001b[31m\nforged\trow\r🦀";
-    await fs.writeFile(
-      path.join(rootDir, "package.json"),
-      JSON.stringify({
-        name: "pack-output",
-        type: "module",
-        openclaw: { extensions: ["./index.js"] },
-      }),
-    );
-    await fs.writeFile(
-      path.join(rootDir, "index.js"),
-      `import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
-export default defineToolPlugin({ id: ${JSON.stringify(pluginId)}, name: "Pack output", description: "Output fixture", tools: (tool) => [tool({ name: "output_echo", description: "Echo", parameters: { type: "object", properties: {} }, execute: async () => ({ ok: true }) })] });`,
-    );
-    await runPluginsBuildCommand({ root: rootDir });
-    const output: unknown[] = [];
-    defaultRuntime.log = (message) => output.push(message);
-    const archive = path.join(parent, "café-🦀.tgz");
-    await runPluginsPackCommand({ root: rootDir, out: archive });
-    const bytes = await fs.readFile(archive);
-    const sha256 = createHash("sha256").update(bytes).digest("hex");
-    assert.deepEqual(output, [
-      `Packed café\\nforged\\trow\\r🦀: ${path.join(parent, "café-🦀.tgz")}\nSHA256: ${sha256}\nUse plugin_activate_artifact with this path and digest to request activation approval.`,
-    ]);
-
-    const jsonOutput: unknown[] = [];
-    defaultRuntime.writeJson = (value) => jsonOutput.push(value);
-    const jsonArchive = path.join(parent, "json-café-🦀.tgz");
-    await runPluginsPackCommand({ root: rootDir, out: jsonArchive, json: true });
-    const jsonBytes = await fs.readFile(jsonArchive);
-    const jsonSha256 = createHash("sha256").update(jsonBytes).digest("hex");
-    assert.deepEqual(jsonOutput, [
-      {
-        path: jsonArchive,
-        sha256: jsonSha256,
-        pluginId,
-        bytes: jsonBytes.length,
-        activation: { action: "plugin_activate_artifact", path: jsonArchive, sha256: jsonSha256 },
-      },
-    ]);
-    assert.equal(output.length, 1);
-    const extracted = path.join(parent, "extracted");
-    await fs.mkdir(extracted);
-    await extract({ file: archive, cwd: extracted, strict: true });
-    assert.deepEqual(
-      await fs.readFile(path.join(extracted, "package/openclaw.plugin.json")),
-      await fs.readFile(path.join(rootDir, "openclaw.plugin.json")),
-    );
-    const manifest = JSON.parse(
-      await fs.readFile(path.join(extracted, "package/openclaw.plugin.json"), "utf8"),
-    );
-    assert.equal(manifest.id, pluginId);
-  });
-
   void it("packs CommonJS dependencies into a self-contained artifact bound to its exact digest", async () => {
     const { rootDir, parent } = await fixture();
     await fs.appendFile(

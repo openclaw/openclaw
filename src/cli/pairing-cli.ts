@@ -8,6 +8,7 @@ import type {
   ChannelsPairingCodeApproveResult,
 } from "../../packages/gateway-protocol/src/schema/channel-pairing.js";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   getTerminalTableWidth,
   renderTerminalSafeTable,
@@ -115,7 +116,7 @@ export function registerPairingCli(program: Command) {
         return;
       }
       if (requests.length === 0) {
-        defaultRuntime.log(theme.muted(`No pending ${channel} pairing requests.`));
+        defaultRuntime.log(theme.muted(terminalText`No pending ${channel} pairing requests.`));
         return;
       }
       const idLabel = resolvePairingIdLabel(channel);
@@ -128,7 +129,7 @@ export function registerPairingCli(program: Command) {
           width: tableWidth,
           columns: [
             { key: "Code", header: "Code", minWidth: 10 },
-            { key: "ID", header: idLabel, minWidth: 12, flex: true },
+            { key: "ID", header: terminalText`${idLabel}`, minWidth: 12, flex: true },
             { key: "Meta", header: "Meta", minWidth: 8, flex: true },
             { key: "Requested", header: "Requested", minWidth: 12 },
           ],
@@ -184,7 +185,7 @@ export function registerPairingCli(program: Command) {
       }
 
       defaultRuntime.log(
-        `${theme.success("Approved")} ${theme.muted(channel)} sender ${theme.command(approved.entry.meta?.senderId ?? approved.id)}.`,
+        `${theme.success("Approved")} ${theme.muted(terminalText`${channel}`)} sender ${theme.command(terminalText`${approved.entry.meta?.senderId ?? approved.id}`)}.`,
       );
       const ownerBootstrap = await bootstrapCommandOwnerFromPairing({
         channel,
@@ -192,7 +193,7 @@ export function registerPairingCli(program: Command) {
       });
       if (ownerBootstrap.status === "configured" && ownerBootstrap.ownerEntry) {
         defaultRuntime.log(
-          `${theme.success("Command owner configured")} ${theme.command(ownerBootstrap.ownerEntry)} ${theme.muted("(commands.ownerAllowFrom was empty).")}`,
+          `${theme.success("Command owner configured")} ${theme.command(terminalText`${ownerBootstrap.ownerEntry}`)} ${theme.muted("(commands.ownerAllowFrom was empty).")}`,
         );
       }
 
@@ -210,7 +211,7 @@ export function registerPairingCli(program: Command) {
           ...(approved.entry.meta ? { meta: approved.entry.meta } : {}),
         });
       } catch (err) {
-        defaultRuntime.log(theme.warn(`Failed to notify requester: ${String(err)}`));
+        defaultRuntime.log(theme.warn(terminalText`Failed to notify requester: ${String(err)}`));
       }
     });
 }

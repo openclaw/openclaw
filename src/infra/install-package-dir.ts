@@ -9,7 +9,7 @@ import {
   type MovePathPublicationReceipt,
 } from "@openclaw/fs-safe/atomic";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errno.js";
 import { isRemovalIoError, removePathWithinRoot } from "./fs-safe-remove.js";
@@ -261,7 +261,7 @@ export async function installPackageDir<
     assertOwned();
     assertCurrent?.();
   });
-  params.logger?.info?.(`Installing to ${sanitizeTerminalText(params.targetDir)}…`);
+  params.logger?.info?.(terminalText`Installing to ${params.targetDir}…`);
   const installBaseDir = path.dirname(params.targetDir);
   let initialInstallBaseRealPath: string;
   try {

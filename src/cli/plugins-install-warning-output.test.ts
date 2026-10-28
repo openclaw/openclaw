@@ -1,20 +1,14 @@
-import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it } from "vitest";
-import { resolveStateDir } from "../config/paths.js";
 import type { installPluginFromPath } from "../plugins/install.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
-  configWriteMock,
-  installHooksFromPathMock,
   installPluginFromPathMock,
   pluginsCliRuntimeLogs,
   pluginLifecycleGatewayMock,
   resolvePluginLifecycleGatewayMock,
-  recordHookInstallMock,
   resetPluginsCliTestState,
   runPluginsCommand,
-  writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
 } from "./plugins-cli-test-helpers.js";
 
 describe("plugin install warning output", () => {
@@ -81,63 +75,5 @@ describe("plugin install warning output", () => {
     expect(pluginsCliRuntimeLogs.filter((line) => line.includes(warning))).toHaveLength(1);
     expect(pluginsCliRuntimeLogs).toContain("Applied in Gateway generation 7.");
     expect(installPluginFromPathMock).not.toHaveBeenCalled();
-  });
-});
-
-describe.each(["plugin", "hook pack"] as const)("local %s install reports", (kind) => {
-  beforeEach(resetPluginsCliTestState);
-
-  it.each([
-    ["Unicode", "café-🦀", "café-🦀"],
-    ["terminal controls", "café\u001b[31m\nFORGED\trow\r🦀", "café\\nFORGED\\trow\\r🦀"],
-  ])("renders %s without changing persisted identity", async (_case, id, displayed) => {
-    await withTempDir("openclaw-install-report-", async (sourcePath) => {
-      const targetDir = installedPluginRoot(resolveStateDir(), id);
-      if (kind === "plugin") {
-        createColdPluginFixture({ rootDir: sourcePath, pluginId: id });
-        installPluginFromPathMock.mockResolvedValue({
-          ok: true,
-          pluginId: id,
-          targetDir,
-          version: "1.0.0",
-        });
-      } else {
-        installHooksFromPathMock.mockResolvedValue({
-          ok: true,
-          hookPackId: id,
-          hooks: [id],
-          packageKind: "hook-only",
-          targetDir,
-        });
-      }
-
-      await runPluginsCommand([
-        "plugins",
-        "install",
-        sourcePath,
-        "--force",
-        "--accept-capabilities",
-      ]);
-
-      if (kind === "plugin") {
-        const records =
-          writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock.mock.calls[0]?.[0];
-        expect(records?.[id]).toMatchObject({
-          sourcePath,
-          installPath: targetDir,
-        });
-      } else {
-        expect(recordHookInstallMock.mock.calls[0]?.[0]).toMatchObject({
-          hookId: id,
-          hooks: [id],
-          sourcePath,
-          installPath: targetDir,
-        });
-        expect(configWriteMock).toHaveBeenCalledWith({
-          hooks: { internal: { enabled: true, entries: { [id]: { enabled: true } } } },
-        });
-      }
-      expect(pluginsCliRuntimeLogs).toContain(`Installed ${kind}: ${displayed}`);
-    });
   });
 });

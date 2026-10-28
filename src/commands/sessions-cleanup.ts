@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { sanitizeTerminalText, terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
@@ -118,16 +118,16 @@ function renderAppliedResult(
         runtime.log("");
       }
       if (summaries.length > 1) {
-        runtime.log(`Agent: ${sanitizeTerminalText(summary.agentId)}`);
+        runtime.log(terminalText`Agent: ${summary.agentId}`);
       }
-      runtime.log(`Session store: ${sanitizeTerminalText(summary.storePath)}`);
+      runtime.log(terminalText`Session store: ${summary.storePath}`);
       runtime.log(`Applied maintenance. Current entries: ${summary.appliedCount ?? 0}`);
       if (summary.unreferencedArtifacts?.removedFiles) {
         runtime.log(`Pruned unreferenced artifacts: ${summary.unreferencedArtifacts.removedFiles}`);
       }
     }
     if (partialError) {
-      runtime.error(`[error] ${partialError.message}`);
+      runtime.error(terminalText`[error] ${partialError.message}`);
     }
   }
   if (partialError) {
@@ -224,9 +224,9 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
         agentId: storeSummary.agentId,
       }).path;
       if (showAgentHeader) {
-        runtime.log(`Agent: ${sanitizeTerminalText(storeSummary.agentId)}`);
+        runtime.log(terminalText`Agent: ${storeSummary.agentId}`);
       }
-      runtime.log(`Session store: ${sanitizeTerminalText(displayStorePath)}`);
+      runtime.log(terminalText`Session store: ${displayStorePath}`);
       runtime.log(`Maintenance mode: ${storeSummary.mode}`);
       runtime.log(
         `Entries: ${storeSummary.beforeCount} -> ${storeSummary.afterCount} (remove ${storeSummary.beforeCount - storeSummary.afterCount})`,

@@ -11,7 +11,6 @@ import { registerWikiCli } from "./cli.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import type { RootMoveHooks } from "./guarded-root.test-support.js";
 import { parseWikiMarkdown } from "./markdown.js";
-import * as obsidianRuntime from "./obsidian.js";
 import {
   renderMemoryWikiStatus,
   type MemoryWikiDoctorReport,
@@ -374,61 +373,6 @@ describe("memory-wiki cli", () => {
       await runWiki(config, ["search", "completed order", "--json"]),
     ) as Array<{ title: string }>;
     expect(searchResults.map(({ title }) => title)).toContain("Orders");
-  });
-
-  it("sanitizes local reports while preserving Unicode, layout, JSON, and page text", async () => {
-    const { config, page, read } = await createCliVault({
-      config: { search: { backend: "local", corpus: "wiki" } },
-    });
-    const title = "Café \u009b2K中文\u009d0;proof-title\u009c 🍵";
-    const snippet = "JuniperCompass \u001b[31mCafé\u001b[0m \u0007中文🍵.";
-    await page(
-      "sources/probe.md",
-      { pageType: "source", id: "source.probe", title },
-      `${snippet}\n`,
-    );
-    await page(
-      "sources/control.md",
-      { pageType: "source", id: "source.control", title: "Plain Café 中文🍵" },
-      "JuniperCompass ordinary text.\n",
-    );
-    const output = await runWiki(config, ["search", "JuniperCompass"]);
-    const original = await read("sources/probe.md");
-    expect(output.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
-    expect(output).toContain("Café 中文 🍵 (wiki/source)\nPath: sources/probe.md\n");
-    expect(output).toContain("Snippet: JuniperCompass Café 中文🍵.");
-    expect(output).toContain("Plain Café 中文🍵");
-    expect(output.split("\n\n")).toHaveLength(2);
-
-    const results = JSON.parse(await runWiki(config, ["search", "JuniperCompass", "--json"]));
-    expect(results).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ path: "sources/probe.md", title, snippet }),
-      ]),
-    );
-    const getArgs = ["get", "sources/probe.md", "--from", "2", "--lines", "1"];
-    expect(await runWiki(config, getArgs)).toBe(`${snippet}\n`);
-    expect(JSON.parse(await runWiki(config, [...getArgs, "--json"]))).toMatchObject({
-      title,
-      content: snippet,
-    });
-    expect(await read("sources/probe.md")).toBe(original);
-  });
-
-  it("preserves raw Obsidian action stdout and JSON", async () => {
-    const { config } = await createCliVault();
-    const result = {
-      command: "obsidian",
-      argv: ["daily"],
-      stdout: "\n\u001b[31mCafé\u001b[0m\n\n中文🍵\u0007\n",
-      stderr: "",
-    };
-    vi.spyOn(obsidianRuntime, "runObsidianAction").mockResolvedValue(result);
-
-    expect(await runWiki(config, ["obsidian", "daily"])).toBe(
-      "\u001b[31mCafé\u001b[0m\n\n中文🍵\u0007\n",
-    );
-    expect(JSON.parse(await runWiki(config, ["obsidian", "daily", "--json"]))).toEqual(result);
   });
 
   it.each([

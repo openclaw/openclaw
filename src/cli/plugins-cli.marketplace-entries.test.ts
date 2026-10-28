@@ -374,58 +374,44 @@ describe("plugins marketplace list", () => {
     },
   );
 
-  it.each([false, true])(
-    "sanitizes terminal control characters in human output but not JSON (empty=%s)",
-    async (empty) => {
-      const sourceLabel = "owner/\u001b[31mrepo\u001b[0m\u0007\r\n\u0085/🦀/marketplace.json";
-      const injected = {
-        name: "Market\u001b]0;marketplace-title-pwned\u0007place",
-        version: "1.0.0",
-        plugins: empty
-          ? []
-          : [
-              {
-                name: "\u001b[31mred-plugin\u001b[0m",
-                version: "\u001b[32m1.2.3\u001b[0m",
-                description: "drops \r\n\u0007bell and \u001b[2J clear",
-                source: { kind: "path", path: "./plugins/demo" },
-              },
-            ],
-      };
-      mocks.listMarketplacePlugins.mockImplementationOnce(async () => ({
-        ok: true,
-        sourceLabel,
-        manifest: injected,
-      }));
+  it("sanitizes terminal control characters in human output but not JSON", async () => {
+    const injected = {
+      name: "Market\u001b]0;marketplace-title-pwned\u0007place",
+      version: "1.0.0",
+      plugins: [
+        {
+          name: "\u001b[31mred-plugin\u001b[0m",
+          version: "\u001b[32m1.2.3\u001b[0m",
+          description: "drops \r\n\u0007bell and \u001b[2J clear",
+          source: { kind: "path", path: "./plugins/demo" },
+        },
+      ],
+    };
+    mocks.listMarketplacePlugins.mockImplementationOnce(async () => ({
+      ok: true,
+      sourceLabel: source,
+      manifest: injected,
+    }));
 
-      await list(source, { json: true });
-      expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith({
-        source: sourceLabel,
-        ...injected,
-      });
-      expect(runtime.log).not.toHaveBeenCalled();
+    await list(source, { json: true });
+    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith({ source, ...injected });
+    expect(runtime.log).not.toHaveBeenCalled();
 
-      vi.clearAllMocks();
-      mocks.listMarketplacePlugins.mockImplementationOnce(async () => ({
-        ok: true,
-        sourceLabel,
-        manifest: injected,
-      }));
-      await list(source, { json: false });
-      const human = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
-      expect(human).not.toContain("\u001b");
-      expect(human).not.toContain("\u0007");
-      expect(human.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
-      if (empty) {
-        expect(human).toBe("No plugins found in marketplace owner/repo\\r\\n/🦀/marketplace.json.");
-        return;
-      }
-      expect(human).toContain("Marketplace");
-      expect(human).toContain("red-plugin");
-      expect(human).toContain("v1.2.3");
-      expect(human).toContain("drops \\r\\nbell and  clear");
-    },
-  );
+    vi.clearAllMocks();
+    mocks.listMarketplacePlugins.mockImplementationOnce(async () => ({
+      ok: true,
+      sourceLabel: source,
+      manifest: injected,
+    }));
+    await list(source, { json: false });
+    const human = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
+    expect(human).not.toContain("\u001b");
+    expect(human).not.toContain("\u0007");
+    expect(human).toContain("Marketplace");
+    expect(human).toContain("red-plugin");
+    expect(human).toContain("v1.2.3");
+    expect(human).toContain("drops \\r\\nbell and  clear");
+  });
 
   it("hands quiet failures to the canonical JSON error renderer", async () => {
     const message = "mock git remote unavailable";

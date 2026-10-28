@@ -1,6 +1,6 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasPackageRuntimeDependencies } from "../infra/install-package-dir.js";
 import { packageNameMatchesId } from "../infra/install-safe-path.js";
@@ -109,7 +109,7 @@ export async function validatePackagePluginInstallSource(params: {
 
   if (manifestPluginId && !packageNameMatchesId(npmPluginId, manifestPluginId)) {
     params.logger.info?.(
-      `Plugin manifest id "${sanitizeTerminalText(manifestPluginId)}" differs from npm package name "${sanitizeTerminalText(npmPluginId)}"; using manifest id as the config key.`,
+      terminalText`Plugin manifest id "${manifestPluginId}" differs from npm package name "${npmPluginId}"; using manifest id as the config key.`,
     );
   }
 

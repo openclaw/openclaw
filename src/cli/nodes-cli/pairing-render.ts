@@ -1,19 +1,8 @@
-import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { renderTable } from "../../../packages/terminal-core/src/table.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
 import type { PendingRequest } from "../../shared/node-list-types.js";
-
-// Bidirectional formatting controls (overrides, isolates, marks, the Arabic
-// letter mark) reorder the glyphs around them, so a pairing device could name
-// itself to render as a different, trusted-looking device in this approval table
-// (Trojan Source, CVE-2021-42574). Strip them from the displayed cells; the
-// terminal's own bidi algorithm still lays out strong-directional letters.
-const PAIRING_BIDI_CONTROL_RE = new RegExp("[؜‎‏‪-‮⁦-⁩]", "gu");
-
-function sanitizePairingCell(value: string): string {
-  return sanitizeTerminalText(value).replace(PAIRING_BIDI_CONTROL_RE, "");
-}
 
 /** Render pending pairing requests with sanitized labels and relative request age. */
 export function renderPendingPairingRequestsTable(params: {
@@ -27,12 +16,10 @@ export function renderPendingPairingRequestsTable(params: {
 }) {
   const { pending, now, tableWidth, theme } = params;
   const rows = pending.map((r) => ({
-    Request: sanitizePairingCell(r.requestId),
-    Node: sanitizePairingCell(r.displayName?.trim() || r.nodeId),
-    IP: sanitizePairingCell(r.remoteIp ?? ""),
-    Scopes: sanitizePairingCell(
-      resolveNodePairApprovalScopes(r.commands, r.requiredApproveScopes).join(", "),
-    ),
+    Request: terminalText`${r.requestId}`,
+    Node: terminalText`${r.displayName?.trim() || r.nodeId}`,
+    IP: terminalText`${r.remoteIp ?? ""}`,
+    Scopes: terminalText`${resolveNodePairApprovalScopes(r.commands, r.requiredApproveScopes).join(", ")}`,
     Requested:
       typeof r.ts === "number" ? formatTimeAgo(Math.max(0, now - r.ts)) : theme.muted("unknown"),
   }));

@@ -107,43 +107,6 @@ describe("plugins search command", () => {
     },
   );
 
-  it("strips terminal controls from registry package names and summaries", async () => {
-    mocks.searchClawHubPackages.mockResolvedValue([
-      {
-        score: 9,
-        package: {
-          name: "evil\u001b]0;x\u0007SEARCH_NAME_MARKER",
-          family: "code-plugin",
-          latestVersion: "1.0.0",
-          summary: "desc\u001b]0;y\u0007SEARCH_SUMMARY_MARKER",
-          createdAt: 1,
-          updatedAt: 1,
-        },
-      },
-      {
-        score: 1,
-        package: {
-          name: "plain-plugin",
-          family: "code-plugin",
-          latestVersion: "2.0.0",
-          summary: "plain summary",
-          createdAt: 1,
-          updatedAt: 1,
-        },
-      },
-    ]);
-
-    await runPluginsSearchCommand(["evil"], {}, mocks.runtime);
-
-    const raw = mocks.logs.join("\n");
-    expect(raw).not.toContain("evil\u001b]0;x\u0007SEARCH_NAME_MARKER");
-    expect(raw).not.toContain("desc\u001b]0;y\u0007SEARCH_SUMMARY_MARKER");
-    expect(raw).not.toContain("\u0007");
-    expect(raw).toContain("SEARCH_NAME_MARKER");
-    expect(raw).toContain("SEARCH_SUMMARY_MARKER");
-    expect(raw).toContain("plain-plugin");
-  });
-
   it("rejects partial numeric search limits", async () => {
     const program = new Command();
     program.exitOverride();

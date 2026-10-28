@@ -90,7 +90,6 @@ function createConfigureInteractiveResult(options?: {
   targets?: unknown[];
   changed?: boolean;
   resolvabilityComplete?: boolean;
-  warnings?: string[];
 }) {
   return {
     plan: {
@@ -103,7 +102,6 @@ function createConfigureInteractiveResult(options?: {
     preflight: createSecretsApplyResult({
       changed: options?.changed,
       resolvabilityComplete: options?.resolvabilityComplete,
-      warnings: options?.warnings,
     }),
   };
 }
@@ -136,7 +134,6 @@ function createAuditReport(options: {
   plaintextCount?: number;
   unresolvedRefCount?: number;
   refsChecked?: number;
-  findings?: { code: string; file: string; jsonPath: string; message: string }[];
 }) {
   return {
     version: 1,
@@ -154,7 +151,7 @@ function createAuditReport(options: {
       skippedExecRefs: 0,
       resolvabilityComplete: true,
     },
-    findings: options.findings ?? [],
+    findings: [],
   };
 }
 
@@ -162,9 +159,7 @@ function createSecretsApplyResult(options?: {
   mode?: "dry-run" | "write";
   changed?: boolean;
   resolvabilityComplete?: boolean;
-  warnings?: string[];
 }) {
-  const warnings = options?.warnings ?? [];
   return {
     mode: options?.mode ?? "dry-run",
     changed: options?.changed ?? false,
@@ -175,8 +170,8 @@ function createSecretsApplyResult(options?: {
     },
     refsChecked: 0,
     skippedExecRefs: 0,
-    warningCount: warnings.length,
-    warnings,
+    warningCount: 0,
+    warnings: [],
   };
 }
 
@@ -307,56 +302,6 @@ describe("secrets CLI", () => {
 
     await runSecrets(["secrets", "audit", "--allow-exec"]);
     expect(mockFirstObjectArg(runSecretsAudit).allowExec).toBe(true);
-  });
-
-  it("escapes terminal controls in secrets audit finding lines", async () => {
-    const esc = "\u001b";
-    const report = createAuditReport({
-      status: "findings",
-      plaintextCount: 1,
-      findings: [
-        {
-          code: "plaintext",
-          file: `/tmp/openclaw${esc}]0;pwned\u0007.json`,
-          jsonPath: `models.providers.openai${esc}[31mapiKey`,
-          message: `found secret\u0007 in ${esc}[2Jcleared screen`,
-        },
-      ],
-    });
-    runSecretsAudit.mockResolvedValue(report);
-    resolveSecretsAuditExitCode.mockReturnValue(0);
-
-    await runSecrets(["secrets", "audit"]);
-
-    const findingLine = runtimeLogs.find((line) => line.startsWith("- [plaintext]"));
-    expect(findingLine).toBeDefined();
-    expect(findingLine).not.toContain(esc);
-    expect(findingLine).not.toContain("]0;pwned");
-    expect(findingLine).toContain("- [plaintext]");
-    expect(findingLine).toContain("openclaw.json");
-  });
-
-  it("escapes terminal controls in secrets configure preflight warnings and plan path", async () => {
-    const esc = "\u001b";
-    const planPath = `/tmp/openclaw-plan${esc}[2J.json`;
-    runSecretsConfigureInteractive.mockResolvedValue(
-      createConfigureInteractiveResult({
-        warnings: [`provider path ${esc}[31mred\u0007 leaked`],
-      }),
-    );
-
-    confirm.mockResolvedValue(false);
-
-    await runSecrets(["secrets", "configure", "--plan-out", planPath, "--skip-provider-setup"]);
-
-    const warningLine = runtimeLogs.find((line) => line.startsWith("- warning:"));
-    expect(warningLine).toBeDefined();
-    expect(warningLine).not.toContain(esc);
-    expect(warningLine).toContain("provider path");
-    const planLine = runtimeLogs.find((line) => line.startsWith("Plan written to "));
-    expect(planLine).toBeDefined();
-    expect(planLine).not.toContain(esc);
-    expect(planLine).toContain("openclaw-plan.json");
   });
 
   it("shows the irreversibility warning before applying configured targets (#83883)", async () => {

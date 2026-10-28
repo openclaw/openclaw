@@ -1,3 +1,4 @@
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { CLI_NAME } from "../cli/cli-name.js";
 import {
   findCompletionProfileWriteError,
@@ -30,12 +31,12 @@ export async function setupWizardShellCompletion(params: {
       }
       await params.prompter.note(
         t("wizard.completion.profileNotWritable", {
-          profile: writeError.path ?? resolveCompletionProfilePath(completionStatus.shell),
+          profile: terminalText`${writeError.path ?? resolveCompletionProfilePath(completionStatus.shell)}`,
           shell: completionStatus.shell,
-          command: formatCompletionReloadCommand(
+          command: terminalText`${formatCompletionReloadCommand(
             completionStatus.shell,
             completionStatus.cachePath,
-          ),
+          )}`,
         }),
         t("wizard.completion.title"),
       );
@@ -88,7 +89,7 @@ export async function setupWizardShellCompletion(params: {
     }
 
     const shell = completionStatus.shell;
-    const command = formatCompletionReloadCommand(shell, resolveCompletionProfileHint(shell));
+    const command = terminalText`${formatCompletionReloadCommand(shell, resolveCompletionProfileHint(shell))}`;
     const reloadHint =
       shell === "powershell"
         ? t("wizard.completion.reloadPowerShell", { command })

@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveManagedUnsetPathsForWrite } from "../config/config-path-mutation.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../config/config-write-guard.js";
 import { replaceConfigFile } from "../config/config.js";
@@ -542,7 +543,7 @@ export async function runConfigOperations(params: {
   if (removedGatewayAuthPaths.length > 0) {
     runtime.log(
       info(
-        `Removed inactive ${removedGatewayAuthPaths.join(", ")} for gateway.auth.mode=${nextConfig.gateway?.auth?.mode ?? "<unset>"}.`,
+        terminalText`Removed inactive ${removedGatewayAuthPaths.join(", ")} for gateway.auth.mode=${nextConfig.gateway?.auth?.mode ?? "<unset>"}.`,
       ),
     );
   }
@@ -588,11 +589,11 @@ export async function runConfigOperations(params: {
       operation?.pathTokens,
       nextConfig,
     );
-    runtime.log(info(`${action} ${requestedPath}. ${hint}`));
+    runtime.log(info(terminalText`${action} ${requestedPath}. ${hint}`));
   } else if (params.successMode === "set") {
-    runtime.log(info(`Updated ${operations.length} config paths. ${hint}`));
+    runtime.log(info(terminalText`Updated ${operations.length} config paths. ${hint}`));
   } else {
-    runtime.log(info(`Applied ${operations.length} config update(s). ${hint}`));
+    runtime.log(info(terminalText`Applied ${operations.length} config update(s). ${hint}`));
   }
 }
 
@@ -629,7 +630,7 @@ export function handleConfigMutationError(params: {
       errors: [{ kind: conflict ? "conflict" : "schema", message }],
     };
     writeRuntimeJson(params.runtime, result);
-    params.runtime.error(danger(message));
+    params.runtime.error(danger(terminalText`${message}`));
     exitCliAfterOutput(params.runtime, 1);
   }
   if (params.jsonOutput) {
@@ -637,12 +638,18 @@ export function handleConfigMutationError(params: {
   }
   if (isConfigValidationFailedError(params.err)) {
     params.runtime.error("Config change declined. No settings were saved.");
-    params.runtime.error(message);
+    params.runtime.error(terminalText`${message}`);
     params.runtime.error(
       `Correct the setting above and retry. Run ${formatCliCommand("openclaw config schema")} to inspect supported settings and values.`,
     );
   } else {
-    params.runtime.error(danger(message));
+    params.runtime.error(
+      danger(
+        params.err instanceof ConfigSetDryRunValidationError
+          ? params.err.humanOutput
+          : terminalText`${message}`,
+      ),
+    );
   }
   exitCliAfterOutput(params.runtime, 1);
 }

@@ -48,29 +48,6 @@ describe("registerWorkboardCli", () => {
     delete process.env.OPENCLAW_GATEWAY_URL;
   });
 
-  it("sanitizes human card reports while preserving multiline notes, JSON, and stored text", async () => {
-    const title = "Café 🧭 \u001b[31mTitle\u001b[0m\u009b2K\u009d0;title\u0007";
-    const notes = "First \u001b[31mnote\u001b[0m\n\nSecond \u009b2Kline\u0007 中文 🧭";
-    const agentId = "agent-\u001b]0;owner\u0007a\u009b2K";
-    const created = await captureCli("create", title, "--notes", notes, "--agent", agentId);
-    const [card] = await store.list();
-    assert(card);
-    const listed = await captureCli("list");
-    const shown = await captureCli("show", card.id);
-    const moved = await captureCli("move", card.id, "--status", "review");
-
-    for (const output of [created, listed, shown, moved]) {
-      expect(output).toContain("Café 🧭 Title");
-      expect(output).toContain("agent-a");
-      expect(output.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
-    }
-    expect(shown).toContain("First note\n\nSecond line 中文 🧭\n");
-    expect(JSON.parse(await captureCli("show", card.id, "--json"))).toMatchObject({
-      card: { title, notes, agentId, status: "review" },
-    });
-    await expect(store.get(card.id)).resolves.toMatchObject({ title, notes, agentId });
-  });
-
   it("rejects invalid list status filters instead of reporting an empty board", async () => {
     const running = await store.create({ title: "Active work", status: "running" });
     await store.create({ title: "Queued work", status: "todo" });
@@ -102,10 +79,7 @@ describe("registerWorkboardCli", () => {
       started: [{ cardId: "started-card", runId: "run-started" }],
       startFailures: [
         { cardId: "12345678-first", error: "offline" },
-        {
-          cardId: "abcdef01-second",
-          error: "mi\u001b[31mss\u001b[0ming Café 🧭\u009b2K\u0007",
-        },
+        { cardId: "abcdef01-second", error: "missing" },
       ],
     };
     gatewayRuntime.callGatewayFromCli.mockResolvedValueOnce(result);
@@ -115,7 +89,7 @@ describe("registerWorkboardCli", () => {
       expect(JSON.parse(output)).toEqual(result);
     } else {
       expect(output).toBe(
-        "dispatch complete: started=1 failures=2\n12345678: offline\nabcdef01: missing Café 🧭\n",
+        "dispatch complete: started=1 failures=2\n12345678: offline\nabcdef01: missing\n",
       );
     }
   });

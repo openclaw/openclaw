@@ -11,7 +11,11 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { readConnectPairingRequiredMessage } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import {
+  getTerminalTableWidth,
+  renderTerminalSafeTable,
+} from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { formatGatewayTransportErrorJson } from "../gateway/call.js";
 import type {
@@ -107,7 +111,10 @@ function pairedDeviceMatchesNodeApprovalQuery(device: PairedDevice, query: strin
   );
 }
 
-function buildPendingNodeApprovalNotice(device: PairedDevice, opts: DevicesRpcOpts): string | null {
+function buildPendingNodeApprovalNotice(
+  device: PairedDevice,
+  opts: DevicesRpcOpts,
+): string[] | null {
   const pending = device.pendingNodeSurface;
   const requestId = normalizeOptionalString(pending?.requestId);
   if (!pending || !requestId) {
@@ -128,7 +135,7 @@ function buildPendingNodeApprovalNotice(device: PairedDevice, opts: DevicesRpcOp
   if (connectionReminder) {
     lines.push(connectionReminder);
   }
-  return lines.join("\n");
+  return lines;
 }
 
 function findPairedDevicePendingNodeApprovalNotices(
@@ -137,7 +144,7 @@ function findPairedDevicePendingNodeApprovalNotices(
 ): string[] {
   return (paired ?? []).flatMap((device) => {
     const notice = buildPendingNodeApprovalNotice(device, opts);
-    return notice ? [notice] : [];
+    return notice ?? [];
   });
 }
 
@@ -302,7 +309,7 @@ async function approvePairingWithFallback(
           if (replacement) {
             defaultRuntime.log(
               theme.warn(
-                `Pending request ${sanitizeForLog(requestId)} was replaced by same-device repair ${sanitizeForLog(replacement.requestId)}; approving latest compatible request.`,
+                terminalText`Pending request ${requestId} was replaced by same-device repair ${replacement.requestId}; approving latest compatible request.`,
               ),
             );
           }
@@ -515,27 +522,21 @@ function formatTokenSummary(tokens: DeviceTokenSummary[] | undefined) {
     return "none";
   }
   const parts = tokens
-    .map((t) => `${sanitizeForLog(t.role)}${t.revokedAtMs ? " (revoked)" : ""}`)
+    .map((t) => terminalText`${t.role}${t.revokedAtMs ? " (revoked)" : ""}`)
     .toSorted((a, b) => a.localeCompare(b));
   return parts.join(", ");
 }
 
 function formatPendingDeviceIdentity(request: PendingDevice): string {
-  return sanitizeForLog(
-    normalizeOptionalString(request.displayName) ?? normalizeOptionalString(request.deviceId) ?? "",
-  );
+  return terminalText`${normalizeOptionalString(request.displayName) ?? normalizeOptionalString(request.deviceId) ?? ""}`;
 }
 
 function formatAccessSummary(access: DevicePairingAccessSummary | null): string {
   if (!access) {
     return "none";
   }
-  const roles =
-    access.roles.length > 0 ? access.roles.map((role) => sanitizeForLog(role)).join(", ") : "none";
-  const scopes =
-    access.scopes.length > 0
-      ? access.scopes.map((scope) => sanitizeForLog(scope)).join(", ")
-      : "none";
+  const roles = access.roles.length > 0 ? terminalText`${access.roles.join(", ")}` : "none";
+  const scopes = access.scopes.length > 0 ? terminalText`${access.scopes.join(", ")}` : "none";
   return `roles: ${roles}; scopes: ${scopes}`;
 }
 
@@ -596,7 +597,7 @@ function failDevicesCommand(json: boolean | undefined, ...lines: string[]): void
     throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
   }
   for (const line of lines) {
-    defaultRuntime.error(line);
+    defaultRuntime.error(terminalText`${line}`);
   }
   defaultRuntime.exit(1);
 }
@@ -625,7 +626,7 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
     const tableWidth = getTerminalTableWidth();
     defaultRuntime.log(`${theme.heading("Pending")} ${theme.muted(`(${list.pending.length})`)}`);
     defaultRuntime.log(
-      renderTable({
+      renderTerminalSafeTable({
         width: tableWidth,
         columns: [
           { key: "Request", header: "Request", minWidth: 10 },
@@ -646,7 +647,7 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
           }
           return {
             Request: req.requestId,
-            Device: `${formatPendingDeviceIdentity(req)}${req.remoteIp ? ` · ${sanitizeForLog(req.remoteIp)}` : ""}`,
+            Device: terminalText`${formatPendingDeviceIdentity(req)}${req.remoteIp ? ` · ${req.remoteIp}` : ""}`,
             Requested: formatAccessSummary(approval.requested),
             Approved: formatAccessSummary(approval.approved),
             Age: typeof req.ts === "number" ? formatTimeAgo(Date.now() - req.ts) : "",
@@ -659,22 +660,16 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
   if (list.paired.length) {
     const tableWidth = getTerminalTableWidth();
     const rows = list.paired.map((device) => ({
-      Device: sanitizeForLog(
-        device.operatorLabel || device.displayName || device.clientId || device.deviceId,
-      ),
-      "Device ID": sanitizeForLog(device.deviceId),
-      Roles: device.roles?.length
-        ? device.roles.map((role) => sanitizeForLog(role)).join(", ")
-        : "",
-      Scopes: device.scopes?.length
-        ? device.scopes.map((scope) => sanitizeForLog(scope)).join(", ")
-        : "",
+      Device: terminalText`${device.operatorLabel || device.displayName || device.clientId || device.deviceId}`,
+      "Device ID": terminalText`${device.deviceId}`,
+      Roles: device.roles?.length ? terminalText`${device.roles.join(", ")}` : "",
+      Scopes: device.scopes?.length ? terminalText`${device.scopes.join(", ")}` : "",
       Tokens: formatTokenSummary(device.tokens),
-      IP: device.remoteIp ? sanitizeForLog(device.remoteIp) : "",
+      IP: terminalText`${device.remoteIp ?? ""}`,
     }));
     defaultRuntime.log(`${theme.heading("Paired")} ${theme.muted(`(${list.paired.length})`)}`);
     defaultRuntime.log(
-      renderTable({
+      renderTerminalSafeTable({
         width: tableWidth,
         columns: [
           { key: "Device", header: "Device", minWidth: 16, flex: true },
@@ -693,7 +688,7 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
     }
     const nodeApprovalNotices = findPairedDevicePendingNodeApprovalNotices(opts, list.paired);
     for (const notice of nodeApprovalNotices) {
-      defaultRuntime.log(theme.warn(notice));
+      defaultRuntime.log(theme.warn(terminalText`${notice}`));
     }
   }
   if (!list.pending.length && !list.paired.length) {
@@ -722,7 +717,7 @@ export async function runDevicesDeleteCommand(
   }
   const deviceId = operation === "remove" ? trimmed : (result as { deviceId?: string })?.deviceId;
   defaultRuntime.log(
-    `${theme.warn(operation === "remove" ? "Removed" : "Rejected")} ${theme.command(deviceId ?? "ok")}`,
+    `${theme.warn(operation === "remove" ? "Removed" : "Rejected")} ${theme.command(terminalText`${deviceId ?? "ok"}`)}`,
   );
 }
 
@@ -824,18 +819,18 @@ export async function runDevicesApproveCommand(
       return;
     }
     defaultRuntime.log(
-      `${theme.warn("Selected pending device request")} ${theme.command(req.requestId)}`,
+      `${theme.warn("Selected pending device request")} ${theme.command(terminalText`${req.requestId}`)}`,
     );
-    defaultRuntime.log(`  Device: ${formatPendingDeviceIdentity(req)}`);
-    defaultRuntime.log(`  Requested: ${formatAccessSummary(approval.requested)}`);
+    defaultRuntime.log(terminalText`  Device: ${formatPendingDeviceIdentity(req)}`);
+    defaultRuntime.log(terminalText`  Requested: ${formatAccessSummary(approval.requested)}`);
     if (approval.approved) {
-      defaultRuntime.log(`  Approved: ${formatAccessSummary(approval.approved)}`);
+      defaultRuntime.log(terminalText`  Approved: ${formatAccessSummary(approval.approved)}`);
     }
     if (req.remoteIp) {
-      defaultRuntime.log(`  IP:     ${sanitizeForLog(req.remoteIp)}`);
+      defaultRuntime.log(terminalText`  IP:     ${req.remoteIp}`);
     }
     defaultRuntime.log(`  Note:   ${PENDING_APPROVAL_COPY[approval.kind].note}`);
-    defaultRuntime.error(`Approve this exact request with: ${approveCommand}`);
+    defaultRuntime.error(terminalText`Approve this exact request with: ${approveCommand}`);
     if (authReminder) {
       defaultRuntime.error(authReminder);
     }
@@ -896,7 +891,7 @@ export async function runDevicesApproveCommand(
       : resolvedRequestId;
   const deviceId = (result as { device?: { deviceId?: string } })?.device?.deviceId;
   defaultRuntime.log(
-    `${theme.success("Approved")} ${theme.command(deviceId ?? "ok")} ${theme.muted(`(${approvedRequestId})`)}`,
+    `${theme.success("Approved")} ${theme.command(terminalText`${deviceId ?? "ok"}`)} ${theme.muted(terminalText`(${approvedRequestId})`)}`,
   );
 }
 
@@ -916,7 +911,7 @@ export async function runDevicesRenameCommand(opts: DevicesRpcOpts): Promise<voi
     return;
   }
   defaultRuntime.log(
-    `${theme.success("Renamed")} ${theme.command(deviceId)} ${theme.muted("→")} ${sanitizeForLog(label)}`,
+    `${theme.success("Renamed")} ${theme.command(terminalText`${deviceId}`)} ${theme.muted("→")} ${terminalText`${label}`}`,
   );
 }
 

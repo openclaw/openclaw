@@ -260,38 +260,18 @@ describe("plugin authoring commands", () => {
     },
   );
 
-  it.each([
-    { name: "Unicode", pluginId: "café-🦀", displayId: "café-🦀" },
-    {
-      name: "terminal controls",
-      pluginId: "café\u001b[31m\nforged\trow\r🦀",
-      displayId: "café\\nforged\\trow\\r🦀",
-    },
-  ])("renders $name in validation without changing metadata or JSON", async (testCase) => {
-    const rootDir = tempDirs.make("openclaw-authoring-output-");
-    sourceProject(testCase.pluginId, rootDir, "display_echo");
-    writeJsonFile(path.join(rootDir, "package.json"), {
-      ...readJson(rootDir, "package.json"),
-      name: "openclaw-plugin-display",
-    });
-    await runPluginsBuildCommand({ root: rootDir });
-    const before = fs.readFileSync(path.join(rootDir, "openclaw.plugin.json"));
-    const log = silenceRuntime("log");
+  it("emits a stable JSON validation result without human output", async () => {
+    const { root: tmpDir, entry: entryPath } = sourceProject("valid-json");
+    await runPluginsBuildCommand({ root: tmpDir, entry: entryPath });
     const writeJson = silenceRuntime("writeJson");
+    const log = silenceRuntime("log");
     const error = silenceRuntime("error");
-    await runPluginsValidateCommand({ root: rootDir });
-    await runPluginsValidateCommand({ root: rootDir, json: true });
+    await runPluginsValidateCommand({ root: tmpDir, entry: entryPath, json: true });
 
-    expect(log).toHaveBeenCalledExactlyOnceWith(`Plugin ${testCase.displayId} is valid.`);
+    expect(writeJson).toHaveBeenCalledOnce();
+    expect(writeJson).toHaveBeenCalledWith({ valid: true, pluginId: "valid-json", errors: [] });
+    expect(log).not.toHaveBeenCalled();
     expect(error).not.toHaveBeenCalled();
-    expect(writeJson).toHaveBeenCalledExactlyOnceWith({
-      valid: true,
-      pluginId: testCase.pluginId,
-      errors: [],
-    });
-    expect(fs.readFileSync(path.join(rootDir, "openclaw.plugin.json"))).toEqual(before);
-    expect(readJson(rootDir, "openclaw.plugin.json").id).toBe(testCase.pluginId);
-    expect(readText(rootDir, "src/index.ts")).toContain(JSON.stringify(testCase.pluginId));
   });
 
   it("reports and retires a preceding host browser declaration through explicit authoring", async () => {

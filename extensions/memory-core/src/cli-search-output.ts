@@ -5,7 +5,7 @@ import {
   shortenHomePath,
   theme,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/terminal-safe-text";
+import { terminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 
 export function renderMemorySearch(result: MemoryCliSearchOutcome, json?: boolean): void {
   if ("status" in result) {
@@ -16,7 +16,7 @@ export function renderMemorySearch(result: MemoryCliSearchOutcome, json?: boolea
       }
     } else {
       const message = `memory search failed (${result.agentId}): ${result.error}`;
-      defaultRuntime.error(message);
+      defaultRuntime.error(terminalText`${message}`);
       process.exitCode = 1;
       if (json) {
         defaultRuntime.writeJson({ ...formatCliJsonFailure(message), agentId: result.agentId });
@@ -29,7 +29,7 @@ export function renderMemorySearch(result: MemoryCliSearchOutcome, json?: boolea
     return;
   }
   if (result.warning) {
-    defaultRuntime.error([result.warning, result.action].filter(Boolean).join(" "));
+    defaultRuntime.error(terminalText`${result.warning} ${result.action ?? ""}`.trim());
   }
   if (result.results.length === 0) {
     defaultRuntime.log("No matches.");
@@ -37,11 +37,13 @@ export function renderMemorySearch(result: MemoryCliSearchOutcome, json?: boolea
   }
   const lines: string[] = [];
   for (const hit of result.results) {
-    const displayPath = sanitizeTerminalText(shortenHomePath(hit.path));
-    // Keep snippet line breaks without letting file content act as terminal controls.
-    const snippet = hit.snippet.split("\n").map(sanitizeTerminalText).join("\n");
+    const displayPath = terminalText`${shortenHomePath(hit.path)}`;
+    const snippet = hit.snippet
+      .split("\n")
+      .map((line) => terminalText`${line}`)
+      .join("\n");
     lines.push(
-      `${theme.success(hit.score.toFixed(3))} ${theme.accent(`${displayPath}:${hit.startLine}-${hit.endLine}`)}`,
+      `${theme.success(hit.score.toFixed(3))} ${theme.accent(terminalText`${displayPath}:${hit.startLine}-${hit.endLine}`)}`,
       theme.muted(snippet),
       "",
     );
