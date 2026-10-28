@@ -21,6 +21,7 @@ import {
 } from "../../../sessions/session-state-events.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { expectText } from "../../../test-utils/text-assertions.js";
+import { normalizeSessionDeliveryState } from "../../../utils/delivery-context.shared.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { addSession, deleteSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
@@ -42,7 +43,6 @@ import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { createEmptyPromptBootstrap } from "./attempt-system-prompt.test-support.js";
 import { applyEmbeddedAttemptToolsAllow } from "./attempt-tool-construction-plan.js";
 import { buildSystemUpdateMessage } from "./runtime-context-prompt.js";
-import { buildTurnDeliveryContextFragments } from "./turn-delivery-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 // Prompt assembly consumes a prepared provider handle; discovery belongs to attempt setup.
@@ -774,13 +774,7 @@ describe("embedded session prompt delivery", () => {
       });
       expect(synthetic.prepared.systemPromptText).toBe(user.prepared.systemPromptText);
       expect(
-        buildTurnDeliveryContextFragments({
-          sessionKey: synthetic.attempt.sessionKey,
-          sourceReplyDeliveryMode: turn.sourceReplyDeliveryMode,
-          requireExplicitMessageTarget: turn.requireExplicitMessageTarget,
-        })
-          .map((fragment) => fragment.text)
-          .join("\n"),
+        synthetic.prepared.runtimeContextFragments?.map((fragment) => fragment.text).join("\n"),
       ).toMatch(
         turn.requireExplicitMessageTarget
           ? /final text is private[\s\S]*target required this turn/u
@@ -788,4 +782,33 @@ describe("embedded session prompt delivery", () => {
       );
     },
   );
+
+  it("overrides a saved group's message-tool policy for an automatic CLI reply", async () => {
+    const shared = {
+      config: { messages: { groupChat: { visibleReplies: "message_tool" as const } } },
+      sessionPromptDelivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "-100123" },
+        origin: { provider: "telegram", surface: "telegram", chatType: "group" },
+      }),
+    };
+    const user = await preparePermissionPrompt({
+      requireExplicitMessageTarget: false,
+      attemptOverrides: {
+        ...shared,
+        messageChannel: "telegram",
+        chatType: "group",
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+    const cli = await preparePermissionPrompt({
+      requireExplicitMessageTarget: false,
+      attemptOverrides: { ...shared, sourceReplyDeliveryMode: undefined },
+    });
+    expect(cli.prepared.systemPromptText).toBe(user.prepared.systemPromptText);
+    expect(cli.prepared.systemPromptText).toContain("MUST use `message(action=send)`");
+    expect(
+      cli.prepared.runtimeContextFragments?.map((fragment) => fragment.text).join("\n"),
+    ).toContain("This turn's final text goes to the current source automatically.");
+    expect(user.prepared.runtimeContextFragments).toEqual([]);
+  });
 });

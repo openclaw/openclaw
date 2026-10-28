@@ -105,6 +105,52 @@ describe("chat transcript full-message recovery", () => {
     expect(load).toHaveBeenCalledOnce();
   });
 
+  it("recovers a capped mixed envelope once without duplicating its visible text", async () => {
+    const message = (text: string) => ({
+      role: "assistant",
+      content: [
+        { type: "text", text },
+        { type: "thinking", thinking: "Recorded work" },
+        { type: "text", text: "Final finding." },
+      ],
+      runId: "mixed-run",
+      timestamp: 2_000,
+      stopReason: "stop",
+      __openclaw: {
+        id: "mixed-recovery",
+        runId: "mixed-run",
+        truncated: text === "Preview",
+        reason: "display-cap",
+      },
+    });
+    const load = vi.fn<SidebarFullMessageLoader>().mockResolvedValue({
+      ok: true,
+      message: message("Recovered finding."),
+    });
+    const pane = document.createElement("test-recovery-transcript") as RecoveryTranscriptElement;
+    pane.props = {
+      ...threadProps("recovery-mixed", "agent:work:dashboard:recovery", [
+        { role: "user", content: "Inspect the sample", timestamp: 1_000 },
+        message("Preview"),
+      ]),
+      fullMessageAgentId: "work",
+      loadFullAssistantMessage: load,
+      showToolCalls: true,
+      showThinking: true,
+      selectedSession: {
+        key: "agent:work:dashboard:recovery",
+        kind: "direct",
+        reasoningLevel: "on",
+      },
+    };
+    document.body.append(pane);
+    await shows(pane, "Recovered finding.");
+    await pane.settleUpdates();
+    expect(pane.textContent?.match(/Recovered finding\./g)).toHaveLength(1);
+    expect(pane.textContent?.match(/Final finding\./g)).toHaveLength(1);
+    expect(load).toHaveBeenCalledOnce();
+  });
+
   it("recovers an oversized source group with its tool cards and complete output", async () => {
     const output = "x".repeat(5_000_000) + " OUTPUT_END";
     const load = vi.fn<SidebarFullMessageLoader>().mockImplementation(async ({ maxChars }) => ({

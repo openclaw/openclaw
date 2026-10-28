@@ -61,6 +61,8 @@ After the cold capture, the tool
 opens Details on chat and waits for image/font readiness and a two-second persistence
 window before starting warm reloads. A read-only cache inventory verifies that an
 owned transcript snapshot exists for the exact route; otherwise warm proof stops.
+Its inventory also records the serialized target-record bytes before warm captures
+so baseline/candidate storage growth can be compared outside measurement.
 Cold captures therefore show default Details
 visibility; warm chat captures show the last visit's Details state. Dashboard keeps
 its native closed Details state. The current router uses `/dashboard/...` for the
@@ -130,6 +132,13 @@ notice, tool activity, reaction, and task progress. A board widget is created
 through the real Gateway RPC owner for the dashboard session. All names, text,
 identities, media, and links are synthetic. `warm-reload-fixture.json` records the
 exact shape; the rig does not claim to reproduce production traffic or authority.
+
+Signed-in proof also seeds three other profiles with distinct synthetic avatars.
+Each signs in through its own HttpOnly proxy cookie and opens both routes through
+the real UI. Peer JavaScript is paused without hiding its pages before measurement,
+preserving live viewer declarations without competing renderer work. Both measured
+arms must finish warming with exactly three other viewers in the header; an empty
+facepile cannot qualify a header-presence comparison.
 
 ## Capture and metric definitions
 

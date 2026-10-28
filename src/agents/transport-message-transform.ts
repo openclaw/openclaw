@@ -141,7 +141,14 @@ export function transformTransportMessages(
       }
       content.push(normalizedToolCall);
     }
-    return { ...msg, content };
+    // Mutable replay callers still own a detached shell and content array.
+    return Array.isArray(msg.content) &&
+      Object.isFrozen(msg) &&
+      Object.isFrozen(msg.content) &&
+      content.length === msg.content.length &&
+      content.every((block, index) => block === msg.content[index])
+      ? msg
+      : { ...msg, content };
   });
   // Pairing-aware transports must let shared repair see errored tool-call frames and
   // their adjacent results together; pre-filtering the call can misattribute its result

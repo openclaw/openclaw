@@ -1,6 +1,8 @@
+import type { Context } from "@openclaw/llm-core";
 import OpenAI from "openai";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { buildOpenAICompletionsParams } from "./openai-transport-stream.js";
 import {
   buildOpenAIResponsesParams,
@@ -14,19 +16,12 @@ import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 type ReplayContextSpec = {
   source?: Pick<Model, "api" | "id" | "provider">;
-  provider?: string;
-  model?: string;
-  stopReason?: "stop" | "toolUse";
-  thinking?: {
-    signature: string | Record<string, unknown>;
-    replayMetadata?: unknown;
-  };
+  thinking?: Record<string, unknown>;
   toolCalls?: ReadonlyArray<{ id: string; name: string; arguments: unknown }>;
   results?: ReadonlyArray<{
     id: string;
     name: string;
     content: readonly unknown[];
-    timestamp?: number;
   }>;
   before?: readonly unknown[];
   after?: readonly unknown[];
@@ -38,13 +33,7 @@ function replayContext(spec: ReplayContextSpec) {
     content.push({
       type: "thinking",
       thinking: "Need a tool.",
-      thinkingSignature:
-        typeof spec.thinking.signature === "string"
-          ? spec.thinking.signature
-          : JSON.stringify(spec.thinking.signature),
-      ...(spec.thinking.replayMetadata === undefined
-        ? {}
-        : { openclawReasoningReplay: spec.thinking.replayMetadata }),
+      thinkingSignature: JSON.stringify(spec.thinking),
     });
   }
   for (const toolCall of spec.toolCalls ?? []) {
@@ -55,57 +44,46 @@ function replayContext(spec: ReplayContextSpec) {
     {
       role: "assistant",
       api: spec.source?.api ?? "openai-responses",
-      provider: spec.source?.provider ?? spec.provider ?? "openai",
-      model: spec.source?.id ?? spec.model ?? "gpt-5.5",
+      provider: spec.source?.provider ?? "openai",
+      model: spec.source?.id ?? "gpt-5.5",
       usage: createZeroUsageFixture(),
-      stopReason: spec.stopReason ?? "toolUse",
+      stopReason: "toolUse",
       timestamp: 1,
       content,
     },
-    ...(spec.results ?? []).map(({ id, name, content: resultContent, timestamp = 2 }) => ({
+    ...(spec.results ?? []).map(({ id, name, content: resultContent }) => ({
       role: "toolResult",
       toolCallId: id,
       toolName: name,
       content: resultContent,
       isError: false,
-      timestamp,
+      timestamp: 2,
     })),
     ...(spec.after ?? []),
   ];
   return { systemPrompt: "system", messages, tools: [] } as never;
 }
 
-function responsesModelFixture(id = "gpt-5.5", name = id) {
-  return makeResponsesModel({ id, name });
-}
+const responsesModelFixture = (id = "gpt-5.5") => makeResponsesModel({ id, name: id });
 
 type ReplayItem = {
   type?: string;
-  role?: string;
   id?: string;
   call_id?: string;
-  phase?: string;
-  status?: string;
-  encrypted_content?: string;
-  summary?: unknown;
-  output?: unknown;
-  arguments?: string;
 };
 type ReplayParams = { store?: boolean; input?: ReplayItem[] };
 
+const copilotModel = makeResponsesModel({
+  id: "gpt-5.5",
+  provider: "github-copilot",
+  baseUrl: "https://api.githubcopilot.com",
+});
 const session = { sessionId: "session-123" };
 const proxyModel = makeResponsesModel({
   id: "gpt-5.4",
   api: "openai-chatgpt-responses",
   baseUrl: "https://proxy.example.com/v1",
 });
-
-function toolContext(id: string, name: string, content: readonly unknown[]) {
-  return replayContext({
-    toolCalls: [{ id, name, arguments: {} }],
-    results: [{ id, name, content }],
-  });
-}
 
 function recover(
   create: ReturnType<typeof vi.fn>,
@@ -134,15 +112,50 @@ const mixedRequest = () => ({
     { type: "compaction", encrypted_content: "compaction" },
   ],
 });
-function rejectedResponse(error: Error) {
-  return { withResponse: vi.fn().mockRejectedValue(error) };
-}
-
-function emptyResponsesContext() {
-  return { systemPrompt: "system", messages: [], tools: [] } as never;
-}
+const rejectedResponse = (error: Error) => ({ withResponse: vi.fn().mockRejectedValue(error) });
 
 describe("openai transport stream", () => {
+  it("reuses frozen history across turns without changing bytes or sharing hook edits", () => {
+    const model = responsesModelFixture();
+    const context: Context = replayContext({
+      before: [{ role: "user", timestamp: 0, content: [{ type: "text", text: "question" }] }],
+      toolCalls: [{ id: "call_1|fc_1", name: "lookup", arguments: "not valid json" }],
+      results: [{ id: "call_1|fc_1", name: "lookup", content: [{ type: "text", text: "result" }] }],
+    });
+    context.messages.forEach(freezeJsonSnapshot);
+    const first = buildOpenAIResponsesParams(model, context, undefined);
+    const bytes = JSON.stringify(first);
+    for (let turn = 0; turn < 4; turn++) {
+      const next = buildOpenAIResponsesParams(model, context, undefined);
+      expect(JSON.stringify(next)).toBe(bytes);
+      next.input?.forEach((item, index) => expect(item).toBe(first.input?.[index]));
+    }
+    const hooked = buildOpenAIResponsesParams(model, context, { onPayload: () => undefined });
+    const call = hooked.input?.find((item) => item.type === "function_call");
+    if (!call || call.type !== "function_call") {
+      throw new Error("fixture must contain a function call");
+    }
+    expect(call.arguments).toBe("not valid json");
+    call.arguments = "edited by hook";
+    expect(JSON.stringify(buildOpenAIResponsesParams(model, context, undefined))).toBe(bytes);
+    context.messages.push({ role: "user", timestamp: 3, content: "next turn" });
+    const extended = buildOpenAIResponsesParams(model, context, undefined);
+    first.input?.forEach((item, index) => expect(extended.input?.[index]).toBe(item));
+    for (const shallow of [false, true]) {
+      const block = { type: "text" as const, text: "before" };
+      const message = { role: "user" as const, timestamp: 0, content: [block] };
+      if (shallow) {
+        Object.freeze(message.content);
+        Object.freeze(message);
+      }
+      const mutableInput = () =>
+        buildOpenAIResponsesParams(model, { messages: [message] }, undefined);
+      expect(JSON.stringify(mutableInput())).toContain("before");
+      block.text = "after";
+      expect(JSON.stringify(mutableInput())).toContain("after");
+    }
+  });
+
   it("keeps embedded replay provenance as a compatibility fallback", () => {
     const options = { ...session, authProfileId: "openai:oauth" };
     const params = buildOpenAIResponsesParams(
@@ -150,15 +163,13 @@ describe("openai transport stream", () => {
       replayContext({
         source: proxyModel,
         thinking: {
-          signature: {
-            type: "reasoning",
-            id: "rs_prior",
-            encrypted_content: "ciphertext",
-            __openclaw_replay: testing.buildOpenAIResponsesReasoningReplayMetadata(
-              proxyModel,
-              options,
-            ),
-          },
+          type: "reasoning",
+          id: "rs_prior",
+          encrypted_content: "ciphertext",
+          __openclaw_replay: testing.buildOpenAIResponsesReasoningReplayMetadata(
+            proxyModel,
+            options,
+          ),
         },
       }),
       options,
@@ -170,20 +181,14 @@ describe("openai transport stream", () => {
   });
 
   it("drops oversized GitHub Copilot Responses reasoning replay ids before send", () => {
-    const model = makeResponsesModel({
-      id: "gpt-5.5",
-      name: "GPT-5.5",
-      provider: "github-copilot",
-      baseUrl: "https://api.githubcopilot.com",
-      contextWindow: 400000,
-    });
+    const model = { ...copilotModel, contextWindow: 400000 };
     const longReasoningId = `rs_${"x".repeat(380)}`;
 
     const params = buildOpenAIResponsesParams(
       model,
       replayContext({
         source: model,
-        thinking: { signature: { type: "reasoning", id: longReasoningId, summary: [] } },
+        thinking: { type: "reasoning", id: longReasoningId, summary: [] },
       }),
       { replayResponsesItemIds: true, sessionId: "session-123" },
     ) as ReplayParams;
@@ -280,14 +285,9 @@ describe("openai transport stream", () => {
     const longToolItemId = "iVec" + "A".repeat(360);
     const longToolCallId = `call_ug6lFGKwZDjHfzW8H0PDQRwN|${longToolItemId}`;
     const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-        provider: "github-copilot",
-        baseUrl: "https://api.githubcopilot.com",
-      }),
+      copilotModel,
       replayContext({
-        provider: "github-copilot",
+        source: copilotModel,
         before: [{ role: "user", content: "read the queue", timestamp: 0 }],
         toolCalls: [
           {
@@ -322,7 +322,10 @@ describe("openai transport stream", () => {
   it("replays empty non-image tool results as no output", () => {
     const params = buildOpenAIResponsesParams(
       responsesModelFixture(),
-      toolContext("call_plan", "update_plan", []),
+      replayContext({
+        toolCalls: [{ id: "call_plan", name: "update_plan", arguments: {} }],
+        results: [{ id: "call_plan", name: "update_plan", content: [] }],
+      }),
       session,
     ) as ReplayParams;
     expectRecordFields(
@@ -336,7 +339,7 @@ describe("openai transport stream", () => {
   });
 
   it("normalizes canonical reasoning casing in Responses and Chat Completions payloads", () => {
-    const context = emptyResponsesContext();
+    const context = { systemPrompt: "system", messages: [], tools: [] };
     const baseModel = { id: "gpt-5.5", name: "GPT-5.5" };
     const responses = buildOpenAIResponsesParams(makeResponsesModel(baseModel), context, {
       reasoningEffort: " XHIGH ",
@@ -380,24 +383,6 @@ describe("openai transport stream", () => {
     ) as { reasoning?: unknown };
 
     expect(params.reasoning).toEqual({ effort, summary: "auto" });
-  });
-
-  it("serializes raw string tool-call arguments without double-encoding them", () => {
-    const params = buildOpenAIResponsesParams(
-      responsesModelFixture("gpt-5.4"),
-      replayContext({
-        model: "gpt-5.4",
-        stopReason: "stop",
-        toolCalls: [{ id: "call_abc|fc_item1", name: "my_tool", arguments: "not valid json" }],
-      }),
-      undefined,
-    ) as ReplayParams;
-
-    const functionCall = params.input?.find((item) => item.type === "function_call");
-    expectRecordFields(functionCall, {
-      type: "function_call",
-      arguments: "not valid json",
-    });
   });
 
   it("normalizes responses tool parameters while downgrading native strict:false", () => {

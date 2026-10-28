@@ -21,7 +21,10 @@ import {
 import { refreshSessionRowProfiles, replaceSessionRowFacts } from "./session-utils-row.js";
 
 /** Registry and display facts have their own lifecycle, independent of stored row acquisition. */
-export function createSessionRowProjectionContext(subagents: SubagentSessionListReadView) {
+export function createSessionRowProjectionContext(
+  subagents: SubagentSessionListReadView,
+  invalidateChildren?: (key?: string) => void,
+) {
   let preparedEpoch = -1;
   let registryRevision: number | undefined = getSubagentRegistryPublicationRevision();
   let registrySnapshot = subagents.snapshotIdentity();
@@ -194,12 +197,16 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
           invalidatePresentation(row);
         }
       }
+      if (broad) {
+        invalidateChildren?.();
+      }
       for (const key of broad
         ? new Set([
             ...subagentIndex.changedChildren,
             ...current.subagentRunsByChildSessionKey.keys(),
           ])
         : subagentIndex.changedChildren) {
+        invalidateChildren?.(key);
         for (const row of matching({ key })) {
           if (!row.storedEntry) {
             continue;
@@ -229,7 +236,11 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
     preparePresentation(
       row: records.MaterializedRow,
       readChildLinks: (row: records.Row) => readonly SessionChildLink[],
+      cfg = row.materialized.source.cfg,
     ) {
+      if (row.materialized.source.cfg !== cfg) {
+        row.materialized = replaceSessionRowFacts(row.materialized, undefined, { cfg });
+      }
       if (row.profileRevision !== profileRevision) {
         row.materialized = refreshSessionRowProfiles(row.materialized);
         row.profileRevision = profileRevision;

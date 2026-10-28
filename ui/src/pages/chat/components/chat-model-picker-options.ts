@@ -71,7 +71,9 @@ export type ChatModelPickerTargetGroup = {
   completion: { promise: Promise<ChatModelPickerTargetGroup["options"]> };
 };
 
-export function formatModelLabel(option: ChatModelPickerOption): string {
+export function formatModelLabel(
+  option: Pick<ChatModelPickerOption, "label" | "provider">,
+): string {
   const prefixes = [
     formatRawProviderLabel(option.provider),
     providerDisplayLabel(option.provider),
