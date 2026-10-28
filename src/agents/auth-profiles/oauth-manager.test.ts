@@ -174,7 +174,9 @@ describe("createOAuthManager", () => {
           ),
         );
 
-      const result = await resolve(createOAuthManager(), profileId, credential, agentDir);
+      const result = await resolve(createOAuthManager(), profileId, credential, agentDir, {
+        forceRefresh: true,
+      });
 
       expect(fetch).toHaveBeenCalledOnce();
       expect(result?.credential).toMatchObject({
