@@ -468,7 +468,7 @@ suite.define(() => {
     const fixture = createControlUiTeamScaleFixture({
       baseUrl: suite.server.baseUrl,
       ...sandbox(""),
-      transcriptMessages: 3,
+      transcriptMessages: 4,
       lateRowFacts: true,
     });
     sandboxAssets = fixture.assets;
