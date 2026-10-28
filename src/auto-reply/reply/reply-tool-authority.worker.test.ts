@@ -336,6 +336,7 @@ it.each(["execution", "separate"] as const)(
 
 it.each([
   "unrelated deletion",
+  "model fallback",
   "revoked policy",
   "reassigned session",
   "deleted requester",
@@ -406,14 +407,15 @@ it.each([
                       { env: state.env },
                     );
                   } else {
-                    await patchSessionEntryCore(scope, () =>
-                      change === "revoked policy"
-                        ? { inheritedToolDeny: ["exec"] }
-                        : {
-                            sessionId: "replacement-requester",
-                            spawnedBy: "agent:main:other-parent",
-                          },
-                    );
+                    const patches = {
+                      "model fallback": { model: "fallback", modelProvider: "fallback" },
+                      "revoked policy": { inheritedToolDeny: ["exec"] },
+                      "reassigned session": {
+                        sessionId: "replacement-requester",
+                        spawnedBy: "agent:main:other-parent",
+                      },
+                    } satisfies Record<typeof change, Partial<SessionEntry>>;
+                    await patchSessionEntryCore(scope, () => patches[change]);
                   }
                   interleaved = true;
                 }
@@ -425,7 +427,7 @@ it.each([
               toolAuthorityOverlay: toolAuthorityOverlay(run),
             });
             expect(interleaved).toBe(true);
-            if (change === "unrelated deletion") {
+            if (change === "unrelated deletion" || change === "model fallback") {
               expect(result).toEqual({ status: "accepted" });
               expect(queueMessage).toHaveBeenCalledOnce();
             } else {

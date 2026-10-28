@@ -538,7 +538,10 @@ export const resolveBuildRequirement = (
         ? { shouldBuild: true, reason: "missing_bundled_plugin_dist_entry" }
         : { shouldBuild: false, reason: "clean" };
     }
-    if (options.allowEquivalentInputs && stamp.inputSignature !== null && !immutable) {
+    // Dirty inputs whose bytes match the stamp reuse dist: a co-located launcher
+    // must not republish outputs a running source Gateway executes. Without
+    // allowEquivalentInputs, a changed HEAD already returned above.
+    if (stamp.inputSignature !== null && !immutable) {
       if (stamp.inputSignature !== resolveRunNodeInputSignature(deps, "build")) {
         return { shouldBuild: true, reason: "build_inputs_changed" };
       }
@@ -641,11 +644,7 @@ export const resolveRuntimePostBuildRequirement = (
         ? { shouldSync: true, reason: "missing_runtime_postbuild_output" }
         : { shouldSync: false, reason: "clean" };
     }
-    if (
-      options.allowEquivalentInputs &&
-      stamp.inputSignature !== null &&
-      !isImmutableGitDeployment(deps)
-    ) {
+    if (stamp.inputSignature !== null && !isImmutableGitDeployment(deps)) {
       if (stamp.inputSignature !== resolveRunNodeInputSignature(deps, "runtime")) {
         return { shouldSync: true, reason: "runtime_inputs_changed" };
       }

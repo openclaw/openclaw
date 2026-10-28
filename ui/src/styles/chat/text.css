@@ -664,18 +664,34 @@
   }
 }
 
-/* --link, not --accent: user bubbles are filled with --accent-subtle (and peer
-   bubbles with the sender tint), so an accent-colored link sits on its own hue
-   and drops to 4.1:1 on the chocolate palette — 3.95:1 at the worst sender hue —
-   while the body text beside it holds 9:1. Hover shifts color instead of fading
-   opacity, which composited the link toward its background and cost another 1.1. */
+:is(.chat-thread, .chat-session-rail__thread) {
+  --chat-text-link: var(--chat-canvas-link, var(--link));
+  --chat-text-link-hover: var(--chat-canvas-link-hover, var(--link-hover));
+}
+
+/* Paired surfaces keep their own link contract. */
+.chat-bubble--tool-shell,
+.chat-text :is(table, pre) {
+  --chat-text-link: var(--link);
+  --chat-text-link-hover: var(--link-hover);
+}
+
 .chat-text :where(a) {
-  color: var(--link);
+  color: var(--chat-text-link, var(--link));
   text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
   text-underline-offset: 2px;
 }
 
 .chat-text :where(a:hover) {
+  color: var(--chat-text-link-hover, var(--link-hover));
+}
+
+/* Inline code has its own fill; file links explicitly remove that chip surface. */
+.chat-text a:not(.markdown-file-link, .markdown-github-item, .markdown-session-link) > code {
+  color: var(--link);
+}
+
+.chat-text a:not(.markdown-file-link, .markdown-github-item, .markdown-session-link):hover > code {
   color: var(--link-hover);
 }
 
@@ -958,7 +974,7 @@
    source order, and sidebar-markdown.css is imported after this file. */
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link {
   position: relative;
-  color: var(--link);
+  color: var(--chat-text-link, var(--link));
   /* File links are href-less anchors (driven by data-file-path), so the UA
      link pointer does not apply; they are content links and keep the hand. */
   cursor: pointer;
@@ -1120,7 +1136,7 @@
    rather than resetting them here, so no theme override has to be out-specified;
    this rule only has to undo the separate mono-font declarations. */
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link > code {
-  color: var(--link);
+  color: var(--chat-text-link, var(--link));
   font-family: inherit;
   font-size: inherit;
 }

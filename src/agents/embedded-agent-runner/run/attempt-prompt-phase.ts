@@ -508,6 +508,7 @@ export async function runEmbeddedAttemptPromptPhase(
             }
           : {}),
         onModelRequest: preparedStreamRuntime.cache.onModelRequest,
+        normalizeToolCallIds: preparedStreamRuntime.normalizeToolCallIds,
         images: imageResult.images,
         modelPrompt: promptContext.promptForModel,
         onFinalPromptText: (prompt) => {

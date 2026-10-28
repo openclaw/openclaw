@@ -528,6 +528,12 @@ describe("CI changed Node test plan", () => {
     );
   });
 
+  it("keeps the extracted session database collection proof protected", () => {
+    expect(PR_PROTECTED_RUNTIME_TEST_FILES).toContain(
+      "src/gateway/session-database-retention.test.ts",
+    );
+  });
+
   it("keeps policy scanners beside ordinary importers without claiming complete source ownership", () => {
     const source = "src/test-utils/runtime.ts";
     const consumer = "src/example/runtime.test.ts";

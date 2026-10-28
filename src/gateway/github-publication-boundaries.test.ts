@@ -235,6 +235,40 @@ describe("Gateway GitHub publication boundaries", () => {
     expectNoCommands("commit-tree", "push");
   });
 
+  it("publishes when a durable local placement is only re-read during snapshot capture", async () => {
+    const database = localDatabase();
+    // Long-lived local sessions keep a durable row; local turn claims stay in memory.
+    database.db
+      .prepare(
+        "INSERT INTO worker_session_placements (session_id, agent_id, session_key, state, created_at_ms, updated_at_ms, state_changed_at_ms) VALUES (?, 'main', ?, 'local', 1, 1, 1)",
+      )
+      .run(SESSION_ID, SESSION_KEY);
+    const placements = createWorkerSessionPlacementStore({ database });
+    await placements.releaseTurn(await localClaim(placements, "requesting-turn"));
+    const other = { sessionId: "other", sessionKey: "agent:main:other", agentId: "main" };
+    const fallback = mocks.runCommand.getMockImplementation()!;
+    let raced = false;
+    mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+      if (!raced && argv.includes("add")) {
+        raced = true;
+        // Another session advances the sequence, then a projection re-reads this idle session.
+        const claim = {
+          ...other,
+          claimId: "other",
+          runId: "other",
+          owner: { kind: "local" as const },
+        };
+        await placements.releaseTurn(await placements.claimTurn(claim));
+        await placements.readProjection([SESSION_ID]);
+      }
+      return await fallback(argv, options);
+    });
+    await expect(
+      publish(createTestGitHubPublicationCoordinator({ placements }), "durable-local-reread"),
+    ).resolves.toMatchObject({ status: "published" });
+    expect(raced).toBe(true);
+  });
+
   it("requeues a publication when execution loses live session authority", async () => {
     const database = localDatabase();
     const placements = createWorkerSessionPlacementStore({ database });

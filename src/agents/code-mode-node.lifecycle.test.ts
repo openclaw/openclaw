@@ -334,7 +334,7 @@ it.each(["idle deadline", "newer completion"] as const)(
     vi.useFakeTimers();
     const reused = await caller.run("completed-turn", warmPool);
     const held = holdRun(reused);
-    const config = { ...input.config, timeoutMs: 120_000 };
+    const config = { ...input.config, timeoutMs: 5 * 60_000 };
     const active = host.run(() => nodeCodeModeExecutor.execute({ ...input, config }, config));
     try {
       await held.started;
@@ -351,7 +351,7 @@ it.each(["idle deadline", "newer completion"] as const)(
         held.complete(fixture.completed);
         await active;
       }
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
       expect(previous.isClosed).toBe(retirement === "idle deadline");
       held.complete(fixture.completed);
       expect(await active).toMatchObject({ status: "completed" });
@@ -372,14 +372,19 @@ it.each(["idle deadline", "newer completion"] as const)(
   },
 );
 
-it("lets a completed burst retire while serial work keeps one worker warm", async () => {
+it("keeps repeated bursts warm, then retires surplus capacity during serial traffic", async () => {
   vi.useFakeTimers();
   const start = fixture.pools.length;
   await Promise.all(Array.from({ length: 8 }, run));
   const burst = fixture.pools.slice(start);
   expect(burst).toHaveLength(8);
-  for (let turn = 0; turn < 20; turn++) {
-    await vi.advanceTimersByTimeAsync(2000);
+  for (const gap of [45_000, 60_000, 45_000]) {
+    await vi.advanceTimersByTimeAsync(gap);
+    await Promise.all(Array.from({ length: 8 }, run));
+    expect(fixture.pools).toHaveLength(start + 8);
+  }
+  for (let turn = 0; turn < 10; turn++) {
+    await vi.advanceTimersByTimeAsync(20_000);
     expect(await run()).toMatchObject({ status: "completed" });
   }
   expect(fixture.pools).toHaveLength(start + 8);

@@ -1,3 +1,4 @@
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../../infra/runtime-worker-url.js";
 import { createCpuTrackedWorker } from "../../infra/worker-cpu.js";
@@ -58,6 +59,7 @@ export async function startSecretEgressProxyWorker(params: {
       return;
     }
     failure = new Error("Secret egress proxy Worker is unavailable; restart the Gateway.");
+    materializeErrorStack(failure);
     Atomics.store(authority, 0, 1);
     ready.reject(failure);
     for (const request of pending.values()) {

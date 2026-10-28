@@ -759,7 +759,7 @@
 :root[data-theme="rose-light"],
 :root[data-theme="miami-light"] {
   --bg-accent: var(--bg);
-  --bg-elevated: color-mix(in srgb, var(--bg-content) 70%, white);
+  --bg-elevated: color-mix(in srgb, var(--bg-content) 50%, white);
   --bg-hover: color-mix(in srgb, var(--text) 5%, var(--bg-content));
   --chat-composer-surface: var(--popover);
   --chat-user-surface: color-mix(in srgb, var(--accent) 12%, var(--bg-content));

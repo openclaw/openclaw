@@ -1,8 +1,10 @@
 import { sanitizeResponsesImagePayload } from "@openclaw/ai/transports";
+import "../llm/ai-transport-host.js";
 import type { Context, Model } from "@openclaw/llm-core";
 // Verifies Responses image payloads are canonicalized or replaced before send.
 import { describe, expect, it, vi } from "vitest";
 import { convertResponsesMessages } from "../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 
 const PNG_1X1 =
   // Valid JPEG-labeled data is sniffed as PNG and normalized to the real MIME type.
@@ -167,6 +169,16 @@ it.each([
       { role: "user", content: [{ ...image, mimeType: "image/png" }], timestamp: 0 },
     ];
     expect(JSON.stringify(sanitizeResponsesImagePayload(build()).input)).toBe(expected);
+    // Frozen image history keeps preparation reusable and hook input editable.
+    context.messages.forEach(freezeJsonSnapshot);
+    const hookInput = () => ({
+      input: convertResponsesMessages(model, context, new Set(["openai"]), { mutableInput: true }),
+    });
+    sanitizeResponsesImagePayload(hookInput());
+    decode.mockClear();
+    const detached = hookInput();
+    expect(JSON.stringify(sanitizeResponsesImagePayload(detached).input)).toBe(expected);
+    expect(decode).not.toHaveBeenCalled();
   } finally {
     decode.mockRestore();
   }

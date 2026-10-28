@@ -263,6 +263,11 @@ export async function performSessionGitHubPreparation(
         "This workspace already continues another PR or head branch. Its original association and saved work were preserved.",
       );
     }
+    if (previous && previous.base.branch !== pullRequest.base.branch) {
+      throw new Error(
+        `The original PR base branch changed. Have the PR author restore its base branch to ${JSON.stringify(previous.base.branch)} on GitHub, then retry prepare_pr. Its original association and saved work were preserved.`,
+      );
+    }
     if (!previous) {
       const merge = await withWorktreeGitConfig(
         owner.worktree.path,

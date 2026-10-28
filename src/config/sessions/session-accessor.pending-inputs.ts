@@ -72,8 +72,7 @@ import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-
 
 export { withSessionPendingInputRelocation };
 export { prepareForeignLiveSessionPendingInputEntries } from "./session-pending-input-live-read.js";
-export type { SessionPendingInput, SessionPendingInputPage };
-export type { SessionPendingInputReceipt } from "./session-pending-input-receipt.types.js";
+export type { SessionPendingInput, SessionPendingInputPage, SessionPendingInputReceipt };
 
 const receiptOwners = new WeakMap<SessionPendingInputReceipt, SessionPendingInputOwner>();
 const withdrawnOwners = new WeakSet<SessionPendingInputOwner>();
@@ -341,12 +340,16 @@ async function stagePreparedPendingInput(
       throw new Error("Pending input read returned a different operation");
     }
     phase.mark("persist.stage.authority");
-    await assertCurrent();
+    const { current, existing, previous, committed } = snapshot;
+    const fresh = current && !(existing || previous || committed);
+    // Approval rechecks fresh input; replay needs a full read before disclosure.
+    await (fresh && options.prepareMessageAfterIdempotencyCheck
+      ? (options.authority?.prepareForSourceScope?.() ?? assertCurrent())
+      : assertCurrent());
     assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-    if (!snapshot.current) {
+    if (!current) {
       return undefined;
     }
-    const { existing, previous, committed } = snapshot;
     const recovery =
       (existing && existing.lifecycle_generation !== lifecycleGeneration) ||
       (committed && !previous) ||
@@ -445,9 +448,7 @@ async function stagePreparedPendingInput(
           }
           (options.authority?.assertLifetimeCurrent ?? assertCompletion)();
           completion = store
-            .mutate(completionInput(outcome), (_stage, facts) =>
-              assertPrepared(facts, assertCompletion),
-            )
+            .mutate(completionInput(outcome), (_, facts) => assertPrepared(facts, assertCompletion))
             .then((receipt) => {
               if (!receipt.outcome) {
                 throw new Error("Input completion omitted its committed outcome");

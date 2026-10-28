@@ -1019,7 +1019,9 @@ The Gateway stays available during validation. Before replacing its installed
 code, the updater asks that exact Gateway to drain work and close its services,
 databases, and listener. A foreground Gateway launches a fresh process only after
 the updater settles; it does not reopen its old module graph after replacement.
-Managed services restart through their existing service manager.
+Managed services restart through their existing service manager. Android
+(Termux) verifies a foreground Gateway with the same Linux kernel process and
+boot identities as Linux.
 
 Chat updates retain the requester's original person-access grant while staging
 and validation run. Revoking that grant stops the pending update and leaves the

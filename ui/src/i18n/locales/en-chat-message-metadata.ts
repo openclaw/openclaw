@@ -81,7 +81,6 @@ const enChatMessageMetadata = {
       voiceTranscript: "Voice transcript",
       readAloud: "Read aloud",
       stopReading: "Stop reading",
-      duplicatesCollapsed: "{count} consecutive identical messages collapsed",
       contextFor: "Message context for {timestamp}",
     },
     systemNotice: {

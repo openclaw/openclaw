@@ -6,7 +6,7 @@ On Windows, the native [Windows Hub](https://docs.openclaw.ai/platforms/windows#
 is the recommended desktop app. This cross-platform Tauri app is the backup,
 with a local Windows Gateway through bundled Bun or a remote Gateway connection.
 
-On macOS, the Tauri build is named **OpenClaw-Tauri** so it can be installed alongside the native **OpenClaw** app. It retains its separate bundle identity when updated.
+On macOS, the Tauri build is named **OpenClaw-Tauri** so it can be installed alongside the native **OpenClaw** app. It retains its separate bundle identity when updated and requires macOS 26.2 or later.
 
 Dashboard widgets and browser panels load inside the app. Browser tabs belong to their conversation and support back, forward, reload, stop, snapshots, element inspection, and saving the current page or asset. Opening the same address in a conversation reuses its tab; other conversations keep their own tabs. Popups opened by a browser tab stay in that conversation.
 
@@ -123,13 +123,10 @@ release workflow's Foundation Azure signing job; no credentials are needed for
 non-publishing builds.
 
 Local setup seeds the private Windows Bun runtime and delegates service
-installation and health checks to `openclaw gateway`. Non-release builds install
-the core CLI and Codex staged from the same source commit; release builds install
-the matching published CLI with Bun. System Node.js and npm are not required.
-Release jobs pass `RELEASE_TAG` and its verified `RELEASE_SHA`, so shallow checkouts
-without tag refs still omit the source package. Staging rejects a release identity
-that disagrees with the package version or source commit. Local builds without an
-explicit release identity continue to use exact tag refs.
+installation and health checks to `openclaw gateway`. Builds include the core CLI
+and Codex staged from the same source commit. System Node.js and npm are not required.
+Release jobs pass `RELEASE_TAG` and its verified `RELEASE_SHA`; staging rejects a
+release identity that disagrees with the package version or source commit.
 The managed launcher is `%USERPROFILE%\.openclaw\bin\openclaw.cmd`; app actions
 execute Bun directly, without interpreting arguments in a command shell.
 `OPENCLAW_DESKTOP_CLI` can select an existing development CLI.
@@ -207,7 +204,7 @@ cargo build
 
 The app uses `OPENCLAW_DESKTOP_CLI` when set. Otherwise it checks `~/.openclaw/bin/openclaw`, then `openclaw` on `PATH`.
 
-Desktop notifications use each platform's system notification service. macOS 13+ uses Apple's User Notifications framework; Windows uses native system toasts and Linux uses the desktop notification service through `notify-rust`. On macOS, test notifications from a signed `.app` bundle: a direct `cargo run` stays unbundled, so the app disables notifications instead of initializing Apple's framework with no bundle identity.
+Desktop notifications use each platform's system notification service. macOS uses Apple's User Notifications framework; Windows uses native system toasts and Linux uses the desktop notification service through `notify-rust`. On macOS, test notifications from a signed `.app` bundle: a direct `cargo run` stays unbundled, so the app disables notifications instead of initializing Apple's framework with no bundle identity.
 
 On macOS, a test launch with an isolated `HOME` or `CFFIXED_USER_HOME` can make
 the user's default keychain unavailable to that process. The saved-Gateway notice
@@ -334,6 +331,11 @@ bundled runtime, and Gateway service owners as **On this computer**, then opens
 the Control UI's custodian onboarding. Release builds select their matching stable
 version; development builds use their staged source package. Nearby Gateways are
 never joined automatically.
+
+Builds with an embedded JIT or AOT runtime install that bundle. Setup shows the
+app version and runtime flavor instead of a release-channel picker, including
+development builds. Update the desktop app to change its bundled version. Builds
+without an embedded runtime retain the Stable, Beta, and Development choices.
 
 The custodian prepares available AI access and explains what was selected. Its
 **Use a different Gateway**, **Review permissions**, and **Open AI setup** actions
@@ -465,14 +467,15 @@ the additional sign-in options.
 
 ## Gateway runtime
 
-On Linux and Windows, fresh local setup installs the Gateway on the bundled OpenClaw Bun
-fork through the CLI. The install carries an `--expected-runtime-pin`
+Fresh local setup installs the Gateway on the app's selected runtime through the
+CLI: the pinned OpenClaw Bun fork for JIT builds, or the standalone executable for
+AOT builds. The install carries an `--expected-runtime-pin`
 guard with `definition: null`, so it refuses if a service has appeared since
 setup observed no service. The app records an informational marker; it never uses
 that marker as permission to change a service automatically.
 
-On Linux, **Use bundled runtime…** appears in the tray whenever the existing Gateway uses
-another runtime, including Node, an older bundled Bun, or an operator-selected
+On Linux, Windows, and macOS, **Use bundled runtime…** appears in the tray whenever the existing Gateway uses
+another runtime, including Node, an older bundled runtime, or an operator-selected
 runtime. The action shows the current runtime and asks for confirmation. It
 passes that observation's service definition and runtime pin to the CLI's
 `--expected-runtime-pin` guard, which refuses an intervening service or pin
@@ -488,11 +491,11 @@ a particular previous executable, use
 `openclaw gateway install --force --runtime-path /absolute/path/to/node-or-bun`.
 
 Startup and desktop updates leave existing Gateway services and runtime pins
-unchanged, including services previously installed by the app. On Linux, after an
-app update provides a newer Bun, choose **Use bundled runtime…** again to switch.
-The CLI owns service installation on both Linux and Windows; macOS Tauri keeps
-its existing behavior, separate from the native macOS app.
-Switching an existing Gateway's runtime leaves its CLI launcher unchanged.
+unchanged, including services previously installed by the app. After an app update
+provides a new runtime or changes flavor, choose **Use bundled runtime…** again to
+switch. The CLI owns service installation; the native macOS app remains separate.
+Successful activation also refreshes the app-managed CLI launcher. Independently
+installed CLI launchers remain under their original owner.
 After successful activation and Gateway health checks, the app records the
 previous selection in its existing managed launcher marker and collects obsolete
 runtime seeds. It keeps the current and previous selections, the launcher's
@@ -596,7 +599,10 @@ Quick Chat pins its native request identity before sending, so activity from oth
 
 ## Installer resource
 
-On Linux, the Rust build assembles the repository's `scripts/install-cli.sh` and shared `scripts/install-policy.sh` into the standalone `install-cli.sh` resource. The app never keeps a forked copy. Fresh release installs select the app version. Existing unmarked stable installs, beta installs, and development installs retain `latest`, `beta`, and the managed Git `main` checkout respectively, under `~/.openclaw`.
+The Rust build assembles the repository's `scripts/install-cli.sh` and shared
+`scripts/install-policy.sh` into the fallback `install-cli.sh` resource. The app
+never keeps a forked copy. Embedded-runtime builds install their staged CLI;
+platforms without an embedded runtime retain the script-owned installer path.
 
 Tauri build/dev hooks stage the runtime through `apps/linux/scripts/stage-runtime.mjs`
 and the shared `scripts/lib/openclaw-bun.json` pin. Linux x64/arm64 use the same
@@ -606,7 +612,7 @@ revision. The app copies verified resource bytes to an immutable directory under
 `~/.openclaw/tools/desktop-runtime`; services never reference a temporary AppImage
 mount. Healthy runtime activations reclaim unused immutable directories under the
 retention policy above. On Linux, Node remains installation/build tooling.
-Fresh local setup also selects bundled Bun for the app-installed CLI launcher.
+Fresh local setup also selects the bundled runtime for the app-installed CLI launcher.
 
 Linux resources carry a fixed `OPENCLAW-BUN-RUNTIME-V1` header so linuxdeploy
 cannot rewrite the pinned ELF executable. Installation strips that header and
@@ -614,24 +620,87 @@ verifies the original executable hash. The packaged ABI scanner also decodes
 the resource and checks its architecture and symbol versions against the
 AppImage's existing compatibility floor.
 
-macOS Tauri keeps its existing runtime behavior; its native macOS sibling owns
-the Mac's bundled runtime. Windows stages its signed fork payload from the same
+macOS Tauri stages its own runtime, separately from the native macOS app.
+Windows stages its signed fork payload from the same
 pin; release builds install the CLI through Bun. Unsigned dry-run builds are not
 eligible. See [Bun compatibility](https://docs.openclaw.ai/install/bun-compatibility) for runtime
 admission and the shared pin's repin gates.
 
-Non-release Linux and Windows builds also stage the same source commit's core
+JIT builds on Linux, Windows, and macOS stage the same source commit's core
 package and official Codex plugin, including the target's Codex executable.
 Fresh local setup copies this prepared package into the verified, immutable
 runtime directory and creates the managed CLI launcher without contacting npm.
 This first copy can take several minutes on a fresh computer. Setup waits for
 the newly installed Gateway to become healthy before opening its dashboard.
-The shared desktop release-tag check leaves release builds on their existing
-installer path. The staged build identity makes plugin install, update, and
+Release builds validate the tag identity and retain the same complete package
+contract, so switching back from AOT does not need a second CLI installation.
+The staged build identity makes plugin install, update, and
 Doctor prefer the bundled Codex copy through the same source-plugin owner as
 the native macOS app. The desktop app owns updates to this core package: rebuild
 or update the desktop app to refresh it. Previous runtime directories remain
 available to existing services.
+
+### Select JIT or experimental AOT
+
+`OPENCLAW_DESKTOP_RUNTIME=jit|aot` is the single build-time flavor switch; the
+default is `jit`. It applies to the Tauri build/dev hook and direct
+`stage-runtime.mjs` runs. The embedded manifest records the flavor, launch shape,
+and verified file inventory. Seeding, CLI installation, Gateway activation,
+retention, and the displayed bundled-runtime label consume that manifest.
+
+An AOT build consumes an already built standalone directory. It never builds the
+experimental compiler or recompiles OpenClaw as part of the ordinary app workflow:
+
+```bash
+OPENCLAW_DESKTOP_RUNTIME=aot \
+OPENCLAW_DESKTOP_AOT_ARTIFACT=/absolute/path/to/standalone-aot \
+  node apps/linux/scripts/stage-runtime.mjs
+
+cd apps/linux/src-tauri
+OPENCLAW_DESKTOP_RUNTIME=aot \
+OPENCLAW_DESKTOP_AOT_ARTIFACT=/absolute/path/to/standalone-aot \
+  pnpm dlx @tauri-apps/cli@2.11.4 build --bundles app \
+  --config '{"bundle":{"createUpdaterArtifacts":false}}'
+```
+
+The example bundles a macOS app; use `--bundles deb,appimage` and the AppImage
+preparation below on Linux. Build the standalone from the matching OpenClaw source
+version and target, including standalone Gateway service support. Keep its
+`manifest.json`, executable, and `runtime/` together. Staging checks their digests
+and preserves source, compiler, build, and capability provenance. It does not
+modify the input artifact. A version match alone is not qualification of a new
+source commit or compiler.
+
+AOT is experimental and requires the OpenClaw AOT-capable Bun/WebKit forks. This
+desktop flavor supports Linux glibc x64/arm64 and macOS Apple silicon; macOS Intel
+uses JIT. The macOS app floor is 26.2. AOT signatures must use hardened runtime
+without `allow-jit` or `allow-unsigned-executable-memory`. Qualify native plugins,
+fetched plugins, and child runtimes on each exact signed artifact. Linux artifacts
+must meet the AppImage's glibc 2.35 / GLIBCXX_3.4.30 floor; packaging cannot lower
+the ABI requirements of a compiler or native addon. See
+[Standalone builds](https://docs.openclaw.ai/install/standalone) for capabilities
+and compiler limits.
+
+Linux arm64 C2 testing has reproduced delayed desktop-node shutdown: quitting
+can require the app's 30-second forced-stop fallback. Linux AOT is not yet
+production-qualified. Keep JIT for production and verify shutdown on each new
+candidate; successful startup and chat do not establish complete qualification.
+
+For the **Linux App** workflow, select `desktop_runtime: aot`, supply `aot_run_id`
+from a successful push or manually dispatched workflow in this repository and
+`aot_artifact_name`. The artifact must target Linux x64 and have the standalone
+files at its root. Runtime selection applies only to the packaging step;
+ordinary native test fixtures and release builds remain JIT. Flip the build
+input back to `jit` to produce a JIT app; after replacing an existing app,
+activate its runtime through **Use bundled runtime…**. Both
+JIT-to-AOT and AOT-to-AOT updates keep old runtime directories while a service or
+rollback selection references them.
+
+The native macOS app does not read `OPENCLAW_DESKTOP_RUNTIME`. Its future
+integration can consume the same per-architecture standalone contract, choosing
+AOT for `darwin-arm64` and JIT for `darwin-x64` at the macOS 26.2 app floor. Its
+runtime owner must perform that separate cutover; no native app default changes
+with this Tauri feature.
 
 ## Icons
 

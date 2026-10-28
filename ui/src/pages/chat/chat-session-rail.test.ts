@@ -369,9 +369,8 @@ describe("ChatSessionRailElement", () => {
           draft: "",
         },
       });
-      const phrase = element.querySelector("openclaw-working-phrase")!;
-      await phrase.updateComplete;
-      expect(phrase.textContent?.replace(/\s+/g, " ").trim()).toBe(expected);
+      const text = () => element.querySelector("openclaw-working-phrase")?.textContent;
+      await waitForSolid(() => expect(text()?.replace(/\s+/g, " ").trim()).toBe(expected));
     } finally {
       setCurrentThemeBranding(originalBranding);
     }
@@ -430,9 +429,8 @@ describe("ChatSessionRailElement", () => {
       },
     });
     const textarea = element.querySelector("textarea")!;
-    await waitForSolid(() =>
-      expect(element.querySelector('button[aria-label="Delete comment"]')).not.toBeNull(),
-    );
+    await vi.dynamicImportSettled();
+    expect(element.querySelector('button[aria-label="Delete comment"]')).not.toBeNull();
     element.querySelector<HTMLButtonElement>('button[aria-label="Delete comment"]')!.click();
     expect(onAttachmentsChange).toHaveBeenCalledWith([]);
     expect(document.activeElement).toBe(textarea);

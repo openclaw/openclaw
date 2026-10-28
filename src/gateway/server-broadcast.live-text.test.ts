@@ -1,8 +1,8 @@
 import { getEventListeners } from "node:events";
 import { expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
+import { startConnect } from "../../ui/src/api/gateway-handshake.test-support.js";
 import {
-  getLatestWebSocket,
   MockWebSocket,
   stubWindowGlobals,
   useNodeFakeTimers,
@@ -79,12 +79,13 @@ const payloads = (peer: ReturnType<typeof createPeer>) => peer.frames.map(({ pay
 it("keeps a shared chat stream when one full observer unsubscribes", async () => {
   useNodeFakeTimers();
   stubWindowGlobals();
+  vi.stubGlobal("crypto", { randomUUID: () => "live-text-request" });
   vi.stubGlobal("WebSocket", MockWebSocket);
   const onEvent = vi.fn();
   const client = new GatewayBrowserClient({ url: "ws://127.0.0.1:18789", onEvent });
-  client.start();
-  const ws = getLatestWebSocket();
-  ws.emitOpen();
+  const { ws, connectFrame } = await startConnect(client);
+  ws.emitMessage({ type: "res", id: connectFrame.id, ok: true, payload: { type: "hello-ok" } });
+  await vi.advanceTimersByTimeAsync(0);
   const peer = createPeer("shared-observers", true);
   peer.client.connect.caps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
   const send = peer.socket.send.getMockImplementation()!;
@@ -93,24 +94,23 @@ it("keeps a shared chat stream when one full observer unsubscribes", async () =>
     ws.emitMessage(String(frame));
   });
   const subscribers = createSessionMessageSubscriberRegistry();
-  const { broadcast } = broadcaster([peer], {
-    sessionMessageSubscribers: subscribers,
-  });
+  const { broadcast, owner } = harness(peer, { sessionMessageSubscribers: subscribers });
   const sessionKey = "agent:main:chat";
-  const owner = new AbortController();
   const assistant = (content: string) => ({ role: "assistant", content });
   const requestObserver = async (method: "subscribe" | "unsubscribe", subscriptionId: string) => {
-    const pending = client.request(`sessions.messages.${method}`, {
-      key: sessionKey,
-      subscriptionId,
-    });
-    const { id, params } = JSON.parse(ws.sent.at(-1) ?? "{}");
+    const requestMethod = `sessions.messages.${method}`;
+    const expectedParams = { key: sessionKey, subscriptionId };
+    const sent = Promise.withResolvers<string>();
+    const pending = client.request(requestMethod, expectedParams, { onSent: sent.resolve });
+    const sentId = await sent.promise;
+    const request = JSON.parse(ws.sent.at(-1) ?? "{}");
+    expect(request).toMatchObject({ type: "req", id: sentId, method: requestMethod });
+    expect(request.params).toEqual(expectedParams);
+    const { id, params: sub } = request;
     if (method === "subscribe") {
-      subscribers.subscribe(peer.client.connId, params.key, {
-        subscriptionId: params.subscriptionId,
-      });
+      subscribers.subscribe(peer.client.connId, sub.key, { subscriptionId: sub.subscriptionId });
     } else {
-      subscribers.unsubscribe(peer.client.connId, params.key, params.subscriptionId);
+      subscribers.unsubscribe(peer.client.connId, sub.key, sub.subscriptionId);
     }
     ws.emitMessage({ type: "res", id, ok: true });
     await pending;

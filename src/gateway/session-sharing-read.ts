@@ -313,6 +313,11 @@ export function createSessionSharingInputAuthority(
   return {
     // Transport/source custody owns lifetime; profile selection ends at input acceptance.
     assertLifetimeCurrent: () => {},
+    prepareForSourceScope: () =>
+      withCurrentSessionSharingProfiles(ownedParams.client, async (profiles) => {
+        profiles.readCurrent();
+        ownedParams.preparedProfiles = profiles;
+      }),
     withCurrent: (consume) =>
       withCurrentSessionSharingProfiles(ownedParams.client, (profiles, beginConsume) => {
         ownedParams.preparedProfiles = profiles;
