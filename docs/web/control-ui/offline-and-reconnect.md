@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "What the Control UI keeps when the Gateway connection drops, and how it recovers"
 read_when:
   - The Control UI shows Reconnecting or drops messages
@@ -527,23 +528,25 @@ one history notice offers **Retry**, which reloads the conversation and restores
 its live subscription, including approval updates. Permission and other terminal
 failures remain visible rather than being silently retried.
 
-After a Gateway restart, eligible accepted chat inputs resume on the server in
-order within each session, even while this browser is closed. Automatic recovery
-requires the original session and current operator access, and is limited to
-inputs accepted in the past 24 hours. Cancelled inputs never resume. Inputs that
-cannot resume stay visibly interrupted for review. The browser keeps the original
-submission ID when retrying, so reconnect cannot duplicate a recovered input.
-It does not resend interrupted inputs automatically: the server owns recovery order.
-If a saved input remains interrupted, copy it and send again to continue.
+After a graceful Gateway restart, each marked running root conversation receives
+one standard resume input. Accepted user messages captured in that shutdown's
+marker follow it in FIFO order, even while this browser is closed. Each sender must still
+have current authority; an unavailable or revoked sender gets an ordinary failed
+send that can be resent. New input uses normal steering and queue rules while the
+resumed run works.
+
+A crash or forced kill does not resume work automatically. Stored conversations
+remain available for a new message. Legacy interrupted or ownerless queued inputs
+are inert and do not produce restart banners, pending counts, or history notices.
+The browser preserves submission IDs when reconciling uncertain sends.
 
 When the Gateway acknowledges a send, including a duplicate submission, the
 Control UI marks it sent. The browser keeps any payload needed to display
 server-held input until consumption or cancellation is confirmed.
 Confirmed server custody does not block later browser-queued
-chat sends, including when the accepted input is too old for automatic recovery.
+chat sends.
 Local commands such as `/compact` and `/reset` in the same browser outbox wait
-for live accepted work. An interrupted input without a live owner remains
-available for explicit recovery and does not block later commands. An independent
+for live accepted work. Legacy interrupted input without a live owner is inert and does not block later commands. An independent
 authorized reset from another client can cancel pending work, as with other session resets.
 If the Gateway is holding that input for a later turn, it appears in the queue
 above the composer. Removing that row withdraws the exact queued message without
@@ -556,11 +559,6 @@ Stopping a turn or an unsuccessful send can still leave a cancelled prompt with
 recovery guidance; those actions do not remove the prompt.
 Incognito chats keep their existing cancellation behavior: Remove cancels queued
 work, but the cancelled-message notice remains until the private session ends.
-
-If automatic restart recovery is interrupted or cancelled before the agent resumes,
-the **System · restart recovery** notice shows that outcome and asks you to send a
-message to continue. It does not mean the agent resumed. Messages forwarded from
-other sessions keep their own delivery status next to each message.
 
 Acknowledging a duplicate submission retires its pending browser copy even when
 the original message is outside the latest history page. Reconnect does not need
@@ -630,8 +628,9 @@ restarts. This also covers attachments, commands sent through `chat.send`, and
 per-message overrides. Reusing a recorded key with different content is rejected.
 The guarantee applies while that submission record remains in the same session;
 it does not restore deleted sessions or resume interrupted agent work.
-The Gateway's separate interrupted-input recovery still resumes eligible accepted
-work after rechecking its current authority.
+Queued input captured in the graceful-shutdown marker follows the session's resume
+input under each sender's current authority. A crash does not trigger queued-input
+reconstruction; later graceful restarts do not adopt those older rows.
 
 **Discard** stays available while a message is pending. It removes only this
 browser's outbox copy, not work the Gateway already accepted. It does not undo or

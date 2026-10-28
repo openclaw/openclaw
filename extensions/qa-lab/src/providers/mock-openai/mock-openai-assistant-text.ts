@@ -30,6 +30,7 @@ import {
   extractLatestToolOutput,
   buildSlackMpimHistoryReply,
   extractCurrentRuntimeContextTexts,
+  hasCurrentGeneratedMediaDelivery,
   extractUserTurnTexts,
   extractAllRequestTexts,
   extractCurrentImageRequest,
@@ -143,7 +144,7 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
     .find(Boolean);
   if (completedImageMediaPath) {
     const reply = "Protocol note: generated the QA lighthouse image successfully.";
-    return completionContexts.some((text) => text.includes("[Generated media delivered]"))
+    return hasCurrentGeneratedMediaDelivery(input)
       ? reply
       : `${reply}\nMEDIA:${completedImageMediaPath}`;
   }

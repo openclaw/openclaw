@@ -20,7 +20,6 @@ import {
   applySessionGoalOperation,
   prepareSessionTurnGoalMessage,
 } from "./goals-operation-policy.js";
-import { assertAcceptedRecoveryNotice } from "./recovery-notice.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import type { TranscriptMessageAppendResult } from "./session-accessor.types.js";
 import type { SessionActorAppend, SessionActorAppendCommitted } from "./session-actor-contract.js";
@@ -398,27 +397,6 @@ export function createSessionActorMemoryTranscript(options: {
               !state.hot.transcript.anchors.some((anchor) => anchor.entryId === predicate.entryId)
             ) {
               throw new Error(predicate.errorMessage);
-            }
-          } else if (predicate?.kind === "recovery-notice") {
-            const anchor = state.hot.transcript.anchors.find(
-              (candidate) => candidate.entryId === predicate.anchor.entryId,
-            );
-            const local = anchor && state.events.find((event) => event.rawSeq === anchor.rawSeq);
-            assertAcceptedRecoveryNotice({
-              sessionKey: state.hot.target.sessionKey,
-              entry,
-              predicate,
-              anchor,
-              localMessage: isRecord(local?.event) ? local.event.message : undefined,
-              message: append.message,
-            });
-            if (
-              predicate.priorEntryId &&
-              !state.hot.transcript.anchors.some(
-                (candidate) => candidate.entryId === predicate.priorEntryId,
-              )
-            ) {
-              throw new Error("background result no longer owns the active transcript");
             }
           } else if (predicate) {
             const latest = selectSessionTranscriptTreePathNodes(tree(), tree().leafId).findLast(

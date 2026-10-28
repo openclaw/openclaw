@@ -98,7 +98,7 @@ export function discardSessionPendingInputInWorker(
               const row = byId.get(id);
               return row ? [row] : [];
             });
-      const active = "inputIds" in input ? rows.filter((row) => row.state === "queued") : [];
+      const active = "inputIds" in input ? rows.filter((row) => row.state !== "cancelled") : [];
       if (active.length) {
         admit("transaction");
         return commitResult({ kind: "active", inputIds: active.map((row) => row.input_id) });

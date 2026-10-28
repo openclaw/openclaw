@@ -81,7 +81,6 @@ export async function startGatewayCoreRuntime(input: {
     nodeSendToAllSubscribed,
     refreshGatewayHealthSnapshotWithRuntime,
     dedupe,
-    restartRecoveryCandidates,
     chatRunState,
     removeChatRun,
     agentRunSeq,
@@ -173,7 +172,6 @@ export async function startGatewayCoreRuntime(input: {
               logHealth,
               clients,
               dedupe,
-              restartRecoveryCandidates,
               chatRunState,
               removeChatRun,
               agentRunSeq,
@@ -218,7 +216,6 @@ export async function startGatewayCoreRuntime(input: {
       toolEventRecipients,
       sessionEventSubscribers,
       sessionMessageSubscribers,
-      restartRecoveryCandidates,
       refreshConnectedUserProfiles: () =>
         runtime.resolvePluginGatewayContext()?.refreshConnectedUserProfile?.(),
     }),

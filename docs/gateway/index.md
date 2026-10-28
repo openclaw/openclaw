@@ -323,7 +323,7 @@ KillMode=mixed
 WantedBy=default.target
 ```
 
-`TimeoutStopSec=330` covers the Gateway's maximum 315-second stop drain plus a 15-second cleanup and exit margin. The Gateway clamps its drain to the installed unit's effective stop timeout; see [Systemd stop deadlines](/gateway/restart-recovery#systemd-stop-deadlines). To inspect the current managed unit body, run `systemctl --user cat openclaw-gateway.service` (or `systemctl --user cat openclaw-gateway-<profile>.service` for a named profile).
+`TimeoutStopSec=330` is the generated unit's outer stop allowance. A committed stop marks running root sessions and aborts work promptly, then bounds persistence and cleanup. The Gateway caps cleanup to the installed unit's effective stop timeout; see [Systemd stop deadlines](/gateway/restart-recovery#systemd-stop-deadlines). To inspect the current managed unit body, run `systemctl --user cat openclaw-gateway.service` (or `systemctl --user cat openclaw-gateway-<profile>.service` for a named profile).
 
   </Tab>
 
@@ -389,7 +389,7 @@ sudo systemctl enable --now openclaw-gateway[-<profile>].service
   </Tab>
 </Tabs>
 
-Invalid configuration errors exit with code `78`. Linux systemd units use `RestartPreventExitStatus=78` to stop relaunching until the config is fixed. launchd and Windows Task Scheduler do not have an equivalent per-exit-code stop rule, so the Gateway also persists rapid unclean boot history and suppresses channel/provider account auto-start after repeated startup failures. In that safe mode the control plane still starts for inspection and repair, main-session restart recovery pauses until the full breaker window drains and then resumes automatically in the same process, config hot reloads and `secrets.reload` refuse automatic channel restarts, and an explicit operator `channels.start` request can override the suppression. Step-by-step recovery lives in [Restart recovery](/gateway/restart-recovery#safety-valves-and-observability).
+Invalid configuration errors exit with code `78`. Linux systemd units use `RestartPreventExitStatus=78` to stop relaunching until the config is fixed. launchd and Windows Task Scheduler do not have an equivalent per-exit-code stop rule, so the Gateway also persists rapid unclean boot history and suppresses channel/provider account auto-start after repeated startup failures. In that safe mode the control plane still starts for inspection and repair, config hot reloads and `secrets.reload` refuse automatic channel restarts, and an explicit operator `channels.start` request can override the suppression. Step-by-step recovery lives in [Restart recovery](/gateway/restart-recovery#safety-valves-and-observability).
 
 ## Dev profile quick path
 

@@ -292,27 +292,6 @@ describe("native assignment completion custody", () => {
   });
 });
 
-describe("native completion custody and host recovery", () => {
-  it("does not exhaust delivery retries while the host recovery owns completion", async () => {
-    vi.useFakeTimers();
-    await using fixture = disposableMonitor();
-    const { client, runtime, monitor } = fixture;
-    runtime.deliverAgentHarnessCompletion.mockResolvedValue({
-      delivered: false,
-      path: "none",
-      recoveryPending: true,
-    });
-    await registerDetachedChild(client, monitor);
-    await client.notify(nativeCompletionNotification());
-    await vi.advanceTimersByTimeAsync(35_000);
-    expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(8);
-    runtime.deliverAgentHarnessCompletion.mockResolvedValue({ delivered: true, path: "direct" });
-    await vi.advanceTimersByTimeAsync(5_000);
-    await vi.advanceTimersByTimeAsync(530_000);
-    expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(9);
-  });
-});
-
 describe("Codex native parent retirement", () => {
   it.each([false, true])(
     "retires the parent during capture without stale close effects (completed=%s)",

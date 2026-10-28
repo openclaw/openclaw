@@ -182,24 +182,6 @@ async function prepareHistoryRead(
         return { kind: request.kind, facts: read() };
       };
     }
-    case "session-harness-completion-source": {
-      const [{ assertCapturedSessionEntryReadSource }, { readHarnessCompletionSourceInDatabase }] =
-        await Promise.all([
-          import("./session-entry-read-source.js"),
-          import("./session-harness-completion-source.kernel.js"),
-        ]);
-      const read = await prepareDatabaseRead(
-        { ...request.database, env: request.env },
-        (database) => {
-          assertCapturedSessionEntryReadSource(request.source, database);
-          return runWithSessionTranscriptReadFence(request.admission, () =>
-            readHarnessCompletionSourceInDatabase(database, request.claim, request.mode),
-          );
-        },
-        () => ({ validInput: false }),
-      );
-      return () => ({ kind: request.kind, snapshot: read() });
-    }
     case "session-pending-input-source": {
       const [{ assertCapturedSessionEntryReadSource }, { readPendingInputSourceInDatabase }] =
         await Promise.all([

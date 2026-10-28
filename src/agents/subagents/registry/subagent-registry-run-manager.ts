@@ -21,7 +21,6 @@ import {
   type SubagentKillSession,
 } from "./subagent-control-session.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
-import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { resolveKilledSubagentTaskEndedAt } from "./subagent-registry-completion.js";
 import { retireSubagentGatewayBinding } from "./subagent-registry-execution-cleanup.js";
 import {
@@ -39,6 +38,7 @@ import { SubagentLaunchManager } from "./subagent-registry-run-launch.js";
 import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import { shouldSuppressSubagentSessionEffects } from "./subagent-session-effects-policy.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
 
@@ -341,7 +341,6 @@ class SubagentRunManager extends SubagentLaunchManager {
                   existingKillIntent && currentKillLifecycle
                     ? existingKillIntent.lifecycleGeneration
                     : entry.execution.lifecycleGeneration,
-                restartRecovery: undefined,
                 suppressSessionEffects:
                   markParams.suppressSessionEffects ||
                   resolveSubagentChildAuthority(entry).status === "legacy-unverified"
@@ -443,9 +442,7 @@ class SubagentRunManager extends SubagentLaunchManager {
         const reconciliation = entry.killReconciliation;
         const ownsSessionEffects = () =>
           this.currentRunOwnsSession(entry) &&
-          !shouldSuppressSubagentRecoverySessionEffects(
-            this.options.runs.get(entry.runId) ?? entry,
-          );
+          !shouldSuppressSubagentSessionEffects(this.options.runs.get(entry.runId) ?? entry);
         const warnCleanupFailure = (message: string, err: unknown) => {
           if (hasSqliteWorkerOutcomeUnknown(err)) {
             throw err;

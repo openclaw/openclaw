@@ -168,6 +168,7 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
         sidecarStartup: "defer",
       }),
     );
+    await server.startupSettled;
 
     // No operator approval client; only a requester with write and approvals scopes.
     // This is the state that triggers the no-route expiry in the unfixed code.

@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   mergeAcceptedSessionSpawnsForRun,
@@ -61,6 +62,21 @@ export function registerYieldedRequesterBatchCase(
       const guest = actor === "guest" ? await options.createGuestParent(false) : undefined;
       const bound = guest?.bound ?? (await options.createBoundParent());
       const { context, runtime } = await options.createBoundGateway(bound);
+      const waitCleanup = new AbortController();
+      const waitFacade = await runtime.createAgentTurnFacade({
+        client: createSyntheticPluginRuntimeClient({ operatorRoleActor: { kind: "system" } }),
+      });
+      const waitForRegisteredParent = runtime.lifecycle.waitForAgent.bind(runtime.lifecycle);
+      runtime.lifecycle.waitForAgent = <T>(
+        params: Parameters<typeof runtime.lifecycle.waitForAgent>[0],
+        timeoutMs?: number,
+      ): Promise<T> => {
+        // The registered parent has no dispatched turn until its children settle.
+        if (params.runId === bound.parentRunId) {
+          return waitForRegisteredParent<T>(params, timeoutMs);
+        }
+        return waitFacade.wait<T>(params, timeoutMs, waitCleanup.signal);
+      };
       const delivery = await import("../announce/subagent-announce-delivery.js");
       const deliver = delivery.deliverSubagentAnnouncement;
       const delivered = createDeferred<Awaited<ReturnType<typeof deliver>>>();
@@ -255,6 +271,8 @@ export function registerYieldedRequesterBatchCase(
       } finally {
         childResult.resolve(visibleResult("Nested child result."));
         deliveryObserver.mockRestore();
+        runtime.lifecycle.waitForAgent = waitForRegisteredParent;
+        waitCleanup.abort(new Error("yielded requester wait cleanup"));
         failures.push(...(await options.closeBoundGateway(bound, runtime, childRunId)));
         options.throwBoundFailures(failures);
       }

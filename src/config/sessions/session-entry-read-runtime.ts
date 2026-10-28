@@ -13,7 +13,6 @@ import { resolveStateDir } from "../state-dir.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import { resolveSessionLifecycleTimestampsWithHeader } from "./lifecycle-timestamps.js";
 import { matchesPluginHostCleanupSession } from "./plugin-host-cleanup.js";
-import { hasOrphanedMainSessionWork } from "./restart-recovery-state.js";
 import {
   assertMemoryExactReadSource,
   captureMemoryExactSessionReader,
@@ -288,13 +287,11 @@ export function createSessionEntryListReader(
 export async function readSessionEntrySummariesInWorker(input: SessionEntrySummaryWorkerRead) {
   const memory = captureMemoryExactSessionReader(input);
   if (memory) {
-    // Incognito sessions have no durable restart work.
-    const entries = input.mainSessionRecovery === "claims" ? [] : memory.entries("list");
-    return entries.filter(
-      ({ sessionKey, entry }) =>
-        matchesPluginHostCleanupSession(sessionKey, entry, input.cleanupSession) &&
-        (input.mainSessionRecovery !== "orphans" || hasOrphanedMainSessionWork(entry, sessionKey)),
-    );
+    return memory
+      .entries("list")
+      .filter(({ sessionKey, entry }) =>
+        matchesPluginHostCleanupSession(sessionKey, entry, input.cleanupSession),
+      );
   }
   const { scope } = captureSessionEntryReadScope({ ...input, sessionKey: "" });
   return withSessionStoreReaderInWorker(
@@ -308,7 +305,6 @@ export async function readSessionEntrySummariesInWorker(input: SessionEntrySumma
           env: database.env,
           projection: "list",
           cleanupSession: input.cleanupSession,
-          mainSessionRecovery: input.mainSessionRecovery,
           hydrateSkillPromptRefs: false,
           readConsistency: input.readConsistency,
         },

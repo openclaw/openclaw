@@ -45,9 +45,7 @@ it("keeps host-owned controls out of public attempt and tool inputs", () => {
   type HostTest = Parameters<typeof createAgentHarnessHostCapabilitiesForTest>[0]["attempt"];
   type Inputs = [...Attempts, SurfaceParams, Tools, HostTools, HostTest];
   expectTypeOf<KeysIn<Inputs, PrivateControls>>().toEqualTypeOf<never>();
-  expectTypeOf<
-    KeysIn<[SurfaceParams], "forceCodeModeControls" | "preparedToolOverrideAllowlist">
-  >().toEqualTypeOf<never>();
+  expectTypeOf<KeysIn<[SurfaceParams], "preparedToolOverrideAllowlist">>().toEqualTypeOf<never>();
   expectTypeOf<Surface>().not.toHaveProperty("plan");
   type CompactOptions = NonNullable<Parameters<Surface["compactTools"]>[1]>;
   expectTypeOf<CompactOptions>().not.toHaveProperty("prepared");

@@ -13,6 +13,8 @@ const suite = createControlUiE2eSuite({ name: "Control UI retry and terminal fai
 const sessionKey = "agent:main:main";
 const summary = "⚠️ The AI service needs a short break. Please try again in a few minutes.";
 const partial = "I found the relevant code. I’m checking the remaining call sites.";
+const resumeText =
+  "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.";
 
 type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
 type Payload = Record<string, unknown>;
@@ -63,7 +65,7 @@ async function receipt(
 }
 
 suite.define(() => {
-  it("preserves restart partials and a neutral durable recovery notice through reload", async () => {
+  it("preserves restart partials and the ordinary resume input through reload", async () => {
     await suite.withPage({ viewport: { width: 1160, height: 850 } }, async ({ page }) => {
       // Synthetic Gateway I/O: this proves the UI contract, not an actual Gateway restart.
       const { gateway, runId } = await openRun(page);
@@ -76,10 +78,10 @@ suite.define(() => {
         }),
         message(
           "user",
-          "[System] Continue the interrupted turn.",
+          "[System] " + resumeText,
           now - 1,
           ["restart-recovery-input", 3, successorRunId],
-          { provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" } },
+          { provenance: { kind: "internal_system", sourceTool: "system-event" } },
         ),
         message("assistant", textContent("The review is complete."), now, [
           "restart-final",
@@ -108,9 +110,9 @@ suite.define(() => {
       // Recovery is admitted by the Gateway's durable system input, never a UI retry/send.
       await gateway.setHistoryMessages(historyMessages.slice(0, 3));
       await receipt(gateway, successorRunId, historyMessages[2], "restart-recovery-input", 3);
-      const notice = thread.locator(".chat-notice", { hasText: "System · restart recovery" });
+      const notice = thread.locator(".chat-notice", { hasText: resumeText });
       await notice.waitFor();
-      expect(await notice.locator(".chat-notice__body").count()).toBe(0);
+      expect(await notice.locator(".chat-notice__body").count()).toBe(1);
       expect(await notice.getAttribute("role")).toBeNull();
       expect(await notice.locator("button").count()).toBe(0);
       await chat(gateway, successorRunId, "delta", {
@@ -134,7 +136,7 @@ suite.define(() => {
       await answer.waitFor();
       await notice.waitFor();
       expect(await partialOutput.count()).toBe(1);
-      expect(await notice.locator(".chat-notice__body").count()).toBe(0);
+      expect(await notice.locator(".chat-notice__body").count()).toBe(1);
       expect(await page.locator(".chat-run-failure, .chat-error").count()).toBe(0);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     });

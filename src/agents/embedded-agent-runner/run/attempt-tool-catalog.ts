@@ -93,7 +93,6 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
       hookContext: catalogToolHookContext,
       prepared: {
         abortSignal,
-        forceRestartSafeTools: attempt.forceRestartSafeTools,
         toolExecutionAllow: attempt.toolExecutionAllow,
         executeTool: input.executeCodeModeTool,
         codeModeSkills,
@@ -257,9 +256,6 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
       hasCallableTools,
     };
     const emptyExplicitToolAllowlistError = (() => {
-      if (attempt.forceRestartSafeTools) {
-        return null;
-      }
       const toolsIntentionallyDisabled =
         attempt.disableTools === true ||
         preparedToolBase.effectiveToolsAllow?.length === 0 ||

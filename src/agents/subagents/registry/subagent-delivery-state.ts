@@ -21,7 +21,6 @@ export function resetRequesterSettleWakeRetry(
     status: "pending",
     attemptCount: 0,
     privateInput: undefined,
-    replayCount: undefined,
     nextAttemptAt: undefined,
     lastError: undefined,
   };
@@ -68,9 +67,6 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
     createdAt: entry.createdAt,
     execution: {
       status: entry.execution.status,
-      ...(entry.execution.interruptionReason
-        ? { interruptionReason: entry.execution.interruptionReason }
-        : {}),
       ...(entry.execution.startedAt !== undefined ? { startedAt: entry.execution.startedAt } : {}),
       ...(entry.execution.endedAt !== undefined ? { endedAt: entry.execution.endedAt } : {}),
       ...(entry.execution.outcome ? { outcome: { status: entry.execution.outcome.status } } : {}),
@@ -152,14 +148,6 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
     ? entry.deleteCleanupDispatchedAt
     : undefined;
   entry.suppressCompletionDelivery = entry.suppressCompletionDelivery === true ? true : undefined;
-  entry.terminalOwner =
-    entry.terminalOwner === "interrupted-recovery" &&
-    Number.isFinite(entry.execution.endedAt) &&
-    entry.execution.outcome?.status === "error" &&
-    entry.endedReason === "subagent-error" &&
-    entry.pauseReason !== "sessions_yield"
-      ? "interrupted-recovery"
-      : undefined;
   if (entry.completion) {
     entry.completion.terminalReply = normalizeAgentRunTerminalReplySnapshot(
       entry.completion.terminalReply,

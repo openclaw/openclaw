@@ -66,8 +66,6 @@ it.each(["commit", "retirement"])(
       gateway: gateway.gateway,
       connection: { capture: () => scope, isCurrent: (captured) => captured === scope },
       reconcileMutation: async () => ({ status: "stale" }),
-      notifyCreated: () => {},
-      reportError: () => {},
     });
     // SAFETY: The widget consumes only these two application capabilities.
     const context = { gateway: gateway.gateway, sessions } as unknown as ApplicationContext;

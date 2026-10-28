@@ -141,7 +141,7 @@ export function scheduleDeliveredSourceReplyTranscriptMirror(params: {
       const mirrored = await mirrorDeliveredSourceReplyToTranscript(params.mirror);
       if (!mirrored && params.mirror.sourceReplyFinal === true) {
         params.context.logGateway?.warn?.(
-          "Terminal source reply receipt was not mirrored; restart recovery is fail-closed.",
+          "Final source reply was delivered but could not be mirrored to the session transcript.",
           {
             channel: params.mirror.channel,
             sessionKey: params.mirror.sessionKey,

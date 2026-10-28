@@ -27,8 +27,7 @@ import {
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
-import { bindSubagentRunGatewayOwners } from "./subagent-registry-gateway-owner.js";
-import { getSubagentActivationRuns, subagentRuns } from "./subagent-registry-memory.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
   getSubagentRegistryPublicationRevision,
@@ -413,42 +412,6 @@ it("publishes overlapping durable and runtime-only mutations in FIFO order", asy
   }
 });
 
-it("rejects a runtime-only mutation when its Gateway recovery owner changes", async () => {
-  await register(
-    entry("recovery-noop", {
-      cleanupHandled: false,
-      execution: { status: "terminal", endedAt: 2 },
-      requesterSettleWake: { status: "pending", attemptCount: 0 },
-    }),
-  );
-  const expected = subagentRuns.get("recovery-noop")!;
-  const previousResolver = () => undefined;
-  bindGatewayContextResolver(expected, previousResolver);
-  const gateway = createGatewayContext();
-  let gatewayCurrent = true;
-  const resolver = () => (gatewayCurrent ? gateway : undefined);
-  const onPublished = vi.fn();
-
-  await expect(
-    mutateSubagentRuns(
-      [expected.runId],
-      (rows) => {
-        gatewayCurrent = false;
-        return postimages([
-          [expected.runId, { ...rows.get(expected.runId)!, cleanupHandled: true }],
-        ]);
-      },
-      {
-        gatewayRecovery: { expected, previousResolver, resolver, gateway },
-        onPublished,
-      },
-    ),
-  ).rejects.toThrow("Subagent Gateway recovery owner changed");
-  expect(subagentRuns.get(expected.runId)).toBe(expected);
-  expect(expected.cleanupHandled).toBe(false);
-  expect(onPublished).not.toHaveBeenCalled();
-});
-
 it("persists prepared-only registration without resurrecting it after a queued deletion", async () => {
   await register(entry("warm-registration"));
   const original = entry("prepared-deletion");
@@ -810,28 +773,6 @@ it("retains the execution's Gateway binding through immutable metadata publicati
   expect(isSameSubagentRunOwner(published, alias)).toBe(true);
 
   gatewayOpen = false;
-  const replacementGateway = createGatewayContext();
-  const replacementResolver = () => replacementGateway;
-  await expect(
-    bindSubagentRunGatewayOwners({
-      runs: subagentRuns,
-      entries: [...getSubagentActivationRuns(subagentRuns)],
-      resumedRuns: new Set(),
-      getGatewayContextResolver: () => replacementResolver,
-      onRecovered: () => {},
-    }),
-  ).resolves.toBe(true);
-  const recovered = subagentRuns.get(child.runId)!;
-  expect(isSameSubagentRunOwner(recovered, alias)).toBe(false);
   expect(getGatewayContextResolver(initial)?.()).toBeUndefined();
-  expect(getGatewayContextResolver(recovered)?.()).toBe(replacementGateway);
-  expect(() => subagentRuns.runWithCompletionAuthority(alias, () => "stale")).toThrow(
-    "runtime owner is no longer active",
-  );
-  // Gateway ownership alone cannot authorize a continuation without its operator source.
-  const dispatch = vi.fn();
-  expect(() => subagentRuns.runWithCompletionAuthority(recovered, dispatch)).toThrow(
-    "Subagent completion authority is no longer active",
-  );
-  expect(dispatch).not.toHaveBeenCalled();
+  expect(getGatewayContextResolver(published)?.()).toBeUndefined();
 });

@@ -29,9 +29,9 @@ import {
   getSessionControllerWorkCount,
 } from "../sessions/session-controller.lifecycle.js";
 import { getRpcSource, isRpcSourceExecuting } from "../sessions/session-controller.rpc-sources.js";
-import * as chatRestartRecovery from "./server-methods/chat-restart-recovery.js";
 import { installGatewayServerChatTestSuite } from "./server.chat.gateway-server-chat.test-support.js";
 import { collectHistoryTextValues } from "./session-history-fixtures.test-support.js";
+import * as sessionLifecycleState from "./session-lifecycle-state.js";
 import { removeChatTestDirectory as removeTempDir } from "./session-test-directories.test-support.js";
 import {
   dispatchInboundMessageMock,
@@ -343,7 +343,7 @@ describe("gateway server chat", () => {
           idempotencyKey: runId,
         });
         expect(res.ok).toBe(true);
-        // Direct operator input commits through restart-safe admission before the ACK.
+        // Direct operator input commits history before the ACK.
         expectRecordFields(res.payload, { runId, status: "started", messageSeq: 1 });
         await waitForAgentRunDrained(runId);
 
@@ -737,15 +737,18 @@ describe("gateway server chat", () => {
       const releasePersistence = createDeferred();
       const dispatchStarted = createDeferred();
       const persistenceEntered = createDeferred();
-      const terminalizeAdmission = chatRestartRecovery.terminalizeRestartSafeChatAdmission;
+      const persistLifecycle = sessionLifecycleState.persistGatewaySessionLifecycleEvent;
       const persistSpy = vi
-        .spyOn(chatRestartRecovery, "terminalizeRestartSafeChatAdmission")
+        .spyOn(sessionLifecycleState, "persistGatewaySessionLifecycleEvent")
         .mockImplementation(async (params) => {
-          if (params.clientRunId === "idem-dispatch-error-1") {
+          if (
+            params.event.runId === "idem-dispatch-error-1" &&
+            params.event.data?.phase === "error"
+          ) {
             persistenceEntered.resolve();
             await releasePersistence.promise;
           }
-          return terminalizeAdmission(params);
+          return persistLifecycle(params);
         });
       const createSnapshot = gatewayActiveWork.createGatewayActiveWorkSnapshot;
       const snapshotSpy = vi.spyOn(gatewayActiveWork, "createGatewayActiveWorkSnapshot");
@@ -780,8 +783,7 @@ describe("gateway server chat", () => {
           await withinTest(dispatchStarted.promise, signal);
           rejectDispatch.resolve();
           await withinTest(persistenceEntered.promise, signal);
-          // Begin draining with the failure write already held. Restart cancels
-          // unclaimed inputs, which this dispatcher mock deliberately does not claim.
+          // Begin draining with the failure write already held.
           markGatewayRestartDraining();
           const restartInspectors = {
             getQueueSize: () => 0,

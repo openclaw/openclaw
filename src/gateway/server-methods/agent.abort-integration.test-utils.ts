@@ -23,7 +23,6 @@ import {
 import { registerAgentAbortQueueDeadlineTest } from "./agent.abort-queue-deadline.test-support.js";
 import { registerAgentAbortSubagentTests } from "./agent.abort-subagents.test-utils.js";
 import { registerAgentPreDispatchFailureTests } from "./agent.pre-dispatch-failure.test-utils.js";
-import { registerAgentQueuedRestartRecoveryTests } from "./agent.restart-recovery.test-support.js";
 import { registerAgentGlobalGoalEventTest } from "./agent.session-events.test-utils.js";
 import {
   createElevatedExecApprovalFixture,
@@ -1520,7 +1519,6 @@ describe("gateway agent handler chat.abort integration", () => {
         getAdmittedSessionId: () => sessionId,
         suppressVisibleSessionEffects: false,
         isOneShotModelRun: false,
-        isRestartRecoveryResumeRun: false,
         runId,
         agentDedupeKeys: [`agent:${runId}`],
         context,
@@ -1971,7 +1969,6 @@ describe("gateway agent handler chat.abort integration", () => {
   });
 
   registerAgentPreDispatchFailureTests();
-  registerAgentQueuedRestartRecoveryTests();
 
   it("does not dispatch a duplicate agent run when dedupe was evicted but the run is active", async () => {
     prime();

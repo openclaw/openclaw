@@ -34,7 +34,11 @@ import {
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { publishCommittedSessionGoalChange } from "./session-goal-change.js";
 import { fingerprintSessionGoalRequest } from "./session-goal-request.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import type {
+  GatewayRequestHandlerOptions,
+  GatewayRequestHandlers,
+  SessionMutationAuthorization,
+} from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 async function handleSessionGoalMutation(
@@ -46,6 +50,7 @@ async function handleSessionGoalMutation(
   let targetRead:
     | Awaited<ReturnType<typeof captureSessionEntryCurrentCheckAsyncInternal>>
     | undefined;
+  let targetReadTransferred = false;
   try {
     const resolvedAuthorization = options.sessionMutationAuthorization
       ? { authorization: options.sessionMutationAuthorization, error: null }
@@ -185,6 +190,25 @@ async function handleSessionGoalMutation(
     if (!actorFacts) {
       assertCurrent();
     }
+    const resumeAuthorization: SessionMutationAuthorization = {
+      assertCurrent: source,
+      assertTargetCurrent: source,
+      takeRelease: () => {
+        const releaseSharing =
+          authorization.authorization?.takeRelease?.() ??
+          authorization.authorization?.retain?.() ??
+          authorization.authorization?.release;
+        // The ACK ends this request; accepted chat keeps both current-source owners.
+        targetReadTransferred = true;
+        return () => {
+          try {
+            targetRead?.release();
+          } finally {
+            releaseSharing?.();
+          }
+        };
+      },
+    };
     if (request.action === "replace") {
       const { replaceExecutingSessionGoal } = await import("./sessions-goal-replace.js");
       await replaceExecutingSessionGoal({
@@ -192,6 +216,7 @@ async function handleSessionGoalMutation(
         request,
         target,
         source,
+        resumeAuthorization,
         requestFingerprint: identity.requestFingerprint,
       });
       return;
@@ -201,10 +226,7 @@ async function handleSessionGoalMutation(
       await handleSessionGoalResumeChat(
         {
           ...options,
-          sessionMutationAuthorization: {
-            assertCurrent: source,
-            assertTargetCurrent: source,
-          },
+          sessionMutationAuthorization: resumeAuthorization,
           params: {
             sessionKey: target.canonicalKey,
             agentId: target.agentId,
@@ -283,7 +305,9 @@ async function handleSessionGoalMutation(
       );
     }
   } finally {
-    targetRead?.release();
+    if (!targetReadTransferred) {
+      targetRead?.release();
+    }
   }
 }
 

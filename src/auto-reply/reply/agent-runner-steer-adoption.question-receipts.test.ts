@@ -12,21 +12,15 @@ import {
   withQuestionGateway,
 } from "../../agents/harness/gateway-question.test-support.js";
 import type { GatewayQuestionCall } from "../../agents/tools/gateway-question-lifecycle.js";
-import {
-  updateSessionEntry,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import {
   captureSessionControllerSourceSettlement,
   retireSessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import { createSteerParams } from "./agent-runner-steer-adoption.test-support.js";
-import { MessageInjectionTargetUnavailableError } from "./message-injection-authority.js";
 import { enqueueFollowupRun, type FollowupRun } from "./queue.js";
 import { clearSessionQueues } from "./queue/cleanup.js";
 import { getExistingFollowupQueue } from "./queue/state.js";
@@ -36,7 +30,6 @@ import {
 } from "./reply-operation-run-state.js";
 import { withQuestionCreator } from "./reply-run-question.test-support.js";
 import { createQueueTestRun } from "./reply-tool-authority.test-support.js";
-import { prepareSteeringDelivery } from "./steering-delivery-preparation.js";
 import { createMockTypingController, createReplyParams } from "./test-helpers.js";
 
 const text = "candidate committed answer";
@@ -85,7 +78,6 @@ it.each([
   ["confirmed-closed-adoption", "steer", false],
   ["confirmed-closed-adoption", "steer", true],
   ["confirmed-closed-adoption", "reply", false],
-  ["late-receipt", "steer", false],
 ] as const)(
   "does not replay or abort independent work after %s/%s (hidden=%s)",
   async (mode, entrypoint, hidden) => {
@@ -97,21 +89,6 @@ it.each([
     });
     await withQuestionGateway(async (fixture) =>
       withQuestionCreator(key, run, async (operation, fingerprint) => {
-        const receiptScope =
-          mode === "late-receipt"
-            ? {
-                agentId: "main",
-                sessionKey: key,
-                storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
-              }
-            : undefined;
-        if (receiptScope) {
-          run.abortSignal = operation.abortSignal;
-          await upsertSessionEntryCore(receiptScope, {
-            sessionId: run.run.sessionId,
-            updatedAt: 1,
-          });
-        }
         const hold = fixture.holdWaitAnswerResponse();
         const call = mode === "legacy-receipt" ? legacyGateway : callGatewayTool;
         const question = { header: "Answer", question: "Continue?", isOther: true, options: [] };
@@ -164,12 +141,6 @@ it.each([
           assertCurrent: () => void,
           kind: "run" | "source-bound",
         ) => {
-          if (receiptScope) {
-            assertCurrent();
-            await updateSessionEntry(receiptScope, () => ({
-              restartRecoveryDeliveryReceiptState: "terminal-pending",
-            }));
-          }
           return await steerActiveSessionWithOptionalDeliveryWait(
             { steer: nativeSteer, subscribe },
             message,
@@ -210,10 +181,8 @@ it.each([
             projectSessionMessages: false,
           });
         }
-        const confirmed = ["delayed-receipt", "confirmed-closed-adoption", "late-receipt"].includes(
-          mode,
-        );
-        if (mode !== "confirmed-closed-adoption" && mode !== "late-receipt") {
+        const confirmed = ["delayed-receipt", "confirmed-closed-adoption"].includes(mode);
+        if (mode !== "confirmed-closed-adoption") {
           fixture.dropNextResolveResponse();
         }
         const state: ReplyOperationRunState = {};
@@ -244,10 +213,9 @@ it.each([
             : runActiveReplySteer(
                 createSteerParams(key, run, operation, {
                   replyOperationRunState: state,
-                  restartRecoverySourceTurnId: run.messageId,
+                  sourceTurnId: run.messageId,
                   runFollowup: followup,
                   sessionCtx,
-                  storePath: receiptScope?.storePath,
                 }),
               )
         ).finally(() => {
@@ -313,21 +281,6 @@ it.each([
           expect.soft(adopted).toHaveBeenCalledOnce();
           expect.soft(settled).toHaveBeenCalledOnce();
           expect(nativeSteer).not.toHaveBeenCalled();
-          if (receiptScope) {
-            const delivery = prepareSteeringDelivery({
-              ...receiptScope,
-              sessionId: run.run.sessionId,
-              assertCurrent: () => operation.abortSignal.throwIfAborted(),
-            });
-            try {
-              await expect(delivery.prepareCurrent()).rejects.toBeInstanceOf(
-                MessageInjectionTargetUnavailableError,
-              );
-            } finally {
-              delivery.release();
-            }
-            expect(nativeSteer).not.toHaveBeenCalled();
-          }
           if (confirmed) {
             expect(result).toBe(entrypoint === "reply" ? undefined : "handled");
             expect(state.admission).toEqual({ status: "accepted", mode: "steer" });

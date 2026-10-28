@@ -624,39 +624,6 @@ describe("normalizeAssistantReplayContent", () => {
     expect(normalize(messages)).toEqual(messages);
   });
 
-  it("sends only the accepted notice through provider replay while retaining its local display artifact", () => {
-    const text = "Restart recovery stopped. Resume in WebChat.";
-    const saved = "Unconfirmed draft must not enter model context.";
-    const local = {
-      ...assistant(
-        [textBlock(text), textBlock(`\nSaved reply (delivery unconfirmed):\n${saved}`)],
-        "stop",
-      ),
-      api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
-      provider: "openclaw",
-      model: "delivery-mirror",
-    };
-    const confirmed = {
-      ...assistant([textBlock(text)], "stop"),
-      api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
-      provider: "openclaw",
-      model: "automation-result",
-      display: false,
-      openclawAutomation: {
-        kind: "recovery-notice",
-        noticeId: "notice",
-        localNotice: { entryId: "private-anchor" },
-      },
-    };
-    const messages = [user("Continue"), local, confirmed, user("Explain")];
-    const before = structuredClone(messages);
-    const converted = JSON.stringify(convertReplay(completionsModel(), messages));
-    expect(converted.split(text)).toHaveLength(2);
-    expect(converted).not.toContain(saved);
-    expect(converted).not.toContain("private-anchor");
-    expect(messages).toEqual(before);
-  });
-
   it.each([false, true])("preserves identical turns with tools=%s", (tools) => {
     const content = tools
       ? [textBlock("checking"), call("call_1", "read", { path: "file.txt" })]

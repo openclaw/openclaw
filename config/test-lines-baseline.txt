@@ -1,5 +1,3 @@
-# Preserve six Anthropic API-key workspace regression cases (97 lines): workspace
-# input, existing provider/request headers, SecretRefs, blank input, and cancellation.
-# Add exactly 97 to the previous 6,311,700 ceiling. Counting, branch-delta handling,
-# and CI requirements stay unchanged.
-6311797
+# Measured bf6a97a1761 plus pending regression additions: 6,312,681 lines.
+# Keep 7,319 lines of bounded headroom for remaining regression work.
+6320000
