@@ -3,12 +3,20 @@ import { addSession } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
 import { stageSessionPendingInput } from "../config/sessions/session-accessor.pending-inputs.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionPendingInput } from "../config/sessions/session-pending-input-history.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  claimAgentRunContext,
+  hasAgentRunContextExecutionOwner,
+  releaseAgentRunContext,
+} from "../infra/agent-run-registry.js";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
+import { getSessionControllerOperation } from "../sessions/session-controller.state.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -17,6 +25,63 @@ import {
   persistRunningSessionsForRestart,
   resumeMarkedSessions,
 } from "./session-restart-resume.js";
+
+it("does not resume completed reply settlement but preserves its queued inputs", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    const target = {
+      agentId: "main",
+      sessionKey: "agent:main:completed-before-restart",
+      sessionId: "completed-before-restart",
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+    };
+    replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const runId = "completed-worker-reply";
+    const { operation, releaseExecution } = await withSessionTurn(target, async (active) => {
+      if (!active) {
+        throw new Error("Expected a real reply operation");
+      }
+      active.attachBackend({ kind: "embedded", runId, cancel() {} });
+      const release = active.retainExecution();
+      active.freezeAbort();
+      return { operation: active, releaseExecution: release };
+    });
+    const runClaim = claimAgentRunContext(runId, target, { trackOwner: true, ownsContext: true });
+    let queued: Awaited<ReturnType<typeof stageSessionPendingInput>> | undefined;
+    try {
+      expect(getSessionControllerOperation(target.sessionKey)).toBe(operation);
+      expect(operation.result).toBeNull();
+      expect(operation.abortFrozen).toBe(true);
+      expect(hasAgentRunContextExecutionOwner(runId)).toBe(true);
+
+      await persistRunningSessionsForRestart({ cfg: {} });
+      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeUndefined();
+
+      queued = await stageSessionPendingInput(target, {
+        runId: "queued-behind-completed-reply",
+        message: {
+          role: "user",
+          content: "Continue after the completed reply",
+          timestamp: 2,
+          idempotencyKey: "queued-behind-completed-reply:user",
+        },
+        assertCurrent() {},
+      });
+      if (!queued) {
+        throw new Error("Queued fixture input was not admitted");
+      }
+      await persistRunningSessionsForRestart({ cfg: {} });
+      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
+        queuedInputIds: [queued.inputId],
+      });
+    } finally {
+      queued?.finish("interrupted");
+      await queued?.settled?.();
+      releaseExecution();
+      await operation.ownerSettlement;
+      releaseAgentRunContext(runId, runClaim);
+    }
+  }));
 
 it("leaves running cron and external-harness sessions with their execution owner", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {

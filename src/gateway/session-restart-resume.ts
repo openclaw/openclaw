@@ -37,7 +37,11 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { getSessionControllerEntryForOperation } from "../sessions/session-controller.identity.js";
-import { activeSessionOperations } from "../sessions/session-controller.state.js";
+import { findSessionControllerOperationByRunId } from "../sessions/session-controller.queries.js";
+import {
+  activeSessionOperations,
+  hasCommittedReplyOperationOutcome,
+} from "../sessions/session-controller.state.js";
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-agent-db.paths.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -54,6 +58,7 @@ type SessionIdentity = {
   storePath: string;
   sessionId?: string;
   hadBackgroundExec?: true;
+  needsResume: boolean;
 };
 
 function canResumeSession(sessionKey: string, entry: InternalSessionEntry): boolean {
@@ -81,6 +86,7 @@ export async function persistRunningSessionsForRestart(params: {
     storePath?: string;
     sessionId?: string;
     hadBackgroundExec?: true;
+    needsResume?: boolean;
   }) => {
     const root = resolveRootSubagentRequester(input.sessionKey, input.agentId);
     const agentId =
@@ -100,16 +106,21 @@ export async function persistRunningSessionsForRestart(params: {
       return;
     }
     const key = JSON.stringify([agentId, root.sessionKey]);
-    if (!sessions.has(key)) {
+    const existing = sessions.get(key);
+    if (!existing) {
       sessions.set(key, {
         agentId,
         storePath,
         sessionKey: root.sessionKey,
         sessionId: root.sessionKey === input.sessionKey ? input.sessionId : undefined,
         hadBackgroundExec: input.hadBackgroundExec,
+        needsResume: input.needsResume !== false,
       });
-    } else if (input.hadBackgroundExec) {
-      sessions.get(key)!.hadBackgroundExec = true;
+    } else {
+      existing.needsResume ||= input.needsResume !== false;
+      if (input.hadBackgroundExec) {
+        existing.hadBackgroundExec = true;
+      }
     }
   };
   for (const operation of activeSessionOperations()) {
@@ -123,11 +134,17 @@ export async function persistRunningSessionsForRestart(params: {
       agentId: operation.agentId,
       sessionId: operation.sessionId,
       storePath: target?.physicalStorePath ?? target?.storeScope,
+      // Completed replies can retain execution custody only to settle workspace uploads.
+      needsResume: !operation.result && !hasCommittedReplyOperationOutcome(operation),
     });
   }
   for (const runId of listLiveAgentRunIds()) {
     assertCurrent();
     if (!hasAgentRunContextExecutionOwner(runId)) {
+      continue;
+    }
+    const operation = findSessionControllerOperationByRunId(runId);
+    if (operation && hasCommittedReplyOperationOutcome(operation)) {
       continue;
     }
     const run = getAgentRunContext(runId);
@@ -211,6 +228,9 @@ export async function persistRunningSessionsForRestart(params: {
             storePath: store.storePath,
             sessionId: entry.sessionId,
           });
+          if (!session.needsResume && queued.queuedInputIds.length === 0) {
+            continue;
+          }
           replacements.push({
             sessionKey,
             entry: {
