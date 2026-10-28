@@ -30,11 +30,6 @@ internal data class TurnRecapTranscriptState(
   val completedNewestItemId: String?,
 )
 
-internal data class TurnRecapTokenFormat(
-  val singular: Boolean,
-  val count: String,
-)
-
 /**
  * [baselineEndedAt] is the session row's endedAt when the working indicator appeared: the
  * previous run's terminal stamp, or null once the run-start patch cleared it. Only a row whose
@@ -50,11 +45,9 @@ private data class TurnRecapWatch(
   var absorbedTerminal: Boolean,
   /** First idle render after the indicator cleared; canceled queued sends must expire promptly. */
   var settleStartedAt: Long?,
-  var pendingTerminal: TurnRecap?,
   var pendingTerminalEndedAt: Long?,
   val settled: TurnRecap?,
   val settledTranscriptItemId: String?,
-  val tracksTranscript: Boolean,
 )
 
 /**
@@ -84,32 +77,7 @@ internal class TurnRecapResolver(
     sessionKey: String,
     indicatorVisible: Boolean,
     row: ChatSessionEntry?,
-  ): TurnRecap? =
-    resolveInternal(
-      sessionKey = sessionKey,
-      indicatorVisible = indicatorVisible,
-      row = row,
-      transcript = null,
-    )
-
-  fun resolve(
-    sessionKey: String,
-    indicatorVisible: Boolean,
-    row: ChatSessionEntry?,
     transcript: TurnRecapTranscriptState,
-  ): TurnRecap? =
-    resolveInternal(
-      sessionKey = sessionKey,
-      indicatorVisible = indicatorVisible,
-      row = row,
-      transcript = transcript,
-    )
-
-  private fun resolveInternal(
-    sessionKey: String,
-    indicatorVisible: Boolean,
-    row: ChatSessionEntry?,
-    transcript: TurnRecapTranscriptState?,
   ): TurnRecap? {
     val watch = watches[sessionKey]
     val rowEndedAt = row?.endedAt
@@ -122,11 +90,9 @@ internal class TurnRecapResolver(
             baselineEndedAt = rowEndedAt,
             absorbedTerminal = false,
             settleStartedAt = null,
-            pendingTerminal = null,
             pendingTerminalEndedAt = null,
             settled = null,
             settledTranscriptItemId = null,
-            tracksTranscript = transcript != null,
           )
       } else if (!watch.baselineKnown) {
         if (row != null) {
@@ -142,11 +108,7 @@ internal class TurnRecapResolver(
     if (watch == null) return null
     watch.watching = false
     watch.settled?.let { settled ->
-      if (
-        !watch.tracksTranscript ||
-        transcript?.sessionKey != sessionKey ||
-        watch.settledTranscriptItemId == transcript.newestItemId
-      ) {
+      if (transcript.sessionKey != sessionKey || watch.settledTranscriptItemId == transcript.newestItemId) {
         return settled
       }
       // A newer transcript turn has replaced the content this recap summarized. Session rows do
@@ -186,33 +148,24 @@ internal class TurnRecapResolver(
       watches.remove(sessionKey)
       return null
     }
-    if (
-      watch.tracksTranscript &&
-      (
-        transcript?.sessionKey != sessionKey ||
-          transcript.completedEndedAt != rowEndedAt
-      )
-    ) {
+    if (transcript.sessionKey != sessionKey || transcript.completedEndedAt != rowEndedAt) {
       // The terminal session row can arrive before the terminal-triggered chat.history snapshot.
       // Keep waiting so its final item becomes the recap anchor, not an intermediate tool row.
-      watch.pendingTerminal = terminal
       watch.pendingTerminalEndedAt = rowEndedAt
       return null
     }
-    if (watch.tracksTranscript && transcript?.newestItemId != transcript?.completedNewestItemId) {
+    if (transcript.newestItemId != transcript.completedNewestItemId) {
       // Newer transcript content already superseded the completed snapshot before this pane could
       // settle it, so there is no safe recap attribution left to display.
       watches.remove(sessionKey)
       return null
     }
-    watches.remove(sessionKey)
-    val settled = watch.pendingTerminal ?: terminal
     watches[sessionKey] =
       watch.copy(
-        settled = settled,
-        settledTranscriptItemId = transcript?.completedNewestItemId,
+        settled = terminal,
+        settledTranscriptItemId = transcript.completedNewestItemId,
       )
-    return settled
+    return terminal
   }
 }
 
@@ -241,18 +194,12 @@ internal fun ChatTurnRecapRow(recap: TurnRecap) {
 @Composable
 internal fun localizedChatOutputTokens(count: Long): String {
   val locale = LocalConfiguration.current.locales[0]
-  val format = turnRecapTokenFormat(count, locale)
-  return if (format.singular) {
+  return if (count == 1L) {
     nativeStringResource("1 token")
   } else {
-    nativeStringResource("\$count tokens", format.count)
+    nativeStringResource("\$count tokens", formatCompactTokenCount(count, locale))
   }
 }
-
-internal fun turnRecapTokenFormat(
-  count: Long,
-  locale: Locale = Locale.getDefault(),
-): TurnRecapTokenFormat = TurnRecapTokenFormat(singular = count == 1L, count = formatCompactTokenCount(count, locale))
 
 internal fun formatCompactTokenCount(
   count: Long,
@@ -266,21 +213,13 @@ internal fun formatCompactTokenCount(
       roundingMode = RoundingMode.HALF_UP
     }
 
-  fun decimal(value: Double): String = decimalFormat.format(value)
-
-  fun millions(): String {
-    val value = decimal(count / 1_000_000.0)
-    return nativeString("\${decimal(count / 1_000_000.0)}M", value)
-  }
-
   return when {
-    count >= 1_000_000L -> {
-      millions()
+    count >= 999_950L -> {
+      nativeString("\${decimal(count / 1_000_000.0)}M", decimalFormat.format(count / 1_000_000.0))
     }
 
     count >= 1_000L -> {
-      val thousands = decimal(count / 1_000.0)
-      if (count >= 999_950L) millions() else nativeString("\${thousands}k", thousands)
+      nativeString("\${thousands}k", decimalFormat.format(count / 1_000.0))
     }
 
     else -> {

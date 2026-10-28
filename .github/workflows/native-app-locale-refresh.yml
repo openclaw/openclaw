@@ -16,23 +16,22 @@ on:
       - apps/.i18n/native/**
       - apps/.i18n/native-source.json
       - scripts/control-ui-i18n.ts
-      - scripts/lib/control-ui-i18n-catalog.ts
       - scripts/lib/control-ui-i18n-catalog-values.ts
-      - ui/src/i18n/lib/config-hint-translation.ts
-      - ui/src/lib/fnv1a.ts
-      - src/config/schema*.ts
-      - src/config/zod-schema*.ts
-      - src/config/media-audio-field-metadata.ts
-      - src/config/talk-defaults.ts
-      - src/config/channel-config-keys.ts
+      - scripts/lib/control-ui-i18n-config.json
+      - scripts/lib/control-ui-i18n-config.ts
+      - scripts/lib/control-ui-i18n-sync-plan.ts
       - scripts/android-app-i18n.ts
       - scripts/apple-app-i18n.ts
       - scripts/native-app-i18n.ts
+      - scripts/native-i18n-inventory.ts
       - scripts/native-i18n-locales.ts
       - ui/src/i18n/.i18n/glossary.*.json
       - .github/actions/create-generated-pr-tokens/action.yml
       - .github/actions/publish-generated-pr/action.yml
+      - .github/actions/publish-generated-pr/policy.py
       - .github/workflows/native-app-locale-refresh.yml
+      - "!apps/ios/README.md"
+      - "!apps/ios/AGENTS.md"
   workflow_dispatch:
     inputs:
       full_refresh:
@@ -201,7 +200,7 @@ jobs:
           git diff --cached --binary --full-index -- apps/.i18n/native > "${artifact_dir}/${LOCALE}.patch"
 
       - name: Upload locale artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: native-locale-${{ matrix.locale }}
           path: ${{ runner.temp }}/native-locale-${{ matrix.locale }}/${{ matrix.locale }}.patch
@@ -226,7 +225,7 @@ jobs:
           submodules: false
 
       - name: Download locale artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: native-locale-*
           path: ${{ runner.temp }}/native-locale-artifacts
@@ -269,7 +268,6 @@ jobs:
           auto-merge: "true"
           generated-paths: |
             apps/.i18n/native
-            apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt
             apps/android/app/src/main/res/values*/assistant.xml
             apps/android/app/src/main/res/values*/strings.xml
             apps/android/app/src/thirdParty/res/values*/accessibility_strings.xml
@@ -291,22 +289,19 @@ jobs:
             apps/macos/Package.swift
             apps/shared/OpenClawKit/Sources
             scripts/control-ui-i18n.ts
-            scripts/lib/control-ui-i18n-catalog.ts
             scripts/lib/control-ui-i18n-catalog-values.ts
-            ui/src/i18n/lib/config-hint-translation.ts
-            ui/src/lib/fnv1a.ts
-            src/config/schema*.ts
-            src/config/zod-schema*.ts
-            src/config/media-audio-field-metadata.ts
-            src/config/talk-defaults.ts
-            src/config/channel-config-keys.ts
+            scripts/lib/control-ui-i18n-config.json
+            scripts/lib/control-ui-i18n-config.ts
+            scripts/lib/control-ui-i18n-sync-plan.ts
             scripts/android-app-i18n.ts
             scripts/apple-app-i18n.ts
             scripts/native-app-i18n.ts
+            scripts/native-i18n-inventory.ts
             scripts/native-i18n-locales.ts
             ui/src/i18n/.i18n/glossary.*.json
             .github/actions/create-generated-pr-tokens/action.yml
             .github/actions/publish-generated-pr/action.yml
+            .github/actions/publish-generated-pr/policy.py
             .github/workflows/native-app-locale-refresh.yml
           pr-body: |
             ## What Problem This Solves

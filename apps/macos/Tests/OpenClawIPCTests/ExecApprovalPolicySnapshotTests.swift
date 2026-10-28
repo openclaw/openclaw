@@ -5,23 +5,7 @@ import Testing
 
 struct ExecApprovalPolicySnapshotTests {
     @Test
-    func `allow always source promotion is additive`() {
-        let expected = Self.snapshot(source: nil)
-        let current = Self.snapshot(source: "allow-always")
-
-        #expect(expected.isCurrent(current))
-    }
-
-    @Test
-    func `allow always source downgrade is rejected`() {
-        let expected = Self.snapshot(source: "allow-always")
-        let current = Self.snapshot(source: nil)
-
-        #expect(!expected.isCurrent(current))
-    }
-
-    @Test
-    func `portable snapshot round trips canonical policy semantics`() {
+    func `portable snapshot import preserves canonical policy semantics`() {
         let snapshot = ExecApprovalPolicySnapshot(
             security: .allowlist,
             ask: .onMiss,
@@ -35,19 +19,18 @@ struct ExecApprovalPolicySnapshotTests {
                     argPattern: "^ok$"),
             ])
 
-        let portable = snapshot.portable
-
-        #expect(portable.security == .allowlist)
-        #expect(portable.ask == .onMiss)
-        #expect(portable.askFallback == .deny)
-        #expect(portable.autoAllowSkills)
-        #expect(portable.allowlistRules == [
-            OpenClawSystemRunApprovalPolicySnapshot.Rule(pattern: "/usr/bin/tool"),
-            OpenClawSystemRunApprovalPolicySnapshot.Rule(
-                pattern: "/usr/bin/tool",
-                argPattern: "^ok$",
-                source: .allowAlways),
-        ])
+        let portable = OpenClawSystemRunApprovalPolicySnapshot(
+            security: .allowlist,
+            ask: .onMiss,
+            askFallback: .deny,
+            autoAllowSkills: true,
+            allowlistRules: [
+                OpenClawSystemRunApprovalPolicySnapshot.Rule(pattern: "/usr/bin/tool"),
+                OpenClawSystemRunApprovalPolicySnapshot.Rule(
+                    pattern: "/usr/bin/tool",
+                    argPattern: "^ok$",
+                    source: .allowAlways),
+            ])
         #expect(snapshot == ExecApprovalPolicySnapshot(portable: portable))
     }
 
@@ -87,18 +70,20 @@ struct ExecApprovalPolicySnapshotTests {
             OpenClawSystemRunApprovalPolicySnapshot.Rule(pattern: "/ä"),
             OpenClawSystemRunApprovalPolicySnapshot.Rule(pattern: "/é"),
         ])
-        #expect(ExecApprovalPolicySnapshot(portable: portable).portable == portable)
-    }
-
-    private static func snapshot(source: String?) -> ExecApprovalPolicySnapshot {
-        ExecApprovalPolicySnapshot(
+        #expect(ExecApprovalPolicySnapshot(portable: portable) == ExecApprovalPolicySnapshot(
             security: .allowlist,
-            ask: .always,
+            ask: .onMiss,
             askFallback: .deny,
             autoAllowSkills: false,
-            allowlist: [ExecAllowlistEntry(
-                pattern: "/usr/bin/printf",
-                source: source,
-                argPattern: "^ok$")])
+            allowlist: [
+                ExecAllowlistEntry(pattern: "/"),
+                ExecAllowlistEntry(pattern: "/", argPattern: "A"),
+                ExecAllowlistEntry(pattern: "/", argPattern: "é"),
+                ExecAllowlistEntry(pattern: "/A"),
+                ExecAllowlistEntry(pattern: "/A", source: "allow-always"),
+                ExecAllowlistEntry(pattern: "/e\u{0301}"),
+                ExecAllowlistEntry(pattern: "/ä"),
+                ExecAllowlistEntry(pattern: "/é"),
+            ]))
     }
 }

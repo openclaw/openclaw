@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { extractToolCardsCached, resolveToolCardOutcome } from "../../lib/chat/tool-cards.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
+import { createProps } from "./chat-thread.test-support.ts";
 
 it("preserves result references and provenance when two calls share a transcript message", () => {
   const messages = [
@@ -32,17 +33,9 @@ it("preserves result references and provenance when two calls share a transcript
     })),
   ];
   const original = structuredClone(messages);
-  const items = buildChatItems({
-    paneId: "output-identity",
-    sessionKey: "agent:main:main",
-    runId: null,
-    messages,
-    toolMessages: [],
-    streamSegments: [],
-    stream: null,
-    streamStartedAt: null,
-    showToolCalls: true,
-  });
+  const items = buildChatItems(
+    createProps({ paneId: "output-identity", sessionKey: "agent:main:main", messages }),
+  );
   const cards = items.flatMap((item) =>
     item.kind === "group"
       ? item.messages.flatMap(({ message }) => extractToolCardsCached(message))

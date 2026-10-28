@@ -12,6 +12,40 @@ public protocol OpenClawChatGatewayTransport: OpenClawChatTransport {
 }
 
 extension OpenClawChatGatewayTransport {
+    public var supportsSlashCommandCatalog: Bool {
+        true
+    }
+
+    public func reactionsRouteLease(
+        routeID: UUID,
+        access: OpenClawChatReactionAccess,
+        isCurrent: @escaping @Sendable () async -> Bool,
+        request: @escaping @Sendable (OpenClawChatGatewayRequest) async throws -> Data)
+        -> OpenClawChatReactionsRouteLease
+    {
+        OpenClawChatReactionsRouteLease(
+            routeID: routeID,
+            access: access,
+            isCurrent: isCurrent,
+            list: { sessionKey, agentID in
+                let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
+                let data = try await request(OpenClawChatGatewayRequests.reactionsList(
+                    sessionKey: target.sessionKey,
+                    agentID: target.agentID))
+                return try OpenClawChatGatewayPayloadCodec.decodeReactionsList(data)
+            },
+            set: { sessionKey, agentID, messageID, emoji, remove in
+                let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
+                let data = try await request(OpenClawChatGatewayRequests.reactionsSet(
+                    sessionKey: target.sessionKey,
+                    agentID: target.agentID,
+                    messageID: messageID,
+                    emoji: emoji,
+                    remove: remove))
+                return try OpenClawChatGatewayPayloadCodec.decodeReactionsSet(data)
+            })
+    }
+
     public func requestChatSessionAction(_ request: OpenClawChatGatewayRequest) async throws -> Data {
         try await self.requestChatGateway(request)
     }
@@ -61,13 +95,6 @@ extension OpenClawChatGatewayTransport {
     public func listQuestions() async throws -> [QuestionRecord] {
         let data = try await self.requestChatGateway(OpenClawChatGatewayRequests.questionList())
         return try JSONDecoder().decode(QuestionListResult.self, from: data).questions
-    }
-
-    public func listTasks(sessionKey: String, agentID: String?) async throws -> [TaskSummary] {
-        let data = try await self.requestChatGateway(OpenClawChatGatewayRequests.tasksList(
-            sessionKey: sessionKey,
-            agentID: agentID))
-        return try JSONDecoder().decode(TasksListResult.self, from: data).tasks
     }
 
     public func getQuestion(id: String) async throws -> QuestionRecord {
@@ -137,6 +164,24 @@ extension OpenClawChatGatewayTransport {
             entryId: entryId)
         let data = try await self.requestChatSessionAction(request)
         return try JSONDecoder().decode(OpenClawChatRewindResponse.self, from: data)
+    }
+
+    public func forkSession(parentKey: String) async throws -> String {
+        try await self.forkSession(parentKey: parentKey, fromLastCompleted: false)
+    }
+
+    public func forkSession(parentKey: String, fromLastCompleted: Bool) async throws -> String {
+        try await self.forkSession(parentKey: parentKey, fromLastCompleted: fromLastCompleted, agentID: nil)
+    }
+
+    public func forkSession(parentKey: String, fromLastCompleted: Bool, agentID: String?) async throws -> String {
+        let target = self.sessionTarget(for: parentKey, overrideAgentID: agentID)
+        let request = OpenClawChatGatewayRequests.forkSession(
+            parentSessionKey: target.sessionKey,
+            agentID: target.agentID,
+            fromLastCompleted: fromLastCompleted)
+        let data = try await self.requestChatSessionAction(request)
+        return try JSONDecoder().decode(OpenClawChatCreateSessionResponse.self, from: data).key
     }
 
     public func forkSessionAtMessage(

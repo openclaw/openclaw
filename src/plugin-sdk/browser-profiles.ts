@@ -1,6 +1,3 @@
-/**
- * Public SDK facade for browser profile defaults and activated profile resolution.
- */
 import type { BrowserConfig } from "../config/types.browser.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./browser-types.js";

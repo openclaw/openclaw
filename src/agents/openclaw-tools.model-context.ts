@@ -7,6 +7,8 @@ export type ModelAwareToolContext = {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   /** Auth profiles already loaded for prompt-time tool availability. */
   authProfileStore?: AuthProfileStore;
+  /** Source detection prepared without loading credentials during tool selection. */
+  authProfileStoreSource?: boolean;
   /** Whether the active model accepts image content natively; this does not load arbitrary files. */
   modelHasVision?: boolean;
   /** Active provider/model pair used for tool gating. */

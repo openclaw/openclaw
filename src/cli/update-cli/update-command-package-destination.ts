@@ -4,18 +4,18 @@ import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { resolveCanonicalPath } from "../../infra/package-update-manager-preflight.js";
+import { pathEntryExists } from "../../infra/path-existence.js";
 import { isPathStrictlyInside } from "../../infra/path-guards.js";
 import {
   UPDATE_DESTINATION_RECOVERY,
   type UpdateDestinationFailure,
-} from "../../infra/update-destination-failure.js";
+} from "../../infra/update-failure-facts-format.js";
 import { createUpdateFailureFact } from "../../infra/update-failure-facts.js";
+import type { ResolvedGlobalInstallTarget } from "../../infra/update-global.js";
 import {
   inspectNpmLauncher,
-  probeNpmGlobalPrefix,
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
 } from "../../infra/update-npm-prefix.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
 import { UPDATE_FOREIGN_DESTINATION_REASON } from "../../shared/update-outcome.js";
 import { formatCliCommand } from "../command-format.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
@@ -25,8 +25,11 @@ import {
   readManagedGatewayServiceForUpdate,
 } from "./update-command-service-plan.js";
 
-/** Re-invocation after a Node switch admits only a positively inspected empty or owned destination. */
-export async function inspectNpmGlobalDestination(root: string, timeoutMs: number) {
+/** Inspect the same destination the package transaction will write after a Node switch. */
+export async function inspectNpmGlobalDestination(
+  root: string,
+  installTarget: ResolvedGlobalInstallTarget,
+) {
   const destination: Omit<UpdateDestinationFailure, "ownership" | "cause"> = {
     destinationKind: "unknown",
     prefix: null,
@@ -41,53 +44,40 @@ export async function inspectNpmGlobalDestination(root: string, timeoutMs: numbe
     /^openclaw\b/,
     () => `node ${quote(path.resolve(root, "openclaw.mjs"))}`,
   );
-  const unknown = (
-    prefix: string | null,
-    cause: "permission" | "probe-failure" | "unreadable-layout",
-  ) => ({
+  const unknown = (prefix: string | null, cause: "permission" | "unreadable-layout") => ({
     kind: "unknown" as const,
     cause,
-    prefix,
     ...destinationRefusal(
-      `Selected npm destination ${prefix ?? "(unresolved; npm prefix -g)"} could not be inspected (${cause}); ownership is unknown. No installation was attempted. Fix inspection permissions on this prefix for the service account, or make \`npm prefix -g\` succeed with the selected runtime, then run \`${retry}\`. Alternatively, ask the deployment owner to verify the layout and explicitly select the intended installation using its existing deployment procedure.`,
+      `Selected npm destination ${prefix ?? "(unresolved installation layout)"} could not be inspected (${cause}); ownership is unknown. No installation was attempted. Fix inspection permissions on this prefix for the service account, or restore the selected package layout, then run \`${retry}\`. Alternatively, ask the deployment owner to verify the layout and explicitly select the intended installation using its existing deployment procedure.`,
       { ...destination, ownership: "unknown", cause },
     ),
   });
   let prefix: string | null = null;
   try {
-    const destinationLayout = await probeNpmGlobalPrefix(runCommandWithTimeout, timeoutMs);
-    if (!destinationLayout) {
-      return unknown(prefix, "probe-failure");
+    const destinationLayout = resolveNpmGlobalPrefixLayoutFromGlobalRoot(installTarget.globalRoot, {
+      allowDirectNodeModulesRoot: installTarget.directNodeModulesRoot === true,
+    });
+    const packageRoot = installTarget.packageRoot;
+    if (!destinationLayout || !packageRoot) {
+      return unknown(prefix, "unreadable-layout");
     }
     prefix = destinationLayout.prefix;
-    const packageRoot = path.join(destinationLayout.globalRoot, "openclaw");
     destination.destinationKind = "npm-global";
     destination.prefix = prefix;
     destination.packageRoot = packageRoot;
     const { launcher, launcherTarget } = await inspectNpmLauncher(destinationLayout);
     destination.launcher = launcher;
     destination.launcherTarget = launcherTarget;
-    const present = (target: string) =>
-      fs.lstat(target).then(
-        () => true,
-        (error: unknown) => {
-          if (hasErrnoCode(error, "ENOENT")) {
-            return false;
-          }
-          throw error;
-        },
-      );
-    const packagePresent = await present(packageRoot);
-    const launcherPresent = await present(launcher);
+    const packagePresent = await pathEntryExists(packageRoot);
+    const launcherPresent = await pathEntryExists(launcher);
     if (!packagePresent && !launcherPresent) {
-      return { kind: "empty" as const, prefix };
+      return { kind: "empty" as const };
     }
     const packageRootReal = packagePresent ? await fs.realpath(packageRoot) : null;
     if (launcherPresent && !launcherTarget) {
       return unknown(prefix, "unreadable-layout");
     }
-    const manageable = isGatewayServiceManagementAllowedForUpdate(process.env);
-    const serviceInspection = manageable
+    const serviceInspection = isGatewayServiceManagementAllowedForUpdate(process.env)
       ? await readManagedGatewayServiceForUpdate(process.env)
       : null;
     const command = serviceInspection?.command ?? null;
@@ -101,7 +91,7 @@ export async function inspectNpmGlobalDestination(root: string, timeoutMs: numbe
         launcherTarget !== null &&
         isPathStrictlyInside(packageRootReal, launcherTarget));
     if (ownsPackage && ownsLauncher) {
-      return { kind: "owned" as const, prefix };
+      return { kind: "owned" as const };
     }
     const layout = await summarizeGatewayServiceLayout(command);
     const wrapper = [
@@ -127,7 +117,6 @@ export async function inspectNpmGlobalDestination(root: string, timeoutMs: numbe
     ].join(" ");
     return {
       kind: "foreign" as const,
-      prefix,
       ...destinationRefusal(message, {
         ...destination,
         ownership: "foreign",

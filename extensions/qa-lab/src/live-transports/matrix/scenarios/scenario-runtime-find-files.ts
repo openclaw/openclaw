@@ -1,26 +1,21 @@
 import path from "node:path";
 import { walkRootDirectory } from "openclaw/plugin-sdk/root-walk";
 
-export async function findFilesByName(params: {
-  filename: string;
-  rootDir: string;
-  maxDepth?: number;
-}): Promise<string[]> {
-  const maxDepth = params.maxDepth ?? 8;
+export async function findMatrixStateDatabases(rootDir: string): Promise<string[]> {
   const matches: string[] = [];
   try {
-    for await (const entry of walkRootDirectory(params.rootDir, "", {
+    for await (const entry of walkRootDirectory(rootDir, "", {
       order: "filesystem",
       symlinkPolicy: "skip",
       onDirectoryError: "skip-and-report",
       // A walker depth limit ends the scan; these probes must still visit siblings.
       entryFilter: (candidate) =>
-        candidate.kind === "directory" && candidate.relativePath.split("/").length > maxDepth
+        candidate.kind === "directory" && candidate.relativePath.split("/").length > 10
           ? "skip-subtree"
           : "include",
     })) {
-      if (entry.kind === "file" && path.posix.basename(entry.relativePath) === params.filename) {
-        matches.push(path.join(params.rootDir, entry.relativePath));
+      if (entry.kind === "file" && path.posix.basename(entry.relativePath) === "openclaw.sqlite") {
+        matches.push(path.join(rootDir, entry.relativePath));
       }
     }
   } catch {

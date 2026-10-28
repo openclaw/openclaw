@@ -5,7 +5,7 @@ import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-r
 import type { OpenClawConfig } from "../config.js";
 import { replaceSessionEntry } from "./session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { listKnownSessionStoreAgentIds } from "./targets.js";
+import { listKnownSessionStoreAgentIds } from "./targets-discovery.native.js";
 
 describe("known session store owners", () => {
   it("includes a retired owner registered under the active shared store", async () => {
@@ -15,7 +15,7 @@ describe("known session store owners", () => {
       const storePath = path.join(stateDir, "shared", "sessions.json");
       const cfg: OpenClawConfig = {
         session: { store: storePath },
-        agents: { entries: { ops: { default: true } } },
+        agents: { entries: { ops: {} } },
       };
 
       await replaceSessionEntry(
@@ -39,7 +39,7 @@ describe("known session store owners", () => {
       const storePath = path.join(stateDir, "shared", "sessions.json");
       const cfg: OpenClawConfig = {
         session: { store: storePath },
-        agents: { entries: { ops: { default: true } } },
+        agents: { entries: { ops: {} } },
       };
 
       await replaceSessionEntry(
@@ -70,7 +70,7 @@ describe("known session store owners", () => {
       const storePath = path.join(stateDir, "shared", "sessions.json");
       const cfg: OpenClawConfig = {
         session: { store: storePath },
-        agents: { entries: { ops: { default: true } } },
+        agents: { entries: { ops: {} } },
       };
 
       await replaceSessionEntry(

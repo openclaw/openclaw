@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { gitEnvironment } from "../../agents/worktrees/git.js";
 import { executeGitCommand, gitNullConfigPath } from "../../infra/git-exec.js";
-import { parseProjectGitUrl } from "../../projects/project-git-url.js";
+import { appendGitConfig } from "../../infra/git-maintenance-env.js";
+import { parseConfiguredProjectGitUrl } from "../../projects/project-git-url.runtime.js";
 import { workerSshCommandOptions } from "./ssh.js";
 import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 
@@ -17,8 +18,8 @@ export async function prepareRepositoryWorkerGitPack(params: {
   signal: AbortSignal;
   assertCurrent: () => void;
 }): Promise<string> {
-  if (parseProjectGitUrl(params.url)?.url !== params.url) {
-    throw new Error("Repository preparation requires a canonical GitHub URL");
+  if (parseConfiguredProjectGitUrl(params.url)?.url !== params.url) {
+    throw new Error("Repository preparation requires a normalized GitHub HTTPS repository URL");
   }
   if (!/^[a-f0-9]{40}$/u.test(params.baseCommit)) {
     throw new Error("Repository preparation requires an exact GitHub commit");
@@ -51,15 +52,14 @@ export async function prepareRepositoryWorkerGitPack(params: {
       ["-c", "http.followRedirects=false", ...args],
       {
         baseEnv,
-        ...(authenticated
-          ? {
-              env: {
-                GIT_CONFIG_COUNT: "3",
-                GIT_CONFIG_KEY_2: `http.${params.url}.extraHeader`,
-                GIT_CONFIG_VALUE_2: `Authorization: Basic ${Buffer.from(`x-access-token:${params.token}`).toString("base64")}`,
-              },
-            }
-          : {}),
+        env: authenticated
+          ? appendGitConfig(baseEnv, [
+              [
+                `http.${params.url}.extraHeader`,
+                `Authorization: Basic ${Buffer.from(`x-access-token:${params.token}`).toString("base64")}`,
+              ],
+            ])
+          : undefined,
         input: "",
         timeoutMs: FETCH_TIMEOUT_MS,
         signal: params.signal,

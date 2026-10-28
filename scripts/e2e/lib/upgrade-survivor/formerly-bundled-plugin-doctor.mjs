@@ -8,8 +8,26 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { createBuildSmokeEnv } from "../../../lib/build-smoke-env.mts";
 import { runManagedCommand, terminateManagedChild } from "../../../lib/managed-child-process.mts";
+import { readJson } from "../fixtures/common.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
+
+// The supervisor stays responsive while the proof's synchronous CLI children run.
+if (process.argv[2] === "--managed") {
+  const started = performance.now();
+  const status = await runManagedCommand({
+    bin: process.execPath,
+    args: [...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(3)],
+    stdio: "inherit",
+    requireProcessTreeExit: true,
+    waitForCleanupRelease: true,
+  });
+  console.log(
+    `Formerly bundled Doctor managed proof: exit=${status} durationMs=${Math.round(performance.now() - started)}`,
+  );
+  process.exit(status);
+}
 
 const expectedVersion = process.argv[2];
 const runtimeRoot = process.env.OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT;
@@ -28,16 +46,9 @@ for (const directory of [stateDir, workspace, proofArtifacts]) {
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
 }
 const env = {
-  ...process.env,
-  HOME: home,
-  OPENCLAW_HOME: home,
-  OPENCLAW_STATE_DIR: stateDir,
-  OPENCLAW_CONFIG_PATH: configPath,
+  ...createBuildSmokeEnv(home, process.env),
   OPENCLAW_AGENT_DIR: path.join(stateDir, "agents", "main", "agent"),
   OPENCLAW_TEST_WORKSPACE_DIR: workspace,
-  XDG_CONFIG_HOME: path.join(home, ".config"),
-  XDG_CACHE_HOME: path.join(home, ".cache"),
-  XDG_DATA_HOME: path.join(home, ".local", "share"),
 };
 delete env.OPENCLAW_PROFILE;
 
@@ -97,9 +108,7 @@ assert.notEqual(
 );
 const prepublishRoot = process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR;
 assert(prepublishRoot, "Doctor proof requires the candidate plugin prepublish artifact");
-const manifest = JSON.parse(
-  fs.readFileSync(path.join(prepublishRoot, "prepublish-plugin-registry.json"), "utf8"),
-);
+const manifest = readJson(path.join(prepublishRoot, "prepublish-plugin-registry.json"));
 const candidatePackage = manifest.packages.find((entry) => entry.name === packageName);
 assert.equal(
   candidatePackage?.version,
@@ -137,6 +146,7 @@ registryEnv.OPENCLAW_NPM_REGISTRY_DIST_TAGS = `beta=${expectedVersion}`;
 delete registryEnv.OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM;
 // The last version becomes latest. Both manifests and archives are real package bytes.
 let registry;
+const registryReady = Promise.withResolvers();
 const registryRun = runManagedCommand({
   bin: process.execPath,
   args: [
@@ -154,10 +164,17 @@ const registryRun = runManagedCommand({
   requireProcessTreeExit: true,
   onReady: (child) => {
     registry = child;
+    registryReady.resolve();
   },
 });
-fs.closeSync(registryLog);
 try {
+  // Nested cleanup admission is asynchronous; keep the log descriptor open until spawn.
+  await Promise.race([
+    registryReady.promise,
+    registryRun.then(() => {
+      throw new Error("Doctor proof registry exited before startup");
+    }),
+  ]);
   for (let attempt = 0; !fs.existsSync(portFile) && attempt < 100; attempt += 1) {
     assert.equal(registry.exitCode, null, "Doctor proof registry exited before readiness");
     await delay(100);
@@ -256,9 +273,7 @@ try {
     "Doctor fabricated operator capability acceptance",
   );
   assert(inspect.install.installPath, "Doctor omitted the installed payload path");
-  const payload = JSON.parse(
-    fs.readFileSync(path.join(inspect.install.installPath, "package.json"), "utf8"),
-  );
+  const payload = readJson(path.join(inspect.install.installPath, "package.json"));
   assert.equal(
     payload.name,
     "@openclaw/duckduckgo-plugin",
@@ -272,7 +287,7 @@ try {
   const after = cli("after-validate", ["config", "validate", "--json"]);
   assert.equal(after.valid, true, "Doctor left the configured plugin invalid");
   assert.deepEqual(after.warnings, [], "Doctor left unresolved config warnings");
-  const repairedConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  const repairedConfig = readJson(configPath);
   assert.equal(
     repairedConfig.tools?.web?.search?.provider,
     "duckduckgo",
@@ -297,6 +312,9 @@ try {
   });
   console.log(`Formerly bundled Doctor proof passed: ${proofArtifacts}/evidence.json`);
 } finally {
-  terminateManagedChild(registry, "SIGKILL");
+  fs.closeSync(registryLog);
+  if (registry) {
+    terminateManagedChild(registry, "SIGKILL");
+  }
   await registryRun;
 }

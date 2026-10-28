@@ -1,6 +1,6 @@
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
-// iMessage tests cover canonical bounded CLI execution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { commandResult } from "../../test-support/command-result.test-support.js";
 import { runIMessageCliJsonCommand } from "./cli-output.js";
 
 vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
@@ -8,25 +8,15 @@ vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
 }));
 
 const runCommandMock = vi.mocked(runCommandWithTimeout);
-
-function commandResult(
-  overrides: Partial<Awaited<ReturnType<typeof runCommandWithTimeout>>> = {},
-): Awaited<ReturnType<typeof runCommandWithTimeout>> {
-  return {
-    stdout: '{"success":true,"messageId":"ok"}\n',
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
-}
+const run = (timeoutMs?: number) =>
+  runIMessageCliJsonCommand({ cliPath: "imsg", args: ["send"], timeoutMs });
 
 describe("runIMessageCliJsonCommand", () => {
   beforeEach(() => {
     runCommandMock.mockReset();
-    runCommandMock.mockResolvedValue(commandResult());
+    runCommandMock.mockResolvedValue(
+      commandResult({ stdout: '{"success":true,"messageId":"ok"}\n' }),
+    );
   });
 
   it("uses the canonical wrapper with bounded asymmetric output", async () => {
@@ -42,10 +32,7 @@ describe("runIMessageCliJsonCommand", () => {
     expect(runCommandMock).toHaveBeenCalledWith(
       ["/usr/local/bin/imsg", "send", "--text", "hello", "--db", "/tmp/chat.db", "--json"],
       expect.objectContaining({
-        maxOutputBytes: {
-          stdout: 8 * 1024 * 1024,
-          stderr: 64 * 1024,
-        },
+        maxOutputBytes: { stdout: 8 * 1024 * 1024, stderr: 64 * 1024 },
         outputCapture: { stdout: "head", stderr: "tail" },
         terminateOnOutputLimit: { stdout: true },
       }),
@@ -56,50 +43,23 @@ describe("runIMessageCliJsonCommand", () => {
     runCommandMock.mockResolvedValueOnce(
       commandResult({ stdout: 'warning\n{"success":true,"messageId":"last"}\n' }),
     );
-    await expect(
-      runIMessageCliJsonCommand({ cliPath: "imsg", args: ["send"] }),
-    ).resolves.toMatchObject({ messageId: "last" });
+    await expect(run()).resolves.toMatchObject({ messageId: "last" });
   });
 
-  it("surfaces timeout and stdout-cap failures", async () => {
-    runCommandMock.mockResolvedValueOnce(commandResult({ code: 124, termination: "timeout" }));
-    await expect(
-      runIMessageCliJsonCommand({ cliPath: "imsg", args: ["send"], timeoutMs: 25 }),
-    ).rejects.toThrow("iMessage action timed out after 25ms");
-
-    runCommandMock.mockResolvedValueOnce(
-      commandResult({ code: null, termination: "signal", outputLimitExceeded: true }),
-    );
-    await expect(runIMessageCliJsonCommand({ cliPath: "imsg", args: ["send"] })).rejects.toThrow(
+  it.each([
+    [{ code: 124, termination: "timeout" }, "iMessage action timed out after 25ms"],
+    [
+      { code: null, termination: "signal", outputLimitExceeded: true },
       "imsg stdout exceeded 8388608 bytes",
-    );
-  });
-
-  it("prefers structured and stderr command failures", async () => {
+    ],
+    [{ code: 2, stdout: '{"success":false,"error":"denied"}\n' }, "denied"],
+    [{ code: 2, stdout: "", stderr: "boom" }, "boom"],
+    [{ stdout: "not json" }, "imsg returned non-JSON output: not json"],
+    [{ stdout: '{"success":false,"error":"failed"}\n' }, "failed"],
+  ] as const)("rejects command result %j with %s", async (overrides, error) => {
     runCommandMock.mockResolvedValueOnce(
-      commandResult({ code: 2, stdout: '{"success":false,"error":"denied"}\n' }),
+      commandResult({ stdout: '{"success":true,"messageId":"ok"}\n', ...overrides }),
     );
-    await expect(runIMessageCliJsonCommand({ cliPath: "imsg", args: ["send"] })).rejects.toThrow(
-      "denied",
-    );
-
-    runCommandMock.mockResolvedValueOnce(commandResult({ code: 2, stdout: "", stderr: "boom" }));
-    await expect(runIMessageCliJsonCommand({ cliPath: "imsg", args: ["send"] })).rejects.toThrow(
-      "boom",
-    );
-  });
-
-  it("rejects successful non-JSON and success=false output", async () => {
-    runCommandMock.mockResolvedValueOnce(commandResult({ stdout: "not json" }));
-    await expect(runIMessageCliJsonCommand({ cliPath: "imsg", args: ["send"] })).rejects.toThrow(
-      "imsg returned non-JSON output: not json",
-    );
-
-    runCommandMock.mockResolvedValueOnce(
-      commandResult({ stdout: '{"success":false,"error":"failed"}\n' }),
-    );
-    await expect(runIMessageCliJsonCommand({ cliPath: "imsg", args: ["send"] })).rejects.toThrow(
-      "failed",
-    );
+    await expect(run(25)).rejects.toThrow(error);
   });
 });

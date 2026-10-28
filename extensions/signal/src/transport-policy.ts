@@ -1,4 +1,3 @@
-// Signal transport policy centralizes local endpoint collision handling.
 import type { SignalTransportConfig } from "./account-types.js";
 import { normalizeSignalTransportUrl } from "./transport-url.js";
 

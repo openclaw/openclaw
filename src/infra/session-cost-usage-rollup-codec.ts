@@ -6,7 +6,7 @@ import { resolveZstdCodec } from "./zstd-codec.js";
 
 // Cache data is rebuildable. Semantic changes get a new version; old rows are
 // ignored and rebuilt instead of normalized through a runtime compatibility path.
-export const USAGE_COST_ROLLUP_VERSION = 6;
+export const USAGE_COST_ROLLUP_VERSION = 9;
 const USAGE_COST_ROLLUP_FORMAT_VERSION = 1;
 export const USAGE_COST_ROLLUP_SCOPE = "session-cost-usage-rollup-v3";
 const zstd = resolveZstdCodec();
@@ -23,6 +23,8 @@ export type UsageCostJsonlCheckpoint = {
 
 export type UsageCostSqliteCheckpoint = {
   kind: "sqlite";
+  /** Existing transcript rewrite watermark; absent legacy checkpoints rebuild once. */
+  generation?: string | null;
   maxSeq: number;
   eventCount: number;
   size: number;
@@ -41,12 +43,13 @@ export type UsageCostRollupEntry = {
   rollup: SessionUsageRollupData;
 };
 
-export type UsageCostStoredRollup = {
-  entry: UsageCostRollupEntry;
-};
-
 export type UsageCostRollupEnvelope = Omit<UsageCostRollupEntry, "rollup"> & {
   format: typeof USAGE_COST_ROLLUP_FORMAT_VERSION;
+  projection?: {
+    version: 3;
+    dates: string[];
+    canonicalNumbers: boolean;
+  };
   body: {
     encoding: "identity" | "zstd";
     bytes: number;
@@ -62,7 +65,7 @@ export function encodeUsageCostRollup(entry: UsageCostRollupEntry): {
 } {
   const json = JSON.stringify(entry.rollup);
   const raw = Buffer.from(json, "utf8");
-  const compressed = raw.byteLength >= 1024 ? zstd?.compress(raw, 1) : undefined;
+  const compressed = raw.byteLength >= 1024 ? zstd.compress(raw, 1) : undefined;
   const useCompressed = compressed !== undefined && compressed.byteLength < raw.byteLength;
   const bytes = useCompressed ? compressed : raw;
   const envelope: UsageCostRollupEnvelope = {
@@ -88,6 +91,38 @@ export function encodeUsageCostRollup(entry: UsageCostRollupEntry): {
 export type UsageCostFreshnessCheckpoint =
   | Pick<UsageCostJsonlCheckpoint, "kind" | "observedSize" | "observedMtimeMs" | "device" | "inode">
   | Pick<UsageCostSqliteCheckpoint, "kind" | "maxSeq" | "eventCount" | "size" | "mtimeMs">;
+
+export function readUsageCostDeferredMetadata(
+  envelope: UsageCostRollupEnvelope,
+): { checkpoint: UsageCostFreshnessCheckpoint; scannedAt: number } | undefined {
+  const source = envelope.checkpoint;
+  const checkpoint: UsageCostFreshnessCheckpoint =
+    source.kind === "jsonl"
+      ? {
+          kind: source.kind,
+          observedSize: source.observedSize,
+          observedMtimeMs: source.observedMtimeMs,
+          device: source.device,
+          inode: source.inode,
+        }
+      : {
+          kind: source.kind,
+          maxSeq: source.maxSeq,
+          eventCount: source.eventCount,
+          size: source.size,
+          mtimeMs: source.mtimeMs,
+        };
+  // Only numeric freshness facts fit the reserved descriptor allowance.
+  if (
+    Object.entries(checkpoint).every(
+      ([key, value]) => key === "kind" || (typeof value === "number" && Number.isFinite(value)),
+    ) &&
+    Number.isFinite(envelope.scannedAt)
+  ) {
+    return { checkpoint, scannedAt: envelope.scannedAt };
+  }
+  return undefined;
+}
 
 export function decodeUsageCostRollupEnvelope(
   valueJson: string,
@@ -119,8 +154,26 @@ export function decodeUsageCostRollupEnvelope(
       typeof record.body.utf16Length !== "number" ||
       !Number.isSafeInteger(record.body.utf16Length) ||
       record.body.utf16Length <= 0 ||
+      // The producer stores UTF-8 JSON and only chooses compression when smaller.
+      record.body.bytes < record.body.utf16Length ||
+      record.body.bytes > 3 * record.body.utf16Length ||
+      (record.body.encoding === "identity"
+        ? record.body.bytes !== record.body.storedBytes
+        : record.body.bytes <= record.body.storedBytes) ||
       typeof record.body.sha256 !== "string" ||
       !/^[0-9a-f]{64}$/.test(record.body.sha256)
+    ) {
+      return undefined;
+    }
+    if (
+      record.projection !== undefined &&
+      (!isRecord(record.projection) ||
+        record.projection.version !== 3 ||
+        !Array.isArray(record.projection.dates) ||
+        !record.projection.dates.every(
+          (date) => typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date),
+        ) ||
+        typeof record.projection.canonicalNumbers !== "boolean")
     ) {
       return undefined;
     }
@@ -136,17 +189,35 @@ export function decodeUsageCostRollup(
   valueJson: string,
   pricingFingerprint: string,
   blob: Uint8Array | null,
-): UsageCostRollupEntry | undefined {
+): UsageCostRollupEntry | undefined;
+export function decodeUsageCostRollup(
+  valueJson: string,
+  pricingFingerprint: string,
+  blob: Uint8Array | null,
+  budget: { remainingBytes: number },
+): UsageCostRollupEntry | null | undefined;
+export function decodeUsageCostRollup(
+  valueJson: string,
+  pricingFingerprint: string,
+  blob: Uint8Array | null,
+  budget?: { remainingBytes: number },
+): UsageCostRollupEntry | null | undefined {
   const envelope = decodeUsageCostRollupEnvelope(valueJson, pricingFingerprint);
   if (!envelope || !blob || blob.byteLength !== envelope.body.storedBytes) {
     return undefined;
   }
+  if (budget) {
+    if (envelope.body.bytes > budget.remainingBytes) {
+      return null;
+    }
+    budget.remainingBytes -= envelope.body.bytes;
+  }
   try {
     const raw =
       envelope.body.encoding === "zstd"
-        ? zstd?.decompress(blob, envelope.body.bytes)
+        ? zstd.decompress(blob, envelope.body.bytes)
         : Buffer.from(blob.buffer, blob.byteOffset, blob.byteLength);
-    if (!raw || raw.byteLength !== envelope.body.bytes || sha256Hex(raw) !== envelope.body.sha256) {
+    if (raw.byteLength !== envelope.body.bytes || sha256Hex(raw) !== envelope.body.sha256) {
       return undefined;
     }
     const json = raw.toString("utf8");

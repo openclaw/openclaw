@@ -1,3 +1,9 @@
+import path from "node:path";
+import { afterEach, beforeEach } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -26,4 +32,38 @@ export async function withStateDirEnv<T>(
       await closeSessionSqliteDatabasesForTest();
     }
   });
+}
+
+export function useSessionStoreFixture(prefix: string): () => string {
+  const tempDirs = createTempDirTracker();
+  let storePath: string;
+  beforeEach(() => {
+    storePath = path.join(tempDirs.make(prefix), "sessions.json");
+  });
+  afterEach(async () => {
+    await closeSessionSqliteDatabasesForTest();
+    tempDirs.cleanup();
+  });
+  return () => storePath;
+}
+
+export function seedSessionEntries(storePath: string, entries: Record<string, SessionEntry>): void {
+  for (const [sessionKey, entry] of Object.entries(entries)) {
+    replaceSessionEntrySync({ sessionKey, storePath }, entry);
+  }
+}
+
+export function createSingleAgentAvatarConfig(workspace: string): OpenClawConfig {
+  const main = { workspace, identity: { avatar: "avatar-link.png" } };
+  return { session: { mainKey: "main" }, agents: { entries: { main } } };
+}
+
+export function createModelDefaultsConfig(params: {
+  primary: string;
+  models?: Record<string, { agentRuntime?: { id: string } }>;
+  agentRuntime?: { id: string };
+}): OpenClawConfig {
+  const { primary, models, agentRuntime } = params;
+  const overrides = agentRuntime ? { [primary]: { agentRuntime } } : {};
+  return { agents: { defaults: { model: { primary }, models: { ...models, ...overrides } } } };
 }

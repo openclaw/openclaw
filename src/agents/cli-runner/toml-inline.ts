@@ -1,6 +1,3 @@
-/**
- * Minimal TOML inline serializer for CLI config overrides.
- */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 function escapeTomlString(value: string): string {
@@ -11,7 +8,6 @@ function formatTomlKey(key: string): string {
   return /^[A-Za-z0-9_-]+$/.test(key) ? key : `"${escapeTomlString(key)}"`;
 }
 
-/** Serialize a supported value into TOML inline syntax. */
 export function serializeTomlInlineValue(value: unknown): string {
   if (typeof value === "string") {
     return `"${escapeTomlString(value)}"`;
@@ -35,7 +31,6 @@ export function serializeTomlInlineValue(value: unknown): string {
   throw new Error(`Unsupported TOML inline value: ${String(value)}`);
 }
 
-/** Format one CLI config override as `key=value`. */
 export function formatTomlConfigOverride(key: string, value: unknown): string {
   return `${key}=${serializeTomlInlineValue(value)}`;
 }

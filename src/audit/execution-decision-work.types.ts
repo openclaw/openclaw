@@ -1,9 +1,12 @@
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
-import type { ExecutionIdentityAdmissionToken } from "./execution-identity-admission.js";
+import type {
+  ExecutionIdentityAdmissionFacts,
+  ExecutionIdentityAdmissionToken,
+} from "./execution-identity-admission.js";
 
 type ExecutionDecisionReceiptFacts = Omit<
   DecisionReceiptV1,
-  "contextId" | "executionId" | "runId" | "action"
+  "contextId" | "executionId" | "runId" | "action" | "representedSubject"
 > & {
   action: Omit<DecisionReceiptV1["action"], "resourceRef" | "targetRef">;
 };
@@ -23,6 +26,7 @@ export type ExecutionDecisionWork = {
   token: ExecutionIdentityAdmissionToken;
   receipt: ExecutionDecisionReceiptFacts;
   refs?: {
+    representedSubject?: ExecutionIdentityAdmissionFacts["representedSubject"];
     resource?: ExecutionDecisionResourceRef;
     target?: ExecutionDecisionTargetRef;
   };

@@ -1,618 +1,239 @@
-import type { CancelNotification } from "@agentclientprotocol/sdk";
-import { createInMemorySessionStore } from "@openclaw/acp-core/session";
-/** Tests ACP translator permission relay for Gateway exec approvals. */
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
-import type { GatewayClient } from "../gateway/client.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { AcpGatewayAgent } from "./translator.js";
-import { promptAgent } from "./translator.prompt-harness.test-support.js";
-import {
-  createAcpConnection,
-  createAcpGateway,
-  createAcpGatewayAgent,
-} from "./translator.test-helpers.js";
+import { createPromptScenario, expectSingleCall } from "./translator.scenario.test-support.js";
 
-vi.mock("./commands.js", () => ({
-  getAvailableCommands: () => [],
-}));
-
-const SESSION_ID = "session-1";
-const SECOND_SESSION_ID = "session-2";
 const SESSION_KEY = "agent:main:main";
 
-type Harness = {
-  agent: AcpGatewayAgent;
-  connection: ReturnType<typeof createAcpConnection>;
-  promptPromise: ReturnType<AcpGatewayAgent["prompt"]>;
-  request: ReturnType<typeof vi.fn>;
-  requestPermission: ReturnType<typeof vi.fn>;
-  runId: string;
-};
-
-function createApprovalEvent(params: {
-  approvalId?: string;
-  runId: string;
-  sessionKey?: string;
-  toolCallId?: string;
-}): EventFrame {
+function agentEvent(runId: string, stream: string, data: Record<string, unknown>): EventFrame {
   return {
     type: "event",
     event: "agent",
-    payload: {
-      runId: params.runId,
-      sessionKey: params.sessionKey ?? SESSION_KEY,
-      stream: "approval",
-      data: {
-        phase: "requested",
-        kind: "exec",
-        status: "pending",
-        title: "Command approval requested",
-        approvalId: params.approvalId ?? "approval-1",
-        toolCallId: params.toolCallId,
-        command: "echo event",
-        host: "gateway",
-      },
-    },
-  } as EventFrame;
+    payload: { runId, sessionKey: SESSION_KEY, stream, data },
+  };
 }
 
-function createApprovalRequestEvent(params: {
-  approvalId?: string;
-  sessionKey?: string;
-  command?: string;
-  toolCallId?: string;
-}): EventFrame {
-  return {
-    type: "event",
-    event: "exec.approval.requested",
-    payload: {
-      id: params.approvalId ?? "approval-1",
-      createdAtMs: 1,
-      expiresAtMs: 2,
-      request: {
-        command: params.command ?? "echo raw",
-        host: "gateway",
-        sessionKey: params.sessionKey ?? SESSION_KEY,
-        toolCallId: params.toolCallId,
-      },
-    },
-  } as EventFrame;
+function approval(runId: string, approvalId = "approval-1", toolCallId?: string): EventFrame {
+  return agentEvent(runId, "approval", {
+    phase: "requested",
+    kind: "exec",
+    status: "pending",
+    title: "Command approval requested",
+    approvalId,
+    toolCallId,
+    command: "echo event",
+    host: "gateway",
+  });
 }
 
-function createToolStartEvent(params: {
-  runId: string;
-  toolCallId: string;
-  name: string;
-  command?: string;
-}): EventFrame {
-  return {
-    type: "event",
-    event: "agent",
-    payload: {
-      runId: params.runId,
-      sessionKey: SESSION_KEY,
-      stream: "tool",
-      data: {
-        phase: "start",
-        name: params.name,
-        toolCallId: params.toolCallId,
-        args: params.command ? { command: params.command } : {},
-      },
-    },
-  } as EventFrame;
+function rawApproval(id: string, toolCallId?: string): EventFrame {
+  const request = { command: "echo raw", host: "gateway", sessionKey: SESSION_KEY, toolCallId };
+  return { type: "event", event: "exec.approval.requested", payload: { id, request } };
+}
+
+function tool(runId: string, toolCallId: string, name = "exec", command?: string): EventFrame {
+  return agentEvent(runId, "tool", {
+    phase: "start",
+    name,
+    toolCallId,
+    args: command ? { command } : {},
+  });
 }
 
 async function createHarness(
   params: {
+    sessions?: string[];
     allowedDecisions?: string[];
     requestPermission?: ReturnType<typeof vi.fn>;
-    resolveApproval?: (requestParams?: Record<string, unknown>) => unknown;
+    resolveApproval?: (params?: Record<string, unknown>) => unknown;
   } = {},
-): Promise<Harness> {
-  let runId: string | undefined;
-  const request = vi.fn(async (method: string, requestParams?: Record<string, unknown>) => {
-    if (method === "chat.send") {
-      runId = requestParams?.idempotencyKey as string | undefined;
-      return { status: "started", runId };
-    }
-    if (method === "exec.approval.get") {
-      return {
-        id: requestParams?.id,
-        commandText: "echo hydrated",
-        allowedDecisions: params.allowedDecisions ?? ["allow-once", "allow-always", "deny"],
-        host: "gateway",
-      };
-    }
-    if (method === "exec.approval.resolve" && params.resolveApproval) {
-      return params.resolveApproval(requestParams);
-    }
-    return {};
-  }) as ReturnType<typeof vi.fn> & GatewayClient["request"];
+) {
   const requestPermission =
     params.requestPermission ??
     vi.fn(async () => ({ outcome: { outcome: "selected", optionId: "allow-once" } }));
-  const sessionStore = createInMemorySessionStore();
-  sessionStore.createSession({
-    sessionId: SESSION_ID,
-    sessionKey: SESSION_KEY,
-    cwd: "/tmp",
-  });
-  const connection = createAcpConnection({ requestPermission });
-  const agent = createAcpGatewayAgent(connection, createAcpGateway(request), { sessionStore });
-  const promptPromise = promptAgent(agent, SESSION_ID);
-
-  await vi.waitFor(() => {
-    if (!runId) {
-      throw new Error("expected ACP permission relay run id");
-    }
-  });
-
-  return {
-    agent,
-    connection,
-    promptPromise,
-    request,
+  const sessions = params.sessions ?? ["session-1"];
+  const h = createPromptScenario({
+    sessions,
     requestPermission,
-    runId: runId!,
+    send: (sendParams) => ({ status: "started", runId: sendParams?.idempotencyKey }),
+    request: (method, requestParams) => {
+      if (method === "exec.approval.get") {
+        return {
+          commandText: "echo hydrated",
+          allowedDecisions: params.allowedDecisions ?? ["allow-once", "allow-always", "deny"],
+          host: "gateway",
+        };
+      }
+      return method === "exec.approval.resolve" && params.resolveApproval
+        ? params.resolveApproval(requestParams)
+        : {};
+    },
+  });
+  const prompts = sessions.map((sessionId) => h.prompt(sessionId));
+  await vi.waitFor(() => expect(h.runIds).toHaveLength(sessions.length));
+  const cleanup = async () => {
+    for (const sessionId of sessions) {
+      await h.agent.cancel({ sessionId });
+    }
+    await Promise.all(prompts);
+  };
+  onTestFinished(cleanup);
+  const resolutions = () =>
+    h.request.mock.calls.filter(([method]) => method === "exec.approval.resolve");
+  return {
+    ...h,
+    requestPermission,
+    resolutions,
+    send: h.agent.handleGatewayEvent.bind(h.agent),
+    async expectResolution(id: string, decision = "allow-once", attempts = 1) {
+      await vi.waitFor(() => {
+        expect(requestPermission).toHaveBeenCalledTimes(1);
+        expect(resolutions()).toEqual(
+          Array.from({ length: attempts }, () => ["exec.approval.resolve", { id, decision }]),
+        );
+      });
+    },
+    runId: expectDefined(h.runIds[0], "first Gateway run id"),
+    cleanup,
   };
 }
 
-async function cleanupHarness(harness: Harness): Promise<void> {
-  await harness.agent.cancel({ sessionId: SESSION_ID } as CancelNotification);
-  await harness.promptPromise;
+function disconnectedResolution(repeat = false) {
+  const resolve = vi.fn().mockRejectedValueOnce(new Error("gateway not connected"));
+  return repeat ? resolve.mockResolvedValue({}) : resolve.mockResolvedValueOnce({});
 }
 
-function approvalResolveCalls(request: ReturnType<typeof vi.fn>) {
-  return request.mock.calls.filter(([method]) => method === "exec.approval.resolve");
-}
-
-function approvalRelayPendingDecision(agent: AcpGatewayAgent, approvalId: string): unknown {
-  const relayMap = (
-    agent as unknown as {
-      approvalRelays: Map<string, { pendingDecision?: unknown }>;
-    }
-  ).approvalRelays;
-  return relayMap.get(approvalId)?.pendingDecision;
-}
-
-function captureApprovalDecisionRetry(
-  agent: AcpGatewayAgent,
-  approvalId: string,
-): () => Promise<void> {
+function approvalRelay(agent: AcpGatewayAgent, approvalId: string) {
   const internal = agent as unknown as {
-    approvalRelays: Map<string, unknown>;
+    approvalRelays: Map<string, { pendingDecision?: unknown }>;
     promptStream: {
       agentEvents: { retryApprovalRelayDecision: (relay: unknown) => Promise<void> };
     };
   };
-  const relay = expectDefined(
-    internal.approvalRelays.get(approvalId),
-    "approval relay test invariant",
-  );
-  return () => internal.promptStream.agentEvents.retryApprovalRelayDecision(relay);
+  const relay = internal.approvalRelays.get(approvalId);
+  return {
+    decision: relay?.pendingDecision,
+    retry: () =>
+      internal.promptStream.agentEvents.retryApprovalRelayDecision(
+        expectDefined(relay, "active approval relay"),
+      ),
+  };
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value) {
-    throw new Error("expected record");
+it.each([
+  ["explicit deny", { outcome: "selected", optionId: "deny" }],
+  ["cancelled", { outcome: "cancelled" }],
+  ["unknown option", { outcome: "selected", optionId: "not-a-real-option" }],
+  ["client throws", new Error("client closed")],
+] as const)("relays %s as deny to Gateway approval resolution", async (_name, outcome) => {
+  const requestPermission =
+    outcome instanceof Error
+      ? vi.fn().mockRejectedValue(outcome)
+      : vi.fn().mockResolvedValue({ outcome });
+  const h = await createHarness({ requestPermission });
+  await h.send(approval(h.runId));
+  await h.expectResolution("approval-1", "deny");
+});
+
+it("relays raw approval requests once before the later agent approval event", async () => {
+  const h = await createHarness();
+  await h.send(rawApproval("approval-raw"));
+  await h.send(approval(h.runId, "approval-raw", "tool-late"));
+  await h.expectResolution("approval-raw");
+  expectSingleCall(h.requestPermission, {
+    sessionId: "session-1",
+    toolCall: {
+      toolCallId: "exec:approval-raw",
+      rawInput: { command: "echo hydrated" },
+    },
+  });
+});
+
+it("correlates concurrent approvals by a unique execute tool call and fails closed otherwise", async () => {
+  const h = await createHarness({
+    sessions: ["session-1", "session-2"],
+    allowedDecisions: ["allow-once", "deny"],
+  });
+  const secondRun = expectDefined(h.runIds[1], "second Gateway run id");
+  await h.send(approval("other-run"));
+  await h.send(rawApproval("approval-without-tool-id"));
+  expect(h.requestPermission).not.toHaveBeenCalled();
+  expect(h.resolutions()).toHaveLength(0);
+  await h.send(tool(secondRun, "tool-second", "exec", "echo second"));
+  expect(h.requestPermission).not.toHaveBeenCalled();
+  await h.send(rawApproval("approval-shared", "tool-second"));
+  await h.expectResolution("approval-shared");
+  expectSingleCall(h.requestPermission, {
+    sessionId: "session-2",
+    toolCall: { toolCallId: "tool-second", title: expect.stringContaining("echo second") },
+  });
+  await h.send(rawApproval("approval-mismatch", "tool-missing"));
+  for (const runId of h.runIds) {
+    await h.send(tool(runId, "tool-duplicate"));
   }
-  expect(typeof value).toBe("object");
-  expect(Array.isArray(value)).toBe(false);
-  return value as Record<string, unknown>;
-}
+  await h.send(rawApproval("approval-duplicate", "tool-duplicate"));
+  await h.send(tool(h.runId, "tool-read", "read"));
+  await h.send(rawApproval("approval-read", "tool-read"));
+  expect(h.requestPermission).toHaveBeenCalledTimes(1);
+  expect(h.resolutions()).toHaveLength(1);
+});
 
-function firstCallArg(mock: ReturnType<typeof vi.fn>): Record<string, unknown> {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error("expected mock call");
-  }
-  return requireRecord(call[0]);
-}
-
-function requestPermissionPayload(mock: ReturnType<typeof vi.fn>): {
-  payload: Record<string, unknown>;
-  toolCall: Record<string, unknown>;
-  rawInput: Record<string, unknown>;
-} {
-  const payload = firstCallArg(mock);
-  const toolCall = requireRecord(payload.toolCall);
-  const rawInput = requireRecord(toolCall.rawInput);
-  return { payload, toolCall, rawInput };
-}
-
-describe("ACP translator permission relay", () => {
-  it.each([
-    ["allow-once", "allow-once"],
-    ["allow-always", "allow-always"],
-    ["deny", "deny"],
-  ])("relays selected %s decisions to Gateway approval resolution", async (optionId, decision) => {
-    const harness = await createHarness({
-      requestPermission: vi.fn(async () => ({
-        outcome: { outcome: "selected", optionId },
-      })),
-    });
-
-    await harness.agent.handleGatewayEvent(createApprovalEvent({ runId: harness.runId }));
-
-    await vi.waitFor(() => {
-      expect(harness.requestPermission).toHaveBeenCalledTimes(1);
-      expect(approvalResolveCalls(harness.request)).toHaveLength(1);
-    });
-
-    const { payload, toolCall, rawInput } = requestPermissionPayload(harness.requestPermission);
-    expect(payload.sessionId).toBe(SESSION_ID);
-    expect(toolCall.toolCallId).toBe("exec:approval-1");
-    expect(toolCall.kind).toBe("execute");
-    expect(rawInput.name).toBe("exec");
-    expect(rawInput.command).toBe("echo hydrated");
-    expect(rawInput.approvalId).toBe("approval-1");
-    expect(harness.request).toHaveBeenCalledWith("exec.approval.get", { id: "approval-1" });
-    expect(harness.request).toHaveBeenCalledWith("exec.approval.resolve", {
-      id: "approval-1",
-      decision,
-    });
-
-    await cleanupHarness(harness);
-  });
-
-  it("dedupes repeated approval events for the same approval id", async () => {
-    const harness = await createHarness();
-    const event = createApprovalEvent({ runId: harness.runId, approvalId: "approval-dup" });
-
-    await harness.agent.handleGatewayEvent(event);
-    await harness.agent.handleGatewayEvent(event);
-
-    await vi.waitFor(() => {
-      expect(harness.requestPermission).toHaveBeenCalledTimes(1);
-      expect(approvalResolveCalls(harness.request)).toHaveLength(1);
-    });
-
-    await cleanupHarness(harness);
-  });
-
-  it("relays exec approval request events before the later agent approval event", async () => {
-    const harness = await createHarness();
-    const approvalId = "approval-raw";
-
-    await harness.agent.handleGatewayEvent(
-      createApprovalRequestEvent({ approvalId, command: "echo raw" }),
-    );
-    await harness.agent.handleGatewayEvent(
-      createApprovalEvent({ runId: harness.runId, approvalId, toolCallId: "tool-late" }),
-    );
-
-    await vi.waitFor(() => {
-      expect(harness.requestPermission).toHaveBeenCalledTimes(1);
-      expect(approvalResolveCalls(harness.request)).toHaveLength(1);
-    });
-
-    const { toolCall, rawInput } = requestPermissionPayload(harness.requestPermission);
-    expect(toolCall.toolCallId).toBe("exec:approval-raw");
-    expect(rawInput.approvalId).toBe(approvalId);
-    expect(rawInput.command).toBe("echo hydrated");
-    expect(harness.request).toHaveBeenCalledWith("exec.approval.resolve", {
-      id: approvalId,
-      decision: "allow-once",
-    });
-
-    await cleanupHarness(harness);
-  });
-
-  it("correlates concurrent approvals by a unique execute tool call and fails closed otherwise", async () => {
-    const runIds: string[] = [];
-    const request = vi.fn(async (method: string, requestParams?: Record<string, unknown>) => {
-      if (method === "chat.send") {
-        const runId = requestParams?.idempotencyKey as string;
-        runIds.push(runId);
-        return { status: "started", runId };
-      }
-      if (method === "exec.approval.get") {
-        return {
-          id: requestParams?.id,
-          commandText: "echo hydrated",
-          allowedDecisions: ["allow-once", "deny"],
-          host: "gateway",
-        };
-      }
-      return {};
-    }) as ReturnType<typeof vi.fn> & GatewayClient["request"];
-    const requestPermission = vi.fn(async () => ({
-      outcome: { outcome: "selected", optionId: "allow-once" },
-    }));
-    const sessionStore = createInMemorySessionStore();
-    sessionStore.createSession({
-      sessionId: SESSION_ID,
-      sessionKey: SESSION_KEY,
-      cwd: "/tmp",
-    });
-    sessionStore.createSession({
-      sessionId: SECOND_SESSION_ID,
-      sessionKey: SESSION_KEY,
-      cwd: "/tmp",
-    });
-    const connection = createAcpConnection({ requestPermission });
-    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), { sessionStore });
-    const firstPrompt = promptAgent(agent, SESSION_ID, "first prompt");
-    const secondPrompt = promptAgent(agent, SECOND_SESSION_ID, "second prompt");
-
-    await vi.waitFor(() => {
-      expect(runIds).toHaveLength(2);
-    });
-
-    await agent.handleGatewayEvent(
-      createApprovalRequestEvent({ approvalId: "approval-without-tool-id" }),
-    );
-
-    expect(requestPermission).not.toHaveBeenCalled();
-    expect(approvalResolveCalls(request)).toHaveLength(0);
-
-    await agent.handleGatewayEvent(
-      createToolStartEvent({
-        runId: expectDefined(runIds[1], "runIds[1] test invariant"),
-        toolCallId: "tool-second",
-        name: "exec",
-        command: "echo second",
-      }),
-    );
-    await agent.handleGatewayEvent(
-      createApprovalRequestEvent({ approvalId: "approval-shared", toolCallId: "tool-second" }),
-    );
-
-    await vi.waitFor(() => {
-      expect(requestPermission).toHaveBeenCalledTimes(1);
-      expect(approvalResolveCalls(request)).toHaveLength(1);
-    });
-
-    const permission = requestPermissionPayload(requestPermission);
-    expect(permission.payload.sessionId).toBe(SECOND_SESSION_ID);
-    expect(permission.toolCall.toolCallId).toBe("tool-second");
-    expect(permission.toolCall.title).toContain("echo second");
-    expect(request).toHaveBeenCalledWith("exec.approval.resolve", {
-      id: "approval-shared",
-      decision: "allow-once",
-    });
-
-    await agent.handleGatewayEvent(
-      createApprovalRequestEvent({ approvalId: "approval-mismatch", toolCallId: "tool-missing" }),
-    );
-    for (const runId of runIds) {
-      await agent.handleGatewayEvent(
-        createToolStartEvent({ runId, toolCallId: "tool-duplicate", name: "exec" }),
-      );
-    }
-    await agent.handleGatewayEvent(
-      createApprovalRequestEvent({
-        approvalId: "approval-duplicate",
-        toolCallId: "tool-duplicate",
-      }),
-    );
-    await agent.handleGatewayEvent(
-      createToolStartEvent({
-        runId: expectDefined(runIds[0], "runIds[0] test invariant"),
-        toolCallId: "tool-read",
-        name: "read",
-      }),
-    );
-    await agent.handleGatewayEvent(
-      createApprovalRequestEvent({ approvalId: "approval-read", toolCallId: "tool-read" }),
-    );
-
-    expect(requestPermission).toHaveBeenCalledTimes(1);
-    expect(approvalResolveCalls(request)).toHaveLength(1);
-
-    await agent.cancel({ sessionId: SESSION_ID } as CancelNotification);
-    await agent.cancel({ sessionId: SECOND_SESSION_ID } as CancelNotification);
-    await Promise.all([firstPrompt, secondPrompt]);
-  });
-
-  it("retries the recorded decision on a duplicate approval event instead of re-asking", async () => {
-    const resolveApproval = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("gateway not connected"))
-      .mockResolvedValueOnce({});
-    const harness = await createHarness({ resolveApproval });
-    const event = createApprovalEvent({ runId: harness.runId, approvalId: "approval-retry" });
-
-    await harness.agent.handleGatewayEvent(event);
-
-    await vi.waitFor(() => {
-      expect(harness.requestPermission).toHaveBeenCalledTimes(1);
-      expect(resolveApproval).toHaveBeenCalledTimes(1);
-    });
-    await vi.waitFor(() => {
-      expect(approvalRelayPendingDecision(harness.agent, "approval-retry")).toBe("allow-once");
-    });
-
-    await harness.agent.handleGatewayEvent(event);
-
-    await vi.waitFor(() => {
-      expect(resolveApproval).toHaveBeenCalledTimes(2);
-    });
-    expect(harness.requestPermission).toHaveBeenCalledTimes(1);
-    expect(harness.request).toHaveBeenLastCalledWith("exec.approval.resolve", {
-      id: "approval-retry",
-      decision: "allow-once",
-    });
-
-    await cleanupHarness(harness);
-  });
-
-  it("replays the user's approval decision on gateway reconnect", async () => {
+it.each(["duplicate event", "gateway reconnect"])(
+  "retries the recorded decision on %s without re-asking",
+  async (trigger) => {
     const permission = createDeferredCore<unknown>();
-    const resolveApproval = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("gateway not connected"))
-      .mockResolvedValueOnce({});
-    const harness = await createHarness({
+    const resolveApproval = disconnectedResolution();
+    const h = await createHarness({
       resolveApproval,
       requestPermission: vi.fn(() => permission.promise),
     });
-    const event = createApprovalEvent({ runId: harness.runId, approvalId: "approval-replay" });
-
-    await harness.agent.handleGatewayEvent(event);
-    await vi.waitFor(() => {
-      expect(harness.requestPermission).toHaveBeenCalledTimes(1);
-    });
-
-    harness.agent.handleGatewayDisconnect("1006: connection lost");
+    const event = approval(h.runId, "approval-retry");
+    await h.send(event);
+    await vi.waitFor(() => expect(h.requestPermission).toHaveBeenCalledTimes(1));
+    if (trigger === "gateway reconnect") {
+      h.agent.handleGatewayDisconnect("1006: connection lost");
+    }
     permission.resolve({ outcome: { outcome: "selected", optionId: "allow-once" } });
-    await vi.waitFor(() => expect(resolveApproval).toHaveBeenCalledTimes(1));
-    harness.agent.handleGatewayReconnect();
-
-    await vi.waitFor(() => {
-      expect(resolveApproval).toHaveBeenCalledTimes(2);
-    });
-    expect(harness.request).toHaveBeenCalledWith("exec.approval.resolve", {
-      id: "approval-replay",
-      decision: "allow-once",
-    });
-    expect(harness.requestPermission).toHaveBeenCalledTimes(1);
-
-    await cleanupHarness(harness);
-  });
-
-  it("does not retry a stored decision after prompt cleanup revokes its relay", async () => {
-    const resolveAttempts: Array<{ id: string; decision: string }> = [];
-    const resolveApproval = vi.fn(async (requestParams?: Record<string, unknown>) => {
-      const attempt = requestParams as { id: string; decision: string };
-      resolveAttempts.push(attempt);
-      if (resolveAttempts.length === 1) {
-        throw new Error("gateway not connected");
-      }
-      return {};
-    });
-    const harness = await createHarness({ resolveApproval });
-    const approvalId = "approval-revoked";
-    await harness.agent.handleGatewayEvent(
-      createApprovalEvent({ runId: harness.runId, approvalId }),
+    await vi.waitFor(() =>
+      expect(approvalRelay(h.agent, "approval-retry").decision).toBe("allow-once"),
     );
-    await vi.waitFor(() => {
-      expect(approvalRelayPendingDecision(harness.agent, approvalId)).toBe("allow-once");
-    });
-    const retry = captureApprovalDecisionRetry(harness.agent, approvalId);
-    await cleanupHarness(harness);
-    await retry();
+    expect(resolveApproval).toHaveBeenCalledTimes(1);
+    if (trigger === "gateway reconnect") {
+      h.agent.handleGatewayReconnect();
+    } else {
+      await h.send(event);
+    }
+    await h.expectResolution("approval-retry", "allow-once", 2);
+  },
+);
 
-    expect(resolveAttempts).toEqual([
-      { id: approvalId, decision: "allow-once" },
-      { id: approvalId, decision: "deny" },
-    ]);
-  });
+it("does not retry a stored decision after prompt cleanup revokes its relay", async () => {
+  const resolveApproval = disconnectedResolution(true);
+  const h = await createHarness({ resolveApproval });
+  const approvalId = "approval-revoked";
+  await h.send(approval(h.runId, approvalId));
+  await vi.waitFor(() => expect(approvalRelay(h.agent, approvalId).decision).toBe("allow-once"));
+  const { retry } = approvalRelay(h.agent, approvalId);
+  await h.cleanup();
+  await retry();
+  expect(resolveApproval.mock.calls).toEqual([
+    [{ id: approvalId, decision: "allow-once" }],
+    [{ id: approvalId, decision: "deny" }],
+  ]);
+});
 
-  it("ignores approval events outside the active ACP run", async () => {
-    const harness = await createHarness();
-
-    await harness.agent.handleGatewayEvent(
-      createApprovalEvent({
-        runId: "other-run",
-        sessionKey: "agent:main:other",
-      }),
-    );
-
-    expect(harness.requestPermission).not.toHaveBeenCalled();
-    expect(approvalResolveCalls(harness.request)).toHaveLength(0);
-
-    await cleanupHarness(harness);
-  });
-
-  it.each([
-    { outcome: { outcome: "cancelled" } },
-    { outcome: { outcome: "selected", optionId: "not-a-real-option" } },
-  ])("denies cancelled and invalid ACP permission outcomes", async (outcome) => {
-    const harness = await createHarness({
-      requestPermission: vi.fn(async () => outcome),
-    });
-
-    await harness.agent.handleGatewayEvent(createApprovalEvent({ runId: harness.runId }));
-
-    await vi.waitFor(() => {
-      expect(harness.requestPermission).toHaveBeenCalledTimes(1);
-      expect(harness.request).toHaveBeenCalledWith("exec.approval.resolve", {
-        id: "approval-1",
-        decision: "deny",
-      });
-    });
-
-    await cleanupHarness(harness);
-  });
-
-  it("denies when the ACP client permission request throws", async () => {
-    const harness = await createHarness({
-      requestPermission: vi.fn(async () => {
-        throw new Error("client closed");
-      }),
-    });
-
-    await harness.agent.handleGatewayEvent(createApprovalEvent({ runId: harness.runId }));
-
-    await vi.waitFor(() => {
-      expect(harness.requestPermission).toHaveBeenCalledTimes(1);
-      expect(harness.request).toHaveBeenCalledWith("exec.approval.resolve", {
-        id: "approval-1",
-        decision: "deny",
-      });
-    });
-
-    await cleanupHarness(harness);
-  });
-
-  it("does not allow execution when the prompt is cancelled during client permission UI", async () => {
-    let resolvePermission!: (value: unknown) => void;
-    const harness = await createHarness({
-      requestPermission: vi.fn(
-        () =>
-          new Promise((resolve) => {
-            resolvePermission = resolve;
-          }),
-      ),
-    });
-
-    await harness.agent.handleGatewayEvent(createApprovalEvent({ runId: harness.runId }));
-    await vi.waitFor(() => {
-      expect(harness.requestPermission).toHaveBeenCalledTimes(1);
-    });
-
-    await cleanupHarness(harness);
-    resolvePermission({ outcome: { outcome: "selected", optionId: "allow-once" } });
-
-    await vi.waitFor(() => {
-      const decisions = approvalResolveCalls(harness.request).map(
-        ([, params]) => (params as { decision?: string }).decision,
-      );
-      expect(decisions).toContain("deny");
-      expect(decisions).not.toContain("allow-once");
-    });
-  });
-
-  it("keeps existing tool streaming behavior unchanged", async () => {
-    const harness = await createHarness();
-
-    await harness.agent.handleGatewayEvent({
-      type: "event",
-      event: "agent",
-      payload: {
-        runId: harness.runId,
-        sessionKey: SESSION_KEY,
-        stream: "tool",
-        data: {
-          phase: "start",
-          name: "exec",
-          toolCallId: "tool-1",
-          args: { command: "echo ok" },
-        },
-      },
-    } as EventFrame);
-
-    expect(harness.requestPermission).not.toHaveBeenCalled();
-    const sessionUpdate = firstCallArg(harness.connection["__sessionUpdateMock"]);
-    const update = requireRecord(sessionUpdate.update);
-    expect(sessionUpdate.sessionId).toBe(SESSION_ID);
-    expect(update.sessionUpdate).toBe("tool_call");
-    expect(update.toolCallId).toBe("tool-1");
-    expect(update.status).toBe("in_progress");
-
-    await cleanupHarness(harness);
+it("does not allow execution when the prompt is cancelled during client permission UI", async () => {
+  const permission = createDeferredCore<unknown>();
+  const h = await createHarness({ requestPermission: vi.fn(() => permission.promise) });
+  await h.send(approval(h.runId));
+  await vi.waitFor(() => expect(h.requestPermission).toHaveBeenCalledTimes(1));
+  await h.cleanup();
+  permission.resolve({ outcome: { outcome: "selected", optionId: "allow-once" } });
+  await vi.waitFor(() => {
+    const decisions = h.resolutions().map(([, params]) => params?.decision);
+    expect(decisions).toContain("deny");
+    expect(decisions).not.toContain("allow-once");
   });
 });

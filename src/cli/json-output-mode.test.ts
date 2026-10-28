@@ -1,116 +1,104 @@
-// JSON output mode tests cover CLI JSON mode detection and output handling.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { loggingState } from "../logging/state.js";
 import {
-  applyResolvedCommandOutputMode,
+  applyResolvedCommandOutputMode as resolveMode,
   hasJsonOutputFlag,
-  isJsonOutputModeActive,
-  withConsoleLogsRoutedToStderrForJson,
+  isJsonOutputModeActive as isJson,
+  withConsoleLogsRoutedToStderr as withTemporary,
+  withConsoleLogsRoutedToStderrForJson as withJson,
 } from "./json-output-mode.js";
 
-describe("json output mode", () => {
-  const originalForceStderr = loggingState.forceConsoleToStderr;
-  const originalEarlyRestore = loggingState.earlyConsoleRoutingRestore;
+const argv = (...args: string[]) => ["node", "openclaw", ...args];
+const configArgs = argv("config", "set", "x", "1", "--json");
+function capture(stream: NodeJS.WriteStream) {
+  const spy = vi.spyOn(stream, "write").mockImplementation(() => true);
+  return { spy, text: () => spy.mock.calls.map(([chunk]) => String(chunk)).join("") };
+}
 
-  beforeEach(() => {
-    loggingState.forceConsoleToStderr = false;
-    loggingState.earlyConsoleRoutingRestore = null;
+const originalRouting = {
+  forceConsoleToStderr: loggingState.forceConsoleToStderr,
+  earlyConsoleRoutingRestore: loggingState.earlyConsoleRoutingRestore,
+};
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_SUPPRESS_NOTES", "");
+  Object.assign(loggingState, { forceConsoleToStderr: false, earlyConsoleRoutingRestore: null });
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  Object.assign(loggingState, originalRouting);
+});
+
+it("detects json output flags before argv terminators", () => {
+  expect(hasJsonOutputFlag(argv("nodes", "list", "--json"))).toBe(true);
+  expect(hasJsonOutputFlag(argv("nodes", "list", "--json=true"))).toBe(true);
+  expect(hasJsonOutputFlag(argv("models", "--status-json"))).toBe(false);
+  expect(hasJsonOutputFlag(argv("nodes", "--", "--json"))).toBe(false);
+});
+
+it("keeps Doctor warnings on stderr and JSON stdout parseable", async () => {
+  const stdout = capture(process.stdout),
+    stderr = capture(process.stderr);
+  const message = "- Agent main database ...: synthetic failure";
+  const report = { ok: true, findings: [] };
+  await withJson(argv("doctor", "--lint", "--json"), async () => {
+    note(message, "Doctor warnings");
+    process.stdout.write(`${JSON.stringify(report)}\n`);
   });
+  expect(stdout.text()).toBe(`${JSON.stringify(report)}\n`);
+  expect(stderr.text()).toContain("Doctor warnings");
+  expect(stderr.text()).toContain(message);
+});
 
-  afterEach(() => {
-    loggingState.forceConsoleToStderr = originalForceStderr;
-    loggingState.earlyConsoleRoutingRestore = originalEarlyRestore;
-  });
+it.each([
+  { args: configArgs, machineOutput: false },
+  { args: argv("models", "aliases", "list", "--plain"), machineOutput: true },
+])("refines machine output=$machineOutput", async ({ args, machineOutput }) => {
+  const stdout = capture(process.stdout),
+    stderr = capture(process.stderr);
+  expect(isJson(args)).toBe(false);
+  await withJson(
+    args,
+    async () => {
+      resolveMode(false, machineOutput);
+      expect(isJson(args)).toBe(false);
+      note("Updated gateway.port.", "Config updated");
+    },
+    { machineOutput },
+  );
+  const output = machineOutput ? stderr : stdout;
+  expect(output.text()).toContain("Config updated");
+  expect(output.text()).toContain("Updated gateway.port.");
+  expect((machineOutput ? stdout : stderr).spy).not.toHaveBeenCalled();
+});
 
-  it("detects json output flags before argv terminators", () => {
-    expect(hasJsonOutputFlag(["node", "openclaw", "nodes", "list", "--json"])).toBe(true);
-    expect(hasJsonOutputFlag(["node", "openclaw", "nodes", "list", "--json=true"])).toBe(true);
-    expect(hasJsonOutputFlag(["node", "openclaw", "models", "--status-json"])).toBe(false);
-    expect(hasJsonOutputFlag(["node", "openclaw", "nodes", "--", "--json"])).toBe(false);
-  });
-
-  it("temporarily routes console logs to stderr while json output is being prepared", async () => {
-    const snapshots: boolean[] = [];
-
-    await withConsoleLogsRoutedToStderrForJson(
-      ["node", "openclaw", "nodes", "list", "--json"],
-      async () => {
-        snapshots.push(loggingState.forceConsoleToStderr);
-      },
-    );
-
-    expect(snapshots).toEqual([true]);
-    expect(loggingState.forceConsoleToStderr).toBe(false);
-  });
-
-  it("leaves existing stderr routing enabled after json output preparation", async () => {
-    loggingState.forceConsoleToStderr = true;
-
-    await withConsoleLogsRoutedToStderrForJson(
-      ["node", "openclaw", "nodes", "list", "--json"],
-      async () => {
+it.each(["temporary-first", "json-first"])(
+  "retains overlapping stderr scopes (%s)",
+  async (order) => {
+    const resume = Promise.withResolvers<void>();
+    let temporary = order === "temporary-first" ? withTemporary(() => resume.promise) : undefined;
+    try {
+      await withJson(["--json"], async () => {
+        temporary ??= withTemporary(() => resume.promise);
+        resolveMode(false);
         expect(loggingState.forceConsoleToStderr).toBe(true);
-      },
-    );
+      });
+      expect(loggingState.forceConsoleToStderr).toBe(true);
+      resume.resolve();
+      await temporary;
+      expect(loggingState.forceConsoleToStderr).toBe(false);
+    } finally {
+      resume.resolve();
+      await temporary;
+    }
+  },
+);
 
+it("preserves JSON routing retained until exit when a temporary scope finishes", async () => {
+  await withTemporary(async () => {
+    await withJson(["--json"], async () => {}, { retainRoutingUntilProcessExit: true });
     expect(loggingState.forceConsoleToStderr).toBe(true);
   });
-
-  it("restores stdout routing when command metadata marks --json as parse-only", async () => {
-    await withConsoleLogsRoutedToStderrForJson(
-      ["node", "openclaw", "config", "set", "gateway.port", "18789", "--json"],
-      async () => {
-        expect(loggingState.forceConsoleToStderr).toBe(true);
-        applyResolvedCommandOutputMode(false);
-        expect(loggingState.forceConsoleToStderr).toBe(false);
-        expect(
-          isJsonOutputModeActive(["node", "openclaw", "config", "set", "x", "1", "--json"]),
-        ).toBe(false);
-      },
-    );
-  });
-
-  it("does not treat config set's parser alias as JSON output before Commander resolves it", () => {
-    expect(isJsonOutputModeActive(["node", "openclaw", "config", "set", "x", "1", "--json"])).toBe(
-      false,
-    );
-  });
-
-  it("preserves inherited stderr routing when resolved metadata is parse-only", async () => {
-    loggingState.forceConsoleToStderr = true;
-
-    await withConsoleLogsRoutedToStderrForJson(
-      ["node", "openclaw", "config", "set", "gateway.port", "18789", "--json"],
-      async () => {
-        applyResolvedCommandOutputMode(false);
-        expect(loggingState.forceConsoleToStderr).toBe(true);
-      },
-    );
-  });
-
-  it("retains stderr routing through preaction for plain machine output", async () => {
-    await withConsoleLogsRoutedToStderrForJson(
-      ["node", "openclaw", "models", "aliases", "list", "--plain"],
-      async () => {
-        expect(loggingState.forceConsoleToStderr).toBe(true);
-        applyResolvedCommandOutputMode(false, true);
-        expect(loggingState.forceConsoleToStderr).toBe(true);
-        expect(
-          isJsonOutputModeActive(["node", "openclaw", "models", "aliases", "list", "--plain"]),
-        ).toBe(false);
-      },
-      { machineOutput: true },
-    );
-  });
-
-  it("still restores stdout when preaction resolves neither JSON nor plain machine output", async () => {
-    await withConsoleLogsRoutedToStderrForJson(
-      ["node", "openclaw", "models", "aliases", "list", "--plain"],
-      async () => {
-        applyResolvedCommandOutputMode(false);
-        expect(loggingState.forceConsoleToStderr).toBe(false);
-      },
-      { machineOutput: true },
-    );
-  });
+  expect(loggingState.forceConsoleToStderr).toBe(true);
 });

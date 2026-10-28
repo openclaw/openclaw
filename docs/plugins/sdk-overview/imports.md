@@ -22,8 +22,8 @@ replacement contracts.
 Always import from a specific subpath:
 
 ```typescript
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 ```
 
 Each subpath is a small, self-contained module. This keeps startup fast and
@@ -34,30 +34,31 @@ the broader umbrella surface and shared helpers such as
 
 For channel config, publish the channel-owned JSON Schema through
 `openclaw.plugin.json#channelConfigs`. The `plugin-sdk/channel-config-schema`
-subpath is for shared schema primitives and the generic builder. OpenClaw's
+subpath is for shared schema primitives and the generic builder. For example,
+`buildChannelAccountSchemaParts` includes a shared `groupDmShape`; compose it
+locally when a channel needs a different group identifier validator. OpenClaw's
 bundled plugins use `plugin-sdk/bundled-channel-config-schema` for retained
 bundled-channel schemas. That bundled schema subpath is not a pattern for new
 plugins.
 
 <Warning>
-  Do not import provider- or channel-branded convenience seams (for example
+  Do not import provider- or channel-branded convenience interfaces (for example
   `openclaw/plugin-sdk/slack`, `.../discord`, `.../signal`, `.../whatsapp`).
   Bundled plugins compose generic SDK subpaths inside their own `api.ts` /
   `runtime-api.ts` barrels; core consumers should either use those plugin-local
   barrels or add a narrow generic SDK contract when a need is truly
   cross-channel.
 
-A small set of bundled-plugin helper seams still appear in the generated export
+A small set of bundled-plugin helper interfaces still appear in the generated export
 map when they have tracked owner usage. They exist for bundled-plugin
 maintenance only and are not recommended import paths for new third-party
 plugins.
 
-`openclaw/plugin-sdk/discord` and `openclaw/plugin-sdk/telegram-account` are
-also kept as deprecated compatibility facades for tracked owner usage. They have
-no published removal date; run `pnpm plugins:boundary-report` and see the
-[removal timeline](/plugins/sdk-migration/removal-timeline) for the surfaces that
-do. Do not copy those import paths into new plugins; use injected runtime helpers
-and generic channel SDK subpaths instead.
+`openclaw/plugin-sdk/discord` and `openclaw/plugin-sdk/telegram-account` were
+removed with explicit SDK-owner approval on October 2, 2026. Use injected runtime
+helpers and generic channel SDK subpaths; see the
+[migration mappings](/plugins/sdk-migration/import-paths#removed-command-and-channel-facades)
+before upgrading plugins that still import these facades.
 </Warning>
 
 For provider discovery that only needs credential values, use
@@ -68,6 +69,10 @@ execution. Use `provider-web-search-config-contract` to read plugin-owned
 web-search config. Keep full auth and search runtime imports in execution paths.
 
 ## Subpath reference
+
+`openclaw/plugin-sdk/gateway-ingress` defines the optional service-owned
+[remote Control UI ingress](/plugins/sdk-gateway-ingress) capability. The host
+admits browser devices through its existing HTTP and WebSocket owners.
 
 The plugin SDK is exposed as a set of narrow subpaths grouped by area (plugin
 entry, channel, provider, auth, runtime, capability, memory, and reserved
@@ -116,7 +121,7 @@ Provider plugins can expose a narrow plugin-local contract barrel when a
 helper is intentionally provider-specific and does not belong in a generic SDK
 subpath yet. Bundled examples:
 
-- **Anthropic**: public `api.ts` / `contract-api.ts` seam for Claude
+- **Anthropic**: public `api.ts` / `contract-api.ts` interface for Claude
   beta-header and `service_tier` stream helpers.
 - **`@openclaw/openai-provider`**: `api.ts` exports provider builders,
   default-model helpers, and realtime provider builders.
@@ -127,5 +132,5 @@ subpath yet. Bundled examples:
   Extension production code should also avoid `openclaw/plugin-sdk/<other-plugin>`
   imports. If a helper is truly shared, promote it to a neutral SDK subpath
   such as `openclaw/plugin-sdk/speech`, `.../provider-model-shared`, or another
-  capability-oriented surface instead of coupling two plugins together.
+  capability-oriented surface instead of making two plugins depend on each other.
 </Warning>

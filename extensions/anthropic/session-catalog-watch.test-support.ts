@@ -1,72 +1,45 @@
-import { EventEmitter } from "node:events";
-import fs from "node:fs";
 import path from "node:path";
 import { vi } from "vitest";
+import * as treeWatch from "./session-catalog-tree-watch.js";
 
-/** Controls OS event delivery while exercising the real watcher and filesystem cache owners. */
+/** Controls cache invalidation; the tree-watch suite covers actual filesystem observation. */
 export function createClaudeCatalogWatchDriver(home: string) {
-  const watchers = new Map<string, { watcher: Watcher; recursive: boolean }>();
-  class Watcher extends EventEmitter {
-    constructor(private readonly root: string) {
-      super();
-    }
-    close() {
-      if (watchers.get(this.root)?.watcher === this) {
-        watchers.delete(this.root);
-      }
-      this.removeAllListeners();
-    }
-    ref() {
-      return this;
-    }
-    unref() {
-      return this;
-    }
-  }
-  const nativeWatch = fs.watch.bind(fs);
-  vi.spyOn(fs, "watch").mockImplementation(
-    (
-      target: fs.PathLike,
-      options: fs.WatchOptionsWithStringEncoding | fs.WatchListener<string>,
-      listener?: fs.WatchListener<string>,
-    ) => {
-      const root = String(target);
-      if (!root.startsWith(`${home}${path.sep}`)) {
-        return typeof options === "function"
-          ? nativeWatch(target, options)
-          : nativeWatch(target, options, listener);
-      }
-      const watcher = new Watcher(root);
-      const callback = listener ?? (typeof options === "function" ? options : undefined);
-      if (callback) {
-        watcher.on("change", callback);
-      }
-      watchers.set(root, {
-        watcher,
-        recursive: typeof options === "object" && options.recursive === true,
-      });
-      return watcher;
-    },
-  );
-  // Integer steps keep the exact arming interval independent of fractional host-clock precision.
-  let monotonicNow = 0;
-  vi.spyOn(performance, "now").mockImplementation(() => monotonicNow);
+  const watchers = new Map<string, { armed: boolean; dirty: "all" | Set<string> }>();
+  vi.spyOn(treeWatch, "createDirtyDirectoryWatch").mockImplementation((directory) => {
+    const state = { armed: false, dirty: "all" as "all" | Set<string> };
+    watchers.set(directory, state);
+    return {
+      takeDirty() {
+        if (!state.armed) {
+          return "all";
+        }
+        const dirty = state.dirty;
+        state.dirty = new Set();
+        return dirty;
+      },
+      async close() {
+        watchers.delete(directory);
+      },
+    };
+  });
   return {
     arm: () => {
-      monotonicNow += 250;
+      for (const state of watchers.values()) {
+        state.armed = true;
+      }
     },
-    change: (file: string, event: fs.WatchEventType = "change") => {
+    change: (file: string) => {
       const absolute = path.resolve(home, file);
-      const selected = [...watchers]
-        .filter(([root, { recursive }]) =>
-          recursive ? absolute.startsWith(`${root}${path.sep}`) : path.dirname(absolute) === root,
-        )
-        .toSorted(([left], [right]) => right.length - left.length)[0];
+      const selected = [...watchers].find(([directory]) =>
+        absolute.startsWith(`${directory}${path.sep}`),
+      );
       if (!selected) {
         throw new Error(`No catalog watcher covers ${absolute}`);
       }
-      const [root, { watcher }] = selected;
-      watcher.emit("change", event, path.relative(root, absolute));
+      const [directory, state] = selected;
+      if (state.dirty !== "all") {
+        state.dirty.add(path.relative(directory, absolute).split(path.sep, 1)[0]!);
+      }
     },
   };
 }

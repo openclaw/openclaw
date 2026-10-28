@@ -1,16 +1,8 @@
 import { CONTROL_UI_DOCUMENT_ROUTE_PATHS, normalizeBasePath } from "../app-route-paths.ts";
 
-type ApprovalDocumentMode = {
-  kind: "approval";
-  approvalId: string | null;
-};
-
-type QuestionDocumentMode = {
-  kind: "question";
-  questionId: string | null;
-};
-
-export type ControlUiDocumentMode = ApprovalDocumentMode | QuestionDocumentMode;
+export type ControlUiDocumentMode =
+  | { kind: "approval"; approvalId: string | null }
+  | { kind: "question"; questionId: string | null };
 
 /**
  * Recognizes shellless documents before the exact-path app router can replace
@@ -43,36 +35,22 @@ function resolveDocumentId(
   }
 }
 
-function resolveApprovalDocumentMode(
+export function resolveControlUiDocumentMode(
   pathname: string,
   basePath: string,
-): ApprovalDocumentMode | null {
+): ControlUiDocumentMode | null {
   const approvalId = resolveDocumentId(
     pathname,
     basePath,
     CONTROL_UI_DOCUMENT_ROUTE_PATHS.approval,
   );
-  return approvalId === undefined ? null : { kind: "approval", approvalId };
-}
-
-function resolveQuestionDocumentMode(
-  pathname: string,
-  basePath: string,
-): QuestionDocumentMode | null {
+  if (approvalId !== undefined) {
+    return { kind: "approval", approvalId };
+  }
   const questionId = resolveDocumentId(
     pathname,
     basePath,
     CONTROL_UI_DOCUMENT_ROUTE_PATHS.question,
   );
   return questionId === undefined ? null : { kind: "question", questionId };
-}
-
-export function resolveControlUiDocumentMode(
-  pathname: string,
-  basePath: string,
-): ControlUiDocumentMode | null {
-  return (
-    resolveApprovalDocumentMode(pathname, basePath) ??
-    resolveQuestionDocumentMode(pathname, basePath)
-  );
 }

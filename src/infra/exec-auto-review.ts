@@ -56,6 +56,8 @@ export type ExecAutoReviewTranscript = {
 export type ExecAutoReviewInput = {
   transcript?: ExecAutoReviewTranscript;
   command: string;
+  /** Exact prepared shell command when execution is on another host. */
+  executionCommand?: string;
   argv?: readonly string[];
   resolvedPath?: string | null;
   cwd?: string | null;
@@ -110,7 +112,7 @@ export function formatExecAutoReviewAssessment(decision: ExecAutoReviewDecision)
 
 /** Keeps reviewer and provider explanations safe for human-facing approval text. */
 export function normalizeExecAutoReviewRationale(value: unknown, fallback: string): string {
-  const text = normalizeOptionalString(typeof value === "string" ? value : undefined);
+  const text = normalizeOptionalString(value);
   const sanitized = sanitizeTerminalText(text ?? fallback)
     .replace(/[\p{Cf}\u2028\u2029]/gu, "")
     .replace(/\s+/gu, " ")

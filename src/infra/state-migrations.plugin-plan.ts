@@ -77,5 +77,6 @@ export function preparePostSessionPluginMigration(params: {
       ...descriptor,
     },
     plannedActions: actions.map(({ pluginId, id }) => ({ pluginId, id })),
+    inventory: params.inventory,
   };
 }

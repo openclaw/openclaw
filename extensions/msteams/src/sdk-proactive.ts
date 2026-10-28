@@ -1,6 +1,6 @@
 import type { IMessageActivityInput } from "@microsoft/teams.api";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-// Msteams plugin module implements sdk proactive behavior.
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeBotFrameworkServiceUrl } from "./bot-framework-service-url.js";
 import {
   validateMSTeamsProactiveServiceUrlBoundary,
@@ -13,6 +13,7 @@ import {
   withMSTeamsConnectorHandoff,
   type MSTeamsSendHandoff,
 } from "./send-handoff.js";
+import { recordMSTeamsSentMessage } from "./sent-message-cache.js";
 
 type MSTeamsAccountRef = {
   id?: string;
@@ -35,35 +36,10 @@ type MSTeamsSdkReferenceSource = {
   aadObjectId?: string;
 };
 
-type MSTeamsSdkConversationReference = {
-  activityId?: string;
-  channelId: "msteams";
-  serviceUrl: string;
-  bot: MSTeamsAccountRef & { id: string; role: "bot" };
-  conversation: { id: string; conversationType?: string; tenantId?: string };
-  locale?: string;
-  user?: MSTeamsAccountRef;
-  tenantId?: string;
-  aadObjectId?: string;
-};
-
-type MSTeamsActivitiesClient = {
-  create(activity: unknown): Promise<{ id?: string }>;
-  createTargeted?(activity: unknown): Promise<{ id?: string }>;
-  update(activityId: string, activity: unknown): Promise<unknown>;
-  updateTargeted?(activityId: string, activity: unknown): Promise<unknown>;
-  delete(activityId: string): Promise<unknown>;
-};
-
-type MSTeamsApiClient = {
-  serviceUrl?: string;
-  http?: unknown;
-  conversations: {
-    activities(conversationId: string): MSTeamsActivitiesClient;
-  };
-};
+type MSTeamsSdkConversationReference = ReturnType<typeof buildSdkConversationReference>;
 
 type MSTeamsProactiveOptions = {
+  accountId?: string | null;
   quoteActivityId?: string;
   threadActivityId?: string;
   serviceUrlBoundary?: MSTeamsSdkCloudOptions;
@@ -74,7 +50,7 @@ const loadMSTeamsApiModule = createLazyRuntimeModule(() => import("@microsoft/te
 async function quoteMSTeamsActivity(
   activity: MSTeamsActivityLike,
   messageId: string,
-): Promise<unknown> {
+): Promise<MSTeamsActivityLike | IMessageActivityInput> {
   const { MessageActivityInput } = await loadMSTeamsApiModule();
   if (typeof activity === "string") {
     return new MessageActivityInput(activity).prependQuote(messageId);
@@ -86,36 +62,23 @@ async function quoteMSTeamsActivity(
   return MessageActivityInput.from(activity as IMessageActivityInput).prependQuote(messageId);
 }
 
-function resolveThreadedConversationId(conversationId: string, threadActivityId?: string): string {
-  if (!threadActivityId) {
-    return conversationId.split(";")[0] ?? conversationId;
-  }
-  const baseId = conversationId.split(";")[0] ?? conversationId;
-  return `${baseId};messageid=${threadActivityId}`;
-}
-
-function normalizeRequiredServiceUrl(ref: MSTeamsSdkReferenceSource): string {
-  if (!ref.serviceUrl) {
-    throw new Error("Invalid stored reference: missing serviceUrl");
-  }
-  return normalizeBotFrameworkServiceUrl(ref.serviceUrl);
-}
-
 function buildSdkConversationReference(
   source: MSTeamsSdkReferenceSource,
   options?: MSTeamsProactiveOptions,
-): MSTeamsSdkConversationReference {
-  const bot = source.agent ?? source.bot ?? undefined;
+) {
+  const bot = source.agent ?? source.bot;
   if (!bot?.id) {
     throw new Error("Invalid stored reference: missing agent.id");
   }
 
-  const conversationId = resolveThreadedConversationId(
-    source.conversation.id,
-    options?.threadActivityId,
-  );
+  const baseId = source.conversation.id.split(";")[0] ?? source.conversation.id;
+  const threadActivityId = options?.threadActivityId;
+  const conversationId = threadActivityId ? `${baseId};messageid=${threadActivityId}` : baseId;
   const tenantId = source.tenantId ?? source.conversation.tenantId;
-  const serviceUrl = normalizeRequiredServiceUrl(source);
+  if (!source.serviceUrl) {
+    throw new Error("Invalid stored reference: missing serviceUrl");
+  }
+  const serviceUrl = normalizeBotFrameworkServiceUrl(source.serviceUrl);
 
   if (options?.serviceUrlBoundary) {
     validateMSTeamsProactiveServiceUrlBoundary({
@@ -134,7 +97,7 @@ function buildSdkConversationReference(
 
   return {
     activityId: source.activityId,
-    channelId: "msteams",
+    channelId: "msteams" as const,
     serviceUrl,
     bot: botRef,
     conversation: {
@@ -149,99 +112,13 @@ function buildSdkConversationReference(
   };
 }
 
-function getStructuralApiClient(app: MSTeamsApp): MSTeamsApiClient {
-  return app.api as MSTeamsApiClient;
-}
-
-function sameServiceUrl(left: string | undefined, right: string): boolean {
-  if (!left) {
-    return false;
-  }
-  try {
-    return normalizeBotFrameworkServiceUrl(left) === right;
-  } catch {
-    return false;
-  }
-}
-
-function stringifyReferenceFallbackActivity(activity: unknown): string {
-  if (typeof activity === "string") {
-    return activity;
-  }
-  if (activity == null) {
-    return "";
-  }
-  if (
-    typeof activity === "number" ||
-    typeof activity === "boolean" ||
-    typeof activity === "bigint"
-  ) {
-    return String(activity);
-  }
-  return "";
-}
-
-async function getApiClientForReference(
+function getApiClientForReference(
   app: MSTeamsApp,
   ref: MSTeamsSdkConversationReference,
-): Promise<MSTeamsApiClient> {
-  const api = getStructuralApiClient(app);
-  if (sameServiceUrl(api.serviceUrl, ref.serviceUrl)) {
-    return api;
-  }
-
-  const appInternals = app as unknown as {
-    client?: ConstructorParameters<typeof import("@microsoft/teams.api").Client>[1];
-    api?: { http?: ConstructorParameters<typeof import("@microsoft/teams.api").Client>[1] };
-  };
-  const httpClient = appInternals.api?.http ?? appInternals.client;
-
-  if (!httpClient) {
-    return api;
-  }
-
-  const { Client } = await loadMSTeamsApiModule();
-  return new Client(ref.serviceUrl, httpClient) as unknown as MSTeamsApiClient;
-}
-
-function mergeReferenceIntoActivity(
-  activity: unknown,
-  ref: MSTeamsSdkConversationReference,
-): Record<string, unknown> {
-  const source =
-    activity && typeof activity === "object" && !Array.isArray(activity)
-      ? (activity as Record<string, unknown>)
-      : { type: "message", text: stringifyReferenceFallbackActivity(activity) };
-  const existingChannelData =
-    source.channelData &&
-    typeof source.channelData === "object" &&
-    !Array.isArray(source.channelData)
-      ? (source.channelData as Record<string, unknown>)
-      : undefined;
-  const existingTenant =
-    existingChannelData?.tenant &&
-    typeof existingChannelData.tenant === "object" &&
-    !Array.isArray(existingChannelData.tenant)
-      ? (existingChannelData.tenant as Record<string, unknown>)
-      : undefined;
-  let channelData = existingChannelData ? { ...existingChannelData } : undefined;
-  if (ref.tenantId) {
-    channelData ??= {};
-    channelData.tenant = existingTenant
-      ? { ...existingTenant, id: ref.tenantId }
-      : { id: ref.tenantId };
-  }
-  return {
-    ...source,
-    channelId: ref.channelId,
-    from: ref.bot,
-    recipient: ref.user,
-    conversation: ref.conversation,
-    ...(channelData ? { channelData } : {}),
-    locale: ref.locale,
-    ...(ref.tenantId ? { tenantId: ref.tenantId } : {}),
-    ...(ref.aadObjectId ? { aadObjectId: ref.aadObjectId } : {}),
-  };
+): MSTeamsApp["api"] {
+  return app.api.serviceUrl === ref.serviceUrl
+    ? app.api
+    : app.api.fromServiceUrl({ serviceUrl: ref.serviceUrl });
 }
 
 export async function sendMSTeamsActivityWithReference(
@@ -253,12 +130,35 @@ export async function sendMSTeamsActivityWithReference(
   return withMSTeamsConnectorHandoff(options ?? {}, async (handoff) => {
     assertMSTeamsSendHandoff(handoff);
     const ref = buildSdkConversationReference(source, options);
-    const api = await getApiClientForReference(app, ref);
+    const api = getApiClientForReference(app, ref);
     const activities = api.conversations.activities(ref.conversation.id);
     const quotedActivity = options?.quoteActivityId
       ? await quoteMSTeamsActivity(activity, options.quoteActivityId)
       : activity;
-    const activityWithRef = mergeReferenceIntoActivity(quotedActivity, ref);
+    const activitySource =
+      typeof quotedActivity === "string"
+        ? { type: "message", text: quotedActivity }
+        : quotedActivity;
+    const existingChannelData = asOptionalRecord(activitySource.channelData);
+    const existingTenant = asOptionalRecord(existingChannelData?.tenant);
+    let channelData = existingChannelData ? { ...existingChannelData } : undefined;
+    if (ref.tenantId) {
+      channelData ??= {};
+      channelData.tenant = existingTenant
+        ? { ...existingTenant, id: ref.tenantId }
+        : { id: ref.tenantId };
+    }
+    const activityWithRef: Record<string, unknown> = {
+      ...activitySource,
+      channelId: ref.channelId,
+      from: ref.bot,
+      recipient: ref.user,
+      conversation: ref.conversation,
+      ...(channelData ? { channelData } : {}),
+      locale: ref.locale,
+      ...(ref.tenantId ? { tenantId: ref.tenantId } : {}),
+      ...(ref.aadObjectId ? { aadObjectId: ref.aadObjectId } : {}),
+    };
     const isTargeted =
       (activityWithRef.recipient as { isTargeted?: unknown } | undefined)?.isTargeted === true;
     if (isTargeted && ref.conversation.conversationType === "personal") {
@@ -268,17 +168,28 @@ export async function sendMSTeamsActivityWithReference(
     const activityId = typeof activityWithRef.id === "string" ? activityWithRef.id : undefined;
     assertMSTeamsSendHandoff(handoff);
     if (activityId) {
-      const res =
-        isTargeted && activities.updateTargeted
-          ? await activities.updateTargeted(activityId, activityWithRef)
-          : await activities.update(activityId, activityWithRef);
+      const res = isTargeted
+        ? await activities.updateTargeted(activityId, activityWithRef)
+        : await activities.update(activityId, activityWithRef);
       return { ...activityWithRef, ...(res && typeof res === "object" ? res : {}) };
     }
 
-    const res =
-      isTargeted && activities.createTargeted
-        ? await activities.createTargeted(activityWithRef)
-        : await activities.create(activityWithRef);
+    const res = isTargeted
+      ? await activities.createTargeted(activityWithRef)
+      : await activities.create(activityWithRef);
+    const conversationId = ref.conversation.id.split(";")[0] ?? ref.conversation.id;
+    // The effective Connector destination proves whether this send created a channel root.
+    if (
+      res.id &&
+      activityWithRef.type === "message" &&
+      ref.conversation.conversationType === "channel" &&
+      ref.conversation.id === conversationId
+    ) {
+      recordMSTeamsSentMessage(conversationId, res.id, {
+        accountId: options?.accountId,
+        botId: ref.bot.id,
+      });
+    }
     return { ...activityWithRef, ...res };
   });
 }
@@ -291,7 +202,7 @@ export async function updateMSTeamsActivityWithReference(
   options?: MSTeamsProactiveOptions,
 ): Promise<unknown> {
   const ref = buildSdkConversationReference(source, options);
-  const api = await getApiClientForReference(app, ref);
+  const api = getApiClientForReference(app, ref);
   return api.conversations.activities(ref.conversation.id).update(activityId, activity);
 }
 
@@ -302,6 +213,6 @@ export async function deleteMSTeamsActivityWithReference(
   options?: MSTeamsProactiveOptions,
 ): Promise<unknown> {
   const ref = buildSdkConversationReference(source, options);
-  const api = await getApiClientForReference(app, ref);
+  const api = getApiClientForReference(app, ref);
   return api.conversations.activities(ref.conversation.id).delete(activityId);
 }

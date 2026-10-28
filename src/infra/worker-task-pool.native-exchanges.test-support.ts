@@ -5,13 +5,12 @@ import { once } from "node:events";
 import { mock } from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { isMainThread, threadId, Worker } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createDeferredCore } from "../shared/deferred.js";
 import {
   cancelWorkerNativeSections,
   createWorkerNativeSectionState,
-} from "./worker-task-native-sections.js";
-import { WorkerTaskPool } from "./worker-task-pool.js";
+} from "@openclaw/worker-runtime/worker";
+import { createDeferredCore } from "../shared/deferred.js";
+import { createOwnedWorkerTaskPool, WorkerTaskPool } from "./worker-task-pool.js";
 import { serveWorkerTasks } from "./worker-task-server.js";
 
 type Input =
@@ -21,16 +20,19 @@ type Input =
       beforeRequest?: boolean;
       blockResponse?: boolean;
     }
-  | { kind: "echo"; value: number };
+  | { kind: "echo"; value: number }
+  | { kind: "progress"; gate: SharedArrayBuffer; callbacks: boolean; fail: boolean };
 type Result = { threadId: number; value?: number };
-export type NativeExchangeScenario =
-  | "abort"
-  | "close"
-  | "before-request"
-  | "late-reply"
-  | "reply-race"
-  | "stale-reply"
-  | "reuse";
+const scenarios = [
+  "close",
+  "before-request",
+  "reply-race",
+  "stale-reply",
+  "progress-reply",
+  "progress-callbacks",
+  "progress-failure",
+] as const;
+export type NativeExchangeScenario = (typeof scenarios)[number];
 
 async function waitFor(gate: Int32Array<SharedArrayBuffer>, index: number): Promise<void> {
   await Atomics.waitAsync(gate, index, 0, 10_000).value;
@@ -43,19 +45,32 @@ function release(gate: Int32Array<SharedArrayBuffer>, index: number): void {
 }
 
 if (!isMainThread) {
-  serveWorkerTasks<Result>(async (input, channel, control) => {
-    assert.ok(isRecord(input));
+  serveWorkerTasks<Result, Input>(async (input, channel, control) => {
     if (input.kind === "echo") {
-      assert.ok(typeof input.value === "number");
-      if (channel) {
-        const reply = await channel.request(input.value);
-        assert.equal(reply.input, input.value);
-        reply.consumed();
-      }
       return { threadId, value: input.value };
     }
-    assert.equal(input.kind, "native-exchange");
-    assert.ok(input.gate instanceof SharedArrayBuffer);
+    if (input.kind === "progress") {
+      const gate = new Int32Array(input.gate);
+      release(gate, 0);
+      await waitFor(gate, 1);
+      let value = 42;
+      if (input.callbacks) {
+        assert.ok(channel);
+        channel.consumeInput();
+        await waitFor(gate, 2);
+        channel.notify("progress notification");
+        await waitFor(gate, 3);
+        const response = await channel.request("progress request");
+        assert.ok(typeof response.input === "number");
+        value = response.input;
+        response.consumed();
+        await waitFor(gate, 4);
+      }
+      if (input.fail) {
+        throw new Error("progress fixture failed");
+      }
+      return { threadId, value };
+    }
     assert.ok(channel);
     const gate = new Int32Array(input.gate);
     await control.runNativeSection(async () => {
@@ -82,19 +97,87 @@ if (!isMainThread) {
   });
 } else {
   const scenario = process.argv[2];
-  assert.ok(
-    scenario &&
-      [
-        "abort",
-        "close",
-        "before-request",
-        "late-reply",
-        "reply-race",
-        "stale-reply",
-        "reuse",
-      ].includes(scenario),
-  );
-  if (scenario === "abort" || scenario === "close" || scenario === "before-request") {
+  assert.ok(scenario && scenarios.some((value) => value === scenario));
+  if (scenario.startsWith("progress-")) {
+    const gate = new Int32Array(new SharedArrayBuffer(20));
+    const progress = new Int32Array(new SharedArrayBuffer(4));
+    const events: string[] = [];
+    const callbacks = scenario === "progress-callbacks";
+    const fail = scenario === "progress-failure";
+    const pool = createOwnedWorkerTaskPool<Input, Result>(
+      { workerUrl: new URL(import.meta.url), maxWorkers: 1 },
+      { retainedTransport: true },
+    );
+    const task = pool.startTask(
+      { kind: "progress", gate: gate.buffer, callbacks, fail },
+      {
+        progressSignal: progress,
+        ...(callbacks
+          ? {
+              onInputConsumed() {
+                events.push("input");
+                release(gate, 2);
+              },
+              onNotification(value: unknown) {
+                assert.equal(value, "progress notification");
+                events.push("notification");
+                release(gate, 3);
+              },
+              onRequestSync(value: unknown) {
+                assert.equal(value, "progress request");
+                events.push("request");
+                return {
+                  input: 42,
+                  timeoutMs: 10_000,
+                  onConsumed() {
+                    events.push("response");
+                    release(gate, 4);
+                  },
+                };
+              },
+            }
+          : {}),
+      },
+    );
+    const settled = task.result.catch(() => {});
+    try {
+      await waitFor(gate, 0);
+      let observed = Atomics.load(progress, 0);
+      task.service();
+      assert.equal(task.read().status, "pending");
+      release(gate, 1);
+      for (;;) {
+        // A producer must publish its reply before waking this blocked host.
+        assert.notEqual(Atomics.wait(progress, 0, observed, 10_000), "timed-out");
+        observed = Atomics.load(progress, 0);
+        task.service();
+        const outcome = task.read();
+        if (!callbacks) {
+          assert.notEqual(outcome.status, "pending", "Wake preceded the posted reply");
+        }
+        if (outcome.status === "pending") {
+          continue;
+        }
+        if (fail) {
+          assert.ok(outcome.status === "rejected");
+          assert.match(String(outcome.error), /progress fixture failed/);
+        } else {
+          assert.ok(outcome.status === "fulfilled");
+          assert.equal(outcome.value.value, 42);
+        }
+        break;
+      }
+      assert.deepEqual(events, callbacks ? ["input", "notification", "request", "response"] : []);
+      console.log(JSON.stringify({ scenario, wokeForPostedMessages: true }));
+    } finally {
+      for (let index = 1; index < gate.length; index++) {
+        release(gate, index);
+      }
+      await settled;
+      await task.release().result;
+      await pool.close();
+    }
+  } else if (scenario === "close" || scenario === "before-request") {
     const gate = new Int32Array(new SharedArrayBuffer(32));
     const hostEntered = createDeferredCore();
     const hostReply = createDeferredCore();
@@ -151,8 +234,7 @@ if (!isMainThread) {
         pool.run(() => {
           successorStarted = true;
           const oldWorker = terminate.mock.calls[0]?.this;
-          assert.ok(oldWorker instanceof Worker);
-          assert.equal(oldWorker.threadId, -1);
+          assert.ok(oldWorker instanceof Worker && oldWorker.threadId === -1);
           return { kind: "echo", value: 42 };
         }, {}),
       ]);
@@ -165,8 +247,7 @@ if (!isMainThread) {
       await waitFor(gate, 2);
       assert.equal(hostCalls, scenario === "before-request" ? 0 : 1);
       assert.equal(terminate.mock.callCount(), 0, "cleanup still owns its native section");
-      assert.equal(inputReleased, false);
-      assert.equal(nativeSettled, false);
+      assert.deepEqual([inputReleased, nativeSettled], [false, false]);
       assert.equal(completed, false);
       assert.equal(successorStarted, false);
       hostReply.resolve();
@@ -174,16 +255,12 @@ if (!isMainThread) {
       assert.equal(replyReleased, false, "late host reply retains custody until worker exit");
       release(gate, 3);
       const result = await outcome;
-      assert.equal(result?.status, "rejected");
-      if (result?.status === "rejected") {
-        assert.equal(result.reason, reason);
-      }
+      assert.ok(result?.status === "rejected");
+      assert.equal(result.reason, reason);
       const oldWorker = terminate.mock.calls[0]?.this;
-      assert.ok(oldWorker instanceof Worker);
-      assert.equal(oldWorker.threadId, -1);
+      assert.ok(oldWorker instanceof Worker && oldWorker.threadId === -1);
       assert.equal(Atomics.load(gate, 4), 1);
-      assert.equal(inputReleased, true);
-      assert.equal(nativeSettled, true);
+      assert.deepEqual([inputReleased, nativeSettled], [true, true]);
       assert.equal(replyReleased, scenario !== "before-request");
       const [next] = await successor;
       assert.equal(next?.status, scenario === "close" ? "rejected" : "fulfilled");
@@ -202,114 +279,59 @@ if (!isMainThread) {
     const worker = new Worker(new URL(import.meta.url));
     const native = createWorkerNativeSectionState();
     const gate = new Int32Array(new SharedArrayBuffer(32));
-    let exited = false;
-    worker.once("exit", () => {
-      exited = true;
-    });
+    const sendTask = (taskId: number, input: Input, nativeSections = native.buffer) =>
+      worker.postMessage(
+        {
+          taskId,
+          input,
+          interactive: input.kind === "native-exchange",
+          nativeSections,
+          taskContext: { deletedAgentDatabaseFences: [] },
+        },
+        [],
+      );
+    const reply = (responseId: number, input: string) =>
+      worker.postMessage({ taskId: 1, responseId, input }, []);
     try {
-      if (scenario === "reuse") {
-        for (let taskId = 1; taskId <= 16; taskId++) {
-          const requested = once(worker, "message");
-          worker.postMessage(
-            {
-              taskId,
-              input: { kind: "echo", value: taskId },
-              interactive: true,
-              nativeSections: native.buffer,
-            },
-            [],
-          );
-          const [request] = await requested;
-          assert.equal(request.status, "request");
-          assert.equal(request.taskId, taskId);
-          const consumed = once(worker, "message");
-          const done = new Promise<void>((resolve) => {
-            const receive = (message: { status: string; taskId: number }) => {
-              if (message.status === "ok") {
-                assert.equal(message.taskId, taskId);
-                worker.off("message", receive);
-                resolve();
-              }
-            };
-            worker.on("message", receive);
-          });
-          worker.postMessage({ taskId, responseId: request.id, input: taskId }, []);
-          assert.equal((await consumed)[0].status, "consumed");
-          await done;
-          assert.equal(Atomics.notify(native, 0), 0, "completed task left a cancellation waiter");
-        }
-        console.log(JSON.stringify({ scenario, waiterFreeTasks: 16 }));
+      release(gate, 3);
+      const requested = once(worker, "message");
+      sendTask(1, {
+        kind: "native-exchange",
+        gate: gate.buffer,
+        blockResponse: scenario === "reply-race",
+      });
+      const [request] = await requested;
+      assert.equal(request.status, "request");
+      const failed = once(worker, "message");
+      if (scenario === "reply-race") {
+        await waitFor(gate, 5);
+        reply(request.id, "already queued reply");
+      }
+      cancelWorkerNativeSections(native);
+      release(gate, 6);
+      assert.equal((await failed)[0].status, "failed");
+      assert.equal(Atomics.load(gate, 4), 1);
+      assert.equal(Atomics.load(gate, 7), 0, "cancellation must not deliver host data");
+      assert.equal(Atomics.notify(native, 0), 0);
+      if (scenario === "reply-race") {
+        const next = once(worker, "message");
+        reply(request.id, "discarded late reply");
+        sendTask(2, { kind: "echo", value: 42 }, createWorkerNativeSectionState().buffer);
+        assert.equal((await next)[0].value.value, 42);
+        console.log(JSON.stringify({ scenario, successorCompleted: true }));
       } else {
-        release(gate, 3);
-        const requested = once(worker, "message");
-        worker.postMessage(
-          {
-            taskId: 1,
-            input: {
-              kind: "native-exchange",
-              gate: gate.buffer,
-              blockResponse: scenario === "reply-race",
-            },
-            interactive: true,
-            nativeSections: native.buffer,
-          },
-          [],
-        );
-        const [request] = await requested;
-        assert.equal(request.status, "request");
-        const failed = once(worker, "message");
-        if (scenario === "reply-race") {
-          await waitFor(gate, 5);
-          worker.postMessage(
-            { taskId: 1, responseId: request.id, input: "already queued reply" },
-            [],
-          );
-        }
-        cancelWorkerNativeSections(native);
-        release(gate, 6);
-        assert.equal((await failed)[0].status, "failed");
-        assert.equal(Atomics.load(gate, 4), 1);
-        assert.equal(Atomics.load(gate, 7), 0, "cancellation must not deliver host data");
-        assert.equal(Atomics.notify(native, 0), 0);
-        if (scenario === "late-reply" || scenario === "reply-race") {
-          const next = once(worker, "message");
-          worker.postMessage(
-            { taskId: 1, responseId: request.id, input: "discarded late reply" },
-            [],
-          );
-          worker.postMessage(
-            {
-              taskId: 2,
-              input: { kind: "echo", value: 42 },
-              nativeSections: createWorkerNativeSectionState().buffer,
-            },
-            [],
-          );
-          assert.equal((await next)[0].value.value, 42);
-          console.log(JSON.stringify({ scenario, successorCompleted: true }));
-        } else {
-          const failure = once(worker, "error");
-          const exit = new Promise<void>((resolve) => {
-            worker.once("exit", () => resolve());
-          });
-          worker.postMessage(
-            {
-              taskId: 1,
-              responseId: request.id + 1,
-              input: "unrelated stale reply",
-            },
-            [],
-          );
-          assert.match((await failure)[0].message, /stale worker task response/);
-          await exit;
-          console.log(JSON.stringify({ scenario, unrelatedStaleRejected: true }));
-        }
+        const failure = once(worker, "error");
+        const exit = new Promise<void>((resolve) => {
+          worker.once("exit", () => resolve());
+        });
+        reply(request.id + 1, "unrelated stale reply");
+        assert.match((await failure)[0].message, /stale worker task response/);
+        await exit;
+        console.log(JSON.stringify({ scenario, unrelatedStaleRejected: true }));
       }
     } finally {
       release(gate, 3);
-      if (!exited) {
-        await worker.terminate();
-      }
+      await worker.terminate();
     }
   }
 }

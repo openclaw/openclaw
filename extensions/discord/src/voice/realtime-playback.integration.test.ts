@@ -894,7 +894,7 @@ it("does not replay heard exact speech when a later native response has no audio
     );
 
     fixture.playback.resetProviderContinuity("provider-reconnect");
-    fixture.playback.drainQueuedExactSpeechMessages("provider-ready");
+    fixture.playback.drainQueuedExactSpeechMessages();
     expect(fixture.sendUserMessage.mock.calls).toEqual([["already heard"]]);
   } finally {
     fixture.close();

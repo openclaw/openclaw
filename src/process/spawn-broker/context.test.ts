@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
@@ -14,52 +14,46 @@ import { spawnBrokerContextEntrypoints } from "./context-runtime.test-support.js
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
-
-describe.skipIf(skipBrokerTests)("Gateway spawn transport initialization", () => {
-  it.each(["exit", "timeout"] as const)(
-    "logs first-start %s and keeps subsequent Gateway starts in-process",
-    async (failure) => {
-      const directory = tempDirs.make("openclaw-broker-startup-fallback-");
-      const marker = path.join(directory, "attempts");
-      const preload = path.join(directory, "exit-before-ready.mjs");
-      await writeFile(
-        preload,
-        `
+it.skipIf(process.platform === "win32").each(["exit", "timeout"] as const)(
+  "logs first-start %s and keeps subsequent Gateway starts in-process",
+  async (failure) => {
+    const directory = tempDirs.make("openclaw-broker-startup-fallback-");
+    const marker = path.join(directory, "attempts");
+    const preload = path.join(directory, "exit-before-ready.mjs");
+    await writeFile(
+      preload,
+      `
       import {appendFileSync} from 'node:fs';
       if (/\\/spawn-broker\\/worker\\.(?:ts|js)$/.test(process.argv[1] ?? '')) {
         appendFileSync(${JSON.stringify(marker)}, 'attempt\\n');
         ${failure === "exit" ? "process.exit(73);" : "process.on('message',()=>{}); await new Promise(()=>{});"}
       }
     `,
-      );
-      const serverUrl = resolveRuntimeWorkerUrl(spawnBrokerContextEntrypoints.server);
-      const execUrl = resolveRuntimeWorkerUrl(spawnBrokerContextEntrypoints.exec).href;
-      const contextUrl = resolveRuntimeWorkerUrl(spawnBrokerContextEntrypoints.context).href;
-      const stateKey = "openclaw.spawn-broker-startup-test";
-      const coreSource = `
+    );
+    const serverUrl = resolveRuntimeWorkerUrl(spawnBrokerContextEntrypoints.server);
+    const execUrl = resolveRuntimeWorkerUrl(spawnBrokerContextEntrypoints.exec).href;
+    const contextUrl = resolveRuntimeWorkerUrl(spawnBrokerContextEntrypoints.context).href;
+    const stateKey = "openclaw.spawn-broker-startup-test";
+    const coreSource = `
       import {runExec} from ${JSON.stringify(execUrl)};
       import {getSpawnBroker} from ${JSON.stringify(contextUrl)};
       const state = globalThis[Symbol.for(${JSON.stringify(stateKey)})];
-      async function parent() {
-        const result = await runExec(process.execPath,['-e','console.log(process.ppid)'],{logOutput:false});
-        state.parents.push(Number(result.stdout));
-      }
+      const parent = async () => state.parents.push(Number(
+        (await runExec(process.execPath,['-e','console.log(process.ppid)'],{logOutput:false})).stdout
+      ));
       export async function startGatewayServerCore() {
         state.brokers.push(getSpawnBroker()?.pid ?? null);
         await parent();
         return {startupSettled:Promise.resolve(),getTailscaleIngressEndpoint:()=>undefined,close:parent};
       }
     `;
-      const loggerSource = `
-      const state = globalThis[Symbol.for(${JSON.stringify(stateKey)})];
-      export function createSubsystemLogger() {
-        return {info() {},error(message) {state.errors.push(message)}};
-      }
-    `;
-      const source = `
-      import {readFileSync} from 'node:fs';
+    const loggerSource = `export const createSubsystemLogger = () => ({
+        info() {}, error(message) {globalThis[Symbol.for(${JSON.stringify(stateKey)})].errors.push(message)}
+      });`;
+    const source = `
+      import {existsSync,readFileSync,watch} from 'node:fs';
       import {registerHooks} from 'node:module';
+      import {mock} from 'node:test';
       const state = {parents:[],brokers:[],errors:[]};
       globalThis[Symbol.for(${JSON.stringify(stateKey)})] = state;
       Object.defineProperty(process,'platform',{value:'linux'});
@@ -72,41 +66,75 @@ describe.skipIf(skipBrokerTests)("Gateway spawn transport initialization", () =>
         return nextResolve(specifier,context);
       }});
       process.env.NODE_OPTIONS = ${JSON.stringify(`--import=${pathToFileURL(preload).href}`)};
+      const realMonotonic = process.hrtime.bigint.bind(process.hrtime);
+      let startupClockOffset = 0n;
+      // The broker captures its clock at import; advance it with the startup timer below.
+      const monotonic = ${failure === "timeout"}
+        ? mock.method(process.hrtime, 'bigint', () => realMonotonic() + startupClockOffset)
+        : undefined;
       const {startGatewayServer} = await import(${JSON.stringify(serverUrl.href)});
-      for (let count=0;count<2;count++) {
-        const server = await startGatewayServer();
-        await server.close();
+      // Load cleanup's native promise timers before faking the startup clock.
+      await import(${JSON.stringify(contextUrl)});
+      let attemptWatcher;
+      try {
+        const attempted = ${failure === "timeout"} ? new Promise((resolve,reject) => {
+          const observe = () => {
+            if (existsSync(${JSON.stringify(marker)}) && readFileSync(${JSON.stringify(marker)},'utf8').trim()) resolve();
+          };
+          attemptWatcher = watch(${JSON.stringify(directory)}, observe);
+          attemptWatcher.on('error', reject);
+          observe();
+        }) : undefined;
+        if (attempted) mock.timers.enable({apis:['Date','setTimeout'],now:Date.now()});
+        for (let count=0;count<2;count++) {
+          const starting = startGatewayServer();
+          if (attempted && count === 0) {
+            await Promise.race([attempted, starting.then(() => {
+              throw new Error('Gateway started before the broker readiness deadline');
+            })]);
+            attemptWatcher.close();
+            startupClockOffset += 15_000_000_000n;
+            mock.timers.tick(15_000);
+          }
+          const server = await starting;
+          await server.close();
+        }
+        console.log(JSON.stringify({...state,hostPid:process.pid,attempts:readFileSync(${JSON.stringify(marker)},'utf8').trim().split('\\n').length}));
+      } finally {
+        attemptWatcher?.close();
+        mock.timers.reset();
+        monotonic?.mock.restore();
       }
-      console.log(JSON.stringify({...state,hostPid:process.pid,attempts:readFileSync(${JSON.stringify(marker)},'utf8').trim().split('\\n').length}));
     `;
-      const node = resolveTestNodeExecPath();
-      const result = spawnSync(
-        node,
-        [
-          ...resolveRuntimeWorkerArgv(serverUrl, node).slice(0, -1),
-          "--input-type=module",
-          "--eval",
-          source,
-        ],
-        { cwd: process.cwd(), encoding: "utf8", timeout: 30_000, maxBuffer: 64 * 1024 },
-      );
-      expect(result.error, result.stderr).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
-      const observed = JSON.parse(result.stdout);
-      expect(observed.attempts).toBe(1);
-      expect(observed.brokers).toEqual([null, null]);
-      expect(observed.parents).toEqual(Array(4).fill(observed.hostPid));
-      expect(observed.errors).toHaveLength(1);
-      expect(observed.errors[0]).toMatch(/before readiness|before becoming ready/);
-      expect(observed.errors[0]).toContain(
-        fileURLToPath(resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.spawnBroker)),
-      );
-      if (failure === "timeout") {
-        expect(observed.errors[0]).toContain("readiness deadline exceeded");
-      }
-      expect(observed.errors[0]).toContain("in-process spawning");
-      expect(observed.errors[0]).not.toMatch(/[\r\n]/);
-    },
-    35_000,
-  );
-});
+    const node = resolveTestNodeExecPath();
+    const result = spawnSync(
+      node,
+      [
+        ...resolveRuntimeWorkerArgv(serverUrl, node).slice(0, -1),
+        "--input-type=module",
+        "--eval",
+        source,
+      ],
+      { cwd: process.cwd(), encoding: "utf8", timeout: 30_000, maxBuffer: 64 * 1024 },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    const observed = JSON.parse(result.stdout);
+    expect(observed).toMatchObject({
+      attempts: 1,
+      brokers: [null, null],
+      parents: Array(4).fill(observed.hostPid),
+    });
+    expect(observed.errors).toHaveLength(1);
+    expect(observed.errors[0]).toMatch(/before readiness|before becoming ready/);
+    expect(observed.errors[0]).toContain(
+      fileURLToPath(resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.spawnBroker)),
+    );
+    if (failure === "timeout") {
+      expect(observed.errors[0]).toContain("readiness deadline exceeded");
+    }
+    expect(observed.errors[0]).toContain("in-process spawning");
+    expect(observed.errors[0]).not.toMatch(/[\r\n]/);
+  },
+  35_000,
+);

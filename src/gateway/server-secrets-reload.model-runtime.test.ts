@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import * as providerCatalog from "../agents/models-config.providers.implicit.js";
 import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
 import {
@@ -19,6 +20,7 @@ import {
   clearSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -55,15 +57,12 @@ function sourceConfig() {
           api: "openai-completions",
           apiKey: "healthy-fixture-key",
           models: [
-            {
-              id: "model",
+            modelDefinition("model", {
               name: "Model",
               reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               maxTokens: 512,
               contextWindow: 4096,
-            },
+            }),
           ],
         },
         "recoverable-fixture": {
@@ -160,6 +159,7 @@ function hotReloadRuntime() {
     createDefaultGatewayReloadState();
   const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
   const handlers = createGatewayReloadHandlers({
+    scheduler: createTestGatewayScheduler(),
     deps: {} as GatewayReloadHandlerParams["deps"],
     broadcast: vi.fn(),
     getState: () => runtimeState,

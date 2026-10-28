@@ -1,6 +1,6 @@
 import type { ApplicationContext } from "../../app/context.ts";
-import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
-import type { HumanMentionDirectory } from "../chat/components/chat-composer-mention-menu.ts";
+import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
+import type { HumanMentionDirectory } from "../chat/components/chat-composer-mention-menu-state.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 
 /** Both creation surfaces query people for the selected destination, not the foreground chat. */
@@ -19,7 +19,10 @@ export function resolveNewSessionMentionDirectory(options: {
     !client ||
     gateway?.snapshot.phase !== "connected" ||
     profile?.type !== "profile" ||
-    !hasOperatorWriteAccess(gateway.snapshot.hello?.auth ?? null) ||
+    !readSessionMethodAccess(gateway.snapshot, {
+      method: "sessions.create",
+      sessionScope: true,
+    }).allowed ||
     options.isCatalogTarget ||
     options.nativeTerminal ||
     options.visibility === "incognito"

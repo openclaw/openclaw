@@ -23,9 +23,18 @@ struct DashboardTLSFixture {
                 result.terminationStatus == 0,
                 Comment(rawValue: String(decoding: result.output, as: UTF8.self)))
         }
+        try """
+        [req]
+        distinguished_name = subject
+        [subject]
+        [server]
+        subjectAltName = DNS:localhost,IP:127.0.0.1
+        extendedKeyUsage = serverAuth
+        """.write(to: directory.appendingPathComponent("openssl.cnf"), atomically: true, encoding: .utf8)
         try await openssl([
             "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2",
-            "-subj", "/CN=localhost", "-keyout", "key.pem", "-out", "cert.pem",
+            "-subj", "/CN=localhost", "-config", "openssl.cnf", "-extensions", "server", "-keyout", "key.pem", "-out",
+            "cert.pem",
         ])
         try await openssl([
             "pkcs12", "-export", "-inkey", "key.pem", "-in", "cert.pem", "-out", "identity.p12",

@@ -4,9 +4,8 @@ import { execFileSync } from "node:child_process";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { isMissingManifestError } from "./lib/docker-manifest-error.mjs";
 import {
-  parseDockerImageConfigVersion,
+  inspectDockerImageVersion,
   resolveDockerReleasePolicy,
 } from "./lib/docker-release-policy.mjs";
 import { compareReleaseVersions } from "./lib/release-version.mjs";
@@ -45,12 +44,11 @@ const VARIANTS = Object.freeze([
  * @property {boolean} [allowRollback]
  * @property {DockerExec} [execFileSyncImpl]
  * @property {(message: string) => void} [log]
+ * @property {() => void} [revalidateAuthority]
  * @property {(params: DockerAttestationParams) => void} [verifyAttestationsImpl]
  */
 
 /**
- * Build the version-specific source to moving-alias promotion plan.
- *
  * @param {DockerPromotionParams} params
  */
 export function createDockerChannelPromotionPlan({
@@ -86,7 +84,12 @@ export function createDockerChannelPromotionPlan({
   return { channel: policy.channel, promotions, version: policy.version };
 }
 
-function runDocker(args, execFileSyncImpl) {
+/** @param {string[]} args
+ * @param {DockerExec} execFileSyncImpl
+ * @param {() => void} [revalidateAuthority]
+ */
+function runDocker(args, execFileSyncImpl, revalidateAuthority) {
+  revalidateAuthority?.();
   return execFileSyncImpl("docker", args, {
     encoding: "utf8",
     killSignal: "SIGKILL",
@@ -113,51 +116,9 @@ function inspectManifestDigest(imageRef, execFileSyncImpl) {
   return digest;
 }
 
-function formatPlatform(platform) {
-  const suffix = platform.variant ? `/${platform.variant}` : "";
-  return `${platform.os}/${platform.architecture}${suffix}`;
-}
-
-function inspectImageVersion(imageRef, execFileSyncImpl, { allowMissing = false } = {}) {
-  const versions = new Map();
-  for (const [index, platform] of REQUIRED_PLATFORMS.entries()) {
-    const platformName = formatPlatform(platform);
-    let raw;
-    try {
-      // In formatted multi-platform inspection, Buildx keys .Image by os/arch.
-      // Read every promoted platform rather than trusting one config label.
-      raw = runDocker(
-        [
-          "buildx",
-          "imagetools",
-          "inspect",
-          imageRef,
-          "--format",
-          `{{json (index .Image "${platformName}")}}`,
-        ],
-        execFileSyncImpl,
-      );
-    } catch (error) {
-      if (allowMissing && index === 0 && isMissingManifestError(error, imageRef)) {
-        return null;
-      }
-      throw error;
-    }
-
-    const version = parseDockerImageConfigVersion(raw, imageRef, platformName);
-    versions.set(platformName, version);
-  }
-  const uniqueVersions = new Set(versions.values());
-  if (uniqueVersions.size !== 1) {
-    const details = [...versions].map(([platform, version]) => `${platform}=${version}`).join(", ");
-    throw new Error(`${imageRef} has inconsistent platform versions: ${details}.`);
-  }
-  return uniqueVersions.values().next().value;
-}
-
 function verifySourceVersions(resolved, version, execFileSyncImpl) {
   for (const promotion of resolved) {
-    const sourceVersion = inspectImageVersion(promotion.sourceDigestRef, execFileSyncImpl);
+    const sourceVersion = inspectDockerImageVersion(promotion.sourceDigestRef, execFileSyncImpl);
     if (sourceVersion !== version) {
       throw new Error(
         `${promotion.sourceDigestRef} reports version ${sourceVersion}, expected ${version}.`,
@@ -169,7 +130,7 @@ function verifySourceVersions(resolved, version, execFileSyncImpl) {
 function preventChannelRollback(resolved, version, execFileSyncImpl) {
   for (const promotion of resolved) {
     for (const targetRef of promotion.targetRefs) {
-      const currentVersion = inspectImageVersion(targetRef, execFileSyncImpl, {
+      const currentVersion = inspectDockerImageVersion(targetRef, execFileSyncImpl, {
         allowMissing: true,
       });
       if (currentVersion === null) {
@@ -192,8 +153,6 @@ function preventChannelRollback(resolved, version, execFileSyncImpl) {
 }
 
 /**
- * Promote every planned alias and verify the registry result.
- *
  * @param {DockerPromotionParams} params
  * @param {DockerPromotionOptions} [options]
  */
@@ -229,6 +188,8 @@ export function promoteDockerChannel(params, options = {}) {
 
   for (const promotion of resolved) {
     const targetArgs = promotion.targetRefs.flatMap((targetRef) => ["--tag", targetRef]);
+    // Candidate publication carries the admission owner through all source and
+    // rollback reads. Standalone historical promotions retain their own gate.
     runDocker(
       [
         "buildx",
@@ -239,6 +200,7 @@ export function promoteDockerChannel(params, options = {}) {
         promotion.sourceDigestRef,
       ],
       execFileSyncImpl,
+      options.revalidateAuthority,
     );
     for (const targetRef of promotion.targetRefs) {
       const targetDigest = inspectManifestDigest(targetRef, execFileSyncImpl);

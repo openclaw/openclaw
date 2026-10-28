@@ -4,9 +4,50 @@ import type { CodexThread } from "./app-server/protocol.js";
 import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
 import {
   commandRpcMocks,
+  config,
   createCodexSessionCatalogControlFactory,
+  createCodexTestBindingStore,
+  createGatewayApi,
+  createRuntime,
   idleThread,
+  registerCodexSessionCatalog,
 } from "./session-catalog.test-helpers.js";
+
+export function catalogFactory(
+  options: Partial<Parameters<typeof createCodexSessionCatalogControlFactory>[0]> = {},
+) {
+  return createCodexSessionCatalogControlFactory({
+    getPluginConfig: () => ({ supervision: { enabled: true } }),
+    getRuntimeConfig: () => undefined,
+    ...options,
+  });
+}
+
+export function remoteCatalogFactory(
+  host: string,
+  options: Parameters<typeof catalogFactory>[0] = {},
+) {
+  return catalogFactory({
+    getPluginConfig: () => ({
+      appServer: {
+        transport: "websocket",
+        url: `wss://${host}.example.test/codex`,
+        authToken: "synthetic-catalog-token",
+      },
+    }),
+    ...options,
+  });
+}
+
+export function catalogProvider(
+  control: Parameters<typeof registerCodexSessionCatalog>[0]["control"],
+  runtime = createRuntime().runtime,
+  bindingStore = createCodexTestBindingStore(),
+) {
+  const { api, getProvider } = createGatewayApi(runtime, config);
+  registerCodexSessionCatalog({ api, bindingStore, control, getRuntimeConfig: () => config });
+  return getProvider()!;
+}
 
 export function nativeCatalogFixture(count = 160, previewBytes = 32) {
   let now = 1_000;
@@ -45,11 +86,7 @@ export function nativeCatalogFixture(count = 160, previewBytes = 32) {
     };
   });
   const make = async () => {
-    const factory = createCodexSessionCatalogControlFactory({
-      getPluginConfig: () => ({ supervision: { enabled: true } }),
-      getRuntimeConfig: () => undefined,
-      now: () => now,
-    });
+    const factory = catalogFactory({ now: () => now });
     const home = (await factory.homesForAgent("main"))[0]!;
     const control = factory.forRequest("main", { ...home, localSessionsRoot: undefined });
     await control.initialize();
@@ -102,11 +139,10 @@ export async function measureCatalogLists(
     page = await control.listPage({ limit: 100, cursor: page.nextCursor });
   }
   const elapsed: number[] = [];
-  const cpu: number[] = [];
-  const beforeCalls = commandRpcMocks.codexControlRequest.mock.calls.length;
+  const calls = commandRpcMocks.codexControlRequest.mock.calls;
+  const beforeCalls = calls.length;
   for (let i = 0; i < 100; i++) {
     advanceClock();
-    const startCpu = process.threadCpuUsage();
     const start = performance.now();
     await control.listPage({
       limit: 64,
@@ -114,18 +150,10 @@ export async function measureCatalogLists(
       ...(i % 3 === 2 ? { searchTerm: "native" } : {}),
     });
     elapsed.push(performance.now() - start);
-    const usage = process.threadCpuUsage(startCpu);
-    cpu.push((usage.user + usage.system) / 1_000);
   }
   elapsed.sort((a, b) => a - b);
   return {
-    fixtureThreads: 3_000,
-    lists: 100,
     p50Ms: elapsed[49],
-    p95Ms: elapsed[94],
-    threadListCalls: commandRpcMocks.codexControlRequest.mock.calls
-      .slice(beforeCalls)
-      .filter((call) => call[1] === "thread/list").length,
-    mainThreadCpuMsPerList: cpu.reduce((sum, value) => sum + value, 0) / cpu.length,
+    threadListCalls: calls.slice(beforeCalls).filter((call) => call[1] === "thread/list").length,
   };
 }

@@ -1,9 +1,8 @@
 // Channel-internal seam carrying a dispatch's terminal processed outcome to the turn kernel.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import type { DispatchProcessedOutcome } from "./dispatch-from-config.audit.js";
+import type { DispatchProcessedOutcome } from "./dispatch-from-config.types.js";
 
-/** Terminal outcome recorded while dispatching; names the branch that ended the turn. */
 export type DispatchProcessedNote = {
   outcome: DispatchProcessedOutcome;
   reason?: string;
@@ -31,7 +30,6 @@ export async function withDispatchProcessedOutcomeSink<T>(
   return { result, processedOutcome: sink.current };
 }
 
-/** Records the dispatch's terminal outcome for the surrounding channel turn, if any. */
 export function noteDispatchProcessedOutcome(note: DispatchProcessedNote): void {
   const sink = dispatchProcessedOutcomeSink.getStore();
   if (sink) {

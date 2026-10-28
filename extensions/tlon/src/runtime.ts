@@ -1,4 +1,3 @@
-// Tlon plugin module implements runtime behavior.
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 

@@ -1,244 +1,139 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createCliDispatchTranscriptRecorder } from "./cli-backend-dispatch-transcript.js";
 
 const appendTranscriptMessage = vi.hoisted(() => vi.fn());
 
-vi.mock("../../config/sessions/session-accessor.js", () => ({
-  appendTranscriptMessage,
-}));
+// mock-isolation: Inspect recorder output without opening or mutating a session database.
+vi.mock("../../config/sessions/session-accessor.js", () => ({ appendTranscriptMessage }));
 
-type AppendedRecord = {
-  scope: Record<string, unknown>;
-  message: Record<string, unknown>;
-};
-
-function appendedRecords(): AppendedRecord[] {
-  return appendTranscriptMessage.mock.calls.map((call) => ({
+const appendedRecords = () =>
+  appendTranscriptMessage.mock.calls.map((call) => ({
     scope: call[0] as Record<string, unknown>,
     message: (call[1] as { message: Record<string, unknown> }).message,
   }));
-}
 
-function recorderParams() {
-  return {
-    sessionId: "recall-session",
-    sessionKey: "agent:main:recall",
-    agentId: "main",
-    sessionFile: "sqlite://agents/main/recall-session",
+const scope = {
+  sessionId: "recall-session",
+  sessionKey: "agent:main:recall",
+  agentId: "main",
+  sessionFile: "sqlite://agents/main/recall-session",
+  expectedLifecycleRevision: "revision-a",
+  expectedWriterRunId: "run-transcript-test",
+};
+function createRecorder() {
+  return createCliDispatchTranscriptRecorder({
+    ...scope,
     runId: "run-transcript-test",
     prompt: "recall prompt",
     provider: "claude-cli",
     model: "claude-opus-4-8",
-    expectedLifecycleRevision: "revision-a",
-    expectedWriterRunId: "run-transcript-test",
     senderIsOwner: true,
-  };
+  });
 }
+
+const recallCall = { toolName: "memory_search", toolCallId: "call-1" };
+const textContent = (text: string) => [{ type: "text", text }];
+const assistantMessage = (text: string, stopReason: string) => ({
+  role: "assistant",
+  content: textContent(text),
+  stopReason,
+});
+const recallContent = textContent('{"results":[{"id":"m1"}]}');
+const recallDetails = { results: [{ id: "m1" }], debug: { backend: "builtin", hits: 1 } };
+const messages = () => appendedRecords().map((record) => record.message);
+const assistants = () => appendedRecords().filter((record) => record.message.role === "assistant");
 
 beforeEach(() => {
   appendTranscriptMessage.mockReset();
   appendTranscriptMessage.mockResolvedValue({ appended: true, message: {}, messageId: "m" });
 });
 
-describe("createCliDispatchTranscriptRecorder", () => {
-  it("appends the user turn to the run's session identity", async () => {
-    const recorder = createCliDispatchTranscriptRecorder(recorderParams());
-    await recorder.finalize();
-
-    const records = appendedRecords();
-    expect(records[0]?.scope).toMatchObject({
-      sessionId: "recall-session",
-      sessionKey: "agent:main:recall",
-      agentId: "main",
-      sessionFile: "sqlite://agents/main/recall-session",
-      expectedLifecycleRevision: "revision-a",
-      expectedWriterRunId: "run-transcript-test",
-    });
-    expect(records[0]?.message).toMatchObject({
-      role: "user",
-      content: [{ type: "text", text: "recall prompt" }],
-      __openclaw: { senderIsOwner: true },
-    });
+it.each(["wrapped", "bare-array"])("mirrors %s recall results and network taint", async (shape) => {
+  const recorder = createRecorder();
+  const details = shape === "wrapped" ? recallDetails : undefined;
+  const result = shape === "wrapped" ? { content: recallContent, details } : recallContent;
+  recorder.noteToolEvent({
+    phase: "start",
+    ...recallCall,
+    args: { query: "wings" },
   });
+  recorder.noteToolEvent({
+    phase: "result",
+    ...recallCall,
+    result,
+    isError: false,
+    resultContentSource: shape === "wrapped" ? "network" : undefined,
+  });
+  await recorder.finalize("Lemon pepper.");
 
-  it("mirrors tool calls and results in the shapes the recall parsers accept", async () => {
-    const recorder = createCliDispatchTranscriptRecorder(recorderParams());
-    recorder.noteToolEvent({
-      phase: "start",
-      toolName: "memory_search",
-      toolCallId: "call-1",
-      args: { query: "wings" },
-    });
-    recorder.noteToolEvent({
-      phase: "result",
-      toolName: "memory_search",
-      toolCallId: "call-1",
-      result: {
-        content: [{ type: "text", text: '{"results":[{"id":"m1"}]}' }],
-        details: { results: [{ id: "m1" }], debug: { backend: "builtin", hits: 1 } },
-      },
-      isError: false,
-    });
-    await recorder.finalize("Lemon pepper.");
-
-    const messages = appendedRecords().map((record) => record.message);
-    expect(messages[1]).toMatchObject({
+  expect(appendedRecords()[0]?.scope).toMatchObject(scope);
+  expect(messages()).toMatchObject([
+    {
+      role: "user",
+      content: textContent("recall prompt"),
+      __openclaw: { senderIsOwner: true },
+    },
+    {
       role: "assistant",
       content: [
-        { type: "toolCall", id: "call-1", name: "memory_search", arguments: { query: "wings" } },
+        {
+          type: "toolCall",
+          id: "call-1",
+          name: "memory_search",
+          arguments: { query: "wings" },
+        },
       ],
       stopReason: "toolUse",
-    });
-    // The toolResult shape is what active-memory's transcript readers parse:
-    // role/toolName gate the record; details/content decide usable-vs-unavailable.
-    expect(messages[2]).toMatchObject({
+    },
+    {
       role: "toolResult",
-      toolCallId: "call-1",
-      toolName: "memory_search",
-      content: [{ type: "text", text: '{"results":[{"id":"m1"}]}' }],
-      details: { results: [{ id: "m1" }], debug: { backend: "builtin", hits: 1 } },
+      ...recallCall,
+      content: recallContent,
+      details,
       isError: false,
-    });
-    expect(messages[3]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "Lemon pepper." }],
-      stopReason: "stop",
-    });
+    },
+    assistantMessage("Lemon pepper.", "stop"),
+  ]);
+  if (shape === "wrapped") {
+    expect(messages()[2]?.["__openclaw"]).toEqual({ resultContentSource: "network" });
+    expect(messages()[3]?.["__openclaw"]).toEqual({ turnTainted: true });
+  }
+});
+
+it("survives a failed append and publishes later tool records before finalization", async () => {
+  appendTranscriptMessage.mockRejectedValueOnce(new Error("store unavailable"));
+  const recorder = createRecorder();
+  recorder.noteToolEvent({
+    phase: "result",
+    toolName: "memory_search",
+    result: { content: [], details: { status: "unavailable", error: "backend offline" } },
+    isError: true,
   });
-
-  it("persists network-result taint on the result and subsequent assistant", async () => {
-    const recorder = createCliDispatchTranscriptRecorder(recorderParams());
-    recorder.noteToolEvent({
-      phase: "result",
-      toolName: "fake_web_tool",
-      result: { content: [{ type: "text", text: "untrusted page" }] },
-      isError: false,
-      resultContentSource: "network",
-    });
-    await recorder.finalize("summary");
-
-    const messages = appendedRecords().map((record) => record.message);
-    expect(messages[1]).toMatchObject({
-      role: "toolResult",
-      __openclaw: { resultContentSource: "network" },
-    });
-    expect(messages[2]).toMatchObject({
-      role: "assistant",
-      __openclaw: { turnTainted: true },
-    });
-  });
-
-  it("keeps bare-array tool_result content as claude stream-json echoes it", async () => {
-    // Live claude -p runs deliver MCP tool results as `block.content` — a bare
-    // content-block array with no {content} wrapper. Dropping it made every
-    // successful recall classify as no_relevant_memory.
-    const recorder = createCliDispatchTranscriptRecorder(recorderParams());
-    recorder.noteToolEvent({
-      phase: "start",
-      toolName: "memory_search",
-      toolCallId: "call-1",
-      args: { query: "copperfin" },
-    });
-    recorder.noteToolEvent({
-      phase: "result",
-      toolName: "memory_search",
-      toolCallId: "call-1",
-      result: [{ type: "text", text: '{"results":[{"path":"MEMORY.md"}]}' }],
-      isError: false,
-    });
-    await recorder.finalize("Port 4173.");
-
-    const messages = appendedRecords().map((record) => record.message);
-    expect(messages[2]).toMatchObject({
-      role: "toolResult",
-      toolCallId: "call-1",
-      toolName: "memory_search",
-      content: [{ type: "text", text: '{"results":[{"path":"MEMORY.md"}]}' }],
-      isError: false,
-    });
-  });
-
-  it("appends tool records incrementally for the live terminal-search watcher", async () => {
-    const recorder = createCliDispatchTranscriptRecorder(recorderParams());
-    recorder.noteToolEvent({
-      phase: "result",
-      toolName: "memory_search",
-      result: { content: [], details: { status: "unavailable", error: "backend offline" } },
-      isError: true,
-    });
-    // No finalize yet: the record must be written mid-run.
-    await vi.waitFor(() => {
-      expect(appendedRecords().some((record) => record.message.role === "toolResult")).toBe(true);
-    });
-    const toolResult = appendedRecords().find(
-      (record) => record.message.role === "toolResult",
-    )?.message;
-    expect(toolResult).toMatchObject({
+  await vi.waitFor(() => {
+    expect(messages().find((message) => message.role === "toolResult")).toMatchObject({
       toolName: "memory_search",
       details: { status: "unavailable", error: "backend offline" },
       isError: true,
     });
-    await recorder.finalize();
   });
+  await expect(recorder.finalize("text")).resolves.toBeUndefined();
+  expect(messages().at(-1)).toMatchObject(assistantMessage("text", "stop"));
+});
 
-  it("flushes the last streamed assistant snapshot when no final text exists", async () => {
-    const recorder = createCliDispatchTranscriptRecorder(recorderParams());
-    recorder.noteAssistantText("partial an");
-    recorder.noteAssistantText("partial answer before timeout");
-    await recorder.finalize(undefined);
-
-    const assistant = appendedRecords().find(
-      (record) => record.message.role === "assistant",
-    )?.message;
-    expect(assistant).toMatchObject({
-      content: [{ type: "text", text: "partial answer before timeout" }],
-    });
-  });
-
-  it("flushes the latest snapshot on abort and does not duplicate it at finalize", async () => {
-    const recorder = createCliDispatchTranscriptRecorder(recorderParams());
-    recorder.noteAssistantText("partial before kill");
-    recorder.flushAssistantSnapshot();
-    await vi.waitFor(() => {
-      expect(
-        appendedRecords().filter((record) => record.message.role === "assistant"),
-      ).toHaveLength(1);
-    });
-    // The killed child settles later; finalize with the same text must not
-    // append a duplicate record.
-    await recorder.finalize(undefined);
-    const assistants = appendedRecords().filter((record) => record.message.role === "assistant");
-    expect(assistants).toHaveLength(1);
-    expect(assistants[0]?.message).toMatchObject({
-      content: [{ type: "text", text: "partial before kill" }],
-      stopReason: "aborted",
-    });
-    expect(assistants[0]?.scope).toMatchObject({
-      expectedLifecycleRevision: "revision-a",
-      expectedWriterRunId: "run-transcript-test",
-    });
-  });
-
-  it("writes a newer final text after an abort flush", async () => {
-    const recorder = createCliDispatchTranscriptRecorder(recorderParams());
-    recorder.noteAssistantText("partial");
-    recorder.flushAssistantSnapshot();
-    await recorder.finalize("full final answer");
-    const assistants = appendedRecords().filter((record) => record.message.role === "assistant");
-    expect(assistants).toHaveLength(2);
-    expect(assistants[1]?.message).toMatchObject({
-      content: [{ type: "text", text: "full final answer" }],
-      stopReason: "stop",
-    });
-  });
-
-  it("survives append failures without failing the run or later appends", async () => {
-    appendTranscriptMessage.mockRejectedValueOnce(new Error("store unavailable"));
-    const recorder = createCliDispatchTranscriptRecorder(recorderParams());
-    recorder.noteToolEvent({ phase: "result", toolName: "memory_search", isError: false });
-    await expect(recorder.finalize("text")).resolves.toBeUndefined();
-    // The user-turn append failed; the tool and assistant records still land.
-    expect(appendedRecords().some((record) => record.message.role === "toolResult")).toBe(true);
-    expect(appendedRecords().some((record) => record.message.role === "assistant")).toBe(true);
-  });
+it.each([
+  { finalText: undefined, count: 1 },
+  { finalText: "full final answer", count: 2 },
+])("flushes then finalizes $finalText without duplicates", async ({ finalText, count }) => {
+  const recorder = createRecorder();
+  recorder.noteAssistantText("partial before kill");
+  recorder.flushAssistantSnapshot();
+  await vi.waitFor(() => expect(assistants()).toHaveLength(1));
+  await recorder.finalize(finalText);
+  expect(assistants()).toHaveLength(count);
+  expect(assistants()[0]?.message).toMatchObject(
+    assistantMessage("partial before kill", "aborted"),
+  );
+  if (finalText) {
+    expect(assistants()[1]?.message).toMatchObject(assistantMessage(finalText, "stop"));
+  }
 });

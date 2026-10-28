@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { z } from "zod";
@@ -13,6 +14,10 @@ import {
   readCodexAppServerProcessCommand,
   readCodexAppServerProcessSnapshot,
 } from "./transport-process-snapshot.js";
+
+const loadPluginStateStoreRuntime = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/plugin-state-store-runtime"),
+);
 
 // Startup tolerates transient host load; signal containment retains its shorter budget.
 const PROCESS_REGISTRATION_INSPECTION_MS = 10_000;
@@ -54,8 +59,7 @@ function fingerprintProcessCommand(command: string): string {
 
 async function openProcessRegistrationStore() {
   const env = { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir() };
-  const { createPluginStateKeyedStore } =
-    await import("openclaw/plugin-sdk/plugin-state-store-runtime");
+  const { createPluginStateKeyedStore } = await loadPluginStateStoreRuntime();
   return createPluginStateKeyedStore<ProcessRegistration>("codex", {
     namespace: "app-server-processes",
     maxEntries: 512,
@@ -78,9 +82,9 @@ async function sweepRegisteredCodexAppServerOrphans(
 ): Promise<void> {
   // Loading durable registrations can include cold database-worker startup.
   const entries = await store.entries();
-  const deadline = Date.now() + PROCESS_REGISTRATION_INSPECTION_MS;
+  const deadline = performance.now() + PROCESS_REGISTRATION_INSPECTION_MS;
   for (const entry of entries) {
-    if (Date.now() >= deadline) {
+    if (performance.now() >= deadline) {
       throw new Error("Codex orphan cleanup exceeded its startup budget. Retry to finish cleanup.");
     }
     const registration = registrationSchema.parse(entry.value);
@@ -161,18 +165,17 @@ export function createCodexAppServerProcessReaperService(): OpenClawPluginServic
 export async function prepareCodexAppServerProcessRegistration(): Promise<
   (child: ChildProcessWithoutNullStreams) => Promise<void>
 > {
-  if (process.platform === "win32") {
-    return async (child) => {
-      await once(child, "spawn");
-    };
-  }
-  const store = await reapRegisteredCodexAppServerOrphans();
+  const store =
+    process.platform === "win32" ? undefined : await reapRegisteredCodexAppServerOrphans();
   return async (child) => {
     await once(child, "spawn");
+    if (!store) {
+      return;
+    }
     if (!child.pid) {
       throw new ProcessInspectionError("unavailable");
     }
-    const deadline = Date.now() + PROCESS_REGISTRATION_INSPECTION_MS;
+    const deadline = performance.now() + PROCESS_REGISTRATION_INSPECTION_MS;
     const snapshot = await readCodexAppServerProcessSnapshot(deadline, [child.pid]);
     const parent = snapshot.find((row) => row.pid === process.pid);
     const spawned = snapshot.find((row) => row.pid === child.pid);

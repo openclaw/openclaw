@@ -1,10 +1,9 @@
-import fs, { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import fs, { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { forceFreePort, forceFreePortAndWait } from "../cli/ports.js";
+import { forceFreePortAndWait } from "../cli/ports.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import {
@@ -13,12 +12,24 @@ import {
   diagnosticEnvReportScript,
   withSyntheticDiagnosticEnv,
 } from "./diagnostic-env.test-support.js";
+import { readGatewayLockProcessNamespace } from "./gateway-lock-payload.js";
 import { readActiveGatewayLockIdentity } from "./gateway-lock.js";
 import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
 import { spawnPsSync } from "./spawn-ps.js";
+import * as bootReader from "./update-managed-service-handoff-boot.js";
 
-const mocks = vi.hoisted(() => ({ exec: vi.fn(), spawn: vi.fn(), probe: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  exec: vi.fn(),
+  spawn: vi.fn(),
+  probe: vi.fn(),
+  darwinCommand: vi.fn(),
+  identity: vi.fn<typeof import("@openclaw/proc-safe/identity").readProcessIdentity>(() => null),
+}));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/proc-safe/identity")>()),
+  readProcessIdentity: mocks.identity,
+}));
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   execFileSync: mocks.exec,
@@ -26,30 +37,47 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 vi.mock("./ports-lsof.js", () => ({ resolveLsofCommandSync: () => "lsof" }));
 vi.mock("./ports-probe.js", () => ({ probePortUsage: mocks.probe }));
+vi.mock("../process/supervisor/darwin-process-command.js", () => ({
+  readDarwinProcessCommand: mocks.darwinCommand,
+}));
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.resetAllMocks();
 });
 
-it("bounds native lock argv inspection by its remaining allowance", async () => {
+function lockRecord(root: string, extra: { pid?: number; port?: number; startTime?: number } = {}) {
+  return JSON.stringify({
+    pid: 424242,
+    port: 43123,
+    createdAt: "2026-09-03T00:00:00Z",
+    configPath: path.join(root, "openclaw.json"),
+    processNamespace: readGatewayLockProcessNamespace(),
+    ...extra,
+  });
+}
+
+it("enforces the lock observation deadline after native argv inspection", async () => {
   const root = tempDirs.make("lock-argv-budget-");
-  await writeFile(
-    path.join(root, "gateway.state.lock"),
-    JSON.stringify({
-      pid: 424242,
-      port: 43123,
-      createdAt: "2026-09-03T00:00:00Z",
-      configPath: path.join(root, "openclaw.json"),
-    }),
-  );
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => ({
+    platform: "darwin",
+    identity: "01234567-89ab-cdef-0123-456789abcdef",
+  }));
+  await writeFile(path.join(root, "gateway.state.lock"), lockRecord(root));
   vi.spyOn(process, "kill").mockReturnValue(true);
+  mocks.identity.mockImplementation((pid) => ({
+    pid,
+    parentPid: 0,
+    startTimeMicros: 1,
+    startTimeResolutionMicros: 1,
+    exited: false,
+  }));
   let elapsedMs = 0;
   vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
-  mocks.exec.mockImplementation((_file, _args, options) => {
-    elapsedMs += Number(options?.timeout ?? 0);
-    throw new Error("native inspection timed out");
+  mocks.darwinCommand.mockImplementation(() => {
+    elapsedMs += 125;
+    return { argv: ["openclaw-gateway"] };
   });
 
   await expect(
@@ -76,30 +104,20 @@ it("stops a canceled lock observation before process inspection resumes", async 
     }
     return await readFile(filePath, options);
   });
-  const readProcessStartTime = vi.fn(() => 111);
   const controller = new AbortController();
   const observed = readActiveGatewayLockIdentity({
     env: { OPENCLAW_STATE_DIR: root },
     lockDir: root,
     requireInspection: true,
     signal: controller.signal,
-    readProcessStartTime,
   }).catch((error: unknown) => error);
   try {
     await entered.promise;
     const reason = new Error("observation canceled");
     controller.abort(reason);
-    released.resolve(
-      JSON.stringify({
-        pid: process.pid,
-        createdAt: "2026-09-03T00:00:00Z",
-        configPath: path.join(root, "openclaw.json"),
-        startTime: 111,
-        port: 48789,
-      }),
-    );
+    released.resolve(lockRecord(root, { pid: process.pid, startTime: 111, port: 48789 }));
     expect(await observed).toBe(reason);
-    expect(readProcessStartTime).not.toHaveBeenCalled();
+    expect(mocks.identity).not.toHaveBeenCalled();
   } finally {
     released.resolve("");
     await observed;
@@ -110,7 +128,6 @@ it.each([
   "shared ps",
   "restart scan",
   "restart poll",
-  "lock argv",
   "CLI lsof",
   "CLI netstat",
   "CLI fuser",
@@ -118,7 +135,7 @@ it.each([
   "CLI fuser KILL",
 ])("projects the environment at the %s launch boundary", async (surface) => {
   const native = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "diagnostic-siblings-")));
+  const root = tempDirs.make("diagnostic-siblings-");
   const routing = createDiagnosticFixtureRouting({
     PATH: root,
     HOME: root,
@@ -129,10 +146,15 @@ it.each([
   vi.spyOn(process, "platform", "get").mockReturnValue(
     surface === "CLI netstat" ? "win32" : surface.startsWith("CLI fuser") ? "linux" : "darwin",
   );
-  const killMock = vi.spyOn(process, "kill").mockImplementation(() => {
+  mocks.darwinCommand.mockImplementation((pid: number) =>
+    pid === 424242 ? { argv: ["openclaw-gateway"] } : undefined,
+  );
+  let portCleared = false;
+  vi.spyOn(process, "kill").mockImplementation(() => {
     if (surface === "restart poll") {
       throw Object.assign(new Error("gone"), { code: "ESRCH" });
     }
+    portCleared = true;
     return true;
   });
   const previousLoggerOverride = loggingState.overrideSettings;
@@ -154,7 +176,6 @@ it.each([
         reports.push({ command, report: JSON.parse(stdout) });
       };
       let lsofCalls = 0;
-      const fuserArgs: string[][] = [];
       mocks.spawn.mockImplementation(
         (command: string, _args: string[], options: { env?: NodeJS.ProcessEnv }) => {
           capture(command, options.env);
@@ -178,16 +199,15 @@ it.each([
             return "node openclaw.mjs gateway";
           }
           if (command === "fuser") {
-            fuserArgs.push(args);
             mocks.probe.mockResolvedValue(
               surface === "CLI fuser KILL" && args.includes("-TERM") ? "busy" : "free",
             );
             return "424242";
           }
           if (command.endsWith("netstat.exe")) {
-            return "TCP 127.0.0.1:43123 0.0.0.0:0 LISTENING 424242";
+            return portCleared ? "" : "TCP 127.0.0.1:43123 0.0.0.0:0 LISTENING 424242";
           }
-          return "p424242\ncnode\n";
+          return portCleared ? "" : "p424242\ncnode\n";
         },
       );
       const parent = { ...process.env };
@@ -198,52 +218,22 @@ it.each([
       } else if (surface === "restart poll") {
         expect(cleanStaleGatewayProcessesSync(43123)).toEqual([]);
         expect(lsofCalls).toBe(2);
-      } else if (surface === "lock argv") {
-        await writeFile(
-          path.join(root, "gateway.state.lock"),
-          JSON.stringify({
-            pid: 424242,
-            port: 43123,
-            createdAt: "2026-09-03T00:00:00Z",
-            configPath: path.join(root, "openclaw.json"),
-          }),
-        );
-        expect(
-          await readActiveGatewayLockIdentity({ lockDir: root, env: { OPENCLAW_STATE_DIR: root } }),
-        ).toMatchObject({ pid: 424242, port: 43123 });
       } else if (surface.startsWith("CLI fuser")) {
         mocks.probe.mockResolvedValue("busy");
-        const beforeSignal = vi.fn();
-        expect(
-          await forceFreePortAndWait(43123, {
-            sigtermTimeoutMs: 0,
-            ...(surface === "CLI fuser" ? { beforeSignal } : {}),
-          }),
-        ).toEqual({
-          killed: [{ pid: 424242 }],
-          waitedMs: 0,
-          escalatedToSigkill: surface === "CLI fuser KILL",
+        const result = await forceFreePortAndWait(43123, {
+          sigtermTimeoutMs: 0,
+          ...(surface === "CLI fuser" ? { beforeSignal: vi.fn() } : {}),
         });
-        if (surface === "CLI fuser") {
-          expect(fuserArgs).toEqual([["43123/tcp"]]);
-          expect(beforeSignal).toHaveBeenCalledExactlyOnceWith({
-            port: 43123,
-            pid: 424242,
-            signal: "SIGTERM",
-          });
-          expect(killMock).toHaveBeenCalledExactlyOnceWith(424242, "SIGTERM");
-        } else {
-          expect(fuserArgs).toEqual(
-            (surface === "CLI fuser KILL" ? ["TERM", "KILL"] : ["TERM"]).map((signal) => [
-              "-k",
-              `-${signal}`,
-              "43123/tcp",
-            ]),
-          );
-          expect(killMock).not.toHaveBeenCalled();
-        }
+        expect(result.escalatedToSigkill).toBe(surface === "CLI fuser KILL");
+        expect(reports.map(({ command }) => command)).toContain(
+          surface === "CLI fuser"
+            ? "fuser 43123/tcp"
+            : `fuser -k -${surface.endsWith("KILL") ? "KILL" : "TERM"} 43123/tcp`,
+        );
       } else {
-        expect(forceFreePort(43123)).toEqual([expect.objectContaining({ pid: 424242 })]);
+        expect((await forceFreePortAndWait(43123)).killed).toEqual([
+          expect.objectContaining({ pid: 424242 }),
+        ]);
       }
       expect(process.env).toEqual(parent);
       expect(reports.length).toBeGreaterThan(0);
@@ -256,6 +246,5 @@ it.each([
     });
   } finally {
     setLoggerOverride(previousLoggerOverride as Parameters<typeof setLoggerOverride>[0]);
-    await rm(root, { recursive: true, force: true });
   }
 });

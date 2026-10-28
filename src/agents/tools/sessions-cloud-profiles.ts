@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EnvironmentsListResult } from "../../../packages/gateway-protocol/src/index.js";
 import { jsonResult, readToolStringParam, ToolInputError } from "./common.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
@@ -12,7 +11,7 @@ export async function listSessionCloudProfiles(
     params: { projection: "profiles" },
   });
   const profiles = catalog.profiles ?? [];
-  const profileId = normalizeOptionalString(readToolStringParam(params, "profileId"));
+  const profileId = readToolStringParam(params, "profileId");
   if (profileId) {
     const profile = profiles.find((candidate) => candidate.id === profileId);
     return jsonResult(

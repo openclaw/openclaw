@@ -1,10 +1,19 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
-import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { OpenClawPluginServiceV2 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   CODEX_NATIVE_PROFILE_IMPORT_COMMAND,
   formatCodexAuthProfileUnavailableMessage,
 } from "./app-server/auth-profile-recovery.js";
+
+const loadAgentRuntime = createLazyRuntimeModule(async () => {
+  const { loadAuthProfileStoreForRuntimeAsync } = await import("openclaw/plugin-sdk/agent-runtime");
+  return { loadAuthProfileStoreForRuntimeAsync };
+});
+const loadAgentScopeRuntime = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/agent-scope-runtime"),
+);
 
 const CHECK_ID = "codex/native-profile-recovery";
 const PROFILE_ID = "openai:default";
@@ -17,17 +26,13 @@ async function collectFindings(
   if (declared?.provider !== "openai" || declared.mode !== "oauth") {
     return [];
   }
-  const [{ loadAuthProfileStoreForRuntime }, { listAgentIds, resolveAgentDir }] = await Promise.all(
-    [
-      import("openclaw/plugin-sdk/agent-runtime"),
-      import("openclaw/plugin-sdk/agent-scope-runtime"),
-    ],
-  );
+  const [{ loadAuthProfileStoreForRuntimeAsync }, { listAgentIds, resolveAgentDir }] =
+    await Promise.all([loadAgentRuntime(), loadAgentScopeRuntime()]);
   const findings: HealthFinding[] = [];
   const missing: string[] = [];
   for (const agentId of listAgentIds(config)) {
     try {
-      const store = loadAuthProfileStoreForRuntime(
+      const store = await loadAuthProfileStoreForRuntimeAsync(
         resolveAgentDir(config, agentId, env),
         { readOnly: true, config, externalCli: { mode: "none" } },
         env,
@@ -65,15 +70,24 @@ export const codexNativeProfileRecoveryHealthCheck: HealthCheck = {
   detect: (ctx) => collectFindings(ctx.cfg, ctx.env ?? process.env),
 };
 
-export const codexNativeProfileRecoveryService: OpenClawPluginService = {
+export const codexNativeProfileRecoveryService: OpenClawPluginServiceV2 = {
   id: CHECK_ID,
-  async start(ctx) {
-    const findings = await collectFindings(ctx.config, {
-      ...process.env,
-      OPENCLAW_STATE_DIR: ctx.stateDir,
+  apiVersion: 2,
+  start(ctx) {
+    ctx.scheduler.schedule({
+      id: CHECK_ID,
+      delayMs: 0,
+      async run() {
+        const findings = await collectFindings(ctx.config, {
+          ...process.env,
+          OPENCLAW_STATE_DIR: ctx.stateDir,
+        });
+        if (!ctx.scheduler.signal.aborted) {
+          for (const finding of findings) {
+            ctx.logger.warn(finding.message);
+          }
+        }
+      },
     });
-    for (const finding of findings) {
-      ctx.logger.warn(finding.message);
-    }
   },
 };

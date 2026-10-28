@@ -2,24 +2,30 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
+import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
+import { extractSqliteTableSchema, quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import {
   canRepairLegacyAuditEventsSchema,
   hasCanonicalAuditEventsSchema,
 } from "./openclaw-state-db-audit-migration.js";
 import {
+  CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
   OPENCLAW_STATE_STRICT_SCHEMA_VERSION,
+  MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION,
   type OpenClawStateDatabaseSchemaMigration,
 } from "./openclaw-state-db-contract.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
 import {
+  ensureColumn,
   tableExists,
   tableHasColumn,
   tablePrimaryKeyColumns,
 } from "./openclaw-state-db-schema-helpers.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import { FOLDED_SINGLETON_STATE_TABLES_V12 } from "./openclaw-state-db-schema-v12-foldin.js";
-import { readStateSchemaMigrationVersion } from "./openclaw-state-db-schema-version.js";
+import { STATE_CURSOR_TABLES_V22 } from "./openclaw-state-db-schema-v22-columns.js";
+import { TEMPLATE_STATE_TABLE_RENAMES } from "./openclaw-state-db-schema-v36-template-names.js";
+import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import {
   hasRecognizedRetiredCommitmentsSchema,
@@ -32,6 +38,79 @@ import {
   resolveOpenClawStateDirForDatabasePath,
 } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+
+type StateMigrationKind = OpenClawStateDatabaseSchemaMigration["kind"];
+
+/** Tables whose existing read contracts can change before this migration completes. */
+export const STATE_SCHEMA_MIGRATION_READ_TABLES: Record<StateMigrationKind, readonly string[]> = {
+  "agent-databases-composite-primary-key": ["agent_databases"],
+  "audit-events-v2": ["audit_events", "audit_identity_keys"],
+  "commitments-retirement-v7": ["commitments"],
+  "worker-placement-execution-mode-v8": ["worker_session_placements"],
+  "agent-databases-relative-paths-v9": ["agent_databases"],
+  "state-table-retirement-v10": RETIRED_DEAD_STATE_TABLES_V10,
+  "state-table-retirement-v11": RETIRED_SKILL_CURATOR_TABLES_V11,
+  "singleton-state-foldin-v12": ["config_machine_state", ...FOLDED_SINGLETON_STATE_TABLES_V12],
+  "state-consolidation-v13": [
+    "cron_jobs",
+    "subagent_runs",
+    "workspace_setup_state",
+    "workspace_attestations",
+    "workspace_generated_bootstrap_hashes",
+    "auth_profile_stores",
+    "auth_profile_state",
+    "installed_plugin_index",
+    "config_machine_state",
+    "diagnostic_events",
+  ],
+  "creator-namespace-v14": ["cron_jobs"],
+  "conversation-binding-targets-v15": ["current_conversation_bindings"],
+  "prepared-worker-ownership-v17": ["worker_environments"],
+  "github-publication-requester-authority-v18": [
+    "github_publication_session_lifecycles",
+    "github_repository_publication_requests",
+  ],
+  "meeting-transcript-start-time": ["meeting_transcript_sessions"],
+  "portable-identity-columns-v22": ["acp_sessions", ...STATE_CURSOR_TABLES_V22],
+  "task-run-indexes-v24": [],
+  "subagent-operator-recovery-v25": [],
+  "session-state-head-layout-v26": [],
+  "state-write-indexes-v27": [],
+  "github-publication-draft-v28": [
+    "github_publication_requests",
+    "github_personal_publication_requests",
+    "github_repository_publication_requests",
+  ],
+  "local-client-credentials-v29": [
+    "device_identities",
+    "device_auth_tokens",
+    "gateway_origin_device_tokens",
+    "exec_approvals_config",
+  ],
+  "predicate-columns-v21": [
+    "meeting_transcript_sessions",
+    "meeting_transcript_summaries",
+    "delivery_queue_entries",
+  ],
+  "automation-policy-fence-v30": ["cron_jobs"],
+  "local-workspace-manifests-v31": [
+    "local_workspace_projections",
+    "local_workspace_manifest_nodes",
+  ],
+  "local-workspace-cas-v35": [
+    "local_workspace_projections",
+    "local_workspace_tree_packs",
+    "local_workspace_source_path_sets",
+  ],
+  "template-names-v36": [...TEMPLATE_STATE_TABLE_RENAMES.flat(), "agent_provenance"],
+  "operator-approvals-system-agent": ["operator_approvals"],
+  "session-watch-cursor-provenance-v4": ["session_watch_cursors"],
+  // STRICT migration can rebuild every ordinary table in the canonical schema.
+  "strict-tables-v3": OPENCLAW_STATE_SCHEMA_SQL.split("\n").flatMap((line) => {
+    const table = /^CREATE TABLE IF NOT EXISTS (\w+) \(/u.exec(line)?.[1];
+    return table ? [table] : [];
+  }),
+};
 
 export function dropLegacyStateTables(db: DatabaseSync): void {
   // Unreleased transient history; drop, do not migrate.
@@ -53,20 +132,13 @@ export function migrateWorkerPlacementExecutionModeSchema(
     "terminal_reason TEXT",
     "terminal_at_ms INTEGER",
   ]) {
-    const column = definition.split(" ", 1)[0]!;
-    if (!tableHasColumn(db, "worker_session_placements", column)) {
-      db.exec(`ALTER TABLE worker_session_placements ADD COLUMN ${definition};`);
-    }
+    ensureColumn(db, "worker_session_placements", definition);
   }
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-    "CREATE TABLE IF NOT EXISTS worker_session_placements (",
+  const placementSchema = extractSqliteTableSchema(
+    OPENCLAW_STATE_SCHEMA_SQL,
+    "worker_session_placements",
+    { errorMessage: "Canonical worker placement schema block is missing" },
   );
-  const endMarker = "\n) STRICT;";
-  const end = start >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start) : -1;
-  if (start < 0 || end < 0) {
-    throw new Error("Canonical worker placement schema block is missing");
-  }
-  const placementSchema = OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + endMarker.length);
   const canonical = openNodeSqliteDatabase(":memory:");
   let canonicalColumns: string[];
   try {
@@ -246,57 +318,16 @@ export function migrateAgentDatabaseRelativePaths(
   };
 }
 
-function hasCanonicalAgentDatabasesPrimaryKey(db: DatabaseSync): boolean {
+export function assertCanonicalAgentDatabasesPrimaryKey(db: DatabaseSync, pathname: string): void {
   if (!tableExists(db, "agent_databases")) {
-    return true;
+    return;
   }
   const primaryKey = tablePrimaryKeyColumns(db, "agent_databases");
-  return primaryKey.length === 2 && primaryKey[0] === "agent_id" && primaryKey[1] === "path";
-}
-
-function canRepairAgentDatabasesPrimaryKey(db: DatabaseSync): boolean {
-  if (!tableExists(db, "agent_databases")) {
-    return false;
-  }
-  const requiredColumns = ["agent_id", "path", "schema_version", "last_seen_at", "size_bytes"];
-  return requiredColumns.every((column) => tableHasColumn(db, "agent_databases", column));
-}
-
-export function repairAgentDatabasesCompositePrimaryKey(db: DatabaseSync): boolean {
-  if (hasCanonicalAgentDatabasesPrimaryKey(db) || !canRepairAgentDatabasesPrimaryKey(db)) {
-    return false;
-  }
-  // Released DBs may have PRIMARY KEY(agent_id); current registration upserts by
-  // (agent_id,path) so explicit relocated agent DBs do not overwrite each other.
-  db.exec(`
-    DROP TABLE IF EXISTS agent_databases_migration_new;
-    CREATE TABLE agent_databases_migration_new (
-      agent_id TEXT NOT NULL,
-      path TEXT NOT NULL,
-      schema_version INTEGER NOT NULL,
-      last_seen_at INTEGER NOT NULL,
-      size_bytes INTEGER,
-      PRIMARY KEY (agent_id, path)
+  if (primaryKey.length !== 2 || primaryKey[0] !== "agent_id" || primaryKey[1] !== "path") {
+    throw new SqliteSchemaMismatchError(
+      `OpenClaw state database ${pathname} has an unsupported agent database registry schema. Upgrades from pre-July-2026 state are no longer migrated; restore a backup produced by a July 2026 or newer release before retrying.`,
     );
-    INSERT OR REPLACE INTO agent_databases_migration_new (
-      agent_id,
-      path,
-      schema_version,
-      last_seen_at,
-      size_bytes
-    )
-    SELECT
-      agent_id,
-      path,
-      schema_version,
-      last_seen_at,
-      size_bytes
-    FROM agent_databases
-    WHERE agent_id IS NOT NULL AND path IS NOT NULL;
-    DROP TABLE agent_databases;
-    ALTER TABLE agent_databases_migration_new RENAME TO agent_databases;
-  `);
-  return true;
+  }
 }
 
 export function repairLegacyGatewayRestartHandoffsForStrictMigration(db: DatabaseSync): void {
@@ -326,22 +357,12 @@ export function repairLegacyGatewayRestartHandoffsForStrictMigration(db: Databas
 
 export function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: string): void {
   operatorApprovalMigration.assertCanonicalOperatorApprovalKinds(db, pathname);
-  if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
-    if (canRepairAgentDatabasesPrimaryKey(db)) {
-      throw new OpenClawStateDatabaseSchemaMigrationRequiredError(
-        "agent-databases-composite-primary-key",
-        pathname,
-      );
-    }
-    throw new Error(
-      `OpenClaw state database ${pathname} has a noncanonical agent database registry schema that cannot be repaired automatically; restore the canonical agent_databases shape before retrying.`,
-    );
-  }
+  assertCanonicalAgentDatabasesPrimaryKey(db, pathname);
   if (!hasCanonicalAuditEventsSchema(db)) {
     if (canRepairLegacyAuditEventsSchema(db)) {
       throw new OpenClawStateDatabaseSchemaMigrationRequiredError("audit-events-v2", pathname);
     }
-    throw new Error(
+    throw new SqliteSchemaMismatchError(
       `OpenClaw state database ${pathname} has a noncanonical audit event schema that cannot be repaired automatically; restore the canonical audit_events shape before retrying.`,
     );
   }
@@ -357,8 +378,9 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   db: DatabaseSync,
   pathname: string,
 ): OpenClawStateDatabaseSchemaMigration[] {
+  assertCanonicalAgentDatabasesPrimaryKey(db, pathname);
   const migrations: OpenClawStateDatabaseSchemaMigration[] = [];
-  const userVersion = readStateSchemaMigrationVersion(db);
+  const userVersion = readStateSchemaContentVersion(db);
   if (
     userVersion < RETIRED_COMMITMENTS_SCHEMA_VERSION &&
     tableExists(db, "commitments") &&
@@ -411,14 +433,6 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
     migrations.push({ kind: "conversation-binding-targets-v15", path: pathname });
   }
   if (
-    userVersion < 16 &&
-    (tableHasColumn(db, "skill_workshop_proposals", "workspace_dir") ||
-      tableHasColumn(db, "skill_workshop_proposals", "claim_released_time") ||
-      tableHasColumn(db, "skill_workshop_collection_reviews", "workspace_dir"))
-  ) {
-    migrations.push({ kind: "skill-workshop-directory-ownership-v16", path: pathname });
-  }
-  if (
     userVersion < 17 &&
     tableExists(db, "worker_environments") &&
     !tableHasColumn(db, "worker_environments", "preparation_consumed_at_ms")
@@ -433,8 +447,55 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   ) {
     migrations.push({ kind: "github-publication-requester-authority-v18", path: pathname });
   }
-  if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
-    migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });
+  if (
+    userVersion < 21 &&
+    ["meeting_transcript_sessions", "meeting_transcript_summaries", "delivery_queue_entries"].some(
+      (table) => tableExists(db, table),
+    )
+  ) {
+    migrations.push({ kind: "predicate-columns-v21", path: pathname });
+  }
+  if (
+    userVersion < 22 &&
+    ["acp_sessions", ...STATE_CURSOR_TABLES_V22].some((table) => tableExists(db, table))
+  ) {
+    migrations.push({ kind: "portable-identity-columns-v22", path: pathname });
+  }
+  if (
+    userVersion < MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION &&
+    tableExists(db, "meeting_transcript_sessions")
+  ) {
+    migrations.push({ kind: "meeting-transcript-start-time", path: pathname });
+  }
+  if (userVersion < 24 && tableExists(db, "task_runs")) {
+    migrations.push({ kind: "task-run-indexes-v24", path: pathname });
+  }
+  if (userVersion < 25) {
+    migrations.push({ kind: "subagent-operator-recovery-v25", path: pathname });
+  }
+  if (userVersion < 26 && tableExists(db, "session_state_heads")) {
+    migrations.push({ kind: "session-state-head-layout-v26", path: pathname });
+  }
+  if (userVersion < 27) {
+    migrations.push({ kind: "state-write-indexes-v27", path: pathname });
+  }
+  if (userVersion < 28) {
+    migrations.push({ kind: "github-publication-draft-v28", path: pathname });
+  }
+  if (userVersion < CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION) {
+    migrations.push({ kind: "local-client-credentials-v29", path: pathname });
+  }
+  if (userVersion < 30) {
+    migrations.push({ kind: "automation-policy-fence-v30", path: pathname });
+  }
+  if (userVersion < 31) {
+    migrations.push({ kind: "local-workspace-manifests-v31", path: pathname });
+  }
+  if (userVersion < 35) {
+    migrations.push({ kind: "local-workspace-cas-v35", path: pathname });
+  }
+  if (userVersion < 36) {
+    migrations.push({ kind: "template-names-v36", path: pathname });
   }
   if (!hasCanonicalAuditEventsSchema(db)) {
     migrations.push({ kind: "audit-events-v2", path: pathname });

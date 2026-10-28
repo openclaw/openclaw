@@ -36,7 +36,6 @@ export async function resolveMatrixIngressAccess(config: {
     typeof createMatrixHandlerState
   >["resolveLiveAccountAllowlists"];
   roomHistoryTracker: ReturnType<typeof createRoomHistoryTracker>;
-  commitInboundEventIfClaimed: () => Promise<void>;
 }) {
   const {
     handler,
@@ -50,7 +49,6 @@ export async function resolveMatrixIngressAccess(config: {
     shouldSendPairingReply,
     resolveLiveAccountAllowlists,
     roomHistoryTracker,
-    commitInboundEventIfClaimed,
   } = config;
   const {
     core,
@@ -96,12 +94,8 @@ export async function resolveMatrixIngressAccess(config: {
   const markReservedHistorySlotConsumed = () => {
     reservedHistorySlotConsumed = true;
   };
-  const commitInboundEventIfClaimedAndDiscardReserved = async () => {
-    discardReservedHistorySlot();
-    await commitInboundEventIfClaimed();
-  };
   if (isRoom && groupPolicy === "disabled") {
-    await commitInboundEventIfClaimedAndDiscardReserved();
+    discardReservedHistorySlot();
     return undefined;
   }
 
@@ -132,7 +126,7 @@ export async function resolveMatrixIngressAccess(config: {
     logVerboseMessage(
       `matrix: drop configured bot sender=${senderId} (allowBots=false${isDirectMessage ? "" : `, ${roomMatchMeta}`})`,
     );
-    await commitInboundEventIfClaimedAndDiscardReserved();
+    discardReservedHistorySlot();
     return undefined;
   }
   const botLoopProtection: ChannelBotLoopProtectionFacts | undefined =
@@ -154,18 +148,18 @@ export async function resolveMatrixIngressAccess(config: {
 
   if (isRoom && roomConfig && !roomConfigInfo?.allowed) {
     logVerboseMessage(`matrix: room disabled room=${roomId} (${roomMatchMeta})`);
-    await commitInboundEventIfClaimedAndDiscardReserved();
+    discardReservedHistorySlot();
     return undefined;
   }
   if (isRoom && groupPolicy === "allowlist") {
     if (!roomConfigInfo?.allowlistConfigured) {
       logVerboseMessage(`matrix: drop room message (no allowlist, ${roomMatchMeta})`);
-      await commitInboundEventIfClaimedAndDiscardReserved();
+      discardReservedHistorySlot();
       return undefined;
     }
     if (!roomConfig) {
       logVerboseMessage(`matrix: drop room message (not in allowlist, ${roomMatchMeta})`);
-      await commitInboundEventIfClaimedAndDiscardReserved();
+      discardReservedHistorySlot();
       return undefined;
     }
   }
@@ -199,7 +193,7 @@ export async function resolveMatrixIngressAccess(config: {
 
   if (isDirectMessage) {
     if (!dmEnabled || dmPolicy === "disabled") {
-      await commitInboundEventIfClaimedAndDiscardReserved();
+      discardReservedHistorySlot();
       return undefined;
     }
     const senderReason = messageIngress.senderAccess.reasonCode;
@@ -212,6 +206,13 @@ export async function resolveMatrixIngressAccess(config: {
           accountId,
           meta: { name: senderName },
         });
+        if (!code) {
+          logVerboseMessage(
+            `matrix pairing request ignored sender=${senderId} (pending limit reached)`,
+          );
+          discardReservedHistorySlot();
+          return undefined;
+        }
         if (shouldSendPairingReply(senderId, created)) {
           const pairingReply = core.channel.pairing.buildPairingReply({
             channel: "matrix",
@@ -236,22 +237,21 @@ export async function resolveMatrixIngressAccess(config: {
                 accountId,
               },
             );
-            await commitInboundEventIfClaimed();
           } catch (err) {
             logVerboseMessage(`matrix pairing reply failed for ${senderId}: ${String(err)}`);
             discardReservedHistorySlot();
-            return undefined;
+            throw err;
           }
         } else {
           logVerboseMessage(`matrix pairing reminder suppressed sender=${senderId} (cooldown)`);
-          await commitInboundEventIfClaimedAndDiscardReserved();
+          discardReservedHistorySlot();
         }
       }
       if (isReactionEvent || dmPolicy !== "pairing") {
         logVerboseMessage(
           `matrix: blocked ${isReactionEvent ? "reaction" : "dm"} sender ${senderId} (dmPolicy=${dmPolicy}, reason=${senderReason})`,
         );
-        await commitInboundEventIfClaimedAndDiscardReserved();
+        discardReservedHistorySlot();
       }
       return undefined;
     }
@@ -261,7 +261,7 @@ export async function resolveMatrixIngressAccess(config: {
     logVerboseMessage(
       `matrix: blocked sender ${senderId} (ingress=${ingressDecision.reasonCode}, ${roomMatchMeta})`,
     );
-    await commitInboundEventIfClaimedAndDiscardReserved();
+    discardReservedHistorySlot();
     return undefined;
   }
   if (isRoom) {
@@ -284,7 +284,7 @@ export async function resolveMatrixIngressAccess(config: {
       isDirectMessage,
       logVerboseMessage,
     });
-    await commitInboundEventIfClaimedAndDiscardReserved();
+    discardReservedHistorySlot();
     return undefined;
   }
 
@@ -303,7 +303,6 @@ export async function resolveMatrixIngressAccess(config: {
     historyThreadId,
     discardReservedHistorySlot,
     markReservedHistorySlotConsumed,
-    commitInboundEventIfClaimedAndDiscardReserved,
     roomConfig,
     allowBotsMode,
     isConfiguredBotSender,

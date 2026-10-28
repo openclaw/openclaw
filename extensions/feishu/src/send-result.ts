@@ -5,14 +5,7 @@ import {
   type MessageReceipt,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
-
-type FeishuMessageApiResponse = {
-  code?: number;
-  msg?: string;
-  data?: {
-    message_id?: string;
-  };
-};
+import type { FeishuSendResult } from "./types.js";
 
 export function resolveFeishuReceiptKind(msgType?: string): MessageReceiptPartKind {
   switch (msgType) {
@@ -52,22 +45,24 @@ function createFeishuSendReceipt(params: {
           },
         ]
       : [],
-    ...(params.replyToId?.trim() ? { replyToId: params.replyToId.trim() } : {}),
+    replyToId: params.replyToId?.trim() || undefined,
     kind: params.kind ?? "unknown",
   });
 }
 
 export function toFeishuSendResult(
-  response: FeishuMessageApiResponse,
+  response: {
+    code?: number;
+    msg?: string;
+    data?: {
+      message_id?: string;
+    };
+  },
   chatId: string,
   kind?: MessageReceiptPartKind,
   errorPrefix = "Feishu send failed",
   replyToId?: string,
-): {
-  messageId: string;
-  chatId: string;
-  receipt: MessageReceipt;
-} {
+): FeishuSendResult {
   const messageId = response.data?.message_id?.trim();
   if (!messageId) {
     // Feishu already accepted this send; an ordinary error would invite a duplicate retry.

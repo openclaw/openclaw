@@ -14,7 +14,12 @@ type GatewayAccessPolicyContext = {
   config: OpenClawConfig;
   /** The person's effective operator role explicitly names this policy's plugin. */
   requiredByRole: boolean;
-  profile: { profileId: string; emails: readonly string[]; assignedRole: string | null };
+  profile: {
+    profileId: string;
+    emails: readonly string[];
+    githubAccountIds?: readonly number[];
+    assignedRole: string | null;
+  };
 };
 
 export type PluginGatewayAccessPolicy = {

@@ -1,0 +1,9 @@
+# Participant capacity reproduction
+
+Cold `session_participants` admission folds its capacity COUNT into the existing writer's conditional insert. The acceptance rule below was recorded before reproduction and design approval.
+
+Acceptance rule, recorded before the first measurement: run the existing committed `scripts/bench-ingress-polling.mts` workload on a freshly built current-main Gateway with synthetic iMessage bridge, mock provider transport, isolated state and frozen v3.1.4 observer. Use five independent fixtures, each with the first incoming participant and at least two warm contributions. Keep first and warm phases separate. Report exact capacity COUNT executions, participant statements, worker requests and MAIN SQL; median, p95 and range across the five fixtures. Count idle statements per minute. Record per-thread profiles for attribution only; claim no CPU or latency improvement.
+
+Positive control: the native participant owner, without a resident actor, must execute one capacity COUNT when adding an absent participant and zero for its subsequent contribution. Preserve the stored identity and contribution result. This control does not establish a live-Gateway saving.
+
+Proceed only if the capacity COUNT occurs in the real synthetic Gateway flow. If it does not occur, reject item 18 with the observed zero and retain the cold fallback and its alias/identity contracts. A candidate, if justified and approved, must remove at least one SQL statement per reproduced cold addition, add zero requests or MAIN SQL, preserve warm work and all quota/identity outcomes, and undergo interleaved baseline/candidate proof. Any adverse user-facing count or a 20% cell movement stops for attribution/disposition. No timing A/B is requested; the timing lock is inapplicable to counts and attribution profiles.

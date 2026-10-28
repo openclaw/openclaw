@@ -7,6 +7,7 @@ import {
   appendSessionTranscriptMessageByIdentity,
   publishSessionTranscriptUpdateByIdentity,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { codexCompactionContextUsage } from "./event-projector-usage.js";
 
 const CONTEXT_COMPACTION_CUSTOM_TYPE = "openclaw.context-compaction";
 
@@ -15,6 +16,9 @@ export async function persistCodexContextCompactionActivity(params: {
   config?: EmbeddedRunAttemptParams["config"];
   cwd?: string;
   runId?: string;
+  provider?: string;
+  model?: string;
+  tokensAfter?: number;
   threadId: string;
   turnId: string;
   itemId: string;
@@ -31,6 +35,11 @@ export async function persistCodexContextCompactionActivity(params: {
     content: "Context compacted",
     display: true,
     excludeFromContext: true,
+    provider: params.provider,
+    model: params.model,
+    usage: {
+      contextUsage: codexCompactionContextUsage(params.tokensAfter),
+    },
     details: {
       kind: "context_compaction",
       backend: "codex-app-server",

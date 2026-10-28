@@ -1,9 +1,11 @@
 import {
   codeModeToolSurfaceObserver,
   type CodeModeToolSurfaceObservation,
+  hasResponsesWebSearchTool,
   resolveOpenAIReasoningEffortForModel,
   supportsOpenAIReasoningEffort,
 } from "@openclaw/ai/internal/openai";
+import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import {
   filterCodeModePayloadTools,
   isCodeModeModelVisibleToolName,
@@ -13,9 +15,7 @@ import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "@openclaw/ai/transports";
-import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-// OpenAI stream wrapper normalizes OpenAI-compatible streamed tool and text events.
 import {
   normalizeFastMode,
   normalizeOptionalLowercaseString,
@@ -35,7 +35,7 @@ import {
   resolveProviderRequestPolicyConfig,
 } from "../../../agents/provider-request-config.js";
 import type { StreamFn } from "../../../agents/runtime/index.js";
-import type { SandboxToolPolicy } from "../../../agents/sandbox.js";
+import type { SandboxToolPolicy } from "../../../agents/sandbox/types.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
@@ -46,16 +46,18 @@ import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { streamSimple } from "../../stream.js";
 import type { SimpleStreamOptions } from "../../types.js";
 import {
+  normalizeOpenAIFastMode,
   normalizeOpenAIServiceTier,
+  type OpenAIFastMode,
   supportsOpenAIResponsesFastMode,
   type OpenAIServiceTier,
 } from "../openai-fast-mode.js";
 import { mapThinkingLevelToReasoningEffort } from "./reasoning-effort-utils.js";
-import { streamWithPayloadPatch } from "./stream-payload-utils.js";
+import { streamWithPayloadPatch, wrapProviderPayloadHook } from "./stream-payload-utils.js";
 
 const log = createSubsystemLogger("llm/providers/stream-wrappers");
 
-type DynamicFastMode = boolean | (() => boolean | undefined);
+type DynamicFastMode = OpenAIFastMode | (() => OpenAIFastMode | undefined);
 type OpenClawSimpleStreamOptions = SimpleStreamOptions & {
   openclawCodeModeToolSurface?: boolean;
   openclawCodeModeAllowedHostedToolTypes?: Set<string>;
@@ -84,41 +86,15 @@ function resolveOpenAIRequestCapabilities(model: {
   baseUrl?: unknown;
   compat?: unknown;
 }) {
-  const compat =
-    model.compat && typeof model.compat === "object"
-      ? (model.compat as { supportsStore?: boolean })
-      : undefined;
   return resolveProviderRequestPolicyConfig({
     provider: readStringValue(model.provider),
     api: readStringValue(model.api),
     baseUrl: readStringValue(model.baseUrl),
-    compat,
+    compat: model.compat,
     capability: "llm",
     transport: "stream",
     routeFacts: getModelProviderRequestRouteFacts(model),
   }).capabilities;
-}
-
-function shouldApplyOpenAIAttributionHeaders(model: {
-  api?: unknown;
-  provider?: unknown;
-  baseUrl?: unknown;
-}): "openai" | undefined {
-  const attributionProvider = resolveOpenAIRequestCapabilities(model).attributionProvider;
-  return attributionProvider === "openai" ? attributionProvider : undefined;
-}
-
-function shouldUseCodexNativeTransport(model: {
-  api?: unknown;
-  provider?: unknown;
-  baseUrl?: unknown;
-  compat?: unknown;
-}): boolean {
-  const api = readStringValue(model.api);
-  if (api !== "openai-chatgpt-responses") {
-    return false;
-  }
-  return resolveOpenAIRequestCapabilities(model).endpointClass === "openai";
 }
 
 function shouldApplyOpenAIServiceTier(model: {
@@ -130,19 +106,8 @@ function shouldApplyOpenAIServiceTier(model: {
 }
 
 function isCodeModeEnabled(config?: OpenClawConfig): boolean {
-  const tools = config?.tools;
-  if (!tools || typeof tools !== "object") {
-    return false;
-  }
-  const codeMode = (tools as { codeMode?: unknown }).codeMode;
-  if (codeMode === true) {
-    return true;
-  }
-  return Boolean(
-    codeMode &&
-    typeof codeMode === "object" &&
-    (codeMode as { enabled?: unknown }).enabled === true,
-  );
+  const codeMode = config?.tools?.codeMode;
+  return codeMode === true || (typeof codeMode === "object" && codeMode?.enabled === true);
 }
 
 function filterCodeModePayloadHookResult(
@@ -187,53 +152,13 @@ function shouldApplyOpenAIReasoningCompatibility(model: {
   return resolveOpenAIRequestCapabilities(model).supportsOpenAIReasoningCompatPayload;
 }
 
-function shouldFlattenOpenAICompletionMessages(model: {
+function readOpenAICompletionsCompat(model: {
   api?: unknown;
   compat?: unknown;
-}): boolean {
-  const compat =
-    model.compat && typeof model.compat === "object"
-      ? (model.compat as { requiresStringContent?: unknown })
-      : undefined;
-  return model.api === "openai-completions" && compat?.requiresStringContent === true;
-}
-
-function shouldStripOpenAICompletionTools(model: { api?: unknown; compat?: unknown }): boolean {
-  const compat =
-    model.compat && typeof model.compat === "object"
-      ? (model.compat as { supportsTools?: unknown })
-      : undefined;
-  return model.api === "openai-completions" && compat?.supportsTools === false;
-}
-
-function shouldStripOpenAICompletionMessageKeys(model: {
-  api?: unknown;
-  compat?: unknown;
-}): boolean {
-  const compat =
-    model.compat && typeof model.compat === "object"
-      ? (model.compat as { strictMessageKeys?: unknown })
-      : undefined;
-  return model.api === "openai-completions" && compat?.strictMessageKeys === true;
-}
-
-function hasResponsesWebSearchTool(tools: unknown): boolean {
-  if (!Array.isArray(tools)) {
-    return false;
-  }
-  return tools.some((tool) => {
-    if (!isRecord(tool)) {
-      return false;
-    }
-    if (tool.type === "web_search") {
-      return true;
-    }
-    if (tool.type === "function" && tool.name === "web_search") {
-      return true;
-    }
-    const fn = tool.function;
-    return isRecord(fn) && fn.name === "web_search";
-  });
+}): Record<string, unknown> | undefined {
+  return model.api === "openai-completions" && model.compat && typeof model.compat === "object"
+    ? (model.compat as Record<string, unknown>)
+    : undefined;
 }
 
 function resolveOpenAIThinkingPayloadEffort(params: {
@@ -299,18 +224,10 @@ export function resolveOpenAIServiceTier(
   return normalized;
 }
 
-function normalizeOpenAIFastMode(value: unknown): boolean | undefined {
-  if (typeof value === "function") {
-    return normalizeOpenAIFastMode((value as () => unknown)());
-  }
-  const fastMode = normalizeFastMode(value);
-  return fastMode === "auto" ? undefined : fastMode;
-}
-
 /** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function resolveOpenAIFastMode(
   extraParams: Record<string, unknown> | undefined,
-): boolean | undefined {
+): OpenAIFastMode | undefined {
   const raw = extraParams?.fastMode ?? extraParams?.fast_mode;
   const normalized = normalizeOpenAIFastMode(raw);
   if (
@@ -323,15 +240,6 @@ export function resolveOpenAIFastMode(
     log.warn(`ignoring invalid OpenAI fast mode param: ${rawSummary}`);
   }
   return normalized;
-}
-
-function applyOpenAIFastModePayloadOverrides(params: {
-  payloadObj: Record<string, unknown>;
-  model: { provider?: unknown; id?: unknown; baseUrl?: unknown; api?: unknown };
-}): void {
-  if (params.payloadObj.service_tier === undefined && shouldApplyOpenAIServiceTier(params.model)) {
-    params.payloadObj.service_tier = "priority";
-  }
 }
 
 /** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
@@ -357,7 +265,6 @@ export function createOpenAIResponsesContextManagementWrapper(
       return underlying(model, context, options);
     }
 
-    const originalOnPayload = options?.onPayload;
     const effectiveStore = policy.shouldStripStore ? false : policy.explicitStore;
     const replayResponsesItemIds =
       effectiveStore ??
@@ -365,14 +272,19 @@ export function createOpenAIResponsesContextManagementWrapper(
     const nextOptions: OpenAIResponsesReplayOptions = {
       ...options,
       ...(replayResponsesItemIds === undefined ? {} : { replayResponsesItemIds }),
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          applyOpenAIResponsesPayloadPolicy(payload as Record<string, unknown>, policy);
-        }
-        return originalOnPayload?.(payload, model);
-      },
     };
-    return underlying(model, context, nextOptions);
+    return streamWithPayloadPatch(underlying, model, context, nextOptions, (payload) => {
+      const compactThreshold =
+        policy.useServerCompaction && payload.service_tier !== undefined
+          ? resolveOpenAIResponsesServerCompactionPlan(model, {
+              ...extraParams,
+              serviceTier: payload.service_tier,
+              fastMode: undefined,
+              fast_mode: undefined,
+            }).threshold
+          : policy.compactThreshold;
+      applyOpenAIResponsesPayloadPolicy(payload, { ...policy, compactThreshold });
+    });
   };
 }
 
@@ -398,7 +310,7 @@ export function createOpenAIReasoningCompatibilityWrapper(
 export function createOpenAIStringContentWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (!shouldFlattenOpenAICompletionMessages(model)) {
+    if (readOpenAICompletionsCompat(model)?.requiresStringContent !== true) {
       return underlying(model, context, options);
     }
     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
@@ -416,7 +328,7 @@ export function createOpenAICompletionsStrictMessageKeysWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (!shouldStripOpenAICompletionMessageKeys(model)) {
+    if (readOpenAICompletionsCompat(model)?.strictMessageKeys !== true) {
       return underlying(model, context, options);
     }
     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
@@ -434,7 +346,7 @@ export function createOpenAICompletionsToolsCompatWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (!shouldStripOpenAICompletionTools(model)) {
+    if (readOpenAICompletionsCompat(model)?.supportsTools !== false) {
       return underlying(model, context, options);
     }
     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
@@ -481,12 +393,8 @@ export function createOpenAIThinkingLevelWrapper(
         payloadObj.reasoning = { effort: reasoningEffort };
         return;
       }
-      if (
-        existingReasoning &&
-        typeof existingReasoning === "object" &&
-        !Array.isArray(existingReasoning)
-      ) {
-        (existingReasoning as Record<string, unknown>).effort = reasoningEffort;
+      if (isRecord(existingReasoning)) {
+        existingReasoning.effort = reasoningEffort;
         raiseMinimalReasoningForResponsesWebSearchPayload({ model, payloadObj });
       }
     });
@@ -500,21 +408,14 @@ export function createOpenAIFastModeWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (normalizeOpenAIFastMode(enabled) !== true || !supportsOpenAIResponsesFastMode(model)) {
+    const fastMode = normalizeOpenAIFastMode(enabled);
+    if (!fastMode || !supportsOpenAIResponsesFastMode(model)) {
       return underlying(model, context, options);
     }
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          applyOpenAIFastModePayloadOverrides({
-            payloadObj: payload as Record<string, unknown>,
-            model,
-          });
-        }
-        return originalOnPayload?.(payload, model);
-      },
+    return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
+      if (payload.service_tier === undefined && shouldApplyOpenAIServiceTier(model)) {
+        payload.service_tier = fastMode === "ultrafast" ? "ultrafast" : "priority";
+      }
     });
   };
 }
@@ -550,22 +451,14 @@ export function createOpenAITextVerbosityWrapper(
     const resolvedVerbosity = resolveOpenAITextVerbosityForModel(model, verbosity);
     const shouldOverrideExistingVerbosity =
       model.api === "openai-chatgpt-responses" || resolvedVerbosity !== verbosity;
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          const payloadObj = payload as Record<string, unknown>;
-          const existingText =
-            payloadObj.text && typeof payloadObj.text === "object"
-              ? (payloadObj.text as Record<string, unknown>)
-              : {};
-          if (shouldOverrideExistingVerbosity || existingText.verbosity === undefined) {
-            payloadObj.text = { ...existingText, verbosity: resolvedVerbosity };
-          }
-        }
-        return originalOnPayload?.(payload, model);
-      },
+    return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
+      const existingText =
+        payload.text && typeof payload.text === "object"
+          ? (payload.text as Record<string, unknown>)
+          : {};
+      if (shouldOverrideExistingVerbosity || existingText.verbosity === undefined) {
+        payload.text = { ...existingText, verbosity: resolvedVerbosity };
+      }
     });
   };
 }
@@ -639,13 +532,9 @@ export function createCodexNativeWebSearchWrapper(
       if (activation?.state === "native_active") {
         allowedHostedToolTypes.add("web_search");
       }
-      if (activation?.state === "native_active" || activation?.codexNativeEnabled) {
-        const outcome =
-          activation.state === "native_active"
-            ? `activating (${activation.codexMode})`
-            : `skipping (${activation.inactiveReason ?? "inactive"})`;
+      if (activation?.codexNativeEnabled && activation.state !== "native_active") {
         log.debug(
-          `${outcome} Codex native web search alongside code mode for ${model.provider ?? "unknown"}/${model.id ?? "unknown"}`,
+          `skipping (${activation.inactiveReason ?? "inactive"}) Codex native web search alongside code mode for ${model.provider ?? "unknown"}/${model.id ?? "unknown"}`,
         );
       }
       const originalOnPayload = options?.onPayload;
@@ -691,37 +580,29 @@ export function createCodexNativeWebSearchWrapper(
         ...options,
         openclawCodeModeToolSurface: true,
         openclawCodeModeAllowedHostedToolTypes: allowedHostedToolTypes,
-        onPayload: (payload) => {
-          if (activation?.state === "native_active") {
-            patchCodexNativeWebSearchPayload({ payload, config: params.config });
-          }
-          filterCodeModePayloadHookResult(
-            payload,
-            undefined,
-            codeModeVisibleToolNames,
-            allowedHostedToolTypes,
-            collectToolSurface,
-          );
-          const nextPayload = originalOnPayload?.(payload, model);
-          if (isPromiseLike(nextPayload)) {
-            return Promise.resolve(nextPayload).then((resolvedPayload) =>
-              filterCodeModePayloadHookResult(
-                payload,
-                resolvedPayload,
-                codeModeVisibleToolNames,
-                allowedHostedToolTypes,
-                observeToolSurface,
-              ),
+        onPayload: wrapProviderPayloadHook(
+          (payload) => originalOnPayload?.(payload, model),
+          (payload, result) =>
+            filterCodeModePayloadHookResult(
+              payload,
+              result,
+              codeModeVisibleToolNames,
+              allowedHostedToolTypes,
+              observeToolSurface,
+            ),
+          (payload) => {
+            if (activation?.state === "native_active") {
+              patchCodexNativeWebSearchPayload({ payload, config: params.config });
+            }
+            filterCodeModePayloadHookResult(
+              payload,
+              undefined,
+              codeModeVisibleToolNames,
+              allowedHostedToolTypes,
+              collectToolSurface,
             );
-          }
-          return filterCodeModePayloadHookResult(
-            payload,
-            nextPayload,
-            codeModeVisibleToolNames,
-            allowedHostedToolTypes,
-            observeToolSurface,
-          );
-        },
+          },
+        ),
       };
       if (observeToolSurface && !existingToolSurfaceObserver) {
         codeModeToolSurfaceObserver.set(codeModeOptions, observeToolSurface, collectToolSurface);
@@ -751,12 +632,6 @@ export function createCodexNativeWebSearchWrapper(
       return underlying(model, context, options);
     }
 
-    log.debug(
-      `activating Codex native web search (${activation.codexMode}) for ${
-        model.provider ?? "unknown"
-      }/${model.id ?? "unknown"}`,
-    );
-
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
@@ -769,10 +644,6 @@ export function createCodexNativeWebSearchWrapper(
           log.debug(
             "Skipping Codex native web search injection because provider payload is not an object",
           );
-        } else if (result.status === "native_tool_already_present") {
-          log.debug("Codex native web search tool already present in provider payload");
-        } else if (result.status === "injected") {
-          log.debug("Injected Codex native web search tool into provider payload");
         }
         return originalOnPayload?.(payload, model);
       },
@@ -786,12 +657,14 @@ export function createOpenAIAttributionHeadersWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const attributionProvider = shouldApplyOpenAIAttributionHeaders(model);
-    if (!attributionProvider) {
+    const capabilities = resolveOpenAIRequestCapabilities(model);
+    const attributionProvider = capabilities.attributionProvider;
+    if (attributionProvider !== "openai") {
       return underlying(model, context, options);
     }
     const shouldCreateCodexTransport =
-      shouldUseCodexNativeTransport(model) &&
+      readStringValue(model.api) === "openai-chatgpt-responses" &&
+      capabilities.endpointClass === "openai" &&
       (baseStreamFn === undefined || baseStreamFn === streamSimple);
     const streamFn = shouldCreateCodexTransport
       ? (opts?.codexNativeTransportStreamFn ?? createOpenAIResponsesTransportStreamFn())
@@ -811,4 +684,3 @@ export function createOpenAIAttributionHeadersWrapper(
     });
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

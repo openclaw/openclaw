@@ -1,4 +1,8 @@
-// Shared policy doctor value readers.
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
+import {
+  normalizeStringEntries,
+  normalizeStringEntriesLower,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getPolicyPath } from "../policy-value.js";
 export { readBooleanPath as readPolicyBoolean } from "../policy-state-helpers.js";
 
@@ -8,16 +12,12 @@ export function readPolicyStringArray(
   options: { readonly lowercase?: boolean } = {},
 ): readonly string[] | undefined {
   const current = getPolicyPath(policy, path);
-  if (!Array.isArray(current) || !current.every((entry) => typeof entry === "string")) {
+  if (!isStringArray(current)) {
     return undefined;
   }
-  const lowercase = options.lowercase ?? true;
-  return current
-    .map((entry) => {
-      const trimmed = entry.trim();
-      return lowercase ? trimmed.toLowerCase() : trimmed;
-    })
-    .filter(Boolean);
+  return options.lowercase === false
+    ? normalizeStringEntries(current)
+    : normalizeStringEntriesLower(current);
 }
 
 export function readStringList(

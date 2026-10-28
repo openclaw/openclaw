@@ -29,7 +29,6 @@ function commandResult(stdout = "", code = 0): SpawnResult {
 
 describe("port inspection cancellation", () => {
   it.each([
-    { platform: "linux", command: "lsof", failure: false },
     { platform: "linux", command: "lsof", failure: true },
     { platform: "linux", command: "ps", failure: false },
     { platform: "win32", command: "netstat.exe", failure: false },

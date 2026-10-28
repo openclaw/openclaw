@@ -10,135 +10,252 @@ import {
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  registerSessionBindingAdapter,
+  unregisterSessionBindingAdapter,
+  type SessionBindingAdapter,
+  type SessionBindingRecord,
+} from "openclaw/plugin-sdk/conversation-runtime";
+import {
+  createReplyDispatcher,
+  dispatchInboundMessage,
+  resetInboundDedupe,
+} from "openclaw/plugin-sdk/reply-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import * as imessageRuntime from "../runtime.js";
+import { createInboundDecisionParams } from "./inbound-decision.test-support.js";
 import {
   buildIMessageInboundContext,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
 
-describe("buildIMessageInboundContext direct reply route", () => {
-  it.each([undefined, 42])(
-    "retains host admission after reply ID mapping (chat ID %s)",
-    async (chatId) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const cfg: OpenClawConfig = {
-          session: { store: state.path("sessions.json") },
-          commands: { ownerAllowFrom: ["imessage:+15555550123"] },
-        };
-        type GatewayContext = NonNullable<
-          ReturnType<
-            NonNullable<
-              Parameters<typeof createHostChannelIngressRuntime>[0]["resolveGatewayContext"]
-            >
-          >
-        >;
-        // SAFETY: Host ingress only reads config and admission audit from this synthetic Gateway.
-        const gateway = {
-          getRuntimeConfig: () => cfg,
-          channelAdmissionAudit: createChannelAdmissionAudit({ enabled: true }),
-        } as GatewayContext;
-        let live = true;
-        const owner = {
-          channelId: "imessage",
-          isLive: () => live,
-          resolveGatewayContext: () => gateway,
-        };
-        const runtime = createPluginRuntimeMock();
-        const hostIngress = createHostChannelIngressRuntime(owner);
-        const bindings: Array<ChannelIngressContextBinding | undefined> = [];
-        runtime.channel.inbound.ingress = {
-          ...hostIngress,
-          createResolver: (base) => {
-            const resolver = hostIngress.createResolver(base);
-            return {
-              ...resolver,
-              message: (input) => {
-                bindings.push(input.contextBinding);
-                return resolver.message(input);
+it.each(["context-only", "permitted", "revoked", "reassigned", "unavailable"] as const)(
+  "direct reply route retains admission and binding ownership: %s",
+  async (dispatchState) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const bound = dispatchState !== "context-only";
+      const chatId = bound ? 42 : undefined;
+      const scope = { channel: "imessage", accountId: "default" };
+      const cfg: OpenClawConfig = {
+        session: { store: state.path("sessions.json") },
+        commands: { ownerAllowFrom: ["imessage:+15555550123"] },
+        ...(bound
+          ? {
+              agents: {
+                entries: { first: {}, second: {} },
+                defaults: { workspace: state.workspaceDir },
               },
-            };
-          },
-        };
-        const runtimeSpy = vi.spyOn(imessageRuntime, "getIMessageRuntime").mockReturnValue(runtime);
-        try {
-          const message = {
-            id: 12349,
-            guid: "p:0/GUID-current-guid-only",
-            sender: "+15555550123",
-            text: "current",
-            is_from_me: false,
-            is_group: false,
-            chat_guid: "iMessage;-;+15555550123",
-            chat_id: chatId,
+            }
+          : {}),
+        plugins: { enabled: false },
+      };
+      if (bound) {
+        await state.writeConfig(cfg);
+        resetInboundDedupe();
+      }
+      type HostOwner = Parameters<typeof createHostChannelIngressRuntime>[0];
+      type GatewayContext = NonNullable<
+        ReturnType<NonNullable<HostOwner["resolveGatewayContext"]>>
+      >;
+      // SAFETY: Host ingress only reads config and admission audit from this synthetic Gateway.
+      const gateway = {
+        getRuntimeConfig: () => cfg,
+        channelAdmissionAudit: createChannelAdmissionAudit({ enabled: true }),
+      } as GatewayContext;
+      let live = true;
+      const owner = {
+        channelId: "imessage",
+        isLive: () => live,
+        resolveGatewayContext: () => gateway,
+      };
+      const runtime = createPluginRuntimeMock();
+      const hostIngress = createHostChannelIngressRuntime(owner);
+      const bindings: Array<ChannelIngressContextBinding | undefined> = [];
+      runtime.channel.inbound.ingress = {
+        ...hostIngress,
+        createResolver: (base) => {
+          const resolver = hostIngress.createResolver(base);
+          return {
+            ...resolver,
+            message: (input) => {
+              bindings.push(input.contextBinding);
+              return resolver.message(input);
+            },
           };
-          const decision = await resolveIMessageInboundDecision({
-            cfg,
-            accountId: "default",
-            opts: undefined,
-            allowFrom: ["*"],
-            groupAllowFrom: [],
-            groupPolicy: "open",
-            dmPolicy: "open",
-            storeAllowFrom: [],
-            historyLimit: 0,
-            groupHistories: new Map(),
-            echoCache: undefined,
-            selfChatCache: undefined,
-            isKnownFromMeMessageId: () => false,
-            logVerbose: undefined,
-            message,
-            messageText: message.text,
-            bodyText: message.text,
-          });
-          expect(decision.kind).toBe("dispatch");
-          if (decision.kind !== "dispatch") {
-            return;
+        },
+      };
+      const runtimeSpy = vi.spyOn(imessageRuntime, "getIMessageRuntime").mockReturnValue(runtime);
+      const targetSessionKey = bound
+        ? "agent:second:imessage:direct:+15555550123"
+        : "agent:second:acp:bound";
+      const binding: SessionBindingRecord = {
+        bindingId: "imessage-inbound-route",
+        targetSessionKey,
+        targetKind: "session",
+        conversation: { ...scope, conversationId: "+15555550123" },
+        status: "active",
+        boundAt: 1,
+      };
+      let currentBinding: SessionBindingRecord | null = binding;
+      let pauseInspection = false;
+      const inspectionEntered = Promise.withResolvers<void>();
+      const releaseInspection = Promise.withResolvers<void>();
+      let pendingDispatch: ReturnType<typeof dispatchInboundMessage> | undefined;
+      const bindingAdapter: SessionBindingAdapter = {
+        ...scope,
+        listBySession: (sessionKey) =>
+          currentBinding?.targetSessionKey === sessionKey ? [currentBinding] : [],
+        resolveByConversation: () => currentBinding,
+        inspectByConversationAsync: async () => {
+          const observed = currentBinding;
+          if (pauseInspection) {
+            inspectionEntered.resolve();
+            await releaseInspection.promise;
           }
+          return observed;
+        },
+        touchAsync: async () => {},
+      };
+      const unregister = () =>
+        unregisterSessionBindingAdapter({ ...scope, adapter: bindingAdapter });
+      try {
+        if (bound) {
+          registerSessionBindingAdapter(bindingAdapter);
+        }
+        const message = {
+          id: 12349,
+          guid: "p:0/GUID-current-guid-only",
+          sender: "+15555550123",
+          text: "current",
+          is_from_me: false,
+          is_group: false,
+          chat_guid: "iMessage;-;+15555550123",
+          chat_id: chatId,
+        };
+        const decision = await resolveIMessageInboundDecision(
+          createInboundDecisionParams({ cfg, message }),
+        );
+        expect(decision.kind).toBe("dispatch");
+        if (decision.kind !== "dispatch") {
+          return;
+        }
+        const buildContext = createHostChannelInboundEventContextBuilder(
+          buildChannelInboundEventContext,
+          owner,
+        );
+        const { ctxPayload, imessageTo } = await buildIMessageInboundContext({
+          cfg,
+          accountService: undefined,
+          decision,
+          message,
+          historyLimit: 0,
+          groupHistories: new Map(),
+          buildContext,
+        });
 
-          const buildContext = createHostChannelInboundEventContextBuilder(
-            buildChannelInboundEventContext,
-            owner,
-          );
-          const { ctxPayload, imessageTo } = await buildIMessageInboundContext({
-            cfg,
-            accountService: undefined,
-            decision,
-            message,
-            historyLimit: 0,
-            groupHistories: new Map(),
-            buildContext: async (input) => buildContext(input),
-          });
-
-          expect(ctxPayload.To).toBe(
-            chatId == null ? "chat_guid:iMessage;-;+15555550123" : "chat_id:42",
-          );
-          expect(imessageTo).toBe("imessage:+15555550123");
-          expect(ctxPayload.MessageSid).toMatch(/^\d+$/u);
-          expect(ctxPayload.MessageSid).not.toBe(String(message.id));
-          expect(
-            bindings.at(-1)?.messageId,
-            "final ingress must use the allocated message ID",
-          ).toBe(ctxPayload.MessageSid);
+        expect(ctxPayload).toMatchObject({
+          To: chatId == null ? "chat_guid:iMessage;-;+15555550123" : "chat_id:42",
+          ...(bound ? { AgentId: "second", SessionKey: targetSessionKey } : {}),
+          MessageSid: expect.stringMatching(/^\d+$/u),
+        });
+        expect(imessageTo).toBe("imessage:+15555550123");
+        expect(ctxPayload.MessageSid).not.toBe(String(message.id));
+        expect(bindings.at(-1)?.messageId, "final ingress must use the allocated message ID").toBe(
+          ctxPayload.MessageSid,
+        );
+        if (bound) {
+          expect(readChannelContextAdmissionEvidence(ctxPayload)).toBeDefined();
+        } else {
           expect(
             consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(ctxPayload)),
           ).toMatchObject({
             ingressState: "present",
             invoker: { state: "present", kind: "person" },
           });
-          const authorization = resolveCommandAuthorization({
-            ctx: ctxPayload,
-            cfg: {},
-            commandAuthorized: true,
-          });
-          expect(authorization.senderIsOwner).toBe(false);
-          expect(authorization.assertOwnerCurrent).toBeUndefined();
-        } finally {
-          live = false;
-          runtimeSpy.mockRestore();
         }
-      });
-    },
-  );
-});
+        const authorization = resolveCommandAuthorization({
+          ctx: ctxPayload,
+          cfg: {},
+          commandAuthorized: true,
+        });
+        expect(authorization.senderIsOwner).toBe(false);
+        expect(authorization.assertOwnerCurrent).toBeUndefined();
+        if (bound) {
+          if (dispatchState === "revoked") {
+            currentBinding = null;
+          } else if (dispatchState === "reassigned") {
+            currentBinding = {
+              ...binding,
+              bindingId: "imessage-inbound-reassigned",
+              boundAt: 2,
+              targetSessionKey: "agent:first:imessage:direct:+15555550123",
+            };
+          } else if (dispatchState === "unavailable") {
+            pauseInspection = true;
+          }
+          const replyResolver = vi
+            .fn<NonNullable<Parameters<typeof dispatchInboundMessage>[0]["replyResolver"]>>()
+            .mockResolvedValue({ text: "bound reply" });
+          const deliver = vi
+            .fn<Parameters<typeof createReplyDispatcher>[0]["deliver"]>()
+            .mockResolvedValue(undefined);
+          const dispatcher = createReplyDispatcher({ deliver });
+          pendingDispatch = dispatchInboundMessage({
+            ctx: ctxPayload,
+            cfg,
+            dispatcher,
+            replyResolver,
+          });
+          const outcome = pendingDispatch.then(
+            () => ({ status: "fulfilled" as const }),
+            (error: unknown) => ({ status: "rejected" as const, error }),
+          );
+          if (dispatchState === "unavailable") {
+            expect(
+              await Promise.race([
+                inspectionEntered.promise.then(() => "inspection"),
+                outcome.then(() => "settled"),
+              ]),
+              "dispatch must enter the awaited owner inspection before retirement",
+            ).toBe("inspection");
+            expect(replyResolver).not.toHaveBeenCalled();
+            expect(deliver).not.toHaveBeenCalled();
+            unregister();
+            releaseInspection.resolve();
+          }
+          if (dispatchState === "permitted") {
+            expect(await outcome).toEqual({ status: "fulfilled" });
+            expect(replyResolver.mock.calls[0]?.[0]).toMatchObject({
+              AgentId: "second",
+              SessionKey: targetSessionKey,
+              MessageSid: ctxPayload.MessageSid,
+            });
+            expect(deliver).toHaveBeenCalledWith(
+              expect.objectContaining({ text: "bound reply" }),
+              expect.objectContaining({ kind: "final" }),
+            );
+          } else {
+            expect(await outcome).toMatchObject({
+              status: "rejected",
+              error: { code: "SESSION_WORK_START_CHANGED" },
+            });
+            expect(replyResolver).not.toHaveBeenCalled();
+            expect(deliver).not.toHaveBeenCalled();
+          }
+        }
+      } finally {
+        releaseInspection.resolve();
+        await pendingDispatch?.catch(() => {});
+        if (bound) {
+          unregister();
+        }
+        live = false;
+        runtimeSpy.mockRestore();
+        if (bound) {
+          resetInboundDedupe();
+        }
+      }
+    });
+  },
+);

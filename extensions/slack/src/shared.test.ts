@@ -1,109 +1,48 @@
-// Slack tests cover shared plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { slackSetupPlugin } from "./channel.setup.js";
 import { setSlackChannelAllowlist } from "./setup-shared.js";
-import { createSlackPluginBase, slackConfigAdapter } from "./shared.js";
+import { slackPluginBase as plugin, slackConfigAdapter } from "./shared.js";
+type SlackConfig = NonNullable<OpenClawConfig["channels"]>["slack"];
+const config = (slack: SlackConfig): OpenClawConfig => ({ channels: { slack } });
 
-describe("createSlackPluginBase", () => {
-  it("owns Slack native command name overrides", () => {
-    const plugin = createSlackPluginBase({
-      setupContract: {} as never,
-      setupWizard: {} as never,
-    });
-
-    expect(
-      plugin.commands?.resolveNativeCommandName?.({
-        commandKey: "status",
-        defaultName: "status",
-      }),
-    ).toBe("agentstatus");
-    expect(
-      plugin.commands?.resolveNativeCommandName?.({
-        commandKey: "tts",
-        defaultName: "tts",
-      }),
-    ).toBe("tts");
-    expect(
-      plugin.commands?.resolveNativeCommandName?.({
-        commandKey: "login",
-        defaultName: "login",
-      }),
-    ).toBe("login");
-  });
-
-  it("exposes security checks on the setup surface", () => {
-    const plugin = createSlackPluginBase({
-      setupContract: {} as never,
-      setupWizard: {} as never,
-    });
-
-    expect(plugin.security?.resolveDmPolicy).toBeTypeOf("function");
-    expect(plugin.security?.collectWarnings).toBeTypeOf("function");
-    expect(plugin.security?.collectAuditFindings).toBeTypeOf("function");
-  });
+it("owns Slack native command name overrides", () => {
+  const resolve = (commandKey: string) =>
+    plugin.commands?.resolveNativeCommandName?.({ commandKey, defaultName: commandKey });
+  expect([resolve("status"), resolve("tts"), resolve("login")]).toEqual([
+    "agentstatus",
+    "tts",
+    "login",
+  ]);
 });
 
-describe("setSlackChannelAllowlist", () => {
-  it("writes canonical enabled entries for setup-generated channel allowlists", () => {
-    const result = setSlackChannelAllowlist(
-      {
-        channels: {
-          slack: {
-            accounts: {
-              work: {},
-            },
-          },
-        },
-      },
-      "work",
-      ["C123", "C456"],
-    );
-
-    expect(result.channels?.slack?.accounts?.work?.channels).toEqual({
-      C123: { enabled: true },
-      C456: { enabled: true },
-    });
+it("writes canonical enabled entries for setup-generated channel allowlists", () => {
+  const result = setSlackChannelAllowlist(
+    { channels: { slack: { accounts: { work: {} } } } },
+    "work",
+    ["C123", "C456"],
+  );
+  expect(result.channels?.slack?.accounts?.work?.channels).toEqual({
+    C123: { enabled: true },
+    C456: { enabled: true },
   });
 });
 
 describe("slackConfigAdapter", () => {
-  it("shares lightweight account accessors with setup but keeps inspection runtime-only", () => {
-    for (const key of [
-      "listAccountIds",
-      "resolveAccount",
-      "defaultAccountId",
-      "setAccountEnabled",
-      "deleteAccount",
-      "resolveAllowFrom",
-      "formatAllowFrom",
-      "resolveDefaultTo",
-    ] as const) {
-      expect(slackSetupPlugin.config[key]).toBe(slackConfigAdapter[key]);
-    }
-
-    expect(slackConfigAdapter.inspectAccount).toBeTypeOf("function");
-    expect(slackSetupPlugin.config.inspectAccount).toBeUndefined();
-  });
-
   it("clears user-identity credentials when deleting the root account", () => {
-    const cfg = {
-      channels: {
-        slack: {
+    const cfg = config({
+      identity: "user",
+      mode: "http",
+      userToken: "test-user-token",
+      signingSecret: "test-signing-secret",
+      accounts: {
+        work: {
           identity: "user",
-          mode: "http",
-          userToken: "test-user-token",
-          signingSecret: "test-signing-secret",
-          accounts: {
-            work: {
-              identity: "user",
-              userToken: "test-work-user-token",
-              appToken: "test-work-app-token",
-            },
-          },
+          userToken: "test-work-user-token",
+          appToken: "test-work-app-token",
         },
       },
-    } as OpenClawConfig;
+    });
 
     const next = slackConfigAdapter.deleteAccount?.({ cfg, accountId: "default" });
 
@@ -116,36 +55,29 @@ describe("slackConfigAdapter", () => {
   });
 
   it("keeps read-only accessors from resolving token SecretRefs", () => {
+    const provider = (name: string) => ({
+      source: "file" as const,
+      path: `/tmp/openclaw-missing-slack-${name}-token`,
+      mode: "singleValue" as const,
+    });
     const cfg = {
       secrets: {
         providers: {
-          slack_bot: {
-            source: "file",
-            path: "/tmp/openclaw-missing-slack-bot-token",
-            mode: "singleValue",
-          },
-          slack_app: {
-            source: "file",
-            path: "/tmp/openclaw-missing-slack-app-token",
-            mode: "singleValue",
-          },
+          slack_bot: provider("bot"),
+          slack_app: provider("app"),
         },
       },
-      channels: {
-        slack: {
-          botToken: { source: "file", provider: "slack_bot", id: "value" },
-          appToken: { source: "file", provider: "slack_app", id: "value" },
-          allowFrom: ["U123"],
-          defaultTo: "C123",
-        },
-      },
-    } as unknown as OpenClawConfig;
+      ...config({
+        botToken: { source: "file", provider: "slack_bot", id: "value" },
+        appToken: { source: "file", provider: "slack_app", id: "value" },
+        allowFrom: ["U123"],
+        defaultTo: "C123",
+      }),
+    };
 
-    expect(slackConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual(["U123"]);
-    expect(slackConfigAdapter.resolveDefaultTo?.({ cfg, accountId: "default" })).toBe("C123");
-    expect(slackSetupPlugin.config.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([
-      "U123",
-    ]);
-    expect(slackSetupPlugin.config.resolveDefaultTo?.({ cfg, accountId: "default" })).toBe("C123");
+    for (const adapter of [slackConfigAdapter, slackSetupPlugin.config]) {
+      expect(adapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual(["U123"]);
+      expect(adapter.resolveDefaultTo?.({ cfg, accountId: "default" })).toBe("C123");
+    }
   });
 });

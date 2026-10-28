@@ -12,16 +12,15 @@ struct ContextUsageBar: View {
         return base.blended(withFraction: 0.24, of: .black) ?? base
     }
 
-    private static let trackFill: NSColor = .init(name: nil) { appearance in
-        let match = appearance.bestMatch(from: [.aqua, .darkAqua])
-        if match == .darkAqua { return NSColor.white.withAlphaComponent(0.14) }
-        return NSColor.black.withAlphaComponent(0.12)
-    }
+    private static let trackFill = trackColor(lightAlpha: 0.12, darkAlpha: 0.14)
+    private static let trackStroke = trackColor(lightAlpha: 0.2, darkAlpha: 0.22)
 
-    private static let trackStroke: NSColor = .init(name: nil) { appearance in
-        let match = appearance.bestMatch(from: [.aqua, .darkAqua])
-        if match == .darkAqua { return NSColor.white.withAlphaComponent(0.22) }
-        return NSColor.black.withAlphaComponent(0.2)
+    private static func trackColor(lightAlpha: CGFloat, darkAlpha: CGFloat) -> NSColor {
+        NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                ? NSColor.white.withAlphaComponent(darkAlpha)
+                : NSColor.black.withAlphaComponent(lightAlpha)
+        }
     }
 
     private var clampedFractionUsed: Double {
@@ -30,8 +29,7 @@ struct ContextUsageBar: View {
     }
 
     private var percentUsed: Int? {
-        guard self.contextTokens > 0, self.usedTokens > 0 else { return nil }
-        return min(100, Int(round(self.clampedFractionUsed * 100)))
+        SessionTokenStats(total: self.usedTokens, contextTokens: self.contextTokens).percentUsed
     }
 
     private var tint: Color {

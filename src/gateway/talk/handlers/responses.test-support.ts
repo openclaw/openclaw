@@ -1,15 +1,7 @@
 import { expect, vi } from "vitest";
+import { expectObjectFields as expectRecordFields } from "../../../test-utils/mock-call-assertions.js";
 
-export function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
+export { expectRecordFields };
 
 export function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
   const call = mock.mock.calls.at(callIndex);
@@ -39,4 +31,20 @@ export function expectRespondError(
   expect(mockCallArg(mock)).toBe(false);
   expect(mockCallArg(mock, 0, 1)).toBeUndefined();
   return expectRecordFields(mockCallArg(mock, 0, 2), expected);
+}
+
+export function expectSessionEntryEnsure(
+  mock: ReturnType<typeof vi.fn>,
+  agentId: string,
+  sessionKey: string,
+) {
+  expect(mock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      agentId,
+      sessionKey,
+      storePath: expect.any(String),
+      requester: expect.any(Function),
+      assertCurrent: expect.any(Function),
+    }),
+  );
 }

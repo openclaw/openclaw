@@ -1,4 +1,4 @@
-import type { ClientCapabilities, ServerCapabilities } from "@modelcontextprotocol/sdk/types.js";
+import type { ClientCapabilities, ServerCapabilities } from "@modelcontextprotocol/client";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
@@ -9,7 +9,9 @@ const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 export function buildMcpClientCapabilities(mcpAppsEnabled: boolean): ClientCapabilities {
   return mcpAppsEnabled
     ? {
+        elicitation: { form: {}, url: {} },
         extensions: {
+          "openai/elicitation": { form: {} },
           [MCP_APPS_CLIENT_EXTENSION]: { mimeTypes: [MCP_APP_RESOURCE_MIME_TYPE] },
         },
       }
@@ -48,11 +50,7 @@ export function sanitizeMcpMetadataText(value: string | undefined): string | und
   }
   const scrubbed = normalized
     .replace(
-      /ignore\s+(?:all\s+)?(?:previous|prior|above)\s+instructions/gi,
-      "[redacted MCP metadata instruction]",
-    )
-    .replace(
-      /disregard\s+(?:all\s+)?(?:previous|prior|above)\s+instructions/gi,
+      /(?:ignore|disregard)\s+(?:all\s+)?(?:previous|prior|above)\s+instructions/gi,
       "[redacted MCP metadata instruction]",
     )
     .replace(/system\s+prompt/gi, "system prompt");

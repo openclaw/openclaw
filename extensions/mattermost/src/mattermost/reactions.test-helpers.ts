@@ -1,7 +1,6 @@
 import { requestUrl } from "openclaw/plugin-sdk/test-env";
 import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
-import type { MattermostFetch } from "./client.js";
 
 let testConfigSequence = 0;
 
@@ -35,7 +34,8 @@ export function createMattermostReactionFetchMock(params: {
   const allowAdd = mode === "add" || mode === "both";
   const allowRemove = mode === "remove" || mode === "both";
   const addStatus = params.status ?? 201;
-  const removeStatus = params.status ?? 204;
+  // Mattermost answers reaction removal with 200 {"status":"OK"}, not 204.
+  const removeStatus = params.status ?? 200;
   const removePath = `/api/v4/users/${userId}/posts/${params.postId}/reactions/${encodeURIComponent(params.emojiName)}`;
 
   return vi.fn<typeof fetch>(async (url, init) => {
@@ -67,23 +67,13 @@ export function createMattermostReactionFetchMock(params: {
       });
 
       const responseBody = params.body === undefined ? { ok: true } : params.body;
-      return new Response(
-        responseBody === null ? null : JSON.stringify(responseBody),
-        responseBody === null
-          ? { status: addStatus, headers: { "content-type": "text/plain" } }
-          : { status: addStatus, headers: { "content-type": "application/json" } },
-      );
+      return Response.json(responseBody, { status: addStatus });
     }
 
     if (allowRemove && urlText.endsWith(removePath)) {
       expect(init?.method).toBe("DELETE");
-      const responseBody = params.body === undefined ? null : params.body;
-      return new Response(
-        responseBody === null ? null : JSON.stringify(responseBody),
-        responseBody === null
-          ? { status: removeStatus, headers: { "content-type": "text/plain" } }
-          : { status: removeStatus, headers: { "content-type": "application/json" } },
-      );
+      const responseBody = params.body === undefined ? { status: "OK" } : params.body;
+      return Response.json(responseBody, { status: removeStatus });
     }
 
     throw new Error(`unexpected url: ${urlText}`);
@@ -91,7 +81,7 @@ export function createMattermostReactionFetchMock(params: {
 }
 
 export async function withMockedGlobalFetch<T>(
-  fetchImpl: MattermostFetch,
+  fetchImpl: typeof fetch,
   run: () => Promise<T>,
 ): Promise<T> {
   const prevFetch = globalThis.fetch;

@@ -1,12 +1,24 @@
 /** Maps cron jobs to the canonical session-store keys they are bound to. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { tryResolveCronJobEffectiveAgentId } from "./agent-id.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
 import type { CronServiceContract } from "./service-contract.js";
 import { resolveCronSessionTargetSessionKey } from "./session-target.js";
-import type { CronJob } from "./types.js";
+import type { CronJob, CronStoredJob } from "./types.js";
 
-type CronJobSessionBinding = Pick<CronJob, "id" | "agentId" | "sessionKey" | "sessionTarget">;
+type CronJobSessionBinding = Pick<
+  CronStoredJob,
+  "id" | "agentId" | "sessionKey" | "sessionTarget" | "sourceConversation"
+>;
+
+type PreparedBinding = Omit<CronJobSessionBinding, "sourceConversation"> & {
+  sourceSessionKey: string | undefined;
+  defaultAgentId: string | undefined;
+  mainKey: string | undefined;
+  scope: NonNullable<OpenClawConfig["session"]>["scope"];
+  keys: ReadonlySet<string>;
+};
+const preparedBindings = new WeakMap<CronJobSessionBinding, PreparedBinding[]>();
 
 /**
  * Resolves every canonical session key a job is bound to: the session the run
@@ -17,9 +29,51 @@ type CronJobSessionBinding = Pick<CronJob, "id" | "agentId" | "sessionKey" | "se
 export function resolveCronJobBoundSessionKeys(
   job: CronJobSessionBinding,
   opts: { cfg: OpenClawConfig; defaultAgentId?: string },
-): Set<string> {
-  const agentId = normalizeAgentId(job.agentId ?? opts.defaultAgentId);
+): ReadonlySet<string> {
+  const mainKey = opts.cfg.session?.mainKey;
+  const scope = opts.cfg.session?.scope;
+  const sourceSessionKey = job.sourceConversation?.sessionKey;
+  const prepared = preparedBindings.get(job);
+  // These scalar facts are the binding revision, including in-place edits.
+  // Keep separate bounded slots for interleaved callers with different routing.
+  for (const entry of prepared ?? []) {
+    if (
+      entry.id === job.id &&
+      entry.agentId === job.agentId &&
+      entry.sessionKey === job.sessionKey &&
+      entry.sessionTarget === job.sessionTarget &&
+      entry.sourceSessionKey === sourceSessionKey &&
+      entry.defaultAgentId === opts.defaultAgentId &&
+      entry.mainKey === mainKey &&
+      entry.scope === scope
+    ) {
+      return entry.keys;
+    }
+  }
   const keys = new Set<string>();
+  const entry: PreparedBinding = {
+    id: job.id,
+    agentId: job.agentId,
+    sessionKey: job.sessionKey,
+    sessionTarget: job.sessionTarget,
+    sourceSessionKey,
+    defaultAgentId: opts.defaultAgentId,
+    mainKey,
+    scope,
+    keys,
+  };
+  if (prepared) {
+    if (prepared.length === 4) {
+      prepared.shift();
+    }
+    prepared.push(entry);
+  } else {
+    preparedBindings.set(job, [entry]);
+  }
+  const agentId = tryResolveCronJobEffectiveAgentId(job, opts.defaultAgentId);
+  if (!agentId) {
+    return keys;
+  }
   const add = (sessionKey: string | undefined) => {
     const trimmed = sessionKey?.trim();
     if (!trimmed) {
@@ -47,6 +101,7 @@ export function resolveCronJobBoundSessionKeys(
       add(resolveCronSessionTargetSessionKey(job.sessionTarget));
     }
     add(job.sessionKey);
+    add(job.sourceConversation?.sessionKey);
   } catch {
     // Malformed persisted targets are quarantined by the store loader; a job
     // that slips through must not break session listing, so bind nothing.

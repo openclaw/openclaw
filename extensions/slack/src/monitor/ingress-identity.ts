@@ -23,10 +23,6 @@ function normalizeSlackUserId(raw?: string | null): string {
   return value.replace(/^(slack:|user:)/, "");
 }
 
-function isSlackStableUserId(value: string): boolean {
-  return /^[ubw][a-z0-9_]+$/i.test(value);
-}
-
 function normalizeSlackWorkspaceUserEntry(entry: string): string | null {
   const normalized = entry.trim().toLowerCase();
   if (!normalized) {
@@ -49,7 +45,7 @@ function normalizeSlackBareUserEntry(entry: string): string | null {
     return null;
   }
   const userId = normalizeSlackUserId(normalized);
-  return isSlackStableUserId(userId) ? userId : null;
+  return /^[ubw][a-z0-9_]+$/i.test(userId) ? userId : null;
 }
 
 function normalizeSlackStableEntry(entry: string): string | null {
@@ -94,8 +90,7 @@ export const slackIngressIdentity = defineStableChannelIngressIdentity({
   },
   key: "senderId",
   kind: "stable-id",
-  // Direct Slack transports bind this id, while relay mode only authenticates its relay peer.
-  // The shared declaration therefore uses the strongest claim defensible for every mode.
+  // Per-event transport evidence overrides this conservative shared declaration.
   authentication: "asserted",
   normalizeEntry: normalizeSlackBareUserEntry,
   normalizeSubject: normalizeSlackUserId,
@@ -129,13 +124,21 @@ export function createSlackIngressSubject(params: {
   senderId: string;
   senderName?: string;
   teamId?: string;
+  senderAuthentication?: "verified" | "asserted";
 }) {
   const senderId = normalizeSlackUserId(params.senderId);
   const teamId = normalizeOptionalLowercaseString(params.teamId);
   const senderName = params.senderName?.trim().toLowerCase();
   const senderNameSlug = senderName ? normalizeSlackSlug(senderName) : undefined;
   return {
-    stableId: senderId,
+    // Host admission binds the native ID exactly; allowlist normalizers own casing.
+    stableId: params.senderId,
+    authentication: {
+      senderId: params.senderAuthentication ?? "asserted",
+      workspaceSenderId: params.senderAuthentication ?? "asserted",
+      senderName: "mutable" as const,
+      senderNameSlug: "mutable" as const,
+    },
     aliases: {
       workspaceSenderId: teamId && senderId ? `team:${teamId}:user:${senderId}` : undefined,
       senderName,

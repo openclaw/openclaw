@@ -19,6 +19,74 @@ This page covers the Gateway client roster. To detect the Mac you most recently
 used and route node alerts there, see
 [Active computer presence](/nodes/presence).
 
+## Ask the agent about presence
+
+The core `presence` tool reads a current snapshot of people, their connected
+clients and devices, and observed activity. It works on personal and shared
+Gateways without shell access. The same read model is available over Gateway
+RPC as `presence.query`.
+
+| Parameter  | Meaning                                                                                                       |
+| ---------- | ------------------------------------------------------------------------------------------------------------- |
+| `action`   | `list` (default), `person`, or `device`.                                                                      |
+| `person`   | Required for `person`: `me`, a returned person/profile ID, or an unambiguous display name.                    |
+| `deviceId` | Required for `device`: a device ID returned by presence.                                                      |
+| `include`  | Optional array of `devices`, `network`, and `location`. Network and location detail also include device rows. |
+| `limit`    | Maximum people in a list, from 1 to 100; default 50. Truncated results are identified.                        |
+
+Examples:
+
+```json
+{ "action": "list" }
+```
+
+```json
+{ "action": "person", "person": "me", "include": ["devices"] }
+```
+
+```json
+{ "action": "person", "person": "Alex", "include": ["network", "location"] }
+```
+
+`list` includes the requester and returns one row per connected identity, rather
+than one row per browser tab. `me` uses the authenticated person who requested
+the turn, including on a remote worker. Ambiguous names return candidates;
+unidentified turns receive `identity-unavailable` for `me`.
+
+Device activity retains its source: `openclaw-interaction`, `app-input`, or
+`system-input`. A person's activity summary identifies the device associated
+with their latest observed activity. Devices without an authenticated person
+association remain separate; use `list` with `devices` to inspect shared or
+unidentified machines. A browser client does not necessarily identify a physical
+computer, and matching names or IP addresses never establish that association.
+
+The result includes `observedAt`; missing activity is `null`, not evidence that
+someone is inactive. Online means connected, including idle tabs. This is live
+presence, not retained activity history: disconnected devices and previous
+Gateway processes do not establish a historical last-used machine.
+
+`network` includes the observed connection IP when available. `location` lazily
+uses the existing [geolocation plugin](/plugins/geolocation), returning coarse
+IP geography with source attribution. Missing results and an unavailable
+provider are distinct. Time zones remain client-reported; IP geography may
+describe a VPN or network exit. Presence never requests GPS or changes device
+permissions.
+
+Authenticated callers need the same `operator.read` access as the presence
+roster. Trusted local operator turns, configured channel owners, and
+operator-owned scheduled runs can also query presence while their source
+authority remains active. Other channel callers and requester-owned schedules
+without read access cannot query the roster. The tool does not expose
+watched-session references or grant device control. Compatible
+remote workers forward the read to their admitting Gateway; workers connected
+to a Gateway without the presence capability omit the tool.
+
+To query the same snapshot from the CLI:
+
+```bash
+openclaw gateway call presence.query --params '{"action":"person","person":"me","include":["devices"]}' --json
+```
+
 ## Presence fields (what shows up)
 
 Presence entries are structured objects with fields like:
@@ -37,6 +105,8 @@ Presence entries are structured objects with fields like:
 - `ts`: last presence update timestamp (ms since epoch), including heartbeat updates. This is not a user-activity timestamp
 - `onlineSince`: start of an authenticated person's current continuous online period, shared across overlapping connections
 - `lastActivityAt`: latest observed accepted interaction during that online period. It is absent until activity is observed
+- `connectionLastActivityAt`: latest accepted interaction on this exact client connection, before person-wide aggregation
+- `connectionId`: Gateway-assigned identity of the current connection
 - `watchedSessions`: session keys the client explicitly declares it is viewing, filtered for the recipient
 
 ## Who can see presence
@@ -83,7 +153,7 @@ Gateway upserts a presence entry for that connection.
 
 #### Why ephemeral control-plane connections do not show up
 
-CLI commands, backend RPC clients, and probes often connect briefly. To avoid
+CLI commands, backend RPC clients, and checks often connect briefly. To avoid
 retaining that churn for the full presence TTL, clients in `cli`, `backend`,
 or `probe` mode are **not** turned into presence entries. Test-mode clients
 stay tracked because test suites use them as stand-ins for real clients.
@@ -113,9 +183,18 @@ sessions cannot overwrite each other. Node connections use their device id,
 then `connect.client.instanceId`, then the connection id.
 
 `system-event` beacons merge by device id or instance id when supplied, otherwise
-by parsed host or other beacon metadata. A stable `instanceId` helps consumers
-associate rows with the same client. It does not merge separate user WebSocket
+by parsed host or other beacon metadata. Native macOS `Node:` beacons that omit
+`deviceId` use the authenticated connection's device id, so a paired Mac does not
+also appear under **Connected without pairing**. Explicit beacon device ids remain
+unchanged. A stable `instanceId` helps consumers associate rows with the same client.
+It does not merge separate user WebSocket
 connections. Ephemeral control-plane clients are excluded from tracking entirely.
+
+Reconnecting removes retained offline rows for the same operator identity: device
+id, then client instance id, then connection id. Closing a tab removes its row if
+another connection of that identity remains live. When the last connection closes,
+at most one offline row remains for that identity until the existing five-minute
+TTL, preserving recently-offline metadata without accumulating reconnect history.
 
 The Control UI groups connection rows by their recorded identity namespace when
 displaying people. Connections with the same qualified profile identity share one
@@ -124,7 +203,8 @@ ID matching a profile ID never combines their watched sessions, connection facts
 or viewer counts. The Gateway uses the same namespace boundary for online/activity
 timing and collaborative typing counts. Overlapping tabs share timing facts only
 within their namespace. Later activity stays separate if a raw tab gains profile
-qualification. Self exclusion follows the authenticated user's recorded
+qualification. The Online roster includes your own connected identity. Session
+viewer indicators exclude you according to the authenticated user's recorded
 qualification, using the current connection only when that user is unavailable.
 Only a displayed owner with the exact qualified profile identity is deduplicated
 from a session's live viewers. The [people card](/concepts/multi-user#people-cards) keeps online duration
@@ -133,10 +213,42 @@ and observed activity separate from each entry's heartbeat freshness.
 Accepted interactions, including typing, update the exact activity timestamp on
 every live connection for that person. Activity-only presence events are coalesced
 to at most one every 30 seconds per identity. The first observed activity and
-activity after that window publish immediately; connection, disconnection,
-profile, and watched-session changes still publish immediately. The people card's
+activity after that window schedule a publication; connection, disconnection,
+profile, and watched-session changes share a 200 ms publication window anchored to
+the first pending change. Later changes do not postpone it. Hello snapshots and
+`system-presence` replies read the current state immediately. The people card's
 activity age can therefore lag the latest interaction by less than 30 seconds.
 Fresh snapshots and `system-presence` reads include the latest stored timestamp.
+
+The Control UI combines viewer declarations within one browser turn. Replacing a
+chat pane with another owner of the same session does not briefly clear and
+re-add its viewer presence. Leaving the session still publishes an empty
+declaration and waits for acknowledgment.
+
+## Online and recent activity
+
+A connected person is **Online**. Activity is a separate, recent-interaction hint:
+
+- **Active:** an accepted interaction was observed less than two minutes ago.
+- **Idle:** an interaction was observed, but it is at least two minutes old.
+- **Online** without an activity label: no interaction timestamp is available.
+  The people card says **Activity unavailable** rather than guessing active or idle.
+
+The sidebar ages active people into idle without waiting for another Gateway
+update. The card keeps continuous online duration separate from **Last interaction**.
+The UI activity label uses the newest OpenClaw interaction across a person's
+live, identity-qualified connections. Heartbeats and native input recency do not
+determine this label. The agent's presence query also exposes native device
+activity with its source, so it can identify the most recently used connected
+machine without treating native input as interaction with OpenClaw.
+
+The Control UI reports its initial foreground visit and throttled keyboard,
+pointer, and scrolling interactions. Automatic reconnects, background tabs,
+incoming messages, and background requests do not count as fresh interaction.
+Clients that do not report interaction can still be online. This describes
+recent use of OpenClaw, not physical presence or attention: someone reading
+without interacting may become idle. The separate native
+[active computer signal](/nodes/presence) does not identify a person.
 
 ## TTL and bounded size
 
@@ -147,6 +259,11 @@ Presence is intentionally ephemeral:
 
 This keeps the list fresh and avoids unbounded memory growth.
 
+Expiry and eviction use the heartbeat's wall-clock timestamp. A host clock
+correction may retain stale rows or expire fresh ones early. Full presence updates
+or reconnects republish current metadata; stale rows clear as wall time catches up
+or on restart. Presence is best effort; it does not grant device authority.
+
 ## Remote/tunnel caveat (loopback IPs)
 
 When a client connects over an SSH tunnel / local port forward, the Gateway
@@ -156,6 +273,16 @@ detected-local (loopback) clients rather than writing the loopback address
 into the entry.
 
 ## Consumers
+
+The Control UI opts into [presence deltas](/gateway/protocol/presence#opt-in-presence-deltas)
+to send changed fields, including heartbeat timestamps, without retransmitting
+each connection's metadata. Its Gateway
+store reconstructs the same ordered presence list and requests a fresh snapshot
+if an update does not match its current version. Current macOS and iOS clients
+also reconstruct full rosters from deltas, reconnecting on a missing baseline.
+Android opts in without consuming roster events. Older native versions retain
+full presence events. Recipient visibility and the best-effort freshness policy
+are the same for both formats.
 
 ### Control UI Devices page
 
@@ -174,7 +301,7 @@ indicator (Active/Idle/Stale) based on the age of the last update.
 - If you see duplicates:
   - confirm clients send a stable `client.instanceId` in the handshake
   - confirm periodic beacons use the same `instanceId`
-  - check for multiple tabs or reconnects. Separate user connections have separate rows, and old rows expire after the TTL
+  - check for multiple live tabs. Separate user connections have separate rows; only the last offline row for a device or instance remains until the TTL, and reconnecting removes it
 
 ## Related
 

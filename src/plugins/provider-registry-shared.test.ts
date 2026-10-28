@@ -3,19 +3,11 @@ import { describe, expect, it } from "vitest";
 import { buildCapabilityProviderIndex } from "./provider-registry-shared.js";
 
 describe("provider registry shared", () => {
-  it("normalizes provider ids case-insensitively", () => {
-    const canonical = buildCapabilityProviderIndex(
-      [{ id: "  OpenAI  " }, { id: "   " }],
-      "canonical",
-    );
-    expect([...canonical.keys()]).toEqual(["openai"]);
-  });
-
   it("indexes providers by id and alias", () => {
     const microsoft = { id: "Microsoft", aliases: [" EDGE ", "ms"] };
-    const openai = { id: "OpenAI" };
+    const openai = { id: "  OpenAI  " };
     const replacement = { id: " microsoft ", aliases: ["azure"] };
-    const providers = [microsoft, openai, replacement];
+    const providers = [microsoft, openai, replacement, { id: "   " }];
     const canonical = buildCapabilityProviderIndex(providers, "canonical");
     const aliases = buildCapabilityProviderIndex(providers, "aliases");
 

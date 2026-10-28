@@ -1,3 +1,4 @@
+import type { ProviderModelRouteSource } from "../../../plugin-sdk/provider-model-types.js";
 import {
   providerOwnsDynamicModelPreparation,
   resolveProviderAuthProfileId,
@@ -5,12 +6,14 @@ import {
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "../../auth-profiles/external-cli-auth-selection.js";
 import type { AgentHarness } from "../../harness/types.js";
+import { hasSyntheticLocalProviderAuthConfig } from "../../model-auth-provider-config.js";
 import {
-  ensureAuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreAsync,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
 } from "../../model-auth.js";
 import { OPENAI_PROVIDER_ID } from "../../openai-routing.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
+import { isConfiguredKeyAuthSource } from "../../provider-model-auth-source-plan.js";
 import { buildAgentRuntimeAuthPlan } from "../../runtime-plan/auth.js";
 import {
   createPreparedRuntimeModelMaterializer,
@@ -21,30 +24,13 @@ import {
   type PreparedAgentRuntimeAuth,
   type PreparedAgentRuntimeAuthAttempt,
 } from "../../runtime-plan/prepare-auth.js";
+import { createUnrecordedScheduledAccountRefusal } from "../../scheduled-unrecorded-account.js";
 import { resolveModelAsync } from "../model.js";
 import type { PreparedNativeSessionRuntime } from "./model-setup.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 
 type ModelResolution = Awaited<ReturnType<typeof resolveModelAsync>>;
 type RuntimeModel = NonNullable<ModelResolution["model"]>;
-
-function loadEmbeddedRunAuthProfileStore(params: {
-  agentDir: string;
-  provider: string;
-  profileId?: string;
-  config: RunEmbeddedAgentParams["config"];
-  externalCliProviderIds: Iterable<string>;
-}): AuthProfileStore {
-  // Provider pins own ambient overlays at this loader seam. Genuinely stored profiles and
-  // explicit bindings remain available for the cross-class contracts in prepare-auth.test.ts.
-  return ensureAuthProfileStore(params.agentDir, {
-    migrationProvider: params.provider,
-    profileId: params.profileId,
-    config: params.config,
-    externalCliProviderIds: params.externalCliProviderIds,
-    allowKeychainPrompt: false,
-  });
-}
 
 export async function prepareEmbeddedRunAuthPlan(params: {
   assertCurrent: () => void;
@@ -57,10 +43,13 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   workspaceDir: string;
   requestStreamTransportOverrides?: "present";
   nativeModelOwned: boolean;
+  /** Picker routes for a native-owned model; its placeholder transport is not an observation. */
+  observedRoutes?: readonly ProviderModelRouteSource[];
   nativeSessionRuntime?: PreparedNativeSessionRuntime;
   authStorage: ModelResolution["authStorage"];
   modelRegistry: ModelResolution["modelRegistry"];
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  requireConfiguredTransportAuth?: boolean;
   getAgentHarness: () => AgentHarness;
   setAgentHarness: (harness: AgentHarness) => void;
   getRuntimeModel: () => RuntimeModel;
@@ -70,9 +59,9 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     model: RuntimeModel,
     attempts: readonly PreparedAgentRuntimeAuthAttempt[],
   ) => AgentHarness;
-  markStage?: (stage: string) => void;
 }) {
   const runParams = params.runParams;
+  runParams.authProfileBinding?.assertCurrent();
   const usesOpenAIAuthRouting = params.provider === OPENAI_PROVIDER_ID;
   const initialHarness = params.getAgentHarness();
   const initialPluginHarnessOwnsTransport = initialHarness.id !== "openclaw";
@@ -80,6 +69,15 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     !initialPluginHarnessOwnsTransport &&
     usesOpenAIAuthRouting &&
     params.getEffectiveModel().api === "openai-chatgpt-responses";
+  const resolveExternalCliAuthScope = (store?: AuthProfileStore) =>
+    resolveExternalCliAuthOverlayScopeFromSelection({
+      ...params,
+      cfg: runParams.config,
+      agentId: runParams.agentId,
+      ...(store ? { store } : {}),
+      userPinnedAuthProfileId:
+        runParams.authProfileIdSource === "user" ? runParams.authProfileId : undefined,
+    });
   let externalCliAuthScope = initialPluginHarnessOwnsTransport
     ? { ignoreAutoPreferredProfile: false }
     : openClawNativeCodexResponsesNeedsAuthBootstrap
@@ -87,70 +85,45 @@ export async function prepareEmbeddedRunAuthPlan(params: {
           providerIds: [OPENAI_PROVIDER_ID],
           ignoreAutoPreferredProfile: false,
         }
-      : resolveExternalCliAuthOverlayScopeFromSelection({
-          provider: params.provider,
-          cfg: runParams.config,
-          agentId: runParams.agentId,
-          modelId: params.modelId,
-          workspaceDir: params.workspaceDir,
-          userPinnedAuthProfileId:
-            runParams.authProfileIdSource === "user" ? runParams.authProfileId : undefined,
-        });
+      : resolveExternalCliAuthScope();
+  const authStoreOptions = {
+    migrationProvider: params.provider,
+    config: runParams.config,
+    inheritedAuthDir: params.preparedModelRuntime?.inheritedAuthDir,
+    profileId: runParams.authProfileId,
+    allowKeychainPrompt: false,
+  };
   let noExternalAuthStore: AuthProfileStore | undefined;
   if (!initialPluginHarnessOwnsTransport && !externalCliAuthScope.providerIds) {
-    noExternalAuthStore = ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
-      migrationProvider: params.provider,
-      config: runParams.config,
-      profileId: runParams.authProfileId,
-      allowKeychainPrompt: false,
-    });
-    externalCliAuthScope = resolveExternalCliAuthOverlayScopeFromSelection({
-      provider: params.provider,
-      cfg: runParams.config,
-      agentId: runParams.agentId,
-      modelId: params.modelId,
-      workspaceDir: params.workspaceDir,
-      store: noExternalAuthStore,
-      userPinnedAuthProfileId:
-        runParams.authProfileIdSource === "user" ? runParams.authProfileId : undefined,
-    });
+    noExternalAuthStore = await ensureAuthProfileStoreWithoutExternalProfilesAsync(
+      params.agentDir,
+      authStoreOptions,
+    );
+    externalCliAuthScope = resolveExternalCliAuthScope(noExternalAuthStore);
   }
-  params.markStage?.("scope");
 
-  const attemptAuthProfileStore = usesOpenAIAuthRouting
-    ? loadEmbeddedRunAuthProfileStore({
-        provider: params.provider,
-        agentDir: params.agentDir,
-        profileId: runParams.authProfileId,
-        config: runParams.config,
-        externalCliProviderIds: [OPENAI_PROVIDER_ID],
-      })
+  // Provider pins own ambient overlays at this loader seam. Stored profiles
+  // and explicit bindings remain available for the cross-class auth contracts.
+  const externalCliProviderIds = usesOpenAIAuthRouting
+    ? [OPENAI_PROVIDER_ID]
     : initialPluginHarnessOwnsTransport
-      ? ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
-          migrationProvider: params.provider,
-          config: runParams.config,
-          profileId: runParams.authProfileId,
-          allowKeychainPrompt: false,
-        })
-      : externalCliAuthScope.providerIds
-        ? loadEmbeddedRunAuthProfileStore({
-            provider: params.provider,
-            agentDir: params.agentDir,
-            profileId: runParams.authProfileId,
-            config: runParams.config,
-            externalCliProviderIds: externalCliAuthScope.providerIds,
-          })
-        : (noExternalAuthStore ??
-          ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
-            migrationProvider: params.provider,
-            config: runParams.config,
-            profileId: runParams.authProfileId,
-            allowKeychainPrompt: false,
-          }));
-  params.markStage?.("store");
+      ? undefined
+      : externalCliAuthScope.providerIds;
+  const attemptAuthProfileStore = externalCliProviderIds
+    ? await ensureAuthProfileStoreAsync(params.agentDir, {
+        ...authStoreOptions,
+        externalCliProviderIds,
+      })
+    : (noExternalAuthStore ??
+      (await ensureAuthProfileStoreWithoutExternalProfilesAsync(
+        params.agentDir,
+        authStoreOptions,
+      )));
 
   const requestedProfileId = runParams.authProfileId?.trim() || undefined;
-  const lockedProfileId = runParams.authProfileIdSource === "user" ? requestedProfileId : undefined;
+  const lockedProfileId =
+    runParams.authProfileBinding?.profileId ??
+    (runParams.authProfileIdSource === "user" ? requestedProfileId : undefined);
   const preferredProfileId =
     externalCliAuthScope.ignoreAutoPreferredProfile && !lockedProfileId
       ? undefined
@@ -158,6 +131,11 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   const createAuthPreparation = (): PreparedAgentRuntimeAuth => {
     const harness = params.getAgentHarness();
     if (params.nativeSessionRuntime?.auth === "native") {
+      if (runParams.authProfileBinding) {
+        throw new Error(
+          "A native connection cannot replace the automation’s recorded inference account.",
+        );
+      }
       // Only the binding-owned connection bypasses host credentials and routes;
       // preserving a native model alone still uses the normal auth planner below.
       const plan = buildAgentRuntimeAuthPlan({
@@ -171,11 +149,12 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       });
       return { plan, attempts: [{ kind: "implicit", plan }] };
     }
-    return prepareAgentRuntimeAuth({
+    const prepared = prepareAgentRuntimeAuth({
       provider: params.provider,
       modelId: params.modelId,
-      modelApi: params.model.api,
-      modelBaseUrl: params.model.baseUrl,
+      ...(params.observedRoutes
+        ? { observedRoutes: params.observedRoutes }
+        : { modelApi: params.model.api, modelBaseUrl: params.model.baseUrl }),
       requestTransportOverrides: params.requestStreamTransportOverrides,
       config: runParams.config,
       env: process.env,
@@ -186,7 +165,18 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       authProfileStore: attemptAuthProfileStore,
       sessionAuthProfileId: preferredProfileId,
       sessionAuthProfileSource: runParams.authProfileIdSource,
-      allowAuthProfileFallback: runParams.allowAuthProfileFallback,
+      requiredAuthProfileId: runParams.authProfileBinding?.profileId,
+      ...(runParams.authProfileBinding
+        ? {
+            routeIntent: {
+              authRequirement: runParams.authProfileBinding.authRequirement,
+              source: "explicit" as const,
+            },
+          }
+        : {}),
+      allowAuthProfileFallback: runParams.authProfileBinding
+        ? false
+        : runParams.allowAuthProfileFallback,
       harnessId: harness.id,
       harnessRuntime: harness.id,
       harnessAuthBootstrap: harness.authBootstrap,
@@ -201,13 +191,56 @@ export async function prepareEmbeddedRunAuthPlan(params: {
           context,
         }),
     });
+    if (
+      params.requireConfiguredTransportAuth &&
+      prepared.attempts.some((attempt) => {
+        if (
+          attempt.kind === "implicit" &&
+          attempt.plan.credentialSource?.kind === "none" &&
+          attempt.plan.forwardedAuthProfileId === undefined &&
+          hasSyntheticLocalProviderAuthConfig({ cfg: runParams.config, provider: params.provider })
+        ) {
+          return false;
+        }
+        return (
+          attempt.kind !== "direct" ||
+          attempt.plan.forwardedAuthProfileId !== undefined ||
+          !isConfiguredKeyAuthSource(attempt.plan.credentialSource) ||
+          (attempt.plan.credentialSource?.kind === "direct" &&
+            attempt.plan.credentialSource.authorization !== "declared")
+        );
+      })
+    ) {
+      throw new Error(
+        "Connection recovery requires configured direct auth or a local no-auth transport.",
+      );
+    }
+    // Legacy jobs have no trustworthy account history. Their env or provider-config key is
+    // the only one they can use, so it keeps running; an eligible stored account needs adoption.
+    const unrecorded =
+      runParams.trigger === "cron" &&
+      !runParams.authProfileBinding &&
+      !runParams.scheduledRuntimeAuthority
+        ? prepared.attempts.find(({ plan }) => {
+            const source = plan.credentialSource;
+            return (
+              source?.kind === "profile" ||
+              (source?.kind === "direct" && !isConfiguredKeyAuthSource(source))
+            );
+          })
+        : undefined;
+    if (unrecorded) {
+      throw createUnrecordedScheduledAccountRefusal({
+        runtime: harness.id,
+        modelRef: `${params.provider}/${params.modelId}`,
+        profileId: unrecorded.kind === "profile" ? unrecorded.profileId : undefined,
+      });
+    }
+    return prepared;
   };
   const providerUsesProfileScopedModelMetadata = providerUsesCredentialScopedModelMetadata({
-    provider: params.provider,
-    modelId: params.modelId,
+    ...params,
     config: runParams.config,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
   });
   const providerOwnsDynamicModelRefresh = providerOwnsDynamicModelPreparation({
     provider: params.provider,
@@ -216,13 +249,10 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   });
   const { materialize: materializeAuthPlan, materializeUncached: materializeAuthPlanUncached } =
     createPreparedRuntimeModelMaterializer({
-      provider: params.provider,
-      modelId: params.modelId,
+      ...params,
       config: runParams.config,
-      workspaceDir: params.workspaceDir,
       metadataSnapshot: params.preparedModelRuntime?.metadataSnapshot,
       getModel: params.getRuntimeModel,
-      nativeModelOwned: params.nativeModelOwned,
       requestedProfileId: runParams.authProfileId,
       providerUsesProfileScopedModelMetadata,
       providerOwnsDynamicModelRefresh,
@@ -244,42 +274,32 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     });
 
   let resolvedAuthPreparation = createAuthPreparation();
-  let preparedAuthAttempts = resolvedAuthPreparation.attempts;
-  let activePreparedAuthPlan = resolvedAuthPreparation.plan;
-  params.applyResolvedRuntimeModel(await materializeAuthPlan(activePreparedAuthPlan));
-  params.markStage?.("prepare-plan");
-
-  const finalizedHarness = params.selectHarnessForPreparedAttempts(
-    params.getEffectiveModel(),
-    preparedAuthAttempts,
-  );
-  if (finalizedHarness.id !== params.getAgentHarness().id) {
-    params.setAgentHarness(finalizedHarness);
-    resolvedAuthPreparation = createAuthPreparation();
-    preparedAuthAttempts = resolvedAuthPreparation.attempts;
-    activePreparedAuthPlan = resolvedAuthPreparation.plan;
-    params.applyResolvedRuntimeModel(await materializeAuthPlan(activePreparedAuthPlan));
-    const confirmedHarness = params.selectHarnessForPreparedAttempts(
+  for (let preparation = 0; ; preparation += 1) {
+    params.applyResolvedRuntimeModel(await materializeAuthPlan(resolvedAuthPreparation.plan));
+    const selectedHarness = params.selectHarnessForPreparedAttempts(
       params.getEffectiveModel(),
-      preparedAuthAttempts,
+      resolvedAuthPreparation.attempts,
     );
-    if (confirmedHarness.id !== params.getAgentHarness().id) {
+    if (selectedHarness.id === params.getAgentHarness().id) {
+      break;
+    }
+    if (preparation > 0) {
       throw new Error(
         `Prepared auth route did not converge on one agent harness for ${params.provider}/${params.modelId}.`,
       );
     }
+    params.setAgentHarness(selectedHarness);
+    resolvedAuthPreparation = createAuthPreparation();
   }
-  params.markStage?.("harness");
 
   return {
-    usesOpenAIAuthRouting,
     attemptAuthProfileStore,
     lockedProfileId,
     preferredProfileId,
     providerUsesProfileScopedModelMetadata,
     materializeAuthPlan,
     materializeAuthPlanUncached,
-    preparedAuthAttempts,
-    activePreparedAuthPlan,
+    preparedAuthAttempts: resolvedAuthPreparation.attempts,
+    activePreparedAuthPlan: resolvedAuthPreparation.plan,
   };
 }

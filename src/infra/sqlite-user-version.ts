@@ -29,6 +29,13 @@ export function readSqliteUserVersion(db: DatabaseSync): number {
   return Number(row?.user_version ?? 0);
 }
 
+export function writeSqliteUserVersion(db: DatabaseSync, version: number): void {
+  if (!Number.isInteger(version) || version < 0 || version > 2147483647) {
+    throw new RangeError("SQLite user_version must be an integer from 0 through 2147483647.");
+  }
+  db.exec(`PRAGMA user_version = ${version}`);
+}
+
 /**
  * Name the refusing build from immutable loaded metadata, plus its install root.
  * The path remains actionable when multiple installs share a version or build.

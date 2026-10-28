@@ -28,7 +28,7 @@ the agent or stock Codex runtime locally.
 Keep the app in the foreground until connected. Established calls use
 background audio; an unfinished startup stops if backgrounded. Physical
 wrist-down, speaker routing, cellular handoff, and long-call endurance remain
-unverified. Simulator results and macOS provider-audio probes are not proof of
+unverified. Simulator results and macOS provider-audio checks are not proof of
 Watch background behavior. See [Watch setup and limits](/platforms/ios#standalone-voice).
 
 ## Android UI
@@ -42,6 +42,10 @@ Watch background behavior. See [Watch setup and limits](/platforms/ios#standalon
   the Gateway does not advertise GPT-Live relay support or explicitly rejects
   relay support for the configuration.
   Explicit `stt-tts` mode is shown as native Talk, not as a realtime failure.
+- Native Talk uses the Gateway's `agents.defaults.timeoutSeconds` for agent runs.
+  It keeps waiting while the Gateway reports its run in flight, including answers
+  that take longer than 30 seconds. Stopping native Talk stops local listening
+  and playback; an accepted answer can still finish in chat history.
 - Dictation, voice-note recording, and Talk are mutually exclusive microphone
   paths; starting one stops or blocks the others.
 - Realtime Talk prefers a connected Bluetooth Classic or BLE headset

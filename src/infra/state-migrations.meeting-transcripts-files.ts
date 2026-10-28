@@ -4,6 +4,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import type { DatabaseSync } from "node:sqlite";
+import { Readable } from "node:stream";
+import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   TranscriptSessionDescriptor,
@@ -13,8 +15,8 @@ import { TRANSCRIPT_EXPORT_FILE_NAMES } from "../transcripts/store-artifacts.js"
 import type { TranscriptsSummary } from "../transcripts/summary.js";
 import { renderTranscriptsMarkdown } from "../transcripts/summary.js";
 import { sha256File, sha256FileSync, sha256Hex } from "./crypto-digest.js";
-import { assertNoSymlinkParents } from "./fs-safe-advanced.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { decodeUtf8Chunks, decodeUtf8Input } from "./utf8-input.js";
 
 export const LEGACY_UTTERANCE_INSERT_CHUNK_SIZE = 64;
 const LEGACY_UTTERANCE_STAGE_BATCH_SIZE = 256;
@@ -22,7 +24,6 @@ const LEGACY_UTTERANCE_STAGE_BATCH_SIZE = 256;
 export type LegacyMeetingTranscriptSnapshot = {
   sourceDir: string;
   relativeDir: string;
-  stageKey: string;
   session: TranscriptSessionDescriptor;
   utteranceCount: number;
   summary?: TranscriptsSummary;
@@ -30,6 +31,11 @@ export type LegacyMeetingTranscriptSnapshot = {
   sourceHash: string;
   sourceSizeBytes: number;
 };
+
+export type LegacyMeetingTranscriptSource = Pick<
+  LegacyMeetingTranscriptSnapshot,
+  "sourceDir" | "sourceHash"
+>;
 
 export function isRecordedCanonicalTranscriptExport(params: {
   sessionDir: string;
@@ -160,7 +166,7 @@ function legacyTranscriptRelativeDir(session: TranscriptSessionDescriptor): stri
   }
   const legacySegment =
     session.sessionId.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "session";
-  return path.normalize(path.join(date, legacySegment));
+  return path.join(date, legacySegment);
 }
 
 async function optionalRegularFile(filePath: string): Promise<boolean> {
@@ -207,8 +213,10 @@ export function disposeLegacyMeetingTranscriptStage(params: {
     params.database?.close();
   } catch (error) {
     warnings.push(
-      `Could not close the meeting transcript migration stage database: ${String(error)}`,
+      `Could not close the meeting transcript migration stage database: ${String(error)}. Left stage files in place${params.databasePath ? ` at ${params.databasePath}` : ""}; remove them only after this process exits.`,
     );
+    // A failed native close can leave the WAL-index mapped.
+    return warnings;
   }
   if (!params.databasePath) {
     return warnings;
@@ -238,7 +246,7 @@ async function stageUtterances(params: {
   if (!(await optionalRegularFile(filePath))) {
     return 0;
   }
-  const stream = createReadStream(filePath, { encoding: "utf8" });
+  const stream = Readable.from(decodeUtf8Chunks(createReadStream(filePath), filePath));
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
   let lineNumber = 0;
   let sequence = 0;
@@ -287,13 +295,12 @@ export function readStagedMeetingTranscriptUtterances(params: {
   stageDatabase: DatabaseSync;
   stageKey: string;
   start: number;
-  limit: number;
 }): TranscriptUtterance[] {
   return params.stageDatabase
     .prepare(
       "SELECT utterance_json FROM staged_utterances WHERE stage_key = ? AND sequence >= ? ORDER BY sequence ASC LIMIT ?",
     )
-    .all(params.stageKey, params.start, params.limit)
+    .all(params.stageKey, params.start, LEGACY_UTTERANCE_INSERT_CHUNK_SIZE)
     .map((row) => JSON.parse(String(row.utterance_json)) as TranscriptUtterance);
 }
 
@@ -306,10 +313,6 @@ async function snapshotFile(filePath: string): Promise<{
   }
   const stat = await fs.stat(filePath);
   return { hash: await sha256File(filePath), sizeBytes: stat.size };
-}
-
-async function snapshotSourceFiles(files: string[]) {
-  return await Promise.all(files.map(snapshotFile));
 }
 
 function sourceFilesHash(
@@ -338,11 +341,14 @@ export async function snapshotLegacyMeetingTranscriptSession(params: {
   const summaryJsonPath = path.join(sourceDir, "summary.json");
   const summaryMarkdownPath = path.join(sourceDir, "summary.md");
   const files = [metadataPath, transcriptPath, summaryJsonPath, summaryMarkdownPath];
-  const beforeSnapshots = await snapshotSourceFiles(files);
+  const beforeSnapshots = await Promise.all(files.map(snapshotFile));
   if (!beforeSnapshots[0]?.hash) {
     throw new Error(`legacy transcript session is missing metadata.json: ${sourceDir}`);
   }
-  const session = parseSession(JSON.parse(await fs.readFile(metadataPath, "utf8")), metadataPath);
+  const session = parseSession(
+    JSON.parse(decodeUtf8Input(await fs.readFile(metadataPath), metadataPath)),
+    metadataPath,
+  );
   const expectedRelativeDir = legacyTranscriptRelativeDir(session);
   if (path.normalize(params.relativeDir) !== expectedRelativeDir) {
     throw new Error(
@@ -357,10 +363,13 @@ export async function snapshotLegacyMeetingTranscriptSession(params: {
   const hasSummaryJson = await optionalRegularFile(summaryJsonPath);
   const hasSummaryMarkdown = await optionalRegularFile(summaryMarkdownPath);
   const summary = hasSummaryJson
-    ? parseSummary(JSON.parse(await fs.readFile(summaryJsonPath, "utf8")), summaryJsonPath)
+    ? parseSummary(
+        JSON.parse(decodeUtf8Input(await fs.readFile(summaryJsonPath), summaryJsonPath)),
+        summaryJsonPath,
+      )
     : undefined;
   const markdown = hasSummaryMarkdown
-    ? await fs.readFile(summaryMarkdownPath, "utf8")
+    ? decodeUtf8Input(await fs.readFile(summaryMarkdownPath), summaryMarkdownPath)
     : summary
       ? renderTranscriptsMarkdown(summary)
       : undefined;
@@ -368,7 +377,7 @@ export async function snapshotLegacyMeetingTranscriptSession(params: {
     throw new Error(`legacy transcript summary session mismatch at ${summaryJsonPath}`);
   }
 
-  const fileSnapshots = await snapshotSourceFiles(files);
+  const fileSnapshots = await Promise.all(files.map(snapshotFile));
   if (
     fileSnapshots.some(
       (snapshot, index) =>
@@ -382,7 +391,6 @@ export async function snapshotLegacyMeetingTranscriptSession(params: {
   return {
     sourceDir,
     relativeDir: params.relativeDir,
-    stageKey: params.relativeDir,
     session,
     utteranceCount,
     summary,
@@ -535,13 +543,13 @@ export async function archivePartialMeetingTranscriptArtifacts(params: {
 }
 
 export async function rehashLegacyMeetingTranscriptSnapshots(
-  snapshots: LegacyMeetingTranscriptSnapshot[],
+  snapshots: LegacyMeetingTranscriptSource[],
 ): Promise<boolean> {
   for (const snapshot of snapshots) {
     const files = ["metadata.json", "transcript.jsonl", "summary.json", "summary.md"].map(
       (fileName) => path.join(snapshot.sourceDir, fileName),
     );
-    const fileSnapshots = await snapshotSourceFiles(files);
+    const fileSnapshots = await Promise.all(files.map(snapshotFile));
     const currentHash = sourceFilesHash(files, fileSnapshots);
     if (currentHash !== snapshot.sourceHash) {
       return false;
@@ -552,11 +560,11 @@ export async function rehashLegacyMeetingTranscriptSnapshots(
 
 export async function archiveLegacyMeetingTranscriptSnapshots(params: {
   sourceRoot: string;
-  snapshots: LegacyMeetingTranscriptSnapshot[];
+  snapshots: LegacyMeetingTranscriptSource[];
   expectedRelativeDirs: string[];
   canonicalRelativeDirs: string[];
   archiveRoot: string;
-}): Promise<string> {
+}): Promise<void> {
   await validateMeetingTranscriptRoot(params.sourceRoot);
   const currentRelativeDirs = await listLegacyMeetingTranscriptSessionDirs(params.sourceRoot);
   const expectedRelativeDirs = params.expectedRelativeDirs.toSorted((a, b) => a.localeCompare(b));
@@ -584,7 +592,6 @@ export async function archiveLegacyMeetingTranscriptSnapshots(params: {
   } catch (error) {
     throw new LegacyMeetingTranscriptArchiveMovedError(error);
   }
-  return params.archiveRoot;
 }
 
 export class LegacyMeetingTranscriptArchiveMovedError extends Error {
@@ -594,6 +601,27 @@ export class LegacyMeetingTranscriptArchiveMovedError extends Error {
     );
     this.name = "LegacyMeetingTranscriptArchiveMovedError";
   }
+}
+
+async function assertCanonicalExportDirectory(
+  rootDir: string,
+  targetPath: string,
+  role: "source" | "destination",
+  cause?: unknown,
+): Promise<void> {
+  const stat = await fs.lstat(targetPath);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(
+      `canonical transcript export ${role} is not a directory: ${targetPath}`,
+      cause === undefined ? undefined : { cause },
+    );
+  }
+  await assertNoSymlinkParents({
+    rootDir,
+    targetPath,
+    allowMissing: false,
+    messagePrefix: `Canonical transcript export ${role}`,
+  });
 }
 
 export async function restoreCanonicalMeetingTranscriptExports(params: {
@@ -613,21 +641,11 @@ export async function restoreCanonicalMeetingTranscriptExports(params: {
     ),
   );
   for (const relativeDir of params.canonicalRelativeDirs) {
-    const archiveRelative = path.relative(
-      path.resolve(params.archiveRoot),
-      path.resolve(params.archiveRoot, relativeDir),
-    );
-    const sourceRelative = path.relative(
-      path.resolve(params.sourceRoot),
-      path.resolve(params.sourceRoot, relativeDir),
-    );
     if (
-      !archiveRelative ||
-      archiveRelative.startsWith("..") ||
-      path.isAbsolute(archiveRelative) ||
-      !sourceRelative ||
-      sourceRelative.startsWith("..") ||
-      path.isAbsolute(sourceRelative)
+      [params.archiveRoot, params.sourceRoot].some((rootDir) => {
+        const relative = path.relative(path.resolve(rootDir), path.resolve(rootDir, relativeDir));
+        return !relative || relative.startsWith("..") || path.isAbsolute(relative);
+      })
     ) {
       throw new Error(`canonical transcript export path escaped its root: ${relativeDir}`);
     }
@@ -637,51 +655,24 @@ export async function restoreCanonicalMeetingTranscriptExports(params: {
     const source = path.join(params.archiveRoot, relativeDir);
     const destination = path.join(params.sourceRoot, relativeDir);
     try {
-      const sourceStat = await fs.lstat(source);
-      if (sourceStat.isSymbolicLink() || !sourceStat.isDirectory()) {
-        throw new Error(`canonical transcript export source is not a directory: ${source}`);
-      }
-      await assertNoSymlinkParents({
-        rootDir: params.archiveRoot,
-        targetPath: source,
-        allowMissing: false,
-        messagePrefix: "Canonical transcript export source",
-      });
+      await assertCanonicalExportDirectory(params.archiveRoot, source, "source");
     } catch (error) {
       if (!(isRecord(error) && error.code === "ENOENT")) {
         throw error;
       }
-      const destinationStat = await fs.lstat(destination);
-      if (destinationStat.isSymbolicLink() || !destinationStat.isDirectory()) {
-        throw new Error(
-          `canonical transcript export destination is not a directory: ${destination}`,
-          { cause: error },
-        );
-      }
-      await assertNoSymlinkParents({
-        rootDir: params.sourceRoot,
-        targetPath: destination,
-        allowMissing: false,
-        messagePrefix: "Canonical transcript export destination",
-      });
+      await assertCanonicalExportDirectory(params.sourceRoot, destination, "destination", error);
       continue;
     }
     try {
-      const destinationStat = await fs.lstat(destination);
-      if (destinationStat.isSymbolicLink() || !destinationStat.isDirectory()) {
-        throw new Error(
-          `canonical transcript export destination is not a directory: ${destination}`,
-        );
-      }
-      await assertNoSymlinkParents({
-        rootDir: params.sourceRoot,
-        targetPath: destination,
-        allowMissing: false,
-        messagePrefix: "Canonical transcript export destination",
-      });
+      await assertCanonicalExportDirectory(params.sourceRoot, destination, "destination");
       const readMetadata = async (directory: string) =>
         parseSession(
-          JSON.parse(await fs.readFile(path.join(directory, "metadata.json"), "utf8")),
+          JSON.parse(
+            decodeUtf8Input(
+              await fs.readFile(path.join(directory, "metadata.json")),
+              path.join(directory, "metadata.json"),
+            ),
+          ),
           path.join(directory, "metadata.json"),
         );
       const [sourceMetadata, destinationMetadata] = await Promise.all([
@@ -709,16 +700,4 @@ export async function restoreCanonicalMeetingTranscriptExports(params: {
     await fs.mkdir(path.dirname(destination), { recursive: true });
     await fs.rename(source, destination);
   }
-}
-
-export async function archiveDivergentMeetingTranscriptExport(params: {
-  sourceRoot: string;
-  relativeDir: string;
-  recoveryRoot: string;
-}): Promise<string> {
-  const source = path.join(params.sourceRoot, params.relativeDir);
-  const destination = path.join(params.recoveryRoot, params.relativeDir);
-  await fs.mkdir(path.dirname(destination), { recursive: true });
-  await fs.rename(source, destination);
-  return destination;
 }

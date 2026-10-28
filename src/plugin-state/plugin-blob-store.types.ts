@@ -32,6 +32,21 @@ export type PluginBlobStore<TMetadata> = {
   clear(): Promise<void>;
 };
 
+export type PluginBlobRegistrationReceipt = {
+  createdAt: number;
+  expiresAt?: number;
+};
+
+/** Current host stores publish committed timestamps without a second blob read. */
+export type PluginBlobStoreWithReceipts<TMetadata> = PluginBlobStore<TMetadata> & {
+  registerIfAbsentWithReceipt(
+    key: string,
+    bytes: Uint8Array,
+    metadata: TMetadata,
+    opts?: { ttlMs?: number },
+  ): Promise<PluginBlobRegistrationReceipt | undefined>;
+};
+
 export type PluginBlobOverflowPolicy = "evict-oldest" | "reject-new";
 
 export type OpenBlobStoreOptions = {

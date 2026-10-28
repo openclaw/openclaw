@@ -8,8 +8,12 @@ export type TranscriptRecentReadLimits = {
 
 export type TranscriptAnchorPageOptions = {
   messageId: string;
-  /** Includes the anchor; directional reads never backfill from the opposite side. */
+  /** Reopen the interval before a closing reset anchor, excluding that reset marker. */
+  closedResetInterval?: boolean;
+  /** Includes the anchor unless closedResetInterval excludes its closing reset; directional reads never backfill. */
   maxMessages: number;
+  /** Optional response bound enforced before a worker returns the page. */
+  maxBytes?: number;
   direction?: "older" | "newer";
   expectedReadWindow?: TranscriptReadWindow;
 };

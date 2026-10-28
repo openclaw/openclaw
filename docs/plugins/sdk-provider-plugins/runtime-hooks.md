@@ -46,7 +46,31 @@ legacy official Completions adapter, prefers subscription authentication when
 both kinds are eligible, and honors explicit API route intent. These are
 additive fields on the existing contract; they add no hook or user setting.
 
+For prepared Decision execution, `capability: "decision"` requests the physical
+route before auth. Return one candidate; incompatible, indeterminate, or multiple
+candidates are unsupported for this consumer. This does not change ordinary
+chat multi-route selection. A missing hook or null result retains the existing
+provider preparation path, including providers with no chat API.
+
+A candidate can supply `inference` using the canonical model capability shape.
+These facts describe that exact route. The Decision host consumes only
+`inference.decision`; a supplied inference object replaces the previous Decision
+claim, including an omitted decision capability. Without inference, the host
+retains catalog Decision facts only when the physical route is unchanged.
+A changed route needs a fresh capability claim. The host validates input against
+the selected route before selecting credentials and does not normalize that
+route a second time. Do not copy chat costs or credentials into route facts.
+
+`normalizeModelCatalog` from `openclaw/plugin-sdk/provider-model-metadata` accepts
+raw manifest data and an `ownedProviders` set. Use it once when loading static
+route metadata to validate the canonical capability shape, rather than asserting
+JSON types or maintaining a separate capability definition.
+
 ## Credential lookup cancellation
+
+`resolveApiKeyForProvider` and `getRuntimeAuthForModel` load the host's authentication
+runtime lazily. The host build selects that module, so SDK consumers do not need
+to locate JavaScript files on disk, including in standalone executables.
 
 Credential consumers using `resolveApiKeyForProvider` from
 `openclaw/plugin-sdk/provider-auth-runtime` should pass their request's optional
@@ -60,14 +84,33 @@ caller signal with an operation timeout. Start it before credential preparation
 when authentication shares the request budget, and call its `cleanup` in
 `finally` to release the timer.
 
+## OAuth refresh configuration
+
+`refreshOAuth(credential, config)` receives the caller's effective OpenClaw config
+as an optional second argument. Use that captured config for checks such as
+regional endpoint compatibility instead of reloading global runtime config.
+Existing one-argument hooks remain compatible, and direct callers can omit config.
+
 ## Hook examples
+
+Use `prepareRuntimeAuthV2` for credential exchange. Its context includes
+`capability: "chat" | "decision"` and a transport model with required `id` and
+`provider`; `name`, `api`, `baseUrl`, and `headers` are optional. Do not require
+chat costs, context windows, or token limits to exchange credentials.
+
+The host prefers V2 when both hooks exist. The shipped `prepareRuntimeAuth`
+hook remains available for chat with its full `ProviderRuntimeModel` context.
+A decision request cannot use a legacy-only exchange and returns
+`unsupported-input`; migrate the hook to V2 before advertising decision support.
+Explicit provider `auth: "none"` skips both hooks. Existing credential ownership
+and caller cancellation checks apply before and after either exchange.
 
 <Tabs>
   <Tab title="Token exchange">
     For providers that need a token exchange before each inference call:
 
     ```typescript
-    prepareRuntimeAuth: async (ctx) => {
+    prepareRuntimeAuthV2: async (ctx) => {
       const exchanged = await exchangeToken(ctx.apiKey);
       return {
         apiKey: exchanged.token,
@@ -97,11 +140,18 @@ when authentication shares the request budget, and call its `cleanup` in
     },
     ```
 
+    Runtime model and stream-option headers accept `string | null`. Preserve
+    `null` when merging headers: it removes a default header in the OpenAI SDK
+    and is omitted when materializing headers for raw HTTP transports. Saved
+    provider configuration and catalog headers remain string-only. For direct HTTP
+    clients, use `omitNullRequestHeaders` from
+    `openclaw/plugin-sdk/provider-request-headers` after the final header merge.
+
     Existing wrappers may still pass the deprecated `maxRetries` stream option,
     including `0`. Built-in text transports ignore it: the embedded runner owns
     retry budgeting, and SDK-internal retries stay disabled. New wrappers should
-    omit the option. This shipped source contract is retained until a future
-    Plugin SDK major release and a published-plugin reader sweep confirm removal
+    omit the option. This shipped source contract is retained until a separately
+    announced ordinary stable release and a published-plugin reader sweep confirm removal
     is safe; it does not change image-generation or native-runtime retry policy.
 
   </Tab>
@@ -198,6 +248,11 @@ prefix separately, and consume the marker before sending any payload.
 Use `stripSystemPromptCacheBoundary` when caching is disabled. By default,
 OpenClaw strips the marker before invoking a custom transport.
 
+Google-family transports can use `buildGoogleSimpleThinking` and
+`buildGoogleGenerationConfig` from the same runtime entrypoint. They share the
+Gemini/Vertex thinking policy, including the output-token reservation; pass the
+caller's original `maxTokens` once, before serializing the request.
+
 For custom `createStreamFn` transports that accumulate JSON tool arguments,
 use `createToolArgumentPreviewSchedule()` from `openclaw/plugin-sdk/llm`.
 Create one schedule per tool call and pass the accumulated raw string's
@@ -247,7 +302,7 @@ Cancelled preparation must reject after cleanup, not report a missing login.
 | `prepareExtraParams`              | Default request params                                                                      |
 | `createStreamFn`                  | Fully custom StreamFn transport                                                             |
 | `wrapStreamFn`                    | Custom headers/body wrappers on the normal stream path                                      |
-| `reconcileLocalService`           | Cheap, idempotent managed-service repair after health and before every request              |
+| `reconcileLocalService`           | Cheap managed-service repair safe to repeat after health and before every request           |
 | `resolveTransportTurnState`       | Native per-turn headers/metadata and WebSocket headers/cool-down                            |
 | `resolveWebSocketSessionPolicy`   | Deprecated WebSocket compatibility hook; use `resolveTransportTurnState`                    |
 | `formatApiKey`                    | Custom runtime token shape                                                                  |
@@ -264,12 +319,14 @@ Cancelled preparation must reject after cleanup, not report a missing login.
 | `supportsXHighThinking`           | `xhigh` reasoning support compatibility (deprecated - prefer `resolveThinkingProfile`)      |
 | `resolveDefaultThinkingLevel`     | Default `/think` policy compatibility (deprecated - prefer `resolveThinkingProfile`)        |
 | `isModernModelRef`                | Live/smoke model matching                                                                   |
-| `prepareRuntimeAuth`              | Token exchange before inference                                                             |
+| `prepareRuntimeAuthV2`            | Capability-aware token exchange before chat or decision inference                           |
+| `prepareRuntimeAuth`              | Legacy chat exchange with a full runtime model; migrate to V2 for decision support          |
 | `resolveUsageAuth`                | Custom usage credential parsing                                                             |
 | `fetchUsageSnapshot`              | Custom usage endpoint                                                                       |
 | `createEmbeddingProvider`         | Provider-owned embedding adapter for memory/search                                          |
 | `buildReplayPolicy`               | Custom transcript replay/compaction policy                                                  |
-| `sanitizeReplayHistory`           | Provider-specific replay rewrites after generic cleanup                                     |
+| `sanitizeReplayHistoryAsync`      | Provider-specific replay rewrites with awaited transcript metadata after generic cleanup    |
+| `sanitizeReplayHistory`           | Deprecated third-party replay compatibility hook; migrate to `sanitizeReplayHistoryAsync`   |
 | `validateReplayTurns`             | Strict replay-turn validation before the embedded runner                                    |
 | `onModelSelected`                 | Post-selection callback (e.g. telemetry)                                                    |
 
@@ -282,9 +339,9 @@ Runtime fallback notes:
 
 - `isCacheTtlEligible(ctx)` receives `provider`, `modelId`, optional `modelApi`, and the resolved route facts `baseUrl` and `supportsPromptCacheKey`. The same bounded context is used when installing cache-TTL pruning and recording cache touches; it does not include the full model, headers, or extra request parameters. OpenAI defaults to eligible on official Platform and Codex endpoints, honors an explicit `supportsPromptCacheKey: false`, and requires explicit opt-in for custom proxy routes. This controls client-side idle pruning, not a guarantee of a provider cache hit.
 - Error classification uses the prepared provider owner or already loaded provider hooks. `matchesContextOverflowError` and `classifyFailoverReason` never trigger plugin discovery while handling an error; provider preparation owns loading those hooks.
-- `normalizeConfig` resolves one owning plugin per provider id (bundled providers first, then the matched runtime plugin) and calls only that hook - there is no scan across other providers. Google's own `normalizeConfig` hook is what normalizes `google` / `google-vertex` / `google-antigravity` config entries; it is not a separate core fallback.
-- `resolveConfigApiKey` uses the provider hook when exposed. Amazon Bedrock keeps AWS env-marker resolution in its provider plugin; runtime auth itself still uses the AWS SDK default chain when configured with `auth: "aws-sdk"`.
-- `resolveThinkingProfile(ctx)` receives the selected `provider`, `modelId`, optional merged `reasoning` catalog hint, and optional merged model `compat` facts. Use `compat` only to select the provider's thinking UI/profile.
+- Config assembly calls `normalizeConfig` only through the owning bundled provider's lightweight policy surface, without loading provider runtime or scanning other providers. Google's own hook normalizes `google` / `google-vertex` / `google-antigravity` config entries through that surface.
+- Config assembly likewise uses the lightweight policy surface for `resolveConfigApiKey`. Amazon Bedrock keeps AWS env-marker resolution in its provider plugin; runtime auth itself still uses the AWS SDK default chain when configured with `auth: "aws-sdk"`.
+- `resolveThinkingProfile(ctx)` receives the selected `provider`, `modelId`, optional catalog route facts `api` and `baseUrl`, optional merged `reasoning` catalog hint, and optional merged model `compat` facts. Use `compat` only to select the provider's thinking UI/profile.
 - `normalizeResolvedModel(ctx)` can set `compactionThinkingDefault` on the returned `ProviderRuntimeModel` when the provider has a preferred embedded-summary effort. This is prepared runtime metadata, not an operator setting or catalog field. Explicit `agents.defaults.compaction.thinkingLevel` takes precedence; otherwise the host uses this preference and then `low`. The chosen effort is still clamped to the actual compaction candidate.
 - `resolveSystemPromptContribution` lets a provider inject cache-aware system-prompt guidance for a model family. Prefer it over the legacy plugin-wide `before_prompt_build` hook when the behavior belongs to one provider/model family and should preserve the stable/dynamic cache split.
 
@@ -295,6 +352,12 @@ entrypoint. Adapters that already bound and redact their diagnostics can constru
 its message so status and retry metadata survive; search tools use those fields
 for safe authentication and quota guidance without exposing response bodies.
 
+The same entrypoint exposes `runHttpTlsPreflight(url, options)` for a
+non-redirecting reachability probe. It distinguishes certificate failures from
+other network failures, accepts cancellation and a current-authority callback,
+and requests best-effort cancellation of unread response bodies. Any HTTP status
+means the endpoint is reachable; this is not a credential or account check.
+
 Bundled and trusted official provider policies can use
 `resolveEffortThinkingProfile(compat?.supportedReasoningEfforts)` from the
 private `openclaw/plugin-sdk/provider-thinking-runtime` helper. It accepts
@@ -304,6 +367,13 @@ of each remaining level. The default preference is `medium`, `high`, `low`,
 then `off`. Missing, null, or empty metadata returns `undefined`; a nonempty
 list without supported values returns an off-only profile. Keep model-specific
 overrides and API fallbacks in the provider policy.
+
+Provider stream adapters can call `resolveOpenAIRequestReasoning(model, level)`
+from `openclaw/plugin-sdk/llm` to resolve declared efforts, native-label maps,
+logical Off, and scalar-effort disablement through the shared transport owner.
+Translate its `effort` and `thinkingEnabled` results into the provider's wire
+dialect instead of defining another effort ladder. Read the level from each
+stream call's options before falling back to the wrapper context.
 
 Bundled and trusted official plugins can also export
 `resolveToolSearchMode(ctx)` from their lightweight `provider-policy-api`
@@ -321,7 +391,7 @@ when a provider supplies hosted search. Its `ProviderNativeWebSearchPolicyContex
 (from `openclaw/plugin-sdk/provider-model-types`) contains `config`, `provider`,
 optional `modelId`, `api`, and `baseUrl`. Return `true` only when that route
 will inject hosted search; share this policy with payload construction. Keep
-the hook synchronous and free of runtime activation or credential probes.
+the hook synchronous and free of runtime activation or credential checks.
 The host applies tool permissions independently and removes managed
 `web_search` before building Tool Search and Code Mode catalogs. Explicit
 managed-provider selection must remain authoritative.
@@ -335,5 +405,15 @@ credentials are not included. Share the policy with request construction.
 The host publishes only `supportsFastMode`, preserving unknown behavior
 and clearing saved preferences. This describes local applicability, not
 upstream entitlement or fulfillment, and does not reject `/fast` commands.
+
+`resolveServiceTiers(ctx)` can publish known model/route tier restrictions through
+the same lightweight artifact and provider registration. It receives
+`ProviderFastModePolicyContext`; return `undefined` when the provider has no
+restriction to add. The API-key OpenAI Responses catalog intersects a returned
+list with account observations or its route defaults, preserving `"default"`
+as Standard processing. A `false` Fast capability together with `["default"]`
+keeps the Control UI on disabled Standard controls without confusing an explicit
+configured tier with a model limitation. Share this capability decision with the
+provider request builder; it does not itself alter configuration or grant access.
 
 </Accordion>

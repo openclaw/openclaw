@@ -1,34 +1,7 @@
-// Nostr plugin entrypoint registers its OpenClaw integration.
 import {
   defineBundledChannelEntry,
   loadBundledEntryExportSync,
 } from "openclaw/plugin-sdk/channel-entry-contract";
-import type { OpenClawConfig, PluginRuntime, ResolvedNostrAccount } from "./api.js";
-
-function createNostrProfileHttpHandler() {
-  return loadBundledEntryExportSync<
-    (params: Record<string, unknown>) => (ctx: unknown) => Promise<void> | void
-  >(import.meta.url, {
-    specifier: "./api.js",
-    exportName: "createNostrProfileHttpHandler",
-  });
-}
-
-function getNostrRuntime() {
-  return loadBundledEntryExportSync<() => PluginRuntime>(import.meta.url, {
-    specifier: "./api.js",
-    exportName: "getNostrRuntime",
-  })();
-}
-
-function resolveNostrAccount(params: { cfg: unknown; accountId: string }) {
-  return loadBundledEntryExportSync<
-    (params: { cfg: unknown; accountId: string }) => ResolvedNostrAccount
-  >(import.meta.url, {
-    specifier: "./api.js",
-    exportName: "resolveNostrAccount",
-  })(params);
-}
 
 export default defineBundledChannelEntry({
   id: "nostr",
@@ -48,14 +21,18 @@ export default defineBundledChannelEntry({
     exportName: "setNostrRuntime",
   },
   registerFull(api) {
-    const httpHandler = createNostrProfileHttpHandler()({
-      getConfigProfile: (accountId: string) => {
+    const { createNostrProfileHttpHandler, getNostrRuntime, resolveNostrAccount } =
+      loadBundledEntryExportSync<typeof import("./api.js")>(import.meta.url, {
+        specifier: "./api.js",
+      });
+    const httpHandler = createNostrProfileHttpHandler({
+      getConfigProfile: (accountId) => {
         const runtime = getNostrRuntime();
-        const cfg = runtime.config.current() as OpenClawConfig;
+        const cfg = runtime.config.current();
         const account = resolveNostrAccount({ cfg, accountId });
         return account.profile;
       },
-      updateConfigProfile: async (_accountId: string, profile: unknown) => {
+      updateConfigProfile: async (_accountId, profile) => {
         const runtime = getNostrRuntime();
 
         await runtime.config.mutateConfigFile({
@@ -74,9 +51,9 @@ export default defineBundledChannelEntry({
           },
         });
       },
-      getAccountInfo: (accountId: string) => {
+      getAccountInfo: (accountId) => {
         const runtime = getNostrRuntime();
-        const cfg = runtime.config.current() as OpenClawConfig;
+        const cfg = runtime.config.current();
         const account = resolveNostrAccount({ cfg, accountId });
         if (!account.configured || !account.publicKey) {
           return null;

@@ -6,6 +6,8 @@ export type CodexCatalogOrderKey = Pick<
   "threadId" | "updatedAt" | "recencyAt" | "sourceOrder"
 >;
 
+export type CodexCatalogOrderedRow = { row: CodexCatalogIndexRow; searchText: string };
+
 export function codexCatalogRowRecency(row: CodexCatalogOrderKey): number {
   return row.recencyAt ?? row.updatedAt ?? 0;
 }
@@ -45,16 +47,49 @@ export function retainCodexCatalogRow(
 /** Stable positions keep issued cursors independent of later native page offsets. */
 export class CodexCatalogOrdering {
   private nextEventOrder = -1;
-  private ordered: CodexCatalogIndexRow[] | undefined;
+  private readonly ordered: CodexCatalogOrderedRow[] = [];
 
-  read(rows: ReadonlyMap<string, CodexCatalogIndexRow>): readonly CodexCatalogIndexRow[] {
-    return (this.ordered ??= [...rows.values()]
-      .filter((row) => !row.archived && row.page.sessions.length > 0)
-      .toSorted(compareCodexCatalogRows));
+  read(): readonly CodexCatalogOrderedRow[] {
+    return this.ordered;
   }
 
-  invalidate(): void {
-    this.ordered = undefined;
+  private positionOf(row: CodexCatalogOrderKey): number {
+    let low = 0;
+    let high = this.ordered.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (compareCodexCatalogRows(this.ordered[middle]!.row, row) < 0) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
+    }
+    return low;
+  }
+
+  put(row: CodexCatalogIndexRow, previous?: CodexCatalogIndexRow): void {
+    if (previous) {
+      this.remove(previous);
+    }
+    const session = row.page.sessions[0];
+    if (!row.archived && session) {
+      this.ordered.splice(this.positionOf(row), 0, {
+        row,
+        searchText: (session.name ?? session.fallbackName ?? "").toLocaleLowerCase(),
+      });
+    }
+  }
+
+  remove(row: CodexCatalogIndexRow): void {
+    const position = this.positionOf(row);
+    // Retention can evict an incoming row before it enters the display view.
+    if (this.ordered[position]?.row.threadId === row.threadId) {
+      this.ordered.splice(position, 1);
+    }
+  }
+
+  clear(): void {
+    this.ordered.length = 0;
   }
 
   restore(row: CodexCatalogIndexRow): void {

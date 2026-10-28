@@ -24,16 +24,8 @@ describe("markOpenClawExecEnv", () => {
 });
 
 describe("ensureOpenClawExecMarkerOnProcess", () => {
-  it.each([
-    {
-      name: "mutates and returns the provided process env",
-      env: { PATH: "/usr/bin" } as NodeJS.ProcessEnv,
-    },
-    {
-      name: "overwrites an existing marker on the provided process env",
-      env: { PATH: "/usr/bin", [OPENCLAW_CLI_ENV_VAR]: "0" } as NodeJS.ProcessEnv,
-    },
-  ])("$name", ({ env }) => {
+  it("overwrites an existing marker on the provided process env", () => {
+    const env = { PATH: "/usr/bin", [OPENCLAW_CLI_ENV_VAR]: "0" };
     expect(ensureOpenClawExecMarkerOnProcess(env)).toBe(env);
     expect(env[OPENCLAW_CLI_ENV_VAR]).toBe(OPENCLAW_CLI_ENV_VALUE);
   });

@@ -80,21 +80,23 @@ export function parseControlUiUserAvatarPath(
   basePath: string,
 ): ControlUiResourcePathMatch {
   const canonical = parseControlUiResourcePath("userAvatar", pathname);
-  if (canonical.matched) {
-    return canonical;
-  }
-  return normalizeControlUiBasePath(basePath)
-    ? parseControlUiResourcePath("userAvatar", pathname, basePath)
-    : canonical;
+  return canonical.matched
+    ? canonical
+    : parseControlUiResourcePath("userAvatar", pathname, basePath);
 }
 
-function matchControlUiResourcePath(
-  route: ControlUiResourceRoute,
-  pathname: string | null | undefined,
-  basePath?: string | null,
+/** Keeps the accepted path's escape spelling while removing its optional mount. */
+export function canonicalizeControlUiUserAvatarPath(
+  pathname: string,
+  basePath: string,
 ): string | undefined {
-  const parsed = parseControlUiResourcePath(route, pathname, basePath);
-  return parsed.matched && parsed.value ? parsed.value : undefined;
+  const parsed = parseControlUiUserAvatarPath(pathname, basePath);
+  if (!parsed.matched || !parsed.value) {
+    return undefined;
+  }
+  return pathname.startsWith(CONTROL_UI_USER_AVATAR_PATH_PREFIX)
+    ? pathname
+    : pathname.slice(normalizeControlUiBasePath(basePath).length);
 }
 
 /** Builds the authenticated conversation-avatar URL for a session. */
@@ -109,32 +111,22 @@ export function buildControlUiChannelAvatarUrl(
   return `${path}?v=${encodeURIComponent(revision)}`;
 }
 
-type ControlUiResourceUrlMatch = {
-  value: string;
-  search: string;
-  hash: string;
-};
-
 /** Matches an exact root-relative same-origin resource URL without parser reinterpretation. */
 export function matchControlUiResourceUrl(
   route: ControlUiResourceRoute,
   value: string,
   basePath?: string | null,
-): ControlUiResourceUrlMatch | undefined {
+): { value: string; search: string; hash: string } | undefined {
   if (!value.startsWith("/") || value.startsWith("//") || value.includes("\\")) {
     return undefined;
   }
-  try {
-    const origin = "http://openclaw.invalid";
-    const parsed = new URL(value, origin);
-    if (parsed.origin !== origin || `${parsed.pathname}${parsed.search}${parsed.hash}` !== value) {
-      return undefined;
-    }
-    const routeValue = matchControlUiResourcePath(route, parsed.pathname, basePath);
-    return routeValue === undefined
-      ? undefined
-      : { value: routeValue, search: parsed.search, hash: parsed.hash };
-  } catch {
+  const origin = "http://openclaw.invalid";
+  const parsed = URL.parse(value, origin);
+  if (parsed?.origin !== origin || `${parsed.pathname}${parsed.search}${parsed.hash}` !== value) {
     return undefined;
   }
+  const resource = parseControlUiResourcePath(route, parsed.pathname, basePath);
+  return resource.matched && resource.value
+    ? { value: resource.value, search: parsed.search, hash: parsed.hash }
+    : undefined;
 }

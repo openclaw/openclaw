@@ -1,10 +1,55 @@
-import { expect } from "vitest";
+import { assert, expect } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { selectSessionArtifacts } from "../session-artifact-read.js";
+import type { prepareSessionMutationFacts } from "../session-sharing-preparation.js";
+import { resolveSessionStoreIdentity } from "../session-store-key.js";
+import type { SessionTranscriptVisitor } from "../session-transcript-read.types.js";
 import { expectRecordFields } from "../test-helpers.assertions.js";
 
 type ResponderCalls = Array<{ ok: boolean; payload?: unknown; error?: unknown }>;
 type ArtifactListPayload = { artifacts?: Array<Record<string, unknown>> };
 
-export function runtimeContext(config: Record<string, unknown>) {
+/** Transcript-format fixtures; access and lifetime suites retain the real facts owner. */
+export function artifactFixtureSessionFacts(
+  params: Parameters<typeof prepareSessionMutationFacts>[0],
+) {
+  const { agentId, canonicalKey } = resolveSessionStoreIdentity(params);
+  const storageTarget = { agentId, canonicalKey, storePath: "/tmp/sessions.json" };
+  return {
+    storageTarget,
+    bindCreation() {},
+    release() {},
+    readCurrent: () => ({
+      target: {
+        ...storageTarget,
+        storeKey: canonicalKey,
+        storeKeys: [canonicalKey],
+        entry: { sessionId: "sess-main" },
+      },
+      membership: new Set<string>(),
+      sourceAgentId: agentId,
+      sourcePath: storageTarget.storePath,
+    }),
+  };
+}
+
+export function withArtifactFixtureReader(
+  actual: typeof import("../session-transcript-readers.js"),
+  visitSessionMessagesAsync: SessionTranscriptVisitor["visitSessionMessagesAsync"],
+) {
+  return {
+    ...actual,
+    readSessionArtifacts: (...[scope, query]: Parameters<typeof actual.readSessionArtifacts>) =>
+      selectSessionArtifacts(scope, query, {
+        visitSessionMessagesAsync,
+        readSessionMessagesPageWithStatsAsync: actual.readSessionMessagesPageWithStatsAsync,
+      }),
+  };
+}
+
+export function runtimeContext(config: OpenClawConfig) {
+  setRuntimeConfigSnapshot(config);
   return { getRuntimeConfig: () => config };
 }
 
@@ -27,30 +72,11 @@ export function expectErrorDetails(calls: ResponderCalls): Record<string, unknow
   return calls[0] ? (calls[0].error as { details?: Record<string, unknown> }).details : undefined;
 }
 
-export function assistantImageMessage(params: {
-  data?: string;
-  alt: string;
-  seq?: number;
-  runId?: string;
-  taskId?: string;
-}) {
-  return {
-    role: "assistant",
-    content: [{ type: "image", data: params.data ?? "aGVsbG8=", alt: params.alt }],
-    __openclaw: {
-      seq: params.seq ?? 2,
-      ...(params.runId ? { runId: params.runId } : {}),
-      ...(params.taskId ? { messageTaskId: params.taskId } : {}),
-    },
-  };
-}
-
 export function assistantFileMessage(params: {
   data?: string;
   title: string;
   seq?: number;
   runId?: string;
-  taskId?: string;
 }) {
   return {
     role: "assistant",
@@ -65,7 +91,6 @@ export function assistantFileMessage(params: {
     __openclaw: {
       seq: params.seq ?? 2,
       ...(params.runId ? { runId: params.runId } : {}),
-      ...(params.taskId ? { taskId: params.taskId } : {}),
     },
   };
 }
@@ -82,12 +107,10 @@ export function resultImageMessage() {
 }
 
 export function requireNonEmptyString(value: unknown, message: string): string {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(message);
-  }
+  assert(typeof value === "string" && value.length > 0, message);
   return value;
 }
 
-export function expectFields(value: unknown, expected: Record<string, unknown>): void {
+export const expectFields = (value: unknown, expected: Record<string, unknown>): void => {
   expectRecordFields(value, "fields", expected);
-}
+};

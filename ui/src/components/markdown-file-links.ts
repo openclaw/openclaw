@@ -89,9 +89,14 @@ const BARE_FILE_EXTENSIONS = new Set([
   "zsh",
 ]);
 
-export function markdownFileLinkFromEvent(
-  event: Event,
-): { path: string; line: number | null } | null {
+export type MarkdownFileLinkTarget = {
+  path: string;
+  line?: number | null;
+  sessionKey?: string;
+  messageEntryId?: string;
+};
+
+export function markdownFileLinkFromEvent(event: Event): MarkdownFileLinkTarget | null {
   const target = event.target;
   if (!(target instanceof Element)) {
     return null;
@@ -102,12 +107,21 @@ export function markdownFileLinkFromEvent(
     return null;
   }
   const line = link.dataset.fileLine;
-  return { path, line: line ? Number.parseInt(line, 10) : null };
+  const sessionKey = link.closest<HTMLElement>("[data-file-session-key]")?.dataset.fileSessionKey;
+  const messageEntryId =
+    link.closest<HTMLElement>("[data-file-entry-id]")?.dataset.fileEntryId ??
+    (!sessionKey ? link.closest<HTMLElement>("[data-entry-id]")?.dataset.entryId : undefined);
+  return {
+    path,
+    line: line ? Number.parseInt(line, 10) : null,
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(messageEntryId ? { messageEntryId } : {}),
+  };
 }
 
 export function markdownFileLinkFromKeyboardEvent(
   event: KeyboardEvent,
-): { path: string; line: number | null } | null {
+): MarkdownFileLinkTarget | null {
   if (event.key !== "Enter" && event.key !== " ") {
     return null;
   }

@@ -26,14 +26,47 @@ type CreatorAccumulator = Omit<CreatorUsage, "daily" | "sessionActivity"> & {
   sessionActivity: Map<string, CreatorUsage["sessionActivity"][number]>;
 };
 
+// Reports repeat a few provider/model pairs across thousands of rows; build each key once.
+const modelIdentities = new Map<string, Map<string, string>>();
+
 /** Builds a collision-free identity while preserving legacy missing-as-unknown grouping. */
 export function usageModelIdentity(provider?: string, model?: string): string {
-  return JSON.stringify([provider ?? "unknown", model ?? "unknown"]);
+  const providerKey = provider ?? "unknown";
+  const modelKey = model ?? "unknown";
+  let models = modelIdentities.get(providerKey);
+  if (!models) {
+    models = new Map();
+    modelIdentities.set(providerKey, models);
+  }
+  let identity = models.get(modelKey);
+  if (identity === undefined) {
+    identity = JSON.stringify([providerKey, modelKey]);
+    models.set(modelKey, identity);
+  }
+  return identity;
 }
 
 /** Extends the model identity with its calendar bucket without delimiter ambiguity. */
 export function usageDailyModelIdentity(date: string, provider?: string, model?: string): string {
-  return JSON.stringify([date, provider ?? "unknown", model ?? "unknown"]);
+  // Same bytes as JSON.stringify([date, provider, model]).
+  return `[${JSON.stringify(date)},${usageModelIdentity(provider, model).slice(1)}`;
+}
+
+/** Sorted union of a row's activity dates; usually the lists already agree. */
+function sessionActivityDates(usage: NonNullable<SessionUsageEntry["usage"]>): string[] {
+  const activity = usage.activityDates ?? [];
+  const extra = [
+    ...(usage.dailyBreakdown ?? []).map(({ date }) => date),
+    ...(usage.dailyMessageCounts ?? []).map(({ date }) => date),
+  ];
+  const known = new Set(activity);
+  if (
+    extra.every((date) => known.has(date)) &&
+    activity.every((date, i) => i === 0 || activity[i - 1]! < date)
+  ) {
+    return activity;
+  }
+  return [...new Set([...activity, ...extra])].toSorted();
 }
 
 function createLatencyAccumulator(): LatencyAccumulator {
@@ -124,6 +157,44 @@ export function createUsageAggregateAccumulator() {
     return day;
   }
 
+  function addModelDays(usage: SessionUsageEntry["usage"]) {
+    for (const day of usage?.dailyModelUsage ?? []) {
+      const key = usageDailyModelIdentity(day.date, day.provider, day.model);
+      const existing: SessionDailyModelUsage = dailyModels.get(key) ?? {
+        date: day.date,
+        provider: day.provider,
+        model: day.model,
+        tokens: 0,
+        cost: 0,
+        count: 0,
+      };
+      existing.tokens += day.tokens;
+      existing.cost += day.cost;
+      if (day.usageReport?.state === "unavailable") {
+        existing.usageReport = day.usageReport;
+      }
+      existing.count += day.count;
+      dailyModels.set(key, existing);
+    }
+  }
+
+  function addCalendar(usage: SessionUsageEntry["usage"]) {
+    for (const day of usage?.dailyBreakdown ?? []) {
+      mergeGroupedTotals(costDays, day.date, day);
+    }
+    addModelDays(usage);
+  }
+
+  function totalsForDays(selectedDays: ReadonlySet<string>) {
+    const selected = createEmptyCostUsageTotals();
+    for (const [date, day] of costDays) {
+      if (selectedDays.has(date)) {
+        addCostUsageTotals(selected, day);
+      }
+    }
+    return selected;
+  }
+
   function add({
     usage,
     agentId,
@@ -170,13 +241,7 @@ export function createUsageAggregateAccumulator() {
     addCostUsageTotals(creator.totals, usage);
     if (countedSession) {
       creator.sessionCount += 1;
-      const dates = [
-        ...new Set([
-          ...(usage.activityDates ?? []),
-          ...(usage.dailyBreakdown?.map(({ date }) => date) ?? []),
-          ...(usage.dailyMessageCounts?.map(({ date }) => date) ?? []),
-        ]),
-      ].toSorted();
+      const dates = sessionActivityDates(usage);
       const key = JSON.stringify(dates);
       const activity = creator.sessionActivity.get(key) ?? { dates, sessionCount: 0 };
       activity.sessionCount += 1;
@@ -195,6 +260,9 @@ export function createUsageAggregateAccumulator() {
       const existing = getDay(day.date);
       existing.tokens += day.tokens;
       existing.cost += day.cost;
+      if (day.usageReport?.state === "unavailable") {
+        existing.usageReport = day.usageReport;
+      }
       mergeGroupedTotals(costDays, day.date, day);
       mergeGroupedTotals(creator.daily, day.date, day);
     }
@@ -204,25 +272,12 @@ export function createUsageAggregateAccumulator() {
       existing.toolCalls += day.toolCalls;
       existing.errors += day.errors;
     }
-    for (const day of usage.dailyModelUsage ?? []) {
-      const key = usageDailyModelIdentity(day.date, day.provider, day.model);
-      const existing = dailyModels.get(key) ?? {
-        date: day.date,
-        provider: day.provider,
-        model: day.model,
-        tokens: 0,
-        cost: 0,
-        count: 0,
-      };
-      existing.tokens += day.tokens;
-      existing.cost += day.cost;
-      existing.count += day.count;
-      dailyModels.set(key, existing);
-    }
+    addModelDays(usage);
   }
 
+  /* oxlint-disable unicorn/no-array-sort -- Every sorted array is freshly materialized here and exclusively owned until return. */
   function finish(): SessionsUsageAggregates {
-    const toolEntries = Array.from(tools, ([name, count]) => ({ name, count })).toSorted(
+    const toolEntries = Array.from(tools, ([name, count]) => ({ name, count })).sort(
       (a, b) => b.count - a.count,
     );
     return {
@@ -234,25 +289,25 @@ export function createUsageAggregateAccumulator() {
         uniqueTools: tools.size,
         tools: toolEntries,
       },
-      byModel: Array.from(models.values()).toSorted(compareModelUsage),
-      byProvider: Array.from(providers.values()).toSorted(compareModelUsage),
+      byModel: Array.from(models.values()).sort(compareModelUsage),
+      byProvider: Array.from(providers.values()).sort(compareModelUsage),
       byAgent: Array.from(agents, ([agentId, groupTotals]) => ({
         agentId,
         totals: groupTotals,
-      })).toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
+      })).sort((a, b) => b.totals.totalCost - a.totals.totalCost),
       byChannel: Array.from(channels, ([channel, groupTotals]) => ({
         channel,
         totals: groupTotals,
-      })).toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
+      })).sort((a, b) => b.totals.totalCost - a.totals.totalCost),
       byCreator: Array.from(creators.values(), ({ daily, sessionActivity, ...creator }) => ({
         ...creator,
-        daily: Array.from(daily, ([date, dayTotals]) => ({ date, ...dayTotals })).toSorted((a, b) =>
+        daily: Array.from(daily, ([date, dayTotals]) => ({ date, ...dayTotals })).sort((a, b) =>
           a.date.localeCompare(b.date),
         ),
-        sessionActivity: Array.from(sessionActivity.values()).toSorted((a, b) =>
+        sessionActivity: Array.from(sessionActivity.values()).sort((a, b) =>
           a.dates.join(",").localeCompare(b.dates.join(",")),
         ),
-      })).toSorted(
+      })).sort(
         (a, b) =>
           b.totals.totalCost - a.totals.totalCost ||
           b.totals.totalTokens - a.totals.totalTokens ||
@@ -261,18 +316,19 @@ export function createUsageAggregateAccumulator() {
       costDaily: Array.from(costDays, ([date, groupTotals]) => ({
         date,
         ...groupTotals,
-      })).toSorted((a, b) => a.date.localeCompare(b.date)),
+      })).sort((a, b) => a.date.localeCompare(b.date)),
       latency: latency.count > 0 ? summarizeLatency(latency) : undefined,
       dailyLatency: Array.from(dailyLatency, ([date, value]) => ({
         date,
         ...summarizeLatency(value),
-      })).toSorted((a, b) => a.date.localeCompare(b.date)),
-      modelDaily: Array.from(dailyModels.values()).toSorted(
+      })).sort((a, b) => a.date.localeCompare(b.date)),
+      modelDaily: Array.from(dailyModels.values()).sort(
         (a, b) => a.date.localeCompare(b.date) || b.cost - a.cost,
       ),
-      daily: Array.from(days.values()).toSorted((a, b) => a.date.localeCompare(b.date)),
+      daily: Array.from(days.values()).sort((a, b) => a.date.localeCompare(b.date)),
     };
   }
+  /* oxlint-enable unicorn/no-array-sort */
 
-  return { totals, add, finish };
+  return { totals, totalsForDays, add, addCalendar, finish };
 }

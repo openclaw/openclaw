@@ -53,8 +53,13 @@ still works for params intentionally shared across every exposed action.
 Channels that must expose a temporary public URL for a platform-side media
 fetch can use `createHostedOutboundMediaStore(...)` from
 `openclaw/plugin-sdk/outbound-media` with plugin state stores. Keep platform
-route parsing and token enforcement in the channel plugin; the shared helper
-only owns media loading, expiry metadata, chunk rows, and cleanup.
+route binding and token authentication in the channel plugin. For namespaced
+capability query parameters, `resolveHostedOutboundMediaRequest(req, res, prefix)`
+returns `false` for unrelated requests, `true` after rejecting ambiguous tokens
+or unsupported methods, or `{ url, id, token, method }` for the plugin to authenticate.
+It accepts only `GET` and `HEAD` with one `<prefix>_<24-character lowercase hex ID>`
+parameter. `resolveOutboundMediaAccess(params)` combines current `mediaAccess`
+with legacy local-root and reader parameters before loading.
 
 `prepareUrl({ mediaAccess })` forwards host-authorized local media access to
 the shared outbound loader. Hosted media capacity defaults to
@@ -117,20 +122,27 @@ the model-facing action schema.
 ## Progress card handoff
 
 A waiting reply can carry the optional host-owned
-`info.adoptProgressContinuation(receipt)` capability in its reply-dispatch
-context. An editable-progress adapter uses it to transfer an already visible
-card, not to send a replacement card or credit final-answer delivery.
+`info.adoptProgressDraft(draft)` capability in its reply-dispatch context. An
+editable-progress adapter uses it to keep an already visible card live while the
+children or detached media generation runs the turn waits on run, not to send a
+replacement card or credit final-answer delivery.
 
 Drain and flush the existing draft, recheck `assertPlatformSendAuthorized`, and
-pass its confirmed `messageId`, delivered `text`, prepared `snapshot`, and
-`channel`/`accountId`/`to`/`threadId` destination. Staged content or an ambiguous
-send is not a receipt. Only a `true` result transfers custody: detach the old
-stream without deleting its message. If the capability is absent or declines,
-keep ordinary reply delivery, including any media or controls alongside the
-waiting text.
+confirm the platform accepted the card. Staged content or an ambiguous send does
+not count. Then pass a draft with two synchronous methods: `push(item)` renders a
+prepared progress item on the same card, and `retire()` deletes it. Only a `true`
+result transfers custody: detach the old stream without deleting its message. If
+the capability is absent or declines, keep ordinary reply delivery, including any
+media or controls alongside the waiting text.
 
-Core retains only bounded presentation data and its receipt. Never serialize
-the capability, expose it in action arguments, or reuse the old turn's callbacks.
+The adapter keeps rendering, throttling, and deletion. `retire()` revokes the card
+at once: reject any edit still waiting for platform admission before network I/O.
+Never serialize the capability, expose it in action arguments, or reuse the old
+turn's callbacks.
+
+The receipt-based `info.adoptProgressContinuation(receipt)` from 2026.9.8 stays
+source-compatible but deprecated. The host no longer offers it, so adapters that
+check for it keep ordinary waiting-reply delivery.
 
 ## Post-delivery pins
 

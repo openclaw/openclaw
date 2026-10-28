@@ -1,16 +1,24 @@
-import type { DatabaseSync } from "node:sqlite";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
-import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
+import { getAdmittedSqlSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
+import { isStateSchemaVersionAtLeast } from "./openclaw-state-db-admission.js";
 import type { OpenClawStateDatabaseReadAdmission } from "./openclaw-state-db-async-lifecycle.js";
-import { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
+import {
+  captureOpenClawStateDatabaseReadAdmission,
+  registerOpenClawStateDatabaseLifecycleListener,
+  registerOpenClawStateDatabaseAsyncResource,
+} from "./openclaw-state-db-cache.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import { readProfileAuthority, type ProfileAuthorityDescriptor } from "./user-profile-authority.js";
 import type { UserProfileMutationChanges } from "./user-profile-mutation.js";
-import type { UserProfileEmailBinding } from "./user-profiles.types.js";
+import type { UserProfileEmailBinding, UserProfilesDatabase } from "./user-profiles.types.js";
 
 type EmailBindingChange = {
-  db: DatabaseSync;
+  db: EngineConnection;
   email: string;
   binding: UserProfileEmailBinding | null;
 };
@@ -26,14 +34,27 @@ export class UserProfileMutationUnsettledError extends Error {
   }
 }
 
+type ProfileAuthorityCell = Int32Array<SharedArrayBuffer>;
+type ProfileAuthorityKind =
+  | "profiles"
+  | "profileIdentities"
+  | "modelAccountLinks"
+  | "channelIdentities";
+type ProfileAuthorityBinding = (() => boolean) & {
+  readonly transferable: ProfileAuthorityDescriptor;
+};
 type ProfileAuthorityStore = {
-  revision: object;
-  identityRevision: object;
-  profiles: Map<string, object>;
-  profileIdentities: Map<string, object>;
-  channelIdentities: Map<string, object>;
+  admission: OpenClawStateDatabaseReadAdmission;
+  identityKey: string;
+  lifetime: { revision: BigInt64Array<SharedArrayBuffer>; epoch: bigint };
+  generation: Int32Array<SharedArrayBuffer>;
+  revision: number;
+  identityRevision: number;
+  profiles: Map<string, ProfileAuthorityCell>;
+  profileIdentities: Map<string, ProfileAuthorityCell>;
+  modelAccountLinks: Map<string, ProfileAuthorityCell>;
+  channelIdentities: Map<string, ProfileAuthorityCell>;
   pending: Map<string, Set<Promise<void>>>;
-  uncertain: Set<string>;
 };
 
 // The native SDK module identity owns these publications across plugin callers.
@@ -44,25 +65,61 @@ const changes = {
   bindingListeners: new Set<(change: EmailBindingChange) => void>(),
   listeners: new Set<() => void>(),
   authorityStores: new Map<string, ProfileAuthorityStore>(),
-  authorityHandles: new WeakMap<DatabaseSync, ProfileAuthorityStore>(),
+  authorityHandles: new WeakMap<EngineConnection, ProfileAuthorityStore>(),
   authorityLifecycleRegistered: false,
 };
 
-function authorityStore(identity: DatabasePathIdentity): ProfileAuthorityStore {
-  let store = changes.authorityStores.get(identity.key);
+// Coordination survives first creation; authority still depends on the captured identity and lifetime.
+function isAuthorityStoreCurrent(store: ProfileAuthorityStore): boolean {
+  if (
+    store.admission.identity.key !== store.identityKey ||
+    Atomics.load(store.lifetime.revision, 0) !== store.lifetime.epoch ||
+    Atomics.load(store.generation, 0) !== 1
+  ) {
+    Atomics.store(store.generation, 0, 0);
+    return false;
+  }
+  return changes.authorityStores.get(store.admission.coordinationKey) === store;
+}
+
+function authorityStore(admission: OpenClawStateDatabaseReadAdmission): ProfileAuthorityStore {
+  let store = changes.authorityStores.get(admission.coordinationKey);
+  if (store && !isAuthorityStoreCurrent(store)) {
+    store = undefined;
+  }
   if (!store) {
+    const lifetime = admission.captureIntegrity?.()?.lifetime;
+    if (!lifetime) {
+      throw new Error("Profile authority requires canonical admission lifetime");
+    }
+    const generation = new Int32Array(new SharedArrayBuffer(2 * Int32Array.BYTES_PER_ELEMENT));
+    Atomics.store(generation, 0, 1);
     store = {
-      revision: {},
-      identityRevision: {},
+      admission,
+      identityKey: admission.identity.key,
+      lifetime: { revision: new BigInt64Array(lifetime.revision), epoch: lifetime.epoch },
+      generation,
+      revision: 0,
+      identityRevision: 0,
       profiles: new Map(),
       profileIdentities: new Map(),
+      modelAccountLinks: new Map(),
       channelIdentities: new Map(),
       pending: new Map(),
-      uncertain: new Set(),
     };
-    changes.authorityStores.set(identity.key, store);
+    changes.authorityStores.set(admission.coordinationKey, store);
   }
   return store;
+}
+
+function retireAuthorityStores(identityKey?: string): void {
+  for (const [key, store] of changes.authorityStores) {
+    if (!identityKey || store.admission.identity.key === identityKey) {
+      // A late service registration keeps this retired buffer, never a replacement generation.
+      Atomics.store(store.generation, 0, 0);
+      changes.authorityStores.delete(key);
+    }
+  }
 }
 
 function observeAuthorityLifecycle(): void {
@@ -70,68 +127,282 @@ function observeAuthorityLifecycle(): void {
     return;
   }
   changes.authorityLifecycleRegistered = true;
+  registerOpenClawStateDatabaseAsyncResource({
+    async close(identity) {
+      retireAuthorityStores(identity?.key);
+    },
+  });
   registerOpenClawStateDatabaseLifecycleListener((event) => {
     if (event.kind === "opened") {
-      changes.authorityHandles.set(event.database.db, authorityStore(event.identity));
+      changes.authorityHandles.set(
+        event.database.db,
+        authorityStore(captureOpenClawStateDatabaseReadAdmission(event.database.path)),
+      );
     } else if (event.identity) {
-      changes.authorityStores.delete(event.identity.key);
+      retireAuthorityStores(event.identity.key);
     }
   });
 }
 
-/** Authority revisions belong to the profile writer, independently of display notifications. */
-export function publishUserProfileAuthorityChange(db: DatabaseSync, ...profileIds: string[]): void {
-  observeAuthorityLifecycle();
-  const store = changes.authorityHandles.get(db);
-  if (!store || profileIds.length === 0) {
+function authorityCell(store: ProfileAuthorityStore, kind: ProfileAuthorityKind, id: string) {
+  let cell = store[kind].get(id);
+  if (!cell) {
+    cell = new Int32Array(new SharedArrayBuffer(2 * Int32Array.BYTES_PER_ELEMENT));
+    store[kind].set(id, cell);
+  }
+  return cell;
+}
+
+function updateAuthorityStore(store: ProfileAuthorityStore, update: () => void): void {
+  // Retire rather than reuse a revision observed by another thread.
+  if (Atomics.load(store.generation, 1) >= 0x7fff_fffc) {
+    Atomics.store(store.generation, 0, 0);
     return;
   }
-  const commit = () => {
-    store.revision = {};
-    for (const profileId of profileIds) {
-      store.profiles.set(profileId, {});
-    }
-  };
-  if (!stageSqliteTransactionState(db, { stage: () => {}, rollback: () => {}, commit })) {
-    commit();
+  Atomics.add(store.generation, 1, 1);
+  try {
+    update();
+  } finally {
+    Atomics.add(store.generation, 1, 1);
   }
+}
+
+function advanceAuthorityCell(store: ProfileAuthorityStore, cell: ProfileAuthorityCell): void {
+  if (Atomics.load(cell, 0) === 0x7fff_ffff) {
+    Atomics.store(store.generation, 0, 0);
+  } else {
+    Atomics.add(cell, 0, 1);
+  }
+}
+
+function authorityDescriptor(
+  store: ProfileAuthorityStore,
+  cells: readonly ProfileAuthorityCell[],
+  bound = false,
+): ProfileAuthorityDescriptor {
+  return {
+    generation: store.generation.buffer,
+    lifetime: { revision: store.lifetime.revision.buffer, epoch: store.lifetime.epoch },
+    entries: cells.map((cell) => ({
+      state: cell.buffer,
+      ...(bound ? { revision: Atomics.load(cell, 0) } : {}),
+    })),
+  };
+}
+
+function authorityBinding(
+  admission: OpenClawStateDatabaseReadAdmission,
+  store: ProfileAuthorityStore,
+  descriptor: ProfileAuthorityDescriptor,
+): ProfileAuthorityBinding {
+  return Object.assign(
+    () => {
+      try {
+        admission.assertCurrent();
+        return isAuthorityStoreCurrent(store) && readProfileAuthority(descriptor) === "current";
+      } catch {
+        return false;
+      }
+    },
+    { transferable: descriptor },
+  );
+}
+
+/** Authority revisions belong to the profile writer, independently of display notifications. */
+export function publishUserProfileAuthorityChange(
+  db: EngineConnection,
+  ...profileIds: string[]
+): void {
+  // Native and worker mutations retire recovery custody in their original transaction.
+  const schema = profileIds.length ? getAdmittedSqlSchemaFacts(db) : undefined;
+  if (profileIds.length && !schema) {
+    throw new Error("Profile authority mutation requires admitted schema facts");
+  }
+  if (schema && isStateSchemaVersionAtLeast(db, 19) && tableExists(db, "user_profile_identities")) {
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<UserProfilesDatabase>(db)
+        .updateTable("user_profile_identities")
+        .set({ authorization_id: null, authorization_basis_json: null })
+        .where("profile_id", "in", profileIds),
+    );
+  }
+  publishAuthorityStoreChange(db, "profiles", profileIds);
 }
 
 /** Only changed merge pointers invalidate account selection; roles and login grants do not. */
-export function publishUserProfileIdentityChange(db: DatabaseSync, ...profileIds: string[]): void {
-  observeAuthorityLifecycle();
-  const store = changes.authorityHandles.get(db);
-  if (!store || profileIds.length === 0) {
-    return;
-  }
-  const commit = () => {
-    store.identityRevision = {};
-    for (const profileId of profileIds) {
-      store.profileIdentities.set(profileId, {});
-    }
-  };
-  if (!stageSqliteTransactionState(db, { stage: () => {}, rollback: () => {}, commit })) {
-    commit();
-  }
+export function publishUserProfileIdentityChange(
+  db: EngineConnection,
+  ...profileIds: string[]
+): void {
+  publishAuthorityStoreChange(db, "profileIdentities", profileIds);
 }
 
-export function publishUserChannelIdentityAuthorityChange(db: DatabaseSync, subject: string): void {
-  observeAuthorityLifecycle();
-  const store = changes.authorityHandles.get(db);
-  if (!store) {
-    return;
-  }
-  const commit = () => {
-    store.revision = {};
-    store.channelIdentities.set(subject, {});
-  };
-  if (!stageSqliteTransactionState(db, { stage: () => {}, rollback: () => {}, commit })) {
-    commit();
-  }
+/** Default-link changes do not revoke explicit selections or saved session account pins. */
+export function publishUserProfileModelAccountLinksChange(
+  db: EngineConnection,
+  ...profileIds: string[]
+): void {
+  publishAuthorityStoreChange(db, "modelAccountLinks", profileIds);
 }
 
-const mutationKey = (kind: "profile" | "identity" | "channel", id: string) =>
+/** A retained catalog assertion consumes only the canonical writer’s committed facts. */
+export function captureUserProfileModelAccountLinksAuthority(
+  admission: OpenClawStateDatabaseReadAdmission,
+  profileId: string,
+): ProfileAuthorityBinding {
+  observeAuthorityLifecycle();
+  admission.assertCurrent();
+  const store = authorityStore(admission);
+  return authorityBinding(
+    admission,
+    store,
+    authorityDescriptor(
+      store,
+      [
+        authorityCell(store, "modelAccountLinks", profileId),
+        authorityCell(store, "profileIdentities", profileId),
+        // A merge may add default links without changing the target's identity.
+        authorityCell(store, "profiles", profileId),
+      ],
+      true,
+    ),
+  );
+}
+
+const mutationKey = (kind: "profile" | "identity" | "channel" | "modelAccountLinks", id: string) =>
   JSON.stringify([kind, id]);
+
+type AuthorityMutationEntry = { key: string; cell: ProfileAuthorityCell };
+
+function fenceAuthorityEntries(
+  store: ProfileAuthorityStore,
+  entries: readonly AuthorityMutationEntry[],
+  advance: boolean,
+): { settle: (known: boolean) => void } {
+  const pending = createDeferredCore();
+  updateAuthorityStore(store, () => {
+    for (const { key, cell } of entries) {
+      if (advance) {
+        advanceAuthorityCell(store, cell);
+      }
+      if (Atomics.load(cell, 1) !== 2) {
+        Atomics.store(cell, 1, 1);
+      }
+      const mutations = store.pending.get(key) ?? new Set<Promise<void>>();
+      store.pending.set(key, mutations);
+      mutations.add(pending.promise);
+    }
+  });
+  let settled = false;
+  return {
+    settle(known) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      updateAuthorityStore(store, () => {
+        for (const { key, cell } of entries) {
+          const mutations = store.pending.get(key);
+          mutations?.delete(pending.promise);
+          if (mutations?.size === 0) {
+            store.pending.delete(key);
+          }
+          if (!known) {
+            Atomics.store(cell, 1, 2);
+          } else if (Atomics.load(cell, 1) !== 2) {
+            Atomics.store(cell, 1, mutations?.size ? 1 : 0);
+          }
+        }
+      });
+      pending.resolve();
+    },
+  };
+}
+
+/** Fence link readers until the original worker's native outcome is acknowledged. */
+export function fenceUserProfileModelAccountLinks(
+  admission: OpenClawStateDatabaseReadAdmission,
+  profileId: string,
+): { settle: (known: boolean) => void } {
+  observeAuthorityLifecycle();
+  admission.assertCurrent();
+  const store = authorityStore(admission);
+  const cell = authorityCell(store, "modelAccountLinks", profileId);
+  const fence = fenceAuthorityEntries(
+    store,
+    [{ key: mutationKey("modelAccountLinks", profileId), cell }],
+    true,
+  );
+  let settled = false;
+  return {
+    settle(known) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      // Retire reads prepared while COMMIT or its acknowledgement was pending.
+      updateAuthorityStore(store, () => advanceAuthorityCell(store, cell));
+      fence.settle(known);
+    },
+  };
+}
+
+export function publishUserChannelIdentityAuthorityChange(
+  db: EngineConnection,
+  subject: string,
+): void {
+  publishAuthorityStoreChange(db, "channelIdentities", [subject]);
+}
+
+function publishAuthorityStoreChange(
+  db: EngineConnection,
+  kind: ProfileAuthorityKind,
+  ids: string[],
+): void {
+  observeAuthorityLifecycle();
+  const store = changes.authorityHandles.get(db);
+  if (!store || ids.length === 0) {
+    return;
+  }
+  const mutationKind = {
+    profiles: "profile",
+    profileIdentities: "identity",
+    channelIdentities: "channel",
+    modelAccountLinks: "modelAccountLinks",
+  } as const;
+  const entries = ids.map((id) => ({
+    key: mutationKey(mutationKind[kind], id),
+    cell: authorityCell(store, kind, id),
+  }));
+  let fence: ReturnType<typeof fenceAuthorityEntries> | undefined;
+  const commit = () => {
+    updateAuthorityStore(store, () => {
+      if (kind === "profileIdentities") {
+        store.identityRevision += 1;
+      } else if (kind !== "modelAccountLinks") {
+        store.revision += 1;
+      }
+      for (const { cell } of entries) {
+        advanceAuthorityCell(store, cell);
+      }
+    });
+    fence?.settle(true);
+  };
+  if (
+    !stageSqliteTransactionState(db, {
+      // Native callbacks keep their committed facts until the physical COMMIT attempt.
+      prepareCommit: () => {
+        fence ??= fenceAuthorityEntries(store, entries, false);
+      },
+      invalidate: () => fence?.settle(false),
+      rollback: () => fence?.settle(true),
+      commit,
+    })
+  ) {
+    throw new Error("Profile authority publication requires a managed transaction");
+  }
+}
 
 /** Close affected preparation before granting COMMIT; settlement, not delivery, reopens it. */
 export function fenceUserProfileMutationAuthority(
@@ -140,47 +411,28 @@ export function fenceUserProfileMutationAuthority(
 ): { settle: (known: boolean) => void } {
   observeAuthorityLifecycle();
   admission.assertCurrent();
-  const store = authorityStore(admission.identity);
-  const keys = [
-    ...changed.profiles.map((id) => mutationKey("profile", id)),
-    ...changed.identities.map((id) => mutationKey("identity", id)),
-    ...changed.channels.map((id) => mutationKey("channel", id)),
+  const store = authorityStore(admission);
+  const entries = [
+    ...changed.profiles.map((id) => ({
+      key: mutationKey("profile", id),
+      cell: authorityCell(store, "profiles", id),
+    })),
+    ...changed.identities.map((id) => ({
+      key: mutationKey("identity", id),
+      cell: authorityCell(store, "profileIdentities", id),
+    })),
+    ...changed.channels.map((id) => ({
+      key: mutationKey("channel", id),
+      cell: authorityCell(store, "channelIdentities", id),
+    })),
   ];
   if (changed.profiles.length || changed.channels.length) {
-    store.revision = {};
+    store.revision += 1;
   }
   if (changed.identities.length) {
-    store.identityRevision = {};
+    store.identityRevision += 1;
   }
-  changed.profiles.forEach((id) => store.profiles.set(id, {}));
-  changed.identities.forEach((id) => store.profileIdentities.set(id, {}));
-  changed.channels.forEach((id) => store.channelIdentities.set(id, {}));
-  const pending = createDeferredCore();
-  for (const key of keys) {
-    const entries = store.pending.get(key) ?? new Set<Promise<void>>();
-    store.pending.set(key, entries);
-    entries.add(pending.promise);
-  }
-  let settled = false;
-  return {
-    settle(known) {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      for (const key of keys) {
-        if (!known) {
-          store.uncertain.add(key);
-        }
-        const entries = store.pending.get(key);
-        entries?.delete(pending.promise);
-        if (entries?.size === 0) {
-          store.pending.delete(key);
-        }
-      }
-      pending.resolve();
-    },
-  };
+  return fenceAuthorityEntries(store, entries, true);
 }
 
 /** A read is qualified once; retained assertions inspect only owner-held memory. */
@@ -190,7 +442,7 @@ export async function captureUserProfileAuthorityRead(
   dependency: "authority" | "identity" = "authority",
 ) {
   observeAuthorityLifecycle();
-  const store = authorityStore(admission.identity);
+  const store = authorityStore(admission);
   const subjectKey = subject === undefined ? undefined : mutationKey("channel", subject);
   const profileKind = dependency === "identity" ? "identity" : "profile";
   const pending: Promise<void>[] = [];
@@ -205,75 +457,86 @@ export async function captureUserProfileAuthorityRead(
     await Promise.all(pending);
   }
   admission.assertCurrent();
-  const subjectIsSettled = () =>
-    subjectKey === undefined ||
-    (!store.uncertain.has(subjectKey) && !store.pending.get(subjectKey)?.size);
-  if (!subjectIsSettled()) {
+  const subjectCell = (value: string | undefined) =>
+    value === undefined ? [] : [authorityCell(store, "channelIdentities", value)];
+  const settlementState = (kind: ProfileAuthorityKind, id: string) => {
+    const cell = store[kind].get(id);
+    return cell ? Atomics.load(cell, 1) : 0;
+  };
+  const subjectIsSettled = (value = subject) =>
+    value === undefined || settlementState("channelIdentities", value) === 0;
+  if (!isAuthorityStoreCurrent(store) || !subjectIsSettled()) {
     throw new UserProfileMutationUnsettledError("pending");
   }
   const currentRevision = () =>
     dependency === "identity" ? store.identityRevision : store.revision;
-  const profileRevisions = dependency === "identity" ? store.profileIdentities : store.profiles;
+  const profileRevisions = dependency === "identity" ? "profileIdentities" : "profiles";
+  const profileCells = (profileIds: string | readonly string[]) =>
+    (typeof profileIds === "string" ? [profileIds] : profileIds).map((id) =>
+      authorityCell(store, profileRevisions, id),
+    );
   const revision = currentRevision();
   return {
+    transferSettled(
+      profileIds: string | readonly string[],
+      boundSubject = subject,
+    ): ProfileAuthorityDescriptor {
+      admission.assertCurrent();
+      if (!isAuthorityStoreCurrent(store)) {
+        throw new Error("Profile authority store changed");
+      }
+      return authorityDescriptor(store, [
+        ...profileCells(profileIds),
+        ...subjectCell(boundSubject),
+      ]);
+    },
     /** Current-fact readers tolerate settled changes, but never borrow an unknown mutation. */
     assertSettled(this: void, profileIds: string | readonly string[]): void {
       admission.assertCurrent();
-      if (changes.authorityStores.get(admission.identity.key) !== store) {
+      // This module owns every cell write. Local synchronous checks need no transfer descriptor.
+      let state = 0;
+      if (typeof profileIds === "string") {
+        state = settlementState(profileRevisions, profileIds);
+      } else {
+        for (const id of profileIds) {
+          state = Math.max(state, settlementState(profileRevisions, id));
+        }
+      }
+      if (!isAuthorityStoreCurrent(store)) {
         throw new Error("Profile authority store changed");
       }
-      for (const id of typeof profileIds === "string" ? [profileIds] : profileIds) {
-        const key = mutationKey(profileKind, id);
-        if (store.uncertain.has(key)) {
-          throw new UserProfileMutationUnsettledError("uncertain");
-        }
-        if (store.pending.get(key)?.size) {
-          throw new UserProfileMutationUnsettledError("pending");
-        }
+      if (state !== 0) {
+        throw new UserProfileMutationUnsettledError(state === 1 ? "pending" : "uncertain");
       }
       if (!subjectIsSettled()) {
         throw new UserProfileMutationUnsettledError("pending");
       }
     },
-    bind(profileIds: string | readonly string[]): (() => boolean) | undefined {
+    bind(
+      profileIds: string | readonly string[],
+      boundSubject = subject,
+    ): ProfileAuthorityBinding | undefined {
       admission.assertCurrent();
       if (
-        changes.authorityStores.get(admission.identity.key) !== store ||
+        !isAuthorityStoreCurrent(store) ||
         currentRevision() !== revision ||
         !subjectIsSettled()
       ) {
         return undefined;
       }
-      const profiles = (typeof profileIds === "string" ? [profileIds] : profileIds).map((id) => ({
-        id,
-        key: mutationKey(profileKind, id),
-        revision: profileRevisions.get(id),
-      }));
-      if (profiles.some(({ key }) => store.uncertain.has(key))) {
+      const cells = profileCells(profileIds);
+      const status = readProfileAuthority(authorityDescriptor(store, cells));
+      if (status === "uncertain") {
         throw new UserProfileMutationUnsettledError("uncertain");
       }
-      if (profiles.some(({ key }) => store.pending.get(key)?.size)) {
+      if (status !== "current" || !subjectIsSettled(boundSubject)) {
         return undefined;
       }
-      const identity = subject === undefined ? undefined : store.channelIdentities.get(subject);
-      return () => {
-        try {
-          admission.assertCurrent();
-          return (
-            changes.authorityStores.get(admission.identity.key) === store &&
-            profiles.every(
-              (profile) =>
-                profileRevisions.get(profile.id) === profile.revision &&
-                !store.uncertain.has(profile.key) &&
-                !store.pending.get(profile.key)?.size,
-            ) &&
-            (subject === undefined || store.channelIdentities.get(subject) === identity) &&
-            subjectIsSettled()
-          );
-        } catch {
-          return false;
-        }
-      };
+      return authorityBinding(
+        admission,
+        store,
+        authorityDescriptor(store, [...cells, ...subjectCell(boundSubject)], true),
+      );
     },
   };
 }
@@ -286,13 +549,11 @@ export function onUserProfileEmailBindingChanged(
 
 /** Native writer facts become visible with the commit, before profile observers. */
 export function stageUserProfileEmailBindingChange(
-  db: DatabaseSync,
+  db: EngineConnection,
   email: string,
   binding: UserProfileEmailBinding | null,
 ): void {
   stageSqliteTransactionState(db, {
-    stage: () => {},
-    rollback: () => {},
     commit: () => {
       changes.bindingRevision += 1;
       for (const listener of changes.bindingListeners) {

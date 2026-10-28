@@ -1,91 +1,140 @@
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
-import { ok } from "@openclaw/normalization-core/result";
-import { listAgentIds } from "../agents/agent-scope-config.js";
+import { readSessionEntryCreatedEntry } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { readPreparedSessionSharingChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import {
   isPreparedSessionSharingChange,
+  readSessionEntryCreationTransition,
+  type SessionEntryPlaceholder,
   projectSessionSharingEntry,
-  readCommittedIncognitoSessionSharing,
   retainPreparedSessionSharingFacts,
 } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
-import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import { assertSessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
-import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
-import { withSessionHistoryWorkerReadCandidates } from "../config/sessions/session-transcript-worker-resources.js";
+import type {
+  SessionEntryCreationOperation,
+  SessionSharingEntry,
+} from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
+import type { SessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
+import {
+  createSessionStoreRegistryMutationFilter,
+  prepareSessionStoreTargetInventory,
+} from "../config/sessions/session-store-target-inventory.js";
+import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
-import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
+} from "../infra/sqlite-worker-identity.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
-import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
-import { getOpenIncognitoAgentDatabase } from "../state/openclaw-agent-db-lifecycle.js";
-import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../state/openclaw-agent-db-registry-listing.js";
+import {
+  isSessionStoreTopologyChange,
+  sessionChangeScopeAffectsStoredRows,
+  sessionChanges,
+  type SessionRowChange,
+} from "../sessions/session-row-changes.js";
+import type { AgentDatabaseRegistryChange } from "../state/openclaw-agent-db-contract.js";
+import { isOpenClawAgentDatabaseRegistryChange } from "../state/openclaw-agent-db-registry-listing.js";
 import {
   matchesAgentDatabaseReadCandidatePath,
-  registerOpenClawAgentDatabaseAsyncResource,
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../state/openclaw-agent-db-resources.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { getPendingOpenClawAgentDatabasePreparation } from "../state/openclaw-agent-execution.js";
+import { readSessionSharingFactsInWorker } from "./session-sharing-facts-read.js";
+import { SessionMutationFactsUnavailableError } from "./session-sharing-incognito.js";
+import { prepareMemorySessionMutationFacts } from "./session-sharing-memory-facts.js";
 import type { PreparedSessionMutationFacts } from "./session-sharing-policy.js";
+import { captureSessionMutationRouting } from "./session-sharing-routing.js";
+import type {
+  PreparedSessionSourceFacts,
+  PreparedSessionSharingSource,
+  ExistingSessionMutationFacts,
+  SessionFactsRequest,
+  SessionFactsRead,
+} from "./session-sharing-target.types.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
-import {
-  prepareGatewaySessionStoreTargetReadOnly,
-  type GatewaySessionStoreDiscoveryCache,
-} from "./session-utils-store-lookup.js";
-import { resolveCanonicalSessionStoreMatchFromStoreKeys } from "./session-utils-store.js";
+import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
+import { prepareGatewaySessionStoreTargetReadOnly } from "./session-utils-store-lookup.js";
+import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 
-type ExistingSessionMutationFacts = PreparedSessionMutationFacts & {
-  target: NonNullable<PreparedSessionMutationFacts["target"]>;
-};
+export { SessionMutationFactsUnavailableError, captureSessionMutationRouting };
+export type { PreparedSessionSourceFacts, SessionFactsRead };
 
-export class SessionMutationFactsUnavailableError extends Error {
-  constructor(options?: ErrorOptions) {
-    super("Session access facts are unavailable; retry after session storage is ready.", options);
-    this.name = "SessionMutationFactsUnavailableError";
-  }
-}
-
-function routeFacts(cfg: OpenClawConfig) {
-  return {
-    agents: listAgentIds(cfg),
-    store: cfg.session?.store,
-    mainKey: cfg.session?.mainKey,
-    scope: cfg.session?.scope,
-  };
-}
-
-type SessionFactsRequest = {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  agentId: string;
-};
-type SessionFactsRead<Facts extends PreparedSessionMutationFacts> = {
-  readCurrent(this: void, cfg: OpenClawConfig): Facts;
-  release(this: void): void;
-};
-
-/** Negative durable reads retain the same keyed publication and source guards as existing rows. */
+/** Negative reads retain the same keyed publication and source guards as existing rows. */
 export function prepareSessionMutationFacts(
   params: SessionFactsRequest & { allowMissing: true },
-): Promise<SessionFactsRead<PreparedSessionMutationFacts>>;
+): Promise<SessionFactsRead<PreparedSessionSourceFacts>>;
 export function prepareSessionMutationFacts(
   params: SessionFactsRequest,
 ): Promise<SessionFactsRead<ExistingSessionMutationFacts>>;
 export async function prepareSessionMutationFacts(
   params: SessionFactsRequest & { allowMissing?: true },
-): Promise<SessionFactsRead<PreparedSessionMutationFacts>> {
-  const route = routeFacts(params.cfg);
+): Promise<SessionFactsRead<PreparedSessionSourceFacts>> {
+  const assertRoutingCurrent = captureSessionMutationRouting(params.cfg, undefined, [params]);
   const { canonicalKey, agentId } = resolveSessionStoreIdentity(params);
+  const memory = prepareMemorySessionMutationFacts(
+    { ...params, agentId, canonicalKey },
+    assertRoutingCurrent,
+  );
+  if (memory) {
+    return memory;
+  }
+  const initialStoreKeys = [params.sessionKey.trim(), canonicalKey];
   const releases: Array<() => void> = [];
   let active = true;
+  let beforeDiscovery = params.storageReady !== undefined;
+  let waitingForStorage = false;
   let invalidated = false;
-  let facts: PreparedSessionMutationFacts | undefined;
+  let facts: PreparedSessionSourceFacts | undefined;
+  let assertRegistryPublication: (() => void) | undefined;
+  let followRegistration: ((change: AgentDatabaseRegistryChange) => void) | undefined;
+  let creation: SessionEntryCreationOperation | undefined;
+  let expectedPlaceholder: SessionEntryPlaceholder | undefined;
+  let adoptCreatedEntry: ((entry: SessionSharingEntry) => void) | undefined;
+  let assertSource: () => void;
   const selectedPaths = new Set<string>();
+  const acquiringPaths = new Set<string>();
+  const acquiringReads = new Map<string, ReturnType<typeof retainPreparedSessionSharingFacts>>();
+  const initializedReads = new Set<string>();
+  const acquireSource = (sourcePath: string, sessionKeys: readonly string[]) => {
+    const identity = readDatabasePathIdentitySync(sourcePath);
+    if (identity.birthtime === undefined) {
+      return undefined;
+    }
+    acquiringPaths.add(path.resolve(sourcePath));
+    acquiringPaths.add(identity.canonicalPath);
+    for (const sessionKey of sessionKeys) {
+      const key = `${identity.key}\0${sessionKey}`;
+      if (!acquiringReads.has(key)) {
+        const retained = retainPreparedSessionSharingFacts({
+          databaseIdentity: identity.key,
+          sessionKey,
+          followLifecycle: params.followLifecycle,
+          acquiring: true,
+        });
+        acquiringReads.set(key, retained);
+        releases.push(retained.release);
+      }
+    }
+    return identity;
+  };
   const release = () => {
     if (active) {
       active = false;
       for (const stop of releases.splice(0).toReversed()) {
         stop();
       }
+    }
+  };
+  const retainCandidate = (candidate: SessionStoreReadCandidate) => {
+    for (const pathname of new Set([candidate.path, candidate.physicalPath])) {
+      releases.push(
+        registerOpenClawAgentDatabaseReadCandidateResource({
+          ...candidate,
+          path: pathname,
+          revoke: release,
+          close: async () => release(),
+        }),
+      );
     }
   };
   const assertActive = () => {
@@ -98,17 +147,26 @@ export async function prepareSessionMutationFacts(
   };
   const changed = (change: SessionRowChange) => {
     if ("all" in change) {
+      if (isSessionStoreTopologyChange(change)) {
+        if (beforeDiscovery) {
+          return;
+        }
+        if (isOpenClawAgentDatabaseRegistryChange(change) && assertRegistryPublication) {
+          try {
+            assertRegistryPublication();
+          } catch {
+            invalidate();
+          }
+        } else {
+          invalidate();
+        }
+        return;
+      }
       if (
-        typeof change.scope === "string" &&
-        [
-          "profiles",
-          "catalog",
-          "acp",
-          "agent-runs",
-          "worker-placements",
-          "worker-environments",
-          "config",
-        ].includes(change.scope)
+        // Runtime and automation still invalidate this retained authority.
+        !sessionChangeScopeAffectsStoredRows(change) &&
+        change.scope !== "runtime" &&
+        change.scope !== "automation"
       ) {
         return;
       }
@@ -124,16 +182,19 @@ export async function prepareSessionMutationFacts(
     }
     if (
       change.scope === "automation" ||
+      change.scope === "acp" ||
       (change.agentId && change.agentId !== agentId && !change.storePath) ||
-      ![params.sessionKey, canonicalKey, ...(facts?.target?.storeKeys ?? [])].includes(
-        change.sessionKey,
-      )
+      ![...initialStoreKeys, ...(facts?.target?.storeKeys ?? [])].includes(change.sessionKey)
     ) {
       return;
     }
     // Placement and presentation observers do not change stored sharing facts.
     // Entry/member writers name their physical store; identity changes have a separate owner.
     if (!change.storePath) {
+      return;
+    }
+    // A bound reader follows its physical source, not same-key rows in other stores.
+    if (facts?.target && !selectedPaths.has(path.resolve(change.storePath))) {
       return;
     }
     if (
@@ -145,277 +206,372 @@ export async function prepareSessionMutationFacts(
       return;
     }
     if (
-      !facts ||
-      !selectedPaths.has(path.resolve(change.storePath)) ||
-      !isPreparedSessionSharingChange(change)
+      active &&
+      !invalidated &&
+      facts?.target === null &&
+      creation &&
+      selectedPaths.has(path.resolve(change.storePath))
     ) {
+      const placeholder = readSessionEntryCreationTransition(change, creation);
+      if (placeholder) {
+        try {
+          assertSource();
+          expectedPlaceholder = placeholder;
+          return;
+        } catch {
+          invalidate();
+          return;
+        }
+      }
+      const created = readSessionEntryCreatedEntry(change, creation);
+      if (created && adoptCreatedEntry) {
+        adoptCreatedEntry(created);
+        creation = undefined;
+        return;
+      }
+    }
+    // A retained acquisition receives this exact source's postimage before this notification.
+    // It still rejects replacements, unknown publications, and stale worker identities.
+    if (
+      !facts &&
+      acquiringPaths.has(path.resolve(change.storePath)) &&
+      isPreparedSessionSharingChange(change)
+    ) {
+      return;
+    }
+    if (!facts || facts.target === null || readPreparedSessionSharingChange(change) === undefined) {
       invalidate();
     }
   };
   releases.push(
     sessionChanges.subscribeFacts(changed),
     onSessionIdentityMutation((change) => {
-      if (change.agentId === agentId && change.previous.sessionKeys.includes(canonicalKey)) {
+      if (
+        change.agentId === agentId &&
+        change.previous.sessionKeys.some((key) => initialStoreKeys.includes(key)) &&
+        !(
+          params.followLifecycle &&
+          change.kind === "reset" &&
+          change.previous.sessionId !== undefined &&
+          change.previous.sessionId === change.current.sessionId &&
+          change.current.sessionKeys.some((key) => initialStoreKeys.includes(key))
+        )
+      ) {
         invalidate();
       }
     }),
   );
   try {
-    let assertSource: () => void;
+    const parsedAgent = parseAgentSessionKey(params.sessionKey)?.agentId;
+    const discoveryInventory = prepareSessionStoreTargetInventory(params.cfg, [
+      agentId,
+      ...(parsedAgent ? [parsedAgent] : []),
+    ]);
+    const candidateIdentities = discoveryInventory.candidates.map((candidate) => ({
+      candidate,
+      identity: readDatabasePathIdentitySync(candidate.path),
+    }));
+    const missingCandidates = candidateIdentities.filter(
+      ({ identity }) => identity.birthtime === undefined,
+    );
+    // Existing sources can publish while writer admission or inventory discovery waits.
+    // Capture their postimages now; later row reads initialize this same acquisition.
+    for (const { candidate, identity } of candidateIdentities) {
+      if (identity.birthtime !== undefined) {
+        retainCandidate(candidate);
+        acquireSource(candidate.path, initialStoreKeys);
+      }
+    }
+    const preparations = params.storageReady ? [params.storageReady] : [];
+    for (const { candidate } of candidateIdentities) {
+      const pending = getPendingOpenClawAgentDatabasePreparation(candidate.physicalPath, "read");
+      if (pending) {
+        preparations.push(pending);
+      }
+    }
+    if (preparations.length > 0) {
+      // Discovery already joins native preparation; capture its registry witness afterward.
+      beforeDiscovery = true;
+      waitingForStorage = true;
+      await Promise.all(preparations);
+      waitingForStorage = false;
+      beforeDiscovery = false;
+      for (const { candidate, identity } of candidateIdentities) {
+        if (identity.birthtime !== undefined) {
+          assertExistingDatabaseIdentity(candidate.physicalPath, identity.key, identity.birthtime);
+        }
+      }
+      for (const captured of missingCandidates) {
+        captured.identity = readDatabasePathIdentitySync(captured.candidate.path);
+      }
+    }
+    assertActive();
+    // Writer admission may create an absent store; retain its admitted source afterward.
+    for (const { candidate } of missingCandidates) {
+      retainCandidate(candidate);
+      acquireSource(candidate.path, initialStoreKeys);
+    }
     let readFacts = () => facts!;
-    if (isIncognitoSessionKey(canonicalKey)) {
-      const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId });
-      const database = getOpenIncognitoAgentDatabase(agentId, storePath);
-      if (!database) {
-        throw new SessionMutationFactsUnavailableError();
-      }
-      const initial = readCommittedIncognitoSessionSharing(database.db, canonicalKey);
-      if (!initial) {
-        throw new SessionMutationFactsUnavailableError();
-      }
-      const { sessionId, lifecycleRevision } = initial.entry;
-      selectedPaths.add(path.resolve(storePath));
-      releases.push(
-        registerOpenClawAgentDatabaseAsyncResource({
-          agentId,
-          path: storePath,
-          revoke: release,
-          close: async () => release(),
-        }),
-      );
-      assertSource = () => {
-        if (getOpenIncognitoAgentDatabase(agentId, storePath) !== database) {
+    const { candidates: discoveryCandidates, ...inventory } = discoveryInventory;
+    const preparedSources: Array<{
+      agentId: string;
+      path: string;
+      identity: string;
+      birthtime: string;
+    }> = [];
+    const inventoryRead = prepareSessionStoreTargetInventoryRead(
+      discoveryInventory,
+      createSessionStoreRegistryMutationFilter({
+        captured: candidateIdentities.map(({ candidate, identity }) => ({
+          candidate,
+          identity: identity.key,
+          birthtime: identity.birthtime,
+        })),
+        preparedSources,
+        registryDiscovery: inventory.registryDiscovery,
+      }),
+    );
+    followRegistration = inventoryRead.followRegistration;
+    assertRegistryPublication = inventoryRead.assertRegistryCurrent;
+    const members = new Map<string, PreparedSessionSharingSource>();
+    const retainedReads = new Map<string, ReturnType<typeof retainPreparedSessionSharingFacts>>();
+    const selected = await inventoryRead.withRead(async (sources, assertDiscoveryCurrent) => {
+      const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
+      for (const source of sources.agents) {
+        if (!source.result.available && source.result.reason !== "database-missing") {
           throw new SessionMutationFactsUnavailableError();
         }
+        targetDiscoveryCache.set(source.agentId, {
+          existing: source.result.available ? source.result.targets : [],
+          fallback: {
+            agentId: source.agentId,
+            storePath: inventory.paths.get(source.agentId)!.configured,
+          },
+        });
+      }
+      const target = await prepareGatewaySessionStoreTargetReadOnly(
+        {
+          cfg: inventory.config,
+          key: params.sessionKey,
+          agentId,
+          preserveQualifiedAddress: params.preserveQualifiedAddress,
+          env: inventory.env,
+          targetDiscoveryCache,
+        },
+        async (reads, select) => {
+          for (const read of reads) {
+            assertActive();
+            const loaded = await readSessionSharingFactsInWorker(
+              {
+                agentId: read.agentId ?? agentId,
+                storePath: read.storePath,
+                sessionKeys: read.options.exactKeys!,
+                env: inventory.env,
+              },
+              (source) => {
+                assertActive();
+                if (acquireSource(source.path, read.options.exactKeys!)) {
+                  acquiringPaths.add(path.resolve(read.storePath));
+                }
+              },
+            );
+            assertActive();
+            const store = Object.fromEntries(
+              loaded.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+            );
+            read.result = store;
+            if (loaded.sharing) {
+              const source = loaded.databaseIdentity;
+              if (
+                !source ||
+                !source.incarnation ||
+                source.filename !== loaded.sharing.source.path ||
+                `file:${source.identity}` !== loaded.sharing.databaseIdentity ||
+                source.birthtime === undefined
+              ) {
+                throw new SessionMutationFactsUnavailableError();
+              }
+              assertExistingDatabaseIdentity(
+                loaded.sharing.source.path,
+                loaded.sharing.databaseIdentity,
+                source.birthtime,
+              );
+              preparedSources.push({
+                ...loaded.sharing.source,
+                identity: loaded.sharing.databaseIdentity,
+                birthtime: source.birthtime,
+              });
+              read.readSource = loaded.sharing.source;
+              members.set(read.storePath, {
+                facts: loaded.sharing,
+                source: {
+                  ...loaded.sharing.source,
+                  databaseIdentity: source.identity,
+                  databaseBirthtime: source.birthtime,
+                },
+              });
+              for (const sessionKey of read.options.exactKeys!) {
+                const key = `${loaded.sharing.databaseIdentity}\0${sessionKey}`;
+                const retained = acquiringReads.get(key);
+                if (!retained) {
+                  throw new SessionMutationFactsUnavailableError();
+                }
+                retainedReads.set(key, retained);
+                if (!initializedReads.has(key)) {
+                  const entry = store[sessionKey];
+                  retained.initialize({
+                    entry: entry ? projectSessionSharingEntry(entry) : undefined,
+                    placeholder: loaded.sharing.placeholders.find(
+                      (row) => row.sessionKey === sessionKey,
+                    ),
+                    membership: new Set(
+                      loaded.sharing.members.find((row) => row.sessionKey === sessionKey)
+                        ?.identityIds,
+                    ),
+                  });
+                  initializedReads.add(key);
+                }
+                const pending = retained.prepareRead();
+                if (pending) {
+                  await pending;
+                  assertActive();
+                }
+                const current = retained.readCurrent();
+                if (!current) {
+                  throw new SessionMutationFactsUnavailableError();
+                }
+                if (current.entry) {
+                  store[sessionKey] = current.entry;
+                }
+              }
+            }
+          }
+          return select();
+        },
+      );
+      assertDiscoveryCurrent();
+      return target;
+    });
+    assertActive();
+    const storageTarget: SessionFactsRead<PreparedSessionMutationFacts>["storageTarget"] =
+      Object.freeze({
+        agentId: selected.agentId,
+        canonicalKey: selected.canonicalKey,
+        storePath: selected.storePath,
+      });
+    const match = findCanonicalStoreMatch(selected.store, selected.storeKeys);
+    const selectedSharing = members.get(selected.storePath);
+    const sharing = selectedSharing?.facts;
+    const readSource = selectedSharing?.source;
+    selectedPaths.add(path.resolve(selected.storePath));
+    if (sharing) {
+      selectedPaths.add(path.resolve(sharing.source.path));
+      // New and existing rows retain the captured aliases of the same physical store.
+      // Creation writers publish through the logical alias used during preparation.
+      const sourceCandidates = discoveryCandidates.filter((candidate) =>
+        matchesAgentDatabaseReadCandidatePath(
+          { ...candidate, path: candidate.physicalPath },
+          sharing.source.path,
+        ),
+      );
+      if (sourceCandidates.length === 0) {
+        throw new SessionMutationFactsUnavailableError();
+      }
+      for (const candidate of sourceCandidates) {
+        selectedPaths.add(path.resolve(candidate.path));
+      }
+    }
+    if (!match) {
+      if (!params.allowMissing) {
+        throw new SessionMutationFactsUnavailableError();
+      }
+      facts = {
+        target: null,
+        membership: new Set(),
+        sourcePath: sharing?.source.path,
+        sourceAgentId: sharing?.source.agentId,
+        readSource,
+      };
+      const retained = sharing && retainedReads.get(`${sharing.databaseIdentity}\0${canonicalKey}`);
+      expectedPlaceholder = retained?.readCurrent()?.placeholder;
+      adoptCreatedEntry = (entry) => {
+        retained?.adoptCreatedEntry(entry);
+        facts = {
+          ...facts!,
+          target: {
+            agentId: selected.agentId,
+            canonicalKey: selected.canonicalKey,
+            storePath: selected.storePath,
+            storeKeys: selected.storeKeys,
+            storeKey: canonicalKey,
+            readSource,
+            entry,
+          },
+        };
       };
       readFacts = () => {
-        const current = readCommittedIncognitoSessionSharing(database.db, canonicalKey);
+        const current = retained?.readCurrent();
+        if (facts!.target && current?.entry) {
+          return {
+            ...facts!,
+            target: { ...facts!.target, entry: current.entry },
+            membership: current.membership,
+          };
+        }
         if (
-          !current ||
-          current.entry.sessionId !== sessionId ||
-          current.entry.lifecycleRevision !== lifecycleRevision
+          (retained && !current) ||
+          current?.entry ||
+          current?.placeholder?.sessionId !== expectedPlaceholder?.sessionId
         ) {
-          invalidate();
+          throw new SessionMutationFactsUnavailableError();
+        }
+        return { ...facts!, target: null, membership: new Set<string>() };
+      };
+    } else {
+      if (!sharing) {
+        throw new SessionMutationFactsUnavailableError();
+      }
+      const target = {
+        agentId: selected.agentId,
+        canonicalKey: selected.canonicalKey,
+        storePath: selected.storePath,
+        readSource,
+        storeKeys: selected.storeKeys,
+        entry: projectSessionSharingEntry(match.entry),
+        storeKey: match.key,
+      };
+      facts = {
+        sourcePath: sharing.source.path,
+        sourceAgentId: sharing.source.agentId,
+        readSource,
+        target,
+        membership: new Set(
+          sharing.members.find((member) => member.sessionKey === match.key)?.identityIds,
+        ),
+      };
+      const retained = retainedReads.get(`${sharing.databaseIdentity}\0${target.storeKey}`);
+      if (!retained) {
+        throw new SessionMutationFactsUnavailableError();
+      }
+      readFacts = () => {
+        const current = retained.readCurrent();
+        if (!current?.entry) {
           throw new SessionMutationFactsUnavailableError();
         }
         return {
-          target: {
-            agentId,
-            canonicalKey,
-            storeKey: canonicalKey,
-            storeKeys: [canonicalKey],
-            storePath,
-            entry: current.entry,
-          },
+          sourcePath: sharing.source.path,
+          sourceAgentId: sharing.source.agentId,
+          readSource,
+          target: { ...target, entry: current.entry },
           membership: current.membership,
         };
       };
-      facts = readFacts();
-    } else {
-      const parsedAgent = parseAgentSessionKey(params.sessionKey)?.agentId;
-      const { candidates: discoveryCandidates, ...inventory } = prepareSessionStoreTargetInventory(
-        params.cfg,
-        [agentId, ...(parsedAgent ? [parsedAgent] : [])],
-      );
-      const candidates = discoveryCandidates.flatMap((candidate) => [
-        candidate,
-        { ...candidate, path: candidate.physicalPath },
-      ]);
-      const candidateIdentities = discoveryCandidates.map((candidate) => ({
-        candidate,
-        identity: readDatabasePathIdentitySync(candidate.path).key,
-      }));
-      for (const candidate of candidates) {
-        releases.push(
-          registerOpenClawAgentDatabaseReadCandidateResource({
-            ...candidate,
-            revoke: release,
-            close: async () => release(),
-          }),
-        );
-      }
-      const registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env: inventory.env });
-      let assertRegistry: (() => void) | undefined;
-      const members = new Map<
-        string,
-        NonNullable<Awaited<ReturnType<typeof readSessionEntriesFromStoreInWorker>>["sharing"]>
-      >();
-      const retainedReads = new Map<string, ReturnType<typeof retainPreparedSessionSharingFacts>>();
-      const selected = await withSessionHistoryWorkerReadCandidates(
-        discoveryCandidates,
-        async (discovery) => {
-          let sources = await discovery.readTargetInventory({
-            ...inventory,
-            registeredDatabases: { status: "deferred" },
-          });
-          if (sources.kind === "session-target-registry-required") {
-            const current = await registry.read();
-            assertRegistry = current.assertCurrent;
-            current.assertCurrent();
-            sources = await discovery.readTargetInventory({
-              ...inventory,
-              registeredDatabases:
-                current.result.status === "available"
-                  ? current.result.entries
-                  : { status: "unavailable" },
-            });
-          }
-          if (sources.kind !== "session-target-inventory") {
-            throw new SessionMutationFactsUnavailableError();
-          }
-          const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-          for (const source of sources.agents) {
-            if (!source.result.available && source.result.reason !== "database-missing") {
-              throw new SessionMutationFactsUnavailableError();
-            }
-            targetDiscoveryCache.set(source.agentId, {
-              existing: source.result.available ? source.result.targets : [],
-              fallback: {
-                agentId: source.agentId,
-                storePath: inventory.paths.get(source.agentId)!.configured,
-              },
-            });
-          }
-          const target = await prepareGatewaySessionStoreTargetReadOnly(
-            {
-              cfg: inventory.config,
-              key: params.sessionKey,
-              agentId,
-              env: inventory.env,
-              targetDiscoveryCache,
-            },
-            async (reads) => {
-              for (const read of reads) {
-                assertActive();
-                const loaded = await readSessionEntriesFromStoreInWorker({
-                  agentId: read.agentId ?? agentId,
-                  storePath: read.storePath,
-                  sessionKeys: read.options.exactKeys!,
-                  projection: "sharing",
-                  env: inventory.env,
-                });
-                const store = Object.fromEntries(
-                  loaded.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
-                );
-                read.result = ok(store);
-                if (loaded.sharing) {
-                  read.readSource = loaded.sharing.source;
-                  members.set(read.storePath, loaded.sharing);
-                  for (const sessionKey of read.options.exactKeys!) {
-                    const key = `${loaded.sharing.databaseIdentity}\0${sessionKey}`;
-                    if (retainedReads.has(key)) {
-                      continue;
-                    }
-                    const entry = store[sessionKey];
-                    const retained = retainPreparedSessionSharingFacts({
-                      databaseIdentity: loaded.sharing.databaseIdentity,
-                      sessionKey,
-                      entry: entry ? projectSessionSharingEntry(entry) : undefined,
-                      membership: new Set(
-                        loaded.sharing.members.find((row) => row.sessionKey === sessionKey)
-                          ?.identityIds,
-                      ),
-                    });
-                    retainedReads.set(key, retained);
-                    releases.push(retained.release);
-                  }
-                }
-              }
-            },
-          );
-          discovery.assertCurrent();
-          assertRegistry?.();
-          return target;
-        },
-      );
-      assertActive();
-      const match = resolveCanonicalSessionStoreMatchFromStoreKeys(
-        selected.store,
-        selected.storeKeys,
-      );
-      const sharing = members.get(selected.storePath);
-      if (!match) {
-        if (!params.allowMissing) {
-          throw new SessionMutationFactsUnavailableError();
-        }
-        facts = { target: null, membership: new Set() };
-      } else {
-        if (!sharing) {
-          throw new SessionMutationFactsUnavailableError();
-        }
-        const target = {
-          agentId: selected.agentId,
-          canonicalKey: selected.canonicalKey,
-          storePath: selected.storePath,
-          storeKeys: selected.storeKeys,
-          entry: projectSessionSharingEntry(match.entry),
-          storeKey: match.key,
-        };
-        facts = {
-          target,
-          membership: new Set(
-            sharing.members.find((member) => member.sessionKey === match.key)?.identityIds,
-          ),
-        };
-        selectedPaths.add(path.resolve(selected.storePath));
-        selectedPaths.add(path.resolve(sharing.source.path));
-        const sourceCandidates = discoveryCandidates.filter((candidate) =>
-          matchesAgentDatabaseReadCandidatePath(
-            { ...candidate, path: candidate.physicalPath },
-            sharing.source.path,
-          ),
-        );
-        if (sourceCandidates.length === 0) {
-          throw new SessionMutationFactsUnavailableError();
-        }
-        for (const candidate of sourceCandidates) {
-          selectedPaths.add(path.resolve(candidate.path));
-        }
-        const retained = retainedReads.get(`${sharing.databaseIdentity}\0${target.storeKey}`);
-        if (!retained) {
-          throw new SessionMutationFactsUnavailableError();
-        }
-        readFacts = () => {
-          const current = retained.readCurrent();
-          if (!current?.entry) {
-            throw new SessionMutationFactsUnavailableError();
-          }
-          return {
-            target: { ...target, entry: current.entry },
-            membership: current.membership,
-          };
-        };
-      }
-      assertSource = () => {
-        assertRegistry?.();
-        for (const { candidate, identity } of candidateIdentities) {
-          assertSessionStoreReadCandidate(candidate.path, [candidate]);
-          if (readDatabasePathIdentitySync(candidate.path).key !== identity) {
-            throw new SessionMutationFactsUnavailableError();
-          }
-        }
-        for (const read of members.values()) {
-          if (readDatabasePathIdentitySync(read.source.path).key !== read.databaseIdentity) {
-            throw new SessionMutationFactsUnavailableError();
-          }
-        }
-        for (const read of retainedReads.values()) {
-          if (!read.readCurrent()) {
-            throw new SessionMutationFactsUnavailableError();
-          }
-        }
-      };
     }
+    assertSource = inventoryRead.assertRegistryCurrent;
     const readCurrent = (cfg: OpenClawConfig) => {
       try {
         assertActive();
-        if (!isDeepStrictEqual(routeFacts(cfg), route)) {
-          throw new SessionMutationFactsUnavailableError();
-        }
-        const currentIdentity = resolveSessionStoreIdentity({ ...params, cfg });
-        if (currentIdentity.agentId !== agentId || currentIdentity.canonicalKey !== canonicalKey) {
-          throw new SessionMutationFactsUnavailableError();
-        }
+        assertRoutingCurrent(cfg);
         assertSource();
         return readFacts();
       } catch (error) {
@@ -424,11 +580,29 @@ export async function prepareSessionMutationFacts(
           : new SessionMutationFactsUnavailableError({ cause: error });
       }
     };
-    readCurrent(params.cfg);
-    return { readCurrent, release };
+    const bindCreation = (operation: SessionEntryCreationOperation) => {
+      // Existing rows already follow write receipts; only absence needs a creation transition.
+      if (facts?.target === null) {
+        creation = operation;
+      }
+    };
+    const prepareRead = () => {
+      if (!active) {
+        return undefined;
+      }
+      const pending = [...acquiringReads.values()].flatMap((read) => read.prepareRead() ?? []);
+      return pending.length > 0 ? Promise.all(pending).then(() => {}) : undefined;
+    };
+    const pending = prepareRead();
+    if (pending) {
+      await pending;
+    }
+    return { storageTarget, bindCreation, prepareRead, readCurrent, release, followRegistration };
   } catch (error) {
     release();
-    throw error instanceof SessionMutationFactsUnavailableError
+    throw waitingForStorage ||
+      error instanceof SessionMutationFactsUnavailableError ||
+      error instanceof SessionCanonicalKeyMigrationRequiredError
       ? error
       : new SessionMutationFactsUnavailableError({ cause: error });
   }

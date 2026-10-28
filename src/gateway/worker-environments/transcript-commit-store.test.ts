@@ -1,26 +1,25 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { deserialize } from "node:v8";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
+import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
   createWorkerTranscriptCommitStore,
   type WorkerTranscriptCommitInput,
   type WorkerTranscriptCommitOutcome,
   type WorkerTranscriptCommitStore,
-} from "./transcript-commit-store.js";
+} from "./transcript-commit-ledger.js";
 
-const SUCCESS_OUTCOME: WorkerTranscriptCommitOutcome = {
+const SUCCESS_OUTCOME = {
   ok: true,
   result: { entryIds: ["entry-a", "entry-b"], newLeafId: "entry-b" },
-};
-const ERROR_OUTCOME: WorkerTranscriptCommitOutcome = {
-  ok: false,
-  reason: "stale-base-leaf",
-};
+} satisfies WorkerTranscriptCommitOutcome;
+const ERROR_OUTCOME: WorkerTranscriptCommitOutcome = { ok: false, reason: "stale-base-leaf" };
 const BASE_INPUT: WorkerTranscriptCommitInput = {
   environmentId: "worker-a",
   sessionId: "session-a",
@@ -28,120 +27,244 @@ const BASE_INPUT: WorkerTranscriptCommitInput = {
   seq: 1,
   requestHash: "a".repeat(64),
 };
+const CLAIMED = { kind: "claimed" };
+const CONFLICT = { kind: "rejected", reason: "conflict" };
+const OUT_OF_ORDER = { kind: "rejected", reason: "out-of-order", expectedSeq: 1 };
+const RECOVER = { kind: "recover" };
+const REPLAY = { kind: "replay", outcome: SUCCESS_OUTCOME };
+const SETTLEMENT = {
+  begin: { result: CLAIMED, next: RECOVER },
+  complete: { result: SUCCESS_OUTCOME, next: REPLAY },
+  discard: { result: undefined, next: CLAIMED },
+};
+const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
+const spyAdmission = () => vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission");
 
-describe("worker transcript commit store", () => {
-  let root: string;
-  let nowMs: number;
-  let store: WorkerTranscriptCommitStore;
+function revokeAt(stage: "transaction" | "commit") {
+  let revoked = false;
+  spyAdmission().mockImplementationOnce((admit, attachment) =>
+    createAdmission((request, grant) => {
+      revoked ||= request.stage === stage;
+      admit(request, grant);
+    }, attachment),
+  );
+  return () => {
+    if (revoked) {
+      throw new Error("ledger caller revoked");
+    }
+  };
+}
 
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-commit-"));
-    nowMs = 1_000;
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    store = createWorkerTranscriptCommitStore({ database, now: () => nowMs });
+function interceptLedgerReply(
+  matches: (value: unknown) => boolean,
+  intercept: (deliver: (bytes?: Uint8Array) => void) => void,
+) {
+  const receive = brokerReply.receiveSqliteWorkerReply;
+  return vi
+    .spyOn(brokerReply, "receiveSqliteWorkerReply")
+    .mockImplementation((slot, reply, owner) => {
+      if (
+        slot.current?.request.type === "execute" &&
+        reply.ok &&
+        !reply.transfer &&
+        !reply.input &&
+        matches(deserialize(reply.value))
+      ) {
+        intercept((bytes = reply.value) => receive(slot, { ...reply, value: bytes }, owner));
+        return;
+      }
+      return receive(slot, reply, owner);
+    });
+}
+
+let root: string;
+let store: WorkerTranscriptCommitStore;
+let input: WorkerTranscriptCommitInput;
+let sequence = 0;
+const openStore = () =>
+  createWorkerTranscriptCommitStore({
+    database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
   });
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterAll(async () => {
+    await closeStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
-  afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
-  });
+beforeAll(() => {
+  root = tempDirs.make("openclaw-worker-commit-");
+  store = openStore();
+});
 
-  it("recovers pending work and replays a terminal result across reopen", () => {
-    expect(store.begin(BASE_INPUT)).toEqual({ kind: "claimed" });
-    expect(store.begin(BASE_INPUT)).toEqual({ kind: "recover" });
+beforeEach(() => {
+  input = { ...BASE_INPUT, sessionId: `session-${++sequence}` };
+});
+afterEach(() => vi.restoreAllMocks());
 
-    nowMs = 1_010;
-    expect(store.complete({ ...BASE_INPUT, outcome: SUCCESS_OUTCOME })).toEqual(SUCCESS_OUTCOME);
-    expect(store.begin(BASE_INPUT)).toEqual({ kind: "replay", outcome: SUCCESS_OUTCOME });
+it("persists an ordered, payload-bound sequence and its first terminal outcome across reopen", async () => {
+  const second = { ...input, seq: 2, requestHash: "b".repeat(64) };
+  const third = { ...input, seq: 3, requestHash: "c".repeat(64) };
+  const conflicting = { ...input, requestHash: second.requestHash };
+  await expect(store.complete({ ...input, outcome: SUCCESS_OUTCOME })).rejects.toThrow(
+    "must begin before terminal completion",
+  );
+  expect(await store.begin(second)).toEqual(OUT_OF_ORDER);
+  expect(await store.begin(input)).toEqual(CLAIMED);
+  expect(await store.begin(input)).toEqual(RECOVER);
+  expect(await store.begin(second)).toEqual(OUT_OF_ORDER);
+  expect(await store.begin(conflicting)).toEqual(CONFLICT);
+  expect(await store.complete({ ...input, outcome: SUCCESS_OUTCOME })).toEqual(SUCCESS_OUTCOME);
+  expect(await store.complete({ ...input, outcome: ERROR_OUTCOME })).toEqual(SUCCESS_OUTCOME);
+  expect(await store.begin(input)).toEqual(REPLAY);
+  expect(await store.begin(conflicting)).toEqual(CONFLICT);
+  expect(await store.begin({ ...input, environmentId: "worker-b" })).toEqual(CONFLICT);
 
-    closeOpenClawStateDatabaseForTest();
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    store = createWorkerTranscriptCommitStore({ database, now: () => nowMs });
-    expect(store.begin(BASE_INPUT)).toEqual({ kind: "replay", outcome: SUCCESS_OUTCOME });
-  });
+  await closeStateDatabaseForTest();
+  store = openStore();
+  expect(await store.begin(input)).toEqual(REPLAY);
+  expect(await store.begin(third)).toEqual({ ...OUT_OF_ORDER, expectedSeq: 2 });
+  expect(await store.begin(second)).toEqual(CLAIMED);
+  expect(await store.complete({ ...second, outcome: ERROR_OUTCOME })).toEqual(ERROR_OUTCOME);
+  expect(await store.begin(second)).toEqual({ kind: "replay", outcome: ERROR_OUTCOME });
+  expect(await store.begin(third)).toEqual(CLAIMED);
+});
 
-  it("rejects a tuple replayed with a different payload or environment", () => {
-    expect(store.begin(BASE_INPUT)).toEqual({ kind: "claimed" });
-    expect(store.begin({ ...BASE_INPUT, requestHash: "b".repeat(64) })).toEqual({
-      kind: "rejected",
-      reason: "conflict",
-    });
-    store.complete({ ...BASE_INPUT, outcome: SUCCESS_OUTCOME });
-    expect(store.begin({ ...BASE_INPUT, requestHash: "b".repeat(64) })).toEqual({
-      kind: "rejected",
-      reason: "conflict",
-    });
-    expect(store.begin({ ...BASE_INPUT, environmentId: "worker-b" })).toEqual({
-      kind: "rejected",
-      reason: "conflict",
-    });
-  });
+it("releases only the exact pending reservation without rewinding or releasing its owner", async () => {
+  await store.begin(input);
+  await store.discardUncommitted({ ...input, requestHash: "b".repeat(64) });
+  await store.discardUncommitted({ ...input, environmentId: "worker-b" });
+  expect(await store.begin(input)).toEqual(RECOVER);
 
-  it("advances one ordered sequence only after terminal completion", () => {
-    const second = { ...BASE_INPUT, seq: 2, requestHash: "b".repeat(64) };
-    const third = { ...BASE_INPUT, seq: 3, requestHash: "c".repeat(64) };
+  await store.discardUncommitted(input);
+  const replacement = { ...input, requestHash: "b".repeat(64) };
+  expect(await store.begin({ ...replacement, environmentId: "worker-b" })).toEqual(CONFLICT);
+  expect(await store.begin(replacement)).toEqual(CLAIMED);
+  await store.complete({ ...replacement, outcome: SUCCESS_OUTCOME });
+  await store.discardUncommitted(replacement);
+  expect(await store.begin(replacement)).toEqual(REPLAY);
+  expect(await store.begin({ ...input, seq: 2 })).toEqual(CLAIMED);
+});
 
-    expect(store.begin(second)).toEqual({
-      kind: "rejected",
-      reason: "out-of-order",
-      expectedSeq: 1,
-    });
-    expect(store.begin(BASE_INPUT)).toEqual({ kind: "claimed" });
-    expect(store.begin(second)).toEqual({
-      kind: "rejected",
-      reason: "out-of-order",
-      expectedSeq: 1,
-    });
-    store.complete({ ...BASE_INPUT, outcome: SUCCESS_OUTCOME });
-    expect(store.begin(third)).toEqual({
-      kind: "rejected",
-      reason: "out-of-order",
-      expectedSeq: 2,
-    });
-    expect(store.begin(second)).toEqual({ kind: "claimed" });
-    expect(store.complete({ ...second, outcome: ERROR_OUTCOME })).toEqual(ERROR_OUTCOME);
-    expect(store.begin(second)).toEqual({ kind: "replay", outcome: ERROR_OUTCOME });
-    expect(store.begin(third)).toEqual({ kind: "claimed" });
-  });
+it("preserves submission order and captures inputs before yielding", async () => {
+  const submitted = { ...input };
+  const first = store.begin(submitted);
+  submitted.requestHash = "b".repeat(64);
+  const collision = store.begin(submitted);
+  expect(await Promise.all([first, collision])).toEqual([CLAIMED, CONFLICT]);
+  const completion = { ...input, outcome: structuredClone(SUCCESS_OUTCOME) };
+  const completed = store.complete(completion);
+  completion.outcome.result.entryIds[0] = "mutated-after-submission";
+  const next = store.begin({ ...input, seq: 2 });
+  expect(await Promise.all([completed, next])).toEqual([SUCCESS_OUTCOME, CLAIMED]);
+});
 
-  it("keeps the first cached terminal outcome", () => {
-    expect(() => store.complete({ ...BASE_INPUT, outcome: SUCCESS_OUTCOME })).toThrow(
-      "must begin before terminal completion",
+it("starts an independent sequence for a later owner epoch", async () => {
+  expect(await store.begin(input)).toEqual(CLAIMED);
+  await store.complete({ ...input, outcome: SUCCESS_OUTCOME });
+  const replacement = {
+    ...input,
+    environmentId: "worker-b",
+    runEpoch: input.runEpoch + 1,
+  };
+
+  expect(await store.begin(replacement)).toEqual(CLAIMED);
+  expect(await store.complete({ ...replacement, outcome: SUCCESS_OUTCOME })).toEqual(
+    SUCCESS_OUTCOME,
+  );
+});
+
+it.each([
+  ["transaction", false],
+  ["commit", false],
+  ["commit", true],
+] as const)(
+  "rechecks %s authority with completion=%s and retains only committed state",
+  async (stage, completing) => {
+    if (completing) {
+      await store.begin(input);
+    }
+    const assertCurrent = revokeAt(stage);
+    const pending = completing
+      ? store.complete({ ...input, outcome: SUCCESS_OUTCOME }, assertCurrent)
+      : store.begin(input, assertCurrent);
+    await expect(pending).rejects.toThrow("ledger caller revoked");
+    expect(await store.begin(input)).toEqual(completing ? RECOVER : CLAIMED);
+    if (completing) {
+      expect(await store.begin({ ...input, seq: 2 })).toEqual(OUT_OF_ORDER);
+    }
+  },
+);
+
+it.each(
+  (["begin", "complete", "discard"] as const).flatMap((operation) =>
+    (["committed", "unknown"] as const).map((outcome) => ({ operation, outcome })),
+  ),
+)(
+  "preserves $outcome $operation settlement after a lost worker reply",
+  async ({ operation, outcome }) => {
+    if (operation !== "begin") {
+      await store.begin(input);
+    }
+    if (outcome === "unknown") {
+      vi.spyOn(operationAdmission, "observeSqliteWorkerCommittedFacts").mockImplementationOnce(
+        () => {},
+      );
+      spyAdmission().mockImplementationOnce((admit, attachment) => ({
+        ...createAdmission(admit, attachment),
+        committed: undefined,
+        settlement: { kind: "unknown" },
+      }));
+    }
+    let corrupted = 0;
+    const replySpy = interceptLedgerReply(
+      (value) =>
+        value === true || (isRecord(value) && (value.kind === "claimed" || value.ok === true)),
+      (deliver) => {
+        corrupted += 1;
+        deliver(new Uint8Array([0]));
+      },
     );
-    store.begin(BASE_INPUT);
-    expect(store.complete({ ...BASE_INPUT, outcome: SUCCESS_OUTCOME })).toEqual(SUCCESS_OUTCOME);
-    expect(store.complete({ ...BASE_INPUT, outcome: ERROR_OUTCOME })).toEqual(SUCCESS_OUTCOME);
-  });
+    const pending = {
+      begin: () => store.begin(input),
+      complete: () => store.complete({ ...input, outcome: SUCCESS_OUTCOME }),
+      discard: () => store.discardUncommitted(input),
+    }[operation]();
+    if (outcome === "unknown") {
+      await expect(pending).rejects.toThrow();
+    } else {
+      await expect(pending).resolves.toEqual(SETTLEMENT[operation].result);
+    }
+    expect(corrupted).toBe(1);
+    replySpy.mockRestore();
+    // An explicit subsequent request observes durable state; the failed call never replayed.
+    expect(await store.begin(input)).toEqual(SETTLEMENT[operation].next);
+  },
+);
 
-  it("releases only the exact pending reservation without rewinding or releasing its owner", () => {
-    store.begin(BASE_INPUT);
-    store.discardUncommitted({ ...BASE_INPUT, requestHash: "b".repeat(64) });
-    store.discardUncommitted({ ...BASE_INPUT, environmentId: "worker-b" });
-    expect(store.begin(BASE_INPUT)).toEqual({ kind: "recover" });
-
-    store.discardUncommitted(BASE_INPUT);
-    const replacement = { ...BASE_INPUT, requestHash: "b".repeat(64) };
-    expect(store.begin({ ...replacement, environmentId: "worker-b" })).toEqual({
-      kind: "rejected",
-      reason: "conflict",
-    });
-    expect(store.begin(replacement)).toEqual({ kind: "claimed" });
-    store.complete({ ...replacement, outcome: SUCCESS_OUTCOME });
-    store.discardUncommitted(replacement);
-    expect(store.begin(replacement)).toEqual({ kind: "replay", outcome: SUCCESS_OUTCOME });
-    expect(store.begin({ ...BASE_INPUT, seq: 2 })).toEqual({ kind: "claimed" });
-  });
-
-  it("starts an independent sequence for a later owner epoch", () => {
-    expect(store.begin(BASE_INPUT)).toEqual({ kind: "claimed" });
-    store.complete({ ...BASE_INPUT, outcome: SUCCESS_OUTCOME });
-    const replacement = {
-      ...BASE_INPUT,
-      environmentId: "worker-b",
-      runEpoch: BASE_INPUT.runEpoch + 1,
-    };
-
-    expect(store.begin(replacement)).toEqual({ kind: "claimed" });
-    expect(store.complete({ ...replacement, outcome: SUCCESS_OUTCOME })).toEqual(SUCCESS_OUTCOME);
-  });
+it("joins accepted ledger work before close and refuses the retired store", async () => {
+  const arrived = createDeferredCore<() => void>();
+  const replySpy = interceptLedgerReply(
+    (value) => isRecord(value) && value.kind === "claimed",
+    (deliver) => arrived.resolve(deliver),
+  );
+  const retired = store;
+  const pending = retired.begin(input);
+  const deliver = await awaitGateBeforeSettlement(
+    arrived.promise,
+    pending,
+    "ledger settled before its reply",
+  );
+  const closing = closeStateDatabaseForTest();
+  try {
+    deliver();
+    expect(await pending).toEqual(CLAIMED);
+    await closing;
+  } finally {
+    replySpy.mockRestore();
+    await Promise.allSettled([pending, closing]);
+  }
+  store = openStore();
+  await expect(retired.complete({ ...input, outcome: SUCCESS_OUTCOME })).rejects.toThrow();
+  expect(await store.begin(input)).toEqual(RECOVER);
 });

@@ -5,9 +5,7 @@
  * send proactive messages later (after the webhook turn has completed).
  */
 
-/** Minimal ConversationReference shape for proactive messaging */
 export type StoredConversationReference = {
-  /** Timestamp when this reference was last seen/updated. */
   lastSeenAt?: string;
   /** Activity ID from the last message */
   activityId?: string;
@@ -23,7 +21,6 @@ export type StoredConversationReference = {
    * are canonical (`agent`); drop this once those imported rows age out.
    */
   bot?: { id?: string; name?: string };
-  /** Conversation details */
   conversation?: { id?: string; conversationType?: string; tenantId?: string };
   /**
    * Tenant ID sourced from `activity.channelData.tenant.id` at inbound time.
@@ -39,13 +36,11 @@ export type StoredConversationReference = {
    * can include it on the connector request (required for personal DMs).
    */
   aadObjectId?: string;
-  /** Team ID for channel messages (when available). */
   teamId?: string;
   /** Channel ID (usually "msteams") */
   channelId?: string;
   /** Service URL for sending messages back */
   serviceUrl?: string;
-  /** Locale */
   locale?: string;
   /** IANA timezone from Teams clientInfo entity (e.g. "America/New_York") */
   timezone?: string;

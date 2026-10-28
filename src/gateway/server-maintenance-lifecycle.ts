@@ -1,3 +1,4 @@
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import type { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 
 export type GatewayMaintenanceHandles = ReturnType<typeof startGatewayMaintenanceTimers>;
@@ -15,10 +16,5 @@ export async function clearGatewayMaintenanceHandles(
       async (stop) => await stop(),
     ),
   );
-  const failures = results.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  if (failures.length > 0) {
-    throw new AggregateError(failures, "Gateway maintenance cleanup failed");
-  }
+  throwSettledAggregate(results, "Gateway maintenance cleanup failed");
 }

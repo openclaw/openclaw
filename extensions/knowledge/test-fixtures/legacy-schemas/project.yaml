@@ -1,0 +1,18 @@
+format: knowledge-schema-v1
+version: 0.1.0
+name: project
+label: Project
+description: Project records. One primary home per record; references connect
+  related knowledge.
+kind: page
+directory: projects/
+fields:
+  - name: status
+    label: Project status
+    type: string
+    required: true
+    values:
+      - active
+      - paused
+      - completed
+      - cancelled

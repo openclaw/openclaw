@@ -277,27 +277,33 @@ struct WatchSessionActivationGateTests {
     }
     #endif
 
-    @Test func `startup event buffering is ordered and bounded`() {
-        var buffer = WatchMessagingStartupBuffer<String>(maxCount: 3)
+    @Test @MainActor
+    func `iPhone observes watch pairing and install changes`() async throws {
+        let session = WCSession.default
+        let previousDelegate = session.delegate
+        let transport = WatchConnectivityTransport()
+        // Drive this callback directly without replacing the app's active Watch delegate.
+        session.delegate = previousDelegate
 
-        #expect(buffer.receive("first").isEmpty)
-        #expect(buffer.receive("second").isEmpty)
-        #expect(buffer.receive("third").isEmpty)
-        #expect(buffer.receive("fourth").isEmpty)
-        #expect(buffer.markReady() == ["second", "third", "fourth"])
-        #expect(buffer.receive("live") == ["live"])
-        #expect(buffer.markReady().isEmpty)
-    }
+        let isActivated = session.activationState == .activated
+        let expectedPaired = isActivated && session.isPaired
+        let expectedInstalled = isActivated && session.isWatchAppInstalled
+        let snapshots = Mutex<[WatchMessagingStatus]>([])
+        let changed = XCTestExpectation(description: "Watch state change delivered")
+        transport.setStatusUpdateHandler { snapshot in
+            snapshots.withLock { $0.append(snapshot) }
+            changed.fulfill()
+        }
+        defer { transport.setStatusUpdateHandler(nil) }
 
-    @Test func `iPhone observes watch pairing and install changes`() throws {
-        let sourceURL = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Sources/Services/WatchConnectivityTransport.swift")
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
-
-        #expect(source.contains("func sessionWatchStateDidChange(_ session: WCSession)"))
-        #expect(source.contains("paired=\\(session.isPaired) installed=\\(session.isWatchAppInstalled)"))
+        transport.sessionWatchStateDidChange(session)
+        let result = await XCTWaiter.fulfillment(of: [changed], timeout: 5)
+        try #require(result == .completed)
+        let received = snapshots.withLock { $0 }
+        #expect(received.count == 1)
+        let snapshot = try #require(received.first)
+        #expect(snapshot.paired == expectedPaired)
+        #expect(snapshot.appInstalled == expectedInstalled)
     }
 
     @Test func `concurrent waiters share one activation`() async throws {
@@ -359,9 +365,9 @@ struct WatchSessionActivationGateTests {
         #expect(receiverSource.contains(
             "acknowledgment: WatchMessageAcknowledgment(replyHandler: replyHandler)"))
         #expect(receiverSource.contains("acknowledgment?.accept()"))
-        #expect(receiverSource.contains("acknowledgment?.rejectUnsupportedPayload()"))
+        #expect(receiverSource.contains(#"acknowledgment?.reject(reason: "unsupported_payload")"#))
         #expect(receiverSource.contains(
-            "acknowledgment: WatchMessageAcknowledgment? = nil) -> Bool"))
+            "acknowledgment: WatchMessageAcknowledgment? = nil)\n    {"))
         #expect(receiverSource.contains("guard activationState == .activated else { return }"))
         let callbackRegistration = try #require(
             serviceSource.range(of: "self.transport.setInboundEventHandler"))
@@ -372,6 +378,22 @@ struct WatchSessionActivationGateTests {
 
 @MainActor
 struct WatchMessagingInboundTransportTests {
+    @Test func `synchronous registration precedes queued inbound delivery`() async {
+        let transport = WatchConnectivityTransport()
+        let service = WatchMessagingService(transport: transport)
+        let requestID = await withCheckedContinuation { continuation in
+            transport.session(WCSession.default, didReceiveMessage: [
+                "type": OpenClawWatchPayloadType.appSnapshotRequest.rawValue,
+                "requestId": "during-registration",
+            ])
+            service.setExecApprovalResolveHandler { _ in Issue.record("Unexpected approval resolution") }
+            service.setExecApprovalSnapshotRequestHandler { _ in Issue.record("Unexpected approval snapshot") }
+            service.setAppSnapshotRequestHandler { event in continuation.resume(returning: event.requestId) }
+            service.setAppCommandHandler { _ in Issue.record("Unexpected app command") }
+        }
+        #expect(requestID == "during-registration")
+    }
+
     @MainActor
     private final class AdmissionGate {
         private(set) var entered = false

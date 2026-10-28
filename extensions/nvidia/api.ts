@@ -1,4 +1,3 @@
-// Nvidia API module exposes the plugin public contract.
 export { buildNvidiaProvider, NVIDIA_DEFAULT_MODEL_ID } from "./provider-catalog.js";
 export {
   applyNvidiaConfig,

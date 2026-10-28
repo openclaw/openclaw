@@ -1,8 +1,3 @@
-/**
- * Transport-aware stream factory selection.
- *
- * Routes models that need OpenClaw-managed proxy/TLS/local-service semantics onto built-in transport implementations.
- */
 import type { Api, Model, StreamFn } from "@openclaw/llm-core";
 import { getAiTransportHost } from "../host.js";
 import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
@@ -13,15 +8,6 @@ import {
   createOpenAIResponsesTransportStreamFn,
 } from "./openai-responses-transport.js";
 import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
-
-const SUPPORTED_TRANSPORT_APIS = new Set<Api>([
-  "openai-responses",
-  "openai-chatgpt-responses",
-  "openai-completions",
-  "azure-openai-responses",
-  "anthropic-messages",
-  "google-generative-ai",
-]);
 
 const SIMPLE_TRANSPORT_API_ALIAS: Record<string, Api> = {
   "openai-completions": "openclaw-openai-completions-transport",
@@ -40,9 +26,9 @@ function createProviderOwnedGoogleTransportStreamFn(
   model: Model,
   ctx?: ProviderTransportStreamContext,
 ): StreamFn | undefined {
-  const streamFn =
+  const resolveStream = (provider: string) =>
     getAiTransportHost().plugin.resolveProviderStream({
-      provider: model.provider,
+      provider,
       config: ctx?.cfg,
       workspaceDir: ctx?.workspaceDir,
       env: ctx?.env,
@@ -54,22 +40,8 @@ function createProviderOwnedGoogleTransportStreamFn(
         modelId: model.id,
         model,
       },
-    }) ??
-    getAiTransportHost().plugin.resolveProviderStream({
-      provider: "google",
-      config: ctx?.cfg,
-      workspaceDir: ctx?.workspaceDir,
-      env: ctx?.env,
-      context: {
-        config: ctx?.cfg,
-        agentDir: ctx?.agentDir,
-        workspaceDir: ctx?.workspaceDir,
-        provider: model.provider,
-        modelId: model.id,
-        model,
-      },
-    }) ??
-    undefined;
+    });
+  const streamFn = resolveStream(model.provider) ?? resolveStream("google") ?? undefined;
   return streamFn
     ? (requestModel, context, options) =>
         streamFn(requestModel, context, {
@@ -79,34 +51,23 @@ function createProviderOwnedGoogleTransportStreamFn(
     : undefined;
 }
 
+const TRANSPORT_STREAM_FACTORIES = new Map<
+  Api,
+  (model: Model, ctx?: ProviderTransportStreamContext) => StreamFn | undefined
+>([
+  ["openai-responses", createOpenAIResponsesTransportStreamFn],
+  ["openai-chatgpt-responses", createOpenAIResponsesTransportStreamFn],
+  ["openai-completions", createOpenAICompletionsTransportStreamFn],
+  ["azure-openai-responses", createAzureOpenAIResponsesTransportStreamFn],
+  ["anthropic-messages", createAnthropicMessagesTransportStreamFn],
+  ["google-generative-ai", createProviderOwnedGoogleTransportStreamFn],
+]);
+
 function createSupportedTransportStreamFn(
   model: Model,
   ctx?: ProviderTransportStreamContext,
 ): StreamFn | undefined {
-  switch (model.api) {
-    case "openai-responses":
-    case "openai-chatgpt-responses":
-      return createOpenAIResponsesTransportStreamFn();
-    case "openai-completions":
-      return createOpenAICompletionsTransportStreamFn();
-    case "azure-openai-responses":
-      return createAzureOpenAIResponsesTransportStreamFn();
-    case "anthropic-messages":
-      return createAnthropicMessagesTransportStreamFn();
-    case "google-generative-ai":
-      return createProviderOwnedGoogleTransportStreamFn(model, ctx);
-    default:
-      return undefined;
-  }
-}
-
-function hasOpenClawTransportRequirement(model: Model): boolean {
-  return getAiTransportHost().requiresManagedTransport(model);
-}
-
-/** Returns whether OpenClaw has a managed transport implementation for this API. */
-function isTransportAwareApiSupported(api: Api): boolean {
-  return SUPPORTED_TRANSPORT_APIS.has(api);
+  return TRANSPORT_STREAM_FACTORIES.get(model.api)?.(model, ctx);
 }
 
 /** Maps public model APIs to the internal transport API id used by simple runtime dispatch. */
@@ -123,47 +84,28 @@ export function createTransportAwareStreamFnForModel(
   model: Model,
   ctx?: ProviderTransportStreamContext,
 ): StreamFn | undefined {
-  if (!hasOpenClawTransportRequirement(model)) {
+  if (!getAiTransportHost().requiresManagedTransport(model)) {
     return undefined;
   }
-  if (!isTransportAwareApiSupported(model.api)) {
+  const createStream = TRANSPORT_STREAM_FACTORIES.get(model.api);
+  if (!createStream) {
     throw new Error(
       `Model-provider request.proxy/request.tls/localService is not yet supported for api "${model.api}"`,
     );
   }
-  const streamFn = createSupportedTransportStreamFn(model, ctx);
+  const streamFn = createStream(model, ctx);
   if (!streamFn) {
     throw new Error(`Managed transport stream is unavailable for api "${model.api}"`);
   }
   return streamFn;
 }
 
-/** Creates a managed OpenClaw transport stream for explicit fallback/runtime callers. */
-export function createOpenClawTransportStreamFnForModel(
-  model: Model,
-  ctx?: ProviderTransportStreamContext,
-): StreamFn | undefined {
-  // Explicit fallback callers use this when they need OpenClaw's HTTP
-  // transport semantics regardless of the default embedded-runner strategy.
-  // Native OpenAI HTTP still depends on this path for strict tool shaping,
-  // attribution, cache-boundary stripping, and runtime credential injection.
-  if (!isTransportAwareApiSupported(model.api)) {
-    return undefined;
-  }
-  return createSupportedTransportStreamFn(model, ctx);
-}
-
-export function createBoundaryAwareStreamFnForModel(
-  model: Model,
-  ctx?: ProviderTransportStreamContext,
-): StreamFn | undefined {
-  // Default embedded-runner fallback. Keep OpenAI-family APIs here while native
-  // HTTP streams preserve the same OpenClaw request contract.
-  if (!isTransportAwareApiSupported(model.api)) {
-    return undefined;
-  }
-  return createSupportedTransportStreamFn(model, ctx);
-}
+// Public entry points share the same transport dispatch; managed selection retains its guard.
+export {
+  createSupportedTransportStreamFn as createOpenClawTransportStreamFnForModel,
+  createSupportedTransportStreamFn as createBoundaryAwareStreamFnForModel,
+  createTransportAwareStreamFnForModel as buildTransportAwareSimpleStreamFn,
+};
 
 export function prepareTransportAwareSimpleModel<TApi extends Api>(
   model: Model<TApi>,
@@ -178,11 +120,4 @@ export function prepareTransportAwareSimpleModel<TApi extends Api>(
     ...model,
     api: alias,
   });
-}
-
-export function buildTransportAwareSimpleStreamFn(
-  model: Model,
-  ctx?: ProviderTransportStreamContext,
-): StreamFn | undefined {
-  return createTransportAwareStreamFnForModel(model, ctx);
 }

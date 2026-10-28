@@ -6,34 +6,31 @@ vi.mock("node:child_process", () => ({ spawnSync: mocks.spawnSync }));
 vi.mock("node:fs", () => ({ readlinkSync: mocks.readlinkSync }));
 
 const originalPlatform = process.platform;
-beforeEach(() => {
-  mocks.spawnSync.mockReset();
-  mocks.readlinkSync.mockReset();
-});
+beforeEach(() => Object.values(mocks).forEach((mock) => mock.mockReset()));
 afterEach(() => {
   Object.defineProperty(process, "platform", { value: originalPlatform });
   vi.restoreAllMocks();
 });
 
+function snapshot(lines: string[]) {
+  mocks.spawnSync.mockReturnValue({ pid: 900, status: 0, stdout: lines.join("\n") });
+}
+
 it("reports nested children without unrelated processes, paths, or the diagnostic subprocess", () => {
-  const executables = new Map([
+  const paths = new Map([
     ["/proc/101/exe", "/private/runtime/node"],
     ["/proc/102/exe", "/usr/bin/security"],
     ["/proc/103/exe", "/private/workspace/blocked-child"],
   ]);
-  mocks.readlinkSync.mockImplementation((file: string) => executables.get(file));
-  mocks.spawnSync.mockReturnValue({
-    pid: 900,
-    status: 0,
-    stdout: [
-      "103 102 /private/workspace/blocked-child",
-      `101 ${process.pid} /private/runtime/node`,
-      "102 101 /usr/bin/security",
-      `900 ${process.pid} /bin/ps`,
-      "901 900 /private/query-helper",
-      "800 1 /private/unrelated-process",
-    ].join("\n"),
-  });
+  mocks.readlinkSync.mockImplementation((file: string) => paths.get(file));
+  snapshot([
+    "103 102 /private/workspace/blocked-child",
+    `101 ${process.pid} /private/runtime/node`,
+    "102 101 /usr/bin/security",
+    `900 ${process.pid} /bin/ps`,
+    "901 900 /private/query-helper",
+    "800 1 /private/unrelated-process",
+  ]);
   expect(inspectUpdateFinalizationChildren()).toEqual({
     childProcessInspection: "complete",
     childProcessesTruncated: false,
@@ -55,14 +52,12 @@ it("reports nested children without unrelated processes, paths, or the diagnosti
 
 it("bounds child count and command names and reports truncation", () => {
   mocks.readlinkSync.mockReturnValue(`/private/${"n".repeat(100)}`);
-  mocks.spawnSync.mockReturnValue({
-    pid: 900,
-    status: 0,
-    stdout: Array.from(
+  snapshot(
+    Array.from(
       { length: 10 },
       (_, index) => `${100 + index} ${process.pid} /private/${"n".repeat(100)}`,
-    ).join("\n"),
-  });
+    ),
+  );
   const result = inspectUpdateFinalizationChildren();
   expect(result.childProcessesTruncated).toBe(true);
   expect(result.childProcesses.map(({ pid }) => pid)).toEqual([
@@ -78,7 +73,7 @@ it.each([false, true])(
   "uses Linux executable identity, never a mutable title (unreadable=%s)",
   (unreadable) => {
     Object.defineProperty(process, "platform", { value: "linux" });
-    mocks.spawnSync.mockReturnValue({ pid: 900, status: 0, stdout: `101 ${process.pid}\n` });
+    snapshot([`101 ${process.pid}`]);
     mocks.readlinkSync.mockImplementation(() => {
       if (unreadable) {
         throw new Error("process executable unavailable");

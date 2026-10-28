@@ -1,189 +1,98 @@
-// Discord tests cover subagent hooks plugin behavior.
 import {
   getRequiredHookHandler,
   registerHookHandlersForTest,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
+import { registerDiscordSubagentHooks } from "../subagent-hooks-api.js";
 
-type ThreadBindingRecord = {
-  accountId: string;
-  threadId: string;
-};
+type Binding = { accountId: string; threadId: string };
 
-const hookMocks = vi.hoisted(() => {
-  return {
-    ensureBindingsLoadedAsync: vi.fn(async () => {}),
-    listThreadBindingsBySessionKey: vi.fn((_params?: unknown): ThreadBindingRecord[] => []),
-    unbindThreadBindingsBySessionKey: vi.fn(() => []),
-  };
-});
+const storage = vi.hoisted(() => ({
+  list: vi.fn(async (_params?: unknown): Promise<Binding[]> => []),
+  unbind: vi.fn(async (): Promise<Binding[]> => []),
+}));
 
-let registerDiscordSubagentHooks: typeof import("../subagent-hooks-api.js").registerDiscordSubagentHooks;
-
+// mock-isolation: Keep persistent binding state outside the hook routing fixture.
 vi.mock("./monitor/thread-bindings.js", () => ({
-  listThreadBindingsBySessionKey: hookMocks.listThreadBindingsBySessionKey,
-  unbindThreadBindingsBySessionKey: hookMocks.unbindThreadBindingsBySessionKey,
+  listThreadBindingsBySessionKeyAsync: storage.list,
+  unbindThreadBindingsBySessionKeyAsync: storage.unbind,
 }));
-vi.mock("./monitor/thread-bindings.state.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./monitor/thread-bindings.state.js")>()),
-  ensureBindingsLoadedAsync: hookMocks.ensureBindingsLoadedAsync,
-}));
-function registerHandlersForTest() {
-  return registerHookHandlersForTest<OpenClawPluginApi>({
-    config: {},
-    register: registerDiscordSubagentHooks,
-  });
-}
+const handlers = registerHookHandlersForTest<OpenClawPluginApi>({
+  config: {},
+  register: registerDiscordSubagentHooks,
+});
+const deliver = getRequiredHookHandler(handlers, "subagent_delivery_target");
+const end = getRequiredHookHandler(handlers, "subagent_ended");
 
-async function resolveSubagentDeliveryTargetForTest(requesterOrigin: {
-  channel: string;
-  accountId: string;
-  to: string;
-  threadId?: string;
-}) {
-  const handlers = registerHandlersForTest();
-  const handler = getRequiredHookHandler(handlers, "subagent_delivery_target");
-  return await handler(
+function deliveryTarget(overrides: { channel?: string; to?: string; threadId?: string } = {}) {
+  return deliver(
     {
       childSessionKey: "agent:main:subagent:child",
       requesterSessionKey: "agent:main:main",
-      requesterOrigin,
-      childRunId: "run-1",
-      spawnMode: "session",
+      requesterOrigin: { channel: "discord", accountId: "work", to: "channel:123", ...overrides },
       expectsCompletionMessage: true,
     },
     {},
   );
 }
 
-describe("discord subagent hook handlers", () => {
-  beforeAll(async () => {
-    ({ registerDiscordSubagentHooks } = await import("../subagent-hooks-api.js"));
+beforeEach(() => vi.clearAllMocks());
+
+it.each(["subagent_ended", "subagent_delivery_target"])("awaits %s storage", async (name) => {
+  const ready = createDeferred<Binding[]>();
+  const entered = createDeferred<void>();
+  const operationStorage = name === "subagent_ended" ? storage.unbind : storage.list;
+  operationStorage.mockImplementationOnce(() => {
+    entered.resolve();
+    return ready.promise;
   });
-
-  beforeEach(() => {
-    hookMocks.ensureBindingsLoadedAsync.mockReset().mockResolvedValue(undefined);
-    hookMocks.listThreadBindingsBySessionKey.mockClear();
-    hookMocks.unbindThreadBindingsBySessionKey.mockClear();
+  const event = {
+    targetSessionKey: "agent:main:subagent:child",
+    targetKind: "subagent",
+    reason: "subagent-complete",
+    sendFarewell: true,
+    accountId: "work",
+  };
+  let settled = false;
+  const operation = Promise.resolve(
+    name === "subagent_ended" ? end(event, {}) : deliveryTarget({ threadId: "777" }),
+  ).then((result) => {
+    settled = true;
+    return result;
   });
-
-  it("restores bindings before unbinding thread routing on subagent_ended", async () => {
-    const ready = createDeferred<void>();
-    const entered = createDeferred<void>();
-    hookMocks.ensureBindingsLoadedAsync.mockImplementationOnce(() => {
-      entered.resolve();
-      return ready.promise;
-    });
-    const handlers = registerHandlersForTest();
-    const handler = getRequiredHookHandler(handlers, "subagent_ended");
-
-    const ending = handler(
-      {
-        targetSessionKey: "agent:main:subagent:child",
-        targetKind: "subagent",
-        reason: "subagent-complete",
-        sendFarewell: true,
-        accountId: "work",
-      },
-      {},
-    );
-
-    try {
-      await entered.promise;
-      expect(hookMocks.unbindThreadBindingsBySessionKey).not.toHaveBeenCalled();
-    } finally {
-      ready.resolve();
-      await ending;
-    }
-    expect(hookMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
-    expect(hookMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
-      targetSessionKey: "agent:main:subagent:child",
-      accountId: "work",
-      targetKind: "subagent",
-      reason: "subagent-complete",
-      sendFarewell: true,
-    });
-  });
-
-  it("waits for cold binding restoration before routing a completion", async () => {
-    const ready = createDeferred<void>();
-    const entered = createDeferred<void>();
-    hookMocks.ensureBindingsLoadedAsync.mockImplementationOnce(() => {
-      entered.resolve();
-      return ready.promise;
-    });
-    hookMocks.listThreadBindingsBySessionKey.mockReturnValueOnce([
-      { accountId: "work", threadId: "777" },
-    ]);
-    const delivery = resolveSubagentDeliveryTargetForTest({
-      channel: "discord",
-      accountId: "work",
-      to: "channel:123",
-      threadId: "777",
-    });
-    try {
-      await entered.promise;
-      expect(hookMocks.listThreadBindingsBySessionKey).not.toHaveBeenCalled();
-    } finally {
-      ready.resolve();
-      await delivery;
-    }
-    expect(await delivery).toEqual({
+  try {
+    await entered.promise;
+    await Promise.resolve();
+    expect(settled).toBe(false);
+  } finally {
+    ready.resolve(name === "subagent_ended" ? [] : [{ accountId: "work", threadId: "777" }]);
+    await operation;
+  }
+  if (name === "subagent_ended") {
+    expect(operationStorage).toHaveBeenCalledExactlyOnceWith(event);
+  } else {
+    expect(await operation).toEqual({
       origin: { channel: "discord", accountId: "work", to: "channel:777", threadId: "777" },
     });
-  });
-
-  it("does not restore Discord bindings for another channel's completion", async () => {
-    expect(
-      await resolveSubagentDeliveryTargetForTest({
-        channel: "telegram",
-        accountId: "work",
-        to: "chat:123",
-      }),
-    ).toBeUndefined();
-    expect(hookMocks.ensureBindingsLoadedAsync).not.toHaveBeenCalled();
-    expect(hookMocks.listThreadBindingsBySessionKey).not.toHaveBeenCalled();
-  });
-
-  it("resolves delivery target from matching bound thread", async () => {
-    hookMocks.listThreadBindingsBySessionKey.mockReturnValueOnce([
-      { accountId: "work", threadId: "777" },
-    ]);
-    const result = await resolveSubagentDeliveryTargetForTest({
-      channel: "discord",
-      accountId: "work",
-      to: "channel:123",
-      threadId: "777",
-    });
-
-    expect(hookMocks.listThreadBindingsBySessionKey).toHaveBeenCalledWith({
+    expect(operationStorage).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:subagent:child",
       accountId: "work",
       targetKind: "subagent",
     });
-    expect(result).toEqual({
-      origin: {
-        channel: "discord",
-        accountId: "work",
-        to: "channel:777",
-        threadId: "777",
-      },
-    });
-  });
+  }
+});
 
-  it("keeps original routing when delivery target is ambiguous", async () => {
-    hookMocks.listThreadBindingsBySessionKey.mockReturnValueOnce([
-      { accountId: "work", threadId: "777" },
-      { accountId: "work", threadId: "888" },
-    ]);
-    const result = await resolveSubagentDeliveryTargetForTest({
-      channel: "discord",
-      accountId: "work",
-      to: "channel:123",
-    });
+it("does not restore Discord bindings for another channel's completion", async () => {
+  expect(await deliveryTarget({ channel: "telegram", to: "chat:123" })).toBeUndefined();
+  expect(storage.list).not.toHaveBeenCalled();
+});
 
-    expect(result).toBeUndefined();
-  });
+it("keeps original routing when delivery target is ambiguous", async () => {
+  storage.list.mockResolvedValueOnce([
+    { accountId: "work", threadId: "777" },
+    { accountId: "work", threadId: "888" },
+  ]);
+  expect(await deliveryTarget()).toBeUndefined();
 });

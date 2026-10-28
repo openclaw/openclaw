@@ -1,217 +1,156 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { createModelCatalogDecisions } from "../../agents/model-catalog-decisions.js";
 import { markPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
+import { createCatalogAttemptReporter } from "../../agents/prepared-model-runtime.publication-events.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { buildModelsListResult, prepareModelsListResult } from "./models-list-result.js";
 import {
-  type PreparedGatewayModelCatalogSnapshot,
-  registerGatewayModelCatalogPrivateAccess,
-} from "../server-model-catalog-auth.js";
-import {
-  buildModelsListResult,
-  createGatewayAgentModelCatalogProjector,
-  prepareModelsListResult,
-} from "./models-list-result.js";
-import type { GatewayRequestContext } from "./types.js";
+  createModelsListTestContext,
+  modelAuthStore,
+} from "./models-list-result.openai-routes.test-support.js";
 
 const metadataSnapshot = createPluginMetadataSnapshotFixture();
+const modelConfig: OpenClawConfig = {
+  agents: {
+    defaults: {
+      model: { primary: "openai/gpt-5.6-sol" },
+      models: { "openai/*": {}, "openai/gpt-5.6-sol": {} },
+    },
+  },
+};
+const openaiModel = {
+  id: "gpt-5.6-sol",
+  name: "GPT-5.6 Sol",
+  provider: "openai",
+  api: "openai-responses" as const,
+  baseUrl: "https://api.openai.com/v1",
+};
+function oauth(label: string): AuthProfileStore["profiles"][string] {
+  return {
+    type: "oauth",
+    provider: "openai",
+    access: `${label}-access-token`,
+    refresh: `${label}-refresh-token`,
+    expires: Date.now() + 30 * 60_000,
+  };
+}
 const emptyAuthStore = { version: 1, profiles: {} } as const;
+const rejectedKey = { type: "api_key" as const, provider: "openai", key: "rejected-api-key" };
+const rejected = (profileId: string) => ({
+  provider: "openai",
+  profileId,
+  status: "auth-rejected" as const,
+});
+type DecisionOptions = Parameters<typeof createModelCatalogDecisions>[0];
+function decisions(
+  snapshot: DecisionOptions["snapshot"],
+  preparedAuthStore: AuthProfileStore = emptyAuthStore,
+  cfg = modelConfig,
+  preferredProfileId?: string,
+) {
+  return createModelCatalogDecisions({
+    cfg,
+    agentId: "main",
+    snapshot,
+    metadataSnapshot,
+    preparedAuthStore,
+    preferredProfileId,
+  });
+}
 
-describe("models.list provider catalog outcomes", () => {
-  it.each([
-    {
-      name: "implicit provider",
-      providers: undefined,
-      baseUrl: "http://127.0.0.1:11434",
-      available: true,
-    },
-    {
-      name: "empty provider config",
-      providers: { ollama: {} },
-      baseUrl: "http://127.0.0.1:11434",
-      available: true,
-    },
-    {
-      name: "remote route without credentials",
-      providers: undefined,
-      baseUrl: "https://ollama.example.com",
-      available: false,
-    },
-    {
-      name: "explicit auth ownership without credentials",
-      providers: { ollama: { auth: "token" as const } },
-      baseUrl: "http://127.0.0.1:11434",
-      available: false,
-    },
-  ])(
-    "projects a discovered Ollama model with $name as available=$available",
-    async ({ providers, baseUrl, available }) => {
-      const config = {
-        ...(providers ? { models: { providers } } : {}),
-        agents: { defaults: { models: { "ollama/qwen3.5": {} } } },
-      } as OpenClawConfig;
-      const model = {
-        id: "qwen3.5",
-        name: "Qwen 3.5",
-        provider: "ollama",
-        api: "ollama" as const,
-        baseUrl,
-      };
-      const snapshot = markPreparedModelCatalogFull({ entries: [model], routeVariants: [model] });
-      const projector = createGatewayAgentModelCatalogProjector({
+function preloaded(
+  config: OpenClawConfig,
+  snapshot: Parameters<typeof createModelCatalogDecisions>[0]["snapshot"],
+  catalogProjector: ReturnType<typeof createModelCatalogDecisions>,
+  includeDefaultModels?: boolean,
+) {
+  return {
+    source: {
+      kind: "gateway" as const,
+      context: createModelsListTestContext({
         cfg: config,
-        agentId: "main",
-        snapshot,
-        metadataSnapshot: createPluginMetadataSnapshotFixture({
-          plugins: [{ id: "ollama", providers: ["ollama"], syntheticAuthRefs: ["ollama"] }],
-        }),
+        catalog: [],
         preparedAuthStore: emptyAuthStore,
-      });
-      const context = {
-        getRuntimeConfig: () => config,
-        loadGatewayModelCatalogSnapshot: vi.fn(),
-        logGateway: { debug: vi.fn() },
-      } as unknown as GatewayRequestContext;
-
-      await expect(
-        buildModelsListResult({
-          source: { kind: "gateway", context },
-          agentId: "main",
-          params: { view: "configured", includeDefaultModels: false },
-          preloadedCatalog: { agentId: "main", config, snapshot },
-          preloadedOnly: true,
-          catalogProjector: projector,
-        }),
-      ).resolves.toEqual({
-        models: [expect.objectContaining({ provider: "ollama", id: "qwen3.5", available })],
-      });
+        metadataSnapshot,
+      }),
     },
-  );
+    params: { view: "configured" as const, includeDefaultModels },
+    preloadedCatalog: { agentId: "main", config, snapshot },
+    preloadedOnly: true,
+    catalogProjector,
+  };
+}
 
-  it("preserves an auth rejection when no usable models are visible", async () => {
-    const config = {} as OpenClawConfig;
-    const snapshot = {
-      agentId: "main",
-      agentDir: "/tmp/models-list-provider-outcomes-agent",
-      catalogComplete: true,
-      workspaceDir: "/tmp/models-list-provider-outcomes-workspace",
-      config,
-      observationConfig: config,
-      isCurrent: () => true,
-      authModes: {},
-      authStore: emptyAuthStore,
-      metadataSnapshot,
-      authMaterializations: [],
+it.each([false, true])("preserves rejection on refresh failure=%s", async (unavailable) => {
+  const reporter = createCatalogAttemptReporter(
+    {},
+    { key: "synthetic", pluginFingerprint: "synthetic", credentials: {} },
+    () => true,
+    () => {},
+  );
+  const providerOutcomes = [
+    rejected("openai:chatgpt"),
+    ...(unavailable ? [{ provider: "unreachable", status: "unavailable" as const }] : []),
+  ];
+  const context = createModelsListTestContext({
+    cfg: {},
+    catalog: [],
+    catalogComplete: true,
+    preparedAuthStore: emptyAuthStore,
+    metadataSnapshot,
+    catalogDiagnostics: reporter.withRefreshStatus({
       entries: [],
       routeVariants: [],
-      providerOutcomes: [
-        {
-          provider: "openai",
-          profileId: "openai:chatgpt",
-          status: "auth-rejected" as const,
-        },
-      ],
-    };
-    const context = {
-      getRuntimeConfig: () => config,
-      loadGatewayModelCatalogSnapshot: vi.fn(() => Promise.resolve(snapshot)),
-      logGateway: { debug: vi.fn() },
-    } as unknown as GatewayRequestContext;
-    registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
-      loadDeferred: async () => snapshot as PreparedGatewayModelCatalogSnapshot,
-      readPrepared: async () => snapshot as PreparedGatewayModelCatalogSnapshot,
-    });
-
-    await expect(
-      buildModelsListResult({ source: { kind: "gateway", context }, params: { view: "all" } }),
-    ).resolves.toEqual({
-      models: [],
-      providerOutcomes: [
-        { provider: "openai", profileId: "openai:chatgpt", status: "auth-rejected" },
-      ],
-    });
+      providerOutcomes,
+    }),
   });
 
-  it.each([
-    { name: "provider auth", rejectionScope: undefined, usageStats: undefined },
-    {
-      name: "model-route auth",
-      rejectionScope: "catalog" as const,
-      usageStats: {
-        "openai:chatgpt": {
-          disabledUntil: 2_000_000_000_000,
-          disabledReason: "auth_permanent" as const,
-        },
-      },
-    },
-  ])("marks configured API-key rows unavailable after $name rejection", async (testCase) => {
-    const config = {
-      auth: { order: { openai: ["openai:chatgpt"] } },
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.6-sol" },
-          models: { "openai/*": {}, "openai/gpt-5.6-sol": {} },
-        },
-      },
-    } as OpenClawConfig;
-    const model = {
-      id: "gpt-5.6-sol",
-      name: "GPT-5.6 Sol",
-      provider: "openai",
-      api: "openai-responses" as const,
-      baseUrl: "https://api.openai.com/v1",
-    };
+  await expect(
+    buildModelsListResult({ source: { kind: "gateway", context }, params: { view: "all" } }),
+  ).resolves.toEqual({
+    models: [],
+    providerOutcomes,
+    ...(unavailable ? { refreshFailed: true } : {}),
+  });
+});
+
+it.each([false, true])(
+  "marks API-key rejection unavailable (catalog=%s)",
+  async (catalogRejection) => {
+    const config = { ...modelConfig, auth: { order: { openai: ["openai:chatgpt"] } } };
     const snapshot = markPreparedModelCatalogFull({
-      entries: [model],
-      routeVariants: [model],
+      entries: [openaiModel],
+      routeVariants: [openaiModel],
       providerOutcomes: [
         {
-          provider: "openai",
-          profileId: "openai:chatgpt",
-          ...(testCase.rejectionScope ? { rejectionScope: testCase.rejectionScope } : {}),
-          status: "auth-rejected" as const,
+          ...rejected("openai:chatgpt"),
+          ...(catalogRejection ? { rejectionScope: "catalog" as const } : {}),
         },
       ],
     });
-    const projector = createGatewayAgentModelCatalogProjector({
-      cfg: config,
-      agentId: "main",
+    const projector = decisions(
       snapshot,
-      metadataSnapshot,
-      preparedAuthStore: {
-        version: 1,
-        profiles: {
-          "openai:chatgpt": {
-            type: "api_key",
-            provider: "openai",
-            key: "rejected-api-key",
-          },
-          "openai:other": {
-            type: "oauth",
-            provider: "openai",
-            access: "accepted-access-token",
-            refresh: "accepted-refresh-token",
-            expires: Date.now() + 30 * 60_000,
-          },
+      modelAuthStore(
+        {
+          "openai:chatgpt": rejectedKey,
+          "openai:other": oauth("accepted"),
         },
-        ...(testCase.usageStats ? { usageStats: testCase.usageStats } : {}),
-      },
-      preferredProfileId: "openai:chatgpt",
-    });
-    const context = {
-      getRuntimeConfig: () => config,
-      loadGatewayModelCatalogSnapshot: vi.fn(),
-      logGateway: { debug: vi.fn() },
-    } as unknown as GatewayRequestContext;
-
+        catalogRejection
+          ? {
+              "openai:chatgpt": {
+                disabledUntil: 2_000_000_000_000,
+                disabledReason: "auth_permanent",
+              },
+            }
+          : undefined,
+      ),
+      config,
+      "openai:chatgpt",
+    );
     await expect(
-      buildModelsListResult({
-        source: { kind: "gateway", context },
-        agentId: "main",
-        params: { view: "configured", includeDefaultModels: false },
-        preloadedCatalog: { agentId: "main", config, snapshot },
-        preloadedOnly: true,
-        catalogProjector: projector,
-      }),
+      buildModelsListResult({ ...preloaded(config, snapshot, projector, false), agentId: "main" }),
     ).resolves.toEqual({
       models: [
         expect.objectContaining({
@@ -220,143 +159,61 @@ describe("models.list provider catalog outcomes", () => {
           unavailableReason: "auth-failed",
         }),
       ],
-      providerOutcomes: [
-        { provider: "openai", profileId: "openai:chatgpt", status: "auth-rejected" },
-      ],
+      providerOutcomes: [rejected("openai:chatgpt")],
     });
+  },
+);
+
+it("does not apply one profile rejection to a different selected profile", () => {
+  const subscriptionModel = {
+    ...openaiModel,
+    api: "openai-chatgpt-responses" as const,
+    baseUrl: "https://chatgpt.com/backend-api/codex",
+  };
+  const snapshot = {
+    entries: [subscriptionModel],
+    routeVariants: [subscriptionModel],
+    providerOutcomes: [rejected("openai:rejected")],
+  };
+  const projector = decisions(
+    snapshot,
+    modelAuthStore({ "openai:rejected": oauth("rejected"), "openai:accepted": oauth("accepted") }),
+    modelConfig,
+    "openai:accepted",
+  );
+
+  expect(projector.evaluateEntry(subscriptionModel, [subscriptionModel])).toMatchObject({
+    availability: true,
+    selectedProfileId: "openai:accepted",
   });
+});
 
-  it("does not apply one profile rejection to a different selected profile", async () => {
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.6-sol" },
-          models: { "openai/*": {}, "openai/gpt-5.6-sol": {} },
-        },
-      },
-    } as OpenClawConfig;
-    const model = {
-      id: "gpt-5.6-sol",
-      name: "GPT-5.6 Sol",
-      provider: "openai",
-      api: "openai-chatgpt-responses" as const,
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-    };
-    const snapshot = {
-      entries: [model],
-      routeVariants: [model],
-      providerOutcomes: [
-        {
-          provider: "openai",
-          profileId: "openai:rejected",
-          status: "auth-rejected" as const,
-        },
-      ],
-    };
-    const projector = createGatewayAgentModelCatalogProjector({
-      cfg: config,
-      agentId: "main",
-      snapshot,
-      metadataSnapshot,
-      preferredProfileId: "openai:accepted",
-      preparedAuthStore: {
-        version: 1,
-        profiles: {
-          "openai:rejected": {
-            type: "oauth",
-            provider: "openai",
-            access: "rejected-access-token",
-            refresh: "rejected-refresh-token",
-            expires: Date.now() + 30 * 60_000,
-          },
-          "openai:accepted": {
-            type: "oauth",
-            provider: "openai",
-            access: "accepted-access-token",
-            refresh: "accepted-refresh-token",
-            expires: Date.now() + 30 * 60_000,
-          },
-        },
-      },
-    });
-
-    await expect(projector.evaluateEntry(model, [model])).resolves.toMatchObject({
-      availability: true,
-      selectedProfileId: "openai:accepted",
-    });
+it.each([false, true])("projects cooldown only when unavailable (%s)", async (available) => {
+  const cooldown = {
+    unavailableReason: "cooldown" as const,
+    unavailableUntil: 2_000_000_000_000,
+  };
+  const config = {
+    agents: { defaults: { models: { "custom/test-model": {} } } },
+  } as OpenClawConfig;
+  const model = { id: "test-model", name: "Test Model", provider: "custom" };
+  const snapshot = markPreparedModelCatalogFull({ entries: [model], routeVariants: [model] });
+  const projector = decisions(snapshot, emptyAuthStore, config);
+  const evaluateEntry = vi.spyOn(projector, "evaluateEntry").mockReturnValue({
+    availability: available,
+    ...cooldown,
+    routeResolution: null,
   });
+  const evaluateNative = vi.spyOn(projector, "evaluateNative");
+  const prepared = await prepareModelsListResult(preloaded(config, snapshot, projector));
 
-  it.each([
-    {
-      name: "missing credentials",
-      evaluation: { availability: undefined, unavailableReason: "missing-auth" },
-      expected: { available: false, unavailableReason: "missing-auth" },
-    },
-    {
-      name: "cooldown with its retry time",
-      evaluation: {
-        availability: false,
-        unavailableReason: "cooldown",
-        unavailableUntil: 2_000_000_000_000,
-      },
-      expected: {
-        available: false,
-        unavailableReason: "cooldown",
-        unavailableUntil: 2_000_000_000_000,
-      },
-    },
-    {
-      name: "unknown availability without an auth diagnosis",
-      evaluation: { availability: undefined },
-      expected: { available: false },
-    },
-    {
-      name: "available models without stale unavailability metadata",
-      evaluation: {
-        availability: true,
-        unavailableReason: "cooldown",
-        unavailableUntil: 2_000_000_000_000,
-      },
-      expected: { available: true },
-    },
-  ] as const)("projects $name", async ({ evaluation, expected }) => {
-    const config = {
-      agents: { defaults: { models: { "custom/test-model": {} } } },
-    } as OpenClawConfig;
-    const model = { id: "test-model", name: "Test Model", provider: "custom" };
-    const snapshot = markPreparedModelCatalogFull({ entries: [model], routeVariants: [model] });
-    const projector = createGatewayAgentModelCatalogProjector({
-      cfg: config,
-      agentId: "main",
-      snapshot,
-      metadataSnapshot,
-      preparedAuthStore: emptyAuthStore,
-    });
-    const evaluateEntry = vi.spyOn(projector, "evaluateEntry").mockResolvedValue({
-      ...evaluation,
-      routeResolution: null,
-    });
-    const evaluateNative = vi.spyOn(projector, "evaluateNative");
-    const context = {
-      getRuntimeConfig: () => config,
-      loadGatewayModelCatalogSnapshot: vi.fn(),
-      logGateway: { debug: vi.fn() },
-    } as unknown as GatewayRequestContext;
-
-    const prepared = await prepareModelsListResult({
-      source: { kind: "gateway", context },
-      params: { view: "configured" },
-      preloadedCatalog: { agentId: "main", config, snapshot },
-      preloadedOnly: true,
-      catalogProjector: projector,
-    });
-
-    expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], ...expected }]);
-    const hostEvaluations = evaluateEntry.mock.calls.length;
-    evaluateNative.mockReturnValue({ availability: true, routeResolution: null });
-    expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], available: true }]);
-    evaluateNative.mockReturnValue({ availability: false, routeResolution: null });
-    expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], available: false }]);
-    expect(evaluateEntry).toHaveBeenCalledTimes(hostEvaluations);
-  });
+  expect(prepared.read().models).toEqual([
+    { ...model, tags: ["configured"], available, ...(available ? {} : cooldown) },
+  ]);
+  const hostEvaluations = evaluateEntry.mock.calls.length;
+  evaluateNative.mockReturnValue({ availability: true, routeResolution: null });
+  expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], available: true }]);
+  evaluateNative.mockReturnValue({ availability: false, routeResolution: null });
+  expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], available: false }]);
+  expect(evaluateEntry).toHaveBeenCalledTimes(hostEvaluations);
 });

@@ -9,7 +9,6 @@ extension OnboardingView {
         }
         defaultsToLocalGateway = false
         state.connectionMode = .local
-        preferredGatewayID = nil
         showRemoteChoices = false
         GatewayDiscoveryPreferences.setPreferredStableID(nil)
         probeConfiguredGatewayForDashboard()
@@ -19,7 +18,6 @@ extension OnboardingView {
         resetGatewayBoundAIState()
         defaultsToLocalGateway = false
         state.connectionMode = .unconfigured
-        preferredGatewayID = nil
         showRemoteChoices = false
         GatewayDiscoveryPreferences.setPreferredStableID(nil)
     }
@@ -36,24 +34,8 @@ extension OnboardingView {
 
     func didSaveRemoteConnection() {
         self.defaultsToLocalGateway = false
-        self.preferredGatewayID = nil
         self.retireGatewayStateForRemoteEndpointEdit()
         self.probeConfiguredGatewayForDashboard()
-    }
-
-    private static func normalizedGatewayID(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed?.isEmpty == false ? trimmed : nil
-    }
-
-    var effectivePreferredGatewayID: String? {
-        let persisted = Self.normalizedGatewayID(GatewayDiscoveryPreferences.preferredStableID())
-        guard let local = Self.normalizedGatewayID(preferredGatewayID) else {
-            return persisted
-        }
-        // Config-watcher endpoint changes clear the persisted owner. Ignore the
-        // stale @State copy until the view's next render catches up.
-        return local == persisted ? local : persisted
     }
 
     func handleBack() {

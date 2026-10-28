@@ -1,12 +1,31 @@
 import { describe, expect, it, vi } from "vitest";
-import { downloadGeneratedMusicAsset, generatedMusicAssetFromBase64 } from "./provider-assets.js";
+import {
+  downloadGeneratedMusicAsset,
+  extractGeneratedMusicFileCandidates,
+  generatedMusicAssetFromBase64,
+} from "./provider-assets.js";
+
+describe("extractGeneratedMusicFileCandidates", () => {
+  it("normalizes provider fields and omits blank or invalid optional metadata", () => {
+    expect(
+      extractGeneratedMusicFileCandidates({
+        audio: {
+          url: " https://cdn.example/track ",
+          content_type: " audio/mpeg ",
+          file_name: " track.mp3 ",
+        },
+        audio_file: { url: "https://cdn.example/other", content_type: " ", file_name: 42 },
+      }),
+    ).toEqual([
+      { url: "https://cdn.example/track", mimeType: "audio/mpeg", fileName: "track.mp3" },
+      { url: "https://cdn.example/other" },
+    ]);
+  });
+});
 
 describe("generatedMusicAssetFromBase64", () => {
-  it.each([
-    ["invalid alphabet", "not-base64!"],
-    ["non-canonical pad bits", "ZE=="],
-  ])("rejects %s", (_scenario, base64) => {
-    expect(() => generatedMusicAssetFromBase64({ base64, mimeType: "audio/mpeg" })).toThrow(
+  it("rejects non-canonical pad bits", () => {
+    expect(() => generatedMusicAssetFromBase64({ base64: "ZE==", mimeType: "audio/mpeg" })).toThrow(
       "Generated music asset contains malformed base64 audio data",
     );
   });

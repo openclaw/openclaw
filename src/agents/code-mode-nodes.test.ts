@@ -1,57 +1,41 @@
-/** Tests the first-class Code Mode nodes API through the real generic nodes tool. */
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { ToolSearchCatalogToolExecutor } from "./tool-search.js";
-import type { AnyAgentTool } from "./tools/common.js";
 
 const gatewayMocks = vi.hoisted(() => ({
   callGatewayTool: vi.fn(),
   readGatewayCallOptions: vi.fn(() => ({})),
 }));
 
-vi.mock("./tools/gateway.js", () => ({
-  callGatewayTool: gatewayMocks.callGatewayTool,
-  readGatewayCallOptions: gatewayMocks.readGatewayCallOptions,
-}));
+// mock-isolation: Exercise node dispatch without contacting a live Gateway.
+vi.mock("./tools/gateway.js", () => gatewayMocks);
 
-const nodeSnapshot = [
+const listedNodes = [
   {
-    nodeId: "node-1",
-    displayName: "Desk",
+    id: "node-1",
+    name: "Desk",
     platform: "darwin",
-    paired: true,
     connected: true,
     commands: ["device.status", "fs.listDir", "computer.act", "danger.read"],
   },
-  {
-    nodeId: "shadow-id",
-    displayName: "Offline",
-    platform: "linux",
-    paired: false,
-    connected: false,
-    commands: ["device.status"],
-  },
-  {
-    nodeId: "node-2",
-    displayName: "shadow-id",
+  { id: "node-2", name: "shadow-id", connected: false, commands: ["device.status"] },
+];
+const nodeSnapshot = [
+  ...listedNodes.map(({ id, name, ...node }) => ({
+    nodeId: id,
+    displayName: name,
     paired: true,
-    connected: false,
-    commands: ["device.status"],
-  },
+    ...node,
+  })),
+  { nodeId: "shadow-id", paired: false, connected: false },
 ];
 
 let applyCodeModeCatalog: typeof import("./code-mode.js").applyCodeModeCatalog;
 let createCodeModeTools: typeof import("./code-mode.js").createCodeModeTools;
 let createToolSearchCatalogRef: typeof import("./tool-search.js").createToolSearchCatalogRef;
 let createNodesTool: typeof import("./tools/nodes-tool.js").createNodesTool;
-let resetCodeModeTestState: typeof import("./code-mode.test-support.js").resetCodeModeTestState;
-
-function resultDetails(result: { details?: unknown }): Record<string, unknown> {
-  expect(result.details).toBeDefined();
-  expect(typeof result.details).toBe("object");
-  return result.details as Record<string, unknown>;
-}
+let support: typeof import("./code-mode.test-support.js");
 
 function createHarness() {
   const catalogRef = createToolSearchCatalogRef();
@@ -59,14 +43,10 @@ function createHarness() {
   const nestedCalls: Parameters<ToolSearchCatalogToolExecutor>[0][] = [];
   const executeTool: ToolSearchCatalogToolExecutor = async (params) => {
     nestedCalls.push(params);
-    const result = await params.tool.execute(
-      params.toolCallId,
-      params.input,
-      params.signal,
-      params.onUpdate,
-      undefined as never,
+    const { tool, toolCallId, input, signal, onUpdate } = params;
+    return await params.acceptResultBeforeProjection(
+      await tool.execute(toolCallId, input, signal, onUpdate, undefined as never),
     );
-    return await params.acceptResultBeforeProjection(result);
   };
   const ctx = {
     config,
@@ -77,39 +57,30 @@ function createHarness() {
     catalogRef,
     executeTool,
   };
-  const codeModeTools = createCodeModeTools(ctx);
+  const tools = createCodeModeTools(ctx);
   const nodesTool = createNodesTool({ agentSessionKey: ctx.sessionKey });
-  applyCodeModeCatalog({
-    tools: [...codeModeTools, nodesTool],
-    config,
-    sessionId: ctx.sessionId,
-    sessionKey: ctx.sessionKey,
-    runId: ctx.runId,
-    catalogRef,
-  });
+  applyCodeModeCatalog({ tools: [...tools, nodesTool], config, catalogRef });
   return {
-    execTool: expectDefined(codeModeTools[0], "code mode exec tool"),
-    waitTool: expectDefined(codeModeTools[1], "code mode wait tool"),
+    execTool: expectDefined(tools[0], "code mode exec tool"),
+    waitTool: expectDefined(tools[1], "code mode wait tool"),
     nestedCalls,
   };
 }
 
-async function runUntilCompleted(params: {
-  execTool: AnyAgentTool;
-  waitTool: AnyAgentTool;
-  code: string;
-}): Promise<Record<string, unknown>> {
-  let details = resultDetails(
-    await params.execTool.execute("code-nodes-call", {
-      code: params.code,
-    }),
-  );
-  for (let index = 0; index < 8 && details.status === "waiting"; index += 1) {
-    details = resultDetails(
-      await params.waitTool.execute(`code-nodes-wait-${index}`, { runId: details.runId }),
-    );
-  }
-  return details;
+async function runUntilCompleted(code: string, params = createHarness()) {
+  const details = support.resultDetails(await params.execTool.execute("code-nodes-call", { code }));
+  return support.waitUntilCompleted({ details, waitTool: params.waitTool });
+}
+
+function runCaught(code: string) {
+  return runUntilCompleted(`
+    try {
+      ${code}
+      return "unexpected success";
+    } catch (error) {
+      return error.message;
+    }
+  `);
 }
 
 describe("Code Mode nodes", () => {
@@ -118,80 +89,57 @@ describe("Code Mode nodes", () => {
     ({ applyCodeModeCatalog, createCodeModeTools } = await import("./code-mode.js"));
     ({ createToolSearchCatalogRef } = await import("./tool-search.js"));
     ({ createNodesTool } = await import("./tools/nodes-tool.js"));
-    ({ resetCodeModeTestState } = await import("./code-mode.test-support.js"));
+    support = await import("./code-mode.test-support.js");
   });
 
   beforeEach(() => {
     gatewayMocks.callGatewayTool.mockReset();
-    gatewayMocks.readGatewayCallOptions.mockReset();
-    gatewayMocks.readGatewayCallOptions.mockReturnValue({});
+    gatewayMocks.readGatewayCallOptions.mockReset().mockReturnValue({});
     gatewayMocks.callGatewayTool.mockImplementation(async (method, _options, input) => {
       if (method === "node.list") {
         return { nodes: nodeSnapshot };
       }
       if (method === "node.invoke") {
-        const invocation = input as {
+        const { nodeId, command, params } = input as {
           nodeId: string;
           command: string;
           params: unknown;
         };
-        if (invocation.command === "danger.read") {
+        if (command === "danger.read") {
           throw new Error(
             'node command not allowed: "danger.read" is blocked by gateway.nodes.commands.deny',
           );
         }
-        return {
-          payload: {
-            nodeId: invocation.nodeId,
-            command: invocation.command,
-            params: invocation.params,
-          },
-        };
+        return { payload: { nodeId, command, params } };
       }
       throw new Error(`unexpected gateway method: ${String(method)}`);
     });
   });
 
-  afterEach(() => resetCodeModeTestState());
+  afterEach(() => support.resetCodeModeTestState());
 
   it("lists nodes and invokes typed handles", async () => {
     const harness = createHarness();
-    const details = await runUntilCompleted({
-      ...harness,
-      code: `
+    const details = await runUntilCompleted(
+      `
         const listed = await nodes.list();
         const node = await nodes.get(listed.find(entry => entry.connected)?.id ?? "Desk");
-        const invoked = await node.invoke("device.status", { detail: true });
-        const directory = node.listDir ? await node.listDir("/tmp") : undefined;
         return {
           listed,
           id: node.id,
           name: node.name,
           methods: Object.keys(node).sort(),
-          invoked,
-          directory,
+          invoked: await node.invoke("device.status", { detail: true }),
+          directory: node.listDir ? await node.listDir("/tmp") : undefined,
           hasExec: "exec" in node,
         };
       `,
-    });
+      harness,
+    );
 
     expect(details.status).toBe("completed");
     expect(details.value).toEqual({
-      listed: [
-        {
-          id: "node-1",
-          name: "Desk",
-          platform: "darwin",
-          connected: true,
-          commands: ["device.status", "fs.listDir", "computer.act", "danger.read"],
-        },
-        {
-          id: "node-2",
-          name: "shadow-id",
-          connected: false,
-          commands: ["device.status"],
-        },
-      ],
+      listed: listedNodes,
       id: "node-1",
       name: "Desk",
       methods: ["id", "invoke", "listDir", "name"],
@@ -203,82 +151,49 @@ describe("Code Mode nodes", () => {
       },
       hasExec: false,
     });
-    expect(harness.nestedCalls).not.toHaveLength(0);
-    expect(harness.nestedCalls.every((call) => call.parentToolCallId === "code-nodes-call")).toBe(
-      true,
+    expect(new Set(harness.nestedCalls.map(({ parentToolCallId }) => parentToolCallId))).toEqual(
+      new Set(["code-nodes-call"]),
     );
   });
 
   it("omits listDir when the node does not advertise fs.listDir", async () => {
-    const harness = createHarness();
-    const details = await runUntilCompleted({
-      ...harness,
-      code: `const node = await nodes.get("node-2"); return Object.keys(node).sort();`,
-    });
-
-    expect(details.value).toEqual(["id", "invoke", "name"]);
-  });
-
-  it("surfaces the generic nodes policy refusal with the command name", async () => {
-    const harness = createHarness();
-    const details = await runUntilCompleted({
-      ...harness,
-      code: `
-        const node = await nodes.get("Desk");
-        try {
-          await node.invoke("danger.read");
-          return "unexpected success";
-        } catch (error) {
-          return error.message;
-        }
-      `,
-    });
-
-    expect(details.value).toContain('node command not allowed: "danger.read"');
-    expect(details.value).toContain("blocked by gateway.nodes.commands.deny");
-  });
-
-  it("keeps computer.act blocked by the generic nodes surface", async () => {
-    const harness = createHarness();
-    const details = await runUntilCompleted({
-      ...harness,
-      code: `
-        const node = await nodes.get("Desk");
-        try {
-          await node.invoke("computer.act", { action: "left_click", x: 1, y: 1 });
-          return "unexpected success";
-        } catch (error) {
-          return error.message;
-        }
-      `,
-    });
-
-    expect(details.value).toContain('invokeCommand "computer.act"');
-    expect(details.value).toContain("use the dedicated computer tool");
     expect(
-      gatewayMocks.callGatewayTool.mock.calls.some(
-        ([method, , input]) =>
-          method === "node.invoke" &&
-          (input as { command?: string } | undefined)?.command === "computer.act",
-      ),
-    ).toBe(false);
+      (await runUntilCompleted('return Object.keys(await nodes.get("node-2")).sort();')).value,
+    ).toEqual(["id", "invoke", "name"]);
+  });
+
+  it.each([
+    [
+      "danger.read",
+      undefined,
+      ['node command not allowed: "danger.read"', "blocked by gateway.nodes.commands.deny"],
+    ],
+    [
+      "computer.act",
+      { action: "left_click", x: 1, y: 1 },
+      ['invokeCommand "computer.act"', "use the dedicated computer tool"],
+    ],
+  ] as const)("preserves the generic nodes refusal for %s", async (command, input, messages) => {
+    const details = await runCaught(`
+        const node = await nodes.get("Desk");
+        await node.invoke(${JSON.stringify(command)}, ${JSON.stringify(input)});
+      `);
+    for (const message of messages) {
+      expect(details.value).toContain(message);
+    }
+    if (command === "computer.act") {
+      expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalledWith(
+        "node.invoke",
+        expect.anything(),
+        expect.objectContaining({ command }),
+      );
+    }
   });
 
   it("rejects an ineligible exact id before matching an eligible node name", async () => {
-    const harness = createHarness();
-    const details = await runUntilCompleted({
-      ...harness,
-      code: `
-        try {
-          await nodes.get("shadow-id");
-          return "unexpected success";
-        } catch (error) {
-          return error.message;
-        }
-      `,
-    });
-
-    expect(details.value).toBe('node "shadow-id" is not paired (paired node ids: node-1, node-2)');
+    expect((await runCaught('await nodes.get("shadow-id");')).value).toBe(
+      'node "shadow-id" is not paired (paired node ids: node-1, node-2)',
+    );
   });
 
   it.each([
@@ -291,28 +206,25 @@ describe("Code Mode nodes", () => {
       code: `return (await nodes.get("Desk")).describe();`,
     },
   ])("reports a guest error after nodes.$label", async ({ code }) => {
-    const details = await runUntilCompleted({ ...createHarness(), code });
+    const details = await runUntilCompleted(code);
 
     expect(details).toMatchObject({
       status: "failed",
-      failurePhase: "bridge",
+      failurePhase: "guest",
       bridgeDispatchStarted: true,
     });
   });
 
   it("reports a guest error after nodes.invoke without replaying the invocation", async () => {
-    const details = await runUntilCompleted({
-      ...createHarness(),
-      code: `
+    const details = await runUntilCompleted(`
         const node = await nodes.get("Desk");
         await node.invoke("device.status");
         return node.describe();
-      `,
-    });
+      `);
 
     expect(details).toMatchObject({
       status: "failed",
-      failurePhase: "bridge",
+      failurePhase: "guest",
       bridgeDispatchStarted: true,
     });
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(

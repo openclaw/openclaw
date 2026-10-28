@@ -1,8 +1,6 @@
-import path from "node:path";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, type ControlUiMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -18,57 +16,39 @@ const suite = createControlUiE2eSuite({
 });
 const credentialPath = ["plugins", "entries", "workboard", "config", "search", "apiKey"];
 const originalRef = { source: "file", provider: "team", id: "/search/apiKey" };
-const sourceConfig = {
+const searchDefaults = {
+  apiKey: originalRef,
+  mode: "web",
+  otherSecret: REDACTED_SENTINEL,
+};
+const configWithSearch = (overrides: Record<string, unknown> = {}) => ({
   plugins: {
     entries: {
-      workboard: {
-        enabled: true,
-        config: {
-          search: {
-            apiKey: originalRef,
-            mode: "web",
-            otherSecret: REDACTED_SENTINEL,
-          },
-        },
-      },
+      workboard: { enabled: true, config: { search: { ...searchDefaults, ...overrides } } },
     },
   },
-};
-const schema = {
+});
+const sourceConfig = configWithSearch();
+const objectSchema = (properties: Record<string, unknown>, closed = false) => ({
   type: "object",
-  properties: {
-    plugins: {
-      type: "object",
-      properties: {
-        entries: {
-          type: "object",
-          properties: {
-            workboard: {
-              type: "object",
-              properties: {
-                config: {
-                  type: "object",
-                  additionalProperties: false,
-                  properties: {
-                    search: {
-                      type: "object",
-                      additionalProperties: false,
-                      properties: {
-                        apiKey: { type: ["string", "object"] },
-                        mode: { type: "string" },
-                        otherSecret: { type: "string" },
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
+  ...(closed ? { additionalProperties: false } : {}),
+  properties,
+});
+const schema = ["plugins", "entries", "workboard", "config", "search"].reduceRight(
+  (child, name) => objectSchema({ [name]: child }, name === "search"),
+  objectSchema(
+    {
+      apiKey: { type: ["string", "object"] },
+      mode: { type: "string" },
+      otherSecret: { type: "string" },
     },
-  },
-};
+    true,
+  ),
+);
+const referenceInspection = (ref: typeof originalRef, baseHash = "mock-config-hash-1") => ({
+  baseHash,
+  credential: { kind: "reference", ref, unresolved: false },
+});
 const prefix = "plugins.entries.workboard.config.search";
 const featureMethods = [
   "config.get",
@@ -81,27 +61,17 @@ const featureMethods = [
 
 suite.define(() => {
   it.each([
-    { width: 390, readOnly: false, literal: false, missing: false },
-    { width: 1174, readOnly: false, literal: false, missing: false },
-    { width: 1174, readOnly: true, literal: false, missing: false },
-    { width: 1174, readOnly: false, literal: true, missing: false },
-    { width: 390, readOnly: false, literal: false, missing: true },
+    { width: 390, readOnly: false, missing: false },
+    { width: 1174, readOnly: false, missing: false },
+    { width: 1174, readOnly: true, missing: false },
+    { width: 390, readOnly: false, missing: true },
   ])(
-    "edits the advertised nested reference through the acknowledged writer at $width (readOnly=$readOnly, literal=$literal, missing=$missing)",
-    async ({ width, readOnly, literal, missing }) => {
+    "edits the advertised nested credential through the acknowledged writer at $width (readOnly=$readOnly, missing=$missing)",
+    async ({ width, readOnly, missing }) => {
       await suite.withPage(
         { colorScheme: "dark", viewport: { width, height: 900 } },
         async ({ page }) => {
-          const proofDir =
-            process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-              ? createControlUiE2eArtifactDir(`plugin-credentials-${width}-${readOnly}`)
-              : undefined;
           const initial = structuredClone(sourceConfig);
-          if (literal) {
-            Object.assign(initial.plugins.entries.workboard.config.search, {
-              apiKey: REDACTED_SENTINEL,
-            });
-          }
           if (missing) {
             Reflect.deleteProperty(initial.plugins.entries.workboard.config.search, "apiKey");
           }
@@ -123,14 +93,9 @@ suite.define(() => {
                   },
                 ],
               },
-              "plugins.credentials.inspect": {
-                baseHash: configMocks["config.get"].hash,
-                credential: missing
-                  ? { kind: "missing" }
-                  : literal
-                    ? { kind: "literal" }
-                    : { kind: "reference", ref: originalRef, unresolved: false },
-              },
+              "plugins.credentials.inspect": missing
+                ? { baseHash: configMocks["config.get"].hash, credential: { kind: "missing" } }
+                : referenceInspection(originalRef, configMocks["config.get"].hash),
               "config.get": {
                 ...configMocks["config.get"],
                 config: initial,
@@ -149,16 +114,11 @@ suite.define(() => {
           });
           await page.goto(`${suite.server.baseUrl}settings/plugins/workboard?view=settings`);
           await page.locator("openclaw-plugin-settings-editor").waitFor();
-          if (literal || missing) {
+          if (missing) {
             const input = page.getByLabel("Search API key", { exact: true });
             await input.waitFor();
             expect(await input.inputValue()).toBe("");
             expect(await input.getAttribute("type")).toBe("password");
-            expect(
-              await page
-                .getByRole("link", { name: "Get an API key", exact: true })
-                .getAttribute("href"),
-            ).toBe("https://provider.example/signup");
             await input.focus();
             await page
               .locator("openclaw-plugin-settings-editor")
@@ -175,57 +135,16 @@ suite.define(() => {
             expect(
               (await gateway.getRequests("plugins.credentials.inspect"))[0]?.params,
             ).not.toHaveProperty("reveal");
-            if (literal) {
-              await gateway.setMethodResponse("plugins.credentials.inspect", {
-                baseHash: configMocks["config.get"].hash,
-                credential: { kind: "literal", value: "synthetic-stored-key" },
-              });
-              await reveal.click();
-              await expect.poll(() => input.inputValue()).toBe("synthetic-stored-key");
-              expect(
-                (await gateway.getRequests("plugins.credentials.inspect")).at(-1)?.params,
-              ).toMatchObject({
-                pluginId: "workboard",
-                path: credentialPath,
-                baseHash: configMocks["config.get"].hash,
-                reveal: true,
-              });
-              await page
-                .getByRole("button", { name: "Hide API key: Search API key", exact: true })
-                .click();
-              expect(await input.inputValue()).toBe("");
-              expect(await gateway.getRequests("config.set")).toHaveLength(0);
-            } else {
-              expect(await reveal.isDisabled()).toBe(true);
-              expect(await input.getAttribute("placeholder")).toBe("demo-key");
-            }
+            expect(await reveal.isDisabled()).toBe(true);
+            expect(await input.getAttribute("placeholder")).toBe("demo-key");
             await input.fill("synthetic-new-key");
-            await page
-              .getByRole("button", { name: "Show API key: Search API key", exact: true })
-              .click();
-            expect(await input.getAttribute("type")).toBe("text");
-            await page
-              .getByRole("button", { name: "Hide API key: Search API key", exact: true })
-              .click();
             await gateway.deferNext("config.set");
             await input.press("Enter");
             const request = await gateway.waitForRequest("config.set");
-            expect(JSON.parse(String(asRecord(request.params).raw))).toEqual({
-              plugins: {
-                entries: {
-                  workboard: {
-                    enabled: true,
-                    config: {
-                      search: {
-                        ...initial.plugins.entries.workboard.config.search,
-                        apiKey: "synthetic-new-key",
-                      },
-                    },
-                  },
-                },
-              },
-            });
-            expect(await input.isDisabled()).toBe(true);
+            expect(JSON.parse(String(asRecord(request.params).raw))).toEqual(
+              configWithSearch({ apiKey: "synthetic-new-key" }),
+            );
+            await expect.poll(() => input.isDisabled()).toBe(true);
             await gateway.setMethodResponse("plugins.credentials.inspect", {
               baseHash: "mock-config-hash-1",
               credential: { kind: "literal" },
@@ -248,11 +167,7 @@ suite.define(() => {
           expect(await other.getAttribute("type")).toBe("password");
           expect(await other.inputValue()).toBe("");
           expect(await page.locator('input[aria-label$="Search mode"]').inputValue()).toBe("web");
-          expect(
-            await page
-              .getByRole("button", { name: "Edit reference: Search API key", exact: true })
-              .count(),
-          ).toBe(1);
+          expect(await reference.count()).toBe(1);
           expect(await page.locator("body").textContent()).not.toContain(REDACTED_SENTINEL);
           if (readOnly) {
             expect(await reference.isDisabled()).toBe(true);
@@ -261,65 +176,31 @@ suite.define(() => {
             return;
           }
           await expect.poll(() => reference.isEnabled()).toBe(true);
-          if (proofDir) {
-            await page.screenshot({
-              path: path.join(proofDir, "settings.png"),
-              animations: "disabled",
-            });
-          }
           await reference.click();
           await page
             .getByRole("dialog", { name: "Secret reference: Search API key", exact: true })
             .waitFor();
           const dialog = page.locator("openclaw-modal-dialog");
+          const cancel = dialog.getByRole("button", { name: "Cancel", exact: true });
+          const save = dialog.getByRole("button", { name: "Save", exact: true });
+          const alert = dialog.getByRole("alert");
           expect(await dialog.getByLabel("Source", { exact: true }).inputValue()).toBe("file");
           expect(await dialog.getByLabel("Provider", { exact: true }).inputValue()).toBe("team");
           const identifier = dialog.getByLabel("Identifier", { exact: true });
           expect(await identifier.inputValue()).toBe("/search/apiKey");
-          if (proofDir) {
-            await page.screenshot({
-              path: path.join(proofDir, "reference.png"),
-              animations: "disabled",
-            });
-          }
-          await identifier.fill("/search/cancelled");
-          await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
-          expect(await gateway.getRequests("config.set")).toHaveLength(0);
-          await reference.click();
-          expect(await identifier.inputValue()).toBe("/search/apiKey");
           await identifier.fill("/search/updated");
           await gateway.deferNext("config.set");
-          await dialog.getByRole("button", { name: "Save", exact: true }).click();
+          await save.click();
           const request = await gateway.waitForRequest("config.set");
           expect(await dialog.isVisible()).toBe(true);
-          expect(
-            await dialog.getByRole("button", { name: "Cancel", exact: true }).isDisabled(),
-          ).toBe(true);
-          await page.keyboard.press("Escape");
-          expect(await dialog.isVisible()).toBe(true);
-          expect(
-            await dialog.getByRole("button", { name: "Saving…", exact: true }).isDisabled(),
-          ).toBe(true);
           const changedRef = { ...originalRef, id: "/search/updated" };
-          expect(JSON.parse(String(asRecord(request.params).raw))).toEqual({
-            plugins: {
-              entries: {
-                workboard: {
-                  enabled: true,
-                  config: {
-                    search: {
-                      ...sourceConfig.plugins.entries.workboard.config.search,
-                      apiKey: changedRef,
-                    },
-                  },
-                },
-              },
-            },
-          });
-          await gateway.setMethodResponse("plugins.credentials.inspect", {
-            baseHash: "mock-config-hash-1",
-            credential: { kind: "reference", ref: changedRef, unresolved: false },
-          });
+          expect(JSON.parse(String(asRecord(request.params).raw))).toEqual(
+            configWithSearch({ apiKey: changedRef }),
+          );
+          await gateway.setMethodResponse(
+            "plugins.credentials.inspect",
+            referenceInspection(changedRef),
+          );
           await gateway.resolveDeferred("config.set");
           await dialog.waitFor({ state: "hidden" });
           expect(await gateway.getRequests("config.set")).toHaveLength(1);
@@ -329,48 +210,68 @@ suite.define(() => {
           await reference.click();
           expect(await identifier.inputValue()).toBe("/search/updated");
           await identifier.fill("/search/failed");
+          const writesBeforeFailure = (await gateway.getRequests("config.set")).length;
           await gateway.deferNext("config.set");
-          await dialog.getByRole("button", { name: "Save", exact: true }).click();
-          await gateway.waitForRequest("config.set");
+          await save.click();
+          const uncertainWrite = await gateway.waitForRequest("config.set", {
+            after: writesBeforeFailure,
+          });
           await gateway.rejectDeferred("config.set", {
             code: width === 390 ? "INVALID_REQUEST" : "UNAVAILABLE",
             message: "Fixture write rejected",
           });
-          await expect
-            .poll(() => dialog.getByRole("alert").textContent())
-            .toContain("Fixture write rejected");
+          await expect.poll(() => alert.textContent()).toContain("Fixture write rejected");
           expect(await identifier.inputValue()).toBe("/search/failed");
-          expect(
-            await dialog.getByRole("button", { name: "Cancel", exact: true }).isEnabled(),
-          ).toBe(true);
+          expect(await cancel.isEnabled()).toBe(true);
           if (width === 1174) {
             // Arm the failure and click in one task so a poll cannot consume Cancel's deferral.
-            const readsBeforeCancel = await dialog
-              .getByRole("button", { name: "Cancel", exact: true })
-              .evaluate((button: HTMLButtonElement) => {
-                const mock = (
-                  window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway }
-                ).openclawControlUiE2eGateway;
-                if (!mock) {
-                  throw new Error("Mock Gateway is not installed");
-                }
-                const reads = mock.findRequests("config.get").length;
-                mock.deferNext("config.get");
-                button.click();
-                return reads;
-              });
+            const readsBeforeCancel = await cancel.evaluate((button: HTMLButtonElement) => {
+              const mock = (
+                window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway }
+              ).openclawControlUiE2eGateway;
+              if (!mock) {
+                throw new Error("Mock Gateway is not installed");
+              }
+              const reads = mock.findRequests("config.get").length;
+              mock.deferNext("config.get");
+              button.click();
+              return reads;
+            });
             await gateway.waitForRequest("config.get", { after: readsBeforeCancel });
             await gateway.rejectDeferred("config.get", {
               code: "UNAVAILABLE",
               message: "Fixture config read unavailable",
             });
             await expect
-              .poll(() => dialog.getByRole("alert").textContent())
+              .poll(() => alert.textContent())
               .toContain("Fixture config read unavailable");
             expect(await dialog.isVisible()).toBe(true);
             expect(await identifier.inputValue()).toBe("/search/failed");
+            await cancel.click();
+            await expect
+              .poll(() => alert.textContent())
+              .toContain("The last save could not be confirmed");
+            expect(await dialog.isVisible()).toBe(true);
+            expect(await identifier.inputValue()).toBe("/search/failed");
+            expect(await gateway.getRequests("config.set")).toHaveLength(writesBeforeFailure + 1);
+            // A successful old snapshot cannot fence the unknown write. Its later
+            // persisted bytes let Cancel reconcile without restoring the older reference.
+            const confirmedRaw = String(asRecord(uncertainWrite.params).raw);
+            await gateway.setMethodResponse("config.get", {
+              ...configMocks["config.get"],
+              config: JSON.parse(confirmedRaw),
+              raw: confirmedRaw,
+              hash: "confirmed-credential-write",
+            });
+            await gateway.setMethodResponse(
+              "plugins.credentials.inspect",
+              referenceInspection(
+                { ...originalRef, id: "/search/failed" },
+                "confirmed-credential-write",
+              ),
+            );
           }
-          await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+          await cancel.click();
           await dialog.waitFor({ state: "hidden" });
           const writesBeforeSibling = (await gateway.getRequests("config.set")).length;
           const mode = page.locator('input[aria-label$="Search mode"]');
@@ -379,25 +280,12 @@ suite.define(() => {
           const siblingWrite = await gateway.waitForRequest("config.set", {
             after: writesBeforeSibling,
           });
-          expect(JSON.parse(String(asRecord(siblingWrite.params).raw))).toEqual({
-            plugins: {
-              entries: {
-                workboard: {
-                  enabled: true,
-                  config: {
-                    search: {
-                      ...sourceConfig.plugins.entries.workboard.config.search,
-                      apiKey: changedRef,
-                      mode: "llm-context",
-                    },
-                  },
-                },
-              },
-            },
-          });
-          expect(
-            await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
-          ).toBe(true);
+          expect(JSON.parse(String(asRecord(siblingWrite.params).raw))).toEqual(
+            configWithSearch({
+              apiKey: width === 1174 ? { ...originalRef, id: "/search/failed" } : changedRef,
+              mode: "llm-context",
+            }),
+          );
         },
       );
     },

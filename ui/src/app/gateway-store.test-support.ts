@@ -1,6 +1,7 @@
-// Shared harness for the gateway-store test suites (base + restart split);
-// keeps the fake client and store factory in one place under the max-lines cap.
-import { vi } from "vitest";
+// Native client observation shared by the Gateway store fixtures.
+import { expectDefined } from "@openclaw/normalization-core";
+import { onTestFinished, vi } from "vitest";
+import * as browserGateway from "../api/gateway.ts";
 import type {
   GatewayBrowserClient,
   GatewayBrowserClientOptions,
@@ -10,100 +11,85 @@ import type {
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { loadSettings } from "./settings.ts";
-
 export const GATEWAY_STORE_TEST_HELLO: GatewayHelloOk = {
   type: "hello-ok",
   protocol: 1,
   auth: { role: "operator", scopes: [] },
 };
-
 export function createGatewayEvent(
   event = "chat",
   payload: unknown = {},
   seq = 1,
 ): GatewayEventFrame {
-  return {
-    type: "event",
-    event,
-    payload,
-    seq,
-    stateVersion: { presence: seq, health: seq },
-  };
+  return { type: "event", event, payload, seq, stateVersion: { presence: seq, health: seq } };
 }
-
-class FakeGatewayClient {
-  started = 0;
-  stopped = 0;
-  readonly instanceId: string;
-
-  constructor(readonly opts: GatewayBrowserClientOptions) {
-    this.instanceId = opts.instanceId ?? "";
-  }
-
-  start() {
-    this.started += 1;
-  }
-
-  stop() {
-    this.stopped += 1;
-  }
-
-  request = vi.fn((_method: string, _params: unknown): Promise<unknown> =>
-    Promise.reject(new Error("unexpected gateway request")),
+const NativeGatewayBrowserClient = browserGateway.GatewayBrowserClient;
+const constructedOptions = new WeakMap<GatewayBrowserClient, GatewayBrowserClientOptions>();
+export function captureGatewayClients(
+  observe?: (client: GatewayBrowserClient, options: GatewayBrowserClientOptions) => void,
+): void {
+  const constructor = vi.spyOn(browserGateway, "GatewayBrowserClient").mockImplementation(
+    class extends NativeGatewayBrowserClient {
+      constructor(options: GatewayBrowserClientOptions) {
+        super(options);
+        constructedOptions.set(this, options);
+        observe?.(this, options);
+      }
+    },
   );
-
-  addEventListener() {
-    return () => {};
-  }
+  onTestFinished(() => constructor.mockRestore());
 }
-
+function observeGatewayClient(client: GatewayBrowserClient) {
+  const testOptions = expectDefined(
+    constructedOptions.get(client),
+    "native Gateway fixture client",
+  );
+  // These fixtures drive admission callbacks, not the socket recovery handshake.
+  Object.defineProperties(client, {
+    recoveryScope: { configurable: true, writable: true, value: undefined },
+    recoveryScopeReady: { configurable: true, writable: true, value: undefined },
+    connectSent: { configurable: true, value: Promise.resolve(true) },
+  });
+  const observed = Object.assign(client, {
+    testOptions,
+    started: 0,
+    stopped: 0,
+    request: vi.spyOn(client, "request").mockRejectedValue(new Error("unexpected gateway request")),
+  });
+  vi.spyOn(observed, "start").mockImplementation(() => {
+    observed.started += 1;
+  });
+  const stop = observed.stop.bind(observed);
+  vi.spyOn(observed, "stop").mockImplementation(() => {
+    observed.stopped += 1;
+    stop();
+  });
+  return observed;
+}
 export function createGatewayStoreTestStore(
-  params: {
+  params: NonNullable<Parameters<typeof createApplicationGateway>[3]> & {
     settings?: ReturnType<typeof loadSettings>;
-    persistDefaultConnectionSettings?: boolean;
-    resourceBasePath?: string;
-    clientOptions?: Pick<
-      GatewayBrowserClientOptions,
-      "clientName" | "mode" | "platform" | "deviceFamily" | "instanceId" | "scopes"
-    >;
+    configureClient?: (client: ReturnType<typeof observeGatewayClient>) => void;
   } = {},
 ) {
-  const clients: FakeGatewayClient[] = [];
-  const gateway = createApplicationGateway(
-    params.settings ?? loadSettings(),
-    "",
-    "",
-    (opts) => {
-      const client = new FakeGatewayClient(opts);
-      clients.push(client);
-      return client as unknown as GatewayBrowserClient;
-    },
-    {
-      persistDefaultConnectionSettings: params.persistDefaultConnectionSettings,
-      resourceBasePath: params.resourceBasePath,
-      clientOptions: params.clientOptions,
-    },
+  captureGatewayClients();
+  const clients: ReturnType<typeof observeGatewayClient>[] = [];
+  const { settings = loadSettings(), configureClient, ...options } = params;
+  const gateway = createApplicationGateway(settings, "", "", options);
+  onTestFinished(
+    gateway.subscribe(({ client }) => {
+      if (client && !clients.some((observed) => observed === client)) {
+        const observed = observeGatewayClient(client);
+        clients.push(observed);
+        configureClient?.(observed);
+      }
+    }),
   );
-  const current = () => {
-    const client = clients.at(-1);
-    if (!client) {
-      throw new Error("expected a gateway client");
-    }
-    return client;
-  };
-  return { gateway, clients, current };
+  return { gateway, clients, current: () => expectDefined(clients.at(-1), "gateway client") };
 }
-
 export function stubGatewayStoreTestGlobals() {
   vi.stubGlobal("localStorage", createStorageMock());
   vi.stubGlobal("sessionStorage", createStorageMock());
   vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
-  vi.stubGlobal("location", {
-    protocol: "http:",
-    host: "127.0.0.1:18789",
-    hostname: "127.0.0.1",
-    origin: "http://127.0.0.1:18789",
-    pathname: "/",
-    href: "http://127.0.0.1:18789/",
-  } as Location);
+  vi.stubGlobal("location", new URL("http://127.0.0.1:18789/"));
 }

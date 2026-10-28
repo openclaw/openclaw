@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it } from "vitest";
-import { waitForDead } from "../../../test/helpers/process-wait.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { waitForDead, waitForFixtureFile } from "../../../test/helpers/process-wait.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
@@ -13,6 +14,7 @@ import { killProcessTree } from "../../process/kill-tree.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const LEAF_CLEANUP_GUARD_MS = 5_000;
 
 it.skipIf(process.platform === "win32").each([
   { managed: false, generation: false, lifetime: "live" },
@@ -34,6 +36,11 @@ it.skipIf(process.platform === "win32").each([
     }
     const control = path.join(root, "control");
     fs.mkdirSync(control);
+    const file = (name: string) => path.join(root, name);
+    const read = (name: string) => fs.readFileSync(file(name), "utf8");
+    const leasePath = path.join(control, "managed-update-handoffs.sqlite");
+    const contender = () =>
+      createManagedHandoffLeaseStore({ databasePath: leasePath, serviceManagerEnv: process.env });
     const owner = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor);
     const importArgs = owner.pathname.endsWith(".ts")
       ? ["--import", path.resolve("scripts/tsx.mjs")]
@@ -41,7 +48,8 @@ it.skipIf(process.platform === "win32").each([
     const leaf = `
       import fs from 'node:fs';
       import {setTimeout} from 'node:timers/promises';
-      const {grant,root}=JSON.parse(fs.readFileSync(0,'utf8'));
+      import {text} from 'node:stream/consumers';
+      const {grant,root}=JSON.parse(await text(process.stdin));
       fs.writeFileSync(root+'/leaf-pid',String(process.pid));
       const {withDelegatedUpdateCommandExecutor}=await import(${JSON.stringify(owner.href)});
       const parentPid=grant.originalParent.executor.pid;
@@ -52,14 +60,14 @@ it.skipIf(process.platform === "win32").each([
       }
       try {
         await withDelegatedUpdateCommandExecutor(grant,grant.runId,grant.root,async fence=>{
-          process.stdout.write('LEAF_READY\\n');
+          fs.writeFileSync(root+'/ready','ready');
           while(!fs.existsSync(root+'/proceed')) await setTimeout(10);
           let current=false;
           try {fence.assertCurrent();current=true;fs.writeFileSync(root+'/effect','owned');}
           finally {observe(current);}
         });
       } catch(error) {
-        if(${lifetime === "altered grant"}) {observe(false);process.stdout.write('LEAF_REFUSED\\n');}
+        if(${lifetime === "altered grant"}) {observe(false);fs.writeFileSync(root+'/ready','refused');}
         process.stderr.write(String(error));process.exitCode=1;
       }
     `;
@@ -89,7 +97,11 @@ it.skipIf(process.platform === "win32").each([
               {input:JSON.stringify({grant,root}),beforeInput,timeoutMs:15000,killProcessTree:true,requireProcessTreeExtinction:true,onOutputChunk:chunk=>process.stdout.write(chunk)}));
           if(result.code!==0)throw new Error(result.stderr);
         },{legacyPackageParent:parent,...(${managed} ? {legacyPackageHandoff:{handoffId:'shipped-owner',root}} : {})});
-      } catch(error) {process.stderr.write(String(error));process.exitCode=1;}
+      } catch(error) {
+        if(process.env.LEGACY_SECOND_PROBE==='1')
+          fs.writeFileSync(root+'/second-error.json',JSON.stringify({name:error.name,message:error.message}));
+        process.stderr.write(String(error));process.exitCode=1;
+      }
     `;
     const wrappedContinuation = `
       import {spawn} from 'node:child_process';
@@ -123,9 +135,9 @@ it.skipIf(process.platform === "win32").each([
       const launch=probe=>spawn(process.execPath,[...${JSON.stringify(importArgs)},'--input-type=module','-e',${JSON.stringify(managed ? wrappedContinuation : continuation)}],{stdio:probe?['ignore','inherit','inherit','ipc']:'inherit',env:{...process.env,...(probe?{LEGACY_SECOND_PROBE:'1'}:{})}});
       if(${managed && lifetime === "live"}){
         const second=launch(true);
-        second.once('message',()=>process.stdout.write('SECOND_READY\\n'));
-        second.once('exit',code=>process.stdout.write('SECOND_EXIT:'+code+'\\n'));
-        process.once('message',()=>{second.send('probe');process.disconnect();});
+        second.once('message',()=>process.send('second-ready'));
+        second.once('exit',(code,signal)=>process.send({event:'second-exit',code,signal},()=>process.disconnect()));
+        process.once('message',()=>second.send('probe'));
       }
       const child=launch(false);
       child.once('exit',code=>{if(process.connected)process.disconnect();process.exitCode=code??1;});
@@ -137,89 +149,65 @@ it.skipIf(process.platform === "win32").each([
       detached: true,
       stdio: ["ignore", "pipe", "pipe", "ipc"],
     });
-    const ready = createDeferred();
     const secondReady = createDeferred();
-    const secondExited = createDeferred();
-    let output = "";
-    expectDefined(child.stdout, "Legacy fixture stdout").on("data", (chunk) => {
-      output += String(chunk);
-      if (output.includes("LEAF_READY\n") || output.includes("LEAF_REFUSED\n")) {
-        ready.resolve();
-      }
-      if (output.includes("SECOND_EXIT:")) {
-        secondExited.resolve();
-      }
-      if (output.includes("SECOND_READY\n")) {
+    const secondExited = createDeferred<unknown>();
+    child.on("message", (message) => {
+      if (message === "second-ready") {
         secondReady.resolve();
+      } else {
+        secondExited.resolve(message);
       }
     });
-    expectDefined(child.stderr, "Legacy fixture stderr").on("data", (chunk) => {
-      output += String(chunk);
-    });
-    const closed = new Promise<void>((resolve, reject) => {
-      child.once("error", reject);
-      child.once("close", () => resolve());
-    });
-    let parentExitCode: number | null | undefined;
-    let parentExitSignal: NodeJS.Signals | null | undefined;
-    const exited = new Promise<void>((resolve) => {
-      child.once("exit", (code, signal) => {
-        parentExitCode = code;
-        parentExitSignal = signal;
-        resolve();
+    let output = "";
+    for (const stream of [child.stdout, child.stderr]) {
+      expectDefined(stream, "Legacy fixture output").on("data", (chunk) => {
+        output += String(chunk);
       });
-    });
+    }
+    const closed = once(child, "close");
+    const exited = once(child, "exit");
+    void exited.catch(() => {}); // Admission can fail before the exit join.
     let termination: ReturnType<typeof killProcessTree>;
     const killGroup = () => {
       if (child.pid && !termination) {
         termination = killProcessTree(child.pid, { detached: true });
       }
     };
-    const deadlineFailure = createDeferred<never>();
-    const deadline = setTimeout(() => {
-      deadlineFailure.reject(new Error(`Legacy descendant did not settle: ${output}`));
-      killGroup();
-    }, 20_000);
+    const signal = AbortSignal.timeout(20_000);
+    const wait = <T>(work: PromiseLike<T>) => withinTest(work, signal);
     try {
-      await Promise.race([
-        deadlineFailure.promise,
-        managed && lifetime === "live"
-          ? Promise.all([ready.promise, secondReady.promise])
-          : ready.promise,
-        closed.then(() => {
-          throw new Error(`Legacy descendant exited before admission: ${output}`);
-        }),
-      ]);
+      await wait(
+        Promise.all([
+          waitForFixtureFile(file("ready"), closed),
+          ...(managed && lifetime === "live" ? [secondReady.promise] : []),
+        ]),
+      );
       if (!child.pid) {
         throw new Error("Missing fixture parent PID");
       }
       if (generation) {
-        const contender = createManagedHandoffLeaseStore({
-          databasePath: path.join(control, "managed-update-handoffs.sqlite"),
-          serviceManagerEnv: process.env,
-        });
-        expect(contender.acquire(targetRoot, "target-contender", { kind: "update" }).kind).toBe(
+        expect(contender().acquire(targetRoot, "target-contender", { kind: "update" }).kind).toBe(
           "busy",
         );
       }
       if (managed && lifetime === "live") {
         child.send("probe");
-        await Promise.race([deadlineFailure.promise, secondExited.promise, closed]);
-        expect(output).toContain("SECOND_EXIT:1");
-        expect(output).toContain("Legacy finalizer lifetime could not be acquired.");
+        expect(await wait(Promise.race([secondExited.promise, closed])), output).toEqual({
+          event: "second-exit",
+          code: 1,
+          signal: null,
+        });
+        // Process exit does not order delivery across stdout and stderr pipes.
+        expect(JSON.parse(read("second-error.json"))).toEqual({
+          name: "UpdateCommandRecoveryPendingError",
+          message: "Legacy finalizer lifetime could not be acquired.",
+        });
       }
       if (lifetime === "exited") {
         child.kill("SIGKILL");
-        await Promise.race([deadlineFailure.promise, exited]);
-        expect(parentExitCode, output).toBeNull();
-        expect(parentExitSignal, output).toBe("SIGKILL");
-        const contender = createManagedHandoffLeaseStore({
-          databasePath: path.join(control, "managed-update-handoffs.sqlite"),
-          serviceManagerEnv: process.env,
-        });
-        expect(contender.acquire(root, "successor", { kind: "update" }).kind).toBe("busy");
+        expect(await wait(exited), output).toEqual([null, "SIGKILL"]);
+        expect(contender().acquire(root, "successor", { kind: "update" }).kind).toBe("busy");
       }
-      const leasePath = path.join(control, "managed-update-handoffs.sqlite");
       if (lifetime === "replaced row") {
         const writer = new DatabaseSync(leasePath);
         writer
@@ -231,35 +219,28 @@ it.skipIf(process.platform === "win32").each([
         fs.copyFileSync(leasePath, `${leasePath}.replacement`);
         fs.renameSync(`${leasePath}.replacement`, leasePath);
       }
-      fs.writeFileSync(path.join(root, "proceed"), "go");
-      await Promise.race([deadlineFailure.promise, closed]);
-      const continuationExitPath = path.join(root, "continuation-exit.json");
+      fs.writeFileSync(file("proceed"), "go");
+      await wait(closed);
       expect(
-        fs.existsSync(continuationExitPath),
+        fs.existsSync(file("continuation-exit.json")),
         `Legacy continuation did not exit: ${output}`,
       ).toBe(true);
-      expect(JSON.parse(fs.readFileSync(continuationExitPath, "utf8")), output).toEqual({
+      expect(JSON.parse(read("continuation-exit.json")), output).toEqual({
         code: lifetime === "live" ? 0 : 1,
       });
       if (lifetime === "live") {
-        expect(parentExitCode, output).toBe(0);
+        expect((await exited)[0], output).toBe(0);
       }
-      expect(JSON.parse(fs.readFileSync(path.join(root, "observation.json"), "utf8"))).toEqual({
+      expect(JSON.parse(read("observation.json"))).toEqual({
         current: lifetime === "live",
-        parentPid: managed
-          ? Number(fs.readFileSync(path.join(root, "wrapper-pid"), "utf8"))
-          : child.pid,
+        parentPid: managed ? Number(read("wrapper-pid")) : child.pid,
         ...(managed ? { helperPid: child.pid } : {}),
       });
-      expect(fs.existsSync(path.join(root, "effect"))).toBe(lifetime === "live");
-      const database = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"), {
-        readOnly: true,
-      });
-      try {
+      expect(fs.existsSync(file("effect"))).toBe(lifetime === "live");
+      {
+        using database = new DatabaseSync(leasePath, { readOnly: true });
         if (managed) {
-          const originalRow = JSON.parse(
-            fs.readFileSync(path.join(root, "original-row.json"), "utf8"),
-          );
+          const originalRow = JSON.parse(read("original-row.json"));
           expect(
             database
               .prepare("SELECT * FROM managed_update_handoffs WHERE install_root = ?")
@@ -274,29 +255,27 @@ it.skipIf(process.platform === "win32").each([
             database.prepare("SELECT COUNT(*) AS count FROM managed_update_handoffs").get()?.count,
           ).toBe(managed ? 1 : 0);
         }
-      } finally {
-        database.close();
       }
       if (lifetime === "exited") {
-        const contender = createManagedHandoffLeaseStore({
-          databasePath: path.join(control, "managed-update-handoffs.sqlite"),
-          serviceManagerEnv: process.env,
-        });
-        const acquired = contender.acquire(root, "successor", { kind: "update" });
+        const store = contender();
+        const acquired = store.acquire(root, "successor", { kind: "update" });
         expect(acquired.kind).toBe("acquired");
         if (acquired.kind === "acquired") {
-          expect(contender.release(acquired.lease)).toBe(true);
+          expect(store.release(acquired.lease)).toBe(true);
         }
       }
     } finally {
-      clearTimeout(deadline);
       // Failed assertions must also release the independently grouped native leaf.
-      fs.writeFileSync(path.join(root, "proceed"), "go");
+      fs.writeFileSync(file("proceed"), "go");
       killGroup();
       await closed.finally(() => termination?.force());
-      const leafPidFile = path.join(root, "leaf-pid");
+      const leafPidFile = file("leaf-pid");
       if (fs.existsSync(leafPidFile)) {
-        await waitForDead(Number(fs.readFileSync(leafPidFile, "utf8")), 5_000);
+        // Cleanup hang guard after the owner released/killed the group, not a readiness race.
+        await waitForDead(
+          Number(fs.readFileSync(leafPidFile, "utf8")),
+          AbortSignal.timeout(LEAF_CLEANUP_GUARD_MS),
+        );
       }
     }
   },

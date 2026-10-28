@@ -3,22 +3,21 @@ function normalizeGatewayScope(gatewayUrl: string, includeSearch: boolean): stri
   if (!trimmed) {
     return "default";
   }
-  try {
-    const browserLocation = (
-      globalThis as {
-        location?: { protocol: string; host: string; pathname: string };
-      }
-    ).location;
-    const base = browserLocation
-      ? `${browserLocation.protocol}//${browserLocation.host}${browserLocation.pathname || "/"}`
-      : undefined;
-    const parsed = base ? new URL(trimmed, base) : new URL(trimmed);
-    const pathname =
-      parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/+$/, "") || parsed.pathname;
-    return `${parsed.protocol}//${parsed.host}${pathname}${includeSearch ? parsed.search : ""}`;
-  } catch {
+  const browserLocation = (
+    globalThis as {
+      location?: { protocol: string; host: string; pathname: string };
+    }
+  ).location;
+  const base = browserLocation
+    ? `${browserLocation.protocol}//${browserLocation.host}${browserLocation.pathname || "/"}`
+    : undefined;
+  const parsed = URL.parse(trimmed, base);
+  if (!parsed) {
     return trimmed;
   }
+  const pathname =
+    parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/+$/, "") || parsed.pathname;
+  return `${parsed.protocol}//${parsed.host}${pathname}${includeSearch ? parsed.search : ""}`;
 }
 
 /** Normalizes the gateway URL scope used for origin-bound device tokens. */

@@ -5,31 +5,29 @@ import {
 import {
   ErrorCodes,
   errorShape,
-  type TerminalUploadParams,
   validateTerminalUploadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isCanonicalTerminalUploadBase64 } from "../../../packages/gateway-protocol/src/schema/terminal-constants.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
+import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-function invalid(respond: GatewayRequestHandlerOptions["respond"], detail: string): void {
-  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, detail));
-}
 
 export const terminalUploadHandlers: GatewayRequestHandlers = {
   "terminal.upload": async (opts) => {
     const { params, respond, context } = opts;
+    const invalid = (detail: string) =>
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, detail));
     if (!assertValidParams(params, validateTerminalUploadParams, "terminal.upload", respond)) {
       return;
     }
     const connId = opts.client?.connId;
     if (!connId) {
-      invalid(respond, "terminal requires an authenticated connection");
+      invalid("terminal requires an authenticated connection");
       return;
     }
-    const p = params as TerminalUploadParams;
-    if (!isCanonicalTerminalUploadBase64(p.contentBase64)) {
-      invalid(respond, "invalid terminal.upload base64 content");
+    if (!isCanonicalTerminalUploadBase64(params.contentBase64)) {
+      invalid("invalid terminal.upload base64 content");
       return;
     }
     if (!context.terminalSessions || !context.isTerminalEnabled()) {
@@ -37,16 +35,18 @@ export const terminalUploadHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const result = await context.terminalSessions.upload(connId, p.sessionId, {
-        name: p.name,
-        contentBase64: p.contentBase64,
+      const result = await context.terminalSessions.upload(connId, params.sessionId, {
+        name: params.name,
+        contentBase64: params.contentBase64,
+        assertCommitAllowed: captureGatewayClientUploadCommitGuard({
+          method: "terminal.upload",
+          requestParams: params,
+          client: opts.client,
+          context,
+        }),
       });
       if (!result) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown terminal session "${p.sessionId}"`),
-        );
+        invalid(`unknown terminal session "${params.sessionId}"`);
         return;
       }
       respond(true, {
@@ -64,10 +64,12 @@ export const terminalUploadHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          error instanceof Error ? error.message : "terminal upload failed",
-        ),
+        error instanceof SessionMutationAuthorizationChangedError
+          ? error.error
+          : errorShape(
+              ErrorCodes.UNAVAILABLE,
+              error instanceof Error ? error.message : "terminal upload failed",
+            ),
       );
     }
   },

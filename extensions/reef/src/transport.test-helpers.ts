@@ -3,7 +3,7 @@ import { ReefTransportClient } from "./transport.js";
 import type { InboxEntry, ReefKeys } from "./types.js";
 
 export const ts = 1_752_300_000;
-export const signing = {
+const signing = {
   secretKey: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
   publicKey: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
 };

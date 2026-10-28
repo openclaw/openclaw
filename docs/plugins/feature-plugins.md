@@ -34,36 +34,48 @@ backend operations remain available.
 
 ## Enable custom plugin UI
 
-In the Control UI, open **Settings → Labs → Custom plugin UI**. The setting
-defaults to off and controls native browser code from user-installed plugins,
-including local development plugins. The equivalent config is:
+Native browser UI is available by default for enabled plugins, including
+user-installed and local development plugins. There is no Custom plugin UI
+Labs switch. Install and enable only plugins you trust: their browser code runs
+inside the Control UI with each signed-in viewer's Gateway permissions.
+Installed plugin details and existing enable reviews disclose a native UI entry
+when the inspected manifest declares one. Catalog install surfaces explain that
+plugin code may include native UI when that metadata is not available yet.
+
+The existing config key remains an advanced opt-out. To disable native browser
+code from user-installed plugins, set:
 
 ```json5
 {
   gateway: {
     controlUi: {
-      experimental: { customPlugins: true },
+      experimental: { customPlugins: false },
     },
   },
 }
 ```
 
+The historical `experimental` path is retained for configuration compatibility,
+not as a Labs requirement. On upgrade, an existing explicit `false` stays off;
+`true` and an omitted key allow native UI. No migration or config rewrite is
+required. Remove the explicit `false` or set `true` to restore the default.
+
 Changes apply without restarting the Gateway, and connected Control UI pages
-refresh their plugin views automatically. Disabling it prevents custom native UI
-from loading and removes its views. Reload browser tabs to clear plugin
-JavaScript that already ran. This does not uninstall plugins or disable their
-backend operations, tools, or services.
-Ordinary plugin APIs, sandboxed dashboard widgets, and MCP Apps are unaffected.
+refresh their plugin views automatically. Disabling native UI prevents new
+loading and removes its views. Reload browser tabs to clear JavaScript that
+already ran. This does not uninstall plugins or disable their backend
+operations, tools, or services. Ordinary plugin APIs, sandboxed dashboard
+widgets, and MCP Apps are unaffected.
 
 Native UI shipped with OpenClaw remains available for enabled bundled plugins,
-including Workboard. OpenClaw determines bundled status from the loaded
-plugin's origin, not its name or a manifest claim. A separately installed copy
-uses the custom-plugin setting.
+including Workboard, even with the advanced opt-out. OpenClaw determines bundled
+status from the loaded plugin's origin, not its name or a manifest claim. A
+separately installed copy follows the user-installed plugin policy.
 
 ## Create a feature plugin
 
-Enable the [Custom plugin UI lab](/plugins/feature-plugins#enable-custom-plugin-ui) before opening the
-scaffold's browser views.
+The generated plugin’s native browser views are available once it is installed
+and enabled; no Labs opt-in is needed.
 
 ```bash
 openclaw plugins init draft-review --name "Draft Review" --type feature
@@ -74,16 +86,16 @@ npm run validate
 openclaw plugins install .
 ```
 
-The scaffold includes a draft-analysis operation, an agent tool, a native page,
+The starter plugin includes a draft-analysis operation, an agent tool, a native page,
 and a composer replacement. Open Draft Review from the Control UI sidebar, or
-open **Plugins → Customize UI** and choose Draft composer. Choose Built-in to
+open **Plugins → Advanced → Customize UI** and choose Draft composer. Choose Built-in to
 restore a view. Replacement selection belongs to the current browser runtime;
 it is not a persistent configuration setting.
 
-Customization controls live on the Plugins page. There is no floating
-customization button. If a workspace replacement hides navigation, open
-`/plugins` under your Control UI base URL to choose Built-in; the Plugins page
-always uses the built-in workspace.
+Customization controls are the first section in **Plugins → Advanced**. If a
+workspace replacement hides navigation, open
+`/settings/plugins?tab=advanced` under your Control UI base URL to choose Built-in; plugin settings
+always use the built-in workspace.
 
 The project has three public SDK imports:
 
@@ -120,6 +132,27 @@ context.signal.throwIfAborted();
 output.textContent = `${report.words} words`;
 ```
 
+For a large contract, keep schemas out of the browser bundle with a small
+descriptor checked against `FeatureClientContract<typeof contract>`. Import the
+canonical contract as a type, include its `pluginId` and every operation's
+`kind`, and pass the canonical type explicitly:
+
+```typescript
+import type { FeatureClientContract } from "openclaw/plugin-sdk/feature-contract";
+import type { contract } from "./contract.js";
+
+const browserContract = {
+  pluginId: "writing",
+  operations: { analyze: { kind: "query" } },
+} satisfies FeatureClientContract<typeof contract>;
+
+const feature = createFeatureClient<typeof contract>(browserContract, context.host);
+```
+
+The canonical contract still supplies input, output, and event types. The
+backend continues validating schemas and authorizing operations; the browser
+descriptor only supplies routing and query-watch metadata.
+
 Backend inputs, outputs, and events are validated as bounded JSON. Define
 meaningful limits in the schemas as well. Use the plugin's existing runtime
 and storage APIs for durable state and services.
@@ -143,14 +176,43 @@ Its id must match the plugin manifest. Register contributions through
 | `registerAction`                        | Composer, header, or session menu actions. An optional `resolve` function supplies the current label, hidden state, and disabled state. |
 | `registerPanel`                         | Session panels.                                                                                                                         |
 | `registerAccessory`                     | Session header content.                                                                                                                 |
+| `registerInlineView`                    | Data-populated native views in the chat transcript.                                                                                     |
 | `registerWidget`                        | Native dashboard widget views.                                                                                                          |
 | `registerReplacement`                   | `workspace`, `session-list`, `composer`, `transcript`, or `tool-result`.                                                                |
+
+Set a navigation item's `parent` to another navigation ID in the same plugin to
+show it nested while the parent or a child destination is active; children only
+appear as top-level entries when pinned. Set `defaultVisible: false` to offer an
+item in **Customize**, and call `host.ui.pinNavigation(id)` after registering it
+to append an ordinary saved sidebar pin. Pinning is a no-op for an unknown or
+already pinned ID; call it for a user action such as creation, not on every
+catalog refresh, so a later manual removal stays removed.
+
+Navigation items can supply `actions` with an `id`, `label`, optional `icon` and
+`destructive` flag, and a `run` callback. The sidebar opens these actions on
+right-click, **Shift+F10**, or the context-menu key on the focused link, including
+nested and pinned entries. Selecting an action closes the menu; **Escape** or an
+outside click dismisses it. Use `host.ui.isNavigationPinned(id)` to read a saved
+pin and `host.ui.unpinNavigation(id)` to remove it; repeated calls have no additional effect. Plugins choose
+which actions to offer and own confirmation for destructive actions.
 
 For a dashboard widget, also register a backend
 `api.session.controls.registerControlUiDescriptor` with `surface: "widget"`,
 the same widget `id`, and its `requiredScopes`. The Gateway advertises widget
 kinds for the current connection's scopes; a native view renders only when its
 matching backend descriptor is advertised.
+
+Use `host.ui.openPanel("editor", { sessionKey, agentId })` to open one of your
+registered panels beside a session. Omitting the session uses the currently
+selected session. The host owns navigation and sidebar presentation, including
+opening from a plugin page before the session pane has mounted. Only the same
+plugin's registered panels can be opened; retained handles expire with their
+view or activation.
+
+For a document link, use `host.navigation.pageHref(...)` to build a link to a
+registered plugin page. That page can resolve its document and call `openPanel`
+with the target session. This does not intercept ordinary file links or change
+the Files plugin's ownership.
 
 Use `host.ui.invalidate()` when plugin-owned state changes the presentation of
 an action or another contribution. Namespace custom elements and CSS with the
@@ -179,7 +241,7 @@ does not expose a separate headless chat service for a completely independent
 workspace.
 
 A composer replacement receives the current draft, admission state, disabled
-reason, and canonical `setDraft`, `send`, and optional `abort` operations. Use
+reason, and standard `setDraft`, `send`, and optional `abort` operations. Use
 these operations instead of issuing a raw chat RPC. `send()` resolves `true`
 when admitted, `false` when rejected, or `undefined` for a local command or no
 submission. Show rejected submissions rather than clearing the draft. Composer
@@ -187,19 +249,53 @@ operations retire when the view stops being presented, even while its DOM and
 host lifetime survive. Use the fresh operations supplied by `update` when the
 view is presented again; previously captured operations remain retired.
 
-The host also exposes session and agent snapshots and operations, plugin page
-navigation, authenticated requests, and subscriptions. Session and agent
-`refresh()` operations fetch new snapshots and reject on failure, so a plugin
+### Host capabilities
+
+Use the host for shared application behavior:
+
+| Capability              | Purpose                                                                                                       |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `agents`                | Agent snapshots, selection, scope, and refresh.                                                               |
+| `components`            | Host-owned dialogs, pickers, and session dashboards.                                                          |
+| `connection`            | Current connection and operator capabilities.                                                                 |
+| `dock` (optional)       | Open a conversation beside the current page with `openSession`, close the dock, and observe `openSessionKey`. |
+| `navigation`            | Open plugin pages and build their URLs.                                                                       |
+| `request` and `onEvent` | Authenticated Gateway requests and event subscriptions.                                                       |
+| `sessions`              | Session snapshots, independent queries, navigation, creation, and updates.                                    |
+| `subscribe`             | Observe host snapshot changes, including the docked session key.                                              |
+| `ui`                    | Register, select, and invalidate plugin contributions.                                                        |
+
+`onEvent("session.message", listener)` listeners receive complete messages;
+delivery begins once the Gateway confirms full-body delivery for this connection.
+The host requests complete roster bodies when the first such listener registers
+and releases that preference when the last listener is removed. Listeners
+registered before connect include the preference in the initial handshake.
+During runtime registration, bodyless roster frames already in flight still
+update core UI consumers but are never delivered to plugin listeners. Other
+event subscriptions are unchanged, and no reconnect is required.
+
+Session and agent `refresh()` operations fetch new snapshots and reject on failure, so a plugin
 can display an error and offer Retry. `host.sessions.rows` is the current
 filtered, paginated session list. `host.sessions.refresh()` preserves that
 list's filters. Use `host.sessions.observe(query, onChange)` to maintain an
 independent session query without replacing it. The query accepts `agentId`,
 `search`, `archived` (`true`, `false`, or `"all"`), `limit`, `configuredAgentsOnly`,
-`includeGlobal`, `includeUnknown`, `includeDerivedTitles`, and
+`includeGlobal`, `includeUnknown`, `excludeDock`, `includeDerivedTitles`, and
 `includeLastMessage`. The callback receives `{ result, loading, error }`,
 starting with the current snapshot; `result` is null until data is available.
 Results contain `sessions` and the Gateway's `hasMore`, `nextOffset`, and
 `totalCount` pagination metadata.
+
+Create a conversation with `host.sessions.create({ agentId, displayName?, label?,
+surface? })`. `displayName` is a reusable display title; `label` is a unique
+session label. For a conversation owned by a plugin page's dock, pass
+`surface: "plugin-dock"`. This immutable creation-surface marker hides the
+conversation from ordinary session lists without changing its human creator,
+access, sharing, or sandbox rules. Rows expose `isDock` and `createdSurface`;
+`createdVia` retains its ordinary operator provenance.
+Independent host list queries exclude dock conversations by default; pass
+`excludeDock: false` when deliberately including them.
+The session key remains usable with `host.dock.openSession` and direct reads.
 
 The host fetches the query and keeps it current through session events,
 observer recovery, and its normal deletion handling. `observe` returns
@@ -227,6 +323,179 @@ options, a selected `value`, an `accessibleLabel`, and an `onSelect` callback.
 With `searchable: true`, lists longer than eight options show a search field.
 The picker matches option labels, values, and descriptions.
 
+### Dock a conversation
+
+Check `host.dock` before offering a dock action. From a mounted view, use
+`context.host.dock.openSession({ sessionKey, agentId, label, context })` to open
+the named conversation alongside your plugin page. `label` supplies the dock
+tab title; the optional `context` is `{ page, detail? }`, where `page` can be
+your plugin page id and `detail` contains string reference fields.
+
+The host reuses the Home dock's placement controls, chat pane, drafts, and
+attachments. Page navigation keeps the conversation dock open; ending the
+plugin activation closes a dock that activation still owns. Use
+`host.subscribe(...)` to refresh your action when `host.dock.openSessionKey`
+changes. See the [dock contract](/plugins/sdk-subpaths#control-ui-conversation-dock)
+for replacement, visibility, access, and context limits.
+
+## Inline views from tools
+
+A native plugin can register a predefined inline component and return **data** for
+it from a tool. The agent selects the tool and its arguments; it does not author
+HTML, JavaScript, templates, or a component. This is native plugin UI, not a
+sandboxed widget or MCP App.
+
+Register the backend display contract and return its descriptor:
+
+```typescript
+api.session.controls.registerControlUiDescriptor({
+  id: "incident-dashboard",
+  surface: "inline",
+  label: "Incident dashboard",
+  requiredScopes: ["operator.read"],
+  version: 1,
+});
+
+api.registerTool({
+  name: "show_incident",
+  label: "Show incident",
+  description: "Show an incident dashboard.",
+  parameters: {
+    type: "object",
+    properties: { incidentId: { type: "string" } },
+    required: ["incidentId"],
+  },
+  async execute(_toolCallId, args: { incidentId: string }) {
+    return api.inlineView(
+      "incident-dashboard",
+      { incidentId: args.incidentId },
+      {
+        version: 1,
+        summary: `Showing incident ${args.incidentId}.`,
+      },
+    );
+  },
+});
+```
+
+The helper binds the canonical manifest plugin id (not the display name). It
+returns ordinary text content containing the required nonblank summary, plus
+`details: { pluginInlineView: { pluginId, viewId, version, payload, summary } }`.
+
+Payloads must be plain JSON, at most **16 KiB of serialized UTF-8**. Summaries
+are at most **4 KiB of serialized UTF-8 JSON**, keeping the complete result within nested tool
+history limits. Store larger data in the plugin and pass an ordinary resource
+id. The helper requires an explicit integer interface version from **1 to 65535**.
+The native tool host binds the record to its originating invocation; model text,
+arbitrary MCP results, and imported external JSON cannot claim that association.
+Core checks bounded JSON, not plugin data semantics. Plugin code owns semantic
+validation, and HTML-looking strings are not inspected or blocked by core.
+
+In the browser entry, register the matching installed component:
+
+```typescript
+export default defineControlUiPlugin({
+  id: "incident-tools",
+  activate(host) {
+    host.ui.registerInlineView({
+      id: "incident-dashboard",
+      version: 1,
+      mount(element, context) {
+        const heading = document.createElement("h3");
+        heading.textContent = "Incident dashboard";
+        element.append(heading);
+        // Read context.props.payload and fetch the resource through context.host.
+        return { dispose: () => heading.remove() };
+      },
+    });
+  },
+});
+```
+
+The host supplies `payload`, `toolCallId`, `toolName`, `sessionKey`, and
+`agentId`. Payload fields cannot override that context. Each tool call owns
+an independent view, keyed by its owning run and tool-call id; repeated receipt of the same
+result does not add another instance. There is no in-place tool-driven update
+protocol in this version. Use plugin-owned state and `host.ui.invalidate()`
+for interactive state shared with another view.
+
+- **Live:** the view appears as soon as its successful tool result arrives,
+  after its summary, without waiting for the agent final reply or expanding
+  tool details. Direct and nested Tool Search calls use their actual call identity.
+- **History:** reload reconstructs the display from the stored descriptor,
+  never by rerunning the agent or tool. Only rows near the scroll viewport mount
+  components. Offscreen instances are disposed/aborted; a measured-height
+  placeholder preserves scrolling while the row remains present. Virtualization
+  can remove the entire row, and scrolling back may mount a new instance.
+- **Availability:** the backend descriptor, browser registration, current viewer
+  scopes, plugin enablement, and Custom plugin UI lab must still permit the view.
+  Missing plugins/views, unsupported interface versions, loading, and activation
+  failures preserve the saved summary. Availability is derived at presentation
+  time; it is not stored or transferred in the record and never discards payload.
+  Reinstalling a compatible renderer can display the same saved data without
+  rerunning tools. No original caller privilege is inherited by a later viewer.
+- **Errors:** a thrown mount/update error or `context.reportError?.(error)`
+  retires that instance and offers **Retry plugin view**. A stale instance cannot
+  report an error against its replacement. Handle ordinary action errors inside
+  your component when a full remount is not appropriate.
+- **Versioning:** the backend declaration, browser registration, and saved record
+  must match exactly on plugin id, view id, and interface version. This version is
+  independent of the plugin package version. Register versions 1 and 2 alongside
+  each other to keep both histories displayable; each can reuse or adapt plugin
+  code. Core never guesses the newest renderer from a schema, archives renderer
+  bundles, or migrates payloads. Unversioned records do not mount native views.
+- **Other surfaces:** text-only clients/model context receive the tool normal
+  summary content; this feature does not force channel tool-progress delivery.
+  Inline views are not dashboard pins or hosted/embed dispatch targets.
+
+### Persistence and transfer
+
+The canonical durable record is { pluginId, viewId, version, payload, summary }.
+Native transcript storage and the native HTML session export retain it and its
+host-bound invocation metadata, including when the plugin is absent. The HTML
+export embeds the full session data, not executable plugin renderer bundles; it
+does not mount native plugins itself or provide a general rich-session importer.
+
+Control UI Markdown export and the native session-catalog/Beam mirror are
+**minimal text exports**: they deliberately emit the saved summary, without the
+component payload or mounting authority. Beam's current closed text protocol
+and catalog text imports do **not** implement full-fidelity inline-view transfer.
+External imports remain untrusted text and do not become authorized native views.
+
+Both historical data policies are valid and plugin-owned:
+
+- **Dynamic reference:** save an ordinary resource id and read fresh data when
+  mounted. The incident example follows this policy. Historical loss, deleted
+  resources, and changed server state are the plugin's responsibility.
+- **Snapshot:** save self-contained bounded data for a historical display.
+
+Core restores the saved reference/data with an explicitly compatible installed
+renderer; it does not promise identical historical pixels or prohibit network
+reads. Mounting may hydrate through plugin Gateway methods, but never reruns the
+original tool or model.
+
+### Inline plugin author responsibilities
+
+Mounting must be repeatable display/read work. Do not acknowledge an incident,
+submit a payment, or mutate a resource just because history was scrolled into
+view. Mutations belong to an explicit click or the original authorized tool.
+Release subscriptions, observers, and framework roots in `dispose`, and honor
+`context.signal` after asynchronous work.
+
+Native plugins run with the existing installation trust boundary and current
+connection authority. The host does not add a sandbox, per-plugin RPC allowlist,
+or generic HTML policing. Plugin authors own safe rendering: prefer
+`textContent`/framework text interpolation for data. If your component uses
+HTML, URL, script, or other executable sinks, validate/sanitize for that sink.
+Never persist credentials, secrets, or bearer-capability references in a payload
+or summary. On every backend request, authorize the **current viewer** against
+resource/session ACLs; a saved resource id is not authorization.
+
+See the runnable [incident example](https://github.com/openclaw/openclaw/tree/main/examples/inline-incident):
+it reads current status, acknowledges through a scope-checked plugin Gateway
+method on an explicit button click, and shares plugin state with a session panel
+opened using both `sessionKey` and `agentId`.
+
 ## Build and reload
 
 `package.json` names the browser **source**:
@@ -247,12 +516,149 @@ under `dist/control-ui/<content-hash>/`, then publishes their paths in
 and assets usable. `plugins validate` and `plugins build --check` detect stale
 source, assets, or generated metadata.
 
-The build emits one self-contained JavaScript entry and optional CSS. Embed
-other static assets in the bundle; arbitrary files and split lazy chunks are
+Host runtime builds keep the authored root manifest unchanged and publish their
+browser declaration in `dist/openclaw.plugin.json`. That generated declaration
+replaces only `controlUi`; config schemas and activation still come from the root
+manifest. Explicit `plugins build` publishes the root declaration and retires
+the previous generated pointer. Both layouts keep asset paths relative to the
+plugin root.
+
+### Solid views
+
+Solid 2 is supported for native plugin views. Use a `.tsx` browser entry and
+declare `solid-js` and `@solidjs/web` as your plugin's runtime dependencies,
+with matching versions. Add `@solidjs/compiler` and `esbuild` to its development
+dependencies. Put `/** @jsxImportSource @solidjs/web */` before the imports in
+each Solid `.tsx` file. This standard JSX pragma selects the plugin's own Solid
+compiler; other JSX files retain esbuild's existing renderer semantics. The
+builder bundles the renderer, and the host does not supply a shared runtime.
+For typechecking, set `jsx: "preserve"` and `jsxImportSource: "@solidjs/web"`.
+
+The framework-neutral view contract stays the same:
+
+```tsx
+import { render } from "@solidjs/web";
+import type { ControlUiView } from "openclaw/plugin-sdk/control-ui";
+/** @jsxImportSource @solidjs/web */
+import { createSignal } from "solid-js";
+
+const mount: ControlUiView = (container, context) => {
+  const [label, setLabel] = createSignal(context.props.label ?? "Ready");
+  const dispose = render(() => <p>{label()}</p>, container);
+  return {
+    update(next) {
+      setLabel(next.props.label ?? "Ready");
+    },
+    dispose,
+  };
+};
+```
+
+Keep one renderer responsible for each container's children and dispose its root
+when the view ends. Solid 2 batches reactive writes; keep synchronous request
+authority and mutation guards with their existing owners.
+
+### Packaged Settings presentations
+
+A bundled presentation can render a host-owned Settings placement without
+activating the plugin's runtime UI. Memory Core uses this for the Memory overview and indexed-search panel,
+including when memory is off, another engine is selected, or the Gateway is offline.
+Declare the placement alongside the built entry:
+
+```json
+{
+  "controlUi": {
+    "entry": "dist/control-ui/<content-hash>/index.js",
+    "activation": "settings-only",
+    "settingsViews": [
+      { "section": "memory", "panel": "overview" },
+      { "section": "memory", "panel": "memories" }
+    ]
+  }
+}
+```
+
+The browser module exports `pluginId` and a `settingsViews` array of
+`ControlUiSettingsView` from `openclaw/plugin-sdk/control-ui`. Each view declares
+its `placement` and a `mount(container, context)` that returns `update(snapshot)`
+and `dispose()`. Memory views support the overview and Memories panel. A channel plugin can instead declare
+`{ "section": "channels", "panel": "detail", "channelId": "<owned-channel>" }` and export a
+`ControlUiChannelSettingsView`. The channel must appear in the declaring manifest's `channels`.
+These placements do not register arbitrary Settings routes.
+
+The host supplies the selected Settings agent, engine availability, connection
+state, advertised Gateway methods, locale, shared Settings components, and bounded navigation. Authenticated
+operator RPC remains trusted native UI authority, bound to the mounted view's
+lifetime. A memory view stays mounted through a same-client reconnect: `connected` and
+`connectionEpoch` arrive through `update(snapshot)`, and a reply to a request sent in an earlier
+epoch rejects. Agent, engine, route, advertised method catalog, Gateway client, account or
+recovery identity, and operator-access changes end the view; retained callbacks then reject.
+An absent method catalog means the method is unavailable. The host keeps
+routing, agent selection, engine decisions, and config writes; the plugin owns
+its presentation, status requests, and indexed-memory search. Search and full-file
+reads remain agent-scoped through the existing Gateway methods. Only an explicit
+user action searches memory or probes embedding readiness.
+
+A channel view receives status/account metadata, locale, connection state, and a
+`presented` flag. Its draft belongs to the Channels page: closing or switching the
+detail modal detaches its DOM without disposing the view. Same-client reconnects
+retain the draft but retire in-flight requests. Gateway/client, channel owner,
+plugin runtime, config owner, or administrator-access replacement ends the view.
+Keep pending-operation identity synchronous and stop rendering hidden updates
+until the view is presented again.
+
+`context.mountConfig(container)` mounts the real host-owned channel schema editor;
+its returned disposer releases that slot. `context.refresh(probe)` refreshes channel
+status. The channel context's `request` accepts an account ID, relative path
+segments, `PUT` or `POST`, a JSON body, and a caller cancellation signal. The host
+encodes the path once under `/api/channels/<owned-channel>/<account>/`, retains
+credentials, and checks connected administrator authority before dispatch, before
+credential retry, and after consuming the response body. Plugins never receive
+arbitrary credentialed URLs, headers, or tokens. A plugin may add its own operation
+deadline, which also covers retries and response-body consumption. The context
+returns parsed JSON plus HTTP status and a sanitized error message; backend route
+validation and mutation authority remain unchanged.
+
+The optional `login` capability connects a channel presentation to an existing
+application-owned login flow shared with setup. Its snapshot exposes the current
+message, QR image, connected state, and busy state; opaque login session keys stay
+with the host. `start(force)` and `wait()` retain the setup account selection.
+`captureLogout()` returns the selected account and a guarded logout callback;
+capture it before awaiting the host's `confirm` dialog. Account or linked-state
+changes, lost administrator access, replaced owners, and ended connection epochs
+invalidate that callback. Closing the detail does not reset the shared login flow.
+The host confirmation retains normal dialog admission and cancels when its view
+or transport lifetime ends. Optional phone and duration formatters preserve the
+host's locale conventions.
+
+The normal plugin builder preserves this declaration. The Control UI build
+loads it from the completed bundled distribution with the same package identity,
+asset revision, and immutable JavaScript/CSS generation. A Settings-only entry
+is excluded from runtime UI activation; existing `defineControlUiPlugin` entries
+keep their required `activate(host)` contract.
+
+Source-checkout `pnpm ui:build` and `pnpm ui:dev` prepare declared Settings
+presentations through the same plugin builder before reading that distribution.
+The dev server serves the validated generated JavaScript and CSS without runtime
+plugin activation. Restart the dev server after editing plugin presentation
+sources to rebuild their immutable generation.
+
+### Bundle boundaries
+
+The build emits a JavaScript entry, optional CSS, and JavaScript chunks for lazy
+imports. The content hash covers the complete generation, including its chunks.
+CSS remains attached to the entry; loading a JavaScript chunk does not attach
+stylesheets. Authenticated bootstrap advertises the entry, stylesheets, and static
+JavaScript dependencies so the browser can preload them together before the
+Gateway connection completes. Activation still waits for the current catalog,
+asset grants, and all stylesheets; dynamic imports remain lazy.
+Embed other static assets in the bundle; arbitrary files are
 outside this build contract. Imports must be analyzable by esbuild: literal
 paths and supported glob imports work; unresolved dynamic imports, indirect
-`require` calls, and `require.resolve` are rejected. Each asset is limited to
-4 MiB, with an 8 MiB limit for the whole plugin browser build.
+`require` calls, and `require.resolve` are rejected. Import validation checks the
+emitted chunks after tree-shaking: unused dependency loaders may be removed, but
+every retained browser import must resolve to a bundled chunk. Each asset is limited to
+4 MiB, with an 8 MiB and 128-asset limit for the whole plugin browser build.
 
 Plugins with prebuilt browser bundles can omit `package.json.openclaw.controlUi`
 and declare the built entry and styles in `openclaw.plugin.json.controlUi`.
@@ -262,7 +668,7 @@ limits. TypeScript sources, source maps, and hidden files are excluded. Keep all
 dependencies inside that directory; traversal is limited to eight nested directory
 levels and 128 entries, counting both files and directories.
 
-After browser-only edits, rebuild the installed plugin and open **Plugins →
+After browser-only edits, rebuild the installed plugin and open **Plugins → Advanced →
 Customize UI → Reload plugin UI** as an administrator. The Gateway captures a fresh asset revision and
 notifies connected browsers. Asset loading or activation failures are reported
 in the UI customization controls; the previous working activation is retained
@@ -331,8 +737,10 @@ Approved application uses those retained bytes through the managed plugin
 installer. Changing the source file while approval is pending cannot change
 what is installed. Existing install policy and capability checks still apply.
 
-Artifact approval does not enable the Custom plugin UI lab. The installed
-backend can run with that setting off; its native browser UI remains gated.
+Artifact approval includes trusted backend code and native UI. Browser views
+are available by default after the plugin is enabled, unless the Gateway’s
+advanced native UI opt-out is explicitly false. Backend activation and observed
+browser activation remain separate outcomes.
 
 Pending imports expire after one hour. OpenClaw keeps at most eight pending
 archives of up to 32 MiB each and prunes expired or oldest imports when another
@@ -358,6 +766,9 @@ activation reports from currently connected Control UI clients. A report names t
 revision and either `activated` or `failed`; it is a browser activation receipt,
 not proof that every feature operation has been exercised. No connected browser
 means no browser activation receipt yet.
+Each catalog refresh sends its activation receipts together after the plugins
+finish initializing or reach their activation deadline. Healthy plugins become
+available immediately while other plugins are still initializing.
 
 For the underlying manifest fields, see [Plugin manifest](/plugins/manifest).
 For install, update, and removal, see [Manage plugins](/plugins/manage-plugins).

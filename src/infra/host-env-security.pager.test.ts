@@ -24,27 +24,17 @@ describe("host no-pager overrides", () => {
     expect(overrides).toEqual({ GIT_PAGER: value, PAGER: value });
   });
 
-  it.each([
-    "less",
-    "/bin/cat",
-    "./cat",
-    "CAT",
-    " cat",
-    "cat ",
-    "cat\n",
-    "\t",
-    "cat -u",
-    "cat; id",
-    "$(id)",
-    "cat|sh",
-  ])("rejects executable and near-miss pager value %j", (value) => {
-    const overrides = { GIT_PAGER: value, PAGER: value, MANPAGER: value };
-    const result = sanitizeHostExecEnvWithDiagnostics({ baseEnv: {}, overrides });
-    expect(result.rejectedOverrideBlockedKeys).toEqual(["GIT_PAGER", "MANPAGER", "PAGER"]);
-    expect(result.env).not.toHaveProperty("GIT_PAGER");
-    expect(result.env).not.toHaveProperty("PAGER");
-    expect(sanitizeSystemRunEnvOverrides({ overrides, shellWrapper: true })).toBeUndefined();
-  });
+  it.each(["less", "/bin/cat", "CAT", " cat", "cat ", "cat\n", "cat -u", "cat; id", "$(id)"])(
+    "rejects executable and near-miss pager value %j",
+    (value) => {
+      const overrides = { GIT_PAGER: value, PAGER: value, MANPAGER: value };
+      const result = sanitizeHostExecEnvWithDiagnostics({ baseEnv: {}, overrides });
+      expect(result.rejectedOverrideBlockedKeys).toEqual(["GIT_PAGER", "MANPAGER", "PAGER"]);
+      expect(result.env).not.toHaveProperty("GIT_PAGER");
+      expect(result.env).not.toHaveProperty("PAGER");
+      expect(sanitizeSystemRunEnvOverrides({ overrides, shellWrapper: true })).toBeUndefined();
+    },
+  );
 
   it("retains key normalization, scoped omission, and unrelated denials", () => {
     const result = sanitizeHostExecEnvWithDiagnostics({

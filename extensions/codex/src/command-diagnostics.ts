@@ -2,15 +2,23 @@ import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-profile.js";
+import {
+  resolveCodexAppServerAuthProfileIdForAgent,
+  withCodexAppServerAuthProfileIdAtEffect,
+} from "./app-server/auth-profile.js";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
+import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
+import type { CodexPluginConfig } from "./app-server/config-contracts.js";
 import { isJsonObject } from "./app-server/protocol.js";
 import {
   bindingStoreKey,
   sessionBindingIdentity,
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.js";
-import type { CodexDiagnosticsTarget } from "./command-diagnostics-state.js";
+import type {
+  CodexDiagnosticsTarget,
+  PendingCodexDiagnosticsConfirmation,
+} from "./command-diagnostics-state.js";
 import {
   buildDiagnosticsTags,
   codexDiagnosticsTargetsMatch,
@@ -18,7 +26,6 @@ import {
   deletePendingCodexDiagnosticsConfirmation,
   formatCodexDiagnosticsTargetLines,
   formatCodexDiagnosticsUploadResult,
-  formatDiagnosticsUsage,
   normalizeDiagnosticsReason,
   parseDiagnosticsArgs,
   readCodexDiagnosticsConfirmationScope,
@@ -29,8 +36,14 @@ import {
   recordCodexDiagnosticsUpload,
 } from "./command-diagnostics-support.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
-import { CODEX_CONTROL_METHODS, type CodexCommandDeps } from "./command-handler-deps.js";
+import type { CodexCommandDeps } from "./command-handler-deps.js";
 import { resolveControlTarget } from "./command-handler-scope.js";
+import { safeCodexControlRequest } from "./command-rpc.js";
+
+const NO_DIAGNOSTICS_THREAD = [
+  "No Codex thread is attached to this OpenClaw session yet.",
+  "Use /codex threads to find a thread, then /codex resume <thread-id> before sending diagnostics.",
+].join("\n");
 
 type CodexDiagnosticsCandidate = Omit<
   CodexDiagnosticsTarget,
@@ -43,18 +56,22 @@ type CodexDiagnosticsCandidate = Omit<
 
 export async function handleCodexDiagnosticsFeedback(
   deps: CodexCommandDeps,
-  context: PluginCommandContext,
-  pluginConfig: unknown,
+  ctx: PluginCommandContext,
+  pluginConfig: CodexPluginConfig | undefined,
   args: string,
-  commandPrefix: string,
 ): Promise<PluginCommandResult> {
-  const ctx = { ...context };
   if (ctx.senderIsOwner !== true) {
     return { text: "Only an owner can send Codex diagnostics." };
   }
   const parsed = parseDiagnosticsArgs(args);
   if (parsed.action === "usage") {
-    return { text: formatDiagnosticsUsage(commandPrefix) };
+    return {
+      text: [
+        "Usage: /codex diagnostics [note]",
+        "Usage: /codex diagnostics confirm <token>",
+        "Usage: /codex diagnostics cancel <token>",
+      ].join("\n"),
+    };
   }
   if (parsed.action === "confirm") {
     return {
@@ -64,25 +81,6 @@ export async function handleCodexDiagnosticsFeedback(
   if (parsed.action === "cancel") {
     return { text: cancelCodexDiagnosticsFeedback(ctx, parsed.token) };
   }
-  if (ctx.diagnosticsUploadApproved === true) {
-    return {
-      text: await sendCodexDiagnosticsFeedbackForContext(deps, ctx, pluginConfig, parsed.note),
-    };
-  }
-  if (ctx.diagnosticsPreviewOnly === true) {
-    return {
-      text: await previewCodexDiagnosticsFeedbackApproval(deps, ctx, parsed.note),
-    };
-  }
-  return await requestCodexDiagnosticsFeedbackApproval(deps, ctx, parsed.note, commandPrefix);
-}
-
-async function requestCodexDiagnosticsFeedbackApproval(
-  deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
-  note: string,
-  commandPrefix: string,
-): Promise<PluginCommandResult> {
   if (!(await hasAnyCodexDiagnosticsIdentity(ctx))) {
     return {
       text: "Cannot send Codex diagnostics because this command did not include a stable session identity.",
@@ -90,13 +88,32 @@ async function requestCodexDiagnosticsFeedbackApproval(
   }
   const targets = await resolveCodexDiagnosticsTargets(deps, ctx);
   if (targets.length === 0) {
+    return { text: NO_DIAGNOSTICS_THREAD };
+  }
+  if (ctx.diagnosticsUploadApproved === true) {
     return {
-      text: [
-        "No Codex thread is attached to this OpenClaw session yet.",
-        "Use /codex threads to find a thread, then /codex resume <thread-id> before sending diagnostics.",
-      ].join("\n"),
+      text: await sendCodexDiagnosticsFeedbackForTargets(
+        deps,
+        ctx,
+        pluginConfig,
+        parsed.note,
+        targets,
+      ),
     };
   }
+  if (ctx.diagnosticsPreviewOnly === true) {
+    return {
+      text: previewCodexDiagnosticsFeedbackApproval(targets, ctx, parsed.note),
+    };
+  }
+  return requestCodexDiagnosticsFeedbackApproval(targets, ctx, parsed.note);
+}
+
+function requestCodexDiagnosticsFeedbackApproval(
+  targets: CodexDiagnosticsTarget[],
+  ctx: PluginCommandContext,
+  note: string,
+): PluginCommandResult {
   const now = Date.now();
   const cooldownMessage = readCodexDiagnosticsTargetsCooldownMessage(targets, ctx, now);
   if (cooldownMessage) {
@@ -118,8 +135,8 @@ async function requestCodexDiagnosticsFeedbackApproval(
     ...readCodexDiagnosticsConfirmationScope(ctx),
     now,
   });
-  const confirmCommand = `${commandPrefix} confirm ${token}`;
-  const cancelCommand = `${commandPrefix} cancel ${token}`;
+  const confirmCommand = `/codex diagnostics confirm ${token}`;
+  const cancelCommand = `/codex diagnostics cancel ${token}`;
   const displayReason = reason ? formatCodexDisplayText(reason) : undefined;
   const lines = [
     targets.length === 1 ? "Codex runtime thread detected." : "Codex runtime threads detected.",
@@ -158,21 +175,11 @@ async function requestCodexDiagnosticsFeedbackApproval(
   };
 }
 
-async function previewCodexDiagnosticsFeedbackApproval(
-  deps: CodexCommandDeps,
+function previewCodexDiagnosticsFeedbackApproval(
+  targets: CodexDiagnosticsTarget[],
   ctx: PluginCommandContext,
   note: string,
-): Promise<string> {
-  if (!(await hasAnyCodexDiagnosticsIdentity(ctx))) {
-    return "Cannot send Codex diagnostics because this command did not include a stable session identity.";
-  }
-  const targets = await resolveCodexDiagnosticsTargets(deps, ctx);
-  if (targets.length === 0) {
-    return [
-      "No Codex thread is attached to this OpenClaw session yet.",
-      "Use /codex threads to find a thread, then /codex resume <thread-id> before sending diagnostics.",
-    ].join("\n");
-  }
+): string {
   const cooldownMessage = readCodexDiagnosticsTargetsCooldownMessage(targets, ctx, Date.now(), {
     includeThreadId: false,
   });
@@ -193,32 +200,27 @@ async function previewCodexDiagnosticsFeedbackApproval(
 async function confirmCodexDiagnosticsFeedback(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
   token: string,
 ): Promise<string> {
-  const pending = readPendingCodexDiagnosticsConfirmation(token, Date.now());
-  if (!pending) {
-    return "No pending Codex diagnostics confirmation was found. Run /diagnostics again to create a fresh request.";
+  const pending = consumeCodexDiagnosticsConfirmation(ctx, token, "confirm");
+  if (typeof pending === "string") {
+    return pending;
   }
-  if (!pending.senderId || !ctx.senderId) {
-    return "Cannot confirm Codex diagnostics because this command did not include the original sender identity.";
-  }
-  if (pending.senderId !== ctx.senderId) {
-    return "Only the user who requested these Codex diagnostics can confirm the upload.";
-  }
-  if (pending.channel !== ctx.channel) {
-    return "This Codex diagnostics confirmation belongs to a different channel.";
-  }
-  const scopeMismatch = readCodexDiagnosticsScopeMismatch(pending, ctx);
-  if (scopeMismatch) {
-    return scopeMismatch.confirmMessage;
-  }
-  deletePendingCodexDiagnosticsConfirmation(token);
   if (!pending.privateRouted && !(await hasAnyCodexDiagnosticsIdentity(ctx))) {
     return "Cannot send Codex diagnostics because this command did not include a stable session identity.";
   }
   const currentTargets = pending.privateRouted
-    ? resolvePendingCodexDiagnosticsTargets(deps, pending.targets, ctx.config)
+    ? (
+        await Promise.all(
+          pending.targets.map(async (target) => {
+            const binding = await deps.bindingStore.readAsync(target.identity);
+            return binding?.threadId
+              ? [await resolveCodexDiagnosticsTarget(target, binding, ctx.config)]
+              : [];
+          }),
+        )
+      ).flat()
     : await resolveCodexDiagnosticsTargets(deps, ctx);
   if (!codexDiagnosticsTargetsMatch(pending.targets, currentTargets)) {
     return "The Codex diagnostics sessions changed before confirmation. Run /diagnostics again for the current threads.";
@@ -229,29 +231,15 @@ async function confirmCodexDiagnosticsFeedback(
     pluginConfig,
     pending.note ?? "",
     currentTargets,
-    { cooldownScope: pending.scopeKey },
+    pending.scopeKey,
   );
 }
 
 function cancelCodexDiagnosticsFeedback(ctx: PluginCommandContext, token: string): string {
-  const pending = readPendingCodexDiagnosticsConfirmation(token, Date.now());
-  if (!pending) {
-    return "No pending Codex diagnostics confirmation was found.";
+  const pending = consumeCodexDiagnosticsConfirmation(ctx, token, "cancel");
+  if (typeof pending === "string") {
+    return pending;
   }
-  if (!pending.senderId || !ctx.senderId) {
-    return "Cannot cancel Codex diagnostics because this command did not include the original sender identity.";
-  }
-  if (pending.senderId !== ctx.senderId) {
-    return "Only the user who requested these Codex diagnostics can cancel the upload.";
-  }
-  if (pending.channel !== ctx.channel) {
-    return "This Codex diagnostics confirmation belongs to a different channel.";
-  }
-  const scopeMismatch = readCodexDiagnosticsScopeMismatch(pending, ctx);
-  if (scopeMismatch) {
-    return scopeMismatch.cancelMessage;
-  }
-  deletePendingCodexDiagnosticsConfirmation(token);
   return [
     "Codex diagnostics upload canceled.",
     "Codex sessions:",
@@ -259,42 +247,20 @@ function cancelCodexDiagnosticsFeedback(ctx: PluginCommandContext, token: string
   ].join("\n");
 }
 
-async function sendCodexDiagnosticsFeedbackForContext(
-  deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
-  pluginConfig: unknown,
-  note: string,
-): Promise<string> {
-  if (!(await hasAnyCodexDiagnosticsIdentity(ctx))) {
-    return "Cannot send Codex diagnostics because this command did not include a stable session identity.";
-  }
-  const targets = await resolveCodexDiagnosticsTargets(deps, ctx);
-  if (targets.length === 0) {
-    return [
-      "No Codex thread is attached to this OpenClaw session yet.",
-      "Use /codex threads to find a thread, then /codex resume <thread-id> before sending diagnostics.",
-    ].join("\n");
-  }
-  return await sendCodexDiagnosticsFeedbackForTargets(deps, ctx, pluginConfig, note, targets);
-}
-
 async function sendCodexDiagnosticsFeedbackForTargets(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
   note: string,
   targets: CodexDiagnosticsTarget[],
-  options: { cooldownScope?: string } = {},
+  cooldownScope?: string,
 ): Promise<string> {
   if (targets.length === 0) {
-    return [
-      "No Codex thread is attached to this OpenClaw session yet.",
-      "Use /codex threads to find a thread, then /codex resume <thread-id> before sending diagnostics.",
-    ].join("\n");
+    return NO_DIAGNOSTICS_THREAD;
   }
   const now = Date.now();
   const cooldownMessage = readCodexDiagnosticsTargetsCooldownMessage(targets, ctx, now, {
-    cooldownScope: options.cooldownScope,
+    cooldownScope,
   });
   if (cooldownMessage) {
     return cooldownMessage;
@@ -303,65 +269,122 @@ async function sendCodexDiagnosticsFeedbackForTargets(
   const sent: CodexDiagnosticsTarget[] = [];
   const failed: Array<{ target: CodexDiagnosticsTarget; error: string }> = [];
   for (const target of targets) {
-    const assertCurrent = () => {
-      ctx.assertOwnerCurrent?.();
-      const current = resolvePendingCodexDiagnosticsTargets(deps, [target], ctx.config);
-      if (!codexDiagnosticsTargetsMatch([target], current)) {
-        throw new Error("The Codex diagnostics session changed before upload; request it again.");
-      }
-    };
-    let connection: Awaited<ReturnType<typeof resolveCodexBindingAppServerConnection>>;
+    let prepared: Awaited<ReturnType<CodexCommandDeps["bindingStore"]["prepareRead"]>>;
     try {
-      connection = await resolveCodexBindingAppServerConnection({
+      prepared = await deps.bindingStore.prepareRead(target.identity);
+      const connection = await resolveCodexBindingAppServerConnection({
         binding: target,
         authProfileId: target.authProfileId,
         pluginConfig,
         agentDir: target.agentDir,
         config: ctx.config,
-        assertCurrent,
       });
+      const send = async (reader?: {
+        read(): Promise<string | undefined>;
+        assertCurrent(): void;
+      }) => {
+        let authProfileId = target.authProfileId;
+        const assertCurrent = () => {
+          ctx.assertOwnerCurrent?.();
+          reader?.assertCurrent();
+          const current = resolvePendingCodexDiagnosticsTarget(
+            target,
+            prepared?.read(),
+            authProfileId,
+          );
+          if (!codexDiagnosticsTargetsMatch([target], current ? [current] : [])) {
+            throw new Error(
+              "The Codex diagnostics session changed before upload; request it again.",
+            );
+          }
+        };
+        return safeCodexControlRequest(
+          pluginConfig,
+          CODEX_CONTROL_METHODS.feedback,
+          {
+            classification: "bug",
+            threadId: target.threadId,
+            includeLogs: true,
+            tags: buildDiagnosticsTags(ctx),
+            ...(reason ? { reason } : {}),
+          },
+          {
+            config: ctx.config,
+            agentDir: target.agentDir,
+            assertCurrent,
+            ...(reader
+              ? {
+                  assertDispatchCurrentAsync: async () => {
+                    authProfileId = await reader.read();
+                    assertCurrent();
+                  },
+                }
+              : {}),
+            ...(connection.clientAuthProfileId !== undefined
+              ? { authProfileId: connection.clientAuthProfileId }
+              : {}),
+            ...(connection.usesSupervisionConnection
+              ? { startOptions: connection.appServer.start }
+              : {}),
+            ...(target.sessionId ? { sessionId: target.sessionId } : {}),
+            ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
+          },
+        );
+      };
+      const response = connection.usesSupervisionConnection
+        ? await send()
+        : await withCodexAppServerAuthProfileIdAtEffect(
+            {
+              agentDir: target.agentDir,
+              authProfileId: prepared?.read()?.authProfileId,
+              config: ctx.config,
+            },
+            send,
+          );
+      if (!response.ok) {
+        failed.push({ target, error: response.error });
+        continue;
+      }
+      const responseThreadId = isJsonObject(response.value)
+        ? normalizeOptionalString(response.value.threadId)
+        : undefined;
+      sent.push({ ...target, threadId: responseThreadId ?? target.threadId });
+      recordCodexDiagnosticsUpload(target.threadId, ctx, now, cooldownScope);
     } catch (error) {
-      failed.push({
-        target,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      continue;
+      failed.push({ target, error: error instanceof Error ? error.message : String(error) });
+    } finally {
+      prepared?.release();
     }
-    const response = await deps.safeCodexControlRequest(
-      pluginConfig,
-      CODEX_CONTROL_METHODS.feedback,
-      {
-        classification: "bug",
-        threadId: target.threadId,
-        includeLogs: true,
-        tags: buildDiagnosticsTags(ctx),
-        ...(reason ? { reason } : {}),
-      },
-      {
-        config: ctx.config,
-        agentDir: target.agentDir,
-        assertCurrent,
-        ...(connection.clientAuthProfileId !== undefined
-          ? { authProfileId: connection.clientAuthProfileId }
-          : {}),
-        ...(connection.usesSupervisionConnection
-          ? { startOptions: connection.appServer.start }
-          : {}),
-        ...(target.sessionId ? { sessionId: target.sessionId } : {}),
-        ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
-      },
-    );
-    if (!response.ok) {
-      failed.push({ target, error: response.error });
-      continue;
-    }
-    const responseThreadId = isJsonObject(response.value)
-      ? normalizeOptionalString(response.value.threadId)
-      : undefined;
-    sent.push({ ...target, threadId: responseThreadId ?? target.threadId });
-    recordCodexDiagnosticsUpload(target.threadId, ctx, now, options.cooldownScope);
   }
   return formatCodexDiagnosticsUploadResult(sent, failed);
+}
+
+function consumeCodexDiagnosticsConfirmation(
+  ctx: PluginCommandContext,
+  token: string,
+  action: "confirm" | "cancel",
+): PendingCodexDiagnosticsConfirmation | string {
+  const pending = readPendingCodexDiagnosticsConfirmation(token, Date.now());
+  if (!pending) {
+    return action === "confirm"
+      ? "No pending Codex diagnostics confirmation was found. Run /diagnostics again to create a fresh request."
+      : "No pending Codex diagnostics confirmation was found.";
+  }
+  if (!pending.senderId || !ctx.senderId) {
+    return `Cannot ${action} Codex diagnostics because this command did not include the original sender identity.`;
+  }
+  if (pending.senderId !== ctx.senderId) {
+    return `Only the user who requested these Codex diagnostics can ${action} the upload.`;
+  }
+  if (pending.channel !== ctx.channel) {
+    return "This Codex diagnostics confirmation belongs to a different channel.";
+  }
+  const scopeMismatch = readCodexDiagnosticsScopeMismatch(pending, ctx);
+  if (scopeMismatch) {
+    return scopeMismatch;
+  }
+  deletePendingCodexDiagnosticsConfirmation(token);
+  return pending;
 }
 
 async function hasAnyCodexDiagnosticsIdentity(ctx: PluginCommandContext): Promise<boolean> {
@@ -384,10 +407,6 @@ async function resolveCodexDiagnosticsTargets(
       sessionKey: ctx.sessionKey,
       sessionId: ctx.sessionId,
       channel: ctx.channel,
-      channelId: ctx.channelId,
-      accountId: ctx.accountId,
-      messageThreadId: ctx.messageThreadId,
-      threadParentId: ctx.threadParentId,
     });
   }
   for (const session of ctx.diagnosticsSessions ?? []) {
@@ -409,10 +428,6 @@ async function resolveCodexDiagnosticsTargets(
       sessionKey: session.sessionKey,
       sessionId: session.sessionId,
       channel: session.channel,
-      channelId: session.channelId,
-      accountId: session.accountId,
-      messageThreadId: session.messageThreadId,
-      threadParentId: session.threadParentId,
     });
   }
   const seenBindingKeys = new Set<string>();
@@ -424,33 +439,32 @@ async function resolveCodexDiagnosticsTargets(
       continue;
     }
     seenBindingKeys.add(key);
-    const binding = deps.bindingStore.read(candidate.identity);
+    const binding = await deps.bindingStore.readAsync(candidate.identity);
     if (!binding?.threadId || seenThreadIds.has(binding.threadId)) {
       continue;
     }
     seenThreadIds.add(binding.threadId);
-    targets.push(resolveCodexDiagnosticsTarget(candidate, binding, ctx.config));
+    targets.push(await resolveCodexDiagnosticsTarget(candidate, binding, ctx.config));
   }
   return targets;
 }
 
-function resolvePendingCodexDiagnosticsTargets(
-  deps: CodexCommandDeps,
-  targets: readonly CodexDiagnosticsTarget[],
-  config?: PluginCommandContext["config"],
-): CodexDiagnosticsTarget[] {
-  const resolved: CodexDiagnosticsTarget[] = [];
-  for (const target of targets) {
-    const binding = deps.bindingStore.read(target.identity);
-    if (!binding?.threadId) {
-      continue;
-    }
-    resolved.push(resolveCodexDiagnosticsTarget(target, binding, config));
+function resolvePendingCodexDiagnosticsTarget(
+  target: CodexDiagnosticsTarget,
+  binding: CodexAppServerThreadBinding | undefined,
+  implicitAuthProfileId: string | undefined,
+): CodexDiagnosticsTarget | undefined {
+  if (!binding?.threadId) {
+    return undefined;
   }
-  return resolved;
+  const authProfileId =
+    binding.connectionScope === "supervision"
+      ? undefined
+      : binding.authProfileId?.trim() || implicitAuthProfileId;
+  return createCodexDiagnosticsTarget(target, binding, authProfileId);
 }
 
-function resolveCodexDiagnosticsTarget(
+async function resolveCodexDiagnosticsTarget(
   target: CodexDiagnosticsCandidate | CodexDiagnosticsTarget,
   binding: Pick<
     CodexAppServerThreadBinding,
@@ -461,6 +475,22 @@ function resolveCodexDiagnosticsTarget(
     | "authProfileId"
   >,
   config?: PluginCommandContext["config"],
+): Promise<CodexDiagnosticsTarget> {
+  const authProfileId =
+    binding.connectionScope === "supervision"
+      ? undefined
+      : await resolveCodexAppServerAuthProfileIdForAgent({
+          authProfileId: binding.authProfileId,
+          agentDir: target.agentDir,
+          config,
+        });
+  return createCodexDiagnosticsTarget(target, binding, authProfileId);
+}
+
+function createCodexDiagnosticsTarget(
+  target: CodexDiagnosticsCandidate | CodexDiagnosticsTarget,
+  binding: Parameters<typeof resolveCodexDiagnosticsTarget>[1],
+  authProfileId: string | undefined,
 ): CodexDiagnosticsTarget {
   // Confirmation re-resolution receives the previous target. Rebuild the candidate so a
   // stale private connection scope or auth profile can never survive a binding change.
@@ -470,10 +500,6 @@ function resolveCodexDiagnosticsTarget(
     sessionKey: target.sessionKey,
     sessionId: target.sessionId,
     channel: target.channel,
-    channelId: target.channelId,
-    accountId: target.accountId,
-    messageThreadId: target.messageThreadId,
-    threadParentId: target.threadParentId,
   };
   if (binding.connectionScope === "supervision") {
     return {
@@ -484,11 +510,6 @@ function resolveCodexDiagnosticsTarget(
       pendingSupervisionBranch: binding.pendingSupervisionBranch,
     };
   }
-  const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
-    authProfileId: binding.authProfileId,
-    agentDir: target.agentDir,
-    config,
-  });
   return {
     ...candidate,
     threadId: binding.threadId,

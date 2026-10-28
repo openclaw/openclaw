@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { pathToFileURL } from "node:url";
 import { sanitizeForLog as safeLogValue } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFile } from "../infra/boundary-file-read.js";
@@ -6,8 +7,12 @@ import { safeRealpathSync } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { isHookLoadable, isHookNameSelected, resolveInternalHookSelection } from "./configured.js";
-import { buildImportUrl } from "./import-url.js";
+import {
+  type InternalHookSelection,
+  isHookLoadable,
+  isHookNameSelected,
+  resolveInternalHookSelection,
+} from "./configured.js";
 import { isKnownInternalHookEventKey } from "./internal-hook-types.js";
 import {
   type InternalHookHandler,
@@ -16,8 +21,26 @@ import {
   unregisterInternalHook,
 } from "./internal-hooks.js";
 import { resolveFunctionModuleExport } from "./module-loader.js";
-import type { HookPolicyEntry } from "./types.js";
+import type { HookPolicyEntry, HookSource } from "./types.js";
 import { prepareWorkspaceHookEntries, type HookSourceFact } from "./workspace.js";
+
+function buildImportUrl(handlerPath: string, source: HookSource): string {
+  const base = pathToFileURL(handlerPath).href;
+
+  // Bundled hooks are immutable between installs; other sources may change between restarts.
+  if (source === "openclaw-bundled") {
+    return base;
+  }
+
+  // ctime detects same-size edits even when mtime is restored.
+  try {
+    const { ctimeMs, mtimeMs, size } = fs.statSync(handlerPath);
+    return `${base}?t=${mtimeMs}&c=${ctimeMs}&s=${size}`;
+  } catch {
+    // Missing metadata still requires a fresh import.
+    return `${base}?t=${Date.now()}`;
+  }
+}
 
 const log = createSubsystemLogger("hooks:loader");
 // Configured hooks belong to the Gateway, not to any one plugin registry generation.
@@ -49,23 +72,20 @@ export async function prepareInternalHooks(
   cfg: OpenClawConfig,
   workspaceDir: string,
   opts?: {
-    managedHooksDir?: string;
-    bundledHooksDir?: string;
     failureMode?: "atomic" | "best-effort";
+    selection?: InternalHookSelection;
   },
 ): Promise<PreparedInternalHooks> {
   const enabled = cfg.hooks?.internal?.enabled !== false;
   const previousGeneration = hookOwner.generation;
   const registrations: HookGeneration["registrations"] = [];
   let loadedCount = 0;
-  const selection = resolveInternalHookSelection(cfg);
+  const selection = opts?.selection ?? (await resolveInternalHookSelection(cfg));
   const shouldLoadHook = (entry: HookPolicyEntry) =>
     isHookLoadable({ entry, config: cfg, names: selection.names });
   const discovery = selection.configured
     ? prepareWorkspaceHookEntries(workspaceDir, {
         config: cfg,
-        managedHooksDir: opts?.managedHooksDir,
-        bundledHooksDir: opts?.bundledHooksDir,
         ...(opts?.failureMode !== "best-effort"
           ? {
               requireValidHook: shouldLoadHook,
@@ -131,9 +151,6 @@ export async function prepareInternalHooks(
       }
       registrations.push(...events.map((event) => ({ event, handler })));
       loadedCount++;
-      log.debug(
-        `Prepared hook: ${safeLogValue(entry.hook.name)} -> ${events.map((event) => safeLogValue(event)).join(", ")}${exportName !== "default" ? ` (export: ${safeLogValue(exportName)})` : ""}`,
-      );
     } catch (error) {
       const message = `Failed to load hook ${safeLogValue(entry.hook.name)}: ${safeLogValue(formatErrorMessage(error))}`;
       if (opts?.failureMode !== "best-effort") {

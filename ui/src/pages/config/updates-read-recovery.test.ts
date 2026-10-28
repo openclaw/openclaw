@@ -1,5 +1,4 @@
 /* @vitest-environment jsdom */
-import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { createUpdateRunFixture } from "../../test-helpers/update-run.ts";
@@ -7,14 +6,14 @@ import {
   createUpdatesViewDom,
   createUpdatesViewProps as createProps,
 } from "./updates.test-support.ts";
-import { renderUpdates } from "./updates.ts";
 
-let container: HTMLDivElement;
+let container: ReturnType<typeof createUpdatesViewDom>["container"];
+let mountUpdates: ReturnType<typeof createUpdatesViewDom>["mountUpdates"];
 let row: ReturnType<typeof createUpdatesViewDom>["row"];
 
 beforeEach(async () => {
   await i18n.setLocale("en");
-  ({ container, row } = createUpdatesViewDom());
+  ({ container, row, mountUpdates } = createUpdatesViewDom());
 });
 
 describe("update status read recovery", () => {
@@ -23,29 +22,26 @@ describe("update status read recovery", () => {
     (canCheckStatus) => {
       const onCheckStatus = vi.fn(async () => true);
       const onUpdateNow = vi.fn();
-      render(
-        renderUpdates(
-          createProps({
-            update: {
-              updateRun: createUpdateRunFixture({
-                status: "skipped",
-                phase: "finished",
-                reason: "external-supervisor-update-required",
-                steps: [],
-              }),
-              updateStatusBanner: {
-                source: "read",
-                tone: "danger",
-                text: "update.runs.get timed out",
-              },
-              updateStatusCheckBanner: null,
+      mountUpdates(
+        createProps({
+          update: {
+            updateRun: createUpdateRunFixture({
+              status: "skipped",
+              phase: "finished",
+              reason: "external-supervisor-update-required",
+              steps: [],
+            }),
+            updateStatusBanner: {
+              source: "read",
+              tone: "danger",
+              text: "update.runs.get timed out",
             },
-            canCheckStatus,
-            onCheckStatus,
-            onUpdateNow,
-          }),
-        ),
-        container,
+            updateStatusCheckBanner: null,
+          },
+          canCheckStatus,
+          onCheckStatus,
+          onUpdateNow,
+        }),
       );
 
       expect(row("Status").textContent).toContain("update.runs.get timed out");

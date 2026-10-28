@@ -1,38 +1,42 @@
-/**
- * Helper functions for agent attempt execution, Claude CLI transcript probing,
- * fallback prompts, and ACP visible-text accumulation.
- */
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import {
-  isSilentReplyPrefixText,
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-  startsWithSilentToken,
-  stripLeadingSilentToken,
-} from "../../auto-reply/tokens.js";
+import { stripMixedSilentReplyTokens } from "../../auto-reply/reply/mixed-silent-reply-tokens.js";
+import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import {
   isToolCallBlock,
   resolveToolUseId,
   type ToolContentBlock,
 } from "../../chat/tool-content.js";
 import {
-  readSessionTranscriptBoundedMessageTailPage,
   type SessionTranscriptRuntimeTarget,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
+import { captureSessionActorStorageOwner } from "../../config/sessions/session-actor-storage-binding.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   type ClaudeCliFallbackSeed,
   readClaudeCliFallbackSeed,
-} from "../../gateway/cli-session-history.js";
-import { buildAgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
+} from "../../gateway/cli-session-history.claude.js";
+import { sleep } from "../../utils/sleep.js";
+import {
+  prepareAgentRunTerminalReply,
+  type PreparedAgentRunTerminalReply,
+} from "../agent-run-terminal-reply.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.types.js";
 import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-approval-output.js";
+import {
+  isClaudeCliProvider,
+  isClaudeToolResultBlockType,
+  isClaudeToolUseBlockType,
+} from "../cli-output-records.js";
 import { cliBackendLog } from "../cli-runner/log.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
+import type { AgentCommandOpts } from "./types.js";
 
 const CLAUDE_CLI_TRANSCRIPT_MAX_RECORDS = 500;
 
@@ -82,14 +86,8 @@ async function scanJsonlFile(filePath: string): Promise<JsonlFileScan> {
         if (recordCount > CLAUDE_CLI_TRANSCRIPT_MAX_RECORDS) {
           break;
         }
-        let obj: unknown;
-        try {
-          obj = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        const rec = obj as Record<string, unknown> | null;
-        if ((rec?.message as Record<string, unknown> | undefined)?.role === "assistant") {
+        const message = safeParseJsonRecord(line)?.message;
+        if (isRecord(message) && message.role === "assistant") {
           return { fileExists: true, hasAssistant: true };
         }
       }
@@ -106,12 +104,22 @@ export async function sessionTranscriptHasContent(
   if (!target) {
     return false;
   }
-  await waitForSessionTranscriptProjection(target, abortSignal);
-  const { events } = readSessionTranscriptBoundedMessageTailPage(target, {
-    maxBytes: 5 * 1024 * 1024,
-    maxMessages: 500,
-    offset: 0,
+  abortSignal?.throwIfAborted();
+  const source = captureSessionActorStorageOwner(target, {
+    assertCurrent() {
+      abortSignal?.throwIfAborted();
+    },
+    authorize() {},
   });
+  const capturedTarget = { ...target, ...(source ? { storePath: source.path } : {}) };
+  await waitForSessionTranscriptProjection(capturedTarget, abortSignal);
+  const { readSessionTranscriptBoundedMessageTailPageAsync } =
+    await import("../../gateway/session-transcript-readers.js");
+  const { events } = await readSessionTranscriptBoundedMessageTailPageAsync(
+    capturedTarget,
+    { maxBytes: 5 * 1024 * 1024, maxMessages: 500, offset: 0 },
+    abortSignal,
+  );
   return events.some(
     ({ event }) =>
       isRecord(event) &&
@@ -121,7 +129,6 @@ export async function sessionTranscriptHasContent(
   );
 }
 
-/** Resolves the expected Claude CLI transcript JSONL path for a session. */
 function claudeCliSessionTranscriptPath(params: {
   sessionId: string | undefined;
   workspaceDir: string | undefined;
@@ -147,7 +154,6 @@ function claudeCliSessionTranscriptPath(params: {
 const CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS = 250;
 const CLAUDE_CLI_ORPHAN_PROBE_TAIL_BYTES = 1024 * 1024;
 
-/** Checks whether Claude CLI has flushed assistant content for a session. */
 export async function claudeCliSessionTranscriptHasContent(
   params: Parameters<typeof claudeCliSessionTranscriptPath>[0],
 ): Promise<boolean> {
@@ -159,16 +165,14 @@ export async function claudeCliSessionTranscriptHasContent(
   if (first.hasAssistant) {
     return true;
   }
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS);
-  });
+  await sleep(CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS);
   const second = await scanJsonlFile(expectedPath);
   if (second.hasAssistant) {
     return true;
   }
   const sessionId = normalizeClaudeCliSessionId(params.sessionId);
   cliBackendLog.warn(
-    `claude-cli transcript probe v4 miss (sessionId-deterministic path, grace ${CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS}ms): sessionId=${sessionId ?? ""} expectedPath=${expectedPath} fileExists=${second.fileExists}`,
+    `claude-cli transcript check v4 miss (sessionId-deterministic path, grace ${CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS}ms): sessionId=${sessionId ?? ""} expectedPath=${expectedPath} fileExists=${second.fileExists}`,
   );
   return false;
 }
@@ -182,18 +186,14 @@ function toToolContentBlocks(content: unknown): ToolContentBlock[] | undefined {
   );
 }
 
-function isClaudeTranscriptToolUseBlock(block: ToolContentBlock): boolean {
-  const type = block.type;
-  return type === "tool_use" || type === "server_tool_use" || type === "mcp_tool_use";
-}
-
-function isClaudeTranscriptToolResultBlock(block: ToolContentBlock): boolean {
-  const type = block.type;
-  return type === "tool_result" || (typeof type === "string" && type.endsWith("_tool_result"));
-}
-
-async function jsonlFileHasOrphanedTrailingToolUse(filePath: string): Promise<boolean> {
-  return await readCliTranscriptFile(filePath, false, async (fh, size) => {
+export async function claudeCliSessionTranscriptHasOrphanedToolUse(
+  params: Parameters<typeof claudeCliSessionTranscriptPath>[0],
+): Promise<boolean> {
+  const expectedPath = claudeCliSessionTranscriptPath(params);
+  if (!expectedPath) {
+    return false;
+  }
+  return await readCliTranscriptFile(expectedPath, false, async (fh, size) => {
     const tailBytes = Math.min(size, CLAUDE_CLI_ORPHAN_PROBE_TAIL_BYTES);
     const start = size - tailBytes;
     const buffer = Buffer.alloc(tailBytes);
@@ -209,17 +209,13 @@ async function jsonlFileHasOrphanedTrailingToolUse(filePath: string): Promise<bo
       if (!line.trim()) {
         continue;
       }
-      let obj: unknown;
-      try {
-        obj = JSON.parse(line);
-      } catch {
+      const rec = safeParseJsonRecord(line);
+      // Only conversation records count. Claude also logs request echoes
+      // (`api-request-blob`) that repeat answered tool calls under role=assistant.
+      if (rec?.isSidechain === true || (rec?.type !== "user" && rec?.type !== "assistant")) {
         continue;
       }
-      const rec = obj as Record<string, unknown> | null;
-      if (rec?.isSidechain === true) {
-        continue;
-      }
-      const message = rec?.message as Record<string, unknown> | undefined;
+      const message = asOptionalRecord(rec?.message);
       const role = message?.role;
       if (role === "assistant") {
         lastAssistantToolUseIds = new Set();
@@ -229,9 +225,9 @@ async function jsonlFileHasOrphanedTrailingToolUse(filePath: string): Promise<bo
       }
       for (const block of toToolContentBlocks(message?.content) ?? []) {
         const target =
-          role === "assistant" && isClaudeTranscriptToolUseBlock(block)
+          role === "assistant" && isClaudeToolUseBlockType(block.type)
             ? lastAssistantToolUseIds
-            : isClaudeTranscriptToolResultBlock(block)
+            : isClaudeToolResultBlockType(block.type)
               ? answeredToolResultIds
               : undefined;
         if (target) {
@@ -251,18 +247,6 @@ async function jsonlFileHasOrphanedTrailingToolUse(filePath: string): Promise<bo
   });
 }
 
-/** Checks whether the latest Claude CLI transcript tail has unanswered tool use. */
-export async function claudeCliSessionTranscriptHasOrphanedToolUse(
-  params: Parameters<typeof claudeCliSessionTranscriptPath>[0],
-): Promise<boolean> {
-  const expectedPath = claudeCliSessionTranscriptPath(params);
-  if (!expectedPath) {
-    return false;
-  }
-  return await jsonlFileHasOrphanedTrailingToolUse(expectedPath);
-}
-
-/** Builds the retry prompt sent to fallback models after a failed attempt. */
 export function resolveFallbackRetryPrompt(params: {
   body: string;
   isFallbackRetry: boolean;
@@ -284,9 +268,7 @@ export function resolveFallbackRetryPrompt(params: {
 const CLAUDE_CLI_FALLBACK_PRELUDE_DEFAULT_CHAR_BUDGET = 8_000;
 const CLAUDE_CLI_FALLBACK_PRELUDE_MIN_TURN_CHARS = 64;
 
-type FallbackTurnLikeMessage = Record<string, unknown>;
-
-function extractFallbackTurnText(message: FallbackTurnLikeMessage): string {
+function extractFallbackTurnText(message: ClaudeCliFallbackSeed["recentTurns"][number]): string {
   const content = message.content;
   if (typeof content === "string") {
     return content;
@@ -328,7 +310,7 @@ function extractFallbackTurnText(message: FallbackTurnLikeMessage): string {
 }
 
 function formatFallbackTurns(
-  turns: ReadonlyArray<FallbackTurnLikeMessage>,
+  turns: Readonly<ClaudeCliFallbackSeed["recentTurns"]>,
   remainingBudget: number,
 ): string {
   if (turns.length === 0 || remainingBudget <= 0) {
@@ -361,17 +343,24 @@ function formatFallbackTurns(
 }
 
 /** Prefer the harvested summary, then retain recent turns within the fallback prompt budget. */
-function formatClaudeCliFallbackPrelude(
-  seed: ClaudeCliFallbackSeed,
-  options?: { charBudget?: number },
-): string {
-  const charBudget = Math.max(
-    CLAUDE_CLI_FALLBACK_PRELUDE_MIN_TURN_CHARS,
-    options?.charBudget ?? CLAUDE_CLI_FALLBACK_PRELUDE_DEFAULT_CHAR_BUDGET,
-  );
+export async function buildClaudeCliFallbackContextPrelude(params: {
+  cliSessionId: string | undefined;
+  homeDir?: string;
+}): Promise<string> {
+  const sessionId = params.cliSessionId?.trim();
+  if (!sessionId) {
+    return "";
+  }
+  const seed = await readClaudeCliFallbackSeed({
+    cliSessionId: sessionId,
+    homeDir: params.homeDir,
+  });
+  if (!seed) {
+    return "";
+  }
   const heading = "## Prior session context (from claude-cli)";
   const sections: string[] = [heading];
-  let remaining = charBudget - heading.length;
+  let remaining = CLAUDE_CLI_FALLBACK_PRELUDE_DEFAULT_CHAR_BUDGET - heading.length;
   if (seed.summaryText) {
     const summarySection = `\nSummary of earlier conversation:\n${seed.summaryText}`;
     if (summarySection.length <= remaining) {
@@ -389,10 +378,7 @@ function formatClaudeCliFallbackPrelude(
     }
   }
   if (remaining > CLAUDE_CLI_FALLBACK_PRELUDE_MIN_TURN_CHARS && seed.recentTurns.length > 0) {
-    const text = formatFallbackTurns(
-      seed.recentTurns as ReadonlyArray<FallbackTurnLikeMessage>,
-      remaining - 32,
-    );
+    const text = formatFallbackTurns(seed.recentTurns, remaining - 32);
     if (text) {
       sections.push(`\nRecent turns:\n${text}`);
     }
@@ -405,126 +391,51 @@ function formatClaudeCliFallbackPrelude(
   return sections.join("\n");
 }
 
-/** Read a CLI session and project the available fallback context. */
-export function buildClaudeCliFallbackContextPrelude(params: {
-  cliSessionId: string | undefined;
-  homeDir?: string;
-  charBudget?: number;
-}): string {
-  const sessionId = params.cliSessionId?.trim();
-  if (!sessionId) {
-    return "";
-  }
-  const seed = readClaudeCliFallbackSeed({ cliSessionId: sessionId, homeDir: params.homeDir });
-  if (!seed) {
-    return "";
-  }
-  return formatClaudeCliFallbackPrelude(seed, { charBudget: params.charBudget });
-}
-
-/** Creates an accumulator that strips ACP silent-reply prefixes while streaming. */
+/** Withholds only a possible exact leading control line while ACP is producing output. */
 export function createAcpVisibleTextAccumulator() {
-  let pendingSilentPrefix = "";
   let visibleText = "";
-  let rawVisibleText = "";
-  const startsWithWordChar = (chunk: string): boolean => /^[\p{L}\p{N}]/u.test(chunk);
-
-  const resolveNextCandidate = (base: string, chunk: string): string => {
-    if (!base) {
-      return chunk;
-    }
-    if (
-      isSilentReplyText(base, SILENT_REPLY_TOKEN) &&
-      !chunk.startsWith(base) &&
-      startsWithWordChar(chunk)
-    ) {
-      return chunk;
-    }
-    if (chunk.startsWith(base) && chunk.length > base.length) {
-      return chunk;
-    }
-    return `${base}${chunk}`;
-  };
-
-  const mergeVisibleChunk = (base: string, chunk: string): { rawText: string; delta: string } => {
-    if (!base) {
-      return { rawText: chunk, delta: chunk };
-    }
-    if (chunk.startsWith(base) && chunk.length > base.length) {
-      const delta = chunk.slice(base.length);
-      return { rawText: chunk, delta };
-    }
-    return {
-      rawText: `${base}${chunk}`,
-      delta: chunk,
-    };
-  };
+  let rawText = "";
+  let released = false;
+  let prepared: PreparedAgentRunTerminalReply | undefined;
+  const finalize = () => (prepared ??= prepareAgentRunTerminalReply({ rawText }));
 
   return {
     consume(chunk: string): { text: string; delta: string } | null {
       if (!chunk) {
         return null;
       }
-
-      if (!visibleText) {
-        const leadCandidate = resolveNextCandidate(pendingSilentPrefix, chunk);
-        const trimmedLeadCandidate = leadCandidate.trim();
-        if (
-          isSilentReplyText(trimmedLeadCandidate, SILENT_REPLY_TOKEN) ||
-          isSilentReplyPrefixText(trimmedLeadCandidate, SILENT_REPLY_TOKEN)
-        ) {
-          pendingSilentPrefix = leadCandidate;
-          return null;
-        }
-        if (startsWithSilentToken(trimmedLeadCandidate, SILENT_REPLY_TOKEN)) {
-          const stripped = stripLeadingSilentToken(leadCandidate, SILENT_REPLY_TOKEN);
-          if (stripped) {
-            pendingSilentPrefix = "";
-            rawVisibleText = leadCandidate;
-            visibleText = stripped;
-            return { text: stripped, delta: stripped };
+      const delta =
+        rawText && chunk.startsWith(rawText) && chunk.length > rawText.length
+          ? chunk.slice(rawText.length)
+          : chunk;
+      rawText += delta;
+      if (!released) {
+        const candidate = rawText.trimStart().toUpperCase();
+        const stripped = stripMixedSilentReplyTokens(rawText);
+        if (SILENT_REPLY_TOKEN.startsWith(candidate) || isSilentReplyText(candidate)) {
+          // A literal newline ends the one permitted control line. Its suffix
+          // is ordinary text, even if it spells another control token.
+          if (stripped === null) {
+            return null;
           }
-          pendingSilentPrefix = leadCandidate;
-          return null;
         }
-        if (pendingSilentPrefix) {
-          pendingSilentPrefix = "";
-          rawVisibleText = leadCandidate;
-          visibleText = leadCandidate;
-          return {
-            text: visibleText,
-            delta: leadCandidate,
-          };
-        }
+        released = true;
+        visibleText = stripped ?? rawText;
+        return visibleText ? { text: visibleText, delta: visibleText } : null;
       }
-
-      const nextVisible = mergeVisibleChunk(rawVisibleText, chunk);
-      rawVisibleText = nextVisible.rawText;
-      if (!nextVisible.delta) {
-        return null;
-      }
-      visibleText = `${visibleText}${nextVisible.delta}`;
-      return { text: visibleText, delta: nextVisible.delta };
+      visibleText += delta;
+      return { text: visibleText, delta };
     },
     finalize(): string {
-      return visibleText.trim();
+      return finalize().text;
     },
     finalizeRaw(): string {
-      return visibleText;
+      return rawText;
     },
     finalizeReplySnapshot(): AgentRunTerminalReplySnapshot {
-      return buildAgentRunTerminalReplySnapshot({
-        visibleText,
-        rawText: pendingSilentPrefix,
-      });
+      return finalize().terminalReply;
     },
   };
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.attemptExecutionHelpersTestApi")
-  ] = { claudeCliSessionTranscriptPath, formatClaudeCliFallbackPrelude };
 }
 
 export function rebaseExecApprovalContinuationPromptRange(params: {
@@ -543,4 +454,41 @@ export function rebaseExecApprovalContinuationPromptRange(params: {
     start: offset + params.range.start,
     end: offset + params.range.end,
   };
+}
+
+/** Restores completion tools only on runtimes that enforce the captured requester cap. */
+export function resolveCompletionToolPolicy(params: {
+  run: { sessionEntry: SessionEntry | undefined; opts: AgentCommandOpts };
+  trustedSubagentAnnounceHandoff: boolean;
+  isSubagentAnnounceHandoff: boolean;
+  isRawModelRun: boolean;
+  isCliExecutionProvider: boolean;
+  cliExecutionProvider: string;
+  completionNeedsMessageDelivery: boolean;
+}) {
+  const { run, completionNeedsMessageDelivery, isSubagentAnnounceHandoff } = params;
+  const completionRetainsRequesterTools =
+    params.trustedSubagentAnnounceHandoff &&
+    !params.isRawModelRun &&
+    (!params.isCliExecutionProvider ||
+      (isClaudeCliProvider(params.cliExecutionProvider) &&
+        run.sessionEntry?.execHost !== "node" &&
+        !run.opts.trustedInternalHandoff?.settleBatch &&
+        !messageToolOwnsVisibleReply(run.opts))) &&
+    (!messageToolOwnsVisibleReply(run.opts) || completionNeedsMessageDelivery);
+  // CLI message-only delivery keeps its existing narrow grant. A denied completion
+  // must clear an explicit cap so its owner can relay frozen text tool-free.
+  const runtimeToolsAllow = isSubagentAnnounceHandoff
+    ? completionRetainsRequesterTools
+      ? run.opts.toolsAllow
+      : completionNeedsMessageDelivery
+        ? ["message"]
+        : undefined
+    : run.opts.toolsAllow;
+  const disableTools =
+    run.opts.modelRun === true ||
+    (isSubagentAnnounceHandoff &&
+      !completionRetainsRequesterTools &&
+      !completionNeedsMessageDelivery);
+  return { completionRetainsRequesterTools, runtimeToolsAllow, disableTools };
 }

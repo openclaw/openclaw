@@ -152,18 +152,18 @@ flow:
             expr: "originalAfter === 'original-effect' + String.fromCharCode(10) && freshAfter === 'fresh-effect' + String.fromCharCode(10)"
             message: recovered work either repeated the prior side effect or failed to execute fresh shell work
         - call: waitForCondition
-          saveAs: childTask
+          saveAs: childRun
           args:
             - lambda:
                 async: true
-                expr: "(await env.gateway.call('tasks.list', { agentId: 'qa', limit: 100 })).tasks?.find(task => task.title === 'restart-proof-child' && task.sessionKey === sessionKey && task.status === 'completed' && task.deliveryStatus === 'not_applicable')"
+                expr: "(await readNativeQaSubagentRuns(env, sessionKey)).find(run => run.label === 'restart-proof-child' && run.execution.status === 'terminal' && run.execution.outcome?.status === 'ok' && run.delivery?.status === 'not_required')"
             - expr: liveTurnTimeoutMs(env, 60000)
             - 50
         - call: readSessionTranscriptSummary
           saveAs: childTranscript
           args:
             - ref: env
-            - expr: childTask.childSessionKey
+            - expr: childRun.childSessionKey
         - assert:
             expr: "childTranscript.finalText.trim() === 'CHILD-RESTART-OK'"
             message: no successful child response was recorded

@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { CliBackendExecuteContext } from "openclaw/plugin-sdk/cli-backend";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { signalProcessTree } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createClaudeCliProcessOwner, type ClaudeCliSecretInput } from "./cli-process.js";
+import {
+  createClaudeCliProcessOwner,
+  type ClaudeCliProcessContext,
+  type ClaudeCliSecretInput,
+} from "./cli-process.js";
 
 // Match the host's per-record JSONL budget, including large image/tool records.
 const MAX_LINE_CHARS = 8 * 1024 * 1024;
@@ -11,89 +13,139 @@ const MAX_LINE_CHARS = 8 * 1024 * 1024;
 const CLOSE_GRACE_MS = 500;
 const KILL_GRACE_MS = 1_000;
 
+export type ClaudeCliTransport = {
+  close(): void;
+  waitForExit(): Promise<void>;
+  send(message: Record<string, unknown>): Promise<void>;
+  initialize(): Promise<Record<string, unknown>>;
+};
+
 /** One Claude Code subprocess and its bidirectional stream-json control channel. */
-export function createClaudeCliTransport(params: {
-  context: CliBackendExecuteContext;
+export async function createClaudeCliTransport(params: {
+  context: ClaudeCliProcessContext;
   args: string[];
   initialize: Record<string, unknown>;
-  currentContext: () => CliBackendExecuteContext | undefined;
+  currentContext: () => ClaudeCliProcessContext | undefined;
   secretInput?: ClaudeCliSecretInput;
   onMessage: (message: Record<string, unknown>) => Promise<void>;
   onRequest: (request: Record<string, unknown>, signal: AbortSignal) => Promise<() => unknown>;
   onError: (error: unknown) => void;
-}) {
+}): Promise<ClaudeCliTransport> {
   const owner = createClaudeCliProcessOwner(params.currentContext, params.secretInput);
-  let child: ReturnType<typeof owner.spawn>;
+  let child: Awaited<ReturnType<typeof owner.spawn>>;
   try {
     const env = { ...params.context.env };
     delete env.NODE_OPTIONS;
     delete env.DEBUG;
-    child = owner.spawn({ ...params.context, args: params.args, env });
+    child = await owner.spawn({
+      ...params.context,
+      args: params.args,
+      env,
+      signal: params.context.abortSignal,
+    });
   } catch (error) {
     owner[Symbol.dispose]();
     throw error;
   }
   const requests = new Map<string, AbortController>();
   const initializeId = randomUUID();
-  const { promise: ready, resolve: resolveReady, reject: rejectReady } = createDeferred<void>();
+  const {
+    promise: ready,
+    resolve: resolveReady,
+    reject: rejectReady,
+  } = createDeferred<Record<string, unknown>>();
   // A child can fail before its caller reaches initialize().
   void ready.catch(() => {});
   let closed = false;
+  let shutdownStarted = false;
+  let forcedExit = false;
   let hasExited = false;
   let exitError: Error | undefined;
+  let inputFailure: Promise<unknown> | undefined;
   let terminateTimer: ReturnType<typeof setTimeout> | undefined;
   let killTimer: ReturnType<typeof setTimeout> | undefined;
   const { promise: exited, resolve: resolveExit } = createDeferred<void>();
-  let treeExit = Promise.resolve();
-  const signalTree = (signal: "SIGTERM" | "SIGKILL") =>
-    new Promise<void>((resolve) => {
-      if (!child.pid) {
-        resolve();
-        return;
-      }
-      signalProcessTree(child.pid, signal, {
-        detached: process.platform !== "win32",
-        onComplete: resolve,
-      });
-    });
+
   const terminate = () => {
-    treeExit = signalTree("SIGTERM");
+    forcedExit = true;
+    child.kill("SIGTERM");
     killTimer = setTimeout(() => {
-      treeExit = signalTree("SIGKILL");
+      child.kill("SIGKILL");
     }, KILL_GRACE_MS);
     killTimer.unref();
   };
 
-  const close = () => {
-    if (closed) {
-      return;
-    }
-    closed = true;
-    rejectReady(new Error("Claude CLI closed before initialization completed."));
+  const abortRequests = () => {
     for (const controller of requests.values()) {
       controller.abort();
     }
     requests.clear();
-    owner[Symbol.dispose]();
+  };
+  const beginShutdown = () => {
+    if (shutdownStarted) {
+      return;
+    }
+    shutdownStarted = true;
+    abortRequests();
     if (process.platform === "win32" && !hasExited) {
       // /T without /F can fail, and EOF would then erase the root before escalation.
       // Force the owned tree while its root exists and await taskkill's completion.
-      treeExit = signalTree("SIGKILL");
-      void treeExit.then(() => child.stdin.end());
+      forcedExit = true;
+      child.kill("SIGKILL");
+      void child.waitForExtinction?.().then(
+        () => child.stdin?.end(),
+        () => {},
+      );
     } else {
       // On POSIX the private process group survives root exit. Let native flush on EOF first.
-      child.stdin.end();
+      child.stdin?.end();
     }
     if (process.platform !== "win32" && !hasExited) {
       terminateTimer = setTimeout(terminate, CLOSE_GRACE_MS);
       terminateTimer.unref();
     }
   };
+  const close = () => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    rejectReady(new Error("Claude CLI closed before initialization completed."));
+    abortRequests();
+    owner[Symbol.dispose]();
+    beginShutdown();
+  };
+  const processExitError = () =>
+    exitError ??
+    new Error("Claude CLI live session exited unexpectedly without a terminal result.");
+  const settleInputError = (error: unknown): Promise<unknown> | undefined => {
+    // Windows must terminate the tree immediately while its root is still present.
+    if (process.platform === "win32" || !isRecord(error) || error.code !== "EPIPE") {
+      return undefined;
+    }
+    const context = params.currentContext();
+    // Pipe failure can precede the exit event. Share settlement across both stdin
+    // notifications, retaining diagnostics until the existing shutdown owner joins.
+    inputFailure ??= Promise.resolve()
+      .then(async () => {
+        beginShutdown();
+        await exited;
+        const failure = context?.abortSignal?.aborted
+          ? context.abortSignal.reason
+          : forcedExit
+            ? error
+            : processExitError();
+        return owner.withDiagnostics(failure);
+      })
+      .catch((failure: unknown) => failure)
+      .then((failure) => (context?.abortSignal?.aborted ? context.abortSignal.reason : failure));
+    return inputFailure;
+  };
   const fail = async (error: unknown) => {
     if (closed) {
       return;
     }
-    const diagnostic = await owner.withDiagnostics(error);
+    const diagnostic = await (inputFailure ?? owner.withDiagnostics(error));
     if (!closed) {
       rejectReady(diagnostic);
       params.onError(diagnostic);
@@ -109,18 +161,11 @@ export function createClaudeCliTransport(params: {
     clearTimeout(killTimer);
     // Descendants can hold pipes and process-owned resources after the root exits.
     if (process.platform !== "win32" || !closed) {
-      treeExit = signalTree("SIGKILL");
+      child.kill("SIGKILL");
     }
     resolveExit();
   };
-  child.once("error", (error) => {
-    exitError = error;
-    if (!child.pid) {
-      didExit();
-    }
-    void fail(error);
-  });
-  child.once("exit", (code, signal) => {
+  child.onExit((code, signal) => {
     if (code !== 0) {
       exitError = new Error(
         signal
@@ -130,18 +175,25 @@ export function createClaudeCliTransport(params: {
     }
     didExit();
   });
-  child.stdin.on("error", (error) => {
-    void fail(error);
-  });
 
   const send = (message: Record<string, unknown>): Promise<void> => {
-    if (closed) {
+    if (inputFailure) {
+      return inputFailure.then((error) => {
+        throw error;
+      });
+    }
+    if (closed || shutdownStarted) {
       return Promise.reject(new Error("Claude CLI control channel is closed."));
     }
     return new Promise((resolve, reject) => {
-      child.stdin.write(`${JSON.stringify(message)}\n`, (error) => {
+      child.stdin!.write(`${JSON.stringify(message)}\n`, (error) => {
         if (error) {
-          reject(error);
+          const settling = settleInputError(error);
+          if (settling) {
+            void settling.then(reject, reject);
+          } else {
+            reject(error);
+          }
         } else {
           resolve();
         }
@@ -181,7 +233,7 @@ export function createClaudeCliTransport(params: {
     }
   };
   const acceptLine = async (line: string) => {
-    if (!line.trim()) {
+    if (inputFailure || !line.trim()) {
       return;
     }
     let message: unknown;
@@ -198,7 +250,7 @@ export function createClaudeCliTransport(params: {
       const response = message.response;
       if (isRecord(response) && response.request_id === initializeId) {
         if (response.subtype === "success") {
-          resolveReady();
+          resolveReady(isRecord(response.response) ? response.response : {});
         } else {
           throw new Error("Claude CLI initialization failed.");
         }
@@ -219,9 +271,7 @@ export function createClaudeCliTransport(params: {
   };
   const read = async () => {
     let pending = "";
-    child.stdout.setEncoding("utf8");
-    for await (const chunk of child.stdout) {
-      const text = String(chunk);
+    await child.consumeStdout(async (text) => {
       for (let offset = 0; offset < text.length;) {
         const newline = text.indexOf("\n", offset);
         const end = newline < 0 ? text.length : newline;
@@ -236,24 +286,30 @@ export function createClaudeCliTransport(params: {
           await acceptLine(line);
         }
       }
-    }
+    });
     if (pending) {
       await acceptLine(pending);
     }
     await exited;
     if (!closed) {
-      throw (
-        exitError ??
-        new Error("Claude CLI live session exited unexpectedly without a terminal result.")
-      );
+      throw inputFailure ? await inputFailure : processExitError();
     }
   };
-  void read().catch(fail);
+  const reading = read();
+  child.onError((error, source) => {
+    if (source === "process") {
+      exitError = error;
+    }
+    const settling = source === "stdin" ? settleInputError(error) : undefined;
+    void (settling ? settling.then(fail) : fail(error));
+  });
+  void reading.catch(fail);
   return {
     close,
     waitForExit: async () => {
       await exited;
-      await treeExit;
+      await Promise.all([child.wait().catch(() => undefined), child.waitForExtinction?.()]);
+      child.dispose();
     },
     send,
     async initialize() {
@@ -262,7 +318,7 @@ export function createClaudeCliTransport(params: {
         request_id: initializeId,
         request: { subtype: "initialize", ...params.initialize },
       });
-      await ready;
+      return await ready;
     },
   };
 }

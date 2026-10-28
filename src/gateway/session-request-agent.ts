@@ -1,15 +1,12 @@
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import {
-  ErrorCodes,
-  type ErrorShape,
-  errorShape,
-} from "../../packages/gateway-protocol/src/index.js";
+import { ok, type Result } from "@openclaw/normalization-core/result";
+import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
 import {
   AgentSelectionRequiredError,
   listAgentIds,
   tryResolveSoleAgentId,
 } from "../agents/agent-scope.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
+import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -19,21 +16,41 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import {
+  createAgentDatabaseAdmissionErrorShape,
+  readAgentDatabaseAdmissionRefusal,
+  readAgentDatabaseReadAdmissionRefusal,
+} from "../state/agent-database-admission.js";
+import { invalidSessionRequest } from "./session-request-error.js";
 import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
 
 type RequestedSessionAgentIdResolution =
   | { ok: true; agentId: string }
   | { ok: false; error: ErrorShape };
 
-function admitRequestedAgent(agentId: string): RequestedSessionAgentIdResolution {
-  const refusal = readAgentDatabaseAdmissionRefusal(agentId);
+/** The shipped chat-send global alias selects main outside configured global scope. */
+export function resolveChatSendSessionKey(
+  cfg: OpenClawConfig,
+  sessionKey: string,
+  agentId: string,
+): string {
+  return cfg.session?.scope !== "global" && sessionKey.trim().toLowerCase() === "global"
+    ? resolveAgentMainSessionKey({ cfg, agentId })
+    : sessionKey;
+}
+
+function admitRequestedAgent(
+  agentId: string,
+  admission: "read" | "write",
+): RequestedSessionAgentIdResolution {
+  const refusal =
+    admission === "read"
+      ? readAgentDatabaseReadAdmissionRefusal(agentId)
+      : readAgentDatabaseAdmissionRefusal(agentId);
   return refusal
     ? {
         ok: false,
-        error: errorShape(ErrorCodes.UNAVAILABLE, `${refusal.reason}\n${refusal.repairHint}`, {
-          details: refusal,
-        }),
+        error: createAgentDatabaseAdmissionErrorShape(refusal),
       }
     : { ok: true, agentId };
 }
@@ -114,11 +131,11 @@ export function resolveRequestedSessionAgentInput(
   explicitAgentId?: string,
 ): Result<string | undefined, ErrorShape> {
   if (classifySessionKeyShape(key) === "malformed_agent") {
-    return err(errorShape(ErrorCodes.INVALID_REQUEST, `malformed session key "${key}"`));
+    return invalidSessionRequest(`malformed session key "${key}"`);
   }
   const agent = explicitAgentId === undefined ? null : normalizeAgentIdStrict(explicitAgentId);
   return agent && !agent.ok
-    ? err(errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${explicitAgentId}"`))
+    ? invalidSessionRequest(`Unknown agent id "${explicitAgentId}"`)
     : ok(agent?.value);
 }
 
@@ -128,6 +145,7 @@ export function resolveRequestedSessionAgentId(
   cfg: OpenClawConfig,
   key: string | undefined,
   explicitAgentId?: string,
+  admission: "read" | "write" = "write",
 ): RequestedSessionAgentIdResolution {
   const input = resolveRequestedSessionAgentInput(key, explicitAgentId);
   if (!input.ok) {
@@ -137,10 +155,7 @@ export function resolveRequestedSessionAgentId(
   const configuredAgentIds = listAgentIds(cfg);
   const normalizedRequestedAgentId = input.value;
   if (normalizedRequestedAgentId && !configuredAgentIds.includes(normalizedRequestedAgentId)) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${explicitAgentId}"`),
-    };
+    return invalidSessionRequest(`Unknown agent id "${explicitAgentId}"`);
   }
   let ownerKey = key;
   if (parsed?.agentId) {
@@ -149,22 +164,15 @@ export function resolveRequestedSessionAgentId(
       cfg.session?.scope === "global" &&
       (parsed.rest === "main" || parsed.rest === normalizeMainKey(cfg.session?.mainKey));
     if (keyIsGlobalMainAlias && !configuredAgentIds.includes(keyAgentId)) {
-      return {
-        ok: false,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${parsed.agentId}"`),
-      };
+      return invalidSessionRequest(`Unknown agent id "${parsed.agentId}"`);
     }
     if (normalizedRequestedAgentId && keyAgentId !== normalizedRequestedAgentId) {
-      return {
-        ok: false,
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `agent "${explicitAgentId}" does not match session key agent "${keyAgentId}"`,
-        ),
-      };
+      return invalidSessionRequest(
+        `agent "${explicitAgentId}" does not match session key agent "${keyAgentId}"`,
+      );
     }
     if (!keyIsGlobalMainAlias || !normalizedRequestedAgentId) {
-      return admitRequestedAgent(keyAgentId);
+      return admitRequestedAgent(keyAgentId, admission);
     }
     // Explicit targets must also match the fixed store after losing their prefix.
     ownerKey = "global";
@@ -172,39 +180,45 @@ export function resolveRequestedSessionAgentId(
 
   const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, ownerKey);
   if (persistedStoreOwner.kind === "retired") {
-    return {
-      ok: false,
-      error: errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `session key belongs to retired agent "${persistedStoreOwner.agentId}"`,
-      ),
-    };
+    return invalidSessionRequest(
+      `session key belongs to retired agent "${persistedStoreOwner.agentId}"`,
+    );
   }
   if (normalizedRequestedAgentId) {
     if (
       persistedStoreOwner.kind === "configured" &&
       persistedStoreOwner.agentId !== normalizedRequestedAgentId
     ) {
-      return {
-        ok: false,
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `agent "${explicitAgentId}" does not match session key agent "${persistedStoreOwner.agentId}"`,
-        ),
-      };
+      return invalidSessionRequest(
+        `agent "${explicitAgentId}" does not match session key agent "${persistedStoreOwner.agentId}"`,
+      );
     }
-    return admitRequestedAgent(normalizedRequestedAgentId);
+    return admitRequestedAgent(normalizedRequestedAgentId, admission);
   }
   const inferredAgentId = tryResolveSessionCompatibilityOwnerAgentId(cfg, key);
   if (inferredAgentId) {
-    return admitRequestedAgent(inferredAgentId);
+    return admitRequestedAgent(inferredAgentId, admission);
   }
   const selectionError = new AgentSelectionRequiredError(configuredAgentIds, {
     surface: `session key "${key}"`,
     hint: "Pass agentId or use an agent-prefixed session key.",
   });
-  return {
-    ok: false,
-    error: errorShape(ErrorCodes.INVALID_REQUEST, selectionError.message),
-  };
+  return invalidSessionRequest(selectionError.message);
+}
+
+/** Fresh children inherit a qualified parent only in explicit-ownership fleets. */
+export function resolveSessionCreateAgentId(
+  cfg: OpenClawConfig,
+  input: { key?: string; agentId?: string; parentSessionKey?: string },
+): RequestedSessionAgentIdResolution {
+  const parentAgentId =
+    cfg.agents?.ownership === "explicit" && input.key === undefined && input.agentId === undefined
+      ? parseAgentSessionKey(input.parentSessionKey?.trim())?.agentId
+      : undefined;
+  const agentId = input.agentId ?? parseAgentSessionKey(input.key)?.agentId ?? parentAgentId;
+  return resolveRequestedSessionAgentId(
+    cfg,
+    input.key ?? (agentId === undefined ? "main" : undefined),
+    agentId,
+  );
 }

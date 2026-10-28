@@ -21,11 +21,10 @@ Inside the Mac app's Dashboard, choose a Dock icon in **Settings → This Mac �
 - **Open C**: a circular claw with two opposing pincer tips.
 
 Each design has light and dark artwork.
-On macOS 26 and later, Original uses native icon styling, including the setting in
+Original uses native icon styling, including the setting in
 **System Settings → Appearance → Icon & widget style**. For automatic switching,
 choose **Dark → Auto** there; the default icon style can otherwise stay light
-even when app windows are dark. On older macOS versions, Original follows light/dark
-appearance while the app runs.
+even when app windows are dark.
 
 The other designs follow macOS light/dark appearance while OpenClaw is running.
 
@@ -55,8 +54,8 @@ A tool-activity badge (SF Symbol puck, e.g. `chevron.left.slash.chevron.right` f
 
 ## Voice wake ears
 
-- Trigger: `AppStateStore.shared.triggerVoiceEars(ttl: nil)`, called from the voice-wake capture pipeline (`VoiceWakeRuntime`) and from voice-wake debug/test tooling (`VoiceWakeTester`, `VoiceWakeOverlayController`).
-- Stop: `stopVoiceEars()`, called when capture finalizes.
+- Trigger: the voice capture and overlay owners set `AppState.earBoostActive` when capture or overlay presentation begins.
+- Stop: those owners clear it when capture finalizes or the overlay closes.
 - Silence window before finalizing: `2.0s` normally, `5.0s` if only the trigger word was heard and no further speech followed (`VoiceWakeRuntime.silenceWindow` / `triggerOnlySilenceWindow`).
 - While boosted, idle blink/wiggle/leg/ear timers are suspended (`earBoostActive` gates the animation task in `CritterStatusLabel+Behavior`).
 
@@ -69,8 +68,7 @@ A tool-activity badge (SF Symbol puck, e.g. `chevron.left.slash.chevron.right` f
 
 ## Behavioral notes
 
-- No external CLI/broker toggle for ears or working state; both are driven internally by app signals (`AppState.setWorking`, `AppState.triggerVoiceEars`) to avoid accidental flapping.
-- Keep any new TTL short (well under 10s) so the icon returns to baseline quickly if a job hangs.
+- App-owned activity, capture, and overlay lifecycles drive the ears and working state.
 
 ## Related
 

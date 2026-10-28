@@ -1,4 +1,4 @@
-import { boundCodeModeError, toCodeModeJsonSafe } from "./code-mode-json.js";
+import { boundCodeModeError, stringifyCodeModeJsonSafe } from "./code-mode-json.js";
 import type { CodeModeConfig, SettledBridgeRequest } from "./code-mode-worker-types.js";
 
 // A fixed control diagnostic is always available, even when payload admission is
@@ -64,14 +64,9 @@ export class CodeModeProgramDataInbox {
         if (this.closed || state !== "pending") {
           return;
         }
-        const json =
-          JSON.stringify(
-            ok ? toCodeModeJsonSafe(value) : normalizeReplyError(value, this.errorBytes),
-          ) ?? "null";
-        // Normalization may invoke tool-owned toJSON code, including cancellation.
-        if (this.closed || state !== "pending") {
-          return;
-        }
+        const json = stringifyCodeModeJsonSafe(
+          ok ? value : normalizeReplyError(value, this.errorBytes),
+        );
         const required = Buffer.byteLength(json, "utf8");
         if (required > this.maxBytes - this.bytes) {
           reply = { id, ok: false, json: INBOX_FULL_JSON };

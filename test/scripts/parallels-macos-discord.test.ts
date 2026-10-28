@@ -53,7 +53,7 @@ describe("Parallels macOS Discord smoke", () => {
       expect(args?.at(-1)).toBe(
         "https://discord.com/api/v10/channels/channel-id/messages/message-id",
       );
-      expect(options).toEqual({ quiet: true, timeoutMs: 45_000 });
+      expect(options).toEqual({ timeoutMs: 45_000 });
     } finally {
       await rm(runDir, { force: true, recursive: true });
     }

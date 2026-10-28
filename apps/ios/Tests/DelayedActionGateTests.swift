@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
-private actor DelayDeliveryBarrier {
+private actor PendingDelay {
     private var deliveryCount = 0
     private var firstDeliveryPaused = false
     private var pauseWaiters: [CheckedContinuation<Void, Never>] = []
@@ -51,12 +51,10 @@ struct DelayedActionGateTests {
         #expect(actions == ["current"])
     }
 
-    @Test @MainActor func `cancellation after delay return suppresses delivery`() async {
+    @Test @MainActor func `cancellation suppresses the pending action`() async {
         var actions: [String] = []
-        let barrier = DelayDeliveryBarrier()
-        let gate = DelayedActionGate(
-            sleeper: { _ in },
-            deliveryBarrier: { await barrier.pauseFirstDelivery() })
+        let barrier = PendingDelay()
+        let gate = DelayedActionGate(sleeper: { _ in await barrier.pauseFirstDelivery() })
 
         let task = gate.schedule(after: .zero) {
             actions.append("stale")
@@ -69,12 +67,10 @@ struct DelayedActionGateTests {
         #expect(actions.isEmpty)
     }
 
-    @Test @MainActor func `replacement action wins after stale delay returns`() async {
+    @Test @MainActor func `replacement cancels the pending action`() async {
         var actions: [String] = []
-        let barrier = DelayDeliveryBarrier()
-        let gate = DelayedActionGate(
-            sleeper: { _ in },
-            deliveryBarrier: { await barrier.pauseFirstDelivery() })
+        let barrier = PendingDelay()
+        let gate = DelayedActionGate(sleeper: { _ in await barrier.pauseFirstDelivery() })
 
         let staleTask = gate.schedule(after: .zero) {
             actions.append("stale")

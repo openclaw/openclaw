@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type {
   GatewayRequestContext,
@@ -30,7 +30,13 @@ beforeEach(async () => {
 afterEach(async () => {
   (await import("../../plugins/runtime.js")).resetPluginRuntimeStateForTest();
   (await import("../../infra/agent-run-registry.js")).resetAgentRunRegistryForTest();
-  await fixture.cleanupWorkerTurnLauncherTest();
+  await fixture.cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true });
+});
+afterAll(async () => {
+  const { closeOpenClawStateDatabaseAsync, closeOpenClawStateDatabaseForTest } =
+    await import("../../state/openclaw-state-db.js");
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
 });
 
 describe("webchat admission to plugin node duplex authority", () => {
@@ -104,7 +110,7 @@ describe("webchat admission to plugin node duplex authority", () => {
         unusedEnvironments,
       } = fixture;
       await upsertSessionEntryCore(sessionTarget, { permissionMode: "full" });
-      seedActivePlacement("remote-exec");
+      await seedActivePlacement("remote-exec");
       const workspace = {
         workspaceDir: "/worker/workspace",
         sessionKey: SESSION_KEY,
@@ -223,12 +229,14 @@ describe("webchat admission to plugin node duplex authority", () => {
           if (request.source.kind !== "local") {
             throw new Error("expected a local workspace source");
           }
-          request.source.journal.commit(MANIFEST_REF);
+          await request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,
             verifyStable: async () => {},
             verifyLocalStable: async () => {},
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
           };
         },
         stop: async () => {},
@@ -338,7 +346,7 @@ describe("webchat admission to plugin node duplex authority", () => {
                     if (claimed?.type !== "return") {
                       throw new Error("expected an admitted placement claim");
                     }
-                    placements.cancelWorkspaceResultAndReleaseTurn(claimed.value, {
+                    await placements.cancelWorkspaceResultAndReleaseTurn(await claimed.value, {
                       reason: "node-disconnect",
                     });
                     break;

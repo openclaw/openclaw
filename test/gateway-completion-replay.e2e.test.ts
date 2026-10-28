@@ -3,15 +3,24 @@ import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { INTERNAL_RUNTIME_CONTEXT_BEGIN } from "../src/agents/internal-runtime-context.js";
-import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
-import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
-import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
 import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "./helpers/openai-responses-sse.js";
+  extractCurrentRuntimeContextTexts,
+  isInternalRuntimeContextCarrierText,
+} from "../extensions/qa-lab/api.js";
+import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import { disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
+import { writeRestartToolCalls } from "./gateway-restart.test-support.js";
+import {
+  closeHttpServer,
+  connectProofClient,
+  listenLoopback,
+  readRequestText,
+  respondJson,
+} from "./helpers/gateway-integration-fixtures.js";
+import { createOpenAiResponsesModelConfig } from "./helpers/openai-responses-model-fixture.js";
+import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -20,7 +29,6 @@ import { createDeferred } from "./helpers/promise.js";
 
 const SESSION_KEY = "agent:main:slack:channel:completion-replay";
 const CHILD_TASK = "Produce CHILD_REPLAY_RESULT.";
-const MODEL_REF = "completion-replay/completion-replay";
 const instances: OpenClawTestInstance[] = [];
 const servers: Array<Awaited<ReturnType<typeof startModel>>> = [];
 
@@ -44,7 +52,7 @@ describe("Gateway completed requester replay", () => {
       servers.push(model);
       const instance = await createOpenClawTestInstance({
         name: "gateway-completion-replay",
-        config: config(model.url),
+        config: createConfig(model.url),
         env: { OPENCLAW_SKIP_PROVIDERS: undefined, OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
       });
       instances.push(instance);
@@ -56,9 +64,7 @@ describe("Gateway completed requester replay", () => {
         "workspace",
         "replay-effects.txt",
       );
-      const client = await connectGatewayClient({
-        url: instance.url,
-        token: instance.gatewayToken,
+      const client = await connectProofClient(instance, {
         role: "operator",
         scopes: ["operator.admin", "operator.read", "operator.write"],
       });
@@ -98,15 +104,6 @@ describe("Gateway completed requester replay", () => {
         );
         expect(model.effectCalls()).toBe(1);
         expect(model.failures()).toEqual([]);
-      } catch (error) {
-        throw new Error(
-          String(error) +
-            "\nFixture failures: " +
-            JSON.stringify(model.failures()) +
-            "\nGateway: " +
-            instance.logs(),
-          { cause: error },
-        );
       } finally {
         model.releaseChild();
         await disconnectGatewayClient(client);
@@ -126,24 +123,20 @@ describe("Gateway completed requester replay", () => {
       closeOpenClawStateDatabaseForTest();
 
       await instance.startGateway();
-      const restoredClient = await connectGatewayClient({
-        url: instance.url,
-        token: instance.gatewayToken,
-      });
+      const restoredClient = await connectProofClient(instance);
       try {
         // A real same-session round trip is the lane barrier, not a timed sleep.
-        expect(
-          await restoredClient.request(
-            "agent",
-            {
-              sessionKey: SESSION_KEY,
-              message: "EXPLICIT_FOLLOWUP_AFTER_RESTART",
-              deliver: false,
-              idempotencyKey: "followup-after-restart",
-            },
-            { expectFinal: true, timeoutMs: 30_000 },
-          ),
-        ).toMatchObject({ status: "ok" });
+        const followup = await restoredClient.request(
+          "agent",
+          {
+            sessionKey: SESSION_KEY,
+            message: "EXPLICIT_FOLLOWUP_AFTER_RESTART",
+            deliver: false,
+            idempotencyKey: "followup-after-restart",
+          },
+          { expectFinal: true, timeoutMs: 30_000 },
+        );
+        expect(followup).toMatchObject({ status: "ok" });
         expect(model.effectCalls()).toBe(1);
         expect(model.failures()).toEqual([]);
         await expect(fs.readFile(effectPath, "utf8")).resolves.toBe("effect\n");
@@ -158,46 +151,25 @@ describe("Gateway completed requester replay", () => {
   );
 });
 
-function config(url: string): OpenClawConfig {
+function createConfig(url: string): OpenClawConfig {
+  const config = createOpenAiResponsesModelConfig({
+    baseUrl: url,
+    providerId: "completion-replay",
+    modelId: "completion-replay",
+    reasoning: false,
+    toolProfile: "coding",
+  });
+  config.models!.providers!["completion-replay"]!.apiKey = "test-placeholder";
   return {
+    ...config,
     plugins: { enabled: false },
     messages: { groupChat: { visibleReplies: "message_tool" } },
-    agents: {
-      defaults: {
-        heartbeat: { every: "0m" },
-        model: { primary: MODEL_REF },
-        models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },
-        skipBootstrap: true,
-        skills: [],
-      },
-    },
     tools: {
       profile: "coding",
+      codeMode: false,
+      toolSearch: false,
       allow: ["sessions_spawn", "exec"],
       exec: { security: "full", ask: "off" },
-    },
-    models: {
-      mode: "replace",
-      providers: {
-        "completion-replay": {
-          baseUrl: url + "/v1",
-          apiKey: "test-placeholder",
-          api: "openai-responses",
-          request: { allowPrivateNetwork: true },
-          models: [
-            {
-              id: "completion-replay",
-              name: "completion-replay",
-              api: "openai-responses",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 128_000,
-              maxTokens: 4096,
-            },
-          ],
-        },
-      },
     },
   };
 }
@@ -211,6 +183,22 @@ type ModelInput = {
   output?: unknown;
 };
 
+function modelInputText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .map((part: unknown) =>
+      typeof part === "object" && part !== null && "text" in part && typeof part.text === "string"
+        ? part.text
+        : "",
+    )
+    .join("\n");
+}
+
 async function startModel() {
   const child = createDeferred();
   const failures: string[] = [];
@@ -220,8 +208,7 @@ async function startModel() {
   const server = createServer((request, response) => {
     void handle(request, response).catch((error: unknown) => {
       failures.push(String(error));
-      response.writeHead(400, { "content-type": "application/json" });
-      response.end(JSON.stringify({ error: { message: String(error) } }));
+      respondJson(response, { error: { message: String(error) } }, 400);
     });
   });
   async function handle(request: IncomingMessage, response: ServerResponse) {
@@ -229,18 +216,14 @@ async function startModel() {
       response.writeHead(404).end();
       return;
     }
-    const chunks: Buffer[] = [];
-    for await (const chunk of request) {
-      chunks.push(Buffer.from(chunk));
-    }
-    const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { input?: ModelInput[] };
+    const body = JSON.parse(await readRequestText(request)) as { input?: ModelInput[] };
     const input = body.input ?? [];
     const latestUser = input
       .toReversed()
       .find(
         (item) =>
           item.role === "user" &&
-          !JSON.stringify(item.content).includes(INTERNAL_RUNTIME_CONTEXT_BEGIN),
+          !isInternalRuntimeContextCarrierText(modelInputText(item.content)),
       );
     const text = JSON.stringify(latestUser?.content);
     const last = input.at(-1);
@@ -257,6 +240,15 @@ async function startModel() {
       final("CHILD_REPLAY_RESULT");
     } else if (text?.includes("EXPLICIT_FOLLOWUP_AFTER_RESTART")) {
       final("EXPLICIT_FOLLOWUP_OK");
+    } else if (
+      text?.includes("Subagent completion delivery is blocked:") ||
+      extractCurrentRuntimeContextTexts(input).some((context) =>
+        context.includes("Subagent completion delivery is blocked:"),
+      )
+    ) {
+      // The host may run this durable notice as its own turn or fold it into the
+      // next prompt; either way it is a notification, not a completion retry.
+      final("Completion delivery is blocked.");
     } else if (last?.type === "function_call_output") {
       // Runtime normalization may change IDs; follow the actual call/output pair.
       const call = input.findLast(
@@ -301,26 +293,16 @@ async function startModel() {
       });
     }
   }
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("model listener missing");
-  }
+  const url = await listenLoopback(server);
   return {
-    url: "http://127.0.0.1:" + address.port,
+    url,
     releaseChild: () => child.resolve(undefined),
     childStarted: () => childStarted,
     effectCalls: () => effectCalls,
     failures: () => failures,
     close: async () => {
       child.resolve(undefined);
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await closeHttpServer(server);
     },
   };
 }
@@ -334,27 +316,5 @@ function tool(response: ServerResponse, id: string, callId: string, name: string
     arguments: JSON.stringify(args),
     status: "completed",
   };
-  writeOpenAiResponsesSse(response, [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...item, status: "in_progress", arguments: "" },
-    },
-    {
-      type: "response.function_call_arguments.done",
-      item_id: item.id,
-      output_index: 0,
-      arguments: item.arguments,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: "resp_" + id,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ]);
+  writeRestartToolCalls(response, "resp_" + id, [item], { argumentEvent: "done" });
 }

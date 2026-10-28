@@ -1,9 +1,12 @@
+import { CRABBOX_RUNTIME_NODE_PATH } from "./crabbox-worker-script.js";
+
 // Enrollment roots its identity, device token, bundles, and node-host workspaces
 // under OPENCLAW_STATE_DIR here; deleting it is the cross-session data boundary.
 // Crabbox's separate checkpoint workdir never receives session files (--no-sync).
 // SSH session workspaces must also be scrubbed; sibling bundle installs and git-seeds
 // in .openclaw-worker are machine-level caches and intentionally survive.
 export const SCRUB_WORKER_STATE = `set -eu
+${CRABBOX_RUNTIME_NODE_PATH}
 worker_root="$HOME/.openclaw/cloud-workers"
 node <<'CRABBOX_SCRUB_NODE_SCRIPT'
 const fs = require("node:fs");
@@ -13,6 +16,15 @@ const root = path.join(os.homedir(), ".openclaw", "cloud-workers");
 const runtimeRoot = path.join(os.homedir(), ".openclaw-worker", "node-runtimes") + path.sep;
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 (async () => {
+  // Setup grants never reach disk; only the runner's temporary CA files can remain.
+  for (const tmpRoot of new Set(["/tmp", os.tmpdir()])) {
+    for (const name of fs.readdirSync(tmpRoot)) {
+      if (!name.startsWith("openclaw-setup-egress.")) continue;
+      const staging = path.join(tmpRoot, name);
+      const stat = fs.lstatSync(staging);
+      if (stat.isDirectory() && stat.uid === process.getuid()) fs.rmSync(staging, { recursive: true });
+    }
+  }
   if (!fs.existsSync(root)) return;
   for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
@@ -47,5 +59,5 @@ rm -rf "$worker_root"
 rm -rf "$HOME/.openclaw-worker/workspaces"
 # Crabbox's forwarded-env cleanup only warns on failure; native images include its workdir.
 # Replace the shell for this final command so deleting its uploaded script cannot interrupt cleanup.
-exec rm -rf -- .crabbox/env .crabbox/scripts
+exec rm -rf -- .crabbox/env .crabbox/env-* .crabbox/scripts
 `;

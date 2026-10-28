@@ -8,6 +8,7 @@ public struct ShareGatewayRelayConfig: Codable, Sendable, Equatable {
     public let sessionKey: String
     public let deliveryChannel: String?
     public let deliveryTo: String?
+    public let requiresForegroundSignIn: Bool?
 
     public init(
         gatewayURLString: String,
@@ -16,7 +17,8 @@ public struct ShareGatewayRelayConfig: Codable, Sendable, Equatable {
         password: String?,
         sessionKey: String,
         deliveryChannel: String? = nil,
-        deliveryTo: String? = nil)
+        deliveryTo: String? = nil,
+        requiresForegroundSignIn: Bool? = nil)
     {
         self.gatewayURLString = gatewayURLString
         self.gatewayStableID = gatewayStableID
@@ -25,14 +27,11 @@ public struct ShareGatewayRelayConfig: Codable, Sendable, Equatable {
         self.sessionKey = sessionKey
         self.deliveryChannel = deliveryChannel
         self.deliveryTo = deliveryTo
+        self.requiresForegroundSignIn = requiresForegroundSignIn
     }
 }
 
 public enum ShareGatewayRelaySettings {
-    private static var suiteName: String {
-        OpenClawAppGroup.identifier
-    }
-
     private static let relayConfigKey = "share.gatewayRelay.config.v1"
     // On iOS an App Group is also a Keychain access group. Reuse the existing
     // group so the host and extension share only this credential bundle.
@@ -41,7 +40,7 @@ public enum ShareGatewayRelaySettings {
     private static let lastEventKey = "share.gatewayRelay.event.v1"
 
     private static var defaults: UserDefaults {
-        UserDefaults(suiteName: self.suiteName) ?? .standard
+        UserDefaults(suiteName: OpenClawAppGroup.identifier) ?? .standard
     }
 
     private static var isAppExtension: Bool {
@@ -78,7 +77,8 @@ public enum ShareGatewayRelaySettings {
             password: credentials?.password,
             sessionKey: config.sessionKey,
             deliveryChannel: config.deliveryChannel,
-            deliveryTo: config.deliveryTo)
+            deliveryTo: config.deliveryTo,
+            requiresForegroundSignIn: config.requiresForegroundSignIn)
     }
 
     /// An endpoint is not a gateway identity. If the extension launches before the
@@ -123,9 +123,7 @@ public enum ShareGatewayRelaySettings {
     }
 
     public static func loadLastEvent() -> String? {
-        let value = self.defaults.string(forKey: self.lastEventKey)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return value.isEmpty ? nil : value
+        self.defaults.string(forKey: self.lastEventKey)?.trimmedNonEmpty
     }
 
     private static func saveMetadata(_ config: ShareGatewayRelayConfig) {
@@ -136,7 +134,8 @@ public enum ShareGatewayRelaySettings {
             password: nil,
             sessionKey: config.sessionKey,
             deliveryChannel: config.deliveryChannel,
-            deliveryTo: config.deliveryTo)
+            deliveryTo: config.deliveryTo,
+            requiresForegroundSignIn: config.requiresForegroundSignIn)
         guard let data = try? JSONEncoder().encode(metadata) else { return }
         self.defaults.set(data, forKey: self.relayConfigKey)
     }
@@ -170,9 +169,8 @@ public enum ShareGatewayRelaySettings {
         guard let json = GenericPasswordKeychainStore.loadString(
             service: self.relayCredentialService,
             account: self.relayCredentialAccount,
-            accessGroup: self.suiteName),
-            let data = json.data(using: .utf8),
-            let credentials = try? JSONDecoder().decode(ShareGatewayRelayConfig.self, from: data)
+            accessGroup: OpenClawAppGroup.identifier),
+            let credentials = try? JSONDecoder().decode(ShareGatewayRelayConfig.self, from: Data(json.utf8))
         else { return nil }
         return credentials
     }
@@ -181,24 +179,19 @@ public enum ShareGatewayRelaySettings {
         guard config.token != nil || config.password != nil else {
             return self.deleteCredentials()
         }
-        guard let data = try? JSONEncoder().encode(config),
-              let json = String(data: data, encoding: .utf8),
-              GenericPasswordKeychainStore.saveString(
-                  json,
-                  service: self.relayCredentialService,
-                  account: self.relayCredentialAccount,
-                  accessGroup: self.suiteName)
-        else {
-            return false
-        }
-        return true
+        guard let data = try? JSONEncoder().encode(config) else { return false }
+        return GenericPasswordKeychainStore.saveString(
+            String(bytes: data, encoding: .utf8)!,
+            service: self.relayCredentialService,
+            account: self.relayCredentialAccount,
+            accessGroup: OpenClawAppGroup.identifier)
     }
 
     private static func deleteCredentials() -> Bool {
         GenericPasswordKeychainStore.delete(
             service: self.relayCredentialService,
             account: self.relayCredentialAccount,
-            accessGroup: self.suiteName)
+            accessGroup: OpenClawAppGroup.identifier)
     }
 
     private static func credentials(

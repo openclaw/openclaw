@@ -19,7 +19,7 @@ In practice:
 
 - Avatars and images served under relative paths (for example `/avatars/<id>`) still render, including authenticated avatar routes the UI fetches and converts into local `blob:` URLs.
 - Inline `data:image/...` URLs still render.
-- Local `blob:` URLs created by the Control UI still render.
+- Local `blob:` URLs created by the Control UI still render. Text attachment previews can read those local bytes before the attachment is sent.
 - HTTPS transcript images render in Chat image galleries and Activity previews. The browser contacts the image host directly, disclosing its network address; thumbnails, the expanded image viewer, and neighboring-image preloads send no page referrer.
 - Markdown attachment and Skill Workshop previews keep remote images as click-to-open links. Plugin README and agent-file previews automatically load HTTPS images and contact their hosts directly from the browser.
 - Verified GitHub account avatars render from `avatars.githubusercontent.com`; avatar helpers continue to reject arbitrary remote avatar URLs.
@@ -28,26 +28,75 @@ In practice:
 - Animated PNG (APNG) icons are accepted as PNG images. Workspace icons and managed channel avatars retain their animation; remote plugin, catalog, and link icons use a resized PNG preview.
 - Remote avatar URLs emitted by channel metadata are stripped at the Control UI's avatar helpers and replaced with the built-in logo/badge, so a compromised or malicious channel cannot force arbitrary remote image fetches from an operator browser.
 
+Page metadata reads stop at the end of the HTML head or after 64 KiB, whichever
+comes first; metadata beyond that limit is omitted. The Gateway streams the head
+without building a page DOM. Anonymous previews use a bounded cache per requesting
+principal and runtime config revision for one hour when available, or five minutes
+when unavailable; URL fragments share the same entry. Repeated links share pending
+requests, and a page that declares the same social image and favicon downloads it
+once. The 15-second preview deadline includes queue wait, fetching, and image work.
+Disabling automatic favicons or retiring the request's authority suppresses cached
+previews too.
+
 The browser-side CSP restriction itself is always on and not configurable.
+
+## Connection permissions
+
+The Control UI uses the granted scopes returned by the Gateway handshake.
+Session readers can open shared chats without polling operator-only dashboards,
+scheduled tasks, voice catalogs, or provider authentication status. Restricted
+surfaces are hidden or show an access message. A dashboard `FORBIDDEN` response
+stops automatic retries; reconnecting replaces the connection's granted scopes.
+The Gateway continues to authorize every request and subscription.
 
 ## Public transcript boundary
 
-The authenticated Control UI does not become public when a session is published.
-Public transcript links use the dedicated `/share/session?token=<opaque>` route;
-the encrypted token is the read capability and does not reveal the agent, session
-key, session ID, or publication ID. Anonymous visitors cannot use it to connect
-to the Gateway, send messages, invoke tools, or open other Control UI routes.
+Public threads use the same `/chat/...` URL as the authenticated Control UI.
+Anonymous readers receive a separate, read-only document, never an operator
+connection. **Log in** goes through a protected same-origin handoff and returns
+to that thread with the person's existing permissions. Identity headers on the
+anonymous thread path do not authorize private access. Private and missing
+threads have the same anonymous unavailable response.
 
-The public renderer reads only user messages and assistant final-answer text.
-It omits tools, reasoning, files, images, widgets, hidden messages, and internal
-metadata, and applies credential-pattern redaction. Responses use a restrictive
-content security policy, `Cache-Control: no-store`, and `Referrer-Policy: no-referrer`.
-Treat the complete URL as public: anyone who receives it can read existing and
-future published text until the creator or a Gateway admin disables access.
+In token/password deployments, the reader can recognize a browser-held session
+token or paired-device credential scoped to the current Gateway address and base
+path. After the protected probe returns `401`, that presence is only a navigation
+hint to open the app shell; the reader never sends the credential or authorizes
+session data. The app's existing WebSocket and bootstrap checks still apply.
+A `204` probe continues into the app, while `403` keeps the public reader even
+when local credentials exist. Trusted-proxy and external-login handoffs retain
+their existing authentication and permission checks.
 
-When a login proxy protects the host, bypass authentication only for the Control
-UI's `/share/*` namespace. Keep the WebSocket, bootstrap, API, dashboard, and all
-other routes protected. The detailed deployment, token, revocation, and restore
+Loopback HTTP retains its public-reader support. On non-secure ingress where
+publication is unavailable, token/password chat links serve the app shell
+directly, without looking up or disclosing a transcript. Serving the shell grants
+no Gateway or session access.
+
+The public renderer includes user and assistant text, including progress updates,
+tool-call summaries, and shared images. Tool result text, reasoning, executable
+widgets, hidden messages, and internal metadata stay private. Images use a public
+media route bound to the current publication and transcript entry; other
+attachments appear as filename chips without download links. Included text
+preserves credentials; review it before publishing. A restrictive content
+security policy permits only the fixed reader script; transcript HTML cannot
+execute. Responses retain `Cache-Control: no-store` and
+`Referrer-Policy: no-referrer`. Server-side representation reuse never substitutes
+for a current publication check, including before a `304` response.
+
+Public transcript documents, preview cards, shared images, and the share namespace
+send `X-Robots-Tag: noindex, nofollow`; HTML reader and preview documents also
+include a robots meta tag. These directives ask compliant search engines not to
+index the content or follow its links. They do not prevent anonymous downloads,
+recall existing copies, or replace access control. Social-preview crawlers can
+still fetch public documents and images.
+
+Anyone who knows a public thread URL can read its existing and future published
+content until the creator or a Gateway admin disables access. Re-enabling access
+revives the normal thread URL, but not previously revoked token links.
+
+A login proxy must expose only the public thread documents and share namespace.
+Keep the session-entry login handoff, WebSocket, bootstrap, API, media, dashboard,
+and other application routes protected. The detailed deployment and revocation
 contract is in [Public session transcripts](/web/urls#public-session-transcripts).
 
 ## Avatar route auth
@@ -66,18 +115,36 @@ Concurrent profile-photo requests can share a Gravatar lookup. Each HTTP request
 keeps its own timeout and disconnect lifecycle, so one expired or disconnected
 request does not interrupt another client loading the same photo.
 
+Saved profile photos use a bounded in-memory cache tied to the Gateway's profile
+catalog. Committed profile edits and merges invalidate cached representations;
+authentication still runs before cached responses and `304 Not Modified`.
+Cold photo reads have a separate concurrency budget to preserve shared-state read
+capacity. During overload, the endpoint returns `503 Service Unavailable` with
+`Retry-After: 1` instead of a permanent lookup failure.
+
 ## Assistant media route auth
 
 Local image previews follow the chat's filesystem permissions. Project chats use
 their session workspace, including managed worktrees. Full Access, or disabled
 workspace-only filesystem protection, also permits image previews outside that
 workspace. An explicit session permission mode takes precedence over the agent's
-filesystem setting.
+filesystem setting. A required creator-role sandbox takes precedence over both:
+image previews remain confined to the session's allowed media roots, including
+in Full Access mode. The administrator's exact-image allowance described below
+remains available.
 
 Assistant `MEDIA:` attachments in local project chats resolve relative paths
 inside the session workspace, including managed worktrees. Absolute paths in
 that workspace are staged for delivery under the same file-access checks.
-Selecting a project does not grant access to sibling worktrees.
+For a managed project running in a local Docker or Podman sandbox, relative and
+absolute container-workspace references (such as `screenshots/result.png` or
+`/workspace/screenshots/result.png`) resolve through that session's worktree
+after pending workspace changes settle.
+The existing sandbox must identify the same visible workspace bind; container-only,
+obscured, or unverifiable backing stays unavailable. Stopped containers retain
+previews when their saved mount metadata still establishes that workspace bind.
+The preview still belongs to the original message and uses the same containment
+and current-access checks. Selecting a project does not grant access to sibling worktrees.
 
 Trusted audio attachments use the same session workspace boundary during playback.
 Mixed replies retain a separate failure card for each rejected attachment alongside
@@ -105,7 +172,8 @@ ticket; replacing the file or restarting the Gateway requires a new allowance.
 When gateway auth is configured, assistant local-media previews use a two-step route:
 
 - `GET /__openclaw__/assistant-media?meta=1&source=<path>&sessionKey=<key>&agentId=<id>` requires the normal Control UI operator auth and access to the selected session; the browser sends the gateway token as a bearer header when checking availability.
-- Successful metadata responses include a short-lived `mediaTicket` scoped to the file and session. Explicit outside-image allowances use an authenticated administrator `POST` to the same route with `meta=1&allow=1`.
+- Saved message attachments also carry `messageId`. Readers with `operator.sessions.read` can open an attachment only when its current, visible message belongs to a conversation they can read, including retained queued or stopped inputs. The Gateway verifies the source against that message’s saved attachment references or supported assistant media directives; a session key or filename alone never grants file access. These reads retain the same filesystem restrictions. Standalone file reads still require `operator.read`.
+- Successful metadata responses include a short-lived `mediaTicket` scoped to the file, session, and message when applicable. Explicit outside-image allowances use an authenticated administrator `POST` to the same route with `meta=1&allow=1`.
 - Browser-rendered image, audio, video, and document URLs use `mediaTicket=<ticket>` instead of the active gateway token or password. The ticket expires quickly and cannot authorize a different source.
 
 Tickets remain bound to the issuing reader's current access. Losing session
@@ -114,15 +182,22 @@ before they expire.
 
 This keeps media rendering compatible with browser-native media elements without putting reusable gateway credentials in visible media URLs.
 
-Uploaded and local chat image previews rendered with native image elements keep an already-loaded image visible during temporary connection or metadata-renewal failures. Retention applies only to that mounted image; it does not extend its media ticket or authorize fresh reads. An explicit missing or access-denied response, or a change to the source, credentials, or access scope, clears the retained image.
+Uploaded and local chat image previews rendered with native image elements keep an already-loaded image visible during temporary connection or metadata-renewal failures. That failure tolerance applies only to the mounted image; it does not extend its media ticket or authorize fresh reads. Scrolling can reuse a successfully decoded image from the bounded in-memory preview cache while its existing metadata and ticket remain valid, without another image download or loading placeholder. An explicit missing or access-denied response, or a change to the source, credentials, or access scope, clears the retained image. When the UI receives a sharing invalidation, a role-configuration change, or the connection close for a role reassignment, cached previews must pass fresh admission before remounting.
+
+If uploaded or local image bytes fail to load or decode after the availability check succeeds, the broken preview becomes an **Unavailable** card with **Retry**. Native image errors do not reveal the HTTP status, so the UI does not automatically repeat the byte request. **Retry** checks current availability and access before loading the image again; it does not grant an outside-folder allowance or extend an existing ticket.
 
 Uploaded images also stay visible while a new session's workspace or worktree details arrive. Media access is rechecked in the background without replacing the loaded preview with a loading card.
 
 Generated images under `/api/chat/media/outgoing/...` use the same capability
 principle through `artifacts.download`. The authenticated WebSocket request
 authorizes the transcript artifact and returns a short-lived URL. The HTTP media
-route rechecks that the artifact still belongs to the transcript before serving
-bytes. The previous shared-owner bearer path remains available for older Control
+route rechecks that the artifact still belongs to the transcript and that the
+issuing reader can still read the session before serving bytes. Full images,
+thumbnails, and media playback share this authority. These URLs expire after five
+minutes and survive an ordinary WebSocket disconnect. Device, role, source, or
+session-access revocation stops reads through an existing URL. Responses use private,
+no-store caching; an already admitted stream retains its read authority until
+completion and stops if that authority is revoked. The previous shared-owner bearer path remains available for older Control
 UI clients during the compatibility window.
 
 ## Approval links

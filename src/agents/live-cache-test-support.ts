@@ -2,14 +2,14 @@ import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion
 /**
  * Shared helpers for live prompt-cache integration tests.
  */
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { completeSimple } from "../llm/stream.js";
+import type { completeSimple } from "../llm/stream.js";
 import type { Api, AssistantMessage, Model } from "../llm/types.js";
-import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
+import { discoverAuthStorageFacts, discoverModelsAsync } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { collectProviderApiKeys } from "./live-auth-keys.js";
-import { isLiveTestEnabled } from "./live-test-helpers.js";
+import { completeSimpleWithTimeout, isLiveTestEnabled } from "./live-test-helpers.js";
 import {
   getApiKeyForModelCore,
   isMissingProviderAuthError,
@@ -118,33 +118,16 @@ export async function completeSimpleWithLiveTimeout<TApi extends Api>(
     toInt(process.env.OPENCLAW_LIVE_MODEL_TIMEOUT_MS, DEFAULT_TIMEOUT_MS),
   ),
 ): Promise<AssistantMessage> {
-  const controller = new AbortController();
-  const abortTimer = setTimeout(() => controller.abort(), timeoutMs);
-  abortTimer.unref?.();
-  let hardTimer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    hardTimer = setTimeout(() => {
-      reject(new Error(`${progressContext} timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    hardTimer.unref?.();
-  });
-  try {
-    return await withLiveCacheHeartbeat(
-      Promise.race([
-        completeSimple(model, context, {
-          ...options,
-          signal: controller.signal,
-        }),
-        timeout,
-      ]),
-      progressContext,
-    );
-  } finally {
-    clearTimeout(abortTimer);
-    if (hardTimer) {
-      clearTimeout(hardTimer);
-    }
-  }
+  return withLiveCacheHeartbeat(
+    completeSimpleWithTimeout(
+      model,
+      context,
+      options,
+      timeoutMs,
+      `${progressContext} timed out after ${timeoutMs}ms`,
+    ),
+    progressContext,
+  );
 }
 
 /** Build deterministic prompt text large enough to exercise provider prompt caches. */
@@ -204,10 +187,10 @@ export async function resolveLiveDirectModelPool(params: {
   preferredModelIds: readonly string[];
 }): Promise<LiveResolvedModelPool> {
   const { resolveModelAsync } = await import("./embedded-agent-runner/model.js");
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
   const agentDir = resolveDefaultAgentDir(cfg);
-  const authStorage = discoverAuthStorage(agentDir);
-  const modelRegistry = discoverModels(authStorage, agentDir, { config: cfg });
+  const { authStorage } = await discoverAuthStorageFacts(agentDir);
+  const modelRegistry = await discoverModelsAsync(authStorage, agentDir, { config: cfg });
   const rawModel = process.env[params.envVar]?.trim();
   const parsed = rawModel ? parseModelRef(rawModel, params.provider) : null;
   const modelIds = rawModel ? [parsed?.model ?? rawModel] : params.preferredModelIds;
@@ -294,4 +277,24 @@ export function withLiveDirectModelApiKey(
   apiKey: string,
 ): LiveResolvedModel {
   return { ...fixture, apiKey };
+}
+
+export function resolveLiveCacheModel(
+  provider: "openai" | "anthropic",
+): Promise<LiveResolvedModel> {
+  return resolveLiveDirectModel(
+    provider === "openai"
+      ? {
+          provider: "openai",
+          api: "openai-responses",
+          envVar: "OPENCLAW_LIVE_OPENAI_CACHE_MODEL",
+          preferredModelIds: ["gpt-5.6-luna", "gpt-5.5", "gpt-5.4-mini", "gpt-5.4"],
+        }
+      : {
+          provider: "anthropic",
+          api: "anthropic-messages",
+          envVar: "OPENCLAW_LIVE_ANTHROPIC_CACHE_MODEL",
+          preferredModelIds: ["claude-sonnet-5", "claude-haiku-4-5"],
+        },
+  );
 }

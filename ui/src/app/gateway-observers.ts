@@ -5,11 +5,15 @@ import type {
 import type { EventLogEntry } from "../api/event-log.ts";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-cache.ts";
-import { invalidateCronCatalog } from "../lib/cron/catalog.ts";
+import {
+  bindCronInventory,
+  clearCronInventory,
+  receiveCronInventoryEvent,
+} from "../lib/cron/inventory-connection.ts";
 import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
 import {
   clearModelCatalogCache,
-  beginModelCatalogRead,
+  beginModelCatalogSnapshot,
   publishModelCatalogResult,
   type ModelCatalogRead,
   type ModelCatalogReadScope,
@@ -81,6 +85,9 @@ export function createGatewayEventLog() {
     get revision() {
       return revision;
     },
+    clear() {
+      entries = [];
+    },
     resetConnection() {
       recoveryScope = null;
       return retire();
@@ -119,6 +126,10 @@ export function createGatewayMetadataObserver(
       return value;
     },
     synchronize(previous: ApplicationGatewaySnapshot, next: ApplicationGatewaySnapshot): boolean {
+      if (next.phase !== "connected") {
+        target = undefined;
+        read = undefined;
+      }
       const connectionChanged = previous.client !== next.client || previous.hello !== next.hello;
       if (
         previous.client &&
@@ -127,13 +138,16 @@ export function createGatewayMetadataObserver(
           (previous.phase === "connected" && next.phase !== "connected"))
       ) {
         invalidateUserPreferences(previous.client);
-        invalidateCronCatalog(previous.client);
+        clearCronInventory(previous.client);
         invalidateModelAuthStatusRequests(previous.client);
         clearModelCatalogCache(previous.client);
         invalidateChatMetadataStore(previous.client);
         if (!isCurrent(next)) {
           return false;
         }
+      }
+      if (next.client && next.hello && next.phase === "connected") {
+        bindCronInventory(next.client, next.hello);
       }
       if (
         !next.client ||
@@ -150,17 +164,15 @@ export function createGatewayMetadataObserver(
             ? resolveUiConversationIdentity({ hello }, target.sessionKey, target.agentId)
             : {}
           : undefined;
-      read = target
-        ? beginModelCatalogRead(client, scope, undefined, scope?.agentId === undefined)
-        : undefined;
+      read = target ? beginModelCatalogSnapshot(client, scope) : undefined;
       return true;
     },
     receive(
       event: GatewayEventFrame,
       host: UiSessionDefaultsHost & Pick<ApplicationGatewaySnapshot, "client">,
     ): GatewayEventFrame | undefined {
-      if (host.client && (event.event === "cron" || event.event === "config.changed")) {
-        invalidateCronCatalog(host.client);
+      if (host.client) {
+        receiveCronInventoryEvent(host.client, event);
       }
       if (event.event !== "models.snapshot") {
         return event;
@@ -183,7 +195,6 @@ export function createGatewayMetadataObserver(
           )
         : publication.scope;
       const accepted = publishModelCatalogResult(currentRead, scope, publication.catalog);
-      currentRead.cache.reads.delete(currentRead);
       return accepted ? { ...event, payload: { ...publication, scope } } : undefined;
     },
   };

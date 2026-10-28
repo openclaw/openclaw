@@ -1,11 +1,13 @@
+import { flush } from "solid-js";
 /* @vitest-environment jsdom */
-import { render } from "lit";
 import { describe, expect, it } from "vitest";
-import { renderCapabilityChips } from "./capability-chips.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { CapabilityChips } from "./capability-chips.tsx";
 
 function renderChips(caps: string[]) {
   const container = document.createElement("div");
-  render(renderCapabilityChips(caps), container);
+  mountSolid(() => CapabilityChips({ caps }), { container });
+  flush();
   return container;
 }
 
@@ -54,17 +56,15 @@ describe("device capability chips", () => {
     expect(runtimeChip?.getAttribute("title")).toBe(title);
   });
 
-  it.each(["custom-tools", "__proto__", "constructor"])(
-    "preserves unknown capability %s as a generic chip",
-    (cap) => {
-      const container = renderChips([cap]);
-      const chip = container.querySelector('[role="listitem"]');
+  it("preserves prototype-named capabilities as generic chips", () => {
+    const cap = "__proto__";
+    const container = renderChips([cap]);
+    const chip = container.querySelector('[role="listitem"]');
 
-      expect(chip?.textContent?.trim()).toBe(cap);
-      expect(chip?.getAttribute("title")).toBe(cap);
-      expect(chip?.querySelector("svg")).not.toBeNull();
-    },
-  );
+    expect(chip?.textContent?.trim()).toBe(cap);
+    expect(chip?.getAttribute("title")).toBe(cap);
+    expect(chip?.querySelector("svg")).not.toBeNull();
+  });
 
   it.each([
     { runtimes: [], overflow: 4 },

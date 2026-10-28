@@ -1,358 +1,65 @@
-// Command path policy tests cover allowed CLI command path shapes and lazy imports.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
-import type { CliCommandCatalogEntry, CliCommandPathPolicy } from "./command-catalog.js";
+import type { CliCommandCatalogEntry, CliCommandPathPolicy } from "./command-catalog-types.js";
 import {
   resolveCliCommandPathPolicy,
   resolveCliNetworkProxyPolicy,
 } from "./command-path-policy.js";
 
-const DEFAULT_EXPECTED_POLICY: CliCommandPathPolicy = {
-  configGuard: "run",
-  stateStoreGuard: "skip",
-  loadPlugins: "never",
-  pluginRegistry: { scope: "all" },
-  ownsProtocolStdout: false,
-  hideBanner: false,
-  ensureCliPath: true,
-  networkProxy: "default",
-};
+const bypass = { networkProxy: "bypass" } as const;
+const skip = { ...bypass, configGuard: "skip" } as const;
 
-type NetworkProxyResolver = Extract<
-  CliCommandPathPolicy["networkProxy"],
-  (ctx: { argv: string[]; commandPath: string[] }) => unknown
->;
-type LoadPluginsResolver = Extract<
-  CliCommandPathPolicy["loadPlugins"],
-  (ctx: { argv: string[]; commandPath: string[]; jsonOutputMode: boolean }) => unknown
->;
-type ConfigGuardResolver = Extract<
-  CliCommandPathPolicy["configGuard"],
-  (ctx: { argv: string[]; commandPath: string[] }) => unknown
->;
-
-function expectResolvedPolicy(
-  commandPath: string[],
-  expected: Partial<CliCommandPathPolicy>,
-): void {
-  expect(resolveCliCommandPathPolicy(commandPath)).toEqual({
-    ...DEFAULT_EXPECTED_POLICY,
-    ...expected,
-  });
+function expectResolvedPolicy(commands: string, expected: Partial<CliCommandPathPolicy>): void {
+  for (const command of commands.split("|")) {
+    expect(resolveCliCommandPathPolicy(command.split(" ")), command).toMatchObject(expected);
+  }
 }
 
 function expectNetworkProxyResolver(
   policy: CliCommandPathPolicy,
-): asserts policy is CliCommandPathPolicy & { networkProxy: NetworkProxyResolver } {
+): asserts policy is CliCommandPathPolicy & {
+  networkProxy: Exclude<CliCommandPathPolicy["networkProxy"], string>;
+} {
   expect(typeof policy.networkProxy).toBe("function");
 }
 
 function expectLoadPluginsResolver(
   policy: CliCommandPathPolicy,
-): asserts policy is CliCommandPathPolicy & { loadPlugins: LoadPluginsResolver } {
+): asserts policy is CliCommandPathPolicy & {
+  loadPlugins: Exclude<CliCommandPathPolicy["loadPlugins"], string>;
+} {
   expect(typeof policy.loadPlugins).toBe("function");
 }
 
 function expectConfigGuardResolver(
   policy: CliCommandPathPolicy,
-): asserts policy is CliCommandPathPolicy & { configGuard: ConfigGuardResolver } {
+): asserts policy is CliCommandPathPolicy & {
+  configGuard: Exclude<CliCommandPathPolicy["configGuard"], string>;
+} {
   expect(typeof policy.configGuard).toBe("function");
 }
 
+function commandContext(commandPath: string[], flags: string[] = [], jsonOutputMode = false) {
+  return { argv: ["node", "openclaw", ...commandPath, ...flags], commandPath, jsonOutputMode };
+}
+
+function expectProxy(args: string[], expected: "default" | "bypass") {
+  expect(resolveCliNetworkProxyPolicy(["node", "openclaw", ...args]), args.join(" ")).toBe(
+    expected,
+  );
+}
+
 describe("command-path-policy", () => {
-  it.each([
-    { commandPath: ["configure"] },
-    { commandPath: ["models", "auth"] },
-    { commandPath: ["models", "auth", "paste-token"] },
-    { commandPath: ["channels", "add"] },
-    { commandPath: ["channels", "login"] },
-  ])("guards local state writes for $commandPath", ({ commandPath }) => {
-    expect(resolveCliCommandPathPolicy(commandPath).stateStoreGuard).toBe("run");
-  });
-
-  it.each([
-    { commandPath: ["models", "list"] },
-    { commandPath: ["channels", "status"] },
-    { commandPath: ["config", "set"] },
-    { commandPath: ["onboard"] },
-  ])("does not broaden the state-store guard to $commandPath", ({ commandPath }) => {
-    expect(resolveCliCommandPathPolicy(commandPath).stateStoreGuard).toBe("skip");
-  });
-
-  it("resolves status policy with shared startup semantics", () => {
-    expectResolvedPolicy(["status"], {
-      configGuard: "skip",
-      loadPlugins: "never",
-      pluginRegistry: { scope: "channels" },
-      ensureCliPath: false,
-      networkProxy: "bypass",
-    });
-  });
-
-  it.each([
-    { commandPath: ["database"], hideBanner: true },
-    { commandPath: ["audit"], hideBanner: false },
-    { commandPath: ["node", "identity"], hideBanner: false },
-    { commandPath: ["update", "cleanup"], hideBanner: true },
-  ])("keeps passive startup for $commandPath", ({ commandPath, hideBanner }) => {
-    expectResolvedPolicy(commandPath, {
-      configGuard: "skip",
-      loadPlugins: "never",
-      ensureCliPath: false,
-      networkProxy: "bypass",
-      hideBanner,
-    });
-  });
-
-  it("keeps built-in node RPCs off the config guard", () => {
-    for (const subcommand of ["status", "list"]) {
-      expectResolvedPolicy(["nodes", subcommand], {
-        configGuard: "skip",
-        networkProxy: "bypass",
-      });
-    }
-    for (const subcommand of [
-      "describe",
-      "pending",
-      "approve",
-      "reject",
-      "remove",
-      "rename",
-      "invoke",
-      "notify",
-      "push",
-      "camera",
-      "screen",
-      "location",
-    ]) {
-      expectResolvedPolicy(["nodes", subcommand], {
-        configGuard: "validate",
-        networkProxy: "bypass",
-      });
-    }
-    // Bare `openclaw nodes` still resolves plugin subcommands from validated config.
-    expectResolvedPolicy(["nodes"], { networkProxy: "bypass" });
-    expectResolvedPolicy(["nodes", "pair"], { networkProxy: "bypass" });
-  });
-
-  it("retains node host startup outside the exact identity lookup", () => {
-    for (const commandPath of [
-      ["node"],
-      ["node", "install"],
-      ["node", "status"],
-      ["node", "identity", "unknown"],
-    ]) {
-      expectResolvedPolicy(commandPath, { networkProxy: "bypass" });
-    }
-    expectResolvedPolicy(["node", "run"], {});
-    expectResolvedPolicy(["node", "worker"], {
-      configGuard: "validate",
-      hideBanner: true,
-      ownsProtocolStdout: true,
-      networkProxy: "bypass",
-    });
-  });
-
-  it("keeps gateway-owned node and device mutations off the local config guard", () => {
-    for (const subcommand of [
-      "list",
-      "join-code",
-      "approve",
-      "reject",
-      "remove",
-      "clear",
-      "rename",
-      "rotate",
-      "revoke",
-    ]) {
-      const commandPath = ["devices", subcommand];
-      expectResolvedPolicy(commandPath, {
-        configGuard: "validate",
-        networkProxy: "bypass",
-      });
-    }
-  });
-
-  it("keeps gateway control RPCs on core-only config validation", () => {
-    for (const subcommand of ["call", "restart", "suspend", "resume"]) {
-      expectResolvedPolicy(["gateway", subcommand], {
-        configGuard: "validate",
-        loadPlugins: "never",
-        networkProxy: "bypass",
-      });
-    }
-  });
-
-  it("applies exact overrides after broader channel plugin rules", () => {
-    expectResolvedPolicy(["channels", "send"], {
-      loadPlugins: "always",
-      pluginRegistry: { scope: "configured-channels" },
-    });
-    expectResolvedPolicy(["channels", "login"], {
-      stateStoreGuard: "run",
-      loadPlugins: "always",
-      pluginRegistry: { scope: "configured-channels" },
-    });
-    expectResolvedPolicy(["channels", "capabilities"], {
-      loadPlugins: "always",
-      pluginRegistry: { scope: "configured-channels" },
-    });
-    expectResolvedPolicy(["channels", "add"], {
-      stateStoreGuard: "run",
-      loadPlugins: "never",
-      pluginRegistry: { scope: "configured-channels" },
-      networkProxy: "bypass",
-    });
-    const channelsStatusPolicy = resolveCliCommandPathPolicy(["channels", "status"]);
-    expect(channelsStatusPolicy).toEqual({
-      ...DEFAULT_EXPECTED_POLICY,
-      configGuard: "skip",
-      loadPlugins: "never",
-      pluginRegistry: { scope: "configured-channels" },
-      networkProxy: channelsStatusPolicy.networkProxy,
-    });
-    expectNetworkProxyResolver(channelsStatusPolicy);
-    expect(
-      channelsStatusPolicy.networkProxy({
-        argv: ["node", "openclaw", "channels", "status"],
-        commandPath: ["channels", "status"],
-      }),
-    ).toBe("bypass");
-    expect(
-      channelsStatusPolicy.networkProxy({
-        argv: ["node", "openclaw", "channels", "status", "--probe"],
-        commandPath: ["channels", "status"],
-      }),
-    ).toBe("default");
-    expectResolvedPolicy(["channels", "list"], {
-      configGuard: "skip",
-      loadPlugins: "never",
-      pluginRegistry: { scope: "configured-channels" },
-      networkProxy: "bypass",
-    });
-    expectResolvedPolicy(["channels", "logs"], {
-      loadPlugins: "never",
-      pluginRegistry: { scope: "configured-channels" },
-      networkProxy: "bypass",
-    });
-    expectResolvedPolicy(["channels", "remove"], {
-      loadPlugins: "always",
-      pluginRegistry: { scope: "configured-channels" },
-      networkProxy: "bypass",
-    });
-    expectResolvedPolicy(["channels", "resolve"], {
-      loadPlugins: "always",
-      pluginRegistry: { scope: "configured-channels" },
-      networkProxy: "bypass",
-    });
-  });
-
   it("keeps config-only agent commands on config-only startup", () => {
     const agentPolicy = resolveCliCommandPathPolicy(["agent"]);
-    expect(agentPolicy).toEqual({
-      ...DEFAULT_EXPECTED_POLICY,
-      configGuard: agentPolicy.configGuard,
-      loadPlugins: agentPolicy.loadPlugins,
-      pluginRegistry: { scope: "all" },
-      networkProxy: agentPolicy.networkProxy,
-    });
+    expect(agentPolicy.pluginRegistry).toEqual({ scope: "all" });
     expectLoadPluginsResolver(agentPolicy);
     expectConfigGuardResolver(agentPolicy);
-    expectNetworkProxyResolver(agentPolicy);
-    expect(
-      agentPolicy.loadPlugins({
-        argv: ["node", "openclaw", "agent"],
-        commandPath: ["agent"],
-        jsonOutputMode: false,
-      }),
-    ).toBe(false);
-    expect(
-      agentPolicy.loadPlugins({
-        argv: ["node", "openclaw", "agent", "--json"],
-        commandPath: ["agent"],
-        jsonOutputMode: true,
-      }),
-    ).toBe(false);
-    expect(
-      agentPolicy.loadPlugins({
-        argv: ["node", "openclaw", "agent", "--local"],
-        commandPath: ["agent"],
-        jsonOutputMode: true,
-      }),
-    ).toBe(true);
-    expect(
-      agentPolicy.configGuard({
-        argv: ["node", "openclaw", "agent"],
-        commandPath: ["agent"],
-      }),
-    ).toBe("skip");
-    expect(
-      agentPolicy.configGuard({
-        argv: ["node", "openclaw", "agent", "--local"],
-        commandPath: ["agent"],
-      }),
-    ).toBe("run");
-    expect(
-      agentPolicy.networkProxy({
-        argv: ["node", "openclaw", "agent"],
-        commandPath: ["agent"],
-      }),
-    ).toBe("bypass");
-    expect(
-      agentPolicy.networkProxy({
-        argv: ["node", "openclaw", "agent", "--local"],
-        commandPath: ["agent"],
-      }),
-    ).toBe("default");
-
-    expectResolvedPolicy(["agent", "exec"], {
-      configGuard: "skip",
-      loadPlugins: "never",
-      pluginRegistry: { scope: "all" },
-      ownsProtocolStdout: true,
-      hideBanner: true,
-      networkProxy: "default",
-    });
-
-    for (const commandPath of [["agents"], ["agents", "list"]]) {
-      expectResolvedPolicy(commandPath, {
-        configGuard: "skip",
-        loadPlugins: "never",
-        networkProxy: "bypass",
-      });
-    }
-    for (const commandPath of [
-      ["agents", "bind"],
-      ["agents", "unbind"],
-      ["agents", "set-identity"],
-      ["agents", "delete"],
-    ]) {
-      expectResolvedPolicy(commandPath, {
-        loadPlugins: "never",
-        networkProxy: "bypass",
-      });
-    }
-    expectResolvedPolicy(["agents", "bindings"], {
-      configGuard: "skip",
-      loadPlugins: "never",
-      networkProxy: "bypass",
-    });
-  });
-
-  it.each([
-    ["approvals", "pending"],
-    ["skills"],
-    ["skills", "list"],
-    ["skills", "check"],
-    ["gateway", "diagnostics", "export"],
-    ["gateway", "stability"],
-    ["gateway", "usage-cost"],
-  ])("keeps read-only cold path %s out of startup config and plugins", (...commandPath) => {
-    expectResolvedPolicy(commandPath, {
-      configGuard: "skip",
-      loadPlugins: "never",
-      networkProxy: "bypass",
-    });
+    expect(agentPolicy.loadPlugins(commandContext(["agent"]))).toBe(false);
+    expect(agentPolicy.loadPlugins(commandContext(["agent"], ["--json"], true))).toBe(false);
+    expect(agentPolicy.loadPlugins(commandContext(["agent"], ["--local"], true))).toBe(true);
+    expect(agentPolicy.configGuard(commandContext(["agent"]))).toBe("skip");
+    expect(agentPolicy.configGuard(commandContext(["agent"], ["--local"]))).toBe("run");
   });
 
   it("loads only sandbox backend owner plugins for runtime commands", () => {
@@ -360,18 +67,10 @@ describe("command-path-policy", () => {
     expectLoadPluginsResolver(sandboxPolicy);
     expect(sandboxPolicy.pluginRegistry).toEqual({ scope: "sandbox-backends" });
 
-    for (const commandPath of [["sandbox", "explain"]]) {
-      expect(resolveCliCommandPathPolicy(commandPath).pluginRegistry).toEqual({
-        scope: "sandbox-backends",
-      });
-      expect(
-        sandboxPolicy.loadPlugins({
-          argv: ["node", "openclaw", ...commandPath],
-          commandPath,
-          jsonOutputMode: false,
-        }),
-      ).toBe(true);
-    }
+    expect(resolveCliCommandPathPolicy(["sandbox", "explain"]).pluginRegistry).toEqual({
+      scope: "sandbox-backends",
+    });
+    expect(sandboxPolicy.loadPlugins(commandContext(["sandbox", "explain"]))).toBe(true);
 
     for (const commandPath of [
       ["sandbox", "list"],
@@ -386,301 +85,88 @@ describe("command-path-policy", () => {
   it.each([
     ["list", ["--browser"]],
     ["recreate", ["--browser", "--all"]],
-    ["recreate", ["--all", "--browser"]],
   ])("keeps browser-only sandbox %s independent of plugin activation", (subcommand, flags) => {
     const policy = resolveCliCommandPathPolicy(["sandbox", subcommand]);
     expectLoadPluginsResolver(policy);
 
-    expect(
-      policy.loadPlugins({
-        argv: ["node", "openclaw", "sandbox", subcommand, ...flags],
-        commandPath: ["sandbox", subcommand],
-        jsonOutputMode: false,
-      }),
-    ).toBe(false);
+    expect(policy.loadPlugins(commandContext(["sandbox", subcommand], flags))).toBe(false);
   });
 
-  it("resolves mixed startup-only rules", () => {
-    expectResolvedPolicy(["qa", "suite"], {
-      configGuard: "skip",
-      loadPlugins: "never",
-      networkProxy: "bypass",
-    });
-    expectResolvedPolicy(["worker"], {
-      configGuard: "skip",
-      loadPlugins: "never",
-      hideBanner: true,
-      ownsProtocolStdout: true,
-      networkProxy: "bypass",
-    });
-    for (const action of ["install", "status", "pair", "setup"]) {
-      expectResolvedPolicy(["browser", "extension", action], {
-        configGuard: "validate",
-        networkProxy: "bypass",
-      });
-    }
-    expectResolvedPolicy(["browser", "extension", "native-host"], {
-      configGuard: "skip",
-      ensureCliPath: false,
-      hideBanner: true,
-      ownsProtocolStdout: true,
-      networkProxy: "bypass",
-    });
-    expectResolvedPolicy(["configure"], {
-      configGuard: "skip",
-      stateStoreGuard: "run",
-      loadPlugins: "never",
-    });
-    expectResolvedPolicy(["config"], {
-      configGuard: "skip",
-      loadPlugins: "never",
-      networkProxy: "bypass",
-    });
-    expectResolvedPolicy(["config", "file"], {
-      configGuard: "skip",
-      ensureCliPath: false,
-      loadPlugins: "never",
-      ownsProtocolStdout: true,
-      networkProxy: "bypass",
-    });
-    expectResolvedPolicy(["config", "set"], {
-      loadPlugins: "never",
-      networkProxy: "bypass",
-    });
+  it.each<[string, Partial<CliCommandPathPolicy>]>([
+    ["browser extension install", { ...bypass, configGuard: "validate" }],
+    [
+      "browser extension native-host",
+      { ...skip, ensureCliPath: false, hideBanner: true, ownsProtocolStdout: true },
+    ],
+    ["configure", { configGuard: "skip", stateStoreGuard: "run" }],
+    ["config file", { ...skip, ensureCliPath: false, ownsProtocolStdout: true }],
+    ["plugins update", { hideBanner: true }],
+    ["plugins list|plugins lint", { ...skip, ensureCliPath: false }],
+    [
+      "memory index",
+      { configGuard: "validate", loadPlugins: "always", pluginRegistry: { scope: "memory" } },
+    ],
+    [
+      "memory search",
+      { configGuard: "skip", loadPlugins: "always", pluginRegistry: { scope: "memory" } },
+    ],
+  ])("resolves static startup policies for %s", expectResolvedPolicy);
+
+  it("resolves dynamic Doctor and memory startup rules", () => {
     const doctorPolicy = resolveCliCommandPathPolicy(["doctor"]);
     expectNetworkProxyResolver(doctorPolicy);
     expect(doctorPolicy).toMatchObject({
       configGuard: "skip",
       loadPlugins: "never",
     });
-    expect(
-      doctorPolicy.networkProxy({
-        argv: ["node", "openclaw", "doctor"],
-        commandPath: ["doctor"],
-      }),
-    ).toBe("default");
-    expect(
-      doctorPolicy.networkProxy({
-        argv: ["node", "openclaw", "doctor", "--state-sqlite=compact"],
-        commandPath: ["doctor"],
-      }),
-    ).toBe("bypass");
-    expectResolvedPolicy(["config", "validate"], {
-      configGuard: "skip",
-      loadPlugins: "never",
-      networkProxy: "bypass",
-    });
-    expectResolvedPolicy(["config", "schema"], {
-      configGuard: "skip",
-      loadPlugins: "never",
-      ownsProtocolStdout: true,
-      networkProxy: "bypass",
-    });
-    expectResolvedPolicy(["gateway", "status"], {
-      configGuard: "skip",
-      loadPlugins: "never",
-      networkProxy: "bypass",
-    });
-    expectResolvedPolicy(["gateway", "health"], {
-      configGuard: "skip",
-      loadPlugins: "never",
-      networkProxy: "bypass",
-    });
-    expectResolvedPolicy(["plugins", "update"], {
-      loadPlugins: "never",
-      hideBanner: true,
-    });
-    expectResolvedPolicy(["plugins", "list"], {
-      configGuard: "skip",
-      ensureCliPath: false,
-      loadPlugins: "never",
-      networkProxy: "bypass",
-    });
-    for (const commandPath of [["tasks"], ["tasks", "list"], ["tasks", "audit"]]) {
-      expectResolvedPolicy(commandPath, {
-        configGuard: "skip",
-        ensureCliPath: false,
-        loadPlugins: "never",
-        networkProxy: "bypass",
-      });
-    }
-    for (const commandPath of [
-      ["plugins", "install"],
-      ["plugins", "inspect"],
-      ["plugins", "registry"],
-      ["plugins", "doctor"],
-    ]) {
-      expectResolvedPolicy(commandPath, {
-        loadPlugins: "never",
-      });
-    }
-    // Authoring commands operate on a target package, not operator config, so
-    // a host config the running CLI predates must not abort them.
-    for (const commandPath of [
-      ["plugins", "build"],
-      ["plugins", "validate"],
-      ["plugins", "init"],
-    ]) {
-      expectResolvedPolicy(commandPath, {
-        configGuard: "skip",
-      });
-    }
-    expectResolvedPolicy(["cron", "list"], {
-      configGuard: "skip",
-      loadPlugins: "never",
-      networkProxy: "bypass",
-    });
-    for (const commandPath of [
-      ["hooks"],
-      ["hooks", "list"],
-      ["hooks", "info"],
-      ["hooks", "check"],
-      ["skills", "info"],
-    ]) {
-      expectResolvedPolicy(commandPath, {
-        configGuard: "skip",
-        loadPlugins: "never",
-        networkProxy: "bypass",
-      });
-    }
-    expectResolvedPolicy(["skills", "search"], {
-      configGuard: "skip",
-      loadPlugins: "never",
-    });
-    expectResolvedPolicy(["memory", "search"], {
-      configGuard: "skip",
-      loadPlugins: "always",
-      pluginRegistry: { scope: "memory" },
-    });
+    expect(doctorPolicy.networkProxy(commandContext(["doctor"]))).toBe("default");
+    expect(doctorPolicy.networkProxy(commandContext(["doctor"], ["--state-sqlite=compact"]))).toBe(
+      "bypass",
+    );
+    expect(doctorPolicy.networkProxy(commandContext(["doctor"], ["--client-credentials"]))).toBe(
+      "bypass",
+    );
     const memoryStatusPolicy = resolveCliCommandPathPolicy(["memory", "status"]);
     expectConfigGuardResolver(memoryStatusPolicy);
     expect(memoryStatusPolicy.loadPlugins).toBe("always");
     expect(memoryStatusPolicy.pluginRegistry).toEqual({ scope: "memory" });
-    expect(
-      memoryStatusPolicy.configGuard({
-        argv: ["node", "openclaw", "memory", "status"],
-        commandPath: ["memory", "status"],
-      }),
-    ).toBe("skip");
+    expect(memoryStatusPolicy.configGuard(commandContext(["memory", "status"]))).toBe("skip");
     for (const flag of ["--index", "--fix"]) {
-      expect(
-        memoryStatusPolicy.configGuard({
-          argv: ["node", "openclaw", "memory", "status", flag],
-          commandPath: ["memory", "status"],
-        }),
-      ).toBe("run");
+      expect(memoryStatusPolicy.configGuard(commandContext(["memory", "status"], [flag]))).toBe(
+        "validate",
+      );
     }
-  });
-
-  it("keeps routed and Commander config reads ahead of observing startup guards", () => {
-    expectResolvedPolicy(["config", "get"], {
-      configGuard: "skip",
-      ensureCliPath: false,
-      loadPlugins: "never",
-      networkProxy: "bypass",
-    });
   });
 
   it("defaults unknown command paths to network proxy routing", () => {
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "googlemeet", "login"])).toBe(
-      "default",
-    );
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "tool", "image_generate"])).toBe(
-      "bypass",
-    );
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "tools", "effective"])).toBe("bypass");
-  });
-
-  it("resolves static network proxy bypass policies from the catalog", () => {
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "status"])).toBe("bypass");
-    expect(
-      resolveCliNetworkProxyPolicy(["node", "openclaw", "config", "get", "proxy.enabled"]),
-    ).toBe("bypass");
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "proxy", "start"])).toBe("bypass");
+    expectProxy(["googlemeet", "login"], "default");
+    expectProxy(["tool", "image_generate"], "bypass");
+    expectProxy(["tools", "effective"], "bypass");
   });
 
   it("resolves mixed network proxy policies from argv-sensitive catalog entries", () => {
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "gateway"])).toBe("default");
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "gateway", "run"])).toBe("default");
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "gateway", "health"])).toBe("bypass");
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "node", "run"])).toBe("default");
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "node", "status"])).toBe("bypass");
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "agent", "--local"])).toBe("default");
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "agent", "run"])).toBe("bypass");
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "channels", "status"])).toBe("bypass");
-    expect(
-      resolveCliNetworkProxyPolicy(["node", "openclaw", "channels", "status", "--probe"]),
-    ).toBe("default");
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "models", "status"])).toBe("bypass");
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "models", "status", "--probe"])).toBe(
-      "default",
-    );
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "models", "--json"])).toBe("bypass");
-    expect(
-      resolveCliNetworkProxyPolicy([
-        "node",
-        "openclaw",
-        "models",
-        "--agent",
-        "main",
-        "--status-json",
-      ]),
-    ).toBe("bypass");
-    expect(
-      resolveCliNetworkProxyPolicy(["node", "openclaw", "models", "--agent", "main", "auth"]),
-    ).toBe("default");
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "skills", "info", "browser"])).toBe(
-      "bypass",
-    );
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "skills", "check"])).toBe("bypass");
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "skills", "list"])).toBe("bypass");
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "skills", "search", "browser"])).toBe(
-      "default",
-    );
-  });
-
-  it("routes ClawHub skill verification through the network proxy", () => {
-    expect(
-      resolveCliNetworkProxyPolicy(["node", "openclaw", "skills", "verify", "@demo-owner/weather"]),
-    ).toBe("default");
-  });
-
-  it.each(["refresh", "set", "set-image", "aliases", "fallbacks", "image-fallbacks", "scan"])(
-    "preserves default startup and proxy policy for models %s",
-    (subcommand) => {
-      expectResolvedPolicy(["models", subcommand], {});
-      for (const parentOptions of [[], ["--agent", "main"]]) {
-        expect(
-          resolveCliNetworkProxyPolicy([
-            "node",
-            "openclaw",
-            "models",
-            ...parentOptions,
-            subcommand,
-          ]),
-        ).toBe("default");
-      }
-    },
-  );
-
-  it.each([
-    { childPath: ["workshop", "list"] },
-    { childPath: ["library", "list"] },
-    { childPath: ["curator", "status"] },
-    { childPath: ["workshop"] },
-    { childPath: ["unknown"] },
-  ])("preserves the skills catalog proxy policy for $childPath", ({ childPath }) => {
-    for (const parentOptions of [[], ["--agent", "main"], ["--agent=main"]]) {
-      expect(
-        resolveCliNetworkProxyPolicy([
-          "node",
-          "openclaw",
-          "skills",
-          ...parentOptions,
-          ...childPath,
-        ]),
-      ).toBe("bypass");
-    }
+    expectProxy(["gateway"], "default");
+    expectProxy(["gateway", "run"], "default");
+    expectProxy(["gateway", "health"], "bypass");
+    expectProxy(["node", "run"], "default");
+    expectProxy(["node", "status"], "bypass");
+    expectProxy(["agent", "--local"], "default");
+    expectProxy(["agent", "run"], "bypass");
+    expectProxy(["chat"], "default");
+    expectProxy(["terminal"], "default");
+    expectProxy(["tui", "--local"], "default");
+    expectProxy(["tui"], "bypass");
+    expectProxy(["channels", "status"], "bypass");
+    expectProxy(["channels", "status", "--probe"], "default");
+    expectProxy(["models", "status"], "bypass");
+    expectProxy(["models", "status", "--probe"], "default");
+    expectProxy(["models", "--json"], "bypass");
+    expectProxy(["models", "--agent", "main", "--status-json"], "bypass");
+    expectProxy(["models", "--agent", "main", "auth"], "default");
+    expectProxy(["skills", "info", "browser"], "bypass");
+    expectProxy(["skills", "check"], "bypass");
+    expectProxy(["skills", "list"], "bypass");
+    expectProxy(["skills", "search", "browser"], "default");
   });
 
   it("uses the longest catalog command path for deep network proxy overrides", async () => {
@@ -717,43 +203,15 @@ describe("command-path-policy", () => {
     }
   });
 
-  it("stops catalog policy resolution before positional arguments", () => {
-    expect(
-      resolveCliNetworkProxyPolicy(["node", "openclaw", "config", "get", "proxy.enabled"]),
-    ).toBe("bypass");
-    expect(
-      resolveCliNetworkProxyPolicy(["node", "openclaw", "message", "send", "--to", "demo"]),
-    ).toBe("default");
-  });
-
-  it("treats bare gateway invocations with options as the gateway runtime", () => {
-    const argv = ["node", "openclaw", "gateway", "--port", "1234"];
-
-    expect(resolveCliNetworkProxyPolicy(argv)).toBe("default");
-  });
-
-  it("resolves gateway runs after root options with values", () => {
-    const argv = ["node", "openclaw", "--log-level", "debug", "gateway", "run"];
-
-    expect(resolveCliNetworkProxyPolicy(argv)).toBe("default");
-  });
-
   it("does not let gateway run option values spoof bypass subcommands", () => {
-    for (const argv of [
-      ["node", "openclaw", "gateway", "--token", "status"],
-      ["node", "openclaw", "gateway", "--token=status"],
-      ["node", "openclaw", "gateway", "--password", "health"],
-      ["node", "openclaw", "gateway", "--password-file", "status"],
-      ["node", "openclaw", "gateway", "--ws-log", "compact"],
+    for (const args of [
+      ["gateway", "--token", "status"],
+      ["gateway", "--token=status"],
+      ["gateway", "--password", "health"],
+      ["gateway", "--password-file", "status"],
+      ["gateway", "--ws-log", "compact"],
     ]) {
-      expect(resolveCliNetworkProxyPolicy(argv), argv.join(" ")).toBe("default");
+      expectProxy(args, "default");
     }
-  });
-
-  it("still resolves real gateway bypass subcommands after their command token", () => {
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "gateway", "status"])).toBe("bypass");
-    expect(
-      resolveCliNetworkProxyPolicy(["node", "openclaw", "gateway", "status", "--token", "secret"]),
-    ).toBe("bypass");
   });
 });

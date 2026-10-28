@@ -19,12 +19,16 @@ vi.mock("./image-ops.js", () => ({
 
 import { normalizeAnthropicInlineContentBlocks } from "./anthropic-inline-images.js";
 
+const image = (data: string, mimeType: string) => ({ type: "image" as const, data, mimeType });
+const encodedImage = (bytes: string, mimeType: string) =>
+  image(Buffer.from(bytes).toString("base64"), mimeType);
+const normalizeImage = (data: string, mimeType: string) =>
+  normalizeAnthropicInlineContentBlocks([image(data, mimeType)]);
+
 describe("normalizeAnthropicInlineContentBlocks", () => {
   beforeEach(() => {
-    convertImageToJpegMock.mockReset();
-    convertImageToJpegMock.mockResolvedValue(Buffer.from("converted-jpeg"));
-    convertImageToPngMock.mockReset();
-    convertImageToPngMock.mockResolvedValue(Buffer.from("converted-png"));
+    convertImageToJpegMock.mockReset().mockResolvedValue(Buffer.from("converted-jpeg"));
+    convertImageToPngMock.mockReset().mockResolvedValue(Buffer.from("converted-png"));
     detectMimeMock.mockReset();
   });
 
@@ -37,16 +41,8 @@ describe("normalizeAnthropicInlineContentBlocks", () => {
       original.write("complete-image-tail", size - 19);
       const tiffData = original.toString("base64");
 
-      await expect(
-        normalizeAnthropicInlineContentBlocks([
-          { type: "image", data: tiffData, mimeType: "image/jpeg" },
-        ]),
-      ).resolves.toEqual([
-        {
-          type: "image",
-          data: Buffer.from("converted-jpeg").toString("base64"),
-          mimeType: "image/jpeg",
-        },
+      await expect(normalizeImage(tiffData, "image/jpeg")).resolves.toEqual([
+        encodedImage("converted-jpeg", "image/jpeg"),
       ]);
       expect(convertImageToJpegMock).toHaveBeenCalledExactlyOnceWith(original);
     },
@@ -70,8 +66,8 @@ describe("normalizeAnthropicInlineContentBlocks", () => {
 
     await expect(
       normalizeAnthropicInlineContentBlocks([
-        { type: "image", data: "QQ==", mimeType: "image/png" },
-        { type: "image", data: "A".repeat(encodedLength), mimeType: "image/tiff" },
+        image("QQ==", "image/png"),
+        image("A".repeat(encodedLength), "image/tiff"),
       ]),
     ).rejects.toThrow("10 MB decoded safety limit");
     expect(detectMimeMock).not.toHaveBeenCalled();
@@ -98,9 +94,7 @@ describe("normalizeAnthropicInlineContentBlocks", () => {
     const data = `${original.toString("base64")}!`;
     detectMimeMock.mockResolvedValue(undefined);
 
-    await expect(
-      normalizeAnthropicInlineContentBlocks([{ type: "image", data, mimeType: "image/png" }]),
-    ).resolves.toEqual([{ type: "image", data, mimeType: "image/png" }]);
+    await expect(normalizeImage(data, "image/png")).resolves.toEqual([image(data, "image/png")]);
     expect(detectMimeMock).toHaveBeenCalledExactlyOnceWith({ buffer: original });
   });
 
@@ -108,16 +102,8 @@ describe("normalizeAnthropicInlineContentBlocks", () => {
     detectMimeMock.mockResolvedValue("image/bmp");
     const bmpData = Buffer.from("bmp-bytes").toString("base64");
 
-    await expect(
-      normalizeAnthropicInlineContentBlocks([
-        { type: "image", data: bmpData, mimeType: "image/bmp" },
-      ]),
-    ).resolves.toEqual([
-      {
-        type: "image",
-        data: Buffer.from("converted-png").toString("base64"),
-        mimeType: "image/png",
-      },
+    await expect(normalizeImage(bmpData, "image/bmp")).resolves.toEqual([
+      encodedImage("converted-png", "image/png"),
     ]);
     expect(convertImageToPngMock).toHaveBeenCalledOnce();
     expect(convertImageToJpegMock).not.toHaveBeenCalled();
@@ -128,13 +114,7 @@ describe("normalizeAnthropicInlineContentBlocks", () => {
     convertImageToJpegMock.mockResolvedValue(Buffer.alloc(10 * 1024 * 1024 + 1));
 
     await expect(
-      normalizeAnthropicInlineContentBlocks([
-        {
-          type: "image",
-          data: Buffer.from("small-tiff").toString("base64"),
-          mimeType: "image/tiff",
-        },
-      ]),
+      normalizeAnthropicInlineContentBlocks([encodedImage("small-tiff", "image/tiff")]),
     ).rejects.toThrow("Normalized Anthropic inline image exceeds the 10 MB decoded safety limit");
   });
 });

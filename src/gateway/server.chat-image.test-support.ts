@@ -1,0 +1,8 @@
+export const CHAT_DOT_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+
+export const INLINE_DOT_PNG_IMAGE = {
+  type: "image",
+  data: CHAT_DOT_PNG_BASE64,
+  mimeType: "image/png",
+};

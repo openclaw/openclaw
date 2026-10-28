@@ -66,7 +66,6 @@ if (phase === "seed") {
       defaults: {
         workspace: process.env.OPENCLAW_TEST_WORKSPACE_DIR,
         skipBootstrap: true,
-        heartbeat: { every: "0m" },
       },
     },
     plugins: { enabled: false },

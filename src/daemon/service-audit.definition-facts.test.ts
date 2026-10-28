@@ -2,33 +2,41 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { VERSION } from "../version.js";
-import "./test-helpers/service-audit-mocks.js";
+import { buildLaunchAgentEnvironmentWrapper } from "./launchd-env-wrapper.js";
 import { buildLaunchAgentPlist } from "./launchd-plist.js";
+import "./test-helpers/service-audit-mocks.js";
 import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
 import {
-  buildLaunchAgentEnvironmentWrapper,
   resolveLaunchAgentPlistPath,
+  resolveLaunchAgentEnvFilePath,
   resolveLaunchAgentEnvWrapperPath,
 } from "./launchd-service-files.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 import {
-  buildScheduledTaskXml,
   buildTaskScript,
   buildHiddenLauncherScript,
   resolveTaskScriptPath,
   resolveTaskLauncherScriptPath,
 } from "./schtasks-layout.js";
-import { auditGatewayServiceConfig } from "./service-audit.js";
-import type { GatewayServiceCommandConfig } from "./service-types.js";
+import { buildScheduledTaskXml } from "./schtasks-xml.js";
+import { auditGatewayInstallPreservation } from "./service-audit-preservation.js";
+import type { ServiceDefinitionDrift } from "./service-audit-types.js";
+import { auditGatewayServiceConfig as inspectGatewayServiceConfig } from "./service-audit.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 import { buildSystemdUnit } from "./systemd-unit.js";
 import {
   execSystemctlUserMock,
   resetServiceAuditMocks,
 } from "./test-helpers/service-audit-fixtures.js";
+import { seedCompletedRuntimePinMigration } from "./test-helpers/service-audit-runtime-pin.js";
 
 const native = vi.hoisted(() => ({ task: vi.fn() }));
-vi.mock("./schtasks-exec.js", () => ({ execSchtasks: native.task }));
+// mock-isolation: Definition facts come from the synthetic scheduler, not host task mutations.
+vi.mock("./schtasks-exec.js", () => ({
+  execSchtasks: native.task,
+  execScheduledTaskEnabledChange: (taskName: string, enabled: boolean) =>
+    native.task(["/Change", "/TN", taskName, enabled ? "/ENABLE" : "/DISABLE"]),
+}));
 vi.mock("../process/exec.js", async (original) => ({
   ...(await original<typeof import("../process/exec.js")>()),
   runExec: vi.fn(async (_command: string, args: string[], options: { input: Uint8Array }) =>
@@ -36,10 +44,24 @@ vi.mock("../process/exec.js", async (original) => ({
   ),
 }));
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+let runtimePinStateDir: string;
 beforeEach(() => {
   resetServiceAuditMocks();
   native.task.mockReset();
+  runtimePinStateDir = dirs.make("definition-facts-runtime-pin-");
 });
+
+type AuditOptions = Parameters<typeof inspectGatewayServiceConfig>[0];
+async function auditGatewayServiceConfig(
+  options: Omit<AuditOptions, "platform"> & { platform?: NodeJS.Platform },
+) {
+  const env = {
+    ...options.env,
+    OPENCLAW_STATE_DIR: options.env.OPENCLAW_STATE_DIR ?? runtimePinStateDir,
+  };
+  await seedCompletedRuntimePinMigration(env);
+  return inspectGatewayServiceConfig({ platform: "linux", ...options, env });
+}
 
 const staleServiceEnvironment = {
   OPENCLAW_SERVICE_MARKER: "openclaw",
@@ -47,15 +69,39 @@ const staleServiceEnvironment = {
   OPENCLAW_SERVICE_VERSION: "2026.7.1-2",
 };
 
+const drift = (kind: string, key: string, fields = {}) =>
+  expect.objectContaining({ kind, key, ...fields });
+const programArguments = ["/usr/bin/node", "/opt/openclaw/index.js", "gateway"];
+const plistValue = (xml: string, key: string, tag: string, value: string | number | undefined) =>
+  xml.replace(
+    new RegExp(`<key>${key}</key>\\s*<${tag}>[^<]*</${tag}>`, "u"),
+    value === undefined ? "" : `<key>${key}</key><${tag}>${value}</${tag}>`,
+  );
+function launchdFixture() {
+  const home = dirs.make("definition-facts-launchd-");
+  const env = { HOME: home, OPENCLAW_STATE_DIR: path.join(home, "state") };
+  const { stdoutPath } = resolveGatewaySupervisorLogPaths(env);
+  return {
+    env,
+    sourcePath: resolveLaunchAgentPlistPath(env),
+    plist: {
+      label: "ai.openclaw.gateway",
+      comment: "OpenClaw Gateway",
+      stdoutPath,
+      stderrPath: stdoutPath,
+    },
+  };
+}
+
 async function systemdFixture(
-  change: (unit: string) => string,
+  change: (unit: string) => string = (unit) => unit,
   dropIn?: string,
   environment: Record<string, string> = {},
 ) {
   const home = dirs.make("definition-facts-systemd-");
   const sourcePath = path.join(home, ".config/systemd/user/openclaw-gateway.service");
   const command = {
-    programArguments: ["/usr/bin/node", "/opt/openclaw/index.js", "gateway"],
+    programArguments,
     environment: {
       PATH: "/usr/bin:/bin",
       NODE_OPTIONS: "--max-old-space-size=4096",
@@ -83,210 +129,194 @@ async function systemdFixture(
   };
 }
 
-it("keeps current policy clean with recognized heap and arbitrary environment settings", async () => {
-  const fixture = await systemdFixture((unit) => unit);
-  const result = await auditGatewayServiceConfig({ ...fixture, platform: "linux" });
-  expect(result).toEqual({ ok: true, issues: [] });
-});
-
-it.each([
-  "stale",
-  "current",
-  "future",
-  "invalid",
-  "missing-marker",
-  "node",
-  "ambient",
-  "effective",
-  "managed-base",
-])("preserves custom systemd policy regardless of installation marker: %s", async (kind) => {
-  const environment: Record<string, string> = { ...staleServiceEnvironment };
-  if (kind === "current") {
-    environment.OPENCLAW_SERVICE_VERSION = VERSION;
-  } else if (kind === "future") {
-    environment.OPENCLAW_SERVICE_VERSION = "9999.1.1";
-  } else if (kind === "invalid") {
-    environment.OPENCLAW_SERVICE_VERSION = "invalid";
-  } else if (kind === "missing-marker") {
-    delete environment.OPENCLAW_SERVICE_MARKER;
-  } else if (kind === "node") {
-    environment.OPENCLAW_SERVICE_KIND = "node";
-  }
-  const fixture = await systemdFixture(
-    (unit) =>
-      unit
-        .replace("TimeoutStartSec=30", "TimeoutStartSec=45")
-        .replace("TimeoutStopSec=330", "TimeoutStopSec=600"),
-    undefined,
-    kind === "ambient" ? {} : environment,
+it("audits missing KillMode separately from effective manager policy", async () => {
+  const fixture = await systemdFixture((unit) => unit.replace("KillMode=mixed\n", ""));
+  execSystemctlUserMock.mockResolvedValue(
+    nativeExit(
+      "LoadState=loaded\nAfter=network-online.target\nWants=network-online.target\nRestartUSec=5s\nKillMode=mixed\nTimeoutStopUSec=330s\n",
+    ),
   );
-  const command: GatewayServiceCommandConfig = fixture.command;
-  if (kind === "effective" || kind === "managed-base") {
-    command.managedDefinition = {
-      ...command,
-      environment: {
-        ...command.environment,
-        OPENCLAW_SERVICE_VERSION: kind === "effective" ? VERSION : "2026.7.1-2",
-      },
-    };
-    if (kind === "managed-base") {
-      command.environment = { ...command.environment, OPENCLAW_SERVICE_VERSION: VERSION };
-    }
-  }
-  const result = await auditGatewayServiceConfig({
-    ...fixture,
-    command,
-    env: { ...fixture.env, ...staleServiceEnvironment },
-    platform: "linux",
-  });
-  expect(result.definitionDrift).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        kind: "preserved",
-        key: "Service.TimeoutStartSec",
-      }),
-      expect.objectContaining({ kind: "preserved", key: "Service.TimeoutStopSec" }),
-    ]),
-  );
-  expect(result.definitionDrift).toHaveLength(2);
-});
-
-it("reports missing systemd policy separately from unchanged legacy repair issues", async () => {
-  const fixture = await systemdFixture((unit) => unit.replace("Restart=always\n", ""));
-  const result = await auditGatewayServiceConfig({ ...fixture, platform: "linux" });
+  const result = await auditGatewayServiceConfig(fixture);
   expect(result.ok).toBe(true);
   expect(result.issues).toEqual([]);
   expect(result.definitionDrift).toEqual([
     {
       kind: "outdated",
-      key: "Service.Restart",
+      key: "Service.KillMode",
       current: null,
-      expected: "always",
+      expected: "mixed",
       sourcePath: fixture.sourcePath,
-      message: expect.stringContaining("Service.Restart"),
+      message: expect.stringContaining("Service.KillMode"),
     },
   ]);
   expect(await fs.readFile(fixture.sourcePath, "utf8")).toBe(fixture.content);
 });
 
-it("reports the missing base KillMode while legacy audit retains effective manager settings", async () => {
-  const fixture = await systemdFixture((unit) => unit.replace("KillMode=mixed\n", ""));
-  execSystemctlUserMock.mockResolvedValue({
-    code: 0,
-    stderr: "",
-    termination: "exit",
-    stdout:
-      "LoadState=loaded\nAfter=network-online.target\nWants=network-online.target\nRestartUSec=5s\nKillMode=mixed\nTimeoutStopUSec=330s\n",
-  });
-  const result = await auditGatewayServiceConfig({ ...fixture, platform: "linux" });
-  expect(result.issues).toEqual([]);
-  expect(result.definitionDrift).toContainEqual(
-    expect.objectContaining({
-      kind: "outdated",
-      key: "Service.KillMode",
-      current: null,
-      expected: "mixed",
-    }),
-  );
-});
-
-it.each(["base", "drop-in", "drop-in-unknown", "drop-in-dependency"])(
+it.each(["drop-in-dependency", "description"])(
   "reports unknown %s edits without exposing their values",
   async (kind) => {
+    const description = kind === "description";
     const fixture = await systemdFixture(
       (unit) =>
-        kind === "base"
-          ? unit.replace("[Service]", "[Service]\nExecStartPre=/private/operator-secret")
+        description
+          ? unit.replace("Description=OpenClaw Gateway", "Description=operator-secret")
           : unit,
-      kind === "drop-in"
-        ? "[Service]\nRestart=operator-secret\n"
-        : kind === "drop-in-unknown"
-          ? "[Service]\nExecStartPre=operator-secret\n"
-          : kind === "drop-in-dependency"
-            ? "[Unit]\nAfter=network-online.target operator-secret\n"
-            : undefined,
+      kind === "drop-in-dependency"
+        ? "[Unit]\nAfter=network-online.target operator-secret\n"
+        : undefined,
       staleServiceEnvironment,
     );
-    const result = await auditGatewayServiceConfig({ ...fixture, platform: "linux" });
+    const result = await auditGatewayServiceConfig({
+      ...fixture,
+      ...(description ? { expectedCommand: fixture.command } : {}),
+    });
     expect(result.definitionDrift).toContainEqual(
       expect.objectContaining({
         kind: "unknown-edit",
-        key:
-          kind === "drop-in"
-            ? "Service.Restart"
-            : kind === "drop-in-dependency"
-              ? "Unit.After"
-              : "Service.ExecStartPre",
-        sourcePath: expect.stringContaining(kind === "base" ? ".service" : "operator.conf"),
+        key: description ? "Unit.Description" : "Unit.After",
+        sourcePath: expect.stringContaining(description ? ".service" : "operator.conf"),
       }),
     );
     expect(JSON.stringify(result.definitionDrift)).not.toContain("operator-secret");
   },
 );
 
-it("reports unavailable drop-in inspection without adding a repair candidate", async () => {
-  const fixture = await systemdFixture((unit) => unit);
-  fixture.command.definitionPaths.push(`${fixture.sourcePath}.d/unreadable.conf`);
-  const result = await auditGatewayServiceConfig({ ...fixture, platform: "linux" });
-  expect(result.issues).toEqual([]);
-  expect(result.definitionDriftError).toContain("inspection could not be completed");
-});
-
-it.each(["other-source", "disappeared", "reload-pending"])(
+it.each(["other-source", "unreadable-drop-in"])(
   "does not report a complete definition inspection when %s",
   async (state) => {
-    const fixture = await systemdFixture((unit) => unit);
-    if (state === "other-source") {
+    const fixture = await systemdFixture();
+    if (state === "unreadable-drop-in") {
+      fixture.command.definitionPaths.push(`${fixture.sourcePath}.d/unreadable.conf`);
+    } else if (state === "other-source") {
       fixture.command.sourcePath = path.join(fixture.env.HOME, "system.service");
       fixture.command.definitionPaths = [fixture.command.sourcePath];
       await fs.unlink(fixture.sourcePath);
-    } else if (state === "disappeared") {
-      await fs.unlink(fixture.sourcePath);
     }
-    const result = await auditGatewayServiceConfig({
-      ...fixture,
-      command: {
-        ...fixture.command,
-        ...(state === "reload-pending" ? { reloadPending: true } : {}),
-      },
-      platform: "linux",
-    });
+    const result = await auditGatewayServiceConfig(fixture);
     expect(result.definitionDrift).toBeUndefined();
     expect(result.definitionDriftError).toEqual(expect.any(String));
+    if (state === "unreadable-drop-in") {
+      expect(result.issues).toEqual([]);
+      expect(result.definitionDriftError).toContain("inspection could not be completed");
+    }
   },
 );
 
-it.each(["missing", "custom", "stale", "legacy-1", "legacy-60"])(
-  "distinguishes missing and released launchd policy from custom policy: %s",
-  async (kind) => {
-    const home = dirs.make("definition-facts-launchd-");
-    const env = { HOME: home, OPENCLAW_STATE_DIR: path.join(home, "state") };
-    const sourcePath = resolveLaunchAgentPlistPath(env);
+it.each(["base", "drop-in"])("recognizes standard systemd directives in %s", async (location) => {
+  const custom = [
+    "[Unit]",
+    "OnFailure=recovery.service",
+    "StartLimitBurst=10",
+    "StartLimitIntervalSec=120",
+    "[Service]",
+    "CPUWeight=1000",
+    "KillMode=control-group",
+    "ManagedOOMPreference=avoid",
+    "TimeoutStartSec=60",
+    "ExecStartPre=/usr/bin/true",
+    "RestartSteps=5",
+    "RestartMaxDelaySec=60",
+    "ProtectSystem=strict",
+    "MemoryMax=1G",
+    "[Install]",
+    "Alias=custom.service",
+    "Also=helper.service",
+  ].join("\n");
+  const fixture = await systemdFixture(
+    (unit) => (location === "base" ? `${unit}\n${custom}\n` : unit),
+    location === "drop-in" ? `${custom}\n` : undefined,
+  );
+  const result = await auditGatewayServiceConfig(fixture);
+  const sourcePath =
+    location === "base" ? fixture.sourcePath : `${fixture.sourcePath}.d/operator.conf`;
+  expect(result.definitionDrift).toContainEqual(
+    expect.objectContaining({
+      kind: "unknown-edit",
+      key: "Service.CPUWeight",
+      sourcePath,
+      message: expect.stringContaining("not changed"),
+    }),
+  );
+  expect(JSON.stringify(result.definitionDrift)).not.toContain("unrecognized");
+
+  await fs.appendFile(sourcePath, "\n[Service]\nRestartStpes=5\nOnFailure=wrong-section.service\n");
+  const unknown = (await auditGatewayServiceConfig(fixture)).definitionDrift?.filter((fact) =>
+    fact.message.includes("unrecognized"),
+  );
+  expect(unknown?.map((fact) => fact.key)).toEqual(["Service.RestartStpes", "Service.OnFailure"]);
+});
+
+it.each(["base", "drop-in"])("preserves ignored systemd metadata in %s", async (location) => {
+  const metadata =
+    "[Unit]\nX-Fleet=managed\n[X-Fleet]\nOwner=operations\nRestartSec=20\nKillMode=process\n";
+  const fixture = await systemdFixture(
+    (unit) => (location === "base" ? `${unit}\n${metadata}` : unit),
+    location === "drop-in" ? metadata : undefined,
+  );
+  const result = await auditGatewayServiceConfig(fixture);
+  expect(result.issues).toEqual([]);
+  expect(result.definitionDrift).toHaveLength(4);
+  for (const fact of result.definitionDrift ?? []) {
+    expect(fact).toMatchObject({
+      kind: "unknown-edit",
+      message: expect.stringContaining("not changed"),
+    });
+  }
+});
+
+it.each([
+  { seconds: undefined, kind: "outdated" },
+  { seconds: 20, kind: "outdated" },
+  { seconds: 30, kind: "preserved" },
+  { seconds: 600, kind: "preserved" },
+  { seconds: 0, kind: "preserved" },
+  { seconds: 330, kind: undefined },
+  { seconds: 600, kind: "preserved", stale: true },
+  { seconds: 20, kind: "outdated", throttle: 1 },
+  { seconds: 20, kind: "outdated", throttle: 60 },
+  { seconds: 20, kind: "outdated", wrapped: true },
+  { seconds: 20, kind: "preserved", throttle: 45 },
+  { seconds: 20, kind: "preserved", customized: "ProcessType" },
+  { seconds: 20, kind: "preserved", customized: "ProgramArguments" },
+  { seconds: 20, kind: "preserved", customized: "Comment" },
+  { seconds: 20, kind: "preserved", customized: "WorkingDirectory" },
+  { seconds: 20, kind: "preserved", customized: "UnknownKey" },
+])(
+  "audits launchd exit timeout $seconds and preserves custom policy (throttle=$throttle, customized=$customized, wrapped=$wrapped)",
+  async ({ seconds, kind, stale, throttle, customized, wrapped }) => {
+    const { env, sourcePath, plist } = launchdFixture();
     const command = {
-      programArguments: ["/usr/bin/node", "/opt/openclaw/index.js", "gateway"],
-      environment: {
-        PATH: "/usr/bin:/bin",
-        ...(kind !== "custom" ? staleServiceEnvironment : {}),
-      },
+      programArguments: [
+        ...programArguments,
+        ...(customized === "ProgramArguments" ? ["--verbose"] : []),
+      ],
+      environment: { PATH: "/usr/bin:/bin", ...(stale ? staleServiceEnvironment : {}) },
     };
-    const { stdoutPath } = resolveGatewaySupervisorLogPaths(env, { platform: "darwin" });
-    const legacyThrottle = kind.startsWith("legacy-") ? Number(kind.slice(7)) : undefined;
-    const original = buildLaunchAgentPlist({
+    let original = buildLaunchAgentPlist({
+      ...plist,
       ...command,
-      label: "ai.openclaw.gateway",
-      stdoutPath,
-      stderrPath: stdoutPath,
-    })
-      .replace(
-        /<key>ExitTimeOut<\/key>\s*<integer>20<\/integer>/u,
-        kind === "missing"
-          ? ""
-          : `<key>ExitTimeOut</key><integer>${legacyThrottle ? 20 : 600}</integer>`,
-      )
-      .replace(
-        /<key>ThrottleInterval<\/key>\s*<integer>10<\/integer>/u,
-        `<key>ThrottleInterval</key><integer>${legacyThrottle ?? 10}</integer>`,
+      programArguments: wrapped
+        ? [
+            "/bin/sh",
+            resolveLaunchAgentEnvWrapperPath(env, "ai.openclaw.gateway"),
+            resolveLaunchAgentEnvFilePath(env, "ai.openclaw.gateway"),
+            ...command.programArguments,
+          ]
+        : command.programArguments,
+      ...(customized === "WorkingDirectory" ? { workingDirectory: "/operator/workspace" } : {}),
+      comment: customized === "Comment" ? "Operator service" : "OpenClaw Gateway",
+    });
+    original = plistValue(original, "ExitTimeOut", "integer", seconds);
+    original = plistValue(original, "ThrottleInterval", "integer", throttle ?? 10);
+    if (customized === "ProcessType") {
+      original = plistValue(original, "ProcessType", "string", "Background");
+    }
+    if (customized === "UnknownKey") {
+      original = original.replace(
+        "<key>Label</key>",
+        "<key>LowPriorityIO</key><true/><key>Label</key>",
       );
+    }
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, original);
     const result = await auditGatewayServiceConfig({
@@ -295,77 +325,72 @@ it.each(["missing", "custom", "stale", "legacy-1", "legacy-60"])(
       platform: "darwin",
       expectedServicePath: "/usr/bin:/bin",
     });
-    expect(result.issues).toEqual([]);
-    expect(result.definitionDrift).toEqual([
-      expect.objectContaining(
-        kind === "custom" || kind === "stale"
-          ? {
-              kind: "preserved",
-              key: "ExitTimeOut",
-              message: expect.stringContaining("not changed"),
-            }
-          : {
-              kind: "outdated",
-              key: legacyThrottle ? "ThrottleInterval" : "ExitTimeOut",
-              current: legacyThrottle ?? null,
-              expected: legacyThrottle ? 10 : 20,
-            },
-      ),
-    ]);
-    if (kind === "custom" || kind === "stale") {
-      expect(JSON.stringify(result.definitionDrift)).not.toContain("600");
-    }
+    expect(result.issues).toEqual(
+      seconds === undefined || (seconds > 0 && seconds < 330)
+        ? [
+            expect.objectContaining({
+              code: "launchd-stop-timeout",
+              message: expect.stringContaining(
+                seconds === 20 && kind === "preserved"
+                  ? "not changed because the definition is customized"
+                  : "ExitTimeOut=330",
+              ),
+            }),
+          ]
+        : [],
+    );
+    const expectedDrift = [
+      kind &&
+        drift(
+          kind,
+          "ExitTimeOut",
+          kind === "preserved"
+            ? { message: expect.stringContaining("not changed") }
+            : { current: seconds ?? null, expected: 330 },
+        ),
+      throttle &&
+        drift(
+          throttle === 45 ? "preserved" : "outdated",
+          "ThrottleInterval",
+          throttle === 45 ? {} : { current: throttle, expected: 10 },
+        ),
+      customized === "ProcessType" && drift("preserved", "ProcessType"),
+      customized === "UnknownKey" && drift("unknown-edit", "LowPriorityIO"),
+    ].filter(Boolean);
+    expect(result.definitionDrift ?? []).toEqual(expect.arrayContaining(expectedDrift));
+    expect(result.definitionDrift ?? []).toHaveLength(expectedDrift.length);
     expect(await fs.readFile(sourcePath, "utf8")).toBe(original);
   },
 );
 
-it.each([
-  { count: "0", stale: false },
-  { count: "9", stale: false },
-  { count: undefined, stale: false },
-  { count: "9", stale: true },
-])(
-  "reports Scheduled Task retry policy without triggering repair: count=$count stale=$stale",
-  async ({ count, stale }) => {
-    const home = dirs.make("definition-facts-task-");
-    const env = { USERPROFILE: home, OPENCLAW_STATE_DIR: home, USERNAME: "fixture" };
-    const command = {
-      programArguments: ["node", "C:\\openclaw\\index.js", "gateway"],
-      ...(stale ? { environment: staleServiceEnvironment } : {}),
-    };
-    const xml = buildScheduledTaskXml({
-      taskDescription: "fixture",
-      taskUser: "fixture",
-      launchPath: resolveTaskScriptPath(env),
-    }).replace("<Count>3</Count>", count === undefined ? "" : `<Count>${count}</Count>`);
-    native.task.mockResolvedValue({ code: 0, stdout: xml, stderr: "" });
-    const result = await auditGatewayServiceConfig({ env, command, platform: "win32" });
-    expect(result.ok).toBe(true);
-    expect(result.issues).toEqual([]);
-    expect(result.definitionDrift).toEqual([
-      expect.objectContaining(
-        count !== "9"
-          ? {
-              kind: "outdated",
-              key: "Settings.RestartOnFailure.Count",
-              current: count ?? null,
-              expected: "3",
-            }
-          : {
-              kind: "preserved",
-              key: "Settings.RestartOnFailure.Count",
-              message: expect.stringContaining("not changed"),
-            },
-      ),
-    ]);
-    expect(native.task).toHaveBeenCalledExactlyOnceWith([
-      "/Query",
-      "/TN",
-      "OpenClaw Gateway",
-      "/XML",
-    ]);
-  },
-);
+it("preserves custom Scheduled Task retry policy despite stale service metadata", async () => {
+  const home = dirs.make("definition-facts-task-");
+  const env = { USERPROFILE: home, OPENCLAW_STATE_DIR: home, USERNAME: "fixture" };
+  const command = {
+    programArguments: ["node", "C:\\openclaw\\index.js", "gateway"],
+    environment: staleServiceEnvironment,
+  };
+  const xml = buildScheduledTaskXml({
+    taskDescription: "fixture",
+    taskUser: "fixture",
+    launchPath: resolveTaskScriptPath(env),
+  }).replace("<Count>3</Count>", "<Count>9</Count>");
+  native.task.mockResolvedValue({ code: 0, stdout: xml, stderr: "" });
+  const result = await auditGatewayServiceConfig({ env, command, platform: "win32" });
+  expect(result.ok).toBe(true);
+  expect(result.issues).toEqual([]);
+  expect(result.definitionDrift).toEqual([
+    drift("preserved", "Settings.RestartOnFailure.Count", {
+      message: expect.stringContaining("not changed"),
+    }),
+  ]);
+  expect(native.task).toHaveBeenCalledExactlyOnceWith([
+    "/Query",
+    "/TN",
+    "OpenClaw Gateway",
+    "/XML",
+  ]);
+});
 
 it("reports failed native task inspection independently from legacy issues", async () => {
   native.task.mockResolvedValue({ code: 1, stdout: "", stderr: "operator-secret" });
@@ -379,70 +404,54 @@ it("reports failed native task inspection independently from legacy issues", asy
   expect(JSON.stringify(result)).not.toContain("operator-secret");
 });
 
-const discardedSettings: Array<{
-  key: string;
-  native: string[];
-  gateway: string[];
-  cwd?: string;
-  environment: Record<string, string>;
-}> = [
-  { key: "ProgramArguments", native: ["--inspect=operator-private"], gateway: [], environment: {} },
-  { key: "ProgramArguments", native: [], gateway: ["--verbose"], environment: {} },
-  { key: "WorkingDirectory", native: [], gateway: [], cwd: "/operator-private", environment: {} },
-  {
-    key: "Environment.OPENCLAW_CUSTOM",
-    native: [],
-    gateway: [],
-    environment: { OPENCLAW_CUSTOM: "operator-private" },
-  },
-  {
-    key: "Environment.PATH",
-    native: [],
-    gateway: [],
-    environment: { PATH: "/usr/bin:/operator-private" },
-  },
-  {
-    key: "Environment.NODE_OPTIONS",
-    native: [],
-    gateway: [],
-    environment: { NODE_OPTIONS: "--max-old-space-size=4096 --require=/operator-private" },
-  },
+const discardedSettings: Array<[string, string[]?, string?, Record<string, string>?]> = [
+  ["ProgramArguments", ["--inspect=operator-private"]],
+  ["WorkingDirectory", [], "/operator-private"],
+  ["Environment.PATH", [], undefined, { PATH: "/usr/bin:/operator-private" }],
+  [
+    "Environment.NODE_OPTIONS",
+    [],
+    undefined,
+    {
+      NODE_OPTIONS: "--max-old-space-size=4096 --require=/operator-private",
+    },
+  ],
 ];
 
 it.each(discardedSettings)(
-  "blocks a rewrite plan that discards $key without exposing values",
-  async ({ key, native: nativeArguments, gateway, cwd, environment }) => {
-    const fixture = await systemdFixture((unit) => unit);
+  "blocks a rewrite plan that discards %s with a safe environment diff",
+  async (key, nativeArguments, cwd, environment = {}) => {
+    const fixture = await systemdFixture();
     const command = {
       ...fixture.command,
-      programArguments: [
-        "/usr/bin/node",
-        ...nativeArguments,
-        "/old/index.js",
-        "gateway",
-        ...gateway,
-      ],
+      programArguments: ["/usr/bin/node", ...(nativeArguments ?? []), "/old/index.js", "gateway"],
       workingDirectory: cwd,
       environment: { ...fixture.command.environment, ...environment },
     };
-    const before = await auditGatewayServiceConfig({ ...fixture, command, platform: "linux" });
+    const before = await auditGatewayServiceConfig({ ...fixture, command });
     expect(before.definitionDrift).toBeUndefined();
     const result = await auditGatewayServiceConfig({
       ...fixture,
       command,
-      platform: "linux",
       expectedCommand: fixture.command,
     });
-    expect(result.definitionDrift).toContainEqual(
-      expect.objectContaining({ kind: "unknown-edit", key }),
-    );
-    expect(JSON.stringify(result.definitionDrift)).not.toContain("operator-private");
+    expect(result.definitionDrift).toContainEqual(drift("unknown-edit", key));
+    if (key === "Environment.PATH") {
+      expect(result.definitionDrift?.[0]?.message).toContain(
+        'Current: "/usr/bin:/operator-private"; installer: "/usr/bin:/bin"',
+      );
+    } else {
+      expect(JSON.stringify(result.definitionDrift)).not.toContain("operator-private");
+      if (key.startsWith("Environment.")) {
+        expect(result.definitionDrift?.[0]?.message).toContain("Current: <redacted>; installer:");
+      }
+    }
     expect(await fs.readFile(fixture.sourcePath, "utf8")).toBe(fixture.content);
   },
 );
 
 it("accepts retained heap aliases, custom environment and owned environment regeneration", async () => {
-  const fixture = await systemdFixture((unit) => unit);
+  const fixture = await systemdFixture();
   const command = {
     ...fixture.command,
     programArguments: [
@@ -465,7 +474,6 @@ it("accepts retained heap aliases, custom environment and owned environment rege
   const result = await auditGatewayServiceConfig({
     ...fixture,
     command,
-    platform: "linux",
     expectedCommand: {
       programArguments: [
         "/new/node",
@@ -481,58 +489,163 @@ it("accepts retained heap aliases, custom environment and owned environment rege
   expect(result.definitionDrift).toBeUndefined();
 });
 
-it.each(["OpenClaw Gateway (v2026.9.4)", "operator-private"])(
-  "classifies systemd description before a rewrite: %s",
-  async (description) => {
-    const fixture = await systemdFixture((unit) =>
-      unit.replace("Description=OpenClaw Gateway", `Description=${description}`),
+it("allows the installer to replace a macOS Node runtime and retire the legacy CA bundle", async () => {
+  const { env, sourcePath, plist } = launchdFixture();
+  const environment = {
+    PATH: "/old/node/bin:/usr/bin:/bin",
+    OPERATOR_SETTING: "operator-secret",
+  };
+  const replacementEnvironment = { ...environment, PATH: "/new/node/bin:/usr/bin:/bin" };
+  const command = {
+    programArguments: ["/old/node/bin/node", "/opt/openclaw/index.js", "gateway"],
+    environment: { ...environment, NODE_EXTRA_CA_CERTS: "/etc/ssl/cert.pem" },
+    sourcePath,
+  };
+  const content = buildLaunchAgentPlist({ ...plist, ...command });
+  await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+  await fs.writeFile(sourcePath, content);
+  const result = await auditGatewayServiceConfig({
+    env,
+    command,
+    platform: "darwin",
+    expectedServicePath: replacementEnvironment.PATH,
+    expectedCommand: {
+      programArguments: ["/new/node/bin/node", "/opt/openclaw/index.js", "gateway"],
+      environment: { ...replacementEnvironment, NODE_USE_SYSTEM_CA: "1" },
+    },
+  });
+  expect(result.definitionDrift).toEqual([drift("outdated", "Environment.NODE_EXTRA_CA_CERTS")]);
+  expect(result.definitionDriftError).toBeUndefined();
+  expect(await fs.readFile(sourcePath, "utf8")).toBe(content);
+});
+
+it.each([
+  [
+    "discarded operator directory",
+    "/old/bin:/operator/bin:/usr/bin:/bin",
+    "/new/bin:/usr/bin:/bin",
+  ],
+  [
+    "reordered operator directories",
+    "/old/bin:/operator/bin:/usr/bin:/bin",
+    "/new/bin:/usr/bin:/operator/bin:/bin",
+  ],
+  ["unrelated leading directory", "/operator/bin:/old/bin:/usr/bin:/bin", "/new/bin:/usr/bin:/bin"],
+  [
+    "replacement missing the selected runtime directory",
+    "/old/bin:/usr/bin:/bin",
+    "/other/bin:/usr/bin:/bin",
+  ],
+  ["opaque launcher", "/old/bin:/usr/bin:/bin", "/new/bin:/usr/bin:/bin", "/old/bin/launcher"],
+])(
+  "refuses a macOS runtime refresh with %s",
+  (_name, currentPath, nextPath, executable?: string) => {
+    const findings: ServiceDefinitionDrift[] = [];
+    auditGatewayInstallPreservation(
+      {
+        programArguments: [executable ?? "/old/bin/node", "/opt/openclaw/index.js", "gateway"],
+        environment: { PATH: currentPath },
+      },
+      {
+        programArguments: ["/new/bin/node", "/opt/openclaw/index.js", "gateway"],
+        environment: { PATH: nextPath },
+      },
+      "darwin",
+      findings,
     );
-    const result = await auditGatewayServiceConfig({
-      ...fixture,
-      platform: "linux",
-      expectedCommand: fixture.command,
-    });
-    if (description === "operator-private") {
-      expect(result.definitionDrift).toContainEqual(
-        expect.objectContaining({ kind: "unknown-edit", key: "Unit.Description" }),
-      );
-      expect(JSON.stringify(result.definitionDrift)).not.toContain(description);
-    } else {
-      expect(result.definitionDrift).toBeUndefined();
-    }
+    expect(findings).toContainEqual(drift("unknown-edit", "Environment.PATH"));
   },
 );
 
-it.each(["canonical-wrapper", "legacy-wrapper", "malformed-args", "wrapper", "metadata"])(
+it.each([
+  { platform: "darwin", value: "/operator-private/ca.pem", replacement: undefined },
+  { platform: "darwin", value: "/etc/ssl/cert.pem", replacement: "/operator-private/ca.pem" },
+  { platform: "linux", value: "/etc/ssl/cert.pem", replacement: undefined },
+  { platform: "win32", value: "/etc/ssl/cert.pem", replacement: undefined },
+] as const)(
+  "refuses other CA changes ($platform, $value -> $replacement)",
+  ({ platform, value, replacement }) => {
+    const findings: ServiceDefinitionDrift[] = [];
+    auditGatewayInstallPreservation(
+      { programArguments, environment: { NODE_EXTRA_CA_CERTS: value } },
+      { programArguments, environment: { NODE_EXTRA_CA_CERTS: replacement } },
+      platform,
+      findings,
+    );
+    expect(findings).toEqual([drift("unknown-edit", "Environment.NODE_EXTRA_CA_CERTS")]);
+    expect(JSON.stringify(findings)).not.toContain("operator-private");
+  },
+);
+
+it("bounds environment diffs and redacts nonnumeric timeout values", () => {
+  const command = {
+    programArguments,
+    environment: {
+      PATH: `/usr/bin:${"/long-directory".repeat(100)}\nforged diagnostic`,
+      OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS: "operator-secret",
+    },
+  };
+  const findings: ServiceDefinitionDrift[] = [];
+  auditGatewayInstallPreservation(
+    command,
+    { ...command, environment: { PATH: "/usr/bin" } },
+    "linux",
+    findings,
+  );
+  expect(findings).toHaveLength(2);
+  expect(findings[0]?.message).toContain('…; installer: "/usr/bin"');
+  expect(findings[0]!.message.length).toBeLessThan(420);
+  expect(findings[1]?.message).toContain("Current: <redacted>; installer: <absent>");
+  expect(JSON.stringify(findings)).not.toContain("operator-secret");
+  expect(findings.some((finding) => finding.message.includes("\n"))).toBe(false);
+});
+
+it("reports a missing managed value when no drop-in supplies it", async () => {
+  const key = "OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS";
+  const fixture = await systemdFixture();
+  const managedDefinition = {
+    ...fixture.command,
+    environment: { ...fixture.command.environment, OPENCLAW_SERVICE_MANAGED_ENV_KEYS: key },
+  };
+  const result = await auditGatewayServiceConfig({
+    ...fixture,
+    command: { ...managedDefinition, managedDefinition },
+    expectedCommand: {
+      ...managedDefinition,
+      environment: { ...managedDefinition.environment, [key]: "30000" },
+    },
+  });
+  expect(result.definitionDrift).toEqual([
+    drift("outdated", `Environment.${key}`, {
+      message: expect.stringContaining('Current: <absent>; installer: "30000"'),
+    }),
+  ]);
+});
+
+it.each(["legacy-wrapper", "malformed-args", "wrapper", "metadata"])(
   "audits launchd %s before the installer can replace it",
   async (kind) => {
-    const home = dirs.make("rewrite-launchd-preservation-");
-    const env = { HOME: home, OPENCLAW_STATE_DIR: path.join(home, "state") };
-    const sourcePath = resolveLaunchAgentPlistPath(env);
+    const { env, sourcePath, plist } = launchdFixture();
     const command = {
-      programArguments: ["/usr/bin/node", "/opt/openclaw/index.js", "gateway"],
+      programArguments,
       environment: { PATH: "/usr/bin:/bin", ...staleServiceEnvironment },
     };
-    const { stdoutPath } = resolveGatewaySupervisorLogPaths(env, { platform: "darwin" });
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(
       sourcePath,
       buildLaunchAgentPlist({
+        ...plist,
         ...command,
-        ...(kind === "malformed-args"
-          ? {
-              programArguments: [
+        programArguments:
+          kind === "malformed-args"
+            ? [
                 "/bin/sh",
                 resolveLaunchAgentEnvWrapperPath(env, "ai.openclaw.gateway"),
                 command.programArguments[0]!,
                 ...command.programArguments,
-              ],
-            }
-          : {}),
-        label: "ai.openclaw.gateway",
+              ]
+            : command.programArguments,
         comment: kind === "metadata" ? "operator-private" : "OpenClaw Gateway",
-        stdoutPath,
-        stderrPath: stdoutPath,
       }),
     );
     if (kind !== "metadata") {
@@ -540,7 +653,7 @@ it.each(["canonical-wrapper", "legacy-wrapper", "malformed-args", "wrapper", "me
       await fs.mkdir(path.dirname(wrapperPath), { recursive: true });
       await fs.writeFile(
         wrapperPath,
-        kind === "canonical-wrapper" || kind === "malformed-args"
+        kind === "malformed-args"
           ? buildLaunchAgentEnvironmentWrapper()
           : kind === "legacy-wrapper"
             ? '#!/bin/sh\nset -eu\nenv_file="$1"\nshift\nif [ -f "$env_file" ]; then\n  . "$env_file"\nfi\nexec "$@"\n'
@@ -553,10 +666,6 @@ it.each(["canonical-wrapper", "legacy-wrapper", "malformed-args", "wrapper", "me
       platform: "darwin",
       expectedCommand: command,
     });
-    if (kind === "canonical-wrapper") {
-      expect(result.definitionDrift ?? []).toEqual([]);
-      return;
-    }
     if (kind === "malformed-args") {
       expect(result.issues).toContainEqual(
         expect.objectContaining({
@@ -570,40 +679,36 @@ it.each(["canonical-wrapper", "legacy-wrapper", "malformed-args", "wrapper", "me
       expect(result.issues).toContainEqual(
         expect.objectContaining({ code: "launchd-env-wrapper-outdated" }),
       );
-      expect(result.definitionDrift).toEqual([
-        expect.objectContaining({ kind: "outdated", key: "EnvironmentWrapper" }),
-      ]);
+      expect(result.definitionDrift).toEqual([drift("outdated", "EnvironmentWrapper")]);
       return;
     }
     expect(result.definitionDrift).toContainEqual(
-      expect.objectContaining({
-        kind: "unknown-edit",
-        key: kind === "wrapper" ? "EnvironmentWrapper" : "Comment",
-      }),
+      drift("unknown-edit", kind === "wrapper" ? "EnvironmentWrapper" : "Comment"),
     );
     expect(JSON.stringify(result.definitionDrift)).not.toContain("operator-private");
   },
 );
 
 it.each([
-  "canonical",
+  "released-waiting",
+  "released-waiting-custom",
   "script",
-  "launcher",
   "metadata",
-  "planned-launcher",
+  "inactive-launcher",
   "missing-launcher",
   "path",
-  "custom-script",
-  "native-defaults",
 ])("checks generated Scheduled Task %s before a rewrite", async (kind) => {
+  const releasedWaiting = kind.startsWith("released-waiting");
   const home = dirs.make("rewrite-task-preservation-");
   const env = {
     USERPROFILE: home,
     OPENCLAW_STATE_DIR: home,
     USERNAME: "fixture",
-    ...(kind === "custom-script" ? { OPENCLAW_TASK_SCRIPT_NAME: "gateway.bat" } : {}),
   };
   const environment: Record<string, string> = { ...staleServiceEnvironment };
+  if (releasedWaiting) {
+    environment.OPENCLAW_SERVICE_VERSION = "2026.9.3";
+  }
   if (kind === "path") {
     environment.PATH = "C:\\operator-private";
   }
@@ -621,8 +726,10 @@ it.each([
     buildTaskScript(command) +
     (kind === "script" ? "echo operator-private\r\n" : "");
   const launcher =
-    buildHiddenLauncherScript({ scriptPath, taskSupervisor: true }) +
-    (kind === "launcher" || kind === "planned-launcher"
+    (releasedWaiting
+      ? `' OpenClaw Gateway (v2026.9.3)\r\nWScript.Quit CreateObject("WScript.Shell").Run("""${scriptPath.replaceAll('"', '""')}""", 0, True)\r\n`
+      : buildHiddenLauncherScript({ scriptPath, taskSupervisor: true })) +
+    (kind === "inactive-launcher" || kind === "released-waiting-custom"
       ? 'WScript.Echo "operator-private"\r\n'
       : "");
   await fs.writeFile(scriptPath, script);
@@ -635,25 +742,10 @@ it.each([
     stdout: buildScheduledTaskXml({
       taskDescription: kind === "metadata" ? "operator-private" : "OpenClaw Gateway",
       taskUser: "fixture",
+      interactive: true,
       launchPath:
-        kind === "planned-launcher" || kind === "missing-launcher" ? scriptPath : hiddenPath,
-    })
-      .replace(
-        "<RunLevel>LeastPrivilege</RunLevel>",
-        kind === "native-defaults" ? "" : "<RunLevel>LeastPrivilege</RunLevel>",
-      )
-      .replace(
-        "<Count>3</Count>",
-        kind === "native-defaults" ? "<Count>0</Count>" : "<Count>3</Count>",
-      )
-      .replace(
-        "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>",
-        `<ExecutionTimeLimit>${kind === "native-defaults" ? "PT72H" : "PT0S"}</ExecutionTimeLimit>`,
-      )
-      .replace(
-        "<StopOnIdleEnd>false</StopOnIdleEnd>",
-        `<StopOnIdleEnd>${kind === "native-defaults" ? "true" : "false"}</StopOnIdleEnd>`,
-      ),
+        kind === "inactive-launcher" || kind === "missing-launcher" ? scriptPath : hiddenPath,
+    }),
   });
   const result = await auditGatewayServiceConfig({
     env,
@@ -664,49 +756,33 @@ it.each([
       environment: { ...environment, OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1" },
     },
   });
-  if (kind === "canonical" || kind === "missing-launcher" || kind === "custom-script") {
-    expect(result.definitionDrift).toBeUndefined();
-  } else if (kind === "native-defaults") {
-    expect(result.definitionDrift).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "outdated",
-          key: "Settings.ExecutionTimeLimit",
-          current: "PT72H",
-          expected: "PT0S",
-        }),
-        expect.objectContaining({
-          kind: "outdated",
-          key: "Settings.IdleSettings.StopOnIdleEnd",
-          current: "true",
-          expected: "false",
-        }),
-        expect.objectContaining({
-          kind: "outdated",
-          key: "Settings.RestartOnFailure.Count",
-          current: "0",
-          expected: "3",
-        }),
-      ]),
+  if (["released-waiting", "missing-launcher", "inactive-launcher", "script"].includes(kind)) {
+    expect(result.definitionDrift).toContainEqual(
+      drift("outdated", "Principals.Principal.LogonType"),
     );
-    expect(result.definitionDrift).toHaveLength(3);
+    if (kind === "script") {
+      expect(result.definitionDriftError).toBe(
+        "Service definition inspection could not be completed.",
+      );
+    } else {
+      expect(result.definitionDrift?.every((finding) => finding.kind === "outdated")).toBe(true);
+    }
   } else {
     expect(result.definitionDrift).toContainEqual(
-      expect.objectContaining({
-        kind: "unknown-edit",
-        key:
-          kind === "script"
-            ? "TaskScript"
-            : kind === "launcher" || kind === "planned-launcher"
-              ? "TaskLauncher"
-              : kind === "path"
-                ? "Environment.PATH"
-                : "RegistrationInfo.Description",
-      }),
+      drift(
+        "unknown-edit",
+        kind === "released-waiting-custom"
+          ? "TaskLauncher"
+          : kind === "path"
+            ? "Environment.PATH"
+            : "RegistrationInfo.Description",
+      ),
     );
     expect(JSON.stringify(result.definitionDrift)).not.toContain("operator-private");
   }
-  expect(result.definitionDriftError).toBeUndefined();
+  if (kind !== "script") {
+    expect(result.definitionDriftError).toBeUndefined();
+  }
   expect(await fs.readFile(scriptPath, "utf8")).toBe(script);
   if (kind === "missing-launcher") {
     await expect(fs.stat(hiddenPath)).rejects.toMatchObject({ code: "ENOENT" });

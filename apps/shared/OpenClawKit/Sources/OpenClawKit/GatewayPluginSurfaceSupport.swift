@@ -1,13 +1,42 @@
 import Foundation
 
 public enum GatewayPluginSurfaceURL {
+    /// Callers validate their relative target namespace before attaching its encoded path.
+    public static func appendingTarget(_ target: URLComponents, toCapabilitySurface rawSurfaceURL: String?) -> URL? {
+        guard let raw = rawSurfaceURL?.trimmedNonEmpty,
+              var surface = URLComponents(string: raw),
+              let scheme = surface.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              surface.host?.isEmpty == false,
+              surface.user == nil,
+              surface.password == nil,
+              surface.percentEncodedQuery == nil,
+              surface.fragment == nil
+        else { return nil }
+
+        let segments = surface.percentEncodedPath.split(separator: "/", omittingEmptySubsequences: true)
+        guard segments.count >= 3,
+              segments[segments.count - 3] == "__openclaw__",
+              segments[segments.count - 2] == "cap",
+              let capability = String(segments[segments.count - 1]).removingPercentEncoding,
+              !capability.isEmpty
+        else { return nil }
+
+        var surfacePath = surface.percentEncodedPath
+        while surfacePath.hasSuffix("/") {
+            surfacePath.removeLast()
+        }
+        surface.percentEncodedPath = surfacePath + target.percentEncodedPath
+        surface.percentEncodedQuery = target.percentEncodedQuery
+        surface.fragment = target.fragment
+        return surface.url
+    }
+
     static func resolveHTTPURL(
         raw: String,
         against activeGatewayURL: URL?,
         relativeToGatewayContext: Bool = false) -> URL?
     {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        guard let trimmed = raw.trimmedNonEmpty else { return nil }
         if let absolute = URL(string: trimmed),
            let scheme = absolute.scheme?.lowercased()
         {
@@ -40,12 +69,11 @@ public enum GatewayPluginSurfaceURL {
     }
 
     public static func canonicalize(raw: String?, against activeGatewayURL: URL?) -> String? {
-        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty else { return nil }
+        guard let trimmed = raw?.trimmedNonEmpty else { return nil }
         guard var parsed = URLComponents(string: trimmed) else { return trimmed }
 
         let parsedHost = parsed.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let parsedIsLoopback = !parsedHost.isEmpty && LoopbackHost.isLoopback(parsedHost)
+        let parsedIsLoopback = !parsedHost.isEmpty && LoopbackHost.isLoopbackHost(parsedHost)
 
         if !parsedHost.isEmpty, !parsedIsLoopback {
             guard let activeGatewayURL else { return trimmed }
@@ -61,7 +89,7 @@ public enum GatewayPluginSurfaceURL {
 
         guard let activeGatewayURL,
               let fallbackHost = activeGatewayURL.host,
-              !LoopbackHost.isLoopback(fallbackHost)
+              !LoopbackHost.isLoopbackHost(fallbackHost)
         else { return trimmed }
         let isTLS = activeGatewayURL.scheme?.lowercased() == "wss"
         parsed.scheme = isTLS ? "https" : "http"

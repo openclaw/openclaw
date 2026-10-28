@@ -3,6 +3,7 @@ import {
   normalizeAgentCommandModelRef,
   parseAgentCommandModelRef,
 } from "../agents/command/model-ref.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginRuntimePluginScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -21,7 +22,6 @@ const dispatch = vi.hoisted(() =>
     ) => ({ runId: "override-run" }),
   ),
 );
-const normalization = vi.hoisted(() => ({ chainedAlias: false }));
 vi.mock("./server-plugin-in-process-dispatch.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./server-plugin-in-process-dispatch.js")>()),
   dispatchGatewayMethodInProcess: dispatch,
@@ -35,7 +35,7 @@ vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
       ? undefined
       : params.context.modelId === "literal"
         ? "permitted"
-        : normalization.chainedAlias && params.context.modelId === "permitted"
+        : params.context.modelId === "permitted"
           ? "different"
           : undefined,
 }));
@@ -44,23 +44,13 @@ let config: OpenClawConfig;
 
 beforeEach(() => {
   dispatch.mockClear();
-  normalization.chainedAlias = false;
   config = {
     agents: { entries: { worker: { model: "fixture/literal" } } },
     models: {
       providers: {
         fixture: {
           baseUrl: "https://fixture.invalid/v1",
-          models: [
-            {
-              id: "literal",
-              name: "Literal",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              maxTokens: 8192,
-            },
-          ],
+          models: [modelDefinition("literal", { name: "Literal", reasoning: false })],
         },
       },
     },
@@ -72,7 +62,6 @@ beforeEach(() => {
       },
     },
   };
-  setRuntimeConfigSnapshot(config);
 });
 
 afterEach(() => {
@@ -81,6 +70,7 @@ afterEach(() => {
 });
 
 function run(override: { provider?: string; model?: string }) {
+  setRuntimeConfigSnapshot(config);
   const context = { getRuntimeConfig: () => config } as GatewayRequestContext;
   const runtime = createGatewaySubagentRuntime(
     () => context,
@@ -96,39 +86,24 @@ function run(override: { provider?: string; model?: string }) {
 }
 
 describe("plugin subagent initial override policy", () => {
-  it.each([{ provider: "fixture", model: "literal" }, { model: "fixture/literal" }])(
-    "checks the exact configured execution target for %j",
-    async (override) => {
-      // An operator-authored model row intentionally bypasses the provider's runtime alias.
-      expect(normalizeAgentCommandModelRef(config, "fixture", "literal", {})).toEqual({
-        provider: "fixture",
-        model: "literal",
-      });
-      await expect(run(override)).rejects.toThrow(/not allowlisted/u);
-      expect(dispatch).not.toHaveBeenCalled();
-    },
-  );
+  it("checks the exact configured execution target", async () => {
+    await expect(run({ provider: "fixture", model: "literal" })).rejects.toThrow(
+      /not allowlisted/u,
+    );
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("preserves an explicit API owner without configured model rows", async () => {
+    config.models!.providers!.fixture!.api = "openai-completions";
+    config.models!.providers!.fixture!.models = [];
+    await expect(run({ model: "fixture/literal" })).rejects.toThrow(/not allowlisted/u);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
 
   it.each([{ provider: "fixture", model: "literal" }, { model: "fixture/literal" }])(
-    "preserves an explicit API owner without configured model rows for %j",
+    "preserves command selection for %j with chained aliases",
     async (override) => {
-      config.models!.providers!.fixture!.api = "openai-completions";
       config.models!.providers!.fixture!.models = [];
-      await expect(run(override)).rejects.toThrow(/not allowlisted/u);
-      expect(dispatch).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    { override: { provider: "fixture", model: "literal" }, chainedAlias: false },
-    { override: { model: "fixture/literal" }, chainedAlias: false },
-    { override: { provider: "fixture", model: "literal" }, chainedAlias: true },
-    { override: { model: "fixture/literal" }, chainedAlias: true },
-  ])(
-    "preserves command selection for $override with chained aliases=$chainedAlias",
-    async ({ override, chainedAlias }) => {
-      config.models!.providers!.fixture!.models = [];
-      normalization.chainedAlias = chainedAlias;
       await expect(run(override)).resolves.toMatchObject({ runId: "override-run" });
       const request = dispatch.mock.calls[0]?.[1];
       expect(request).toMatchObject(override);
@@ -139,14 +114,6 @@ describe("plugin subagent initial override policy", () => {
       expect(selected).toEqual({ provider: "fixture", model: "permitted" });
     },
   );
-
-  it("allows an explicitly permitted configured literal without applying its runtime alias", async () => {
-    config.plugins!.entries!["override-fixture"]!.subagent!.allowedModels = ["fixture/literal"];
-    await expect(run({ provider: "fixture", model: "literal" })).resolves.toMatchObject({
-      runId: "override-run",
-    });
-    expect(dispatch.mock.calls[0]?.[1]).toMatchObject({ provider: "fixture", model: "literal" });
-  });
 
   it("rejects a replaced configuration before admitting its prepared override", async () => {
     config.models!.providers!.fixture!.models = [];

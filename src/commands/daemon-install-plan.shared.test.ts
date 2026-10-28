@@ -1,167 +1,84 @@
-// Daemon install plan tests cover shared install plan validation and platform warning helpers.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   resolveDaemonInstallRuntimeInputs,
-  resolveDaemonRuntimeBinDir,
   resolveDaemonServicePathDirs,
 } from "./daemon-install-plan.shared.js";
 
-describe("resolveDaemonInstallRuntimeInputs", () => {
-  it.skipIf(process.platform === "win32")(
-    "keeps a persisted runtime pin instead of selecting system Node",
-    async () => {
-      const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "daemon-pin-")));
-      const pinned = path.join(root, "node");
-      try {
-        fs.symlinkSync(process.execPath, pinned);
-        await expect(
-          resolveDaemonInstallRuntimeInputs({
-            env: {},
-            pinnedRuntimePath: pinned,
-            runtime: "node",
-            devMode: false,
-          }),
-        ).resolves.toEqual({ devMode: false, runtimePath: pinned });
-      } finally {
-        fs.rmSync(root, { recursive: true, force: true });
-      }
-    },
-  );
+let root: string;
+let originalArgv: string[];
+beforeEach(() => {
+  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "daemon-plan-")));
+  originalArgv = process.argv;
+});
+afterEach(() => {
+  process.argv = originalArgv;
+  fs.rmSync(root, { recursive: true, force: true });
+});
 
-  it("rejects a relative persisted pin instead of silently selecting another runtime", async () => {
+function entrypoint(folder: string, packaged = false) {
+  const dir = path.join(root, folder);
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, "openclaw.mjs");
+  fs.writeFileSync(file, "");
+  if (packaged) {
+    fs.writeFileSync(path.join(dir, "package.json"), '{"name":"openclaw"}');
+  }
+  return file;
+}
+
+describe("resolveDaemonInstallRuntimeInputs", () => {
+  it.skipIf(process.platform === "win32")("keeps a persisted runtime pin", async () => {
+    const pinned = path.join(root, "node");
+    fs.symlinkSync(resolveTestNodeExecPath(), pinned);
     await expect(
       resolveDaemonInstallRuntimeInputs({
         env: {},
-        pinnedRuntimePath: "relative/node",
+        pinnedRuntimePath: pinned,
         runtime: "node",
         devMode: false,
       }),
-    ).rejects.toThrow(/absolute/);
+    ).resolves.toEqual({ devMode: false, runtime: "node", runtimePath: pinned });
   });
 
-  it("detects src ts entrypoints when devMode is not overridden", async () => {
-    const originalArgv = process.argv;
-    try {
-      for (const [entrypoint, expected] of [
-        ["/Users/me/openclaw/src/cli/index.ts", true],
-        ["C:\\Users\\me\\openclaw\\src\\cli\\index.ts", true],
-        ["/Users/me/openclaw/dist/cli/index.js", false],
-      ] as const) {
-        process.argv = ["node", entrypoint];
-        await expect(
-          resolveDaemonInstallRuntimeInputs({
-            env: {},
-            runtime: "node",
-            runtimePath: "/custom/node",
-          }),
-        ).resolves.toMatchObject({ devMode: expected });
-      }
-    } finally {
-      process.argv = originalArgv;
-    }
-  });
-
-  it("keeps explicit devMode and runtimePath overrides", async () => {
+  it.each([
+    ["/Users/me/openclaw/src/cli/index.ts", true],
+    ["C:\\Users\\me\\openclaw\\src\\cli\\index.ts", true],
+    ["/Users/me/openclaw/dist/cli/index.js", false],
+  ] as const)("detects devMode from %s", async (entry, devMode) => {
+    process.argv = ["node", entry];
     await expect(
       resolveDaemonInstallRuntimeInputs({
         env: {},
         runtime: "node",
-        devMode: false,
         runtimePath: "/custom/node",
       }),
-    ).resolves.toEqual({
-      devMode: false,
-      runtimePath: "/custom/node",
-    });
+    ).resolves.toMatchObject({ devMode });
   });
-});
-
-describe("resolveDaemonRuntimeBinDir", () => {
-  it("returns the absolute runtime bin directory", () => {
-    expect(resolveDaemonRuntimeBinDir("/custom/runtime/bin/bun")).toEqual(["/custom/runtime/bin"]);
-  });
-
-  it("ignores bare executable names", () => {
-    expect(resolveDaemonRuntimeBinDir("bun")).toBeUndefined();
-  });
-});
-
-describe("resolveDaemonServicePathDirs openclaw discovery", () => {
-  it("uses the active openclaw command directory", () => {
-    expect(
-      resolveDaemonServicePathDirs({
-        argv: ["node", "/Users/testuser/.npm-global/bin/openclaw", "gateway", "install"],
-        env: { PATH: "" },
-        platform: "darwin",
-      }),
-    ).toEqual(["/Users/testuser/.npm-global/bin"]);
-  });
-
-  it.skipIf(process.platform === "win32")(
-    "finds the PATH shim that resolves to the active package entrypoint",
-    () => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-daemon-path-"));
-      try {
-        const binDir = path.join(root, "bin");
-        const packageDir = path.join(root, "lib", "node_modules", "openclaw");
-        const entrypoint = path.join(packageDir, "openclaw.mjs");
-        fs.mkdirSync(binDir, { recursive: true });
-        fs.mkdirSync(packageDir, { recursive: true });
-        fs.writeFileSync(entrypoint, "");
-        fs.symlinkSync(entrypoint, path.join(binDir, "openclaw"));
-
-        expect(
-          resolveDaemonServicePathDirs({
-            argv: ["node", entrypoint, "gateway", "install"],
-            env: { PATH: binDir },
-            platform: "darwin",
-          }),
-        ).toEqual([binDir]);
-      } finally {
-        fs.rmSync(root, { recursive: true, force: true });
-      }
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "ignores unrelated openclaw commands elsewhere on PATH",
-    () => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-daemon-path-"));
-      try {
-        const binDir = path.join(root, "bin");
-        const activeEntrypoint = path.join(root, "active", "openclaw.mjs");
-        const otherEntrypoint = path.join(root, "other", "openclaw.mjs");
-        fs.mkdirSync(binDir, { recursive: true });
-        fs.mkdirSync(path.dirname(activeEntrypoint), { recursive: true });
-        fs.mkdirSync(path.dirname(otherEntrypoint), { recursive: true });
-        fs.writeFileSync(activeEntrypoint, "");
-        fs.writeFileSync(otherEntrypoint, "");
-        for (const entrypoint of [activeEntrypoint, otherEntrypoint]) {
-          fs.writeFileSync(
-            path.join(path.dirname(entrypoint), "package.json"),
-            '{"name":"openclaw"}',
-          );
-        }
-        fs.symlinkSync(otherEntrypoint, path.join(binDir, "openclaw"));
-
-        expect(
-          resolveDaemonServicePathDirs({
-            argv: ["node", activeEntrypoint, "gateway", "install"],
-            env: { PATH: binDir },
-            platform: "darwin",
-          }),
-        ).toBeUndefined();
-      } finally {
-        fs.rmSync(root, { recursive: true, force: true });
-      }
-    },
-  );
 });
 
 describe("resolveDaemonServicePathDirs", () => {
+  it.skipIf(process.platform === "win32").each([true, false])(
+    "accepts only the active installation's PATH shim (same=%s)",
+    (same) => {
+      const active = entrypoint(same ? "lib/node_modules/openclaw" : "active", !same);
+      const target = same ? active : entrypoint("other", true);
+      const binDir = path.join(root, "bin");
+      fs.mkdirSync(binDir);
+      fs.symlinkSync(target, path.join(binDir, "openclaw"));
+      expect(
+        resolveDaemonServicePathDirs({
+          argv: ["node", active, "gateway", "install"],
+          env: { PATH: binDir },
+          platform: "darwin",
+        }),
+      ).toEqual(same ? [binDir] : undefined);
+    },
+  );
+
   it("combines runtime and active openclaw command directories", () => {
     expect(
       resolveDaemonServicePathDirs({

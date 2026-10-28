@@ -8,28 +8,22 @@
 import type { SessionConfig } from "@github/copilot-sdk";
 
 type SdkSessionHooks = NonNullable<SessionConfig["hooks"]>;
-type PreToolUseHandler = NonNullable<SdkSessionHooks["onPreToolUse"]>;
-type PreMcpToolCallHandler = NonNullable<SdkSessionHooks["onPreMcpToolCall"]>;
-type PostToolUseHandler = NonNullable<SdkSessionHooks["onPostToolUse"]>;
-type PostToolUseFailureHandler = NonNullable<SdkSessionHooks["onPostToolUseFailure"]>;
-type UserPromptSubmittedHandler = NonNullable<SdkSessionHooks["onUserPromptSubmitted"]>;
-type SessionStartHandler = NonNullable<SdkSessionHooks["onSessionStart"]>;
-type SessionEndHandler = NonNullable<SdkSessionHooks["onSessionEnd"]>;
-type ErrorOccurredHandler = NonNullable<SdkSessionHooks["onErrorOccurred"]>;
 
 interface CopilotHooksBridgeOptions {
   onUserPromptSubmitted?: (submission: { prompt: string; additionalContext?: string }) => void;
 }
 
-export interface CopilotHooksConfig {
-  onPreToolUse?: PreToolUseHandler;
-  onPreMcpToolCall?: PreMcpToolCallHandler;
-  onPostToolUse?: PostToolUseHandler;
-  onPostToolUseFailure?: PostToolUseFailureHandler;
-  onUserPromptSubmitted?: UserPromptSubmittedHandler;
-  onSessionStart?: SessionStartHandler;
-  onSessionEnd?: SessionEndHandler;
-  onErrorOccurred?: ErrorOccurredHandler;
+export interface CopilotHooksConfig extends Pick<
+  SdkSessionHooks,
+  | "onPreToolUse"
+  | "onPreMcpToolCall"
+  | "onPostToolUse"
+  | "onPostToolUseFailure"
+  | "onUserPromptSubmitted"
+  | "onSessionStart"
+  | "onSessionEnd"
+  | "onErrorOccurred"
+> {
   /**
    * Called when a native SDK hook handler throws. Defaults to console.warn so
    * native hook failures do not terminate the SDK session.
@@ -82,28 +76,16 @@ export function createHooksBridge(
     return undefined;
   }
   const onError = config.onHookError ?? DEFAULT_HOOK_ERROR_HANDLER;
-  const hooks: SdkSessionHooks = {};
-  const pre = isolate("onPreToolUse", config.onPreToolUse, onError);
-  const preMcp = isolate("onPreMcpToolCall", config.onPreMcpToolCall, onError);
-  const post = isolate("onPostToolUse", config.onPostToolUse, onError);
-  const postFailure = isolate("onPostToolUseFailure", config.onPostToolUseFailure, onError);
+  const hooks: SdkSessionHooks = {
+    onPreToolUse: isolate("onPreToolUse", config.onPreToolUse, onError),
+    onPreMcpToolCall: isolate("onPreMcpToolCall", config.onPreMcpToolCall, onError),
+    onPostToolUse: isolate("onPostToolUse", config.onPostToolUse, onError),
+    onPostToolUseFailure: isolate("onPostToolUseFailure", config.onPostToolUseFailure, onError),
+    onSessionStart: isolate("onSessionStart", config.onSessionStart, onError),
+    onSessionEnd: isolate("onSessionEnd", config.onSessionEnd, onError),
+    onErrorOccurred: isolate("onErrorOccurred", config.onErrorOccurred, onError),
+  };
   const userPrompt = isolate("onUserPromptSubmitted", config.onUserPromptSubmitted, onError);
-  const sessionStart = isolate("onSessionStart", config.onSessionStart, onError);
-  const sessionEnd = isolate("onSessionEnd", config.onSessionEnd, onError);
-  const errorOccurred = isolate("onErrorOccurred", config.onErrorOccurred, onError);
-
-  if (pre) {
-    hooks.onPreToolUse = pre as PreToolUseHandler;
-  }
-  if (preMcp) {
-    hooks.onPreMcpToolCall = preMcp as PreMcpToolCallHandler;
-  }
-  if (post) {
-    hooks.onPostToolUse = post as PostToolUseHandler;
-  }
-  if (postFailure) {
-    hooks.onPostToolUseFailure = postFailure as PostToolUseFailureHandler;
-  }
   if (userPrompt) {
     hooks.onUserPromptSubmitted = async (input, invocation) => {
       const output = await userPrompt(input, invocation);
@@ -122,14 +104,10 @@ export function createHooksBridge(
       return output;
     };
   }
-  if (sessionStart) {
-    hooks.onSessionStart = sessionStart as SessionStartHandler;
-  }
-  if (sessionEnd) {
-    hooks.onSessionEnd = sessionEnd as SessionEndHandler;
-  }
-  if (errorOccurred) {
-    hooks.onErrorOccurred = errorOccurred as ErrorOccurredHandler;
+  for (const key of Object.keys(hooks) as (keyof SdkSessionHooks)[]) {
+    if (hooks[key] === undefined) {
+      delete hooks[key];
+    }
   }
 
   return Object.keys(hooks).length > 0 ? hooks : undefined;

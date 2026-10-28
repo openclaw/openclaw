@@ -36,38 +36,62 @@ struct DashboardBrowserDownloadDestination {
     }
 }
 
-/// One user-requested transfer, retained by the window's native browser host.
+/// One user-requested transfer, retained by its document or native browser host.
 @MainActor
 final class DashboardBrowserDownload: NSObject, WKDownloadDelegate {
+    typealias AuthenticationHandler = @MainActor (
+        URLAuthenticationChallenge,
+        @escaping @MainActor @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) -> Void
+
+    private let authenticationHandler: AuthenticationHandler?
     private weak var window: NSWindow?
     private let isCurrent: @MainActor () -> Bool
     private var activeDownload: WKDownload?
     private var panel: NSSavePanel?
     private var destination: DashboardBrowserDownloadDestination?
-    private var continuation: CheckedContinuation<Bool, any Error>?
+    private var completion: ((Result<Bool, any Error>) -> Void)?
 
-    init(window: NSWindow, isCurrent: @escaping @MainActor () -> Bool) {
+    init(
+        window: NSWindow,
+        authenticationHandler: AuthenticationHandler? = nil,
+        isCurrent: @escaping @MainActor () -> Bool)
+    {
+        self.authenticationHandler = authenticationHandler
         self.window = window
         self.isCurrent = isCurrent
     }
 
     /// Returns true for cancellation, false only after the completed file is saved.
     func start(using webView: WKWebView, url: URL) async throws -> Bool {
+        guard AppLaunchRuntimePlan.current.allowsActivation else { throw DashboardBrowserError.dialogDeferred }
         guard self.isCurrent() else { throw DashboardBrowserError.unavailable }
         return try await withCheckedThrowingContinuation { continuation in
-            self.continuation = continuation
+            self.completion = { continuation.resume(with: $0) }
             // WebKit owns cookies, redirects, authentication, and quarantine metadata.
             // A separate URLSession would not share the reading tab's browser session.
             webView.startDownload(using: URLRequest(url: url)) { [weak self] download in
-                guard let self, self.continuation != nil, self.isCurrent() else {
-                    download.cancel { _ in }
-                    self?.finish(.failure(DashboardBrowserError.unavailable))
+                guard let self else { download.cancel { _ in }
                     return
                 }
-                self.activeDownload = download
-                download.delegate = self
+                self.attach(download)
             }
         }
+    }
+
+    /// Converted navigations must receive their delegate before WebKit's callback returns.
+    func start(_ download: WKDownload, completion: @escaping (Result<Bool, any Error>) -> Void) {
+        self.completion = completion
+        self.attach(download)
+    }
+
+    private func attach(_ download: WKDownload) {
+        guard self.completion != nil, self.isCurrent(), AppLaunchRuntimePlan.current.allowsActivation else {
+            download.cancel { _ in }
+            self.finish(.failure(DashboardBrowserError.unavailable))
+            return
+        }
+        self.activeDownload = download
+        download.delegate = self
     }
 
     func cancel() {
@@ -80,7 +104,7 @@ final class DashboardBrowserDownload: NSObject, WKDownloadDelegate {
         suggestedFilename: String,
         completionHandler: @escaping @MainActor @Sendable (URL?) -> Void)
     {
-        guard self.continuation != nil, self.isCurrent(), let window else {
+        guard self.completion != nil, self.isCurrent(), let window else {
             completionHandler(nil)
             self.finish(.failure(DashboardBrowserError.unavailable))
             return
@@ -97,7 +121,7 @@ final class DashboardBrowserDownload: NSObject, WKDownloadDelegate {
         panel.nameFieldStringValue = filename.isEmpty ? "download" : filename
         self.panel = panel
         panel.beginSheetModal(for: window) { [weak self] result in
-            guard let self, self.continuation != nil else {
+            guard let self, self.completion != nil else {
                 completionHandler(nil)
                 return
             }
@@ -123,9 +147,26 @@ final class DashboardBrowserDownload: NSObject, WKDownloadDelegate {
         }
     }
 
+    func download(
+        _: WKDownload,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @MainActor @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void)
+    {
+        guard self.completion != nil, self.isCurrent() else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+        guard let authenticationHandler else {
+            // Preserve WebKit's default for reading-tab transfers without Gateway authority.
+            completionHandler(.rejectProtectionSpace, nil)
+            return
+        }
+        authenticationHandler(challenge, completionHandler)
+    }
+
     func downloadDidFinish(_: WKDownload) {
         do {
-            guard self.continuation != nil, self.isCurrent(), let destination else {
+            guard self.completion != nil, self.isCurrent(), let destination else {
                 throw DashboardBrowserError.unavailable
             }
             try destination.commit()
@@ -140,8 +181,8 @@ final class DashboardBrowserDownload: NSObject, WKDownloadDelegate {
     }
 
     private func finish(_ result: Result<Bool, any Error>) {
-        guard let continuation else { return }
-        self.continuation = nil
+        guard let completion else { return }
+        self.completion = nil
         self.activeDownload?.delegate = nil
         self.activeDownload?.cancel { _ in }
         self.activeDownload = nil
@@ -149,6 +190,6 @@ final class DashboardBrowserDownload: NSObject, WKDownloadDelegate {
         self.panel = nil
         self.destination?.discard()
         self.destination = nil
-        continuation.resume(with: result)
+        completion(result)
     }
 }

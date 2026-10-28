@@ -12,10 +12,19 @@ export const enum CommandLane {
    */
   HookDispatch = "hook-dispatch",
   Background = "background",
+  RestartRecovery = "restart-recovery",
   Subagent = "subagent",
   ActiveMemory = "active-memory",
   Nested = "nested",
 }
+
+export const SUBAGENT_LANE_PREFIX = `${CommandLane.Subagent}:`;
+export const SWARM_LANE_PREFIX = `${SUBAGENT_LANE_PREFIX}swarm:`;
+
+export type CommandLaneConfiguration = {
+  readonly lane: string;
+  readonly maxConcurrent: number;
+};
 
 // Keep the exported diagnostics inventory closed so per-session lanes cannot
 // turn a saturation snapshot into an unbounded payload.
@@ -27,6 +36,7 @@ export const STATIC_COMMAND_LANES = [
   CommandLane.CronNested,
   CommandLane.HookDispatch,
   CommandLane.Background,
+  CommandLane.RestartRecovery,
   CommandLane.Subagent,
   CommandLane.ActiveMemory,
   CommandLane.Nested,

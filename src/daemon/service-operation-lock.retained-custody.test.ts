@@ -9,6 +9,7 @@ import { captureManagedUpdateLeaseDatabaseIdentity } from "../infra/update-manag
 import { createManagedHandoffLeaseStore } from "../infra/update-managed-service-handoff-lease.js";
 import {
   heldServiceLockCoordinate,
+  readManagedHandoffRowsJson,
   seedRetainedBorrower,
   type RetainedBorrowerSource,
 } from "../infra/update-retained-custody.test-support.js";
@@ -100,18 +101,7 @@ function seedRetained(
   return result.lease;
 }
 
-function rowBytes() {
-  const db = new DatabaseSync(path.join(fixture.root, "managed-update-handoffs.sqlite"), {
-    readOnly: true,
-  });
-  try {
-    return JSON.stringify(
-      db.prepare("SELECT * FROM managed_update_handoffs ORDER BY install_root").all(),
-    );
-  } finally {
-    db.close();
-  }
-}
+const rowBytes = () => readManagedHandoffRowsJson(fixture.root);
 function sidecar(file = source.serviceKey) {
   const lockPath = file + ".lock";
   const stat = fs.lstatSync(lockPath);
@@ -393,7 +383,10 @@ it.each(["missing", "unknown-phase", "unknown-version", "relative-source"] as co
       rows = rowBytes();
     fixture.dead = true;
     const mutate = vi.fn(async () => undefined);
-    expect(store.read(installRoot)).toEqual({ kind: "unreadable" });
+    expect(store.read(installRoot)).toEqual({
+      kind: "unreadable",
+      error: expect.objectContaining({ message: expect.stringContaining("incompatible") }),
+    });
     await expect(withGatewayServiceOperationLock(env, mutate)).rejects.toThrow(/incompatible/);
     expect(mutate).not.toHaveBeenCalled();
     expect(store.release(lease)).toBe(false);

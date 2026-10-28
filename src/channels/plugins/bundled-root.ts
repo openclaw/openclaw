@@ -20,7 +20,6 @@ const OPENCLAW_PACKAGE_ROOT =
 
 export type BundledChannelRootScope = {
   packageRoot: string;
-  cacheKey: string;
   pluginsDir?: string;
 };
 
@@ -43,7 +42,6 @@ export function resolveBundledChannelRootScope(
   if (!bundledPluginsDir) {
     return {
       packageRoot: OPENCLAW_PACKAGE_ROOT,
-      cacheKey: OPENCLAW_PACKAGE_ROOT,
     };
   }
   const resolvedPluginsDir = path.resolve(bundledPluginsDir);
@@ -54,7 +52,6 @@ export function resolveBundledChannelRootScope(
       path.basename(resolvedPluginsDir) === "extensions"
         ? derivePackageRootFromExtensionsDir(resolvedPluginsDir)
         : resolvedPluginsDir,
-    cacheKey: resolvedPluginsDir,
     pluginsDir: resolvedPluginsDir,
   };
 }

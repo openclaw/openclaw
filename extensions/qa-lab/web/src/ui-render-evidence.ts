@@ -35,12 +35,16 @@ function evidenceEntryMatches(state: UiState, entry: EvidenceEntryView): boolean
   return haystack.includes(query);
 }
 
-function renderEvidenceMetric(label: string, value: string | number, tone?: string): string {
-  return `<div class="evidence-metric${tone ? ` evidence-metric-${esc(tone)}` : ""}">
+function createMetricRenderer(className: string) {
+  return (label: string, value: string | number, tone?: string): string =>
+    `<div class="${className}${tone ? ` ${className}-${esc(tone)}` : ""}">
     <span>${esc(label)}</span>
     <strong>${esc(String(value))}</strong>
   </div>`;
 }
+
+const renderEvidenceMetric = createMetricRenderer("evidence-metric");
+const renderProducerContextMetric = createMetricRenderer("evidence-producer-metric");
 
 function renderEvidenceCoverage(entry: EvidenceEntryView): string {
   if (entry.coverage.length === 0) {
@@ -152,13 +156,6 @@ function renderEvidenceDetail(entry: EvidenceEntryView | null): string {
           : '<div class="empty-state">No execution artifacts recorded for this entry.</div>'
       }
     </section>
-  </div>`;
-}
-
-function renderProducerContextMetric(label: string, value: string | number): string {
-  return `<div class="evidence-producer-metric">
-    <span>${esc(label)}</span>
-    <strong>${esc(String(value))}</strong>
   </div>`;
 }
 

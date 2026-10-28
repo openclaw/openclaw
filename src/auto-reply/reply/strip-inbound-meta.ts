@@ -1,6 +1,8 @@
 // Generated inbound context is current-turn model input, never historical display text.
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { escapeRegExp } from "../../shared/regexp.js";
+import type { TextProjection } from "../../shared/text/text-projection.js";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "./delivery-hints.js";
 import { INBOUND_CONTEXT_MARKER } from "./inbound-context-marker.js";
 
@@ -9,16 +11,11 @@ const CHANNEL_CONTEXT_HEADER = `Context: ${INBOUND_CONTEXT_MARKER}`;
 const ACTIVE_MEMORY_CONTEXT_HEADER = "Context:";
 const ACTIVE_MEMORY_OPEN_TAG = "<active_memory_plugin>";
 const ACTIVE_MEMORY_CLOSE_TAG = "</active_memory_plugin>";
-export const INBOUND_METADATA_MARKERS = [
-  "[",
-  INBOUND_CONTEXT_MARKER,
-  ...MESSAGE_TOOL_DELIVERY_HINTS,
-  ACTIVE_MEMORY_CONTEXT_HEADER,
-];
-const METADATA_TOKENS_RE = new RegExp(
-  [INBOUND_CONTEXT_MARKER, ...MESSAGE_TOOL_DELIVERY_HINTS].map(escapeRegExp).join("|"),
-  "g",
-);
+// Historical producer bytes: this companion preceded the marked JSON hint field.
+const LEGACY_REQUESTER_PROFILE_HINT =
+  'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.';
+const INBOUND_METADATA_SENTINELS = [INBOUND_CONTEXT_MARKER, ...MESSAGE_TOOL_DELIVERY_HINTS];
+const METADATA_TOKENS_RE = new RegExp(INBOUND_METADATA_SENTINELS.map(escapeRegExp).join("|"), "g");
 
 type TextLine = { start: number; end: number; next: number; trimmed: string };
 type LineSpan = { start: number; next: number };
@@ -63,7 +60,6 @@ function isMessageToolDeliveryHintLine(line: string): boolean {
   return MESSAGE_TOOL_DELIVERY_HINTS.some((hint) => hint === line);
 }
 
-/** Fast check for whether text contains any inbound metadata sentinel. */
 export function hasInboundMetadataSentinel(text: string): boolean {
   return (
     text.includes(INBOUND_CONTEXT_MARKER) ||
@@ -73,10 +69,90 @@ export function hasInboundMetadataSentinel(text: string): boolean {
   );
 }
 
+/** Probe appended bytes only until canonical metadata can affect the visible text. */
+export function createInboundMetadataProbe(): (input: TextProjection) => boolean {
+  const scanOverlap = Math.max(...INBOUND_METADATA_SENTINELS.map((token) => token.length - 1));
+  let active = false;
+  let tail = "";
+  let contextOffset = 0;
+  let timestampHead: string | null = "";
+  let timestampOpen = false;
+  return ({ text, delta }) => {
+    if (active) {
+      return true;
+    }
+    const appended = delta ?? text;
+    const scan = tail + appended;
+    tail = scan.slice(-scanOverlap);
+    if (INBOUND_METADATA_SENTINELS.some((token) => scan.includes(token))) {
+      active = true;
+      return true;
+    }
+    let timestampTail = appended;
+    if (timestampHead !== null) {
+      // The fixed timestamp grammar through minutes is 21 ASCII characters.
+      const needed = 21 - timestampHead.length;
+      timestampHead += appended.slice(0, needed);
+      timestampTail = appended.slice(needed);
+      if (timestampHead.length === 21) {
+        timestampOpen = LEADING_TIMESTAMP_PREFIX_RE.test(timestampHead + "]");
+        timestampHead = null;
+      }
+    }
+    if (timestampOpen && timestampTail.includes("]")) {
+      active = true;
+      return true;
+    }
+    for (const char of appended) {
+      if (char === "\n" || char === "\r" || char === "\u2028" || char === "\u2029") {
+        if (contextOffset === ACTIVE_MEMORY_CONTEXT_HEADER.length) {
+          active = true;
+          return true;
+        }
+        contextOffset = 0;
+      } else if (char === " " || char === "\t") {
+        if (contextOffset !== 0 && contextOffset !== ACTIVE_MEMORY_CONTEXT_HEADER.length) {
+          contextOffset = -1;
+        }
+      } else if (contextOffset >= 0 && char === ACTIVE_MEMORY_CONTEXT_HEADER[contextOffset]) {
+        contextOffset++;
+      } else {
+        contextOffset = -1;
+      }
+    }
+    // Complete lines follow JavaScript's line boundaries, like the canonical sentinel.
+    // At EOF, don't latch: the next delta may turn Context: into ordinary inline prose.
+    return contextOffset === ACTIVE_MEMORY_CONTEXT_HEADER.length;
+  };
+}
+
 function metadataBlockEnd(text: string, header: TextLine): number {
   let line = readTextLine(text, header.next);
   if (line?.trimmed === "```json") {
-    return findTextLine(text, "```", line.next)?.next ?? text.length + 1;
+    const close = findTextLine(text, "```", line.next);
+    if (!close) {
+      return text.length + 1;
+    }
+    const hint = readTextLine(text, skipEmptyLines(text, close.next));
+    const separator = hint && readTextLine(text, hint.next);
+    if (
+      header.trimmed === `Conversation info: ${INBOUND_CONTEXT_MARKER}` &&
+      hint &&
+      hint.start > close.next &&
+      text.slice(hint.start, hint.end).replace(/\r$/u, "") === LEGACY_REQUESTER_PROFILE_HINT &&
+      (!separator || separator.trimmed === "")
+    ) {
+      const metadata = safeParseJsonRecord(text.slice(line.next, close.start));
+      if (
+        metadata &&
+        isRecord(metadata.requester_profile) &&
+        !("requester_profile_hint" in metadata)
+      ) {
+        // The old companion belongs to this block, not to later quoted user text.
+        return skipEmptyLines(text, hint.next);
+      }
+    }
+    return close.next;
   }
   // Generated prose context ends at the next blank separator, including its blanks.
   while (line && line.trimmed !== "") {
@@ -165,9 +241,31 @@ export function stripInboundMetadata(text: string): string {
     }
   }
   return removeLineSpans(source, spans)
-    .replace(/^\n+/, "")
-    .replace(/\n+$/, "")
+    .replace(/^(?:\r?\n)+/u, "")
+    .replace(/(?:\r?\n)+$/u, "")
     .replace(LEADING_TIMESTAMP_PREFIX_RE, "");
+}
+
+/** Returns the leading metadata boundary without rewriting any later content. */
+function readLeadingInboundMetadataEnd(text: string): number {
+  let start = skipEmptyLines(text, 0, false);
+  let line = readTextLine(text, start);
+  const strippedDeliveryHint = Boolean(line && isMessageToolDeliveryHintLine(line.trimmed));
+  while (line && isMessageToolDeliveryHintLine(line.trimmed)) {
+    start = skipEmptyLines(text, line.next, false);
+    line = readTextLine(text, start);
+  }
+  if (!line) {
+    return text.length;
+  }
+  if (!isInboundContextHeaderLine(line.trimmed)) {
+    return strippedDeliveryHint ? Math.min(start, text.length) : 0;
+  }
+  while (line && isInboundContextHeaderLine(line.trimmed)) {
+    start = skipEmptyLines(text, metadataBlockEnd(text, line));
+    line = readTextLine(text, start);
+  }
+  return Math.min(start, text.length);
 }
 
 /** Strips only leading inbound metadata blocks while preserving later user text. */
@@ -176,24 +274,7 @@ export function stripLeadingInboundMetadata(text: string): string {
     return text;
   }
   const source = stripActiveMemoryPromptPrefixBlocks(text);
-  let start = skipEmptyLines(source, 0, false);
-  let line = readTextLine(source, start);
-  const strippedDeliveryHint = Boolean(line && isMessageToolDeliveryHintLine(line.trimmed));
-  while (line && isMessageToolDeliveryHintLine(line.trimmed)) {
-    start = skipEmptyLines(source, line.next, false);
-    line = readTextLine(source, start);
-  }
-  if (!line) {
-    return "";
-  }
-  if (!isInboundContextHeaderLine(line.trimmed)) {
-    return stripTrailingContextBlockSuffix(strippedDeliveryHint ? source.slice(start) : source);
-  }
-  while (line && isInboundContextHeaderLine(line.trimmed)) {
-    start = skipEmptyLines(source, metadataBlockEnd(source, line));
-    line = readTextLine(source, start);
-  }
-  return stripTrailingContextBlockSuffix(source.slice(start));
+  return stripTrailingContextBlockSuffix(source.slice(readLeadingInboundMetadataEnd(source)));
 }
 
 function parseInboundMetaBlock(text: string, label: string): Record<string, unknown> | null {
@@ -216,7 +297,6 @@ function firstNonEmptyString(...values: unknown[]): string | null {
   return null;
 }
 
-/** Extracts the sender label from injected inbound metadata when present. */
 export function extractInboundSenderLabel(text: string): string | null {
   if (!text.includes(INBOUND_CONTEXT_MARKER)) {
     return null;
@@ -233,14 +313,12 @@ export function extractInboundSenderLabel(text: string): string | null {
     return label;
   }
   const conversationSender = parseInboundMetaBlock(text, "Conversation info:")?.sender;
-  return conversationSender &&
-    typeof conversationSender === "object" &&
-    !Array.isArray(conversationSender)
+  return isRecord(conversationSender)
     ? firstNonEmptyString(
-        (conversationSender as Record<string, unknown>).name,
-        (conversationSender as Record<string, unknown>).username,
-        (conversationSender as Record<string, unknown>).e164,
-        (conversationSender as Record<string, unknown>).id,
+        conversationSender.name,
+        conversationSender.username,
+        conversationSender.e164,
+        conversationSender.id,
       )
     : firstNonEmptyString(conversationSender);
 }

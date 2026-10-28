@@ -5,10 +5,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
 
 describe("maybeSeedControlUiAllowedOriginsAtStartup", () => {
-  it("applies origins seeded from runtime bind and port without persisting config", async () => {
+  it("applies origins seeded from runtime bind and port without persisting config", () => {
     const log = { info: vi.fn(), warn: vi.fn() };
 
-    const result = await maybeSeedControlUiAllowedOriginsAtStartup({
+    const result = maybeSeedControlUiAllowedOriginsAtStartup({
       config: { gateway: {} },
       log,
       runtimeBind: "lan",
@@ -24,15 +24,13 @@ describe("maybeSeedControlUiAllowedOriginsAtStartup", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
-  it("does not rewrite config when origins already exist", async () => {
-    const config: OpenClawConfig = {
-      gateway: {
-        controlUi: { allowedOrigins: ["https://control.example.com"] },
-      },
-    };
+  it.each<OpenClawConfig>([
+    { gateway: { controlUi: { allowedOrigins: ["https://control.example.com"] } } },
+    { gateway: { publicOrigin: "https://control.example.com" } },
+  ])("does not rewrite an already configured origin policy: %j", (config) => {
     const log = { info: vi.fn(), warn: vi.fn() };
 
-    const result = await maybeSeedControlUiAllowedOriginsAtStartup({
+    const result = maybeSeedControlUiAllowedOriginsAtStartup({
       config,
       log,
       runtimeBind: "lan",

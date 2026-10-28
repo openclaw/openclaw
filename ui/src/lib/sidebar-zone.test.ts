@@ -1,76 +1,59 @@
 import { describe, expect, it } from "vitest";
-import { SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
-import { reconcileSidebarZone } from "./sidebar-zone.ts";
+import { personalSessionPinKeys } from "../app-navigation.ts";
+import { buildReconciledSidebarZone } from "../components/app-sidebar-session-navigation-logic.ts";
+import { projectSidebarSession } from "../components/app-sidebar-session-navigation.test-support.ts";
 
-describe("reconcileSidebarZone", () => {
-  it("preserves route and pinned-session interleaving", () => {
-    const result = reconcileSidebarZone(
-      ["route:usage", "session:agent:main:alpha", "route:plugins"],
-      [{ key: "agent:main:alpha" }],
-      SIDEBAR_NAV_ROUTES,
-    );
-
-    expect(result.entries).toEqual([
-      { type: "route", route: "usage" },
-      { type: "session", key: "agent:main:alpha" },
-      { type: "route", route: "plugins" },
-    ]);
-    expect(result.sidebarEntries).toEqual([
-      "route:usage",
-      "session:agent:main:alpha",
-      "route:plugins",
-    ]);
+function reconcile(
+  sidebarEntries: string[],
+  sessions: readonly { key: string }[] = [],
+  pluginTabs: Parameters<typeof buildReconciledSidebarZone>[0]["pluginTabs"] = [],
+) {
+  const { entries, sidebarEntries: canonical } = buildReconciledSidebarZone({
+    sidebarEntries,
+    rows: sessions.map((row) => projectSidebarSession(row)),
+    pluginNavigation: [],
+    pluginTabs,
   });
+  return { entries, sidebarEntries: canonical };
+}
 
-  it("prunes known-unpinned sessions and appends server-pinned sessions", () => {
-    const result = reconcileSidebarZone(
+describe("sidebar zone", () => {
+  it("persists a sidebar pin and independent rail shortcut for the same session", () => {
+    const entries = ["session:agent:main:alpha", "session-rail:agent:main:alpha"];
+    const result = reconcile(entries, [{ key: "agent:main:alpha" }]);
+    expect(result.sidebarEntries).toEqual(entries);
+    expect(result.entries).toEqual([
+      { type: "session", key: "agent:main:alpha" },
+      { type: "session", key: "agent:main:alpha", rail: true },
+    ]);
+    expect([...personalSessionPinKeys(result.sidebarEntries)]).toEqual(["agent:main:alpha"]);
+    expect([...personalSessionPinKeys(entries.slice(1))]).toEqual([]);
+  });
+  it("retains personal session refs without importing global pins", () => {
+    const result = reconcile(
       ["session:agent:main:stale", "route:usage", "session:agent:main:alpha"],
       [{ key: "agent:main:alpha" }, { key: "agent:main:beta" }],
-      SIDEBAR_NAV_ROUTES,
-      new Set(["agent:main:stale"]),
     );
 
     expect(result.sidebarEntries).toEqual([
+      "session:agent:main:stale",
       "route:usage",
       "session:agent:main:alpha",
-      "session:agent:main:beta",
     ]);
-  });
-
-  it("keeps unknown-state session entries in place without rendering them", () => {
-    // agent-b's pinned session is not loaded in this view; its slot must
-    // survive a canonical write or synced prefs lose cross-agent order.
-    const result = reconcileSidebarZone(
-      ["session:agent:b:remote", "route:usage", "session:agent:main:alpha"],
-      [{ key: "agent:main:alpha" }],
-      SIDEBAR_NAV_ROUTES,
-      new Set(["agent:main:other"]),
-    );
-
     expect(result.entries).toEqual([
       { type: "route", route: "usage" },
       { type: "session", key: "agent:main:alpha" },
     ]);
-    expect(result.sidebarEntries).toEqual([
-      "session:agent:b:remote",
-      "route:usage",
-      "session:agent:main:alpha",
-    ]);
-  });
-
-  it("drops routes outside the supplied valid route set", () => {
-    expect(
-      reconcileSidebarZone(["route:usage", "route:plugins"], [], ["usage"]).sidebarEntries,
-    ).toEqual(["route:usage"]);
   });
 
   it("migrates shipped Workboard placements to plugin destinations", () => {
-    const result = reconcileSidebarZone(
+    const result = reconcile(
       ["route:usage", "route:workboard", "workboard:ops"],
       [],
-      SIDEBAR_NAV_ROUTES,
-      new Set(),
-      new Set(["workboard/workboard", "workboard/board-ops"]),
+      [
+        { pluginId: "workboard", id: "workboard", label: "Workboard" },
+        { pluginId: "workboard", id: "board-ops", label: "Operations" },
+      ],
     );
     expect(result.sidebarEntries).toEqual([
       "route:usage",
@@ -86,13 +69,12 @@ describe("reconcileSidebarZone", () => {
 
   it("preserves unavailable plugin positions through reloads and permission loss", () => {
     const entries = ["plugin:example/review", "route:usage"];
-    expect(reconcileSidebarZone(entries, [], SIDEBAR_NAV_ROUTES)).toEqual({
+    expect(reconcile(entries)).toEqual({
       entries: [{ type: "route", route: "usage" }],
       sidebarEntries: entries,
     });
     expect(
-      reconcileSidebarZone(entries, [], SIDEBAR_NAV_ROUTES, new Set(), new Set(["example/review"]))
-        .entries,
+      reconcile(entries, [], [{ pluginId: "example", id: "review", label: "Review" }]).entries,
     ).toEqual([
       { type: "plugin", key: "example/review" },
       { type: "route", route: "usage" },

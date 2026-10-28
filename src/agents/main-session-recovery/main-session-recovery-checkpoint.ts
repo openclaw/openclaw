@@ -1,0 +1,72 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  isCompletionReportInputProvenance,
+  isCronExecutionInputProvenance,
+  isMainSessionRestartRecoveryInputProvenance,
+  normalizeInputProvenance,
+} from "../../sessions/input-provenance.js";
+import { normalizePersistedSteerTargetRunId } from "../../sessions/user-turn-transcript.metadata.js";
+import { getTranscriptMessageRole } from "../embedded-agent-runner/message-visibility.js";
+import { hasReplaySafeCodeModeCheckpointInCurrentTurn } from "./main-session-restart-recovery-resume-policy.js";
+
+type RecoverySource =
+  | "completion"
+  | "cron"
+  | "harness_completion"
+  | "inter_session"
+  | "internal_system"
+  | "external_user";
+
+export function selectMainSessionRecoveryCheckpoint(
+  visit: (read: (message: unknown) => void) => void,
+): { replaySafe: boolean; source: RecoverySource | undefined } {
+  let replaySafe = false;
+  let source: RecoverySource | undefined;
+  // The display tail can evict the source and checkpoint. Recovery inputs
+  // continue the original turn; both facts come from one constant-memory snapshot.
+  visit((message) => {
+    if (getTranscriptMessageRole(message) === "user") {
+      const record = asOptionalRecord(message);
+      const provenance = normalizeInputProvenance(record?.provenance);
+      if (!isMainSessionRestartRecoveryInputProvenance(provenance)) {
+        replaySafe = false;
+        // Confirmed steering belongs to the running cron occurrence. It cannot
+        // turn that occurrence into a replayable operator turn after restart.
+        if (
+          source === "cron" &&
+          normalizePersistedSteerTargetRunId(
+            asOptionalRecord(record?.["__openclaw"])?.steerTargetRunId,
+          )
+        ) {
+          return;
+        }
+        switch (provenance?.kind) {
+          case "internal_system":
+            source =
+              isCronExecutionInputProvenance(provenance) ||
+              provenance.sourceTool?.toLowerCase() === "cron"
+                ? "cron"
+                : provenance.kind;
+            break;
+          case "external_user":
+            source = provenance.kind;
+            break;
+          case "inter_session":
+            source =
+              provenance.sourceTool?.toLowerCase() === "agent_harness_task"
+                ? "harness_completion"
+                : isCompletionReportInputProvenance(provenance)
+                  ? "completion"
+                  : "inter_session";
+            break;
+          default:
+            // A later unverified input cannot inherit an earlier human sender's evidence.
+            source = undefined;
+        }
+      }
+    } else if (hasReplaySafeCodeModeCheckpointInCurrentTurn([message])) {
+      replaySafe = true;
+    }
+  });
+  return { replaySafe, source };
+}

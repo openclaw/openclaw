@@ -12,12 +12,10 @@ export type DeviceManagementAuthz = DeviceSessionAuthz & {
 };
 
 export function resolveDeviceSessionAuthz(client: GatewayClient | null): DeviceSessionAuthz {
-  const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  const rawCallerDeviceId = client?.connect?.device?.id;
-  const callerDeviceId =
-    client?.isDeviceTokenAuth && typeof rawCallerDeviceId === "string" && rawCallerDeviceId.trim()
-      ? rawCallerDeviceId.trim()
-      : null;
+  const callerScopes = client?.connect.scopes ?? [];
+  const callerDeviceId = client?.isDeviceTokenAuth
+    ? client.connect.device?.id.trim() || null
+    : null;
   return {
     callerDeviceId,
     callerScopes,
@@ -47,45 +45,14 @@ export function deniesDeviceTokenRoleManagement(
   authz: DeviceManagementAuthz,
   targetRole: string,
 ): boolean {
-  const normalizedTargetRole = targetRole.trim();
-  if (!normalizedTargetRole || authz.isAdminCaller) {
-    return false;
-  }
-  return normalizedTargetRole !== "operator";
+  return !authz.isAdminCaller && requestsNonOperatorDeviceRole({ role: targetRole });
 }
 
-function hasNonOperatorDeviceRole(input: { role?: string; roles?: string[] }): boolean {
-  const roles = new Set<string>();
-  const role = input.role?.trim();
-  if (role) {
-    roles.add(role);
-  }
-  for (const entry of input.roles ?? []) {
-    const normalized = entry.trim();
-    if (normalized) {
-      roles.add(normalized);
-    }
-  }
-  return [...roles].some((entry) => entry !== "operator");
-}
-
-function hasNonOperatorDeviceTokenRole(
-  tokens: Record<string, DeviceAuthToken> | undefined,
-): boolean {
-  for (const token of Object.values(tokens ?? {})) {
-    const normalized = token.role.trim();
-    if (normalized && normalized !== "operator") {
-      return true;
-    }
-  }
-  return false;
-}
-
-export function requestsNonOperatorDeviceRole(pending: {
-  role?: string;
-  roles?: string[];
-}): boolean {
-  return hasNonOperatorDeviceRole(pending);
+export function requestsNonOperatorDeviceRole(input: { role?: string; roles?: string[] }): boolean {
+  return [input.role, ...(input.roles ?? [])].some((role) => {
+    const normalized = role?.trim();
+    return Boolean(normalized && normalized !== "operator");
+  });
 }
 
 export function pairedDeviceHasNonOperatorRole(device: {
@@ -93,5 +60,11 @@ export function pairedDeviceHasNonOperatorRole(device: {
   roles?: string[];
   tokens?: Record<string, DeviceAuthToken>;
 }): boolean {
-  return hasNonOperatorDeviceRole(device) || hasNonOperatorDeviceTokenRole(device.tokens);
+  return (
+    requestsNonOperatorDeviceRole(device) ||
+    Object.values(device.tokens ?? {}).some((token) => {
+      const normalized = token.role.trim();
+      return Boolean(normalized && normalized !== "operator");
+    })
+  );
 }

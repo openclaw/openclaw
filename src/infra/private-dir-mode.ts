@@ -17,6 +17,20 @@ import path from "node:path";
 
 const OPEN_DIR_FLAGS = fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_DIRECTORY;
 
+/** Preserve the operator's mode only for the selected, existing state root. */
+export function readExistingStateRootMode(
+  directory: string,
+  stateDir: string,
+  ioFs: typeof fsSync = fsSync,
+): number | undefined {
+  if (path.resolve(directory) !== path.resolve(stateDir)) {
+    return undefined;
+  }
+  const stat = ioFs.lstatSync(directory, { throwIfNoEntry: false });
+  // fs-safe still admits and pins the parent before applying this mode.
+  return stat?.isDirectory() ? stat.mode & 0o7777 : undefined;
+}
+
 /** Tighten every existing directory from `rootDir` down to `targetDir`. */
 export async function tightenPrivateDirChain(
   rootDir: string,

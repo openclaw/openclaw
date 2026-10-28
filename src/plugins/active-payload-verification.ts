@@ -10,8 +10,8 @@ import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-st
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import {
-  resolveTrustedSourceLinkedOfficialClawHubSpec,
-  resolveTrustedSourceLinkedOfficialNpmSpec,
+  resolveTrustedSourceLinkedOfficialClawHubInstall,
+  resolveTrustedSourceLinkedOfficialNpmInstall,
 } from "./official-external-install-records.js";
 import {
   runPluginPayloadSmokeCheck,
@@ -74,8 +74,11 @@ export function filterRecordsToActive(params: {
     }
     // Trusted-source-linked official installs remain authoritative sync targets
     // even when their plugin entry is disabled.
-    const officialNpm = resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId, record });
-    const officialClawHub = resolveTrustedSourceLinkedOfficialClawHubSpec({ pluginId, record });
+    const officialNpm = resolveTrustedSourceLinkedOfficialNpmInstall({ pluginId, record })?.npmSpec;
+    const officialClawHub = resolveTrustedSourceLinkedOfficialClawHubInstall({
+      pluginId,
+      record,
+    })?.clawhubSpec;
     if (officialNpm || officialClawHub) {
       setPluginInstallRecordMapEntry(filtered, pluginId, record);
     }
