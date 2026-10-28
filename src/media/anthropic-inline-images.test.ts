@@ -1,5 +1,16 @@
+import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import { FILE_TYPE_SNIFF_MAX_BYTES } from "@openclaw/media-core/mime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createAiTransportHost, runWithAiTransportHost } from "../../packages/ai/src/host.js";
+import { buildAnthropicRequest } from "../../packages/ai/src/transports/anthropic-messages.js";
+import { makeAnthropicTransportModel } from "../../packages/ai/src/transports/anthropic-transport-stream.test-support.js";
+import type { Context } from "../../packages/llm-core/src/types.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+
+vi.mock("@openclaw/media-core/base64", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/media-core/base64")>();
+  return { ...actual, canonicalizeBase64: vi.fn(actual.canonicalizeBase64) };
+});
 
 const { convertImageToJpegMock, convertImageToPngMock, detectMimeMock } = vi.hoisted(() => ({
   convertImageToJpegMock: vi.fn(),
@@ -31,6 +42,45 @@ describe("normalizeAnthropicInlineContentBlocks", () => {
     convertImageToPngMock.mockReset().mockResolvedValue(Buffer.from("converted-png"));
     detectMimeMock.mockReset();
   });
+
+  it.each(["provider", "transport"] as const)(
+    "canonicalizes frozen user and tool images once across %s requests",
+    async (profile) => {
+      detectMimeMock.mockResolvedValue("image/png");
+      const canonicalize = vi.mocked(canonicalizeBase64).mockClear();
+      const mutableImage = image("YQ", "image/png");
+      const messages: Context["messages"] = [
+        freezeJsonSnapshot({ role: "user", timestamp: 0, content: [image("Yg", "image/png")] }),
+        freezeJsonSnapshot({
+          role: "toolResult",
+          timestamp: 1,
+          toolCallId: "call_1",
+          toolName: "read",
+          isError: false,
+          content: [image("Yw", "image/png")],
+        }),
+        { role: "user", timestamp: 2, content: [mutableImage] },
+      ];
+      const model = makeAnthropicTransportModel({ input: ["text", "image"] });
+      const host = createAiTransportHost({ normalizeAnthropicInlineContentBlocks });
+      const build = () =>
+        runWithAiTransportHost(host, () =>
+          buildAnthropicRequest(model, { messages }, undefined, profile, false, false),
+        );
+      const first = await build();
+      expect(canonicalize).toHaveBeenCalledTimes(3);
+      canonicalize.mockClear();
+      expect((await build()).params).toEqual(first.params);
+      expect(canonicalize).toHaveBeenCalledExactlyOnceWith("YQ");
+      mutableImage.data = "ZA";
+      canonicalize.mockClear();
+      expect(JSON.stringify((await build()).params)).toContain('"data":"ZA=="');
+      expect(canonicalize).toHaveBeenCalledExactlyOnceWith("ZA");
+      detectMimeMock.mockResolvedValue(undefined);
+      mutableImage.mimeType = "image/webp";
+      expect(JSON.stringify((await build()).params)).toContain('"media_type":"image/webp"');
+    },
+  );
 
   it.each([32, FILE_TYPE_SNIFF_MAX_BYTES + 3])(
     "converts all %i unsupported bytes despite a supported declaration",
