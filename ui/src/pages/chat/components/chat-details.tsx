@@ -20,8 +20,9 @@ import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import type { MobileDetailsBindings } from "../chat-details-mobile-host-content.tsx";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
-import type { ChatDetailsProps } from "./chat-details-types.ts";
+import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
 import "../../../styles/chat/details.css";
+import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -555,6 +556,35 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       </Show>
     );
   }
+  function DesktopContent() {
+    const [ready, setReady] = createSignal(false);
+    const [scrollport, setScrollport] = createSignal<HTMLDivElement>();
+    return (
+      <ChatDetailsDesktopBody
+        presented={isPresented() && opened()}
+        ready={ready()}
+        onScrollPortRef={setScrollport}
+      >
+        <SessionContent>
+          <ChatDetailsDesktopComposition
+            scrollport={scrollport()}
+            onReady={() => setReady(true)}
+            props={props.chat}
+            presented={isPresented() && opened()}
+            dismissed={intent() === "closed"}
+            progressMenuRef={(menu) => {
+              progressMenu = menu;
+            }}
+            onHideProgress={() => {
+              if (!docked()) {
+                close(true);
+              }
+            }}
+          />
+        </SessionContent>
+      </ChatDetailsDesktopBody>
+    );
+  }
   return (
     <openclaw-chat-details
       ref={(element) => (host = element)}
@@ -668,21 +698,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
                   </Show>
                 }
               >
-                <SessionContent>
-                  <ChatDetailsDesktopComposition
-                    props={props.chat}
-                    presented={isPresented() && opened()}
-                    dismissed={intent() === "closed"}
-                    progressMenuRef={(menu) => {
-                      progressMenu = menu;
-                    }}
-                    onHideProgress={() => {
-                      if (!docked()) {
-                        close(true);
-                      }
-                    }}
-                  />
-                </SessionContent>
+                <DesktopContent />
               </Show>
             )}
           </Show>
