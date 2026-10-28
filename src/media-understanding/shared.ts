@@ -92,7 +92,7 @@ export function buildAudioTranscriptionFormData(params: {
   return form;
 }
 
-/** Shared absolute deadline state for long-running provider operations and polling loops. */
+/** Process-local monotonic deadline shared by provider operations and polling loops. */
 export type ProviderOperationDeadline = {
   deadlineAtMs?: number;
   label: string;

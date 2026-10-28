@@ -18,6 +18,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { remainingMonotonicMs } from "openclaw/plugin-sdk/time-runtime";
 import {
   normalizeVideoGenerationDuration,
   type GeneratedVideoAsset,
@@ -312,7 +313,7 @@ function resolveFalQueueRemainingMs(
   if (typeof deadline.deadlineAtMs !== "number") {
     return defaultMs;
   }
-  const remainingMs = deadline.deadlineAtMs - Date.now();
+  const remainingMs = remainingMonotonicMs(deadline.deadlineAtMs);
   if (remainingMs <= 0) {
     throw new Error(`fal video generation did not finish in time (last status: ${lastStatus})`);
   }
