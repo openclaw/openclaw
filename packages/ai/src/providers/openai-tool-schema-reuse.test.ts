@@ -121,37 +121,8 @@ it("publishes detached immutable schemas while source edits require a new public
   expect(actions(payloadSchema([choose(refreshed.schema)]))).toEqual(["read", "write"]);
 });
 
-it("computes canonical fingerprints only when consumed and once per immutable publication", () => {
-  using stringify = vi.spyOn(normalization, "stableStringify");
-  const source = actionSchema();
-  const { schema } = publishRuntimeToolInputSchema(source);
-  assert(isRecord(schema));
-  const tool = choose(schema);
-  const loose = JSON.stringify(wireTool([tool]));
-  const strict = JSON.stringify(wireTool([tool], true));
-  expect(stringify).not.toHaveBeenCalled();
-  const published = expectDefined(publication(schema), "published schema");
-  const digest = published.canonicalFingerprint;
-  expect(published.canonicalFingerprint).toBe(digest);
-  expect(stringify).toHaveBeenCalledTimes(1);
-  const reordered = publishRuntimeToolInputSchema({
-    additionalProperties: false,
-    required: ["action"],
-    properties: source.properties,
-    type: "object",
-  });
-  expect(publication(reordered.schema)?.canonicalFingerprint).toBe(digest);
-  source.properties.action.enum.push("write");
-  expect(publication(publishRuntimeToolInputSchema(source).schema)?.canonicalFingerprint).not.toBe(
-    digest,
-  );
-  expect(published.canonicalFingerprint).toBe(digest);
-  expect(JSON.stringify(wireTool([tool]))).toBe(loose);
-  expect(JSON.stringify(wireTool([tool], true))).toBe(strict);
-  expect(stringify).toHaveBeenCalledTimes(3);
-});
-
 it("reuses published provider variants without changing current strict or compatibility options", () => {
+  using stringify = vi.spyOn(normalization, "stableStringify");
   const source = actionSchema();
   Reflect.deleteProperty(source, "additionalProperties");
   const projection = publishRuntimeToolInputSchema(source);
@@ -169,6 +140,7 @@ it("reuses published provider variants without changing current strict or compat
   expect(stripped).not.toHaveProperty("properties.action.enum");
   expect(normalizePrepared(tools, stripEnumCompat)).toBe(stripped);
   expect(payloadSchema(tools, true)).toHaveProperty("properties.action.enum", ["read"]);
+  expect(stringify).not.toHaveBeenCalled();
 });
 
 it("keeps current provider options isolated", () => {

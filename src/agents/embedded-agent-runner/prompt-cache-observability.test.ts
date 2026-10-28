@@ -2,7 +2,7 @@ import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import * as cryptoDigest from "@openclaw/normalization-core/node-crypto";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Usage } from "../../llm/types.js";
 import { normalizeUsage } from "../usage.js";
 import * as promptCacheFacts from "./prompt-cache-facts.js";
@@ -163,9 +163,7 @@ describe("prompt cache observability", () => {
     };
     const first = collectPromptCacheTools([{ name: "read", parameters: source }]);
     const parameters = publishRuntimeToolInputSchema(source).schema;
-    if (parameters === null || typeof parameters !== "object") {
-      throw new Error("Expected published object schema");
-    }
+    assert(parameters !== null && typeof parameters === "object");
     const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
     expect(collectPromptCacheTools([{ name: "read", parameters }])).toEqual(first);
     expect(collectPromptCacheTools([{ name: "read", parameters }])).toEqual(first);
