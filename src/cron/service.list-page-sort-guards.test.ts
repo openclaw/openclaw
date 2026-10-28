@@ -212,6 +212,43 @@ it("applies schedule, status, trigger, and cross-field phrase filters before pag
   });
   expect(page).toMatchObject({ jobs: [{ id: "job-3" }], total: 1, hasMore: false });
 });
+
+it.each([
+  ["München", "Mu\u0308nchen report"],
+  ["Mu\u0308nchen", "München report"],
+])(
+  "finds a canonically equivalent search text without rewriting stored names (%s)",
+  async (query, storedName) => {
+    const state = listState(
+      { id: "muenchen", name: storedName },
+      { id: "other", name: "Daily report" },
+    );
+
+    const page = await listPage(state, { query });
+
+    expect(page.jobs.map((job) => job.id)).toEqual(["muenchen"]);
+    expect(page.jobs[0]?.name).toBe(storedName);
+    expect(state.store!.jobs.find((job) => job.id === "muenchen")?.name).toBe(storedName);
+
+    const ascii = await listPage(state, { query: "daily report" });
+    expect(ascii.jobs.map((job) => job.id)).toEqual(["other"]);
+
+    const absent = await listPage(state, { query: "absent phrase" });
+    expect(absent.jobs).toEqual([]);
+  },
+);
+
+it("finds a canonical query inside a decomposed description field", async () => {
+  const state = listState(
+    { id: "desc", name: "Weekly summary", description: "Mu\u0308nchen office report" },
+    { id: "other", name: "Daily report" },
+  );
+
+  const page = await listPage(state, { query: "München" });
+
+  expect(page.jobs.map((job) => job.id)).toEqual(["desc"]);
+});
+
 it("prepares search text once per row generation while rechecking visibility", async () => {
   const state = listState(
     { id: "one", name: "Alpha", description: "Report", displayName: "日本語 🦞" },
