@@ -280,7 +280,7 @@ function setupDirectMemoryHarness(
   options: NonNullable<Parameters<typeof createStandardMemoryTableHarness>[0]> & {
     embeddingsCreate?: ReturnType<typeof vi.fn>;
     openAiPost?: ReturnType<typeof vi.fn>;
-    loadLanceDbModule?: ReturnType<typeof vi.fn>;
+    loadLanceDbModule?: typeof moduleMocks.loadLanceDbModule;
   } = {},
 ) {
   const embeddingsCreate = options.embeddingsCreate ?? vi.fn(async () => embeddingResponse());

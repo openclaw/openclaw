@@ -64,7 +64,9 @@ describe("memory-lancedb provider runtime", () => {
         purpose: "status",
         context: { authority, assertCurrent },
       });
-      if (!result.provider) throw new Error(result.error);
+      if (!result.provider) {
+        throw new Error(result.error);
+      }
       return result.provider;
     };
     return { db, embed, seed, open, runtime };
@@ -170,8 +172,9 @@ describe("memory-lancedb provider runtime", () => {
     for (const caller of [provider, await open({ kind: "host", operation: "status" })]) {
       const health = await caller.health();
       expect(health.status).toBe("degraded");
-      for (const privateText of [getDbPath(), "Auth store", "agentDir"])
+      for (const privateText of [getDbPath(), "Auth store", "agentDir"]) {
         expect(JSON.stringify(health)).not.toContain(privateText);
+      }
     }
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(error));
     await expect(provider.search({ query: "tea" })).resolves.toMatchObject({
@@ -192,13 +195,17 @@ describe("memory-lancedb provider runtime", () => {
       const { open } = createHarness({
         countMemories: async () => {
           current = !revoked;
-          if (fails) throw new Error(getDbPath());
+          if (fails) {
+            throw new Error(getDbPath());
+          }
           return 1;
         },
         logger: { warn },
       });
       const provider = await open(OPERATOR, () => {
-        if (!current) throw new Error("revoked");
+        if (!current) {
+          throw new Error("revoked");
+        }
       });
       if (revoked) {
         await expect(provider.health()).rejects.toThrow("revoked");
@@ -226,7 +233,9 @@ describe("memory-lancedb provider runtime", () => {
       const query = vi.spyOn(prototype, "query");
       const vectorSearch = vi.spyOn(prototype, "vectorSearch");
       const provider = await open(ownerSession(), () => {
-        if (prepare.mock.calls.length) throw new Error("revoked");
+        if (prepare.mock.calls.length) {
+          throw new Error("revoked");
+        }
       });
       for (const read of [
         () => provider.search({ query: "tea" }),
@@ -236,7 +245,9 @@ describe("memory-lancedb provider runtime", () => {
       ]) {
         await db.close();
         db.start();
-        if (preparation === "checkoutLatest") await db.query("alpha", { columns: ["id"] });
+        if (preparation === "checkoutLatest") {
+          await db.query("alpha", { columns: ["id"] });
+        }
         prepare.mockClear();
         query.mockClear();
         vectorSearch.mockClear();
@@ -244,7 +255,9 @@ describe("memory-lancedb provider runtime", () => {
         expect(prepare).toHaveBeenCalled();
         expect(query).not.toHaveBeenCalled();
         expect(vectorSearch).not.toHaveBeenCalled();
-        if (preparation === "embedding") expect(search).not.toHaveBeenCalled();
+        if (preparation === "embedding") {
+          expect(search).not.toHaveBeenCalled();
+        }
       }
     },
   );
