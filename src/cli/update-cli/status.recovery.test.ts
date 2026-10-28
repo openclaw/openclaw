@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  UPDATE_CAPTURE_PRIVACY_MARKER,
+  UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
+} from "../../infra/update-capture-privacy-marker.js";
 import { updateStatusCommand } from "./status.js";
 // Prepare the lazy production graph during collection, not inside the first test timeout.
 import "../../infra/update-recovery-backup-status.js";
@@ -123,6 +127,10 @@ async function capture(
   const directory = `${stateDir}.update-captures/${runId}`;
   const manifestPath = path.join(directory, "manifest.json");
   await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(
+    path.join(directory, UPDATE_CAPTURE_PRIVACY_MARKER),
+    UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
+  );
   const raw = JSON.stringify(manifest);
   await fs.writeFile(manifestPath, raw);
   return { manifest, directory, manifestPath, raw, manifestSha256: digest(raw) };
@@ -176,7 +184,9 @@ it("reports standalone Doctor captures as manual evidence", async () => {
   expect(output).not.toContain("no matching update run");
   expect(output).not.toContain("unresolved after a failed update");
   expect(await fs.readFile(c.manifestPath, "utf8")).toBe(c.raw);
-  expect(await fs.readdir(c.directory)).toEqual(["manifest.json"]);
+  expect(new Set(await fs.readdir(c.directory))).toEqual(
+    new Set([UPDATE_CAPTURE_PRIVACY_MARKER, "manifest.json"]),
+  );
 });
 it.each([
   ["partial", false],
@@ -188,6 +198,22 @@ it.each([
     await terminal(c, "committed");
     const directory = path.join(path.dirname(c.directory), "22222222-2222-4222-8222-222222222222");
     await fs.mkdir(directory);
+    await fs.writeFile(
+      path.join(directory, UPDATE_CAPTURE_PRIVACY_MARKER),
+      UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
+    );
+    const store = path.dirname(directory);
+    for (const name of [
+      ".DS_Store",
+      "._capture",
+      "Thumbs.db",
+      "desktop.ini",
+      "operator-notes.txt",
+    ]) {
+      await fs.writeFile(path.join(store, name), "unrelated metadata");
+    }
+    await fs.mkdir(path.join(store, "unmarked"));
+    await fs.writeFile(path.join(store, "unmarked", "manifest.json"), "{");
     const partialPath = path.join(directory, "manifest.json.partial");
     await fs.writeFile(
       partialPath,
@@ -430,7 +456,9 @@ it("validates forward resolution against retained generations without writing", 
   mocks.readRun.mockResolvedValue(row);
   await updateStatusCommand({ json: true });
   expect(result().recoverySets[0]).toMatchObject({ status: "forward-resolved" });
-  expect(await fs.readdir(c.directory)).toEqual(["manifest.json"]);
+  expect(new Set(await fs.readdir(c.directory))).toEqual(
+    new Set([UPDATE_CAPTURE_PRIVACY_MARKER, "manifest.json"]),
+  );
   const candidate = {
     ...c.manifest,
     generation: { kind: "candidate", baselineSha256: c.manifestSha256 },
@@ -458,4 +486,18 @@ it("validates forward resolution against retained generations without writing", 
   );
   await updateStatusCommand({ json: true });
   expect(result().recoverySetsError).toContain("generation identity changed");
+});
+
+it("keeps filesystem inspection errors visible instead of hiding retained captures", async () => {
+  const c = await capture();
+  const { readUpdateRecoveryBackups } =
+    await import("../../infra/update-recovery-backup-reader.js");
+  const failure = Object.assign(new Error("Capture inspection denied"), { code: "EACCES" });
+  const stat = vi.spyOn(fs, "lstat").mockRejectedValueOnce(failure);
+  try {
+    await expect(readUpdateRecoveryBackups()).rejects.toBe(failure);
+  } finally {
+    stat.mockRestore();
+  }
+  expect(await fs.readFile(c.manifestPath, "utf8")).toBe(c.raw);
 });
