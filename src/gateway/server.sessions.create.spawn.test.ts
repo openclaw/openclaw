@@ -69,9 +69,12 @@ async function holdSessionWriter(storePath: string) {
 test.each([
   { drafts: true, fork: false },
   { drafts: true, fork: true },
+  { drafts: false, fork: false },
+  { drafts: false, fork: true },
 ])(
-  "sessions.create preserves a Draft spawn parent's audience (draft selection=$drafts, fork=$fork)",
+  "sessions.create applies Draft spawn policy (draft selection=$drafts, fork=$fork)",
   async ({ drafts, fork }) => {
+    testState.sessionConfig = { sharing: { drafts } };
     const { storePath } = await createSessionStoreDir();
     const parentSessionKey = "agent:main:main";
     const actor = { type: "human", source: "profile", id: "visible-spawn-creator" } as const;
@@ -98,12 +101,13 @@ test.each([
         ],
       });
     }
-    testState.sessionConfig = { sharing: { drafts } };
+    const childSessionKey = "agent:main:dashboard:draft-spawn";
 
     const created = await directSessionReq<CreatedSessionPayload>(
       "sessions.create",
       {
         agentId: "main",
+        key: childSessionKey,
         label: "Restricted visible child",
         parentSessionKey,
         spawnDepth: 1,
@@ -131,6 +135,33 @@ test.each([
       },
     );
 
+    if (!drafts) {
+      expect(created).toMatchObject({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining("Continue in the existing Draft"),
+          details: { code: "SESSION_VISIBILITY_DISABLED", visibility: "draft" },
+        },
+      });
+      expect(
+        loadSessionEntry({ agentId: "main", sessionKey: childSessionKey, storePath }),
+      ).toBeUndefined();
+      expect(
+        loadSessionEntry({ agentId: "main", sessionKey: parentSessionKey, storePath }),
+      ).toMatchObject({
+        sessionId: "sess-visible-spawn-parent",
+        visibility: "draft",
+      });
+      const explicitShared = await directSessionReq<CreatedSessionPayload>("sessions.create", {
+        agentId: "main",
+        parentSessionKey,
+        visibility: "shared",
+      });
+      expect(explicitShared.ok, JSON.stringify(explicitShared.error)).toBe(true);
+      expect(explicitShared.payload?.entry?.visibility).toBe("shared");
+      return;
+    }
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
     expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
     expect(created.payload?.entry).toMatchObject({
@@ -187,6 +218,53 @@ test.each([
     );
   },
 );
+
+test("sessions.create rechecks inherited Draft admission after spawn preparation", async () => {
+  const { createGatewaySession } = await import("./session-create-service.js");
+  testState.sessionConfig = { sharing: { drafts: true } };
+  const { storePath } = await createSessionStoreDir();
+  const parentSessionKey = "agent:main:main";
+  const key = "agent:main:dashboard:draft-policy-changed";
+  await writeSessionStore({
+    entries: {
+      [parentSessionKey]: {
+        ...sessionStoreEntry("draft-policy-parent"),
+        visibility: "draft",
+      },
+    },
+  });
+  const cfg = getRuntimeConfig();
+  let currentConfig = cfg;
+  let prepared = false;
+  const created = await createGatewaySession({
+    cfg,
+    getCurrentConfig: () => currentConfig,
+    agentId: "main",
+    key,
+    parentSessionKey,
+    spawnDepth: 1,
+    commandSource: "test",
+    creation: { via: "spawn", actor: { type: "agent", id: "main" } },
+    onPhase: (phase) => {
+      if (phase === "worktree") {
+        prepared = true;
+        currentConfig = { ...cfg, session: { ...cfg.session, sharing: { drafts: false } } };
+      }
+    },
+  });
+  expect(prepared).toBe(true);
+  expect(created).toMatchObject({
+    ok: false,
+    error: { details: { code: "SESSION_VISIBILITY_DISABLED", visibility: "draft" } },
+  });
+  expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: parentSessionKey, storePath }),
+  ).toMatchObject({
+    sessionId: "draft-policy-parent",
+    visibility: "draft",
+  });
+});
 
 test("sessions.create persists trusted agent-runtime spawn permissions", async () => {
   const { storePath } = await createSessionStoreDir();
