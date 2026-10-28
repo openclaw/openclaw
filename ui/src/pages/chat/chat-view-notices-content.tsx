@@ -30,7 +30,7 @@ registerEnglishCatalog(registerChatComposerEnglish);
 registerNewSessionRuntimeEnglish();
 
 function StatusNotice(props: {
-  className: string;
+  class: string;
   tone: "info" | "warn" | "danger";
   title: string;
   body: string;
@@ -41,7 +41,7 @@ function StatusNotice(props: {
       class={[
         "chat-composer-neighbor-card",
         `chat-composer-neighbor-card--${props.tone}`,
-        props.className,
+        props.class,
       ]}
       role={props.tone === "danger" ? "alert" : "status"}
       title={props.tooltip}
@@ -68,7 +68,7 @@ function renderDiskSpaceNotice(diskSpace: SessionPlacementDiskSpace | undefined)
   const critical = diskSpace.status === "critical";
   return (
     <StatusNotice
-      className="chat-cloud-disk-space-notice"
+      class="chat-cloud-disk-space-notice"
       tone={critical ? "danger" : "warn"}
       title={t(critical ? "chat.diskSpace.criticalTitle" : "chat.diskSpace.warningTitle")}
       body={t(critical ? "chat.diskSpace.criticalBody" : "chat.diskSpace.warningBody", {
@@ -97,7 +97,7 @@ function renderWorkerRuntimeInstallNotice(
   // Topbar notices render as compact pills that hide the body, so the title carries progress.
   return (
     <StatusNotice
-      className="chat-worker-runtime-install-notice"
+      class="chat-worker-runtime-install-notice"
       tone="info"
       title={
         installing
@@ -334,7 +334,7 @@ function ProviderPolicyNoticeView(props: { notice: ProviderPolicyNotice }) {
       : t(`chat.providerPolicy.${props.notice.state}Body`, { model: model() ?? "" });
   return (
     <StatusNotice
-      className="chat-provider-policy-notice"
+      class="chat-provider-policy-notice"
       tone={blocked() ? "danger" : "warn"}
       title={t(`chat.providerPolicy.${props.notice.state}Title`)}
       body={body()}
