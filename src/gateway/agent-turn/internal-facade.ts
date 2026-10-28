@@ -57,6 +57,60 @@ function throwEnvelopeRejection(method: string, error: ErrorShape): never {
   }) as never;
 }
 
+/** Shares exact-registration start/cancel observation across trusted turn adapters. */
+export function createAgentTurnStartOwner(params: {
+  context: GatewayRequestOptions["context"];
+  runId: string;
+  entry: RpcSourceRef;
+  isCurrent: () => boolean;
+}): import("./internal-facade.types.js").AgentTurnStartOwner {
+  const observe = () => {
+    if (!params.isCurrent()) {
+      return undefined;
+    }
+    const executionStarted = isRpcSourceExecuting(params.entry);
+    if (params.entry.input.abortSignal.aborted || params.entry.input.retirementRequested === true) {
+      return undefined;
+    }
+    // The start watch is complete; attempt policy may itself read this owner.
+    const watchdog = executionStarted ? undefined : params.entry.input.claim?.operation?.watchdog;
+    const snapshot = watchdog?.snapshot();
+    const decision = snapshot?.current ? watchdog?.decide() : undefined;
+    const deadlineAtMs = decision
+      ? decision.action === "observe" || decision.action === "warn"
+        ? Math.min(snapshot?.executionDeadlineAtMs ?? Infinity, decision.deadlineAtMs ?? Infinity)
+        : Date.now()
+      : undefined;
+    return Object.defineProperty(
+      {
+        executionStarted,
+        startDeadlineAtMs:
+          deadlineAtMs !== undefined
+            ? Number.isFinite(deadlineAtMs)
+              ? deadlineAtMs
+              : null
+            : isRpcSourceQueued(params.entry) && params.entry.input.phase === "waiting"
+              ? null
+              : undefined,
+      },
+      "expiresAtMs",
+      REMOVED_START_OWNER_EXPIRY,
+    );
+  };
+  return {
+    observe,
+    // Captured registration, not a later run-id lookup, owns cancellation.
+    abort: () =>
+      observe()?.executionStarted === false &&
+      abortChatRunById(params.context, {
+        runId: params.runId,
+        expectedEntry: params.entry,
+        sessionKey: getRpcSourceIdentity(params.entry).sessionKey,
+        stopReason: "timeout",
+      }).aborted,
+  };
+}
+
 /** Typed, frame-free access to agent turns owned by the running Gateway instance. */
 export function createInternalAgentTurnFacade(
   options: InternalAgentTurnFacadeOptions,
@@ -158,54 +212,14 @@ export function createInternalAgentTurnFacade(
           return;
         }
         startOwnerPublished = true;
-        const observe = () => {
-          if (!isSourceIdentityCurrent(owner)) {
-            return undefined;
-          }
-          const executionStarted = isRpcSourceExecuting(owner);
-          if (owner.input.abortSignal.aborted || owner.input.retirementRequested === true) {
-            return undefined;
-          }
-          // The start watch is complete; attempt policy may itself read this owner.
-          const watchdog = executionStarted ? undefined : owner.input.claim?.operation?.watchdog;
-          const snapshot = watchdog?.snapshot();
-          const decision = snapshot?.current ? watchdog?.decide() : undefined;
-          const deadlineAtMs = decision
-            ? decision.action === "observe" || decision.action === "warn"
-              ? Math.min(
-                  snapshot?.executionDeadlineAtMs ?? Infinity,
-                  decision.deadlineAtMs ?? Infinity,
-                )
-              : Date.now()
-            : undefined;
-          return Object.defineProperty(
-            {
-              executionStarted,
-              startDeadlineAtMs:
-                deadlineAtMs !== undefined
-                  ? Number.isFinite(deadlineAtMs)
-                    ? deadlineAtMs
-                    : null
-                  : isRpcSourceQueued(owner) && owner.input.phase === "waiting"
-                    ? null
-                    : undefined,
-            },
-            "expiresAtMs",
-            REMOVED_START_OWNER_EXPIRY,
-          );
-        };
-        dispatchOptions.onStartOwner({
-          observe,
-          // Captured registration, not a later run-id lookup, owns cancellation.
-          abort: () =>
-            observe()?.executionStarted === false &&
-            abortChatRunById(context, {
-              runId,
-              expectedEntry: owner,
-              sessionKey: getRpcSourceIdentity(owner).sessionKey,
-              stopReason: "timeout",
-            }).aborted,
-        });
+        dispatchOptions.onStartOwner(
+          createAgentTurnStartOwner({
+            context,
+            runId,
+            entry: owner,
+            isCurrent: () => isSourceIdentityCurrent(owner),
+          }),
+        );
       };
       let pendingCancelReason: "rpc" | "timeout" | undefined;
       const cancelAcceptedRun = (reason: "rpc" | "timeout") => {

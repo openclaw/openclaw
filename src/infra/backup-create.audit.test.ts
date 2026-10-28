@@ -11,6 +11,7 @@ import {
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   inspectDatabase,
+  isolateBackupScratch,
   restoreBackup,
   withBackupFixture,
 } from "./backup-create-family.test-support.js";
@@ -43,17 +44,10 @@ function migrateAudit(stateDir: string) {
   return migrateLegacyAuditLogs({ detected: detectAudit(stateDir), stateDir });
 }
 
-function auditEntries(stateDir: string, env = process.env) {
-  return createSqliteAuditRecordStore({
-    scope: CONFIG_AUDIT_SCOPE,
-    maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
-    env: { ...env, OPENCLAW_STATE_DIR: stateDir },
-  }).entries();
-}
-
 const it = baseIt.extend<{ state: OpenClawTestState }>({
   state: async ({ task: _task }, use) =>
     withBackupFixture({}, async (state) => {
+      await isolateBackupScratch(state);
       try {
         await use(state);
       } finally {
@@ -202,7 +196,11 @@ it.for(["lease-duration overrun", "concurrent audit migration", "identical later
       const migrated = await migrateAudit(restoredStateDir);
       expect(migrated.warnings).toEqual([]);
     }
-    const records = auditEntries(restoredStateDir, state.env);
+    const records = createSqliteAuditRecordStore({
+      scope: CONFIG_AUDIT_SCOPE,
+      maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
+      env: { ...state.env, OPENCLAW_STATE_DIR: restoredStateDir },
+    }).entries();
     const expected = scenario === "identical later append" ? [record, record] : [record];
     expect(new Set(records.map((entry) => entry.key)).size).toBe(expected.length);
     expect(records.map((entry) => entry.value)).toEqual(expected);

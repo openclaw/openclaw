@@ -264,6 +264,7 @@ Operational notes:
 
 - Use `MODE=json-rpc` for receiving. `MODE=normal` can make `/v1/about` look healthy, but `/v1/receive/{account}` will not WebSocket-upgrade, so container receive streaming will fail its check.
 - Set `kind: "container"` for the bbernhard REST API and `kind: "external-native"` for native `signal-cli` JSON-RPC/SSE.
+- The receive WebSocket sends standard ping frames. When the container stops answering them (for example after a network drop that never closed the connection), OpenClaw drops the socket and reconnects. A quiet account alone never triggers a reconnect.
 - Container attachment downloads honor the same media byte limits as native mode. Oversized responses are rejected before being fully buffered when the server sends `Content-Length`, and while streaming otherwise.
 - Health and missing-attachment results do not wait for an unused response body's cancellation to finish.
 

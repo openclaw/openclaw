@@ -62,6 +62,8 @@ export type SessionMutationAuthorizationParams = {
   expectedTarget?: ExpectedSessionMutationTarget;
   /** The router's actual alternative admission, not other grants on the same client. */
   sessionScope?: SessionOperatorScope;
+  /** Database access classified by the host-owned method registry. */
+  databaseAdmission?: "read" | "write";
   sessionRowRead?: SessionRowReadView;
   preparedSharing?: PreparedMutationSharing;
   preparedTargets?: ReadonlyArray<{

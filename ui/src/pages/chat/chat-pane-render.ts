@@ -279,7 +279,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const initialHistoryUnavailable = !catalogKey && isInitialChatHistoryUnavailable(state);
     const presence = this.presence.snapshot;
     const composerSessionKey = state.sessionKey;
-    const composerConnected = state.connected;
     const catalogCanContinue = this.history.catalogSession?.canContinue === true;
     const composerPendingReason = state.connected ? null : pendingReason;
     const auth = gatewaySnapshot.hello?.auth ?? null;
@@ -310,7 +309,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
             selectedSession?.restartRecoveryStatus === "tombstoned" ||
             placementComposer.blocksSend
           ));
-    const canWriteProgressCard = composerConnected && !sessionParticipationBlocked && hasWriteScope;
+    const canWriteProgressCard = state.connected && !sessionParticipationBlocked && hasWriteScope;
     const typingEnabled =
       multiIdentity &&
       hasWriteScope &&
@@ -443,6 +442,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         historyHasMore || this.history.loadingOlder
           ? {
               hasMore: historyHasMore,
+              error: this.history.olderError,
+              connected: state.connected,
               loading:
                 this.history.loadingOlder ||
                 (catalogKey ? this.history.catalogLoading : state.chatLoading),
@@ -509,7 +510,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         state.settings = patchSettings({ composerHoldToRecord: enabled });
       },
       onOpenTalkSettings: () => this.context.navigate("talk"),
-      onOpenDictationSettings: () => this.context.navigate("model-setup"),
+      onOpenDictationSettings: () => this.context.navigate("talk"),
       suggestionComposer: suggestionViewer,
       typingActors: multiIdentity ? this.collaboration.typingViews : [],
       typingOverflow: multiIdentity ? this.collaboration.typingOverflow : undefined,
@@ -690,6 +691,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         detailsActions: {
           ...this.captureProgressCardActions(canWriteProgressCard),
           progressCardRefresh: detailsProgressRefresh,
+          // Hydrated cards precede both hello and composer action readiness.
+          progressCardRefreshReserved: !state.connected || canWriteProgressCard,
         },
         observerDigest,
         observerRunId,

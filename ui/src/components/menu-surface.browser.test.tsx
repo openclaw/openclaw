@@ -230,6 +230,10 @@ describe.skipIf(!hasPopoverApi)("submenu parent highlight", () => {
     const parent = query(container, '[data-value="parent"]');
     const child = query(container, '[data-value="child"]');
     const sibling = query(container, '[data-value="sibling"]');
+    const submenu = child.closest<HTMLElement>(".oc-menu")!;
+    const submenuShown = new Promise<void>((resolve) => {
+      submenu.addEventListener("overlay-after-show", () => resolve(), { once: true });
+    });
     const highlight = colorSwatch(
       input === "pointer" ? "var(--surface-selected-hover)" : "var(--surface-selected)",
     );
@@ -246,7 +250,9 @@ describe.skipIf(!hasPopoverApi)("submenu parent highlight", () => {
       expect(document.activeElement).toBe(parent);
     }
     await expect.poll(() => parent.getAttribute("aria-expanded")).toBe("true");
-    // A loaded WebKit worker can sample the color transition just before the poll expires.
+    // Keyboard focus can precede submenu presentation and its final highlight transition.
+    await submenuShown;
+    expect(submenu.dataset.phase).toBe("open");
     await Promise.all(parent.getAnimations().map((animation) => animation.finished));
     expect(getComputedStyle(parent).backgroundColor).toBe(highlight);
 

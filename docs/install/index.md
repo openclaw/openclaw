@@ -10,7 +10,7 @@ title: "Install"
 
 ## System requirements
 
-- **Node 24.22.1+ or 26.12.1+** - Node 26 is recommended; the installer provisions Node 26 on macOS and Node 24 LTS on Linux when Node is missing (see [Node.js compatibility](/install/node-compatibility)).
+- **Node 24.16.0+ on 24.x, or 26.1.0+** (24.22.1+/26.12.1+ strongly recommended for security) - Node 26 is recommended; the installer provisions Node 26 on macOS and Node 24 LTS on Linux when Node is missing (see [Node.js compatibility](/install/node-compatibility)).
 - **macOS, Linux, or Windows** - Windows users can start with the native Windows Hub app, the PowerShell CLI installer, or a WSL2 Gateway. See [Windows](/platforms/windows).
 - `pnpm` is only needed if you build from source.
 

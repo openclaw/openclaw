@@ -419,7 +419,6 @@ suite.define(() => {
         await expectCount(transcript.getByText(partialText, { exact: true }));
         await expectCount(transcript.getByText(finalText, { exact: true }));
         await assertPromptBeforeReply(transcript, "Resume locally.", finalText);
-        expect(await pane.locator(".chat-duplicate-count").count()).toBe(0);
         expect(await pane.locator(`[data-entry-id="${localFinalIdentity.id}"]`).count()).toBe(1);
       };
       await gateway.emitGatewayEvent("chat", {

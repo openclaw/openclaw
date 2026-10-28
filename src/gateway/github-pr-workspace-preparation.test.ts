@@ -111,6 +111,8 @@ describe("existing PR preparation through the registered agent action", () => {
         guestHead: await f.guestGit("rev-parse", "HEAD"),
         guestIndex: await f.guestGit("write-tree"),
         guestStatus: await f.guestGit("status", "--porcelain"),
+        guestArtifact: await fs.readFile(path.join(f.projection, "artifact.txt"), "utf8"),
+        guestUntracked: await fs.readFile(path.join(f.projection, "untracked.txt"), "utf8"),
       });
       const beforeRepeat = await workspaceState();
       await closeOpenClawAgentDatabasesAsync();
@@ -135,8 +137,18 @@ describe("existing PR preparation through the registered agent action", () => {
       }
       expect(await f.guestGit("rev-parse", "HEAD")).toBe(continuedGuestHead);
       expect(await f.guestGit("symbolic-ref", "HEAD")).toBe(guestBranch);
-      await f.advanceHead({ "newer-pr.txt": "newer remote PR work\n" });
-      expect(await f.invoke()).toMatchObject({ status: "prepared", headCommit: f.pr.head.sha });
+      for (const advance of [false, true]) {
+        if (advance) {
+          await f.advanceHead({ "newer-pr.txt": "newer remote PR work\n" });
+        }
+        f.pr.base.ref = "another-base";
+        const beforeRetarget = await workspaceState();
+        expect(await f.invoke()).toMatchObject({ status: "prepared", headCommit: f.pr.head.sha });
+        expect(f.readSession().worktree?.githubPullRequest?.base.branch).toBe("another-base");
+        if (!advance) {
+          expect(await workspaceState()).toEqual(beforeRetarget);
+        }
+      }
       const refreshedAssociation = f.readSession().worktree?.githubPullRequest;
       expect(refreshedAssociation?.preparedHeadCommit).toBe(f.pr.head.sha);
       await f.git("merge-base", "--is-ancestor", f.headCommit, "HEAD");
@@ -184,6 +196,60 @@ describe("existing PR preparation through the registered agent action", () => {
       expect(f.externalWrites).toEqual([]);
     },
   );
+
+  it("reconciles a new destination and its advancing tip without restaging saved work", async () => {
+    const f = await fixture();
+    const acceptedHead = await f.advanceHead({ "continued-pr.txt": "later contribution\n" });
+    expect(await f.invoke()).toMatchObject({ review: { base: f.commonAncestor } });
+    await fs.writeFile(path.join(f.projection, "notes.txt"), "saved guest history\n");
+    await f.guestGit("add", "notes.txt");
+    await f.guestGit("commit", "-m", "Save guest work");
+    await fs.writeFile(path.join(f.projection, "artifact.txt"), "staged version\n");
+    await f.guestGit("add", "artifact.txt");
+    await fs.writeFile(path.join(f.projection, "artifact.txt"), "working version\n");
+    await fs.writeFile(path.join(f.projection, "untracked.txt"), "untracked work\n");
+    const snapshot = async () => ({
+      hostHead: await f.git("rev-parse", "HEAD"),
+      hostIndex: await f.git("write-tree"),
+      guestHead: await f.guestGit("rev-parse", "HEAD"),
+      guestIndex: await f.guestGit("write-tree"),
+      guestStatus: await f.guestGit("status", "--porcelain"),
+      artifact: await fs.readFile(path.join(f.projection, "artifact.txt"), "utf8"),
+      notes: await fs.readFile(path.join(f.projection, "notes.txt"), "utf8"),
+      untracked: await fs.readFile(path.join(f.projection, "untracked.txt"), "utf8"),
+    });
+    const before = await snapshot();
+    f.pr.base.ref = "new-destination";
+    f.pr.base.sha = f.headCommit;
+    await f.local!.git("-C", f.upstream, "checkout", "-b", f.pr.base.ref, f.headCommit);
+    for (const advance of [false, true]) {
+      if (advance) {
+        await fs.writeFile(path.join(f.upstream, "destination-only.txt"), "new destination work\n");
+        await f.local!.git("-C", f.upstream, "add", "destination-only.txt");
+        await f.local!.git("-C", f.upstream, "commit", "-m", "Advance destination");
+        f.pr.base.sha = await f.local!.git("-C", f.upstream, "rev-parse", "HEAD");
+      }
+      expect(await f.invoke()).toMatchObject({
+        status: "prepared",
+        headCommit: acceptedHead,
+        headChanged: false,
+        changedPaths: [],
+        conflictPaths: [],
+        review: { mode: "local", base: f.headCommit },
+      });
+      expect(await f.guestGit("rev-parse", "refs/openclaw/review-base")).toBe(f.headCommit);
+      expect(f.readSession().worktree?.githubPullRequest).toMatchObject({
+        base: { branch: f.pr.base.ref, commit: f.pr.base.sha },
+        head: { commit: acceptedHead },
+        preparedHeadCommit: acceptedHead,
+      });
+      expect(await snapshot()).toEqual(before);
+      await expect(fs.stat(path.join(f.projection, "destination-only.txt"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }
+    expect(f.writes).toEqual([]);
+  });
 
   it.each(["clean", "authored directory", "cache-only directory"] as const)(
     "admits only pristine source after native managed sandbox layout (%s)",

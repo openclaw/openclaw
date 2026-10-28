@@ -111,6 +111,10 @@ export class UpdateFinalizationLifecycle {
     return this.ownsRun;
   }
 
+  get ownsUpdateRepairRun(): boolean {
+    return this.ownsRepairRun;
+  }
+
   attachLedger(repair = false, reportResult = false): string {
     this.driver = readUpdateRunDriver();
     const inherited = process.env[UPDATE_RUN_ID_ENV]?.trim();

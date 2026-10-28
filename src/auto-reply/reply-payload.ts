@@ -379,8 +379,8 @@ export type ReplyPayloadMetadata = {
   hostNotice?: true;
   /** The channel notice has a canonical model-fallback transcript event in the Control UI. */
   modelFallbackNotice?: true;
-  /** Runtime acknowledgment of a committed queue decision, independent of active reply delivery. */
-  queueAdmissionNotice?: true;
+  /** Runtime queue decision; successful acceptance can use a client's queue presentation. */
+  queueAdmissionNotice?: true | "queued";
 };
 
 // Source Gateways and native plugin SDK chunks must share the same payload identity.

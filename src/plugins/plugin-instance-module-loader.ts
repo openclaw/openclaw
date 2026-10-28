@@ -261,13 +261,16 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       rootDir: params.rootDir,
       cache,
       loader,
-      source: captureBundledPluginStateOperationModules({
-        rootDir: params.rootDir,
-        source: params.source,
-        devSourceRoot: params.devSourceRoot,
-        pluginSdkResolution: params.pluginSdkResolution,
-        preparedArtifact: params.preparedArtifact?.artifact,
-      }),
+      source:
+        params.stateOperations === false
+          ? undefined
+          : captureBundledPluginStateOperationModules({
+              rootDir: params.rootDir,
+              source: params.source,
+              devSourceRoot: params.devSourceRoot,
+              pluginSdkResolution: params.pluginSdkResolution,
+              preparedArtifact: params.preparedArtifact?.artifact,
+            }),
     });
     return;
   }

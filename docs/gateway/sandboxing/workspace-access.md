@@ -34,6 +34,19 @@ visibility alone does not let a sandbox-required reader browse an unsandboxed
 shared host workspace. Ordinary nonsandbox-required read-only readers keep
 their existing in-root access.
 
+Recognized file references in chat can also use absolute paths under the local
+sandbox's workspace mount, including a custom container workdir. Previews and downloads resolve them
+through the sending conversation's admitted workspace and verify that its
+existing Docker or Podman runtime exposes the same file backing. A nested bind,
+container-only mount, or unrelated host path does not grant additional access.
+With `ro` access, `/agent` names the admitted agent workspace; the private
+container workdir is a different source and does not alias that workspace.
+Managed project references read the canonical worktree after its normal
+checkpoint. If the original runtime or its namespace mapping is unavailable,
+an absolute alias can fail even when the saved file remains readable through an
+admitted workspace-relative reference. Reading never creates a sandbox or
+reconstructs an unavailable historical mapping.
+
 The Changes view requires an admitted project checkout. An unmanaged private
 sandbox remains available in Files, but Changes returns the existing `not_git`
 notice instead of running host Git against private sandbox metadata. Managed
@@ -117,6 +130,16 @@ changing saved manifest bytes. Older archives can lack the original index
 membership of saved files. Exact cache-root paths in the owned archive remain
 restored inputs; new generated paths under the same directories are still excluded.
 An ambiguous older cache file may therefore remain preserved.
+
+If local workspace preparation reports that it expired during cleanup, retry the
+session. Both workspaces remain intact. Older missing baseline records repair
+automatically when either workspace still matches the saved baseline, or when an
+intact pending-checkpoint result reconstructs that exact baseline. Recovery keeps
+other live edits and pending receipts. If neither can be verified, the error names
+both preserved paths and a command to compare them. That command only inspects
+differences; it does not restore the missing baseline. Keep both directories and
+ask a Gateway administrator to recover the saved baseline inventory before retrying.
+Recreating a sandbox does not repair missing baseline records.
 
 For Git-backed native-node and SSH workspaces, worker-side captures also exclude
 new generated files under those two build-cache roots. Tracked files, ignored

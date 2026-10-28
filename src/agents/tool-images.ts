@@ -89,10 +89,9 @@ function isImageTypeBlock(block: unknown): block is Record<string, unknown> & { 
 }
 
 function isImageBlock(block: unknown): block is ImageContentBlock {
-  if (!isImageTypeBlock(block)) {
-    return false;
-  }
-  return typeof block.data === "string" && typeof block.mimeType === "string";
+  return (
+    isImageTypeBlock(block) && typeof block.data === "string" && typeof block.mimeType === "string"
+  );
 }
 
 function inferMimeTypeFromBase64(base64: string): string | undefined {
@@ -324,11 +323,11 @@ export async function sanitizeContentBlocksImages(
           `Image could not be reduced below ${formatBytesShort(maxBytes)} (got ${formatBytesShort(bestSize)})`,
         );
       })();
-      const sanitized = {
-        ...block,
-        data: resized.base64,
-        mimeType: resized.mimeType,
-      };
+      // Preserve the source identity used by provider image preparation.
+      const sanitized =
+        resized.base64 === block.data && resized.mimeType === block.mimeType
+          ? block
+          : { ...block, data: resized.base64, mimeType: resized.mimeType };
       if (resized.base64 === canonicalData) {
         preparedImages.set(sanitized, {
           data: resized.base64,

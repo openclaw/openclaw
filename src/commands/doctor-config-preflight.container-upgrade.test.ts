@@ -160,7 +160,7 @@ describe("container image replacement Doctor repair and startup readiness", () =
       } finally {
         database.close();
       }
-      await cleanupSessionStateForTest();
+      await cleanupSessionStateForTest({ stateDir });
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const inspect = () => inspectSessionSqliteRecovery({ cfg: {}, env });
       const protectedBackups = inspect();
@@ -178,7 +178,7 @@ describe("container image replacement Doctor repair and startup readiness", () =
       fs.mkdirSync(path.dirname(store), { recursive: true });
       fs.writeFileSync(store, "{}");
       await runDoctorSessionSqlite({ env, cfg: {}, agent: "main", store, mode: "import" });
-      await cleanupSessionStateForTest();
+      await cleanupSessionStateForTest({ stateDir });
       // A later update counts once its external supervisor accepts it, not at migration.
       const now = Date.now;
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + 1000);
@@ -186,7 +186,7 @@ describe("container image replacement Doctor repair and startup readiness", () =
       const backupRoot = path.join(path.dirname(stateDir), ".openclaw-update", "next", "native");
       await withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: "external" }, async () => {
         await updateMigrateCommand(backupRoot);
-        await cleanupSessionStateForTest();
+        await cleanupSessionStateForTest({ stateDir });
         expect(
           inspect().artifacts.filter(
             (item) => item.path.endsWith(".bak") && item.outcome === "candidate",
@@ -195,7 +195,7 @@ describe("container image replacement Doctor repair and startup readiness", () =
         await updateFinishCommand(backupRoot);
       });
       clock.mockRestore();
-      await cleanupSessionStateForTest();
+      await cleanupSessionStateForTest({ stateDir });
       const preview = inspect();
       expect(preview.artifacts.filter((item) => item.outcome === "candidate")).toHaveLength(3);
       expect(preview.artifacts).toContainEqual(
@@ -211,7 +211,7 @@ describe("container image replacement Doctor repair and startup readiness", () =
         readConfig: async () => ({}),
         confirm: async () => true,
       });
-      expect(retired.status).toBe("complete");
+      expect(retired.status, JSON.stringify(retired, null, 2)).toBe("complete");
       expect(retired.totals.removedFiles).toBe(3);
       expect(fs.existsSync(legacyBackup)).toBe(true);
       expect(fs.existsSync(databasePath)).toBe(true);

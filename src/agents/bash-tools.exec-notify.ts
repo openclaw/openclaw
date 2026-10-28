@@ -310,6 +310,8 @@ export function prepareExecExitNotification(
   }
   return captureSessionEventTarget(owner, targetKey, {
     operatorAuthority: getGatewayToolCallerIdentity()?.operatorAuthority,
+    // The completion continues the requester's own command, not a new sender's request.
+    retainRequesterOwner: true,
   }).then(
     (target) => {
       if (isCronRunSessionKey(targetKey)) {

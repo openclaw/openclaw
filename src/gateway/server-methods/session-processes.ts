@@ -43,7 +43,12 @@ async function observeProcesses(options: GatewayRequestHandlerOptions, stop: boo
   const authority = readGatewayRequestMutationAuthority(options);
   const projection = requireSessionRowProjection(context);
   const queries = (cfg: ReturnType<typeof context.getRuntimeConfig>) => {
-    const agent = resolveRequestedSessionAgentId(cfg, input.key, input.agentId);
+    const agent = resolveRequestedSessionAgentId(
+      cfg,
+      input.key,
+      input.agentId,
+      stop ? "write" : "read",
+    );
     if (!agent.ok) {
       throw new SessionMutationAuthorizationChangedError(agent.error);
     }
@@ -62,7 +67,7 @@ async function observeProcesses(options: GatewayRequestHandlerOptions, stop: boo
     const row = read.describe(query, captured);
     if (
       !row ||
-      presentation.sharing.entryFilter?.(row.key, row.entry) === false ||
+      !presentation.sharing.canReadTarget(presentation.target(query)!) ||
       (captured &&
         (row.entry.sessionId !== captured.entry.sessionId ||
           row.entry.lifecycleRevision !== captured.entry.lifecycleRevision ||

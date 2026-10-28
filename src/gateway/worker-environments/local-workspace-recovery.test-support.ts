@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect } from "vitest";
+import { requireGit } from "../../agents/worktrees/git.js";
 import { readLocalWorkspaceProjection } from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 
@@ -89,9 +90,21 @@ export async function proveOversizedWorkspaceRecovery({
   expect(String(linkedFailure)).not.toContain("openclaw sandbox recover");
   await fs.unlink(path.join(projection, "hardlink"));
   const recovered = await recover();
+  expect(recovered).toEqual({
+    path: path.join(
+      stateRoot,
+      "workspace-recovery",
+      owner.worktree.id,
+      recovery.recoveryId,
+      relativePath,
+    ),
+    bytes: oversizedBytes,
+  });
+  const originalBytes = Buffer.alloc(oversizedBytes);
+  originalBytes.write("retained binary contents\n");
+  expect((await fs.readFile(recovered.path)).equals(originalBytes)).toBe(true);
   expect(await recover()).toEqual(recovered);
   const relocated = recovered.path;
-  expect(recovered.bytes).toBe(oversizedBytes);
   await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
   using resumed = await prepareSandbox();
   expect(resumed).toBeDefined();
@@ -119,4 +132,132 @@ export async function proveOversizedWorkspaceRecovery({
     expect(failure).toBeInstanceOf(Error);
     expect(String(failure)).toContain(guidance);
   }
+}
+
+export async function proveAggregateWorkspaceRecovery({
+  owner,
+  canonical,
+  stateRoot,
+}: {
+  owner: LocalWorkspaceOwner;
+  canonical: string;
+  stateRoot: string;
+}) {
+  const { prepareLocalSandboxWorkspace } = await import("../../agents/sandbox/local-workspace.js");
+  const { resolveSandboxConfigForAgent } = await import("../../agents/sandbox/config.js");
+  const { replaceSessionEntry } = await import("../../config/sessions/session-accessor.js");
+  const { recoverLocalWorkspaceFile } = await import("./local-workspace-recovery.js");
+  const cfg = {
+    worktreeAcceleration: false,
+    session: { store: path.join(stateRoot, "sessions.json") },
+  };
+  await replaceSessionEntry(
+    { agentId: owner.agentId, sessionKey: owner.sessionKey, storePath: cfg.session.store },
+    {
+      sessionId: owner.sessionId,
+      updatedAt: 1,
+      worktree: {
+        id: owner.worktree.id,
+        branch: owner.worktree.branch,
+        repoRoot: owner.worktree.repoRoot,
+      },
+    },
+  );
+  const prepareSandbox = () =>
+    prepareLocalSandboxWorkspace({
+      cfg,
+      agentId: owner.agentId,
+      sessionKey: owner.sessionKey,
+      workspaceDir: canonical,
+      sandbox: resolveSandboxConfigForAgent(cfg, owner.agentId),
+    });
+  const admitted = "src/Existing/bin/input.txt";
+  await fs.mkdir(path.join(canonical, "src/Existing/bin"), { recursive: true });
+  await fs.writeFile(path.join(canonical, admitted), "original admitted input\n");
+  await fs.writeFile(path.join(canonical, "src/Existing/Existing.csproj"), "<Project />\n");
+  await requireGit(canonical, ["add", admitted, "src/Existing/Existing.csproj"]);
+  const first = await prepareSandbox();
+  const projection = first!.workspaceDir;
+  // Real aggregate budget, individually valid files: no limit override can hide a staging bypass.
+  const artifactBytes = Math.ceil((768 * 1024 * 1024) / 13);
+  const artifacts = Array.from(
+    { length: 13 },
+    (_, index) =>
+      "src/App/" + (index % 2 ? "obj" : "bin") + "/Debug/net10.0/output-" + index + ".dll",
+  );
+  const sourceText = "authored edit survives aggregate recovery\n";
+  await fs.writeFile(path.join(projection, ".gitignore"), ".env.local\n**/bin/\n**/obj/\n");
+  for (const relative of artifacts) {
+    const file = path.join(projection, relative);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, "synthetic build output\n");
+    await fs.truncate(file, artifactBytes);
+  }
+  await fs.writeFile(path.join(projection, "source.txt"), sourceText);
+  await fs.writeFile(
+    path.join(projection, "src/App/App.csproj"),
+    '<Project Sdk="Microsoft.NET.Sdk" />\n',
+  );
+  await fs.mkdir(path.join(projection, "bin"));
+  await fs.writeFile(path.join(projection, "bin/authored-script"), "authored executable\n");
+  await fs.writeFile(path.join(projection, "src/App/bin/authored-tool"), "authored project tool\n");
+  const failure = await first!.checkpoint().catch((error: unknown) => error);
+  first![Symbol.dispose]();
+  expect(failure).toBeInstanceOf(Error);
+  expect(String(failure)).toContain("805306368 byte limit");
+  expect(String(failure)).toContain("openclaw sandbox recover");
+  const pending = (await readLocalWorkspaceProjection(owner.worktree.id))!.pending_ref;
+  await expect(prepareSandbox()).rejects.toThrow("openclaw sandbox recover");
+  expect((await readLocalWorkspaceProjection(owner.worktree.id))!.pending_ref).toBe(pending);
+  expect(await fs.readFile(path.join(canonical, "source.txt"), "utf8")).toBe("original\n");
+  const recovery = {
+    cfg,
+    sessionKey: owner.sessionKey,
+    path: artifacts[0]!,
+    recoveryId: randomUUID(),
+    assertCurrent: owner.assertCurrent,
+  };
+  await expect(recoverLocalWorkspaceFile({ ...recovery, path: "source.txt" })).rejects.toThrow(
+    "already admitted",
+  );
+  await expect(recoverLocalWorkspaceFile({ ...recovery, path: admitted })).rejects.toThrow(
+    "already admitted",
+  );
+  const recovered = await recoverLocalWorkspaceFile(recovery).catch((error: unknown) => {
+    throw new Error("Aggregate file relocation failed", { cause: error });
+  });
+  expect(recovered.bytes).toBe(artifactBytes);
+  await expect(
+    recoverLocalWorkspaceFile({ ...recovery, path: artifacts[1]!, recoveryId: randomUUID() }),
+  ).rejects.toThrow("no aggregate overflow");
+  expect((await readLocalWorkspaceProjection(owner.worktree.id))!.pending_ref).toBe(pending);
+  expect(await recoverLocalWorkspaceFile(recovery)).toEqual(recovered);
+  await expect(fs.stat(path.join(projection, artifacts[0]!))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+  using resumed = await prepareSandbox().catch((error: unknown) => {
+    throw new Error("Preparation after aggregate relocation failed", { cause: error });
+  });
+  expect(resumed).toBeDefined();
+  expect(await fs.readFile(path.join(canonical, "source.txt"), "utf8")).toBe(sourceText);
+  expect(await fs.readFile(path.join(canonical, "bin/authored-script"), "utf8")).toBe(
+    "authored executable\n",
+  );
+  expect(await fs.readFile(path.join(canonical, admitted), "utf8")).toBe(
+    "original admitted input\n",
+  );
+  expect(await fs.readFile(path.join(canonical, "src/App/bin/authored-tool"), "utf8")).toBe(
+    "authored project tool\n",
+  );
+  for (const relative of artifacts.slice(1)) {
+    expect((await fs.stat(path.join(canonical, relative))).size).toBe(artifactBytes);
+  }
+  expect((await fs.stat(recovered.path)).size).toBe(artifactBytes);
+  const originalBytes = Buffer.alloc(artifactBytes);
+  originalBytes.write("synthetic build output\n");
+  expect((await fs.readFile(recovered.path)).equals(originalBytes)).toBe(true);
+  expect(await readLocalWorkspaceProjection(owner.worktree.id)).toMatchObject({
+    pending_ref: null,
+    pending_target: null,
+  });
 }

@@ -222,10 +222,18 @@ Workspace maintenance advances `workspace.manifest.sweepEpoch` in the existing
 in one read snapshot, and deletes unreachable packs and path sets older than the
 preceding epoch in bounded batches. Writers stamp the current epoch when
 preparing or reusing content. A writer stalled for more than an epoch can lose
-unaccepted packs. A missing-pack load reconstructs the saved root from the
-projection or canonical copy; if neither reproduces its digest, reconciliation
-reports an error and preserves files rather than changing the accepted baseline.
-This recoverable case uses no reference counts or cross-thread handshake.
+unaccepted packs. Preparation returns its sweep epoch; acceptance checks the
+oldest preparation epoch inside the writer transaction and refuses an expired
+preparation before publishing any root or checkpoint. Retry the session to
+prepare the preserved live files again. This uses the existing retention window,
+without reference counts or a new durable reservation.
+
+A missing-pack load reconstructs the saved root from the projection or canonical
+copy. An intact pending-checkpoint result can also reconstruct the saved baseline
+by reversing its authenticated delta in memory and verifying the saved tree digest.
+Neither filesystem is changed by reconstruction. If no candidate reproduces the
+saved digest, reconciliation reports both preserved paths and an inspection
+command. It cannot safely invent a merge base or choose between divergent edits.
 
 ### PostgreSQL index ordering migrations
 
@@ -260,6 +268,17 @@ starts with cron paused and reports the available partitions. Run
 selection, noninteractive Doctor preserves retired heartbeat settings and reports
 the combined selection and migration step. Rollback restores the verified
 pre-migration backup with its matching binary.
+
+Agent schema 38 makes PostgreSQL full-text search tokenize like SQLite FTS5:
+punctuation runs are replaced by spaces before `to_tsvector` and before the query
+parser, so words inside dates, paths, and file names match. The stored `tsvector`
+is maintained by a `<table>_search_sync` trigger instead of a generated column,
+because PostgreSQL 16 cannot replace a generated expression in place and dropping
+the column would move it out of the sealed catalog position. The migration drops
+the generated expression in place, installs the trigger, and reparses existing
+rows once for the transcript index and every persisted search extension. SQLite
+advances version metadata only. Historical admission and backup descriptors keep
+the generated column; rollback restores the verified pre-upgrade backup.
 
 The transcript navigation CHECK keeps its JSON validation for present metadata.
 Its PostgreSQL helper is strict, so absent metadata passes the CHECK without
@@ -1657,7 +1676,7 @@ opening, with Gateway schema authority granted by its live host operation.
 Classified database errors survive transport, and store close joins worker
 operations and native cleanup. Cold subagent-registry restoration reads through
 the shared-state read-only worker before installing its resident snapshot.
-Asynchronous runtime-configuration preparation also reads Claw consent provenance
+Asynchronous runtime-configuration preparation also reads Template consent provenance
 in the shared-state worker; the synchronous configuration loader retains its
 existing compatibility path.
 

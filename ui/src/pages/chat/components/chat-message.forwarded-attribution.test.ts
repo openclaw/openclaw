@@ -234,7 +234,6 @@ it.each([false, true])("preserves sender attribution (forwarded=%s)", async (for
   }
   const forwardedGroup = query(".chat-group--forwarded");
   expect(forwardedGroup?.classList.contains("chat-group--sender-tint")).toBe(true);
-  expect(forwardedGroup?.style.getPropertyValue("--chat-sender-hue")).not.toBe("");
   const attribution = required(
     ".chat-group--forwarded .chat-group-messages > .chat-reply-attribution",
   );

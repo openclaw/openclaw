@@ -509,6 +509,7 @@ describe("startTelegramWebhook", () => {
   registerTelegramWebhookRegistrationTests({
     gateway,
     setWebhookSpy,
+    initSpy,
     stopSpy,
     transportCloseSpies,
     startWebhookStartupFixture,
@@ -516,24 +517,6 @@ describe("startTelegramWebhook", () => {
     token: TELEGRAM_TOKEN,
     secret: TELEGRAM_SECRET,
     path: TELEGRAM_WEBHOOK_PATH,
-  });
-
-  it("retries transient getMe startup init failures before starting the account", async () => {
-    const setStatus = vi.fn();
-    initSpy.mockRejectedValueOnce(new TypeError("fetch failed")).mockResolvedValueOnce(undefined);
-
-    await withWebhook(
-      async ({ port }) => {
-        await expectAccepted(await postUpdate(port, telegramMessageUpdate(806, "startup webhook")));
-      },
-      {
-        setStatus,
-      },
-    );
-
-    expect(initSpy).toHaveBeenCalledTimes(2);
-    expectStatusCall(setStatus, { lifecycle: "recovering" });
-    expect(setWebhookSpy).toHaveBeenCalledTimes(1);
   });
 
   it.each(["creation", "initialization", "route registration", "ingress queue"] as const)(

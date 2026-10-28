@@ -7,12 +7,17 @@ import {
 } from "../../lib/protocol-validators.generated/transcript.js";
 import { listen } from "../../lib/reactive/listener.ts";
 import * as json from "../../lib/snapshot-json.ts";
+import {
+  chatHeaderSharingSnapshotSchema,
+  chatHeaderViewersSnapshotSchema,
+} from "./chat-header-viewers-snapshot.ts";
 import { chatSessionStateSnapshotSchema } from "./chat-session-state-snapshot.ts";
 import {
   getSessionCacheValue,
   MAX_CACHED_CHAT_SESSIONS,
   setSessionCacheValue,
 } from "./session-cache.ts";
+import { detailsSnapshotSchema } from "./session-details-snapshot-schema.ts";
 import {
   MAX_CACHED_CHAT_SNAPSHOT_WEIGHT,
   MAX_CACHED_CHAT_WEIGHT,
@@ -86,6 +91,9 @@ const permissionModeSchema = json.enumeration(["read-only", "guarded", "workspac
 const snapshotSchema = json.object(
   {
     sessionState: json.optional(chatSessionStateSnapshotSchema),
+    headerViewers: json.optional(chatHeaderViewersSnapshotSchema),
+    headerSharing: json.optional(json.nullable(chatHeaderSharingSnapshotSchema)),
+    details: detailsSnapshotSchema,
     composer: json.optional(
       json.nullable(
         json.object({
@@ -162,7 +170,7 @@ const metadataFields = {
 };
 const metadataSchema = json.object({ ...metadataFields, weight: nonnegative }, true);
 type SessionSnapshotMetadata = json.SnapshotValue<typeof metadataSchema>;
-type PreparedSnapshotRecord = NonNullable<ReturnType<typeof createSnapshotRecord>>;
+type PreparedSnapshotRecord = NonNullable<Awaited<ReturnType<typeof createSnapshotRecord>>>;
 type PendingSessionState = {
   savedAt: number;
   snapshot: ChatSessionSnapshot;
@@ -548,7 +556,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
         let weight = 0;
         for (const [sessionKey, state] of pending) {
           pending.delete(sessionKey);
-          const record = createSnapshotRecord(sessionKey, state);
+          const record = await createSnapshotRecord(sessionKey, state);
           if (!record) {
             // Rejection publishes invalidation, which awaits accepted DB writes.
             // Keep it outside writeChain so a connected store cannot await itself.
@@ -614,6 +622,12 @@ export class SessionSnapshotStore implements ChatCacheObserver {
   }
 
   async whenIdle(): Promise<void> {
+    await this.draining;
+    await this.whenWritesIdle();
+  }
+
+  // Invalidation can run during preparation, so it waits only for admitted writes.
+  async whenWritesIdle(): Promise<void> {
     let accepted: Promise<void>;
     do {
       accepted = this.writeChain;
@@ -685,7 +699,7 @@ subscribeSnapshotInvalidation(async (invalidation) => {
       store.clearMemory();
     }
   }
-  await Promise.all([...activeStores].map((store) => store.whenIdle()));
+  await Promise.all([...activeStores].map((store) => store.whenWritesIdle()));
 });
 
 function flushActiveStores(): void {

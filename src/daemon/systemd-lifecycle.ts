@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { ignoreMissingPath } from "../infra/errno.js";
+import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
 import { LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES } from "./constants.js";
 import { formatLine } from "./output.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
@@ -30,6 +31,7 @@ import {
   resolveSystemdUnitPathForName,
 } from "./systemd-service-files.js";
 import { activateSystemdServiceIdentity } from "./systemd-service-identity.js";
+import { readSystemdGatewayStopTimeout } from "./systemd-stop-policy.js";
 
 async function runSystemdServiceAction(
   params: GatewayServiceControlArgs,
@@ -72,18 +74,35 @@ async function runSystemdServiceAction(
     report(params.systemdIdentity.unitName);
     return;
   }
+  let commandTimeoutMs: number | undefined;
+  if (action === "stop") {
+    params.assertCurrent?.();
+    const effective = await readSystemdGatewayStopTimeout({ env }, installed ?? undefined);
+    params.assertCurrent?.();
+    const timeout =
+      effective !== undefined && Number.isFinite(effective)
+        ? effective
+        : GATEWAY_SERVICE_STOP_TIMEOUT_MS;
+    if (effective === undefined || !Number.isFinite(effective)) {
+      warn(
+        `Gateway service stop timeout is ${effective === undefined ? "unverified" : "unbounded"}; limiting the systemctl stop command to ${timeout + 5_000}ms. Operator policy is unchanged.`,
+      );
+    }
+    // Give the manager its configured shutdown budget, then bound a wedged client.
+    commandTimeoutMs = timeout + 5_000;
+  }
   let runSystemctl: (args: string[]) => ReturnType<typeof execSystemctl>;
   if (installed?.scope === "system") {
     runSystemctl = (args) => {
       params.assertCurrent?.();
-      return execSystemctl(args, env, undefined, params.beforeEffect);
+      return execSystemctl(args, env, commandTimeoutMs, params.beforeEffect);
     };
   } else {
     runSystemctl = (args) =>
       execSystemctlUser(
         env,
         args,
-        undefined,
+        commandTimeoutMs,
         params.assertCurrent,
         action === "stop" ? { warn } : undefined,
         params.beforeEffect,

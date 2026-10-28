@@ -40,7 +40,7 @@ beforeEach(async () => {
   sharedMocks = createMocks();
   prompter = createWizardPrompter();
   await Promise.all([import("../agents/utility-model.js"), import("./onboard-agent-target.js")]);
-  vi.useFakeTimers({ now: 0, toFake: ["Date", "setTimeout", "clearTimeout"] });
+  vi.useFakeTimers({ now: 0, toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
   for (const name of [
     "OPENCLAW_GATEWAY_TOKEN",
     "OPENCLAW_GATEWAY_PASSWORD",

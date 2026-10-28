@@ -365,7 +365,7 @@ describe("update-cli", () => {
     });
     expect(modules.defaultRuntime.error).toHaveBeenCalledWith(
       expect.stringContaining(
-        `Gateway service Node 24.14.0 at ${serviceNode} requires >=24.15.0 <25. Install Node 24.22.1 and update that service definition, then retry; changing the shell's Node alone does not update the service.`,
+        `Gateway service Node 24.14.0 at ${serviceNode} requires >=24.15.0 <25. Install Node 24.16.0 and update that service definition, then retry; changing the shell's Node alone does not update the service.`,
       ),
     );
     expect(proof.packageInstallCommandCall()?.[0]).toBeUndefined();

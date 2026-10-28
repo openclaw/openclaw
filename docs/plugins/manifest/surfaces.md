@@ -184,7 +184,7 @@ plugin after changing its artwork.
 Declare portable themes in `openclaw.plugin.json` to make them available in
 Settings → Appearance and the agent's [theme tool](/tools/theme). The same
 catalog serves both surfaces. Theme discovery reads static JSON and does not
-execute plugin code or require the Custom plugin UI Labs setting.
+execute plugin code or depend on the advanced native UI opt-out.
 
 ```json
 {
@@ -491,12 +491,12 @@ flow. Bundled plugins and Nix-store plugins in Nix mode can load hardlinked
 assets and reload hardlinked manifests under the shared plugin-file policy.
 Mutable external plugin roots and CLI packing still reject hardlinks.
 
-User-installed native UI requires **Settings → Labs → Custom plugin UI**
-(`gateway.controlUi.experimental.customPlugins`, default `false`). Native UI
-from enabled bundled plugins remains available. See
+Native UI is available by default for enabled plugins. The existing
+`gateway.controlUi.experimental.customPlugins: false` remains an advanced
+opt-out for user-installed native UI; enabled bundled views are unaffected. See
 [Enable custom plugin UI](/plugins/feature-plugins#enable-custom-plugin-ui) for
-restart and browser reload requirements. This gate does not disable the
-plugin's backend APIs or the sandboxed dashboard bindings below.
+upgrade behavior and browser reload requirements. This opt-out does not disable
+the plugin’s backend APIs or the sandboxed dashboard bindings below.
 
 ```json
 {

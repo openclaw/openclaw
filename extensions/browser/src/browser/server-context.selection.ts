@@ -135,8 +135,8 @@ export function createProfileSelectionOps({
         canResolveSelection(unfilteredTabs) ||
         preservedCanResolveSelection())
     ) {
-      const deadline = Date.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
-      while (Date.now() < deadline) {
+      const deadline = performance.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
+      while (performance.now() < deadline) {
         await sleepWithAbort(OPEN_TAB_DISCOVERY_POLL_MS, options?.signal);
         listedTabs = await readTabs();
         await openWhenConfirmedEmpty(listedTabs);
@@ -196,7 +196,7 @@ export function createProfileSelectionOps({
     targetId: string,
     options?: BrowserTabTargetOptions,
   ): Promise<void> => {
-    const deadline = Date.now() + CLOSE_TAB_VERIFY_WINDOW_MS;
+    const deadline = performance.now() + CLOSE_TAB_VERIFY_WINDOW_MS;
     for (;;) {
       let stillOpen: boolean;
       try {
@@ -216,7 +216,7 @@ export function createProfileSelectionOps({
       if (!stillOpen) {
         return;
       }
-      if (Date.now() >= deadline) {
+      if (performance.now() >= deadline) {
         throw new BrowserError(
           `Browser did not close tab ${targetId}: it is still open after the close request. ` +
             "A page prompt such as a beforeunload dialog may be blocking it; resolve the prompt " +

@@ -127,7 +127,8 @@ function prependFailedExec(
   turn.attempt.itemLifecycle = { startedCount: 2, completedCount: 2, activeCount: 0 };
 }
 
-it.each(["message", "error code", "exec refusal"])(
+const MALFORMED_ARGS = "Provider completed tool call with malformed JSON arguments";
+it.each(["message", "error code", "gateway diagnostic", "exec refusal"])(
   "continues once after settled tools (%s)",
   async (shape) => {
     const refused = shape === "exec refusal";
@@ -135,12 +136,11 @@ it.each(["message", "error code", "exec refusal"])(
       ? await refusedExecThenRejectedCall()
       : rejectedCallAfterSettledTool(
           {},
-          shape === "error code"
-            ? {
-                errorMessage: "Provider completed tool call with malformed JSON arguments",
-                errorCode: "malformed_tool_call_arguments",
-              }
-            : {},
+          shape === "message"
+            ? {}
+            : shape === "error code"
+              ? { errorMessage: MALFORMED_ARGS, errorCode: "malformed_tool_call_arguments" }
+              : { errorMessage: "Upstream returned invalid tool input for 'exec'." },
         );
     if (!refused) {
       expect(turn.attempt.replayMetadata.hadPotentialSideEffects).toBe(true);

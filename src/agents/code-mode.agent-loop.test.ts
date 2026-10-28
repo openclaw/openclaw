@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Context } from "openclaw/plugin-sdk/llm";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, type TestContext, vi } from "vitest";
 import {
   makeAssistantMessage,
   model as agentLoopModel,
@@ -58,6 +58,28 @@ function effectTool(name: string, effects: string[], effect: string, value: unkn
 
 function tool(name: string, execute: AnyAgentTool["execute"]) {
   return pluginToolWithExecute(name, name, execute);
+}
+
+async function nativeExecFixture(label: string, onTestFinished: TestContext["onTestFinished"]) {
+  const state = await createOpenClawTestState({ label });
+  const scopeKey = `agent-loop:${label}`;
+  const closeScope = getProcessSupervisor().acquireScopeCleanup(scopeKey, {
+    processTree: "required-all",
+  });
+  onTestFinished(async () => {
+    await closeScope();
+    resetProcessRegistryForTests();
+    await state.cleanup();
+  });
+  const shell = createExecTool({
+    host: "gateway",
+    security: "full",
+    ask: "off",
+    scopeKey,
+    cwd: state.workspaceDir,
+    notifyOnExit: false,
+  });
+  return { state, scopeKey, shell };
 }
 
 async function runCodeModeAgent(params: {
@@ -217,26 +239,80 @@ describe("Code Mode agent-loop error recovery", () => {
     }
   });
 
+  it("preserves native exec refusal diagnostics", async ({ onTestFinished }) => {
+    const { state, shell } = await nativeExecFixture("exec-cwd-recovery", onTestFinished);
+    await writeFile(join(state.workspaceDir, "input.txt"), "review-ready");
+    const execute = vi.spyOn(shell, "execute");
+    const command = `${JSON.stringify(globalThis.process.execPath)} -e "require('node:fs').appendFileSync('executions.txt', 'run\\n'); process.stdout.write(require('node:fs').readFileSync('input.txt', 'utf8'))"`;
+    const nonzeroCommand = `${JSON.stringify(globalThis.process.execPath)} -e "process.stdout.write('ordinary-exit'); process.exit(7)"`;
+    const missingCwd = join(state.workspaceDir, "missing");
+    const { agent } = await runCodeModeAgent({
+      hiddenTools: [shell],
+      programs: [
+        `return await exec({ command: ${JSON.stringify(command)}, workdir: ${JSON.stringify(missingCwd)} });`,
+        `return await exec({ command: ${JSON.stringify(command)} });`,
+        `return await exec({ command: ${JSON.stringify(nonzeroCommand)} });`,
+      ],
+    });
+    const nativeFailure = await execute.mock.results[0]!.value;
+    expect(nativeFailure.content).toEqual([
+      { type: "text", text: expect.stringContaining("command was not executed") },
+    ]);
+    const results = agent.state.messages
+      .filter((message) => message.role === "toolResult")
+      .map(readToolResultDetails);
+    expect(results[0]).toMatchObject({
+      status: "completed",
+      output: [],
+      value: {
+        status: "failed",
+        failureKind: "runtime-error",
+        exitCode: null,
+        aggregated: "",
+        message: expect.stringContaining("command was not executed"),
+      },
+    });
+    expect(resultDetails({ details: results[0]?.value }).message).toContain(
+      "omit an explicit workdir to use the default cwd",
+    );
+    expect(results[1]).toMatchObject({
+      status: "completed",
+      value: { status: "completed", exitCode: 0, aggregated: "review-ready" },
+    });
+    expect(results[2]).toMatchObject({
+      status: "completed",
+      value: {
+        status: "completed",
+        exitCode: 7,
+        aggregated: "ordinary-exit\n\n(Command exited with code 7)",
+      },
+    });
+    for (const result of results.slice(1)) {
+      expect(resultDetails({ details: result?.value })).not.toHaveProperty("message");
+    }
+    expectRecovered(agent);
+    expectToolCalls(3, shell);
+    expect(await readFile(join(state.workspaceDir, "executions.txt"), "utf8")).toBe("run\n");
+  });
+
+  it("keeps native failure output within its budget", async ({ onTestFinished }) => {
+    const { shell } = await nativeExecFixture("exec-failure-budget", onTestFinished);
+    const bounded = createCatalogCodeModeHarness([shell], {
+      codeMode: { maxSnapshotBytes: 65_536 },
+    });
+    const command = `${JSON.stringify(globalThis.process.execPath)} -e "process.stdout.write('x'.repeat(40000)); process.exit(127)"`;
+    const inspected = await bounded.complete(
+      `const failure = await exec({ command: ${JSON.stringify(command)} }); return { exitCode: failure.exitCode, length: failure.aggregated.length, message: failure.message };`,
+    );
+    expect(inspected, JSON.stringify(inspected)).toMatchObject({
+      status: "completed",
+      value: { exitCode: 127, length: 40_000, message: "Command not found" },
+    });
+  });
+
   it("recovers a wrong shell wait without relaunching", async ({ onTestFinished }) => {
-    const state = await createOpenClawTestState({ label: "wrong-wait-recovery" });
-    const scopeKey = "agent-loop-wrong-wait";
-    const closeScope = getProcessSupervisor().acquireScopeCleanup(scopeKey, {
-      processTree: "required-all",
-    });
-    onTestFinished(async () => {
-      await closeScope();
-      resetProcessRegistryForTests();
-      await state.cleanup();
-    });
+    const { scopeKey, shell } = await nativeExecFixture("wrong-wait-recovery", onTestFinished);
     const command = `${JSON.stringify(globalThis.process.execPath)} -e "process.stdout.write('same-process-recovered')"`;
-    const shell = createExecTool({
-      host: "gateway",
-      security: "full",
-      ask: "off",
-      scopeKey,
-      cwd: state.workspaceDir,
-      notifyOnExit: false,
-    });
     const process = createProcessTool({ scopeKey });
     vi.spyOn(shell, "execute");
     vi.spyOn(process, "execute");

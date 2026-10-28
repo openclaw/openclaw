@@ -18,7 +18,10 @@ import {
   type ConnectionSessionRows,
 } from "./session-ancestor-references.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
-import { createSessionRowDeltaDiffer } from "./session-row-delta-fields.js";
+import {
+  createSessionRowDeltaDiffer,
+  prepareSessionRowDeltaFields,
+} from "./session-row-delta-fields.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { prepareSessionRowPublication } from "./session-row-presentation.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
@@ -219,7 +222,12 @@ export function prepareSessionEventProjection(
         const hiddenAncestors: Array<{ key: string; histories: Map<object, object> }> = [];
         const ancestorRows = ancestors?.every((ancestor) => projection.isCurrent(ancestor))
           ? ancestors.flatMap((ancestor) => {
-              if (presentation.sharing.entryFilter?.(ancestor.key, ancestor.entry) === false) {
+              const target = presentation.target({
+                key: ancestor.key,
+                agentId: ancestor.agentId,
+                storePath: ancestor.storeTarget.storePath,
+              });
+              if (!target || !presentation.sharing.canReadTarget(target)) {
                 hiddenAncestors.push({ key: ancestor.key, histories: new Map() });
                 return [];
               }
@@ -251,6 +259,9 @@ export function prepareSessionEventProjection(
       let delivery = deliveries.get(references.history);
       if (!delivery) {
         const { row } = audience;
+        if (rowDeltas) {
+          prepareSessionRowDeltaFields(row, record.materialized.row);
+        }
         const plan = references.prepareDelivery(
           row,
           audience.ancestors,

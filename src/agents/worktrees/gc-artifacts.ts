@@ -1,4 +1,4 @@
-import { constants } from "node:fs";
+import { constants, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -24,6 +24,38 @@ import type { ManagedWorktreeRecord } from "./types.js";
 
 const log = createSubsystemLogger("agents/worktrees");
 
+async function hasUnregisteredArtifacts(
+  root: string,
+  entries: readonly Dirent[],
+  records: readonly ManagedWorktreeRecord[],
+): Promise<boolean> {
+  const key = (target: string) => {
+    const resolved = path.resolve(target);
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  };
+  const registered = new Set(records.map((record) => key(record.path)));
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name === WORKTREE_TEMPLATE_DIRECTORY) {
+      continue;
+    }
+    const directory = path.join(root, entry.name);
+    if (registered.has(key(directory))) {
+      continue;
+    }
+    const children = await fs.readdir(directory, { withFileTypes: true }).catch(() => undefined);
+    if (
+      !children ||
+      children.length === 0 ||
+      children.some(
+        (child) => child.isDirectory() && !registered.has(key(path.join(directory, child.name))),
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export async function collectRetiredWorktreeArtifacts({
   env,
   getConfig,
@@ -48,8 +80,9 @@ export async function collectRetiredWorktreeArtifacts({
   const expired = records.filter(
     (record) => record.removedAt !== undefined && record.removedAt < expiresBefore,
   );
+  const worktreesRoot = path.join(resolveStateDir(context.environment), "worktrees");
   const entries = await fs
-    .readdir(path.join(resolveStateDir(context.environment), "worktrees"), {
+    .readdir(worktreesRoot, {
       withFileTypes: true,
     })
     .catch((error: unknown) => {
@@ -59,9 +92,14 @@ export async function collectRetiredWorktreeArtifacts({
       progress.error("orphans", error);
       return undefined;
     });
-  const hasOrphanCandidates =
+  let hasOrphanCandidates =
     entries?.some((entry) => entry.isDirectory() && entry.name !== WORKTREE_TEMPLATE_DIRECTORY) ??
     false;
+  if (hasOrphanCandidates && entries && expired.length === 0 && pending.length === 0) {
+    // Exact registered paths can only suppress a sweep. Unknown paths still get
+    // the fresh registry and canonical safety checks under allocation custody.
+    hasOrphanCandidates = await hasUnregisteredArtifacts(worktreesRoot, entries, records);
+  }
   if (entries && !hasOrphanCandidates) {
     orphanFailures.clear();
   }
