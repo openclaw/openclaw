@@ -1,4 +1,8 @@
 import { expect, it, vi } from "vitest";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import { addSession } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
@@ -7,7 +11,10 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
 import { stageSessionPendingInput } from "../config/sessions/session-accessor.pending-inputs.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
-import { readSessionPendingInput } from "../config/sessions/session-pending-input-history.js";
+import {
+  captureSessionQueuedInputsForRestart,
+  readSessionPendingInput,
+} from "../config/sessions/session-pending-input-history.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -18,15 +25,17 @@ import {
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { getSessionControllerOperation } from "../sessions/session-controller.state.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
+import * as gatewayDispatch from "./server-in-process-dispatch.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import {
   persistRunningSessionsForRestart,
   resumeMarkedSessions,
 } from "./session-restart-resume.js";
 
-it("does not resume completed reply settlement but preserves its queued inputs", () =>
+it("marks completed reply settlement only when accepted inputs remain queued", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
     const target = {
@@ -197,5 +206,66 @@ it("settles captured queued sends as failed when the recorded owner's authority 
       receipt?.finish("interrupted");
       await receipt?.settled?.();
       resetProcessRegistryForTests();
+    }
+  }));
+
+it("fails a captured browser-copilot send instead of running without its live binding", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    const profile = ensureGatewayOwnerProfile("Browser owner");
+    const target = {
+      agentId: "main",
+      sessionKey: "agent:main:bound-browser-queue",
+      sessionId: "bound-browser-queue",
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+    };
+    replaceSessionEntrySync(target, {
+      sessionId: target.sessionId,
+      updatedAt: 1,
+      createdActor: { type: "human", source: "profile", id: profile.id },
+    });
+    const receipt = await stageSessionPendingInput(target, {
+      runId: "bound-browser-send",
+      message: {
+        role: "user",
+        content: "Inspect the selected tab",
+        timestamp: 1,
+        idempotencyKey: "bound-browser-send:user",
+        __openclaw: {
+          senderIdentity: { type: "profile", id: profile.id },
+          transport: {
+            clients: [{ id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT, mode: GATEWAY_CLIENT_MODES.UI }],
+          },
+        },
+      },
+      assertCurrent() {},
+    });
+    if (!receipt) {
+      throw new Error("Queued fixture input was not admitted");
+    }
+    const send = vi.spyOn(gatewayDispatch, "dispatchGatewayRequestInProcess").mockResolvedValue({});
+    const context = createContext();
+    try {
+      const captured = await captureSessionQueuedInputsForRestart(target);
+      captured.preserve();
+      receipt.finish("interrupted");
+      await receipt.settled?.();
+      await continueSessionQueuedInputs(context, target, {
+        signal: new AbortController().signal,
+        queuedInputIds: [receipt.inputId],
+        assertCurrent() {},
+      });
+      expect(send.mock.calls.length).toBe(0);
+      expect(await readSessionPendingInput(target, receipt.inputId)).toMatchObject({
+        state: "cancelled",
+        message: { content: "Inspect the selected tab" },
+      });
+      expect(context.logGateway.warn).toHaveBeenCalledWith(
+        expect.stringContaining("Browser-bound queued input requires a fresh browser send"),
+      );
+    } finally {
+      send.mockRestore();
+      receipt.finish("cancelled");
+      await receipt.settled?.();
     }
   }));

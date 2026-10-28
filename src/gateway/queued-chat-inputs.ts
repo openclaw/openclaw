@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readMessageClientSources } from "../chat/message-client-source.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import { readSessionQueuedInputPage } from "../config/sessions/session-pending-input-history.js";
 import { preparePendingInputStore } from "../config/sessions/session-pending-input-store.js";
@@ -7,6 +8,7 @@ import type { SessionPendingInputRow } from "../config/sessions/session-pending-
 import { MEDIA_ONLY_USER_TEXT } from "../sessions/user-turn-media.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { getResidentUserProfileDisplay } from "../state/user-profile-list.js";
+import { isBrowserCopilotClient } from "../utils/message-channel.js";
 import { queuedChatInputAdmission } from "./queued-chat-input-admission.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -61,6 +63,10 @@ export async function continueSessionQueuedInputs(
     const sender = readTranscriptSenderIdentity(message["__openclaw"]?.senderIdentity);
     let admitted: Awaited<ReturnType<typeof prepareSessionPrincipalRunAuthority>> | undefined;
     try {
+      // A paired browser's process-local tab/profile capability cannot survive restart.
+      if (readMessageClientSources(message).some(isBrowserCopilotClient)) {
+        throw new Error("Browser-bound queued input requires a fresh browser send");
+      }
       if (sender?.type !== "profile") {
         throw new Error("Queued input sender has no current human principal");
       }
