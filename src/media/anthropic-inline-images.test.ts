@@ -8,7 +8,7 @@ import type { Context } from "../../packages/llm-core/src/types.js";
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 
-const [jpeg, png, detect] = vi.hoisted(() => [vi.fn(), vi.fn(), vi.fn()]);
+const [jpeg, png, detect] = vi.hoisted(() => [vi.fn(), vi.fn(), vi.fn()] as const);
 
 vi.mock("@openclaw/media-core/mime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/media-core/mime")>()),
