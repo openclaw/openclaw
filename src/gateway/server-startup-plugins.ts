@@ -339,7 +339,7 @@ export async function loadGatewayStartupPluginRuntime(params: {
   signal?: AbortSignal;
 }) {
   const { confirmPluginStateMigrationReadiness } =
-    await import("../infra/state-migrations.plugin-readiness.js");
+    await import("../plugins/plugin-state-migration-readiness.js");
   try {
     await confirmPluginStateMigrationReadiness({
       config: params.activationSourceConfig ?? params.cfg,
