@@ -246,6 +246,18 @@ export async function persistCliSessionBindingResult(
       update: (entry) => {
         const meta = params.result.meta.agentMeta;
         if (!params.preserveBinding) {
+          const resumed = getCliSessionBinding(expectedSession, params.provider)?.sessionId;
+          const published = meta?.cliSessionBinding?.sessionId.trim();
+          // Another writer can clear or replace the resumed native id while this turn runs.
+          // Republishing it would resurrect continuity that writer retired.
+          if (
+            meta?.clearCliSessionBinding !== true &&
+            resumed !== undefined &&
+            published === resumed &&
+            getCliSessionBinding(entry, params.provider)?.sessionId !== resumed
+          ) {
+            return false;
+          }
           return applyCliSessionBindingResult(entry, params.provider, meta);
         }
         const binding = getCliSessionBinding(entry, params.provider);

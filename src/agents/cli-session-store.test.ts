@@ -488,3 +488,21 @@ it.for([
     }
   },
 );
+
+it.for([
+  ["cleared", makeSessionEntry(), undefined],
+  ["replaced", boundEntry("other-writer"), "other-writer"],
+] as const)(
+  "keeps a resumed native binding another writer %s while the turn ran",
+  async ([_case, durable, expected], { f }) => {
+    await f.seed(boundEntry("resumed-native"), durable);
+    await f.publish(nativeResult("resumed-native"));
+    expect(getCliSessionBinding(f.read(), "claude-cli")?.sessionId).toBe(expected);
+  },
+);
+
+it("publishes a newly minted native id over a concurrent clear", async ({ f }) => {
+  await f.seed(boundEntry("resumed-native"), makeSessionEntry());
+  await f.publish(nativeResult("minted-native"));
+  expect(getCliSessionBinding(f.read(), "claude-cli")?.sessionId).toBe("minted-native");
+});
