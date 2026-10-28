@@ -2996,6 +2996,10 @@
     "target": "Daytona"
   },
   {
+    "source": "Everpod",
+    "target": "Everpod"
+  },
+  {
     "source": "Gateway remote access",
     "target": "Gateway 远程访问"
   },
