@@ -63,7 +63,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar owner avatar", () =>
       await sidebar.updateComplete;
       expect(sidebar.sessionData.sessionsResult?.ts).toBe(result.ts + revision);
       expect(avatar(), "session refresh must not remount the owner avatar").toBe(original);
-      gateway.publish({ presence: { ts: revision, clients: [] } });
+      gateway.publish({ deferredIntentCount: revision });
       await sidebar.updateComplete;
       expect(avatar(), "unrelated Gateway publication must not remount the owner avatar").toBe(
         original,
@@ -142,7 +142,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar owner avatar", () =>
 
   it("updates changed owner facts and removes avatars for non-owner filters", async () => {
     const { page, gateway, sessions, result, sidebar, trigger, avatar } = await mountOwners();
-    gateway.gateway.updateSelfUser({ name: "Fiona Example" });
+    gateway.publish({ selfUser: { id: "profile-frank", name: "Fiona Example" } });
     await sidebar.updateComplete;
     await expect.poll(() => avatar()?.textContent).toBe("FE");
     expect(avatar()?.getAttribute("aria-label")).toBe("Fiona Example");
