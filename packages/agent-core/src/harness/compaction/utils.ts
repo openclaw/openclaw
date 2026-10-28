@@ -189,9 +189,14 @@ function truncateForSummary(text: string, maxChars: number): string {
       }
     }
   }
-  const sliced = truncateUtf16Safe(text, maxChars);
-  const truncatedChars = text.length - sliced.length;
-  return `${sliced}\n\n[... ${truncatedChars} more characters truncated]`;
+  const headBudget = maxChars - tailChars - ELISION_MARKER_RESERVE_CHARS;
+  const prefix = truncateUtf16Safe(text, maxChars);
+  // Preserve diagnostics the old prefix already held; ordinary results also
+  // need their terminal facts, with the marker inside the same budget.
+  const tail = IMPORTANT_TOOL_RESULT_TAIL.test(prefix) ? "" : sliceUtf16Safe(text, -tailChars);
+  const head = tail ? truncateUtf16Safe(prefix, headBudget) : prefix;
+  const truncatedChars = text.length - head.length - tail.length;
+  return `${head}\n\n[... ${truncatedChars} more characters truncated]${tail ? `\n\n${tail}` : ""}`;
 }
 
 /** Project summary content once so rendering and token accounting share omission facts. */
@@ -376,7 +381,7 @@ export const MAX_SUMMARY_INPUT_CHARS = 160_000;
 const MAX_SAMPLED_ENTRY_CHARS = 6_000;
 const MIN_TRIMMED_ENTRY_CHARS = 200;
 const TRIMMED_ENTRY_HEAD_SHARE = 0.7;
-// Covers "\n\n[... N characters omitted ...]\n\n" for any UTF-16 length.
+// Covers truncation and elision markers for any UTF-16 length.
 const ELISION_MARKER_RESERVE_CHARS = 64;
 const SUMMARY_INPUT_TAIL_SHARE = 0.5;
 const SUMMARY_INPUT_USER_SHARE = 0.25;

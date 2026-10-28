@@ -185,6 +185,67 @@ describe("A2A channel inbound dispatch", () => {
     },
   );
 
+  it.each([
+    [
+      "answer",
+      { kind: "completed" as const },
+      [
+        { text: "queued answer" },
+        { text: "host notice", isStatusNotice: true },
+        setReplyPayloadMetadata({ text: "metadata-only notice" }, { hostNotice: true }),
+        { text: "reasoning", isReasoning: true },
+        { text: "private provider error", isError: true },
+        { text: "second paragraph" },
+      ],
+      "TASK_STATE_COMPLETED",
+      "queued answer\n\nsecond paragraph",
+    ],
+    ["silence", { kind: "completed" as const }, [], "TASK_STATE_COMPLETED", undefined],
+    [
+      "failure",
+      { kind: "failed" as const, error: "private provider details" },
+      [],
+      "TASK_STATE_FAILED",
+      undefined,
+    ],
+    ["abort", { kind: "aborted" as const }, [], "TASK_STATE_FAILED", undefined],
+  ])(
+    "settles a queued %s only on its task and never reopens it",
+    async (_label, completion, payloads, state, text) => {
+      fixture.dispatch.mockImplementation(async (turn) => dispatched(turn, false, true));
+      await fixture.run();
+      const other = fixture.store.create(fixture.task.contextId, "hermes", "next-task");
+      fixture.store.start(other.id);
+      const turn = fixture.dispatch.mock.calls[0]![0];
+      const deliver = turn.replyOptions?.onQueuedFollowupReplyBatch;
+      expect(deliver).toBeDefined();
+      const batch = {
+        kind: "queued-followup" as const,
+        runId: "queued-run",
+        originatingChannel: "a2a",
+        payloads,
+      };
+      await deliver?.({ ...batch, completion: { kind: "progress" } });
+      expect(fixture.task.status.state).toBe("TASK_STATE_WORKING");
+      await deliver?.({ ...batch, completion });
+      expect(fixture.task.status.state).toBe(state);
+      expect(fixture.task.artifacts).toEqual(
+        text ? [{ artifactId: expect.any(String), parts: [{ text }] }] : [],
+      );
+      // A duplicate/later success must not overwrite a terminal failure or settle the next task.
+      await deliver?.({
+        ...batch,
+        payloads: [{ text: "late answer" }],
+        completion: { kind: "completed" },
+      });
+      expect(fixture.task.status.state).toBe(state);
+      expect(fixture.task.artifacts).toEqual(
+        text ? [{ artifactId: expect.any(String), parts: [{ text }] }] : [],
+      );
+      expect(other.status.state).toBe("TASK_STATE_WORKING");
+    },
+  );
+
   it("propagates dispatch failure to the HTTP owner", async () => {
     const failure = new Error("provider unavailable");
     fixture.dispatch.mockRejectedValue(failure);
