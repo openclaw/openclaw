@@ -136,7 +136,7 @@ export async function resolveSessionMutationAuthorizationAsync(
         cfg,
         target.sessionKey,
         target.agentId,
-        sessionMethodDatabaseAdmission(params.method),
+        params.databaseAdmission ?? sessionMethodDatabaseAdmission(params.method),
       );
       if (!input.ok) {
         release();

@@ -200,6 +200,7 @@ export function readSessionMutationTarget(params: {
   method: string;
   requestParams: unknown;
   sessionScope?: SessionOperatorScope;
+  databaseAdmission?: "read" | "write";
   sessionRowRead?: SessionRowReadView;
   targetRef: SessionMutationTarget;
 }):
@@ -232,7 +233,7 @@ export function readSessionMutationTarget(params: {
       return { target: facts?.target ?? null };
     }
     const projection = getSessionRowProjection(params.context);
-    const admission = sessionMethodDatabaseAdmission(params.method);
+    const admission = params.databaseAdmission ?? sessionMethodDatabaseAdmission(params.method);
     const projected =
       projection &&
       readProjectedSessionMutationTarget(params.targetRef, params.cfg, projection, admission);

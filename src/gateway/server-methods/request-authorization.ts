@@ -491,6 +491,10 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       requestParams,
       context: params.context,
       sessionScope: scopeAuthorization.sessionScope,
+      databaseAdmission:
+        params.methodRegistry.getScope(params.method) === "operator.read"
+          ? ("read" as const)
+          : undefined,
     };
     const assertSessionInvocationCurrent = () => {
       assertPreparationCurrent?.();

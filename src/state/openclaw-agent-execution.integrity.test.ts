@@ -269,12 +269,13 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
           }
         }
         if (contents === "valid" || contents === "missing-index") {
-          for (const method of ["sessions.resolve", "chat.metadata"]) {
+          for (const method of ["sessions.resolve", "chat.metadata", "test.plugin.read"]) {
             const result = await withinTest(
               resolveSessionMutationAuthorizationAsync({
                 client: sharingPolicyClient({ scopes: ["operator.read"] }),
                 context: createDirectChatContext({ getRuntimeConfig: () => config }),
                 method,
+                databaseAdmission: method === "test.plugin.read" ? "read" : undefined,
                 requestParams:
                   method === "sessions.resolve"
                     ? { key: scope.sessionKey }

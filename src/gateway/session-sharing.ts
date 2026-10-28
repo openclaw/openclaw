@@ -108,7 +108,8 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
   }
   const { params, authorizesAgentRun, bindsProgressLifecycle, adminBypass, targetOwnership } =
     requestPreparation;
-  const admission = methods.sessionMethodDatabaseAdmission(params.method);
+  const admission =
+    params.databaseAdmission ?? methods.sessionMethodDatabaseAdmission(params.method);
   const memoryBinding = getSessionActorStorageBinding({});
   const withSelectedStorage = <T>(run: () => T): T =>
     memoryBinding ? runWithSessionActorStorage(memoryBinding, run) : run();
