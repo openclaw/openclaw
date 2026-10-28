@@ -294,6 +294,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/run-attempt.test.ts",
   "extensions/codex/src/app-server/run-attempt.skills.test.ts",
   "extensions/codex/src/app-server/run-attempt.skills.native.test.ts",
+  "extensions/codex/src/app-server/run-attempt.yield-output.native.test.ts",
   "extensions/codex/src/app-server/run-attempt.activation.test.ts",
   "extensions/codex/src/app-server/run-attempt.agent-end-context.test.ts",
   "extensions/codex/src/app-server/run-attempt.auth-context.test.ts",
