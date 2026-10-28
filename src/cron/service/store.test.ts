@@ -3,6 +3,8 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { pluginCommandSchedule } from "../plugin-command-schedule.test-support.js";
+import { PLUGIN_COMMAND_SCHEDULE_MESSAGE } from "../plugin-command-schedule.types.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
@@ -38,6 +40,7 @@ function createStoreTestState(storePath: string, onEvent = vi.fn()) {
     enqueueSystemEvent: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     onEvent,
+    onDefinitionChange: vi.fn(),
   });
 }
 
@@ -57,6 +60,7 @@ describe("cron service store seam coverage", () => {
       configJobIndexes: [0],
       configJobRuntimeEntries: [{ state: job.state }],
       invalidConfigRows: [],
+      configRevisions: new Map(),
     });
     const read = vi
       .spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobsByKey")
@@ -80,6 +84,15 @@ describe("cron service store seam coverage", () => {
     const legacyValidTrigger = createReloadCronJob({ id: "legacy-valid-trigger" });
     const legacyInvalidTrigger = createReloadCronJob({ id: "legacy-invalid-trigger" });
     const legacyMissingPayload = createReloadCronJob({ id: "legacy-missing-payload" });
+    const invalidProjection = {
+      ...createReloadCronJob({ id: "invalid-projection" }),
+      pluginCommand: pluginCommandSchedule(STORE_TEST_NOW),
+      payload: {
+        kind: "agentTurn" as const,
+        message: PLUGIN_COMMAND_SCHEDULE_MESSAGE,
+        toolsAllow: ["sessions_spawn", "agents_wait"],
+      },
+    };
     const surviving = createReloadCronJob({
       id: "surviving-sqlite-row",
       state: { nextRunAtMs: STORE_TEST_NOW + 60_000 },
@@ -93,6 +106,7 @@ describe("cron service store seam coverage", () => {
         legacyInvalidTrigger,
         legacyMissingPayload,
         surviving,
+        invalidProjection,
       ],
     });
     const db = openOpenClawStateDatabase().db;
@@ -117,6 +131,9 @@ describe("cron service store seam coverage", () => {
     db.prepare(
       "UPDATE cron_jobs SET job_json = json_remove(job_json, '$.payload') WHERE job_id = ?",
     ).run(legacyMissingPayload.id);
+    db.prepare(
+      "UPDATE cron_jobs SET job_json = json_set(job_json, '$.payload.toolsAllow', json(?)) WHERE job_id = ?",
+    ).run(JSON.stringify([" "]), invalidProjection.id);
     const state = createStoreTestState(storePath);
 
     await ensureLoaded(state);
@@ -141,6 +158,11 @@ describe("cron service store seam coverage", () => {
         sourceIndex: 4,
         reason: "missing-payload",
         job: expect.objectContaining({ id: legacyMissingPayload.id }),
+      }),
+      expect.objectContaining({
+        sourceIndex: 6,
+        reason: "invalid-payload",
+        job: expect.objectContaining({ id: invalidProjection.id }),
       }),
     ]);
     await expectPathMissing(storePath.replace(/\.json$/, "-quarantine.json"));
@@ -351,7 +373,7 @@ describe("cron service store seam coverage", () => {
     await expectPathMissing(`${storePath}.migrated`);
   });
 
-  it("loads persisted jobs with opaque custom session ids containing separators", async () => {
+  it("loads opaque session ids and preserves lazy errors for malformed persisted ids", async () => {
     const { storePath } = await makeStorePath();
     const sessionTarget = "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
 
@@ -384,5 +406,20 @@ describe("cron service store seam coverage", () => {
           message.includes("invalid persisted sessionTarget"),
       ),
     ).toBe(false);
+
+    openOpenClawStateDatabase()
+      .db.prepare(
+        "UPDATE cron_jobs SET job_json = json_set(job_json, '$.sessionTarget', ?) WHERE job_id = ?",
+      )
+      .run("session:bad\0id", job.id);
+    const malformed = createStoreTestState(storePath);
+    await expect(ensureLoaded(malformed)).resolves.toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: job.id }),
+      expect.stringContaining("invalid persisted sessionTarget"),
+    );
+    await expect(ensureLoaded(malformed, { forceReload: true })).rejects.toThrow(
+      "invalid cron sessionTarget session id",
+    );
   });
 });

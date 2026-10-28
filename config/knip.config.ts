@@ -592,6 +592,7 @@ const repositoryScriptEntries = [
   "scripts/perf/ui-streaming-render-measure.ts!",
   // Their source headers document these standalone performance commands.
   "scripts/perf/active-run-projector-measure.ts!",
+  "scripts/perf/cron-definition-publication-measure.ts!",
   "scripts/perf/cron-store-context-measure.ts!",
   "scripts/perf/diagnostic-frozen-trace-measure.ts!",
   "scripts/perf/image-worker-buffers-measure.mjs!",

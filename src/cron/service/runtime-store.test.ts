@@ -14,6 +14,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
+import * as definitionHash from "../definition-hash.js";
 import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { CronService } from "../service.js";
 import {
@@ -31,10 +32,12 @@ import {
 } from "../store/run-receipt-store.test-support.js";
 import { mutateCronRuntimeRowsInDatabase } from "../store/runtime-rows.kernel.js";
 import type { CronStoredJob } from "../types.js";
+import { remove, update } from "./ops-mutations.js";
 import {
   applyCronRuntimeRowsToState,
   publishDurableNextRunChanges,
 } from "./runtime-publication.js";
+import { ensureLoaded } from "./store.js";
 
 const runtimeStoreFixtures = setupCronRegressionFixtures({ prefix: "cron-runtime-store-" });
 
@@ -53,6 +56,57 @@ function trackCronRowReads() {
 
 describe("cron runtime row publication", () => {
   afterEach(() => vi.useRealTimers());
+
+  it("reloads unchanged definitions without main-thread hashing and publishes edits and removals once", async () => {
+    const { storePath } = runtimeStoreFixtures.makeStorePath();
+    const now = Date.now();
+    const jobs = Array.from({ length: 200 }, (_, index) =>
+      createDueIsolatedJob({ id: `definition-${index}`, nowMs: now, nextRunAtMs: now + 60_000 }),
+    );
+    await saveCronStore(storePath, { version: 1, jobs });
+    const onDefinitionChange = vi.fn();
+    const state = createCronRegressionState({
+      storePath,
+      runIsolatedAgentJob: vi.fn(),
+      onDefinitionChange,
+    });
+    await ensureLoaded(state);
+    const revision = vi.spyOn(definitionHash, "hashCronJobDefinition");
+    await ensureLoaded(state, { forceReload: true });
+    expect(onDefinitionChange).not.toHaveBeenCalled();
+    expect(revision.mock.calls.length).toBe(0);
+
+    const changed = { ...jobs[0]!, name: "edited definition" };
+    await saveCronStore(storePath, { version: 1, jobs: [changed, ...jobs.slice(2)] });
+    await ensureLoaded(state, { forceReload: true });
+    expect(
+      onDefinitionChange.mock.calls.map(([previous, next]) => [previous?.id, next?.name]),
+    ).toEqual([
+      ["definition-0", "edited definition"],
+      ["definition-1", undefined],
+    ]);
+    onDefinitionChange.mockClear();
+    await ensureLoaded(state, { forceReload: true });
+    expect(onDefinitionChange).not.toHaveBeenCalled();
+
+    const current = state.store!.jobs[0]!;
+    applyCronRuntimeRowsToState(state, [{ ...current, state: { lastRunAtMs: now } }]);
+    expect(onDefinitionChange).not.toHaveBeenCalled();
+    applyCronRuntimeRowsToState(state, [{ ...current, enabled: false }]);
+    expect(onDefinitionChange).toHaveBeenCalledTimes(1);
+    onDefinitionChange.mockClear();
+    await ensureLoaded(state, { forceReload: true });
+    expect(onDefinitionChange).toHaveBeenCalledTimes(1);
+    onDefinitionChange.mockClear();
+    await update(state, current.id, { name: "CRUD edit" });
+    await remove(state, current.id);
+    expect(
+      onDefinitionChange.mock.calls.map(([previous, next]) => [previous?.id, next?.name]),
+    ).toEqual([
+      [current.id, "CRUD edit"],
+      [current.id, undefined],
+    ]);
+  });
 
   it("publishes committed wake transitions once while tracking topology and suppressed slots", () => {
     const now = Date.now();
