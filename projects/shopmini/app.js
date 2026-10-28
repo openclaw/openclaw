@@ -36,5 +36,67 @@ $$(".nav-link").forEach(a=>a.addEventListener("click",()=>{$$(".nav-link").forEa
 const globalSearch=$("#global-search");if(globalSearch){globalSearch.addEventListener("keydown",e=>{if(e.key==="Enter"){ $("#order-search").value=e.currentTarget.value;renderOrders();location.hash="#orders";$("#orders").scrollIntoView({behavior:"smooth"});}});}
 function $$(s){return [...document.querySelectorAll(s)];}
 window.ShopMini={resetDemo:()=>{if(confirm("Khôi phục dữ liệu demo?")){state=JSON.parse(JSON.stringify(starter));save();render();toast("Đã khôi phục demo.");}}};
+
+let aiMode="manage";
+function addAiMessage(role,text){
+  const log=$("#ai-chat-log"),item=document.createElement("div");
+  item.className="ai-message "+role;
+  const heading=document.createElement("strong");heading.textContent=role==="user"?"Bạn":"ShopMini AI";
+  const paragraph=document.createElement("p");paragraph.textContent=text;
+  item.append(heading,paragraph);log.append(item);log.scrollTop=log.scrollHeight;return item;
+}
+function applyAiAction(action){
+  if(!action||typeof action!=="object")return "";
+  if(action.type==="record_sale"){
+    const p=product(String(action.productId||"")),qty=Number(action.quantity),customer=String(action.customer||"Khách lẻ").trim().slice(0,70);
+    if(!p)return "Chưa cập nhật: không tìm thấy sản phẩm khớp trong danh mục.";
+    if(!Number.isInteger(qty)||qty<1||qty>p.stock)return "Chưa cập nhật: số lượng không hợp lệ hoặc tồn kho không đủ.";
+    p.stock-=qty;
+    const order={id:"DH"+Date.now().toString().slice(-8),customer:customer||"Khách lẻ",productId:p.id,productName:p.name,quantity:qty,unitPrice:Number(p.price),unitCost:Number(p.cost)||0,status:"Đã giao",date:today()};
+    state.orders.unshift(order);
+    state.stockHistory.unshift({date:new Date().toISOString(),name:p.name,qty:-qty,note:"AI ghi nhận bán hàng "+order.id});
+    save();render();
+    return "Đã ghi nhận bán "+qty+" × "+p.name+" cho "+order.customer+". Tồn kho còn "+p.stock+". Mã đơn "+order.id+".";
+  }
+  if(action.type==="add_product"){
+    const name=String(action.name||"").trim().slice(0,70),price=Number(action.price),stock=Number(action.stock);
+    if(!name||!Number.isFinite(price)||price<=0||!Number.isInteger(stock)||stock<0)return "Chưa thêm sản phẩm: tên, giá bán hoặc số lượng chưa hợp lệ.";
+    if(state.products.some(p=>p.name.toLocaleLowerCase("vi")===name.toLocaleLowerCase("vi")))return "Chưa thêm: đã có sản phẩm cùng tên. Hãy kiểm tra danh mục để tránh trùng.";
+    const rawCost=action.cost,cost=rawCost===null||rawCost===undefined?price:Number(rawCost);
+    if(!Number.isFinite(cost)||cost<0)return "Chưa thêm sản phẩm: giá vốn không hợp lệ.";
+    const p={id:"SP"+Date.now().toString().slice(-7),name,price,cost,stock,reorder:5,emoji:"📦"};
+    state.products.unshift(p);
+    if(stock>0)state.stockHistory.unshift({date:new Date().toISOString(),name:p.name,qty:stock,note:"AI thêm sản phẩm mới"});
+    save();render();
+    return "Đã thêm sản phẩm "+name+", giá bán "+money(price)+", tồn đầu "+stock+".";
+  }
+  return "AI chưa thực hiện thay đổi nào.";
+}
+$("#ai-mode-switch")?.addEventListener("click",()=>{});
+document.querySelectorAll("[data-ai-mode]").forEach(button=>button.addEventListener("click",()=>{
+  aiMode=button.dataset.aiMode==="customer"?"customer":"manage";
+  document.querySelectorAll("[data-ai-mode]").forEach(b=>b.classList.toggle("active",b===button));
+  $("#ai-chat-input").placeholder=aiMode==="manage"?"Ví dụ: Tôi vừa bán 2 Bình giữ nhiệt cho khách Minh Anh...":"Ví dụ: Shop có những sản phẩm nào? Giá bao nhiêu?";
+}));
+$("#ai-chat-form").addEventListener("submit",async e=>{
+  e.preventDefault();
+  const input=$("#ai-chat-input"),sendButton=$("#ai-send"),message=input.value.trim();
+  if(!message)return;
+  addAiMessage("user",message);input.value="";sendButton.disabled=true;sendButton.textContent="Đang xử lý...";
+  const waiting=addAiMessage("assistant","Đang kết nối OpenClaw...");
+  try{
+    const response=await fetch("/api/assistant",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode:aiMode,message,catalog:{products:state.products.map(p=>({id:p.id,name:p.name,price:p.price,cost:p.cost,stock:p.stock})),orders:aiMode==="manage"?state.orders.slice(0,10).map(o=>({id:o.id,productName:o.productName,quantity:o.quantity,status:o.status})):[]})});
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(data.error||"Không kết nối được máy chủ AI.");
+    let answer=String(data.reply||"AI chưa có phản hồi.");
+    if(aiMode==="manage"&&data.action){const result=applyAiAction(data.action);answer+="\n\n"+result;}
+    waiting.querySelector("p").textContent=answer;
+  }catch(error){
+    waiting.querySelector("p").textContent=(error&&error.message)||"Không kết nối được OpenClaw. Hãy kiểm tra máy chủ và cấu hình .env.";
+  }finally{
+    sendButton.disabled=false;sendButton.textContent="Gửi tin nhắn";input.focus();
+  }
+});
+
 render();
 })();
