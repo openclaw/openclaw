@@ -6,6 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ClickClackHttpError } from "../http-client.js";
 import type { ClickClackChannel } from "../types.js";
@@ -226,6 +227,7 @@ describe("ClickClack discussion service", () => {
     async (entry) => {
       h.setSessionEntry(entry);
       expect(await h.service.open("agent:main:unavailable")).toEqual({ state: "available" });
+      expect(h.workspaces).not.toHaveBeenCalled();
       expect(h.channels).not.toHaveBeenCalled();
       expect(h.updateChannel).not.toHaveBeenCalled();
       expect(h.createChannel).not.toHaveBeenCalled();
@@ -533,12 +535,20 @@ describe("ClickClack discussion session events", () => {
   });
 
   const services: ClickClackDiscussionService[] = [];
+  let finishScenario: (() => Promise<void>) | undefined;
   beforeEach(() => {
+    finishScenario = undefined;
     vi.useFakeTimers();
   });
   afterEach(async () => {
-    await Promise.all(services.splice(0).map((service) => service.cleanup()));
-    vi.useRealTimers();
+    try {
+      // Vitest can time out before the test body unwinds; release and join its work first.
+      await finishScenario?.();
+      await Promise.all(services.splice(0).map((service) => service.cleanup()));
+    } finally {
+      finishScenario = undefined;
+      vi.useRealTimers();
+    }
   });
   function fixture(...args: Parameters<typeof createHarness>) {
     const h = createHarness(...args);
@@ -552,58 +562,78 @@ describe("ClickClack discussion session events", () => {
     await h.service.open(sessionKey);
     return { ...h, gateway, sessionKey };
   }
-  it("does not overwrite a replacement attachment when metadata reconciliation settles late", async () => {
+  it("does not overwrite a replacement attachment when metadata reconciliation settles late", async (context) => {
     const h = fixture({ sessionId: "old", label: "Old", category: "Projects" });
     const sessionKey = "agent:main:event-concurrent-reset";
     const updateEntered = createDeferred<void>();
     const releaseUpdate = createDeferred<void>();
     let reconcile: Promise<void> | undefined;
+    let scenario: Promise<void> | undefined;
+    let finishing: Promise<void> | undefined;
+    const finish = () =>
+      (finishing ??= (async () => {
+        releaseUpdate.resolve();
+        await Promise.allSettled([
+          ...(scenario ? [scenario] : []),
+          ...(reconcile ? [reconcile] : []),
+        ]);
+      })());
+    finishScenario = finish;
+    scenario = (async () => {
+      try {
+        await h.service.open(sessionKey);
+        h.updateChannel.mockClear();
+        const updateChannel = h.updateChannel.getMockImplementation()!;
+        h.updateChannel.mockImplementationOnce(async (...args) => {
+          updateEntered.resolve();
+          await releaseUpdate.promise;
+          return updateChannel(...args);
+        });
+        h.setSessionEntry({ sessionId: "old", label: "New", category: "Projects" });
+        reconcile = h.service.reconcile(sessionKey);
+        void reconcile.catch(() => undefined);
+        await withinTest(updateEntered.promise, context.signal);
+        h.setSessionEntry({ sessionId: "new", label: "Next", category: "Next" });
+        expect(
+          await resolveClickClackDiscussionRoute({
+            runtime: h.runtime,
+            accountId: "default",
+            serverBaseUrl: "https://clickclack.example",
+            workspaceId: "wsp_team",
+            channelId: "chn_discussion",
+          }),
+        ).toMatchObject({ state: "active" });
+        const replacementBinding = h.store.lookup(sessionKey);
+        expect(replacementBinding).toMatchObject({
+          sessionId: "new",
+          label: "Old",
+          displayTitle: "Old",
+          section: "Projects",
+        });
+        releaseUpdate.resolve();
+        await reconcile;
+        expect(h.store.lookup(sessionKey)).toEqual(replacementBinding);
+        await h.service.reconcile(sessionKey);
+        expect(h.store.lookup(sessionKey)).toMatchObject({
+          sessionId: "new",
+          label: "Next",
+          displayTitle: "Next",
+          section: "Next",
+        });
+        expect(h.updateChannel).toHaveBeenLastCalledWith(
+          "chn_discussion",
+          expect.objectContaining({ display_title: "Next", sidebar_section: "Next" }),
+        );
+      } finally {
+        releaseUpdate.resolve();
+        await Promise.allSettled(reconcile ? [reconcile] : []);
+      }
+    })();
+    void scenario.catch(() => undefined);
     try {
-      await h.service.open(sessionKey);
-      h.updateChannel.mockClear();
-      const updateChannel = h.updateChannel.getMockImplementation()!;
-      h.updateChannel.mockImplementationOnce(async (...args) => {
-        updateEntered.resolve();
-        await releaseUpdate.promise;
-        return updateChannel(...args);
-      });
-      h.setSessionEntry({ sessionId: "old", label: "New", category: "Projects" });
-      reconcile = h.service.reconcile(sessionKey);
-      await updateEntered.promise;
-      h.setSessionEntry({ sessionId: "new", label: "Next", category: "Next" });
-      expect(
-        await resolveClickClackDiscussionRoute({
-          runtime: h.runtime,
-          accountId: "default",
-          serverBaseUrl: "https://clickclack.example",
-          workspaceId: "wsp_team",
-          channelId: "chn_discussion",
-        }),
-      ).toMatchObject({ state: "active" });
-      const replacementBinding = h.store.lookup(sessionKey);
-      expect(replacementBinding).toMatchObject({
-        sessionId: "new",
-        label: "Old",
-        displayTitle: "Old",
-        section: "Projects",
-      });
-      releaseUpdate.resolve();
-      await reconcile;
-      expect(h.store.lookup(sessionKey)).toEqual(replacementBinding);
-      await h.service.reconcile(sessionKey);
-      expect(h.store.lookup(sessionKey)).toMatchObject({
-        sessionId: "new",
-        label: "Next",
-        displayTitle: "Next",
-        section: "Next",
-      });
-      expect(h.updateChannel).toHaveBeenLastCalledWith(
-        "chn_discussion",
-        expect.objectContaining({ display_title: "Next", sidebar_section: "Next" }),
-      );
+      await withinTest(scenario, context.signal);
     } finally {
-      releaseUpdate.resolve();
-      await Promise.allSettled(reconcile ? [reconcile] : []);
+      await finish();
     }
   });
 

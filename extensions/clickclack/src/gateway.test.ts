@@ -552,7 +552,7 @@ describe("ClickClack gateway", () => {
   it("carries validated event correlation through the authoritative fetch and inbound turn", async () => {
     await startGateway();
 
-    emitMessageEvent(socket, 1, { correlation_id: "fakeco.case_1" });
+    emitMessageEvent(socket, 1, { correlation_id: " fakeco.case_1 " });
 
     await vi.waitFor(() => expect(inbound).toHaveBeenCalledTimes(1));
     expect(mocks.createClickClackClient).toHaveBeenLastCalledWith({
