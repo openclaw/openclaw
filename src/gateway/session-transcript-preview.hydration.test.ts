@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import {
+  loadSessionEntry,
   replaceSessionEntry,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
@@ -16,6 +17,7 @@ import {
 import * as hydration from "../config/sessions/session-transcript-hydration.js";
 import { SessionTranscriptStorageUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { recordOpenClawAgentDatabaseOpenFailure } from "../state/openclaw-agent-db-lifecycle.js";
 import { clearOpenClawAgentDatabaseOpenFailure } from "../state/openclaw-agent-db.js";
 import {
@@ -98,12 +100,42 @@ async function persistHistory(
   await waitForSessionTranscriptProjection(scope);
 }
 
-function readTalk(scope: ReturnType<typeof previewScope>, assertCurrent: () => void = vi.fn()) {
+function readTalk(
+  scope: ReturnType<typeof previewScope>,
+  assertCurrent: () => void = vi.fn(),
+  cfg = {},
+) {
   return readTalkRealtimeInitialItems(
     { ...scope, canonicalKey: scope.sessionKey, assertCurrent },
     assertCurrent,
+    cfg,
   );
 }
+
+// A stale session's call quotes no history and is left unchanged for the Gateway's pinned target.
+it.each([2 * 24 * 60, 1])(
+  "starts a Talk call from the daily reset (%i minutes old)",
+  async (age) => {
+    vi.useFakeTimers({ now: new Date(2026, 9, 27, 12).getTime(), toFake: ["Date"] });
+    await withOpenClawTestState({ label: "talk-call-reset" }, async (state) => {
+      const scope = previewScope(state, "talk-call");
+      const startedAt = Date.now() - age * 60_000;
+      const target = { agentId: "main", sessionKey: scope.sessionKey, storePath: scope.storePath };
+      const entry = {
+        sessionId: scope.sessionId,
+        lifecycleRevision: "day-one",
+        updatedAt: startedAt,
+      };
+      await replaceSessionEntry(target, { ...entry, sessionStartedAt: startedAt });
+      const fillers = Array.from({ length: 9 }, (_, index) => `Filler message ${index + 2}.`);
+      await persistHistory(scope, ["Remember the code word PELICAN-DAY1.", ...fillers]);
+      const daily: OpenClawConfig = { session: { reset: { mode: "daily", atHour: 4 } } };
+      const texts = (await readTalk(scope, vi.fn(), daily)).map((item) => item.text);
+      expect(texts).toEqual(age > 1 ? [] : ["Remember the code word PELICAN-DAY1.", ...fillers]);
+      expect(loadSessionEntry(target)?.lifecycleRevision).toBe("day-one");
+    }).finally(() => vi.useRealTimers());
+  },
+);
 
 it("keeps missing preview storage absent and propagates terminal read refusal", async () => {
   await withOpenClawTestState({ label: "preview-reader-refusal" }, async (state) => {

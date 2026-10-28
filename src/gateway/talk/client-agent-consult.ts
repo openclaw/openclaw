@@ -100,6 +100,8 @@ export function createTalkClientAgentConsultRunner(params: {
 }) {
   const { agentId, sessionKey, canonicalKey, storePath } = params.sessionTarget;
   const getConfig = () => params.context.getRuntimeConfig?.() ?? params.config;
+  // History quoted when the call started; a consult that resets the session drops it for the call.
+  let historicalItems = params.initialItems;
   const authority: TalkAgentConsultAuthority = {
     ...(params.authority ?? resolveTalkAgentConsultAuthority(undefined)),
     operatorAuthority:
@@ -220,7 +222,15 @@ export function createTalkClientAgentConsultRunner(params: {
           lane: "talk",
           runIdPrefix: params.runIdPrefix ?? "talk-realtime-consult",
           args: parsedArgs,
-          transcript: params.initialItems,
+          transcript: historicalItems,
+          onSessionReset: () => {
+            historicalItems = [];
+            return historicalItems;
+          },
+          assertSourceCurrent: () => {
+            assertConsultCurrent();
+            params.runAuthority?.assertCurrent();
+          },
           surface: params.surface ?? "a browser Talk session",
           userLabel: "User",
           questionSourceLabel: "user",

@@ -11,6 +11,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveMemoryAudienceFromEntry } from "../plugins/memory-audience.js";
 import { createRuntimeAgent } from "../plugins/runtime/runtime-agent.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import { reserveSessionControllerSource } from "../sessions/session-controller.mailbox.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -79,6 +81,117 @@ describe("voice consult concrete store ownership", () => {
         agentAccountId: accountId,
       });
     }
+  });
+
+  describe("configured session reset", () => {
+    const MINUTE = 60_000;
+    const noon = new Date(2026, 9, 27, 12).getTime(); // clear of the 04:00 daily boundary
+    const daily = { reset: { mode: "daily", atHour: 4 } } as const;
+    const stale = noon - 2 * 24 * 60 * MINUTE;
+    beforeEach(() => void vi.useFakeTimers({ now: noon, toFake: ["Date"] }));
+    afterEach(() => void vi.useRealTimers());
+
+    async function seed(session: OpenClawConfig["session"], at: number, fields = {}) {
+      const fixture = createConsultFixture();
+      fixture.cfg.session = session;
+      const target = {
+        agentId: "main",
+        sessionKey: "agent:main:voice-reset",
+        storePath: state.statePath("consult", "sessions.sqlite"),
+      };
+      const times = { updatedAt: at, sessionStartedAt: at, lastInteractionAt: at };
+      const entry = { sessionId: "voice-session", lifecycleRevision: "day-one", ...times };
+      await replaceSessionEntry(target, { ...entry, ...fields });
+      const sessionTarget = { ...target, sessionId: "voice-session" };
+      SessionManager.open(sessionTarget, state.workspaceDir).appendMessage(
+        makeAgentAssistantMessage({ content: [{ type: "text", text: "earlier voice answer" }] }),
+      );
+      const seen: Array<{ history: string; prompt: string }> = [];
+      fixture.runEmbeddedAgent.mockImplementation(async (params) => {
+        expect(params.sessionId).toBe("voice-session");
+        const messages = SessionManager.open(
+          sessionTarget,
+          state.workspaceDir,
+        ).buildSessionContext();
+        seen.push({ history: JSON.stringify(messages.messages), prompt: params.prompt });
+        return checkedResult();
+      });
+      const revision = () => loadSessionEntry(target)?.lifecycleRevision;
+      return { ...fixture, target, seen, revision, run: () => fixture.consult(target) };
+    }
+
+    it.each([
+      { name: "past the daily boundary", startedAt: stale, reset: true },
+      { name: "within the same day", startedAt: noon - MINUTE, reset: false },
+    ])("applies the daily reset before a consult $name", async ({ startedAt, reset }) => {
+      const { consult, seen, revision, target } = await seed(daily, startedAt);
+      // Call history quoted before a reset is replaced through onSessionReset.
+      const onSessionReset = vi.fn(() => []);
+      const quoted = [{ role: "user" as const, text: "Quoted call history: PELICAN-DAY1" }];
+      await expect(consult({ ...target, transcript: quoted, onSessionReset })).resolves.toEqual({
+        text: "Checked",
+      });
+      expect(seen[0]?.history.includes("earlier voice answer")).toBe(!reset);
+      expect(seen[0]?.prompt.includes("PELICAN-DAY1")).toBe(!reset);
+      expect(onSessionReset).toHaveBeenCalledTimes(reset ? 1 : 0);
+      expect(loadSessionEntry(target)?.sessionId).toBe("voice-session");
+      const after = revision();
+      expect(after === "day-one").toBe(!reset);
+      // The next consult continues the rolled-over session instead of resetting again.
+      await expect(consult(target)).resolves.toEqual({ text: "Checked" });
+      expect(revision()).toBe(after);
+    });
+
+    it("keeps a blocked stale session unchanged for admission to reject", async () => {
+      const { revision, run, runEmbeddedAgent } = await seed(daily, stale, { archivedAt: noon });
+      await expect(run()).rejects.toThrow("is archived");
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      expect(revision()).toBe("day-one");
+    });
+
+    it("keeps the browser's reserved consult input across the reset", async () => {
+      const { revision, runEmbeddedAgent, target, consult } = await seed(daily, stale);
+      // Browser Talk reserves its controller input first and passes that input's signal.
+      const input = reserveSessionControllerSource(target.sessionKey, {
+        policy: { mode: "followup" },
+        target: captureSessionTarget({ ...target, storeScope: target.storePath }),
+        adapter: { signal: new AbortController().signal },
+      });
+      const result = await consult({ ...target, abortSignal: input.abortSignal });
+      expect(result).toEqual({ text: "Checked" });
+      expect(input.abortSignal.aborted).toBe(false);
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+      expect(revision()).not.toBe("day-one");
+    });
+
+    it("leaves the session untouched when the caller cancels during preparation", async () => {
+      const { agentRuntime, consult, revision, runEmbeddedAgent, target } = await seed(
+        daily,
+        stale,
+      );
+      const controller = new AbortController();
+      const read = agentRuntime.session.getSessionEntryAsync;
+      agentRuntime.session = {
+        ...agentRuntime.session,
+        getSessionEntryAsync: async (lookup) =>
+          read(lookup).finally(() => controller.abort(new Error("caller closed"))),
+      };
+      const result = consult({ ...target, abortSignal: controller.signal });
+      await expect(result).rejects.toThrow("caller closed");
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      expect(revision()).toBe("day-one");
+    });
+
+    it("counts each consult as activity for idle reset", async () => {
+      const { revision, run } = await seed({ reset: { mode: "idle", idleMinutes: 5 } }, noon);
+      // A consult every four minutes never goes idle; ten quiet minutes later one starts fresh.
+      for (const minute of [0, 4, 8, 12, 22]) {
+        vi.setSystemTime(noon + minute * MINUTE);
+        expect(revision() === "day-one").toBe(true);
+        await expect(run()).resolves.toEqual({ text: "Checked" });
+      }
+      expect(revision()).not.toBe("day-one");
+    });
   });
 
   it("preserves live run identity and source text through transcript storage", async () => {

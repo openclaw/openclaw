@@ -224,6 +224,20 @@ describe("Talk client agent consult admission", () => {
     },
   );
 
+  it("drops the call's quoted history for the resetting and later consults", async () => {
+    const history = [{ role: "user" as const, text: "Quoted call history: PELICAN-DAY1" }];
+    const transcripts: unknown[] = [];
+    mockConsult(
+      async (params) => void transcripts.push(params.transcript, params.onSessionReset?.()),
+    );
+    mockConsult(async (params) => void transcripts.push(params.transcript));
+    const runner = createConsultRunner({ initialItems: history });
+    for (const prompt of ["first task", "second task"]) {
+      await expect(runner.runPrompt({ prompt })).resolves.toEqual({ text: "done" });
+    }
+    expect(transcripts).toEqual([history, [], []]);
+  });
+
   it.each(["runOwnedArgs", "runPrompt"] as const)(
     "steers and claims the registered owner through %s",
     async (entrypoint) =>
