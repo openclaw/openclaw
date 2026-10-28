@@ -3,6 +3,7 @@ summary: "Knowledge scribes: conversations Knowledge starts for you that keep a 
 read_when:
   - You want Knowledge to learn from your conversations or from Memory without asking each time
   - You are turning on the scheduled consolidation of unlinked claims
+  - You want Granola meetings ingested into Knowledge automatically
   - A scribe shows Failing or Conversation not found on the Scribes tab
 title: "Knowledge scribes"
 sidebarTitle: "Scribes"
@@ -20,11 +21,12 @@ which can be started again.
 
 ## The scribes
 
-| Scribe                   | Runs            | Options                                                                       | Skill                           |
-| ------------------------ | --------------- | ----------------------------------------------------------------------------- | ------------------------------- |
-| Knowledge Consolidation  | Ongoing         | Weekly or nightly                                                             | `knowledge-claim-consolidation` |
-| Learn from conversations | Once or ongoing | Active only, or active and archived; starting 30 days, 90 days, all, or today | `knowledge-ingest`              |
-| Learn from Memory        | Once            | `MEMORY.md`, daily notes, and the Dreaming diary (`DREAMS.md`)                | `knowledge-ingest`              |
+| Scribe                   | Runs            | Options                                                                          | Skill                           |
+| ------------------------ | --------------- | -------------------------------------------------------------------------------- | ------------------------------- |
+| Knowledge Consolidation  | Ongoing         | Weekly or nightly                                                                | `knowledge-claim-consolidation` |
+| Learn from conversations | Once or ongoing | Active only, or active and archived; starting 30 days, 90 days, all, or today    | `knowledge-ingest`              |
+| Learn from Granola       | Once or ongoing | Your meetings, or every meeting you can read; starting 7 days, 30 days, or today | `knowledge-meeting-ingest`      |
+| Learn from Memory        | Once            | `MEMORY.md`, daily notes, and the Dreaming diary (`DREAMS.md`)                   | `knowledge-ingest`              |
 
 - **Knowledge Consolidation** files claims that
   [maintenance](/plugins/knowledge/maintenance) left unlinked, creates pages for
@@ -39,8 +41,41 @@ which can be started again.
   conversations daily at 4:00 AM in your time zone. Conversations already
   learned from are skipped. Defaults are active conversations from the last 30
   days.
+- **Learn from Granola** turns each Granola meeting into a meeting page, updates
+  the people, companies, and projects it discusses, and saves its decisions and
+  commitments, through the [Granola plugin](#the-granola-plugin). Ongoing runs
+  check for finished meetings on weekdays at 10 AM, 2 PM, and 6 PM in your time
+  zone. Meetings already in Knowledge are skipped, and a meeting still being
+  recorded waits for a later run. It keeps a checkpoint page,
+  `Knowledge scribe checkpoint · Learn from Granola`, so an interrupted run
+  resumes. Defaults are your meetings (recorded by you or with you invited)
+  from the last 7 days.
 - **Learn from Memory** brings `memory-core` notes into Knowledge once. Memory
   itself is not changed.
+
+### The Granola plugin
+
+Learn from Granola reads meetings with the tools of the Granola plugin, which
+connects to your Granola account through Granola's MCP server. The Scribes tab
+checks the plugin and shows one of:
+
+| Shown                                    | Control              |
+| ---------------------------------------- | -------------------- |
+| Needs the Granola plugin, not installed  | **Install Granola…** |
+| Needs the Granola plugin, turned off     | **Turn on Granola…** |
+| Installed, not connected to your account | **Connect Granola…** |
+| Granola connected                        | None                 |
+
+Each control opens the plugin's page under **Plugins**, where you install it,
+turn it on, or sign in. **Set up…** stays disabled until Granola is connected.
+If the page cannot read the plugin's state (for example, without
+`operator.read`), it shows nothing and lets you start; a run without the plugin
+stops with `Scribe status: failed` and says the plugin is not connected.
+
+The scribe keeps the meeting's Granola ID (the UUID in its
+`notes.granola.ai/d/…` link) on the meeting page. It retains the meeting notes
+and the full transcript as originals; a meeting without a transcript is not
+ingested.
 
 ## Start a scribe
 
@@ -138,7 +173,8 @@ summary.
 ## Controls
 
 Open a scribe for its schedule, next and last run, model, failure alert, and
-recent runs.
+recent runs. Learn from Granola also shows the Granola plugin's state as its
+source.
 
 | Control           | Effect                                                                                                                                                                                                                                                                                                                                                   |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
