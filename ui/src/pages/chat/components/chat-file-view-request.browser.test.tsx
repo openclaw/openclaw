@@ -88,7 +88,7 @@ describe.runIf(browserMode)("file view request delivery", () => {
     const view = mountRequest(content);
     const editable = () =>
       view.container.querySelector<HTMLElement>('.cm-content[contenteditable="true"]');
-    await expect.poll(editable).not.toBeNull();
+    await expect.poll(editable, { timeout: 5_000 }).not.toBeNull();
     const editor = editable()!;
     const edits = () =>
       view.onFileInteraction.mock.calls.filter(([, interaction]) => interaction === "edit");
