@@ -23,7 +23,20 @@ export type ChannelHealthMonitor = {
 };
 
 export function startChannelHealthMonitor(params: {
-  channelManager: ChannelManager;
+  channelManager: Pick<
+    ChannelManager,
+    | "getRuntimeSnapshot"
+    | "getAutostartSuppression"
+    | "recoverAutostartSuppression"
+    | "isAccountListed"
+    | "isHealthMonitorEnabled"
+    | "isManuallyStopped"
+    | "isAmbientAutostartSuppressed"
+    | "isAutoRestartScheduled"
+    | "captureAccountRestart"
+    | "resetRestartAttempts"
+    | "startChannel"
+  >;
   scheduler: GatewayScheduler;
 }): ChannelHealthMonitor {
   const { channelManager } = params;
@@ -38,8 +51,7 @@ export function startChannelHealthMonitor(params: {
 
   async function runCheckWork() {
     try {
-      const now = scheduler.now();
-      if (now - startedAt < DEFAULT_MONITOR_STARTUP_GRACE_MS) {
+      if (scheduler.now() - startedAt < DEFAULT_MONITOR_STARTUP_GRACE_MS) {
         return;
       }
 
