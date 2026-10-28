@@ -648,6 +648,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/cloudflare-ai-gateway/**"
+          - "docs/providers/cloudflare-ai-gateway.md"
 "extensions: cohere":
   - changed-files:
       - any-glob-to-any-file:

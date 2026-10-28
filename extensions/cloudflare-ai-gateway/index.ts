@@ -20,6 +20,8 @@ import {
   applyCloudflareAiGatewayConnectionConfig,
   applyCloudflareAiGatewayProviderConnectionConfig,
 } from "./onboard.js";
+import { buildWorkersAiDecisionProvider } from "./workers-ai-decision-provider.js";
+import { buildWorkersAiProvider } from "./workers-ai-provider.js";
 
 const log = createSubsystemLogger("cloudflare-ai-gateway-stream");
 
@@ -191,5 +193,11 @@ export default definePluginEntry({
         });
       },
     });
+    api.registerProvider(buildWorkersAiProvider());
+    api.registerDecisionProvider(
+      buildWorkersAiDecisionProvider({
+        getImageMetadata: (buffer) => api.runtime.media.getImageMetadata(buffer),
+      }),
+    );
   },
 });

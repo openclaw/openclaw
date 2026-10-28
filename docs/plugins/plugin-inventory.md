@@ -234,7 +234,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[clickclack](/plugins/reference/clickclack)** (`@openclaw/clickclack`) - npm or ClawHub: `@openclaw/clickclack`. OpenClaw ClickClack channel plugin.
 
-- **[cloudflare-ai-gateway](/plugins/reference/cloudflare-ai-gateway)** (`@openclaw/cloudflare-ai-gateway-provider`) - npm or ClawHub: `@openclaw/cloudflare-ai-gateway-provider`. Adds Cloudflare AI Gateway model provider support to OpenClaw.
+- **[cloudflare-ai-gateway](/plugins/reference/cloudflare-ai-gateway)** (`@openclaw/cloudflare-ai-gateway-provider`) - npm or ClawHub: `@openclaw/cloudflare-ai-gateway-provider`. Adds Cloudflare AI Gateway, Cloudflare Workers AI model provider support to OpenClaw.
 
 - **[codex](/plugins/reference/codex)** (`@openclaw/codex`) - npm or ClawHub: `@openclaw/codex`. Codex app-server harness and native session catalog.
 
