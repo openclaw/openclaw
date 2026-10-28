@@ -41,6 +41,18 @@ describe("slack directory live cursor pagination", () => {
     expect(slackClientMocks.usersList).toHaveBeenCalledTimes(2);
   });
 
+  it("matches canonically equivalent names without rewriting the entry", async () => {
+    const displayName = "Mu\u0308ller";
+    slackClientMocks.usersList.mockResolvedValue({
+      members: [{ id: "U9", name: "mueller", profile: { display_name: displayName } }],
+      response_metadata: { next_cursor: "" },
+    });
+
+    const rows = await listSlackDirectoryPeersLive({ ...params, query: "Müller" });
+
+    expect(rows).toMatchObject([{ id: "user:U9", name: displayName }]);
+  });
+
   it("rejects a repeated users.list cursor instead of paginating forever", async () => {
     slackClientMocks.usersList.mockResolvedValue({
       members: [],
