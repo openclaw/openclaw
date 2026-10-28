@@ -118,6 +118,16 @@ membership of saved files. Exact cache-root paths in the owned archive remain
 restored inputs; new generated paths under the same directories are still excluded.
 An ambiguous older cache file may therefore remain preserved.
 
+If local workspace preparation reports that it expired during cleanup, retry the
+session. Both workspaces remain intact. Older missing baseline records repair
+automatically when either workspace still matches the saved baseline, or when an
+intact pending-checkpoint result reconstructs that exact baseline. Recovery keeps
+other live edits and pending receipts. If neither can be verified, the error names
+both preserved paths and a command to compare them. That command only inspects
+differences; it does not restore the missing baseline. Keep both directories and
+ask a Gateway administrator to recover the saved baseline inventory before retrying.
+Recreating a sandbox does not repair missing baseline records.
+
 For Git-backed native-node and SSH workspaces, worker-side captures also exclude
 new generated files under those two build-cache roots. Tracked files, ignored
 files explicitly selected by `.worktreeinclude`, and exact inputs recorded in a
