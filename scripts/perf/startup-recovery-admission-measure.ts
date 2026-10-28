@@ -227,6 +227,7 @@ const earlyReadProbes: Array<{
   error?: string;
 }> = [];
 let earlyReads: Promise<void> | undefined;
+let mainIntegrityFinishedAt: number | undefined;
 const report: Record<string, unknown> = {
   checkout,
   port,
@@ -662,6 +663,14 @@ try {
       ? [{ time: record.time, message: record.message, details: asRecord(record["1"]) }]
       : [],
   );
+  const mainIntegrity = restartRecords.find(
+    (record) =>
+      record.message === "agent database integrity gate" &&
+      asRecord(record["1"]).agentId === "main",
+  );
+  if (typeof mainIntegrity?.time === "string") {
+    mainIntegrityFinishedAt = Date.parse(mainIntegrity.time);
+  }
   const recoveryDurations = restartMessages.flatMap((message) => {
     const match = /startup (?:phase|trace): sidecars\.main-session-recovery (\d+(?:\.\d+)?)ms/.exec(
       message,
@@ -681,8 +690,12 @@ try {
   process.exitCode = 1;
 }
 await earlyReads;
+report.mainIntegrityFinishedAt = mainIntegrityFinishedAt;
 report.earlyReadsSuccess =
-  earlyReadProbes.length > 0 && earlyReadProbes.every((probe) => probe.success);
+  earlyReadProbes.length > 0 &&
+  earlyReadProbes.every(
+    (probe) => probe.success && (probe.completedAt ?? Infinity) < (mainIntegrityFinishedAt ?? 0),
+  );
 report.sessions = scenarios;
 await writeFile(path.join(output, "gateway.log"), instance.logs());
 await writeFile(path.join(output, "report.json"), `${JSON.stringify(report, null, 2)}\n`);

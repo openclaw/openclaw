@@ -144,95 +144,101 @@ it.each(["queued", "reused"] as const)("bounds and drains pending %s opens", asy
   expect(admission.retainedBytes).toBe(0);
 });
 
-it("admits cold shared state while an agent opens, with one shared input budget", async () => {
-  const admission = inputAdmission();
-  const finishAgent = createDeferredCore();
-  const sharedGate = createEnteredGate();
-  const openShared = <T>(bytes: number, run: () => Promise<T>) =>
-    admission.open(bytes, run, undefined, undefined, true);
-  const agent = admission.open(512, () => finishAgent.promise);
-  const shared = openShared(512, sharedGate.wait);
-  try {
-    await sharedGate.entered;
-    await expect(admission.open(1, async () => {})).rejects.toMatchObject({ code: "overloaded" });
-    sharedGate.release();
-    await shared;
-    expect(admission.retainedBytes).toBe(512);
-    await expect(openShared(513, async () => {})).rejects.toMatchObject({ code: "overloaded" });
-    await expect(openShared(512, async () => "shared reopened")).resolves.toBe("shared reopened");
-  } finally {
-    sharedGate.release();
-    finishAgent.resolve();
-    await Promise.all([agent, shared]);
-  }
-  expect(admission.retainedBytes).toBe(0);
-});
+it.each(["shared-state", "agent"] as const)(
+  "admits cold %s beside ordinary opens within one input budget",
+  async (carrierClass) => {
+    const admission = inputAdmission();
+    const finishOrdinary = createDeferredCore();
+    const isolatedGate = createEnteredGate();
+    const openIsolated = <T>(bytes: number, run: () => Promise<T>) =>
+      admission.open(bytes, run, undefined, undefined, carrierClass);
+    const ordinary = admission.open(512, () => finishOrdinary.promise);
+    const isolated = openIsolated(512, isolatedGate.wait);
+    try {
+      await isolatedGate.entered;
+      await expect(admission.open(1, async () => {})).rejects.toMatchObject({ code: "overloaded" });
+      isolatedGate.release();
+      await isolated;
+      expect(admission.retainedBytes).toBe(512);
+      await expect(openIsolated(513, async () => {})).rejects.toMatchObject({ code: "overloaded" });
+      await expect(openIsolated(512, async () => "isolated reopened")).resolves.toBe(
+        "isolated reopened",
+      );
+    } finally {
+      isolatedGate.release();
+      finishOrdinary.resolve();
+      await Promise.all([ordinary, isolated]);
+    }
+    expect(admission.retainedBytes).toBe(0);
+  },
+);
 
 await initializeSqliteRuntimeCapabilities();
 const { databasePath } = useSqliteWorkerStoreFixture("sqlite-capacity-drain-");
-it("keeps one physical owner when shared and ordinary opens acquire carriers together", async ({
-  signal,
-}) => {
-  const pathname = databasePath();
-  const alias = `${pathname}.alias`;
-  const database = openNodeSqliteDatabase(pathname);
-  database.exec("CREATE TABLE entries (id INTEGER PRIMARY KEY, value TEXT NOT NULL)");
-  admitSqliteSchema(database);
-  linkSync(pathname, alias);
-  const acquired = createDeferredCore();
-  let count = 0;
-  const createLifecycle = workerLifecycle.createSqliteWorkerLifecycle;
-  const lifecycleSpy = vi
-    .spyOn(workerLifecycle, "createSqliteWorkerLifecycle")
-    .mockImplementation((options) => {
-      const lifecycle = createLifecycle(options);
-      const acquireSlot = lifecycle.acquireSlot;
-      lifecycle.acquireSlot = async (...args) => {
-        const slot = await acquireSlot(...args);
-        if (++count === 2) {
-          acquired.resolve();
-        }
-        await acquired.promise;
-        return slot;
-      };
-      return lifecycle;
-    });
-  const broker = new SqliteWorkerBroker();
-  const options = {
-    moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
-    databasePath: pathname,
-    existingOnly: true,
-    input: undefined,
-  };
-  const opening = Promise.allSettled([
-    broker.open<FixtureOperations>(options, undefined, undefined, { sharedState: true }),
-    broker.open<FixtureOperations>({ ...options, databasePath: alias }),
-  ]);
-  try {
-    const outcomes = await withinTest(opening, signal);
-    const opened = outcomes.flatMap((outcome) =>
-      outcome.status === "fulfilled" && outcome.value ? [outcome.value] : [],
-    );
-    expect(opened).toHaveLength(1);
-    expect(outcomes.find((outcome) => outcome.status === "rejected")).toMatchObject({
-      reason: { code: "overloaded", message: expect.stringContaining("retry open") },
-    });
-    const store = opened[0]!;
-    await appendWorkerRow(store, "still owned");
-    await expect(readWorkerRows(store)).resolves.toEqual(["still owned"]);
-  } finally {
-    acquired.resolve();
-    const outcomes = await opening;
-    await Promise.all(
-      outcomes.flatMap((outcome) =>
-        outcome.status === "fulfilled" && outcome.value ? [outcome.value.close()] : [],
-      ),
-    );
-    await broker.close();
-    lifecycleSpy.mockRestore();
-    database.close();
-  }
-});
+it.for(["shared-state", "agent"] as const)(
+  "keeps one physical owner across %s and ordinary opens",
+  async (carrierClass, { signal }) => {
+    const pathname = databasePath();
+    const alias = `${pathname}.alias`;
+    const database = openNodeSqliteDatabase(pathname);
+    database.exec("CREATE TABLE entries (id INTEGER PRIMARY KEY, value TEXT NOT NULL)");
+    admitSqliteSchema(database);
+    linkSync(pathname, alias);
+    const acquired = createDeferredCore();
+    let count = 0;
+    const createLifecycle = workerLifecycle.createSqliteWorkerLifecycle;
+    const lifecycleSpy = vi
+      .spyOn(workerLifecycle, "createSqliteWorkerLifecycle")
+      .mockImplementation((options) => {
+        const lifecycle = createLifecycle(options);
+        const acquireSlot = lifecycle.acquireSlot;
+        lifecycle.acquireSlot = async (...args) => {
+          const slot = await acquireSlot(...args);
+          if (++count === 2) {
+            acquired.resolve();
+          }
+          await acquired.promise;
+          return slot;
+        };
+        return lifecycle;
+      });
+    const broker = new SqliteWorkerBroker();
+    const options = {
+      moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
+      databasePath: pathname,
+      existingOnly: true,
+      input: undefined,
+    };
+    const opening = Promise.allSettled([
+      broker.open<FixtureOperations>(options, undefined, undefined, { carrierClass }),
+      broker.open<FixtureOperations>({ ...options, databasePath: alias }),
+    ]);
+    try {
+      const outcomes = await withinTest(opening, signal);
+      const opened = outcomes.flatMap((outcome) =>
+        outcome.status === "fulfilled" && outcome.value ? [outcome.value] : [],
+      );
+      expect(opened).toHaveLength(1);
+      expect(outcomes.find((outcome) => outcome.status === "rejected")).toMatchObject({
+        reason: { code: "overloaded", message: expect.stringContaining("retry open") },
+      });
+      const store = opened[0]!;
+      await appendWorkerRow(store, "still owned");
+      await expect(readWorkerRows(store)).resolves.toEqual(["still owned"]);
+    } finally {
+      acquired.resolve();
+      const outcomes = await opening;
+      await Promise.all(
+        outcomes.flatMap((outcome) =>
+          outcome.status === "fulfilled" && outcome.value ? [outcome.value.close()] : [],
+        ),
+      );
+      await broker.close();
+      lifecycleSpy.mockRestore();
+      database.close();
+    }
+  },
+);
 
 it("joins host drainage during reclamation without cycling through open admission", async () => {
   const broker = new SqliteWorkerBroker();

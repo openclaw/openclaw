@@ -25,6 +25,7 @@ import {
 } from "../infra/sqlite-database-admission.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import * as sqliteWorkerStore from "../infra/sqlite-worker-store.js";
+import type { FixtureOperations } from "../infra/sqlite-worker-store.test-support.js";
 import {
   assertAgentDatabaseAdmitted,
   captureAgentDatabaseAdmission,
@@ -421,8 +422,8 @@ it.for(["before-promotion", "revoked", "aborted"] as const)(
   },
 );
 
-it.for(["warm", "cold", "peer"] as const)(
-  "serves shared ingress and prepares peers while agent integrity is held (%s)",
+it.for(["warm", "cold", "peer", "plugin-warm", "plugin-cold"] as const)(
+  "serves independent stores and prepares peers while agent integrity is held (%s)",
   { timeout: 30_000 },
   async (workload, { signal }) => {
     const env = makeEnv("agent-preparation-isolation-");
@@ -439,8 +440,21 @@ it.for(["warm", "cold", "peer"] as const)(
     });
     const pending: Promise<void>[] = [];
     let slowPrepared = false;
+    const plugins: Promise<sqliteWorkerStore.SqliteWorkerStore<FixtureOperations>>[] = [];
+    const openPlugin = () => {
+      const opening = sqliteWorkerStore.openSqliteWorkerStore<FixtureOperations>({
+        moduleUrl: new URL("../infra/sqlite-worker-store.test-support.ts", import.meta.url),
+        databasePath: `${env.OPENCLAW_STATE_DIR}/plugin-${plugins.length}.sqlite`,
+        input: undefined,
+      });
+      plugins.push(opening);
+      return opening;
+    };
     try {
-      // Warm ingress and the ready agent occupy both ordinary slots before the slow open.
+      if (workload === "plugin-warm") {
+        await openPlugin();
+        await openPlugin();
+      }
       if (workload === "warm") {
         await queue.enqueue("before", { text: "before preparation" });
       }
@@ -453,7 +467,20 @@ it.for(["warm", "cold", "peer"] as const)(
       pending.push(preparing);
       void preparing.catch(() => {});
       await withinTest(integrity.entered(), signal);
-      if (workload === "peer") {
+      if (workload.startsWith("plugin-")) {
+        if (workload === "plugin-cold") {
+          void openPlugin();
+        }
+        await withinTest(
+          Promise.all(
+            plugins.map(async (opening) => {
+              const store = await opening;
+              expect(await store.execute({ type: "read", input: undefined })).toEqual([]);
+            }),
+          ),
+          signal,
+        );
+      } else if (workload === "peer") {
         for (const execution of executions.slice(1)) {
           const preparingPeer = execution.prepare(source);
           pending.push(preparingPeer);
@@ -469,6 +496,7 @@ it.for(["warm", "cold", "peer"] as const)(
     } finally {
       integrity.release();
       await Promise.allSettled(pending);
+      await Promise.all(plugins.map(async (opening) => (await opening).close()));
       await Promise.all(executions.map((execution) => execution.release()));
     }
     expect(slowPrepared).toBe(true);

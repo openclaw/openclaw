@@ -267,14 +267,17 @@ table check. Explicit FULL, foreign-key checks, private-image certification, and
 rollback validation retain their existing coverage.
 
 Gateway agent inspections share a five-second foreground wait. Unfinished stores
-remain unavailable while the startup admission owner completes their inspection
+remain pending while the startup admission owner completes their inspection
 and session/model preparation after the listener is ready. Other agents and the
 Control UI can start in the meantime. Inspection starts during foreground
 readiness and continues without an idle retry delay. Deferred writable admission
 starts after Gateway sidecars are ready, with at most two databases opening
-concurrently. The shared-state writer has its own SQLite carrier and cold-open
-queue, so agent integrity scans cannot hold durable channel intake or shared
-configuration reads behind them. Channels and accounts prepare independently;
+concurrently. Agent writers, generic plugin stores, and shared state use separate
+SQLite carriers and cold-open queues, so agent integrity scans cannot hold plugin
+reads, durable channel intake, or shared configuration reads behind them. Agent
+and generic stores each retain up to two carriers; shared state retains one. Each
+class can lend one additional carrier to a retained runtime generation during an
+update. Physical database ownership and the global store/input budgets stay shared. Channels and accounts prepare independently;
 pending channel starts remain tracked for shutdown while plugin services and
 recovery continue. Agent-local session preparation then
 runs with up to four agents concurrently. Only credential/model publication
@@ -853,7 +856,7 @@ completes. Eligible reads use their separate owner-published readiness; writes
 never bypass the integrity gate.
 New database opens wait for an available worker before selecting their execution
 carrier, so a brief busy period on one worker does not bind them behind another
-agent's full integrity scan. Worker limits and existing command ordering are unchanged.
+agent's full integrity scan. Existing per-actor command ordering is unchanged.
 Genuine migration warnings remain recorded for the boot. This changes no stored state or update
 migration behavior.
 
