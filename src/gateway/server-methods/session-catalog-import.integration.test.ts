@@ -287,6 +287,66 @@ async function createCatalog(restricted: boolean) {
 }
 
 describe("sessions.catalog.import with durable Gateway owners", () => {
+  it.each([false, true])(
+    "rechecks Draft creation policy after import preparation (existing=%s)",
+    (existing) =>
+      withCatalog(async (fixture) => {
+        if (existing) {
+          expect(await fixture.call()).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ created: true, importedItems: 2 }),
+          );
+        }
+        let current = fixture.config;
+        vi.spyOn(fixture.context, "getRuntimeConfig").mockImplementation(() => current);
+        const createGatewaySession = sessionCreation.createGatewaySession;
+        vi.spyOn(sessionCreation, "createGatewaySession").mockImplementationOnce(async (params) => {
+          current = {
+            ...fixture.config,
+            session: { ...fixture.config.session, sharing: { drafts: false } },
+          };
+          setRuntimeConfigSnapshot(current);
+          return createGatewaySession(params);
+        });
+        const response = await fixture.call();
+        if (existing) {
+          expect(response).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ created: false, importedItems: 0 }),
+          );
+          expect(
+            loadSessionEntryReadOnly({ agentId: "main", sessionKey: fixture.key })?.visibility,
+          ).toBe("draft");
+        } else {
+          expect(response).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              code: "INVALID_REQUEST",
+              details: { code: "SESSION_VISIBILITY_DISABLED", visibility: "draft" },
+            }),
+          );
+          expect(
+            loadSessionEntryReadOnly({ agentId: "main", sessionKey: fixture.key }),
+          ).toBeUndefined();
+          expect(await fixture.transcript()).toEqual([]);
+        }
+      }),
+  );
+
+  it("keeps the configured import default when Draft creation starts disabled", () =>
+    withCatalog(async (fixture) => {
+      fixture.config.session = { sharing: { drafts: false } };
+      expect(await fixture.call()).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ created: true, importedItems: 2 }),
+      );
+      expect(
+        loadSessionEntryReadOnly({ agentId: "main", sessionKey: fixture.key })?.visibility ??
+          "shared",
+      ).toBe("shared");
+    }));
+
   it("imports and re-imports without waiting on model catalog publication", async () => {
     await withCatalog(async (fixture) => {
       const loadCatalog = vi
