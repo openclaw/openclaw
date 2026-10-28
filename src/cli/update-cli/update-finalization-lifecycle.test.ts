@@ -295,11 +295,12 @@ it("records the accepted CLI stop cause after admitted plugin work settles", asy
           step: "finalize:plugins",
           status: "failed",
           failureFacts: [
-            expect.objectContaining({
+            {
               check: "plugins",
               code: "20",
               message: "CLI stopping (unhandled rejection)",
-            }),
+            },
+            { check: "update", code: "update-failed" },
           ],
         }),
       ]),
