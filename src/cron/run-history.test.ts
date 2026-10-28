@@ -9,6 +9,7 @@ import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { cronQuietTriggerDetail, cronRunLogEntryToDetail } from "./run-history-detail.js";
 import {
+  cronRunHistoryMatchesQuery,
   projectCronRunHistoryPage,
   selectCronRunHistoryPage,
   type ReadCronRunHistoryPageOptions,
@@ -90,6 +91,26 @@ function expectTimestamps(records: CronRunRecord[], id: string, expected: (numbe
     row && [row.createdAt, row.startedAt, row.endedAt, row.lastEventAt, row.cleanupAfter],
   ).toEqual(expected);
 }
+
+it("matches canonically equivalent Unicode text in run search", () => {
+  const composed = "München report";
+  const decomposed = "Mu\u0308nchen report";
+  const entry = (fields: Partial<CronRunLogEntry> = {}): CronRunLogEntry => ({
+    action: "finished",
+    jobId: "job",
+    ts: 20,
+    status: "ok",
+    ...fields,
+  });
+  expect(cronRunHistoryMatchesQuery(entry({ summary: decomposed }), composed)).toBe(true);
+  expect(cronRunHistoryMatchesQuery(entry({ summary: composed }), decomposed)).toBe(true);
+  expect(cronRunHistoryMatchesQuery(entry({ summary: "run" }), composed, { job: decomposed })).toBe(
+    true,
+  );
+  // ASCII, case and absent-text behavior stay as they were.
+  expect(cronRunHistoryMatchesQuery(entry({ summary: "Daily REPORT" }), "report")).toBe(true);
+  expect(cronRunHistoryMatchesQuery(entry({ summary: "Daily REPORT" }), "nightly")).toBe(false);
+});
 
 function pruneHistory(
   db: EngineConnection,
