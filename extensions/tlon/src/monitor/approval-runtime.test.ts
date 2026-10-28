@@ -12,10 +12,11 @@ function createApproval(index: number): PendingApproval {
   };
 }
 
-function createFixture() {
-  const approvals = Array.from({ length: TLON_PENDING_APPROVAL_LIMIT }, (_, index) =>
+function createFixture(
+  approvals = Array.from({ length: TLON_PENDING_APPROVAL_LIMIT }, (_, index) =>
     createApproval(index),
-  );
+  ),
+) {
   const state: Parameters<typeof createTlonApprovalRuntime>[0]["state"] = {
     pendingApprovals: approvals,
     currentSettings: {},
@@ -42,6 +43,7 @@ function createFixture() {
   });
   return {
     approvals,
+    state,
     poke,
     runtime,
     approvalRuntime,
@@ -119,5 +121,28 @@ describe("Tlon pending approval limit", () => {
       originalMessage: message,
     });
     expect(fixture.getPendingApprovals()[0]?.verifiedDirect).toBeUndefined();
+  });
+});
+
+describe("Tlon approval targeting", () => {
+  it("applies a bare decision when exactly one request is pending", async () => {
+    const fixture = createFixture([createApproval(0)]);
+
+    expect(await fixture.approvalRuntime.handleApprovalResponse("approve")).toBe(true);
+
+    expect(fixture.state.effectiveDmAllowlist).toEqual(["~ship-0"]);
+    expect(fixture.state.pendingApprovals).toEqual([]);
+  });
+
+  it("does not guess when a bare decision has multiple pending requests", async () => {
+    const fixture = createFixture();
+
+    expect(await fixture.approvalRuntime.handleApprovalResponse("approve")).toBe(true);
+
+    expect(fixture.state.effectiveDmAllowlist).toEqual([]);
+    expect(fixture.state.pendingApprovals).toEqual(fixture.approvals);
+    expect(JSON.stringify(fixture.poke.mock.calls)).toContain("Multiple approvals are pending");
+    expect(JSON.stringify(fixture.poke.mock.calls)).toContain("dm-0");
+    expect(JSON.stringify(fixture.poke.mock.calls)).toContain("dm-99");
   });
 });
