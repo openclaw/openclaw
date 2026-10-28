@@ -672,6 +672,9 @@ function createPluginGenerationArtifact(
       // The receipt attests the initial snapshot; lazy imports retain their own copied bytes.
       sourceDigest: initialReceipt.sourceDigest,
       ...sourceLookup,
+      captureRecoverySource: markPluginSourceCaptureOperation(async () =>
+        sourceLookup.captureRecoverySource(),
+      ),
       retainSourceCustody: markPluginSourceCaptureOperation(() =>
         sourceFacts.captureCustody(sourceLookup.captureRecoverySource),
       ),

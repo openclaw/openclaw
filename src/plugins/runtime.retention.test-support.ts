@@ -307,7 +307,7 @@ async function recoverOwner(root: string, kind: "source" | "bundled-cjs" | "bund
     rootDir: root,
   });
   assert.equal((instance.loadModule(source) as { read(): string }).read(), "recovered source");
-  const recovery = instance.captureModuleLoaderRecovery();
+  const recovery = await instance.captureModuleLoaderRecovery();
   await instance.dispose();
   const current = new PluginInstance(record.id);
   recovery.bind(current);

@@ -246,7 +246,7 @@ export async function reloadGatewayPlugins(
     let nextRegistry = preflight.pluginRegistry;
     resourceHandoffIds = selectResourceHandoff(nextRegistry, requestedIds);
     channels.collectTargets(nextRegistry, changedPluginIds);
-    for (const warning of recovery.capture(changedPluginIds)) {
+    for (const warning of await recovery.capture(changedPluginIds)) {
       log.warn(warning);
       recordWarning(warning);
     }

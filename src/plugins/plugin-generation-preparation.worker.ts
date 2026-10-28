@@ -256,8 +256,8 @@ function createPreparationSession(context: CaptureCommand) {
             ),
           );
           const captureRecovery = artifact.captureRecoverySource.bind(artifact);
-          artifact.captureRecoverySource = markPluginSourceCaptureOperation(() =>
-            ownRecovery(captureRecovery()),
+          artifact.captureRecoverySource = markPluginSourceCaptureOperation(async () =>
+            ownRecovery(await captureRecovery()),
           );
           const retainCustody = artifact.retainSourceCustody.bind(artifact);
           artifact.retainSourceCustody = markPluginSourceCaptureOperation(() => {

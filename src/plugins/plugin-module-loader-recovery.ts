@@ -106,10 +106,10 @@ export function preparePluginModuleLoaderRecovery(
     pluginSdkResolution: params.pluginSdkResolution,
     recoverySourceMap: params.recoverySourceMap,
   };
-  params.instance.bindModuleLoaderRecovery(() =>
+  params.instance.bindModuleLoaderRecovery(async () =>
     createSourceModuleRecovery(
       { ...facts, sourceDigest: params.instance.sourceDigest },
-      artifact.captureRecoverySource(),
+      await artifact.captureRecoverySource(),
       bindInstance,
     ),
   );

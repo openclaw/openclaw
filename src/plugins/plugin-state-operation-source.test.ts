@@ -163,7 +163,7 @@ it("recovers bundled closures without requiring bundled-away dependencies", asyn
     "index.cjs",
     true,
   );
-  const recovery = original.captureModuleLoaderRecovery();
+  const recovery = await original.captureModuleLoaderRecovery();
   await original.dispose();
   fs.rmSync(root, { recursive: true, force: true });
   const restored = new PluginInstance("operation-fixture");

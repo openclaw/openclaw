@@ -163,7 +163,7 @@ it("streams native bytes into a stable snapshot", () => {
 
 it.each(["cold", "warm", "lazy"] as const)(
   "rejects replaced destinations before %s admission",
-  (phase) => {
+  async (phase) => {
     const source = fixture(Buffer.from("captured"), "fixture.js");
     fs.writeFileSync(path.join(source.directory, "native.bin"), "native");
     const entry = path.join(source.directory, "entry.js");
@@ -206,7 +206,7 @@ it.each(["cold", "warm", "lazy"] as const)(
           lazy.captureModule(lazy.resolve(entry), specifier, ["node", "import"]),
         ).toThrow(reloadError);
       }
-      expect(lazy.captureRecoverySource).toThrow(reloadError);
+      await expect(lazy.captureRecoverySource()).rejects.toThrow(reloadError);
     }
     expect(replaced).toBe(true);
     expect(readText(source.filename)).toBe("captured");

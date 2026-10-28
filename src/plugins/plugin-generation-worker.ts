@@ -261,7 +261,7 @@ export async function preparePluginGenerationArtifact(
         asynchronous,
         args: codec.encodeArguments(args),
       };
-      return asynchronous ? request(command) : requestSync(command, sourceCapture);
+      return asynchronous ? request(command, sourceCapture) : requestSync(command, sourceCapture);
     },
     {
       exportRoot: () => {
@@ -291,7 +291,7 @@ export async function preparePluginGenerationArtifact(
     }
     return codec.decode(reply.value);
   }
-  async function request(command: GenerationWorkerInput): Promise<unknown> {
+  async function request(command: GenerationWorkerInput, sourceCapture = false): Promise<unknown> {
     if (closing) {
       throw new Error("Plugin preparation worker has closed");
     }
@@ -303,7 +303,7 @@ export async function preparePluginGenerationArtifact(
         {
           // Capture cost scales with package size and filesystem latency. Its owner
           // controls retirement; an arbitrary deadline can reject healthy plugins.
-          ...(command.operation === "capture" ? {} : { timeoutMs: 120_000 }),
+          ...(command.operation === "capture" || sourceCapture ? {} : { timeoutMs: 120_000 }),
           progressSignal: waitSignal,
           transferList: (value) =>
             value.operation === "capture" && value.callbackPort ? [value.callbackPort] : [],
