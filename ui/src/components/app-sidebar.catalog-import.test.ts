@@ -5,6 +5,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { SessionsCatalogImportResult } from "../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import "../lib/toast-host.tsx";
+import {
+  consumeSessionNavigationDetails,
+  prepareSessionNavigationHandoff,
+} from "../lib/sessions/navigation-handoff.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import {
   catalogPage,
@@ -32,11 +36,14 @@ const result: SessionsCatalogImportResult = {
   created: true,
 };
 
-async function fixture(scopes = ["operator.read", "operator.write"]) {
+async function fixture(scopes = ["operator.read", "operator.write"], filtered = false) {
   vi.useFakeTimers();
   const imported = createDeferred<SessionsCatalogImportResult>();
   const catalog = catalogPage([{ threadId: "thread-1", name: "Keep these notes" }]);
   catalog.catalogs[0]!.hosts[0]!.sessions[0]!.sourceHomeId = "home-1";
+  if (filtered) {
+    catalog.catalogs[0]!.capabilities.profileRelation = true;
+  }
   const request = vi.fn(async (method: string) => {
     if (method === "sessions.catalog.import") {
       return imported.promise;
@@ -44,13 +51,19 @@ async function fixture(scopes = ["operator.read", "operator.write"]) {
     return catalog;
   });
   const gateway = createGatewayHarness(createTestGatewayClient(request));
-  gateway.publish({ hello: gatewayHelloForMethods(["sessions.catalog.list"], scopes) });
+  gateway.publish({
+    hello: gatewayHelloForMethods(["sessions.catalog.list"], scopes),
+    selfUser: { id: "profile-alice", name: "Alice" },
+  });
   const { sidebar } = await mountSidebar(
     gateway.gateway,
     createSessions("main", ["agent:main:main"]),
   );
   sidebar.connected = true;
   sidebar.onNavigate = vi.fn();
+  if (filtered) {
+    sidebar.setSessionOwnerFilter(null, true);
+  }
   const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
   await sidebar.updateComplete;
   await vi.advanceTimersByTimeAsync(0);
@@ -68,6 +81,63 @@ async function fixture(scopes = ["operator.read", "operator.write"]) {
 }
 
 describe("AppSidebar catalog import", () => {
+  it.each(["row", "menu"])(
+    "carries the selected relationship from %s navigation into the route",
+    async (entry) => {
+      const { sidebar, gateway } = await fixture(undefined, true);
+      const profileRelation = { relationship: "involving", target: { type: "me" } };
+      expect(sidebar.sessionData.sessionCatalogProfileRelation).toEqual(profileRelation);
+      if (entry === "menu") {
+        sidebar
+          .querySelector<HTMLButtonElement>('openclaw-catalog-session-menu [data-value="viewer"]')!
+          .click();
+      } else {
+        sidebar.sidebarMenus.catalogMenu.close();
+        sidebar
+          .querySelector<HTMLAnchorElement>(
+            '[data-catalog-session-key*="thread-1"] .sidebar-recent-session__link',
+          )!
+          .click();
+      }
+      expect(sidebar.onNavigate).toHaveBeenCalledOnce();
+      const [, navigation] = vi.mocked(sidebar.onNavigate!).mock.calls[0]!;
+      expect(JSON.stringify(navigation)).not.toContain("profileRelation");
+      expect(consumeSessionNavigationDetails(gateway.gateway, navigation!.pathname!)).toMatchObject(
+        {
+          catalogProfileRelation: profileRelation,
+        },
+      );
+    },
+  );
+
+  it("replaces a pending filtered handoff when opening an unfiltered menu row", async () => {
+    const { sidebar, gateway } = await fixture();
+    const pathname = "/chat/main";
+    prepareSessionNavigationHandoff(gateway.gateway, pathname, "stale-catalog-key", {
+      relationship: "involving",
+      target: { type: "me" },
+    });
+    sidebar
+      .querySelector<HTMLButtonElement>('openclaw-catalog-session-menu [data-value="viewer"]')!
+      .click();
+    const [, navigation] = vi.mocked(sidebar.onNavigate!).mock.calls[0]!;
+    expect(consumeSessionNavigationDetails(gateway.gateway, navigation!.pathname!)).toMatchObject({
+      catalogProfileRelation: undefined,
+    });
+  });
+
+  it("imports through the query captured by the filtered catalog row", async () => {
+    const { selectImport, request, imported } = await fixture(undefined, true);
+    await selectImport();
+    expect(request).toHaveBeenCalledWith(
+      "sessions.catalog.import",
+      expect.objectContaining({
+        profileRelation: { relationship: "involving", target: { type: "me" } },
+      }),
+    );
+    imported.resolve(result);
+    await vi.advanceTimersByTimeAsync(0);
+  });
   it.each([
     { outcome: "success", stale: false },
     { outcome: "failure", stale: false },

@@ -1,4 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
+import type { SessionCatalogProfileRelation } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { NavigationRouteId, SidebarZoneEntry } from "../app-navigation.ts";
@@ -71,6 +72,7 @@ export interface SessionListHost {
     | "refreshSessionCatalogs"
     | "retryChildSessions"
     | "sessionCatalogRefreshStatus"
+    | "sessionCatalogProfileRelation"
     | "sessionMutationError"
     | "visibleSessionLimits"
   >;
@@ -146,6 +148,11 @@ export interface SessionListHost {
   showMoreChildren(sessionKey: string): void;
   toggleSection(sectionId: string): void;
   expandedAgentId(): string;
+  prepareSessionNavigation(
+    sessionKey: string,
+    pathname: string,
+    profileRelation?: SessionCatalogProfileRelation,
+  ): void;
   readNewSessionAccess(): SessionMethodAccess;
   readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess;
   requestOpenNewSession(agentId: string, target?: NewSessionTarget): void;

@@ -88,6 +88,55 @@ it("owns canonical list/read parameter and cursor parsing", () => {
   ).toThrow("cursor is invalid");
 });
 
+it("requires relationship opt-in and binds list/read cursors to the exact query", () => {
+  const involving = {
+    relationship: "involving",
+    target: { type: "github-account", id: "101" },
+  } as const;
+  const owned = { ...involving, relationship: "owned" } as const;
+  const listOptions = { searchMaxLength: 20, messages };
+  const readOptions = { threadIdMaxLength: 32, threadIdPattern: /^thread-\d+$/u, messages };
+  expect(() =>
+    sessionCatalogPaging.parseListParams({ profileRelation: involving }, listOptions),
+  ).toThrow("unknown list: profileRelation");
+  expect(() =>
+    sessionCatalogPaging.parseReadParams(
+      { threadId: "thread-1", profileRelation: involving },
+      readOptions,
+    ),
+  ).toThrow("unknown read: profileRelation");
+  expect(
+    sessionCatalogPaging.parseListParams(
+      { profileRelation: involving },
+      { ...listOptions, supportsProfileRelation: true },
+    ),
+  ).toMatchObject({ profileRelation: involving });
+  expect(
+    sessionCatalogPaging.parseReadParams(
+      { threadId: "thread-1", profileRelation: involving },
+      { ...readOptions, supportsProfileRelation: true },
+    ),
+  ).toMatchObject({ profileRelation: involving });
+  const page = sessionCatalogPaging.encodeCursor(100, involving);
+  const transcript = sessionCatalogPaging.encodeScopedCursor("native-cursor", involving);
+  expect(sessionCatalogPaging.decodeCursor(page, involving)).toBe(100);
+  expect(sessionCatalogPaging.decodeScopedCursor(transcript, involving)).toBe("native-cursor");
+  for (const query of [owned, undefined]) {
+    expect(() => sessionCatalogPaging.decodeCursor(page, query)).toThrow("cursor is invalid");
+    if (query) {
+      expect(() => sessionCatalogPaging.decodeScopedCursor(transcript, query)).toThrow(
+        "relationship query",
+      );
+    }
+  }
+  expect(() =>
+    sessionCatalogPaging.decodeCursor(sessionCatalogPaging.encodeCursor(100), involving),
+  ).toThrow("cursor is invalid");
+  expect(() => sessionCatalogPaging.decodeScopedCursor("native-cursor", involving)).toThrow(
+    "relationship query",
+  );
+});
+
 it("pages newest-first by source order with non-monotonic timestamps", () => {
   const timestamps = [4, 1, 3, 0, 2].map((second) => `2026-08-30T12:00:0${second}Z`);
   const items: SessionCatalogTranscriptItem[] = ["z", "2", "10", "a", "1"].map((id, index) => ({

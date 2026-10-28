@@ -623,11 +623,15 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     this.catalogRead = read;
     this.catalogReadPending = false;
     const agentId = resolveChatAgentId(state);
+    const profileRelation =
+      this.catalogProfileRelation && structuredClone(this.catalogProfileRelation);
+    const queryKey = JSON.stringify(profileRelation);
     const requestedSessionKey = this.sessionKey;
     const isCurrent = () =>
       !read.controller.signal.aborted &&
       this.catalogRead === read &&
       this.isConnectionScopeCurrent(scope) &&
+      JSON.stringify(this.catalogProfileRelation) === queryKey &&
       this.sessionKey === requestedSessionKey &&
       resolveChatAgentId(state) === agentId;
     if (!older) {
@@ -645,6 +649,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
           agentId,
           client,
           key,
+          profileRelation,
           isCurrent,
           signal: read.controller.signal,
         });
@@ -662,6 +667,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
           catalogId: key.catalogId,
           hostId: key.hostId,
           threadId: key.threadId,
+          ...(profileRelation ? { profileRelation } : {}),
           ...(this.history.catalogSession?.sourceHomeId
             ? { sourceHomeId: this.history.catalogSession.sourceHomeId }
             : {}),

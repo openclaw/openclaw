@@ -9,6 +9,7 @@ export const chatPaneProperties = {
   chatMessagesBySession: { default: undefined },
   sessionSnapshotStore: { default: undefined },
   sessionKey: { default: "" },
+  catalogProfileRelation: { default: undefined },
   routeLoadingSkeleton: { default: false },
   routeResolutionPending: { default: false },
   agentId: { default: undefined },

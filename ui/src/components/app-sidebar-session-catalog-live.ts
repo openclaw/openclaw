@@ -1,6 +1,7 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   SessionCatalog,
+  SessionCatalogProfileRelation,
   SessionsCatalogHostEvent,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
@@ -21,6 +22,7 @@ import {
   preserveExpandedCatalogHost,
   refetchExpandedSessionCatalogPages,
   sessionCatalogPageFailed,
+  sessionCatalogRequestError,
 } from "./app-sidebar-session-catalog-state.ts";
 import { sessionCatalogHostKey } from "./app-sidebar-session-types.ts";
 
@@ -67,6 +69,7 @@ function isSessionsCatalogHostEvent(value: unknown): value is SessionsCatalogHos
 
 /** Tracks one sidebar's progressive list streams and event refresh lifecycle. */
 export class SessionCatalogLiveState {
+  readonly pollId = generateUUID();
   refreshScope = {};
   timer: ReturnType<typeof globalThis.setTimeout> | null = null;
   requestGeneration: number | null = null;
@@ -391,6 +394,7 @@ export async function refreshSessionCatalogsLive(params: {
   live: SessionCatalogLiveState;
   client: GatewayBrowserClient;
   agentId: string;
+  profileRelation?: SessionCatalogProfileRelation;
   generation: number;
   currentGeneration: () => number;
   currentClient: () => GatewayBrowserClient | null;
@@ -423,12 +427,52 @@ export async function refreshSessionCatalogsLive(params: {
     scope === live.refreshScope &&
     live.isCurrentRequest(progressId);
   try {
-    const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+    const request = {
       agentId: params.agentId,
+      pollId: live.pollId,
       limitPerHost: 40,
       progressId,
       allowPartialResults: true,
-    });
+    };
+    // Discover capabilities without downloading any rows. Unrelated native catalogs
+    // keep their existing local-filter behavior; selected shared catalogs never
+    // fall back to an unfiltered request.
+    let result: SessionsCatalogListResult;
+    if (params.profileRelation) {
+      const metadata = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+        agentId: params.agentId,
+        metadataOnly: true,
+      });
+      if (!requestIsCurrent()) {
+        return;
+      }
+      const pages = await Promise.all(
+        metadata.catalogs.map(async (catalog) => {
+          try {
+            return await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+              ...request,
+              catalogId: catalog.id,
+              ...(catalog.capabilities.profileRelation
+                ? { profileRelation: params.profileRelation }
+                : {}),
+            });
+          } catch (error) {
+            return {
+              catalogs: [
+                {
+                  ...catalog,
+                  hosts: [],
+                  error: sessionCatalogRequestError(error),
+                },
+              ],
+            };
+          }
+        }),
+      );
+      result = { catalogs: pages.flatMap((page) => page.catalogs) };
+    } else {
+      result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", request);
+    }
     if (!requestIsCurrent() || !result?.catalogs) {
       return;
     }
@@ -441,6 +485,8 @@ export async function refreshSessionCatalogsLive(params: {
         previousCatalogs: observed,
         client,
         agentId: params.agentId,
+        pollId: live.pollId,
+        ...(params.profileRelation ? { profileRelation: params.profileRelation } : {}),
         pageDepths,
         isCurrent: requestIsCurrent,
         canRequestPage: () => requestIsCurrent() && document.visibilityState !== "hidden",

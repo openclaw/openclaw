@@ -20,6 +20,10 @@ import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.t
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import {
+  CATALOG_SESSION_GROUP_LIMIT,
+  CatalogPagination,
+} from "./app-sidebar-session-catalog-pagination.tsx";
+import {
   catalogErrorMessages,
   formatSidebarTimestamp,
   normalizeCatalogTimestamp,
@@ -50,7 +54,6 @@ const CATALOG_CONTROLS = [
   ["menu", "[data-sidebar-session-menu]"],
   ["catalogMenu", "[data-catalog-session-menu]"],
 ] as const;
-const CATALOG_SESSION_GROUP_LIMIT = 5;
 export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
   // Adopted rows use canonical local labels and title snapshots; native catalog
   // refreshes must not rename them or replace the regular session presentation.
@@ -123,6 +126,9 @@ function renderCatalogHostGroup(
       agentId: params.snapshot.newSessionAgentId,
       routeId,
       navigation: target().options,
+      profileRelation: readCatalog().capabilities.profileRelation
+        ? params.host.sessionData.sessionCatalogProfileRelation
+        : undefined,
       canOpenTerminal: readSession().canOpenTerminal === true,
       canDelete: readSession().canArchive && readCatalog().capabilities.archive,
       name: readSession().name ?? readSession().threadId,
@@ -243,6 +249,13 @@ function renderCatalogHostGroup(
                     params.snapshot.newSessionAgentId,
                   );
                 } else {
+                  params.host.prepareSessionNavigation(
+                    key(),
+                    target().options.pathname,
+                    readCatalog().capabilities.profileRelation
+                      ? params.host.sessionData.sessionCatalogProfileRelation
+                      : undefined,
+                  );
                   params.host.onNavigate?.(routeId, target().options);
                 }
               })
@@ -334,34 +347,6 @@ function renderCatalogHostGroup(
       >
         {(session) => renderCatalogSessionRow(session, rowProps.projectChild === true)}
       </For>
-    );
-  }
-  function CatalogPagination(pageProps: {
-    sessions: readonly SessionCatalogSession[];
-    sectionId: string;
-  }) {
-    const expanded = () =>
-      (params.host.sessionData.visibleSessionLimits.get(pageProps.sectionId) ??
-        CATALOG_SESSION_GROUP_LIMIT) > CATALOG_SESSION_GROUP_LIMIT;
-    const label = () => (expanded() ? t("chat.messages.showLess") : t("chat.messages.showMore"));
-    return (
-      <Show when={pageProps.sessions.length > CATALOG_SESSION_GROUP_LIMIT}>
-        <div class="sidebar-session-pagination sidebar-session-pagination--catalog">
-          <button
-            type="button"
-            class="sidebar-session-pagination__button"
-            aria-label={label()}
-            onClick={() =>
-              params.host.setVisibleSessionLimit(
-                pageProps.sectionId,
-                expanded() ? CATALOG_SESSION_GROUP_LIMIT : pageProps.sessions.length,
-              )
-            }
-          >
-            {label()}
-          </button>
-        </div>
-      </Show>
     );
   }
   const flatSessions = createMemo(() => projectGroups()?.ungrouped ?? readHost().sessions);
@@ -468,7 +453,11 @@ function renderCatalogHostGroup(
                           projectChild
                         />
                       </div>
-                      <CatalogPagination sessions={group().sessions} sectionId={sectionId()} />
+                      <CatalogPagination
+                        host={params.host}
+                        sessions={group().sessions}
+                        sectionId={sectionId()}
+                      />
                     </>
                   )}
                 </div>
@@ -478,7 +467,7 @@ function renderCatalogHostGroup(
         ) : undefined}
         <CatalogRows sessions={flatSessions()} sectionId={flatSectionId()} />
       </div>
-      <CatalogPagination sessions={flatSessions()} sectionId={flatSectionId()} />
+      <CatalogPagination host={params.host} sessions={flatSessions()} sectionId={flatSectionId()} />
     </section>
   );
 }

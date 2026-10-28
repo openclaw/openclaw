@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type {
   SessionCatalog,
   SessionCatalogHost,
+  SessionCatalogProfileRelation,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
@@ -174,6 +175,7 @@ export function projectSidebarSessionCatalogs(
         // Catalog access and creator attribution do not establish involvement.
         // Only the Gateway-filtered backing roster can admit a catalog row.
         if (
+          !catalog.capabilities.profileRelation &&
           involvingSessionKeys &&
           (!session.sessionKey || !involvingSessionKeys.has(session.sessionKey))
         ) {
@@ -185,7 +187,7 @@ export function projectSidebarSessionCatalogs(
         if (session.sessionKey && isSessionHidden?.(adoptedRow ?? { key: session.sessionKey })) {
           return false;
         }
-        if (!ownerId) {
+        if (!ownerId || catalog.capabilities.profileRelation) {
           return true;
         }
         const effectiveOwnerId = adoptedRow ? adoptedRow.owner?.actor.id : session.createdActor?.id;
@@ -224,6 +226,7 @@ export type CatalogSessionMenuRequest = {
   agentId: string;
   routeId: "chat" | "new-session";
   navigation: ApplicationNavigationOptions;
+  profileRelation?: SessionCatalogProfileRelation;
   canOpenTerminal: boolean;
   canDelete: boolean;
   name: string;

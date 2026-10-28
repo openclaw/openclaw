@@ -3,7 +3,10 @@ import type {
   SessionCatalog,
   SessionCatalogHost,
 } from "../../../packages/gateway-protocol/src/index.ts";
-import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import {
+  createTestGatewayClient,
+  createGatewayRequestMock,
+} from "../test-helpers/gateway-client.ts";
 import {
   mergeSessionCatalogPage,
   refetchExpandedSessionCatalogPages,
@@ -66,3 +69,46 @@ it.each(["host", "catalog"] as const)(
     }
   },
 );
+
+it("replays expanded pages with the owning poll scope and only supported relationship queries", async () => {
+  const first = catalog(["first"], { nextCursor: "native-next" });
+  const shared = {
+    ...catalog(["shared-first"], { nextCursor: "selected-next" }),
+    id: "openclaw",
+    capabilities: { continueSession: false, archive: false, profileRelation: true as const },
+  };
+  const query = {
+    relationship: "owned" as const,
+    target: { type: "local-profile" as const, id: "local-person" },
+  };
+  const request = createGatewayRequestMock(async (_method, args) => ({
+    catalogs: [{ ...catalog(["last"]), id: (args as { catalogId: string }).catalogId }],
+  }));
+  await refetchExpandedSessionCatalogPages({
+    catalogs: [first, shared],
+    previousCatalogs: [],
+    client: createTestGatewayClient(request),
+    agentId: "main",
+    pollId: "sidebar",
+    profileRelation: query,
+    pageDepths: new Map(
+      [first, shared].map((entry) => [sessionCatalogHostKey(entry.id, "gateway:local"), 1]),
+    ),
+    isCurrent: () => true,
+    canRequestPage: () => true,
+  });
+  expect(request).toHaveBeenCalledWith(
+    "sessions.catalog.list",
+    expect.objectContaining({
+      catalogId: "openclaw",
+      pollId: "sidebar",
+      profileRelation: query,
+      cursors: { "gateway:local": "selected-next" },
+    }),
+  );
+  expect(
+    request.mock.calls.find(
+      ([, args]) => (args as { catalogId: string }).catalogId === "anthropic",
+    )?.[1],
+  ).not.toHaveProperty("profileRelation");
+});

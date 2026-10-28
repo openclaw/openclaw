@@ -5,6 +5,7 @@ import type {
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
 import sessionSharePlugin from "../../extensions/session-share/index.js";
+import type { SessionCatalogSourceProfileRelation } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import { createPluginRecord } from "../../src/plugins/loader-records.js";
 import { createRuntimeTestRegistry } from "../../src/plugins/registry-runtime.test-helpers.js";
 import { createPluginRuntime } from "../../src/plugins/runtime/index.js";
@@ -39,7 +40,11 @@ export function commandFixture(groups: string[] = ["Team"], agents?: OpenClawCon
   const commands = registry.registry.nodeHostCommands.map((entry) => entry.command);
   const list = commands.find((command) => command.command === "openclaw.sessions.list.v1")!;
   const read = commands.find((command) => command.command === "openclaw.sessions.read.v1")!;
+  let profileRelation: SessionCatalogSourceProfileRelation | undefined;
   return {
+    query: (value?: SessionCatalogSourceProfileRelation) => {
+      profileRelation = value;
+    },
     config,
     runtime,
     commands,
@@ -47,8 +52,16 @@ export function commandFixture(groups: string[] = ["Team"], agents?: OpenClawCon
       config.plugins!.entries!["session-share"]!.config = { share };
     },
     list: async (params: Record<string, unknown> = {}) =>
-      JSON.parse(await list.handle(JSON.stringify(params))) as SessionPage,
+      JSON.parse(
+        await list.handle(
+          JSON.stringify({ ...(profileRelation ? { profileRelation } : {}), ...params }),
+        ),
+      ) as SessionPage,
     read: async (threadId: string, params: Record<string, unknown> = {}) =>
-      JSON.parse(await read.handle(JSON.stringify({ threadId, ...params }))) as TranscriptPage,
+      JSON.parse(
+        await read.handle(
+          JSON.stringify({ threadId, ...(profileRelation ? { profileRelation } : {}), ...params }),
+        ),
+      ) as TranscriptPage,
   };
 }

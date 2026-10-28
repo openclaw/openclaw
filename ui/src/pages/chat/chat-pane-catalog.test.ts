@@ -87,6 +87,83 @@ function expectNoContinuation({ pane, state }: ReturnType<typeof createCatalogCo
 }
 
 describe("chat pane catalog", () => {
+  it("carries a relationship query from metadata lookup through transcript pagination", async () => {
+    const query = { relationship: "involving", target: { type: "me" } } as const;
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(catalogList(catalogKey, [catalogSession]))
+      .mockResolvedValueOnce({
+        hostId: catalogKey.hostId,
+        threadId: catalogKey.threadId,
+        items: [],
+        nextCursor: "older",
+      })
+      .mockResolvedValueOnce({
+        hostId: catalogKey.hostId,
+        threadId: catalogKey.threadId,
+        items: [],
+      });
+    const { pane } = createCatalogPane(request, catalogKey, true);
+    pane.catalogProfileRelation = query;
+    await pane.loadCatalogSession(catalogKey, false);
+    await pane.loadCatalogSession(catalogKey, true);
+    expect(request).toHaveBeenCalledTimes(3);
+    for (const [, params] of request.mock.calls) {
+      expect(params).toMatchObject({ profileRelation: query });
+    }
+    expect(request).toHaveBeenLastCalledWith(
+      "sessions.catalog.read",
+      expect.objectContaining({ cursor: "older", profileRelation: query }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it.each(["metadata", "transcript"])(
+    "does not retry without selection after a %s query error",
+    async (phase) => {
+      const query = {
+        relationship: "owned",
+        target: { type: "profile", id: "source-person" },
+      } as const;
+      const request = vi.fn();
+      if (phase === "transcript") {
+        request.mockResolvedValueOnce(catalogList(catalogKey, [catalogSession]));
+      }
+      request.mockRejectedValue(new Error("Profile selection is unresolved on this source"));
+      const { pane, state } = createCatalogPane(request, catalogKey, true);
+      pane.catalogProfileRelation = query;
+      expect(await pane.loadCatalogSession(catalogKey, false)).toBe(false);
+      expect(state.lastError).toContain("Profile selection is unresolved");
+      expect(request).toHaveBeenCalledTimes(phase === "metadata" ? 1 : 2);
+      for (const [, params] of request.mock.calls) {
+        expect(params).toMatchObject({ profileRelation: query });
+      }
+      expect(pane.history.catalogMessages).toEqual([]);
+    },
+  );
+
+  it("rejects a held transcript when the pane's relationship selection changes", async () => {
+    const held = createDeferred<SessionsCatalogReadResult>();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(catalogList(catalogKey, [catalogSession]))
+      .mockImplementationOnce(() => held.promise);
+    const { pane } = createCatalogPane(request, catalogKey, true);
+    pane.catalogProfileRelation = { relationship: "involving", target: { type: "me" } };
+    const pending = pane.loadCatalogSession(catalogKey, false);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    pane.catalogProfileRelation = {
+      relationship: "owned",
+      target: { type: "profile", id: "another" },
+    };
+    held.resolve({
+      hostId: catalogKey.hostId,
+      threadId: catalogKey.threadId,
+      items: [{ type: "userMessage", text: "obsolete" }],
+    });
+    expect(await pending).toBe(false);
+    expect(JSON.stringify(pane.history.catalogMessages)).not.toContain("obsolete");
+  });
   it("reuses catalog history while admitting an older page", async () => {
     installTranscriptDomMocks();
     onTestFinished(resetTranscriptTestDom);

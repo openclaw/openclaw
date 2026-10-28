@@ -1,5 +1,6 @@
 import type {
   SessionCatalog,
+  SessionCatalogProfileRelation,
   SessionCatalogHost,
   SessionCatalogSession,
   SessionsCatalogListResult,
@@ -171,6 +172,8 @@ export async function refetchExpandedSessionCatalogPages(params: {
   previousCatalogs: readonly SessionCatalog[];
   client: GatewayBrowserClient;
   agentId: string;
+  profileRelation?: SessionCatalogProfileRelation;
+  pollId?: string;
   pageDepths: ReadonlyMap<string, number>;
   isCurrent: () => boolean;
   canRequestPage: () => boolean;
@@ -251,6 +254,10 @@ export async function refetchExpandedSessionCatalogPages(params: {
                 {
                   agentId: params.agentId,
                   catalogId: catalog.id,
+                  ...(params.pollId ? { pollId: params.pollId } : {}),
+                  ...(catalog.capabilities.profileRelation && params.profileRelation
+                    ? { profileRelation: params.profileRelation }
+                    : {}),
                   hostIds: [host.hostId],
                   cursors: { [host.hostId]: nextCursor },
                 },

@@ -18,7 +18,7 @@ import {
 const suite = createControlUiE2eSuite({ name: "Catalog session involvement" });
 
 suite.define(() => {
-  it("keeps only Gateway-admitted catalog conversations under Involving me", async () => {
+  it("preserves mixed-provider involvement and carries the Team selection into reads", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const sidebar = page.locator(".sidebar");
       const viewer = sessionPerson("profile-ada", "Ada");
@@ -70,11 +70,40 @@ suite.define(() => {
           ],
         },
       ];
+      const profileRelation = { relationship: "involving", target: { type: "me" } };
+      const teamEntry = {
+        ...entry("team-mentioned", "Team mention conversation"),
+        canContinue: false,
+      };
+      const team = {
+        id: "openclaw",
+        label: "Team",
+        capabilities: { continueSession: false, archive: false, profileRelation: true },
+        requiresFreshList: true,
+        hosts: [
+          {
+            hostId: "node:team",
+            nodeId: "team",
+            label: "Team source",
+            kind: "node",
+            connected: true,
+            sessions: [
+              teamEntry,
+              { ...entry("team-unrelated", "Unrelated Team conversation"), canContinue: false },
+            ],
+          },
+        ],
+      };
+      const selectedTeam = { ...team, hosts: [{ ...team.hosts[0], sessions: [teamEntry] }] };
       const gateway = await installMockGateway(page, {
         sessionKey: native.key,
         presenceUsers: [{ self: true, id: viewer.id, name: viewer.label }],
         sessions: [native, involved, unrelated],
-        featureMethods: [...defaultControlUiFeatureMethods, "sessions.catalog.list"],
+        featureMethods: [
+          ...defaultControlUiFeatureMethods,
+          "sessions.catalog.list",
+          "sessions.catalog.read",
+        ],
         historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
         methodResponses: {
           "sessions.list": {
@@ -86,7 +115,35 @@ suite.define(() => {
               { response },
             ],
           },
-          "sessions.catalog.list": { catalogs },
+          "sessions.catalog.list": {
+            cases: [
+              {
+                match: { metadataOnly: true },
+                response: {
+                  catalogs: [...catalogs, team].map((catalog) => ({
+                    id: catalog.id,
+                    label: catalog.label,
+                    capabilities: catalog.capabilities,
+                    requiresFreshList:
+                      "requiresFreshList" in catalog ? catalog.requiresFreshList : undefined,
+                    hosts: [],
+                  })),
+                },
+              },
+              {
+                match: { catalogId: "openclaw", profileRelation },
+                response: { catalogs: [selectedTeam] },
+              },
+              { match: { catalogId: "openclaw" }, response: { catalogs: [team] } },
+              { match: { catalogId: "codex" }, response: { catalogs } },
+              { response: { catalogs: [...catalogs, team] } },
+            ],
+          },
+          "sessions.catalog.read": {
+            hostId: "node:team",
+            threadId: "team-mentioned",
+            items: [{ type: "agentMessage", text: "Selected Team transcript" }],
+          },
         },
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, native.key));
@@ -100,24 +157,48 @@ suite.define(() => {
       await chooseSidebarMenuOption(page, "Status", "All");
       await closeSidebarMenu(page);
       // Open the source so filter assertions inspect actual rows.
-      const coding = page.getByRole("button", { name: "Coding", exact: true });
-      if (await coding.count()) {
-        await coding.click();
+      for (const [id, label] of [
+        ["codex", "Coding"],
+        ["openclaw", "Team"],
+      ]) {
+        const source = page.getByRole("button", { name: label, exact: true });
+        if (await source.count()) {
+          await source.click();
+        }
+        const toggle = page
+          .locator(`[data-session-section="catalog:${id}"] .sidebar-session-group-toggle`)
+          .first();
+        if ((await toggle.count()) && (await toggle.getAttribute("aria-expanded")) === "false") {
+          await toggle.click();
+        }
       }
-      const toggle = page
-        .locator('[data-session-section="catalog:codex"] .sidebar-session-group-toggle')
-        .first();
-      if ((await toggle.count()) && (await toggle.getAttribute("aria-expanded")) === "false") {
-        await toggle.click();
-      }
-      await expectVisible("Unlinked conversation", involved.label);
+      await expectVisible("Unlinked conversation", involved.label, "Unrelated Team conversation");
       await chooseSidebarOwner(page, "involving-me");
       await expect
         .poll(
           async () => (await gateway.getRequests("sessions.list", { involvingMe: true })).length,
         )
         .toBeGreaterThan(0);
-      await expectVisible(native.label, involved.label);
+      await expectVisible(native.label, involved.label, teamEntry.name);
+      await expect
+        .poll(
+          async () =>
+            (
+              await gateway.getRequests("sessions.catalog.list", {
+                catalogId: "openclaw",
+                profileRelation,
+              })
+            ).length,
+        )
+        .toBeGreaterThan(0);
+      const codingRequests = await gateway.getRequests("sessions.catalog.list", {
+        catalogId: "codex",
+      });
+      expect(codingRequests.length).toBeGreaterThan(0);
+      for (const request of codingRequests) {
+        expect(request.params).not.toHaveProperty("profileRelation");
+      }
+      await expectBrowser(text("Unrelated Team conversation")).toHaveCount(0);
       const artifactParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       if (artifactParent) {
         const directory = createControlUiE2eArtifactDir("catalog-involvement", artifactParent);
@@ -131,8 +212,18 @@ suite.define(() => {
       }
       await expectBrowser(text("Unlinked conversation")).toHaveCount(0);
       await expectBrowser(text(unrelated.label)).toHaveCount(0);
+      await text(teamEntry.name).click();
+      await expectBrowser(
+        page.getByText("Selected Team transcript", { exact: true }),
+      ).toBeVisible();
+      expect((await gateway.getRequests("sessions.catalog.read")).at(-1)?.params).toMatchObject({
+        catalogId: "openclaw",
+        hostId: "node:team",
+        threadId: "team-mentioned",
+        profileRelation,
+      });
       await selectAllSidebarSessions(page);
-      await expectVisible("Unlinked conversation", unrelated.label);
+      await expectVisible("Unlinked conversation", unrelated.label, "Unrelated Team conversation");
     });
   });
 });

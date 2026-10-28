@@ -22,12 +22,16 @@ import { createPluginRuntime } from "../../src/plugins/runtime/index.js";
 import { createDeferredCore } from "../../src/shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../src/state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../../src/state/openclaw-state-db.paths.js";
-import { linkEmail } from "../../src/state/user-profile-writes.worker.js";
+import { linkEmail, syncGitHubIdentity } from "../../src/state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../src/state/user-profiles.js";
 import { observeHostDataSql } from "../helpers/sqlite-statement-execution-counter.js";
 import { commandFixture } from "./session-share.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
+const relation = (id: string, relationship: "owned" | "involving" = "involving") => ({
+  relationship,
+  target: { type: "profile" as const, id },
+});
 
 describe("session-share source publication filters", () => {
   it("requires groups, narrows to canonical owners or participants, and preserves exclusions", async () => {
@@ -112,6 +116,30 @@ describe("session-share source publication filters", () => {
         (await fixture.list()).sessions
           .map(({ threadId }) => threadId.slice("agent:main:".length))
           .toSorted((left, right) => left.localeCompare(right));
+      // Request selection narrows the publication; only its involvement relation includes mentions.
+      fixture.select({ groups: ["Team"] });
+      fixture.query(relation(alias.id));
+      expect(await listed()).toEqual(["creator", "mention", "owner", "participant"]);
+      fixture.query(relation(person.id, "owned"));
+      expect(await listed()).toEqual(["creator", "owner"]);
+      fixture.query(relation(other.id, "owned"));
+      expect(await listed()).toEqual(["reassigned"]);
+      fixture.select({ groups: ["Team"], involvingProfileId: person.id });
+      expect(await listed()).toEqual([]);
+      await expect(fixture.read("agent:main:reassigned")).rejects.toThrow("not shared");
+      fixture.query(relation(person.id));
+      expect(await listed()).toEqual(["creator", "owner", "participant"]);
+      await expect(fixture.read("agent:main:mention")).rejects.toThrow("not shared");
+      fixture.select({ groups: ["Team"] });
+      expect(await listed()).toContain("mention");
+      const first = await fixture.list({ limit: 1 });
+      expect(first.nextCursor).toBeDefined();
+      expect((await fixture.list({ limit: 1, cursor: first.nextCursor })).sessions).toHaveLength(1);
+      fixture.query(relation(person.id, "owned"));
+      await expect(fixture.list({ cursor: first.nextCursor })).rejects.toThrow("cursor");
+      fixture.query();
+      expect(await listed()).toContain("unrelated");
+      expect(await listed()).toContain("reassigned");
       fixture.select({ involvingProfileId: person.id });
       expect(await listed()).toEqual([]);
       await expect(fixture.read("agent:main:participant")).rejects.toThrow("not shared");
@@ -263,6 +291,7 @@ describe("session-share source publication filters", () => {
         },
       };
       fixture.select({ groups: ["Team"], involvingProfileId: person.id });
+      fixture.query(relation(person.id));
       await replaceSessionEntry(scope, entry);
       await appendSessionTranscriptMessageByIdentity({
         ...scope,
@@ -644,6 +673,95 @@ describe("session-share source publication filters", () => {
             value: { share },
           }).ok,
         ).toBe(false);
+      }
+    });
+  });
+  it("selects a canonical source person by verified numeric accounts across a merge", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const fixture = commandFixture();
+      const profile = (accountId: number, email: string) =>
+        syncGitHubIdentity({
+          identity: { accountId, login: `query-${accountId}` },
+          authenticationAlias: { kind: "email", email },
+        });
+      const person = profile(701, "canonical@example.test");
+      const alias = profile(702, "alias@example.test");
+      const scope = { agentId: "main", sessionKey: "agent:main:portable", sessionId: "portable" };
+      await replaceSessionEntry(scope, {
+        sessionId: scope.sessionId,
+        updatedAt: Date.now(),
+        category: "Team",
+        createdActor: { type: "human", source: "profile", id: alias.id },
+      });
+      await appendSessionTranscriptMessageByIdentity({
+        ...scope,
+        message: { role: "user", content: "Selected portable transcript" },
+      });
+      linkEmail("alias@example.test", person.id);
+      for (const id of ["701", "702"]) {
+        fixture.query({ relationship: "owned", target: { type: "github-account", id } });
+        expect((await fixture.list()).sessions.map(({ threadId }) => threadId)).toEqual([
+          scope.sessionKey,
+        ]);
+        expect((await fixture.read(scope.sessionKey)).items).toMatchObject([
+          { type: "userMessage", text: "Selected portable transcript" },
+        ]);
+      }
+      fixture.query({ relationship: "owned", target: { type: "github-account", id: "999" } });
+      await expect(fixture.list()).rejects.toThrow("unresolved");
+      await expect(fixture.read(scope.sessionKey)).rejects.toThrow("unresolved");
+    });
+  });
+
+  it("bounds canonical membership preparation to the requested transcript", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const fixture = commandFixture();
+      const person = ensureProfileForEmail("reader@example.test");
+      for (const name of ["selected", "unrelated"]) {
+        await replaceSessionEntry(
+          { agentId: "main", sessionKey: `agent:main:${name}` },
+          {
+            sessionId: name,
+            updatedAt: Date.now(),
+            category: "Team",
+            createdActor: { type: "human", source: "profile", id: person.id },
+          },
+        );
+      }
+      await appendSessionTranscriptMessageByIdentity({
+        agentId: "main",
+        sessionKey: "agent:main:selected",
+        sessionId: "selected",
+        message: { role: "user", content: "Selected transcript" },
+      });
+      fixture.query(relation(person.id));
+      const prepare = vi.spyOn(fixture.runtime.agent.session, "withSessionEntriesAsync");
+      expect((await fixture.read("agent:main:selected")).items).toMatchObject([
+        { type: "userMessage", text: "Selected transcript" },
+      ]);
+      expect(prepare).toHaveBeenCalledTimes(2);
+      for (const [params] of prepare.mock.calls) {
+        expect(params.stores.flatMap((store) => store.sessionKeys)).toEqual([
+          "agent:main:selected",
+        ]);
+      }
+    });
+  });
+
+  it("rejects malformed relation queries instead of fetching an unfiltered publication", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const fixture = commandFixture();
+      for (const profileRelation of [
+        null,
+        {},
+        { relationship: "created", target: { type: "profile", id: "x" } },
+        { relationship: "involving", target: { type: "me" } },
+        { relationship: "owned", target: { type: "github-account", id: "login" } },
+      ]) {
+        await expect(fixture.list({ profileRelation })).rejects.toThrow("profileRelation");
+        await expect(fixture.read("agent:main:x", { profileRelation })).rejects.toThrow(
+          "profileRelation",
+        );
       }
     });
   });

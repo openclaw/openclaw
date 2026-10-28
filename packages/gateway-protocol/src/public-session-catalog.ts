@@ -2,6 +2,8 @@
 export type {
   SessionCatalog,
   SessionCatalogCapabilities,
+  SessionCatalogProfileRelation,
+  SessionCatalogSourceProfileRelation,
   SessionCatalogDescriptor,
   SessionCatalogHost,
   SessionCatalogLocator,

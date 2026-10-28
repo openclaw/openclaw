@@ -65,6 +65,14 @@ it("retains only observed hello identity and clears it across disconnect and sto
   expect(client.evidenceIdentity).toBeNull();
 });
 
+it("selects direct-local password auth without also sending the unused token", async () => {
+  const client = await startClient({ password: "qa-password" });
+  const options = rpc.Client.mock.calls[0]?.[0];
+  expect(options).toMatchObject({ password: "qa-password" });
+  expect(options).not.toHaveProperty("token");
+  await client.stop();
+});
+
 it("gates concurrent requests on reconnect without serializing their dispatch", async () => {
   const held = Promise.withResolvers<{ ok: boolean }>();
   rpc.request.mockImplementationOnce(() => held.promise).mockResolvedValueOnce({ ok: true });

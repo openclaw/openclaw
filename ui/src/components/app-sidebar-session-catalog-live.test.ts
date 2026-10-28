@@ -1,7 +1,11 @@
 // @vitest-environment node
-import { beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
-import { SessionCatalogLiveState } from "./app-sidebar-session-catalog-live.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
+import {
+  refreshSessionCatalogsLive,
+  SessionCatalogLiveState,
+} from "./app-sidebar-session-catalog-live.ts";
 import { sessionCatalogHostKey } from "./app-sidebar-session-types.ts";
 
 const idleSession = { status: "idle", archived: false, canContinue: true, canArchive: true };
@@ -105,5 +109,80 @@ it.each([
     expect(update?.catalogs).toEqual([fresh]);
     const pendingFinal = { ...fresh, hosts: [{ ...fresh.hosts[0]!, pending: true, sessions: [] }] };
     expect(live.mergeFinal([pendingFinal], update!.catalogs)).toEqual([fresh]);
+  },
+);
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+it.each([false, true])(
+  "discovers capabilities without prefetch and isolates unresolved selection (%s)",
+  async (unresolved) => {
+    vi.stubGlobal("document", { visibilityState: "hidden" });
+    const shared = {
+      ...catalog("openclaw", 1),
+      capabilities: { continueSession: false, archive: false, profileRelation: true as const },
+    };
+    const native = catalog("codex", 1);
+    const query = { relationship: "involving" as const, target: { type: "me" as const } };
+    const request = vi.fn(async (_method: string, args: Record<string, unknown>) => {
+      if (args.metadataOnly) {
+        return {
+          catalogs: [
+            { ...shared, hosts: [] },
+            { ...native, hosts: [] },
+          ],
+        };
+      }
+      if (args.catalogId === "openclaw") {
+        expect(args.profileRelation).toEqual(query);
+        if (unresolved) {
+          throw new Error("Profile selection has no verified GitHub identity");
+        }
+        return { catalogs: [shared] };
+      }
+      expect(args.catalogId).toBe("codex");
+      expect(args.profileRelation).toBeUndefined();
+      return { catalogs: [native] };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const current = new SessionCatalogLiveState();
+    let catalogs: SessionCatalog[] = [];
+    await refreshSessionCatalogsLive({
+      live: current,
+      client,
+      agentId: "main",
+      profileRelation: query,
+      generation: 1,
+      currentGeneration: () => 1,
+      currentClient: () => client,
+      catalogs: () => catalogs,
+      pageDepths: new Map(),
+      connected: () => true,
+      withdrawPrevious: () => {},
+      applyFinal: (result) => {
+        catalogs = result;
+      },
+      continueRefresh: async () => {},
+      applyError: (error) => {
+        throw error;
+      },
+      refresh: async () => {},
+    });
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request.mock.calls[0]?.[1]).toEqual({ agentId: "main", metadataOnly: true });
+    expect(catalogs.find(({ id }) => id === "codex")).toEqual(native);
+    const result = catalogs.find(({ id }) => id === "openclaw");
+    if (unresolved) {
+      expect(result?.hosts).toEqual([]);
+      expect(result?.error?.message).toContain("verified GitHub");
+    } else {
+      expect(result).toEqual(shared);
+    }
+    expect(request.mock.calls.slice(1).map(([, args]) => args.pollId)).toEqual([
+      current.pollId,
+      current.pollId,
+    ]);
   },
 );

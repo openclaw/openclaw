@@ -6,6 +6,7 @@ import {
   type SessionsCatalogReadResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
+import { resolveSessionCatalogProfileRelation } from "../session-catalog-identity.js";
 import { projectSessionParticipant } from "../session-identity-projection.js";
 import type { SessionActorProfileIdentity } from "../session-utils-contracts.js";
 import {
@@ -22,9 +23,21 @@ export async function readAuthorizedSessionCatalog(params: {
   client: GatewayClient | null;
   context: Pick<GatewayRequestContext, "getRuntimeConfig">;
 }): Promise<{ ok: true; page: SessionsCatalogReadResult } | { ok: false; error: ErrorShape }> {
-  const { catalogId: _catalogId, ...providerRequest } = params.request;
+  const {
+    catalogId: _catalogId,
+    profileRelation: requestedRelation,
+    ...providerRequest
+  } = params.request;
+  const profileRelation = await resolveSessionCatalogProfileRelation(
+    requestedRelation,
+    params.client?.authenticatedUserProfile?.profileId,
+  );
+  if (profileRelation && !params.provider.supportsProfileRelation) {
+    throw new Error("This catalog does not support relationship queries");
+  }
   const page = await params.provider.read({
     ...providerRequest,
+    ...(profileRelation ? { profileRelation } : {}),
     agentId: params.agentId,
     allowProcessHomeFallback: params.allowProcessHomeFallback,
   });

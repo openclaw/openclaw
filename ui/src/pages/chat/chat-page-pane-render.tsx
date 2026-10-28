@@ -193,6 +193,7 @@ function ChatPageSession(props: { options: ChatPagePaneRenderOptions; sessionKey
         chatMessagesBySession={props.options.chatMessagesBySession}
         sessionSnapshotStore={props.options.sessionSnapshotStore}
         sessionKey={props.sessionKey}
+        catalogProfileRelation={retainedRoute()?.catalogProfileRelation}
         agentId={
           props.options.splitMode ? parseAgentSessionKey(props.sessionKey)?.agentId : undefined
         }

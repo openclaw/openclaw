@@ -1,5 +1,6 @@
 import type {
   SessionCatalog,
+  SessionCatalogProfileRelation,
   SessionsCatalogArchiveParams,
   SessionsCatalogImportParams,
   SessionsCatalogImportResult,
@@ -74,6 +75,7 @@ export interface SessionCatalogDataOwner {
   loadingMoreSessionCatalogIds: ReadonlySet<string>;
   readonly sessionCatalogLive: SessionCatalogLiveState;
   sessionCatalogAgentId: string | null;
+  sessionCatalogProfileRelation?: SessionCatalogProfileRelation;
   readonly sessionScopeGeneration: number;
   sessionCatalogRevision: number;
   readonly sessionCatalogPageDepths: Map<string, number>;
@@ -320,6 +322,8 @@ async function replayFreshSessionCatalogHost(
     client,
     agentId,
     pageDepths: owner.sessionCatalogPageDepths,
+    profileRelation: owner.sessionCatalogProfileRelation,
+    pollId: owner.sessionCatalogLive.pollId,
     isCurrent,
     canRequestPage: () => isCurrent() && document.visibilityState !== "hidden",
   });
@@ -365,6 +369,7 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
     currentClient: () => owner.sessionCatalogGatewayClient(),
     catalogs: () => owner.sessionCatalogs,
     pageDepths: owner.sessionCatalogPageDepths,
+    profileRelation: owner.sessionCatalogProfileRelation,
     connected: () => owner.isSessionDataHostConnected,
     withdrawPrevious: () => {
       owner.loadingMoreSessionCatalogIds = new Set();
@@ -490,6 +495,10 @@ export async function loadMoreSessionCatalog(
     const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
       agentId,
       catalogId,
+      pollId: owner.sessionCatalogLive.pollId,
+      ...(catalog.capabilities.profileRelation && owner.sessionCatalogProfileRelation
+        ? { profileRelation: owner.sessionCatalogProfileRelation }
+        : {}),
       hostIds: Object.keys(cursors),
       cursors,
     });

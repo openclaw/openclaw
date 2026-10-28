@@ -173,9 +173,14 @@ async function startOwnedGatewayChild(
       await waitForGatewayReady(health);
     }
     lifetime.assertOpen();
+    const auth = launch.cfg.gateway?.auth;
     lifetime.rpcClient = await startQaGatewayRpcClient({
       wsUrl: launch.wsUrl,
       token: gatewayToken,
+      ...((auth?.mode === "password" || auth?.mode === "trusted-proxy") &&
+      typeof auth.password === "string"
+        ? { password: auth.password }
+        : {}),
       logs,
     });
     await lifetime.rpcClient.request("config.get", {}, { timeoutMs: 30_000 });

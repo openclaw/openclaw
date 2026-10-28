@@ -1,4 +1,7 @@
-import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
+import type {
+  SessionCatalog,
+  SessionCatalogProfileRelation,
+} from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
@@ -93,6 +96,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   readonly sessionCatalogLive = new SessionCatalogLiveState();
   sessionScopeGeneration = 0;
   sessionCatalogAgentId: string | null = null;
+  sessionCatalogProfileRelation: SessionCatalogProfileRelation | undefined;
   sessionCatalogRevision = 0;
   readonly sessionCatalogPageDepths = new Map<string, number>();
   private sessionScopeAgentId: string | null = null;
@@ -360,13 +364,22 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     this.agentSelectionSource = selection;
     this.agentSelectionIntentRevision = selection.intentRevision;
     const nextAgentId = normalizeAgentId(this.inputs.expandedAgentId());
+    const { ownerId, involvingMe } = this.inputs.sidebarSessionOwnerFilter();
+    const profileRelation: SessionCatalogProfileRelation | undefined = involvingMe
+      ? { relationship: "involving", target: { type: "me" } }
+      : ownerId
+        ? { relationship: "owned", target: { type: "local-profile", id: ownerId } }
+        : undefined;
+    const queryChanged =
+      JSON.stringify(profileRelation) !== JSON.stringify(this.sessionCatalogProfileRelation);
     // A reconnect cannot revoke ownership until its replacement hello is authoritative.
     const nextCatalogAgentId =
       resolveSessionCatalogAgentId(this) ??
       (context.gateway.snapshot.phase !== "connected" ? this.sessionCatalogAgentId : null);
     if (
       nextAgentId === this.sessionScopeAgentId &&
-      nextCatalogAgentId === this.sessionCatalogAgentId
+      nextCatalogAgentId === this.sessionCatalogAgentId &&
+      !queryChanged
     ) {
       return;
     }
@@ -387,11 +400,12 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
 
     this.sessionScopeAgentId = nextAgentId;
     this.sessionCatalogAgentId = nextCatalogAgentId;
+    this.sessionCatalogProfileRelation = profileRelation;
     retireSessionCatalogData(this);
     this.sessionCatalogRevision += 1;
     this.sessionCatalogRefreshStatus = createPanelRefreshStatus();
 
-    if (agentChanged || catalogAgentChanged) {
+    if (agentChanged || catalogAgentChanged || queryChanged) {
       // Catalog cursors and rows belong to the selected agent, not just its host.
       this.sessionCatalogs = [];
       this.sessionCatalogPageDepths.clear();

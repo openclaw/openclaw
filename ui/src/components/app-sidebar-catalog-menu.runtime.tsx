@@ -5,8 +5,9 @@ import { registerSessionOrganizationSharedEnglish } from "../i18n/locales/en-ses
 import { formatUiError } from "../lib/format-error.ts";
 import { t, registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { readSessionMethodScopeAccess } from "../lib/session-method-access.ts";
-import { parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import { buildCatalogSessionKey, parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
+import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { showToast } from "../lib/toast.ts";
 import type {
@@ -50,6 +51,7 @@ export function SidebarCatalogMenu(props: SidebarCatalogMenuProps) {
       const result = await props.host.sessionData.importSessionCatalog(scope, {
         ...menu.key,
         agentId: menu.agentId,
+        ...(menu.profileRelation ? { profileRelation: menu.profileRelation } : {}),
         ...(displayName ? { displayName } : {}),
       });
       if (!result || !isMutationCurrent(scope)) {
@@ -163,6 +165,16 @@ export function SidebarCatalogMenu(props: SidebarCatalogMenuProps) {
             void deleteSession(props.menu);
           }
           return;
+        }
+        const gateway = props.host.sessionDataContext?.gateway;
+        const pathname = props.menu.navigation.pathname;
+        if (gateway && pathname) {
+          prepareSessionNavigationHandoff(
+            gateway,
+            pathname,
+            buildCatalogSessionKey(props.menu.key, props.menu.agentId),
+            props.menu.profileRelation,
+          );
         }
         props.host.onNavigate?.(props.menu.routeId, props.menu.navigation);
       }}

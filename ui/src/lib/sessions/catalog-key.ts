@@ -1,5 +1,6 @@
 import type {
   SessionCatalogHost,
+  SessionCatalogProfileRelation,
   SessionsCatalogListResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -38,6 +39,7 @@ export async function lookupCatalogSession(params: {
   client: Pick<GatewayBrowserClient, "request">;
   key: CatalogSessionKey;
   agentId: string;
+  profileRelation?: SessionCatalogProfileRelation;
   isCurrent: () => boolean;
   signal?: AbortSignal;
 }) {
@@ -55,6 +57,7 @@ export async function lookupCatalogSession(params: {
         agentId,
         catalogId: key.catalogId,
         hostIds: [key.hostId],
+        ...(params.profileRelation ? { profileRelation: params.profileRelation } : {}),
         limitPerHost: CATALOG_SESSION_LOOKUP_PAGE_LIMIT,
         ...(cursor ? { cursors: { [key.hostId]: cursor } } : {}),
       },
