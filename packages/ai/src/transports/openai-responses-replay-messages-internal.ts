@@ -272,7 +272,31 @@ type ConvertResponsesMessagesOptions = {
   authProfileId?: string;
   replayMode?: OpenAIResponsesReplayMode;
   retainUserProvenance?: boolean;
+  mutableInput?: boolean;
 };
+
+// Weak source keys release projections with history. Keep a bounded set of route/position
+// variants so interleaved requests reuse their own result without retaining every route.
+const responsesMessageProjections = new WeakMap<
+  Context["messages"][number],
+  Map<string, ResponseInput>
+>();
+
+/** Detach hook-editable JSON containers while retaining scalar strings. */
+function cloneResponsesInputForPayloadHook<T>(value: T): T {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(cloneResponsesInputForPayloadHook) as T;
+  }
+  // Non-wire source/provenance symbols retain identity through payload spreads.
+  const copy = { ...value };
+  for (const key of Object.keys(copy)) {
+    Reflect.set(copy, key, cloneResponsesInputForPayloadHook(Reflect.get(value, key)));
+  }
+  return copy;
+}
 
 function convertResponsesMessagesWithStyle(
   model: Model,
@@ -402,13 +426,13 @@ function convertResponsesMessagesWithStyle(
   let msgIndex = 0;
   const appendAssistant = createResponsesInputReplay(model);
   const inHistorySystemUpdates = supportsNativeOpenAIResponsesEndpoint(model);
-  for (const msg of replayMessages) {
-    if (!("role" in msg)) {
-      messages.push(msg);
-      continue;
-    }
+  const convertMessage = (
+    msg: Context["messages"][number],
+    messageIndex: number,
+  ): ResponseInput => {
+    const converted: ResponseInput = [];
     if (inHistorySystemUpdates && isRuntimeContextMessage(msg)) {
-      messages.push(
+      converted.push(
         buildResponsesInputMessage(resolveResponsesInstructionRole(model), [
           {
             type: "input_text",
@@ -447,12 +471,10 @@ function convertResponsesMessagesWithStyle(
         ) {
           Object.assign(input, { [RESPONSES_RETAINED_USER]: true });
         }
-        messages.push(input);
-      } else if (providerStyle) {
-        continue;
+        converted.push(input);
       }
     } else if (msg.role === "assistant") {
-      const output: ResponseInput = [];
+      const output = converted;
       const sourceTurnKey = responsesAssistantTurnKey(msg);
       const sourceFragmentId = msg.content.find((block) => block.type === "toolCall")?.id;
       let textFallbackOrdinal = 0;
@@ -513,7 +535,7 @@ function convertResponsesMessagesWithStyle(
             // Async prefixes own a call; the final tail has none. Both survive history pruning.
             fallbackId: sourceTurnKey
               ? `msg_${shortHash(JSON.stringify([sourceTurnKey, sourceFragmentId]))}`
-              : `msg_${msgIndex}`,
+              : `msg_${messageIndex}`,
             fallbackOrdinal: textFallbackOrdinal,
             previousReplayItemWasReasoning,
           });
@@ -582,10 +604,7 @@ function convertResponsesMessagesWithStyle(
         }
         output.pop();
       }
-      appendAssistant(messages, output, msg);
-      if (output.length === 0 && providerStyle) {
-        continue;
-      }
+      return output;
     } else if (msg.role === "toolResult") {
       const textResult = extractToolResultText(msg.content);
       const hasText = textResult.trim().length > 0;
@@ -631,13 +650,68 @@ function convertResponsesMessagesWithStyle(
         }
         output = parts;
       }
-      messages.push({
+      converted.push({
         type: "function_call_output",
         call_id: callId,
         output,
       });
     }
-    msgIndex += 1;
+    return converted;
+  };
+  const immutable = getAiTransportHost().immutableData;
+  const projectionKey = JSON.stringify([
+    conversionStyle,
+    replayContext,
+    shouldReplayResponsesItemIds,
+    inHistorySystemUpdates,
+    resolveResponsesInstructionRole(model),
+    model.input.includes("image"),
+    options?.retainUserProvenance === true,
+  ]);
+  for (const msg of replayMessages) {
+    if (!("role" in msg)) {
+      messages.push(msg);
+      continue;
+    }
+    // Prepared suffix results resolve IDs against the current request's call map.
+    // Images already have prepared scalar facts. Caching their composed data URLs
+    // would retain a second large base64 string alongside each source image.
+    const reusable =
+      immutable &&
+      !preparedRequestSuffix.has(context) &&
+      immutable.isDeeplyFrozenPlainData(msg) &&
+      (typeof msg.content === "string" || !msg.content.some((block) => block.type === "image"));
+    const key = `${projectionKey}:${msgIndex}`;
+    let projections = reusable ? responsesMessageProjections.get(msg) : undefined;
+    let output = projections?.get(key);
+    if (!output) {
+      output = convertMessage(msg, msgIndex);
+      if (reusable) {
+        immutable.freezeJsonSnapshot(output);
+        if (!projections) {
+          projections = new Map();
+          responsesMessageProjections.set(msg, projections);
+        }
+        if (projections.size >= 8) {
+          const oldest = projections.keys().next().value;
+          if (oldest !== undefined) {
+            projections.delete(oldest);
+          }
+        }
+        projections.set(key, output);
+      }
+    }
+    if (reusable && options?.mutableInput) {
+      output = cloneResponsesInputForPayloadHook(output);
+    }
+    if (msg.role === "assistant") {
+      appendAssistant(messages, output, msg);
+    } else {
+      messages.push(...output);
+    }
+    if (output.length > 0 || !providerStyle) {
+      msgIndex += 1;
+    }
   }
   return messages;
 }
