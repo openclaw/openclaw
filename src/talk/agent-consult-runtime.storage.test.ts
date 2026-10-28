@@ -217,6 +217,43 @@ describe("voice consult concrete store ownership", () => {
       expect(revision()).not.toBe("day-one");
     });
 
+    it.each([
+      { name: "keeps its authority", revoke: false },
+      { name: "loses its authority", revoke: true },
+    ])("resets only while the caller $name through the commit", async ({ revoke }) => {
+      const { agentRuntime, consult, revision, runEmbeddedAgent, target } = await seedVoiceSession(
+        { reset: { mode: "daily", atHour: 4 } },
+        noon - 2 * 24 * 60 * MINUTE_MS,
+      );
+      let revoked = false;
+      const read = agentRuntime.session.getSessionEntryAsync;
+      agentRuntime.session = {
+        ...agentRuntime.session,
+        // Operator or device revocation lands while the consult prepares its reset.
+        getSessionEntryAsync: async (lookup) => {
+          const entry = await read(lookup);
+          revoked = revoke;
+          return entry;
+        },
+      };
+      const assertSourceCurrent = () => {
+        if (revoked) {
+          throw new Error("Talk caller source authority is no longer active");
+        }
+      };
+
+      const result = consult({ ...target, assertSourceCurrent });
+
+      if (revoke) {
+        await expect(result).rejects.toThrow("no longer active");
+        expect(runEmbeddedAgent).not.toHaveBeenCalled();
+        expect(revision()).toBe("day-one");
+      } else {
+        await expect(result).resolves.toEqual({ text: "Checked" });
+        expect(revision()).not.toBe("day-one");
+      }
+    });
+
     it("leaves the session untouched when the caller cancels during preparation", async () => {
       const { agentRuntime, consult, revision, runEmbeddedAgent, target } = await seedVoiceSession(
         { reset: { mode: "daily", atHour: 4 } },

@@ -191,6 +191,7 @@ async function rollOverStaleConsultSession(params: {
   entry: SessionEntry | undefined;
   logger: Pick<RuntimeLogger, "warn">;
   abortSignal?: AbortSignal;
+  assertSourceCurrent?: () => void;
 }): Promise<boolean> {
   const { agentId, sessionKey, storePath, entry } = params;
   const reason = await resolveDueVoiceSessionReset(params);
@@ -215,8 +216,12 @@ async function rollOverStaleConsultSession(params: {
     agentId,
     storePath,
     target: { canonicalKey: normalizeStoreSessionKey(sessionKey), storeKeys: [sessionKey] },
-    // A consult cancelled while preparing must not reset the session it never runs in.
-    commitGuard: () => params.abortSignal?.throwIfAborted(),
+    // A consult cancelled, or whose caller lost its authority, while preparing must not reset the
+    // session; this is the reset's point of effect, ahead of the run's own authority checks.
+    commitGuard: () => {
+      params.abortSignal?.throwIfAborted();
+      params.assertSourceCurrent?.();
+    },
     resetBoundary: {
       context: "preserve-tail",
       reason,
@@ -271,6 +276,8 @@ export async function consultRealtimeVoiceAgent(params: {
    * taken before the reset return its replacement (and drop that snapshot for later consults).
    */
   onSessionReset?: () => RealtimeVoiceAgentConsultTranscriptEntry[];
+  /** Owner-held caller authority (operator and device), rechecked when the reset commits. */
+  assertSourceCurrent?: () => void;
   surface: string;
   userLabel: string;
   assistantLabel?: string;
@@ -415,6 +422,7 @@ export async function consultRealtimeVoiceAgent(params: {
     entry: initialSessionEntry,
     logger: params.logger,
     abortSignal: params.abortSignal,
+    assertSourceCurrent: params.assertSourceCurrent,
   });
   // History quoted before the reset must not come back through the prompt's transcript.
   const consultPromptParams =

@@ -228,6 +228,10 @@ export function createTalkClientAgentConsultRunner(params: {
             historicalItems = [];
             return historicalItems;
           },
+          assertSourceCurrent: () => {
+            assertConsultCurrent();
+            params.runAuthority?.assertCurrent();
+          },
           surface: params.surface ?? "a browser Talk session",
           userLabel: "User",
           questionSourceLabel: "user",
