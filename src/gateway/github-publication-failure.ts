@@ -71,18 +71,13 @@ export class GitHubPublicationBranchChangedError extends GitHubPublicationKnownF
   }
 }
 
-const PUSH_PERMISSION_DENIED =
-  /permission to \S+ denied|returned error: 403|write access to repository not granted/iu;
-
-type PushResult = { code: number | null; signal: unknown; killed: boolean; stderr: Buffer };
-
 /**
  * Classify a push whose head did not land. Git exiting on its own with a failure while the
  * remote still holds its pre-push head is a definitive rejection. Anything else (exit 0, a
  * killed or signalled push, or a moved remote) stays unconfirmed for recovery to settle.
  */
 export function gitHubPublicationPushFailure(
-  pushed: PushResult,
+  pushed: { code: number | null; signal: unknown; killed: boolean },
   remoteUnchanged: boolean,
   { login, pushRepository }: { login: string; pushRepository: string },
 ): Error {
@@ -91,15 +86,9 @@ export function gitHubPublicationPushFailure(
       pushed.code === 0 ? "GitHub push verification failed." : "GitHub push was rejected.",
     );
   }
-  if (PUSH_PERMISSION_DENIED.test(pushed.stderr.toString("utf8"))) {
-    return new GitHubPublicationKnownFailure(`@${login} cannot push to ${pushRepository}.`, {
-      code: "push_rejected",
-      nextAction: `GitHub denied @${login} write access to ${pushRepository}; nothing was pushed. Grant that account write access, or point the worktree's origin at a fork it owns, then request publication again.`,
-    });
-  }
-  return new GitHubPublicationKnownFailure(`GitHub declined the push to ${pushRepository}.`, {
+  return new GitHubPublicationKnownFailure(`GitHub rejected the push to ${pushRepository}.`, {
     code: "push_rejected",
-    nextAction: `GitHub declined the push to ${pushRepository} (for example a branch rule or ruleset); nothing was pushed. Check the account's write access and the repository's branch rules, then request publication again.`,
+    nextAction: `GitHub rejected @${login}'s push to ${pushRepository}; nothing was pushed. Give @${login} write access (or point the worktree's origin at a fork it owns) and check the repository's branch rules, then request publication again.`,
   });
 }
 
