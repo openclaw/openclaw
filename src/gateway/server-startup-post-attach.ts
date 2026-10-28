@@ -244,9 +244,15 @@ export async function startGatewayPostAttachRuntime(params: {
   // Startup failure can precede publication of the post-attach return handle.
   params.onGatewayLifetimeSidecars(updateCheck);
 
-  const startSidecars = () =>
+  const startSidecars = (signal: AbortSignal) =>
     params.minimalTestGateway
-      ? startStartupLog().then(() => pluginRegistry)
+      ? startStartupLog().then(() => {
+          // Minimal Gateways omit sidecars but still admit explicit account starts once ready.
+          if (!signal.aborted && !params.isClosing?.()) {
+            params.onChannelsStarted?.();
+          }
+          return pluginRegistry;
+        })
       : nextTurn().then(async () => {
           if (params.isClosing?.()) {
             skipStartupLog();

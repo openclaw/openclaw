@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import {
@@ -33,6 +34,57 @@ export function registerGatewayStartupReadinessTests(params: {
   path: (...parts: string[]) => string;
   expectAutonomousSidecarsNotStarted: () => void;
 }): void {
+  it.each(["ready", "aborted", "closing", "logging failed"] as const)(
+    "releases minimal Gateway account starts only after successful startup: %s",
+    async (outcome) => {
+      const logging = createDeferred();
+      const loggingStarted = createDeferred();
+      const controller = new AbortController();
+      const startupError = new Error("minimal startup logging failed");
+      let closing = false;
+      const onChannelsStarted = vi.fn();
+      const startupParams = params.createParams({
+        minimalTestGateway: true,
+        sidecarStartup: "defer",
+        isClosing: () => closing,
+        trackStartupWork: (run) => run(controller.signal),
+        onChannelsStarted,
+      });
+      const runtime = await params.start(startupParams, {
+        ...params.createRuntimeDeps(),
+        logGatewayStartup: async () => {
+          loggingStarted.resolve();
+          await logging.promise;
+        },
+      });
+      try {
+        await awaitGateBeforeSettlement(
+          loggingStarted.promise,
+          runtime.startupSettled,
+          "minimal startup settled before logging completed",
+        );
+        expect(onChannelsStarted).not.toHaveBeenCalled();
+        if (outcome === "aborted") {
+          controller.abort();
+        }
+        closing = outcome === "closing";
+        if (outcome === "logging failed") {
+          logging.reject(startupError);
+          await expect(runtime.startupSettled).rejects.toBe(startupError);
+        } else {
+          logging.resolve();
+          await runtime.startupSettled;
+        }
+        expect(onChannelsStarted).toHaveBeenCalledTimes(outcome === "ready" ? 1 : 0);
+        expect(startupParams.startChannels).not.toHaveBeenCalled();
+        params.expectAutonomousSidecarsNotStarted();
+      } finally {
+        logging.resolve();
+        await Promise.allSettled([runtime.startupSettled]);
+      }
+    },
+  );
+
   it.each([true, false])(
     "admits update canary readiness only for attributed plugin failures (attributed=%s)",
     async (attributed) => {
