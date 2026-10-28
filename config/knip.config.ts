@@ -31,6 +31,8 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  // The source header documents this matched Code Mode engine probe by path.
+  "scripts/perf/code-mode-engine-measure.ts!",
   // The prepublish registry executes this shared build-and-pack lifetime by path.
   "scripts/lib/plugin-npm-build-and-pack.mts!",
   // Package scripts execute the PostgreSQL schema generator, which consumes state declarations.
@@ -198,6 +200,7 @@ const repositoryScriptEntries = [
   // #181150 invokes this reproducible session-row owner probe by path.
   "scripts/perf/session-actor-row-facts-measure.ts!",
   "scripts/perf/session-catalog-selection-measure.ts!",
+  "scripts/perf/session-selection-facts-measure.ts!",
   // The offline health-cron measurement invokes this synthetic fixture by path.
   "scripts/perf/health-cron-fixture.ts!",
   // #183020 invokes this synthetic category-registration workload by path.
@@ -592,6 +595,7 @@ const repositoryScriptEntries = [
   "scripts/perf/ui-streaming-render-measure.ts!",
   // Their source headers document these standalone performance commands.
   "scripts/perf/active-run-projector-measure.ts!",
+  "scripts/perf/cron-definition-publication-measure.ts!",
   "scripts/perf/cron-store-context-measure.ts!",
   "scripts/perf/diagnostic-frozen-trace-measure.ts!",
   "scripts/perf/image-worker-buffers-measure.mjs!",
@@ -2036,6 +2040,10 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/cloudflare-ai-gateway`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/chutes`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/clawrouter`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/code-mode-quickjs`]: bundledPluginWorkspace([
+      // The source header documents this opt-in engine attribution probe by path.
+      "bench/engine-attribution.ts!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/cohere`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/comfy`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/copilot`]: bundledPluginWorkspace([

@@ -111,6 +111,7 @@ export function buildOpenAIResponsesParams(
     includeSystemPrompt: !payloadPolicy.usesInstructionsField,
     replayResponsesItemIds,
     authProfileId: options?.authProfileId,
+    mutableInput: Boolean(options?.onPayload),
     sessionId: options?.sessionId,
     replayMode,
     retainUserProvenance,

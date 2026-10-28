@@ -37,7 +37,11 @@ function replaceImagesWithPlaceholder(
     }
   }
 
-  return result;
+  return Object.isFrozen(content) &&
+    result.length === content.length &&
+    result.every((block, index) => block === content[index])
+    ? content
+    : result;
 }
 
 function transformAssistant<TApi extends Api>(
@@ -100,7 +104,13 @@ function transformAssistant<TApi extends Api>(
     }
     return id === block.id ? unsigned : Object.assign({}, unsigned, { id });
   });
-  return { ...message, content };
+  return Array.isArray(message.content) &&
+    Object.isFrozen(message) &&
+    Object.isFrozen(message.content) &&
+    content.length === message.content.length &&
+    content.every((block, index) => block === message.content[index])
+    ? message
+    : { ...message, content };
 }
 
 export function transformMessages<TApi extends Api>(
@@ -209,15 +219,15 @@ export function transformMessages<TApi extends Api>(
       });
     } else {
       if (!supportsImages && typeof message.content !== "string") {
-        message = {
-          ...message,
-          content: replaceImagesWithPlaceholder(
-            message.content,
-            message.role === "user"
-              ? NON_VISION_USER_IMAGE_PLACEHOLDER
-              : NON_VISION_TOOL_IMAGE_PLACEHOLDER,
-          ),
-        };
+        const content = replaceImagesWithPlaceholder(
+          message.content,
+          message.role === "user"
+            ? NON_VISION_USER_IMAGE_PLACEHOLDER
+            : NON_VISION_TOOL_IMAGE_PLACEHOLDER,
+        );
+        if (!Object.isFrozen(message) || content !== message.content) {
+          message = { ...message, content };
+        }
       }
       if (message.role === "toolResult") {
         const trimmedId = message.toolCallId.trim();

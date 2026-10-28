@@ -80,6 +80,8 @@ export const operations = {
   correct: (s: Storage, a: Access, input: In<Storage["correct"]>) => s.correct(input, a, "agent"),
   withdraw: (s: Storage, a: Access, input: In<Storage["withdraw"]>) =>
     s.withdraw(input, a, "agent"),
+  supersede: (s: Storage, a: Access, input: In<Storage["supersede"]>) =>
+    s.supersede(input, a, "agent"),
   merge: (s: Storage, a: Access, input: In<Storage["merge"]>) =>
     budgeted(s.merge(input, a, "agent")),
   unmerge: (s: Storage, a: Access, input: In<Storage["unmerge"]>) => s.unmerge(input, a, "agent"),

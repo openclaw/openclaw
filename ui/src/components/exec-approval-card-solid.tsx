@@ -9,7 +9,7 @@ import {
 } from "../app/approval-presentation.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import { registerApprovalsEnglish } from "../i18n/locales/en-approvals.ts";
-import { resolveAgentTextAvatar } from "../lib/agents/display.ts";
+import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { formatCountdown } from "../lib/format.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
@@ -17,6 +17,7 @@ import { projectAgentRowContext } from "../lib/reactive/agent-row-context.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
+import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
 import {
@@ -60,6 +61,7 @@ const MODAL_DECISION_ORDER = [
 export type ExecApprovalCardProps = {
   approval: ExecApprovalRequest;
   sourceSession?: GatewaySessionRow;
+  currentSessionKey?: string;
   nodeDisplayName?: string;
   busy: boolean;
   connected: boolean;
@@ -353,17 +355,40 @@ function ExecApprovalCardContent(
   const agentId = () => (props.variant === "modal" ? active().request.agentId?.trim() : null);
   const commandAgent = () =>
     active().kind === "exec" ? active().request.agentId?.trim() : undefined;
-  const commandTitleParts = createMemo(() => {
-    const proposal = active().request.streamProposal;
-    // Split the translation template before inserting names so parameter text stays literal.
-    return t(
-      proposal
-        ? proposal.operation === "add"
-          ? "execApproval.agentStartWatcher"
-          : "execApproval.agentChangeWatcher"
-        : "execApproval.agentRunCommand",
-    ).split("{agent}");
+  const agentContext = projectAgentRowContext(useOptionalApplication());
+  const commandAgentName = createMemo(() => {
+    const id = commandAgent() ?? "";
+    const app = agentContext.read();
+    const agent = app?.agents.state.agentsList?.agents.find((entry) => entry.id === id);
+    return normalizeAgentLabel(agent ?? { id }, app?.agentIdentity.get(id));
   });
+  const sessionSuffix = createMemo(() => {
+    const key =
+      props.variant === "modal"
+        ? (active().sourceSessionKey ?? active().request.sessionKey)
+        : active().kind === "exec" && active().sourceSessionKey;
+    return key &&
+      !(props.currentSessionKey && areUiSessionKeysEquivalent(key, props.currentSessionKey))
+      ? " " +
+          t("execApproval.inSession", {
+            session: resolveSessionDisplayName(key, props.sourceSession),
+          })
+      : "";
+  });
+  const commandTitleKey = () =>
+    active().request.streamProposal
+      ? active().request.streamProposal?.operation === "add"
+        ? "execApproval.agentStartWatcher"
+        : "execApproval.agentChangeWatcher"
+      : "execApproval.agentRunCommand";
+  // Split the translation template before inserting names so parameter text stays literal.
+  const title = () =>
+    (commandAgent()
+      ? t(commandTitleKey(), {
+          agent: commandAgentName()!,
+          name: active().request.streamProposal?.name ?? "",
+        })
+      : approvalTitle(active())) + sessionSuffix();
   const shortcuts = () =>
     props.variant === "modal" && (active().kind !== "exec" || props.onDecisionReady !== undefined);
   const sourceSession = () => props.variant === "inline" && active().sourceSessionKey;
@@ -371,12 +396,12 @@ function ExecApprovalCardContent(
     <>
       <div class="exec-approval-header">
         <div class="exec-approval-heading">
-          <div class="exec-approval-title">
+          <div class="exec-approval-title" title={title()}>
             <Show when={active().kind === "exec"} fallback={approvalTitle(active())}>
               <Show
                 when={commandAgent()}
                 fallback={
-                  <span class="exec-approval-request">
+                  <span class={["exec-approval-request", "exec-approval-sentence"]}>
                     <span class="exec-approval-fallback-icon" aria-hidden="true">
                       <Icon name="terminal" />
                     </span>
@@ -392,13 +417,13 @@ function ExecApprovalCardContent(
               >
                 {(agent) => (
                   <span class="exec-approval-sentence">
-                    <For each={commandTitleParts()}>
+                    <For each={t(commandTitleKey()).split("{agent}")}>
                       {(part, index) => (
                         <>
                           {index() > 0 ? (
                             <span class="exec-approval-identity">
                               <ApprovalAgentAvatar agentId={agent()} />
-                              <span class="exec-approval-agent-name">{agent()}</span>
+                              <span class="exec-approval-agent-name">{commandAgentName()}</span>
                             </span>
                           ) : undefined}
                           <span class="exec-approval-request">
@@ -422,21 +447,13 @@ function ExecApprovalCardContent(
                 )}
               </Show>
             </Show>
+            <span>{sessionSuffix()}</span>
           </div>
           {active().kind !== "exec" && (pluginId() || agentId()) ? (
             <div class="exec-approval-chips">
               {renderChip("plugin", pluginId())} {renderChip("agent", agentId())}
             </div>
           ) : undefined}
-          <Show when={active().kind === "exec" && sourceSession()}>
-            {(sessionKey) => (
-              <div class="exec-approval-source">
-                {t("execApproval.requestedBySession", {
-                  session: resolveSessionDisplayName(sessionKey(), props.sourceSession),
-                })}
-              </div>
-            )}
-          </Show>
           <Show when={active().kind !== "exec"}>
             <ApprovalCountdown
               class="exec-approval-sub exec-approval-countdown"

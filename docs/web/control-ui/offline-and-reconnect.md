@@ -110,6 +110,10 @@ identity. A one-time bootstrap credential is never retained for offline admissio
 a successful pairing can use the reusable device grant already issued and stored
 by the browser client.
 
+The cached agent roster supplies the conversation's agent name and text avatar
+on the first render, including when the offline shell cannot fetch bootstrap
+config. Reconnecting keeps the displayed identity until a live refresh replaces it.
+
 The retained identity is for local display and storage, not permission to call
 the Gateway. Reading, drafting, and queuing input remain available offline;
 sending and synchronization wait for the Gateway to revalidate the account.
@@ -134,7 +138,13 @@ cached transcript opens at its latest messages without an initial scroll animati
 It retains participant and completed-work timing information and the last task
 progress card for display while connecting; live Gateway results replace those
 cached facts in place. Cached progress does not authorize offline actions. The
-first chat request uses the saved cursor if the cached transcript is ready when
+header also retains its last three viewer avatars and overflow count for that
+conversation while connecting. The reconnect indicator describes connection
+state; the full live presence roster replaces these last-known viewers when it
+arrives. The identity-only hello does not clear them. The header retains the
+sharing control's displayed mode and geometry while connecting, without enabling
+its menu or membership actions until live authority is available.
+The first chat request uses the saved cursor if the cached transcript is ready when
 the live message subscription finishes connecting. Otherwise, the live read and
 cache restoration run in parallel. Agent switches and stale asynchronous reads
 retain their own identity checks. When the cached conversation also has the exact

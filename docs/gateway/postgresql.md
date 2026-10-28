@@ -898,8 +898,9 @@ backfills the generated sketches without building an HNSW index; ordinary writes
 maintain them automatically. Canonical embeddings, zero-vector eligibility and
 the result shape are unchanged, and backup/port operations rebuild the sketches.
 
-Scores and tokenization are engine-local. Expect different ordering from SQLite
-BM25, particularly for punctuation, compound words, and Unicode. Hybrid retrieval
+Scores are engine-local. Expect different ordering from SQLite BM25 and different
+Unicode normalization; punctuation runs are replaced by spaces before indexing and
+querying, so words inside dates, paths, and file names match as on SQLite. Hybrid retrieval
 keeps the existing text/vector weighting, not cross-engine score equivalence.
 Memory full-text rank uses unnormalized frequency ranking (`ts_rank`) and maps
 its rank `r` to `r / (r + 0.0027)` before the shared hybrid merge. This calibration

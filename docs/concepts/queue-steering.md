@@ -87,7 +87,7 @@ If several messages arrive while the agent is executing a tool call:
 
 `messages.queue.allowCollaborativeSteering` defaults to `true` in the personal preset and `false` in the corporate preset. Explicit settings override the preset. See [security presets](/gateway/security/presets). When Bob's admitted human input joins Alice's active turn in the same conversation, the execution keeps Alice's identity and prepared permissions. Bob can influence actions using permissions Alice has that Bob does not. Bob remains identified as the message author; steering does not switch the execution to Bob, combine their permissions, or attribute subsequent actions to individual messages.
 
-With the option set to `false` and quiet fallback selected, another person’s input queues for a separate execution under their identity and current policy. The active turn is unchanged. No warning or queue status message is sent for this expected fallback. Same-requester steering still requires compatible permissions. Unidentified input cannot borrow the active execution's authority. Conversation access, backend compatibility, cancellation, and current-owner checks always apply.
+With the option set to `false` and quiet fallback selected, another person’s input queues for a separate execution under their identity and current policy. The active turn is unchanged. No warning or queue status message is sent for this expected fallback. Ordinary guidance from the same authenticated requester in the same conversation retains the active execution’s prepared permissions, regardless of this option. Reconnecting with different client capabilities or caller tool bindings does not replace that execution or its permissions. Unidentified input cannot borrow the active execution's authority. Current conversation access, the original execution’s live authority, backend compatibility, cancellation, and current-owner checks always apply.
 
 For strict opt-in refusal, set `messages.queue.collaborativeSteeringFallback: "reject"`. Only this mode sends the following refusal without invoking the model:
 
@@ -122,7 +122,7 @@ When steering is unavailable, the message runs automatically after the announcem
 and its cleanup finish. The input remains queued and can still be canceled while
 it waits.
 
-The same signed-in person can steer after reconnecting when permissions and model access remain compatible. Browser connections and display names do not define a new requester. The turn keeps its original authority, tool bindings, and approval destination. With collaborative steering disabled, changes to role scopes, session access, sandbox requirements, allowed agents, model access, access grants, tool policy, workspace, or bound tools can require a followup.
+The same signed-in person can steer after reconnecting without reproducing the original connection’s policy snapshot. Browser connections and display names do not define a new requester. The turn keeps its original authority, tool bindings, capabilities, and approval destination; incoming caller differences do not expand or retarget them. This continuation rule applies only to ordinary human guidance in the same channel, account, conversation, and thread. It does not bypass access revocation or authorize a new execution configuration. Explicit execution-setting changes, including a different workspace, execution policy, or selected model, can require a followup.
 
 Configured permissions are resolved when each new execution is admitted and remain stable for that execution. Human messages waiting for admission use current policy. Already admitted native work retains its prepared policy while waiting to run. A new delegation resolves current destination policy for the original requester, or for an explicitly selected authenticated participant on a tool that supports `user`. Native delegation retains the original requester. A delegation may intentionally use a more capable agent; selecting a participant does not establish that person’s intent or approval. Cancellation and current-owner checks still apply, and accepted asynchronous work survives normal source-turn completion.
 
@@ -130,9 +130,8 @@ This setting does not broaden cross-session authorization. Explicit `sessions_se
 
 Automatic credential rotation and model fallback also retain the active turn.
 New input can steer that turn while the selected model remains unchanged, fallback
-is still allowed, and the applicable steering policy permits it. Selecting or locking a model,
-pinning a different account, or disabling collaboration when permissions differ can require a followup
-turn. Answers to a pending question still go to the question's original owner.
+is still allowed, and the applicable steering policy permits it. Selecting or locking a model
+or pinning a different account can require a followup turn. Answers to a pending question still go to the question's original owner.
 
 [Personal `USER.md` context](/concepts/user-model#personal-user-files-on-a-shared-gateway)
 follows the session's assigned human owner, otherwise its authenticated human

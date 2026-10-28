@@ -1,7 +1,8 @@
 ---
-summary: "Correct, withdraw, merge, and unmerge Knowledge records while preserving originals and history"
+summary: "Correct, withdraw, supersede, merge, and unmerge Knowledge records while preserving originals and history"
 read_when:
   - A saved Knowledge claim or relationship is wrong and needs replacing
+  - Earlier Knowledge claims are replaced by a claim that already exists, such as status snapshots by their outcome
   - You need to retract a Knowledge record without deleting history
   - Two Knowledge pages turn out to describe the same person or entity
 title: "Knowledge corrections and merges"
@@ -49,10 +50,45 @@ request stays retryable.
 Withdrawal is not erasure. Originals, evidence, history, Git, exports, and
 backups keep their content. There is no unwithdraw.
 
+## Supersede claims by an existing claim
+
+`knowledge_correct` writes a new replacement. When the replacement already
+exists, for example a series of CI and review snapshots about one PR followed by
+the claim that it merged, use `knowledge_supersede` instead so no duplicate is
+written:
+
+- `knowledge_supersede` takes `requestId`, a nonblank `reason`, an optional
+  `expectedVaultId`, `by: {id, expectedRevision, expectedHash}` (the claim that
+  replaces them), and `superseded`: 1 to 25 `{id, expectedRevision,
+  expectedHash}` fences of the earlier claims.
+- `by` must be a current claim in the caller's scope: active, not expired, and
+  not hidden by an unavailable dependency. Each earlier claim must be an active
+  claim, listed once, other than `by`, and share at least one linked page
+  (`entities` or source page, merge redirects followed) with `by`, as a check
+  that both are about the same subject. Link them first with
+  `knowledge_annotate`.
+- Each earlier claim keeps its text, evidence, attribution, and history and gets
+  a new revision with `lifecycle: superseded`, `superseded_by`, and
+  `lifecycle_change`, exactly like a corrected original. `by` is not
+  rewritten. All changes publish in one journal entry. The receipt has
+  `operation: "supersede"`, `replacementId`, the dependents in `impact`, and
+  one `items` entry with the new revision and hash per superseded claim.
+- Because `by` must be current and every earlier claim active, supersession
+  cannot form a cycle, and a superseded claim keeps its first replacement.
+
+To undo a supersession, call `knowledge_supersede` again with `undo: true`, the
+same `by`, and the superseded claims' current fences (from the receipt's
+`items` or `knowledge_record`). Each claim becomes active again without
+`superseded_by`; its `lifecycle_change` records the undo reason. The receipt has
+`operation: "unsupersede"`. Undo applies only to supersessions this tool made:
+a claim replaced by `knowledge_correct` is rejected, since its replacement is a
+new version of it. Correct or withdraw that replacement instead.
+
 ## Impact and visibility
 
-Both receipts include `operation`, `targetId`, `replacementId` (for
-corrections), `reason`, and `impact`. `impact.items` lists authorized direct and
+Correction, withdrawal, and supersession receipts include `operation`,
+`targetId`, `replacementId` (for corrections and supersessions), `reason`, and
+`impact`. `impact.items` lists authorized direct and
 transitive dependents through `dependencies`, `entities`, `owner`, and
 relationship endpoints. These are unresolved impacts, not automatic repairs.
 Nothing rewrites prose copies, cascades, or deletes. Follow up by inspecting and
@@ -74,7 +110,8 @@ reads until reviewed; resume never overwrites a conflicting edit.
 
 Durable guards in `state.sqlite` record withdrawals and supersessions per store
 and partition. A restored or stale active Markdown file cannot clear them, and
-withdrawal outranks supersession. Back these tables up with the rest of
+withdrawal outranks supersession. Only a published `knowledge_supersede` undo
+lifts a supersession guard, for the claims it restores. Back these tables up with the rest of
 `state.sqlite`: restoring only Markdown or Git cannot rebuild a guard for a
 record that is no longer present.
 

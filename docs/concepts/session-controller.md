@@ -191,7 +191,10 @@ A refusal retires the reservation and leaves the caller's own fallback in charge
 A detached attempt has no turn, so nothing can steer it.
 
 Collecting requires compatible sender authority, tool permissions, visibility,
-and delivery contracts. Same-requester steering retains its compatibility checks.
+and delivery contracts. Ordinary guidance from the same authenticated requester
+in the same conversation retains the selected execution’s prepared permissions;
+incoming caller differences neither replace nor expand them. Current caller and
+incumbent execution authority remain live-checked.
 With `messages.queue.allowCollaborativeSteering: true`, human input from the same
 conversation may steer another person's turn under that turn's unchanged identity
 and prepared permissions. The message retains its author's identity; it does not

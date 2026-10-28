@@ -174,8 +174,8 @@ Markdown-only or Git-only copy is not a complete backup.
   claims are never limited. See [Page budgets](/plugins/knowledge/tools#page-budgets).
 - Saved records are immediately available. There is no approval or acceptance
   step.
-- Corrections, withdrawals, and identity merges are explicit agent operations
-  that preserve history. See [Corrections and merges](/plugins/knowledge/corrections).
+- Corrections, withdrawals, supersessions, and identity merges are explicit
+  agent operations that preserve history. See [Corrections and merges](/plugins/knowledge/corrections).
 - The Control UI is read-only. **Ask** sends change requests to the agent in a
   new chat instead of editing records.
 - Operators cannot save knowledge through operator read access. Changing store
@@ -183,7 +183,7 @@ Markdown-only or Git-only copy is not a complete backup.
 
 ## Tools
 
-Knowledge registers 36 `knowledge_*` agent tools. Each tool acts only on the
+Knowledge registers 38 `knowledge_*` agent tools. Each tool acts only on the
 caller's authorized store and partition.
 
 | Area                  | Tools                                                                                                                                                                            |
@@ -194,7 +194,7 @@ caller's authorized store and partition.
 | Remember and author   | `knowledge_remember`, `knowledge_save_page`, `knowledge_edit_body`, `knowledge_extract_section`, `knowledge_create_claim`, `knowledge_create_relationship`, `knowledge_annotate` |
 | Evidence files        | `knowledge_attach_file`, `knowledge_attach`, `knowledge_attachment`, `knowledge_reconcile_evidence`                                                                              |
 | Ingestion             | `knowledge_publish_batch`, `knowledge_verify`, `knowledge_source_check`                                                                                                          |
-| Lifecycle             | `knowledge_correct`, `knowledge_withdraw`, `knowledge_merge`, `knowledge_unmerge`, `knowledge_relink`                                                                            |
+| Lifecycle             | `knowledge_correct`, `knowledge_withdraw`, `knowledge_supersede`, `knowledge_merge`, `knowledge_unmerge`, `knowledge_relink`                                                     |
 | Automatic recall      | `knowledge_recall`                                                                                                                                                               |
 | History and recovery  | `knowledge_history`, `knowledge_revision`, `knowledge_mutation`, `knowledge_resume`                                                                                              |
 
@@ -205,17 +205,17 @@ See [Tools](/plugins/knowledge/tools) for inputs, limits, and pagination.
 Knowledge ships nine skills. They are agent workflows over the tools above, not
 an autonomous ingestion engine.
 
-| Skill                       | Use                                                                                                 |
-| --------------------------- | --------------------------------------------------------------------------------------------------- |
-| `knowledge-automation`      | Create and verify scheduled ingestion through the host scheduler with a retained authorized worker. |
-| `knowledge-capture`         | Save decisions, preferences, facts, and short notes with attribution and readback.                  |
-| `knowledge-correct`         | Correct or withdraw exact records and inspect affected knowledge.                                   |
-| `knowledge-entities`        | Resolve and enrich people, companies, projects, and concepts with sourced profiles.                 |
-| `knowledge-ingest`          | Ingest documents, articles, and conversations; learn lessons from sets of sources (`/learn`).       |
-| `knowledge-meeting-ingest`  | Ingest meeting transcripts with attendee enrichment, decisions, commitments, and chronology checks. |
-| `knowledge-recall`          | Answer from saved knowledge with inspectable citations. Read-only.                                  |
-| `knowledge-source-ingest`   | Incrementally ingest enumerable sources with snapshot manifests and diffing.                        |
-| `knowledge-unlinked-claims` | Link claims relink left unlinked, create missing pages, retire duplicates, and update page State.   |
+| Skill                           | Use                                                                                                 |
+| ------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `knowledge-automation`          | Create and verify scheduled ingestion through the host scheduler with a retained authorized worker. |
+| `knowledge-capture`             | Save decisions, preferences, facts, and short notes with attribution and readback.                  |
+| `knowledge-claim-consolidation` | Review and consolidate claims: unlinked, on one page, or about one subject; supersede snapshots.    |
+| `knowledge-correct`             | Correct or withdraw exact records and inspect affected knowledge.                                   |
+| `knowledge-entities`            | Resolve and enrich people, companies, projects, and concepts with sourced profiles.                 |
+| `knowledge-ingest`              | Ingest documents, articles, and conversations; learn lessons from sets of sources (`/learn`).       |
+| `knowledge-meeting-ingest`      | Ingest meeting transcripts with attendee enrichment, decisions, commitments, and chronology checks. |
+| `knowledge-recall`              | Answer from saved knowledge with inspectable citations. Read-only.                                  |
+| `knowledge-source-ingest`       | Incrementally ingest enumerable sources with snapshot manifests and diffing.                        |
 
 See [Ingestion workflows](/plugins/knowledge/ingestion).
 
@@ -251,7 +251,7 @@ See [Maintenance](/plugins/knowledge/maintenance).
 ## Scribes
 
 The **Scribes** tab starts conversations that keep a store up to date on their
-own: reviewing unlinked claims after maintenance, learning from conversations
+own: consolidating unlinked claims after maintenance, learning from conversations
 once or daily, and importing Memory once. Each follows a bundled skill; ongoing
 scribes schedule themselves as OpenClaw automations.
 
@@ -267,7 +267,7 @@ See [Scribes](/plugins/knowledge/scribes).
 | Keyword retrieval and exact identity lookup              | Implemented (SQLite FTS5)                                         |
 | Structured date queries                                  | Implemented                                                       |
 | Original source file attachments                         | Implemented; chunked upload/download, no evidence-count cap       |
-| Correction, withdrawal, identity merge                   | Implemented as agent-only, history-preserving operations          |
+| Correction, withdrawal, supersession, identity merge     | Implemented as agent-only, history-preserving operations          |
 | Local Git history                                        | Automatic when Git is installed and writes are enabled            |
 | Interrupted-write recovery and conflict retention        | Implemented; not a complete backup/restore protocol               |
 | Read-only Control UI                                     | Implemented; no direct write controls                             |

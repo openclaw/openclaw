@@ -229,6 +229,26 @@ export const ExtractSectionInput = Type.Object(
   { additionalProperties: false },
 );
 export type ExtractSectionInput = Static<typeof ExtractSectionInput>;
+export const SupersedeInput = Type.Object(
+  {
+    ...mergeCommon,
+    by: pageFence(
+      "The existing active claim that replaces them (usually the outcome), with its current revision and hash. It is not rewritten.",
+    ),
+    superseded: Type.Array(
+      pageFence("An earlier active claim it replaces, with its current revision and hash."),
+      { minItems: 1, maxItems: 25 },
+    ),
+    undo: Type.Optional(
+      Type.Boolean({
+        description:
+          "Restore the listed claims, superseded by `by` through this tool, to active. Their fences come from the supersede receipt's items or knowledge_record.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
+export type SupersedeInput = Static<typeof SupersedeInput>;
 const MergeReport = Type.Object(
   {
     survivorId: id,
@@ -360,6 +380,8 @@ export const Receipt = Type.Object(
         Type.Literal("merge"),
         Type.Literal("unmerge"),
         Type.Literal("extract"),
+        Type.Literal("supersede"),
+        Type.Literal("unsupersede"),
       ]),
     ),
     merge: Type.Optional(MergeReport),

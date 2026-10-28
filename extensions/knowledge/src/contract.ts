@@ -50,6 +50,7 @@ import {
   WithdrawInput,
   MergeInput,
   UnmergeInput,
+  SupersedeInput,
   RecallInput,
   Receipt,
   HistoryEntry,
@@ -292,6 +293,14 @@ export const contract = defineFeatureContract({
       input: WithdrawInput,
       output: Receipt,
       tool: { name: "knowledge_withdraw", label: "Withdraw knowledge" },
+    },
+    supersede: {
+      kind: "action",
+      description:
+        "Agent-only: mark 1–25 earlier active claims superseded by one existing current claim, such as status snapshots replaced by their outcome or a claim a later one explicitly corrects, without writing a new copy (knowledge_correct publishes a new replacement). Each earlier claim keeps its text, evidence and history and gets superseded_by plus the reason; the superseding claim is not rewritten. Every claim must share a linked page with the superseding one; link them first. No self-supersession; already superseded or withdrawn claims are rejected. Default reads exclude superseded claims; historical reads and knowledge_history keep them. undo=true restores claims this tool superseded by the same claim. Supply current revision/hash fences and a reason. Reuse identical request/payload for retries.",
+      input: SupersedeInput,
+      output: Receipt,
+      tool: { name: "knowledge_supersede", label: "Supersede claims" },
     },
     merge: {
       kind: "action",

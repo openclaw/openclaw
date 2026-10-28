@@ -10,6 +10,7 @@ import {
   readStoredChatSnapshotRecord,
 } from "./session-snapshot-database.ts";
 import * as snapshotDatabase from "./session-snapshot-database.ts";
+import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "./session-snapshot-projection.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 /* @vitest-environment jsdom */
 import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
@@ -271,7 +272,7 @@ describe("snapshot write serialization and scheduling", () => {
       // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON omission/conversion is the persisted storage contract.
       const sanitized: ChatSessionSnapshot = JSON.parse(JSON.stringify(value));
       const envelope = {
-        projectionVersion: 6,
+        projectionVersion: CHAT_SNAPSHOT_PROJECTION_VERSION,
         savedAt: Date.now(),
         sessionId: value.sessionId,
         sessionKey,
@@ -352,7 +353,7 @@ describe("snapshot write serialization and scheduling", () => {
       const transaction = database.transaction(CHAT_SNAPSHOT_STORE_NAME, "readwrite");
       const completed = transactionComplete(transaction);
       transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).put({
-        projectionVersion: 6,
+        projectionVersion: CHAT_SNAPSHOT_PROJECTION_VERSION,
         savedAt: 1,
         sessionId: "session-1",
         sessionKey,

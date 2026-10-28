@@ -258,8 +258,8 @@ async function runUsageReportAfterRefresh<
   params: { config?: OpenClawConfig; agentId: string },
   run: () => Promise<T>,
 ): Promise<T> {
-  const deadline = Date.now() + USAGE_REPORT_REFRESH_WAIT_MS;
-  const remaining = () => Math.max(0, deadline - Date.now());
+  const deadline = performance.now() + USAGE_REPORT_REFRESH_WAIT_MS;
+  const remaining = () => Math.max(0, deadline - performance.now());
   const request = (result: T) =>
     requestCostUsageCacheRefresh({
       config: params.config,

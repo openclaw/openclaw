@@ -46,7 +46,10 @@ import type { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepar
 import { resolvePromptModeForSession } from "./attempt-prompt-helpers.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
 import { buildAttemptSystemPrompt, type SystemPromptRefresh } from "./attempt-system-prompt.js";
-import { resolveSessionPromptDelivery } from "./turn-delivery-context.js";
+import {
+  buildTurnDeliveryContextFragments,
+  resolveSessionPromptDelivery,
+} from "./turn-delivery-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PreparedBootstrap = Awaited<ReturnType<typeof prepareEmbeddedAttemptBootstrap>>;
@@ -208,6 +211,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       config: attempt.config,
       preparedGitCoauthorPrompt: attempt.gitCoauthorPrompt,
       preparedSessionEntry,
+      sessionPromptDelivery: attempt.sessionPromptDelivery,
       agentId: params.setup.sessionAgentId,
       workspaceDir: params.setup.effectiveWorkspace,
       cwd: params.setup.effectiveCwd,
@@ -231,6 +235,12 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       blind: attempt.blindPrompt,
     },
   );
+  const promptDeliveryFacts = {
+    config: attempt.config,
+    sessionKey: attempt.sessionKey,
+    chatType: runtimePrompt.runtimeInfo.chatType,
+    channel: runtimePrompt.runtimeInfo.channel,
+  };
   const promptMode =
     attempt.promptMode ??
     (params.isRawModelRun ? "none" : resolvePromptModeForSession(attempt.sessionKey));
@@ -255,7 +265,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     provider: attempt.provider,
     modelId: attempt.modelId,
     promptMode: effectivePromptMode,
-    runtimeChannel,
+    runtimeChannel: runtimePrompt.runtimeInfo.channel,
     runtimeCapabilities,
     agentId: params.setup.sessionAgentId,
   };
@@ -424,12 +434,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       promptMode: effectivePromptMode,
       // The cached prompt uses session delivery facts; a turn that differs gets
       // its delivery rules in the turn's runtime context instead.
-      ...resolveSessionPromptDelivery({
-        config: attempt.config,
-        sessionKey: attempt.sessionKey,
-        chatType: attempt.chatType,
-        channel: runtimeChannel,
-      }),
+      ...resolveSessionPromptDelivery(promptDeliveryFacts),
       silentReplyPromptMode: attempt.silentReplyPromptMode,
       proactiveSubagentOrchestration: params.setup.proactiveSubagentOrchestration,
       acpEnabled: isAcpRuntimeSpawnAvailable({
@@ -506,7 +511,15 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     systemPromptText: attemptSystemPrompt.systemPrompt,
     // Current run facts belong beside their turn, not ahead of all prior history.
     get runtimeContextFragments(): RuntimeContextFragment[] {
-      const fragments = [...turnInstructions];
+      const fragments = [
+        ...buildTurnDeliveryContextFragments({
+          ...promptDeliveryFacts,
+          sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
+          requireExplicitMessageTarget: attempt.requireExplicitMessageTarget,
+          messageToolFinalByDefault: attempt.messageToolFinalByDefault,
+        }),
+        ...turnInstructions,
+      ];
       if (currentWatchedSessions) {
         fragments.push({
           kind: "conversation-data",

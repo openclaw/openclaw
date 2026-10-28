@@ -13,7 +13,7 @@ import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-con
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { CronAgentDeletionBlockedError } from "../agent-availability.js";
-import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { captureCronJobConfigRevision, resolveCronJobConfigRevision } from "../config-revision.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { findCronRunRecoveryInDatabase } from "../service/run-history-recovery.js";
 import { cronStreamExecApprovalBinding } from "../stream-exec-authority.js";
@@ -316,6 +316,11 @@ export function mutateCronJobsInWorker(
           return {
             outcome: {
               store,
+              configRevisions: new Map(
+                input.includeConfigRevisions
+                  ? store.jobs.map((job) => [job.id, captureCronJobConfigRevision(job)])
+                  : [],
+              ),
               ...(approval?.result ? { consumedStreamApproval: approval.result } : {}),
               names: inventory.names,
               changed: changes.changedIds.size > 0,
