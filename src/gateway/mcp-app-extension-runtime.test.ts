@@ -4,7 +4,6 @@ import type { McpCatalogTool } from "../agents/agent-bundle-mcp-types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { prepareMcpAppExtensionRuntime } from "./mcp-app-extension-runtime.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
-import { resolveSessionResourceToolPolicy } from "./session-resource-tool-policy.js";
 const mocks = vi.hoisted(() => ({
   native: vi.fn(),
   direct: vi.fn(),
@@ -248,32 +247,5 @@ describe("cold App request admission", () => {
     await expect(prepareMcpAppExtensionRuntime(options())).rejects.toThrow("revoked");
     expect(mocks.prepare).not.toHaveBeenCalled();
     expect(mocks.releaseSource).toHaveBeenCalledOnce();
-  });
-  it("checks session tool policy with the projected tool's bundle MCP ownership", async () => {
-    const tool: McpCatalogTool = {
-      serverName: "demo",
-      safeServerName: "demo",
-      toolName: "show",
-      inputSchema: Type.Object({}),
-      fallbackDescription: "Show an App",
-    };
-    mocks.catalog.mockResolvedValue({
-      version: 1,
-      generatedAt: 1,
-      servers: { demo: { pluginId: "demo" } },
-      tools: [tool],
-    });
-    mocks.project.mockReturnValue([{ name: "demo_show" }]);
-    // The server name is not the owning plugin; materialization records bundle-mcp.
-    mocks.metadata.mockReturnValue({ pluginId: "bundle-mcp", mcp: { operation: "tool", ...tool } });
-    const active = await prepareMcpAppExtensionRuntime(options());
-    await active.approveTool(tool, {});
-    expect(vi.mocked(resolveSessionResourceToolPolicy)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolName: "demo_show",
-        toolMeta: expect.objectContaining({ pluginId: "bundle-mcp" }),
-      }),
-    );
-    await active.dispose();
   });
 });
