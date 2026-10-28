@@ -538,7 +538,7 @@ function setupDesktopLayout() {
   });
 }
 
-it("desktop browses lazy directories and restores activity after global search closes", async () => {
+it("desktop browses lazy directories and restores activity after an incomplete search", async () => {
   setupDesktopLayout();
   const listFiles = vi.fn(
     async (_sessionKey: string, options?: { path?: string; search?: string }) => ({
@@ -551,7 +551,7 @@ it("desktop browses lazy directories and restores activity after global search c
       ],
       browser: {
         path: options?.path ?? "",
-        truncated: options?.path === "docs",
+        truncated: Boolean(options?.search) || options?.path === "docs",
         ...(options?.search ? { search: options.search } : {}),
         entries: options?.search
           ? [{ path: "docs/read.md", name: "read.md", kind: "file" as const }]
@@ -610,12 +610,18 @@ it("desktop browses lazy directories and restores activity after global search c
       ),
     );
     expect(getSessionWorkspace(state).filter).toBe("changed");
-    button(mounted.container, "Close file search")!.click();
+    await vi.waitFor(() =>
+      expect(mounted.queryByRole("button", { name: "Browse files" })).not.toBeNull(),
+    );
+    mounted.getByRole("button", { name: "Browse files" }).click();
     flush();
     expect(getSessionWorkspace(state).browserSearch).toBe("");
     expect(getSessionWorkspace(state).tree?.searchOpen).toBe(false);
     expect(getSessionWorkspace(state).tree?.expandedPaths).toContain("docs");
     expect(getSessionWorkspace(state).filter).toBe("changed");
+    await waitForSolid(() =>
+      expect(document.activeElement).toBe(button(mounted.container, "Search files")),
+    );
   } finally {
     unsubscribe();
     mounted.unmount();
@@ -624,7 +630,8 @@ it("desktop browses lazy directories and restores activity after global search c
 
 it("desktop distinguishes incomplete matching searches from empty complete results", async () => {
   setupDesktopLayout();
-  const warning = "Showing the first matching files. Refine the search to narrow results.";
+  const warning = "Search is incomplete. Some files may not appear in these results.";
+  const directoryWarning = "Showing the first matching files. Refine the search to narrow results.";
   const navigation = {
     browserPath: "",
     browserSearch: "",
@@ -666,7 +673,7 @@ it("desktop distinguishes incomplete matching searches from empty complete resul
     expect(
       [
         ...mounted.container.querySelectorAll(".workspace-desktop__project-scroll [role=status]"),
-      ].filter((node) => node.textContent === warning),
+      ].filter((node) => node.textContent === directoryWarning),
     ).toHaveLength(2);
     mounted.update({
       ...workspace,
@@ -685,6 +692,7 @@ it("desktop distinguishes incomplete matching searches from empty complete resul
       mounted.container.querySelector(".workspace-desktop__results")?.textContent;
     expect(results()).toContain(warning);
     expect(results()).not.toContain("No matching files.");
+    expect(mounted.getByRole("button", { name: "Browse files" })).toBeDefined();
     mounted.update({
       ...workspace,
       browserSearch: "report",
@@ -696,6 +704,7 @@ it("desktop distinguishes incomplete matching searches from empty complete resul
     });
     expect(results()).not.toContain(warning);
     expect(results()).toContain("No matching files.");
+    expect(mounted.queryByRole("button", { name: "Browse files" })).toBeNull();
   } finally {
     mounted.unmount();
   }
