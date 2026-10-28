@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -237,7 +238,7 @@ describe("channel ingress monitor asynchronous inspection", () => {
     });
     try {
       await monitor.waitForPumpIdle();
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await nextTurn();
       expect(settled).toBe(false);
       expect(deliver).not.toHaveBeenCalled();
       if (mode === "deliver") {
