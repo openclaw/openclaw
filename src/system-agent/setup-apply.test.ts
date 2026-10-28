@@ -385,7 +385,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       pluginMetadataSnapshot,
     }));
     await apply({
-      expectedInferenceRoute: await projectInferenceRoute(initialSnapshot.runtimeConfig),
+      expectedInferenceRoute: await projectInferenceRoute(initialSnapshot.config),
     });
 
     expect(mocks.ensureWorkspace).toHaveBeenCalledOnce();
