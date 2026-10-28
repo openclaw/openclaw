@@ -9,6 +9,7 @@ import { prepareSessionPendingInputDedupeRecovery } from "../../config/sessions/
 import { logVerbose } from "../../globals.js";
 import { toPluginConversationBinding } from "../../plugins/conversation-binding.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { resolveCommandTurnContext } from "../command-turn-context.js";
 import { isExplicitCommandTurnContext } from "../command-turn-detection.js";
@@ -401,6 +402,21 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     recordAgentDispatchCompleted?: boolean;
     sessionMetadataChanges?: DispatchFromConfigResult["sessionMetadataChanges"];
   }): DispatchFromConfigResult => {
+    const userTurnRecorder = params.replyOptions?.userTurnTranscriptRecorder;
+    const targetAgentId = sessionStoreEntry.agentId ?? sessionAgentId;
+    const targetSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
+    if (
+      (!userTurnRecorder || userTurnRecorder.hasPersisted()) &&
+      targetAgentId &&
+      targetSessionKey &&
+      sessionStoreEntry.storePath
+    ) {
+      recordAcceptedSessionParticipantInput(ctx, {
+        agentId: targetAgentId,
+        sessionKey: targetSessionKey,
+        storePath: sessionStoreEntry.storePath,
+      });
+    }
     void state.releasePreDispatchLifecycleAdmission(() =>
       waitForReplyDispatcherSettlement(dispatcher),
     );
