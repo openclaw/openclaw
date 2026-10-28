@@ -35,6 +35,8 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as chatAttachments from "../chat-attachments.js";
 import { queuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
+import { createGatewayRequestContext } from "../server-request-context.js";
+import { makeContextParams } from "../server-request-context.test-support.js";
 import { prepareSessionPrincipalRunAuthority } from "../session-sharing-authorization-async.js";
 import { prepareTurn } from "./chat-send-user-turn-family.test-support.js";
 import { applyChatSendManagedMedia } from "./chat-send-user-turn.js";
@@ -125,10 +127,12 @@ describe("prepareChatSendUserTurn", () => {
         updatedAt: 1,
         createdActor: { type: "human", source: "profile", id: profile.id },
       });
+      const context = createGatewayRequestContext(makeContextParams());
+      context.getRuntimeConfig = () => cfg;
       const admitted = await prepareSessionPrincipalRunAuthority({
         ...target,
         profileId: profile.id,
-        context: { getRuntimeConfig: () => cfg },
+        context,
       });
       const isCurrent = () => {
         try {

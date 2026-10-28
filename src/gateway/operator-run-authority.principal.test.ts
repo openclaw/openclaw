@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { acceptCompactionSuccessor } from "../agents/embedded-agent-runner/compaction-successor.js";
 import { resolveCommandAuthorization } from "../auto-reply/command-auth.js";
 import {
   buildSessionEventContext,
@@ -17,10 +18,17 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../sessions/session-controller.lifecycle.js";
+import { acknowledgeSessionEffectTransition } from "../sessions/session-controller.owner-context.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createGatewayRequestContext } from "./server-request-context.js";
+import { makeContextParams } from "./server-request-context.test-support.js";
 import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
 
 const scope = { agentId: "main", sessionKey: "agent:main:resume-principal" };
@@ -45,6 +53,13 @@ const config: OpenClawConfig = {
   },
 };
 
+function principalContext(cfg: OpenClawConfig) {
+  const context = createGatewayRequestContext(makeContextParams());
+  context.getRuntimeConfig = () => cfg;
+  context.getCommittedRuntimeConfig = () => cfg;
+  return context;
+}
+
 function fixture(cfg: OpenClawConfig = config) {
   setRuntimeConfigSnapshot(cfg);
   const profile = ensureProfileForEmail("resume-principal@example.test");
@@ -65,7 +80,7 @@ function fixture(cfg: OpenClawConfig = config) {
         profileId: profile.id,
         sessionId,
         storePath,
-        context: { getRuntimeConfig: () => cfg },
+        context: principalContext(cfg),
       }),
   };
 }
@@ -105,7 +120,7 @@ it("admits a recorded person's current role and refuses revoked, demoted, archiv
         ...foreign,
         profileId: profile.id,
         sessionId: "foreign-session",
-        context: { getRuntimeConfig: () => config },
+        context: principalContext(config),
       }),
     ).rejects.toThrow();
     replaceSessionEntrySync(scope, entry);
@@ -256,7 +271,7 @@ it("admits the recorded Gateway owner without roles and never substitutes it for
       ...scope,
       sessionId,
       storePath: resolveOpenClawAgentSqlitePath({ agentId: scope.agentId }),
-      context: { getRuntimeConfig: () => ({}) },
+      context: principalContext({}),
     };
     const accepted = await prepareSessionPrincipalRunAuthority({ ...params, profileId: owner.id });
     try {
@@ -265,10 +280,42 @@ it("admits the recorded Gateway owner without roles and never substitutes it for
       expect(accepted.authority.assertCurrent).not.toThrow();
       expect(accepted.authority.recoverySnapshot).toBeUndefined();
       // Existing sessions may predate lifecycle revisions; reset still creates a new revision.
-      await patchSessionEntryCore(scope, () => ({ sessionId: "legacy-compacted-transcript" }), {
-        skipMaintenance: true,
+      const target = captureSessionTarget({
+        storeScope: resolveSessionStorePathCore(undefined, { agentId: scope.agentId }),
+        physicalStorePath: params.storePath,
+        ...scope,
+        incarnation: sessionId,
       });
-      expect(accepted.authority.assertCurrent).not.toThrow();
+      const effect = await beginSessionEffect({ target });
+      try {
+        await effect.run(async () => {
+          accepted.authority.assertCurrent();
+          const compacted = await acceptCompactionSuccessor({
+            currentTarget: params,
+            expectedEntry: {
+              sessionId,
+              lifecycleRevision: undefined,
+              activeWriterRunId: undefined,
+            },
+            assertActive: accepted.authority.assertCurrent,
+            result: {
+              ok: true,
+              compacted: true,
+              result: { sessionId: "legacy-compacted-transcript", tokensBefore: 0 },
+            },
+            onCommitted: ({ admissionTransition }) => {
+              if (admissionTransition) {
+                acknowledgeSessionEffectTransition(target, admissionTransition);
+              }
+            },
+          });
+          expect(compacted.entry.sessionId).toBe("legacy-compacted-transcript");
+          accepted.authority.assertCurrent();
+        });
+      } finally {
+        effect.release();
+        await effect.released;
+      }
     } finally {
       accepted.release();
     }

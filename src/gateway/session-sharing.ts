@@ -448,6 +448,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
             : (() => {
                 throw targetChanged(targetRef.sessionKey);
               })();
+    params.assertPrincipalTargetCurrent?.(current);
     // Ensure may mint an absent row/id, never replace an admitted session.
     const ensuredTarget =
       talkSessionTarget && authorizesAgentRun && expected?.sessionId === null && ensuredSessionId
@@ -515,6 +516,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
   const admittedInput = createAdmittedSessionSharingAuthority({
     target: chatTarget,
     request: params,
+    ownSessionProfileId,
     consumeSharing,
     assertTargetCurrent,
     changed: targetChanged,

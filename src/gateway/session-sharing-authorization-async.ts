@@ -35,15 +35,10 @@ import {
   type SessionMutationAuthorizationParams,
 } from "./session-sharing-authorization.js";
 import {
-  authorizePreparedSessionMutation,
-  type PreparedSessionMutationFacts,
-} from "./session-sharing-policy.js";
-import {
   prepareSessionMutationFacts,
   SessionMutationFactsUnavailableError,
 } from "./session-sharing-preparation.js";
 import { prepareSessionSharingProfiles } from "./session-sharing-read.js";
-import { withPreparedSessionSharingSource } from "./session-sharing-source.js";
 import {
   resolveDirectSessionTargets,
   resolveSessionMutationTargets,
@@ -54,12 +49,7 @@ import { prepareTalkSessionTarget } from "./talk/session-target.js";
 
 /** Admit a new input as a recorded person using only that person's current grants. */
 export async function prepareSessionPrincipalRunAuthority(
-  params: Parameters<typeof prepareSessionPrincipalRunAccess>[0] & {
-    context: Pick<
-      GatewayRequestContext,
-      "getRuntimeConfig" | "getCommittedRuntimeConfig" | "resolveGatewayContext"
-    >;
-  },
+  params: Parameters<typeof prepareSessionPrincipalRunAccess>[0],
 ): Promise<{ authority: AdmittedRunOperatorAuthority; release: () => void }> {
   const source = await prepareSessionPrincipalRunAccess(params);
   try {
@@ -80,7 +70,7 @@ export async function prepareSessionPrincipalRunAuthority(
 
 /** Resolve a recorded person against current grants and an existing exact session. */
 async function prepareSessionPrincipalRunAccess(params: {
-  context: Pick<GatewayRequestContext, "getRuntimeConfig" | "getCommittedRuntimeConfig">;
+  context: GatewayRequestContext;
   profileId: string;
   agentId: string;
   sessionKey: string;
@@ -92,9 +82,9 @@ async function prepareSessionPrincipalRunAccess(params: {
   const getConfig = params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig;
   const identity = await prepareUserProfileIdentity(params.profileId);
   const ownerProfilePath = resolveDatabasePath();
-  let sharing: Awaited<ReturnType<typeof prepareSessionMutationFacts>> | undefined;
+  let sharing: ReturnType<typeof resolveSessionMutationAuthorization>["authorization"];
   const release = () => {
-    sharing?.release();
+    sharing?.release?.();
     identity.release();
   };
   const readRole = () => {
@@ -126,18 +116,6 @@ async function prepareSessionPrincipalRunAccess(params: {
     const access = resolveGatewayOperatorAccessAuthority(params.profileId, getConfig(), {
       requireLivePolicySet: true,
     });
-    const preparedSharing = await prepareSessionMutationFacts({
-      cfg: getConfig(),
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      followTranscript: true,
-    });
-    sharing = preparedSharing;
-    const initialFacts = preparedSharing.readCurrent(getConfig());
-    const initialTarget = initialFacts.target;
-    if (initialTarget.entry.sessionId !== params.sessionId) {
-      throw new Error("Session is unavailable for this principal.");
-    }
     // A policy adapter identifies the resolved person without manufacturing a transport grant.
     const client: GatewayClient = {
       connect: {
@@ -161,58 +139,39 @@ async function prepareSessionPrincipalRunAccess(params: {
         throw new Error("Session principal has no current run authority.");
       }
     };
-    const assertFactsCurrent = (facts: PreparedSessionMutationFacts) => {
-      assertPrincipalCurrent();
-      const target = facts.target;
-      if (
-        !target ||
-        target.agentId !== params.agentId ||
-        target.entry.lifecycleRevision !== initialTarget.entry.lifecycleRevision ||
-        target.entry.archivedAt !== undefined ||
-        (params.storePath !== undefined &&
-          target.storePath !== params.storePath &&
-          !sameSessionTranscriptStorePath(params.storePath, target.readSource?.path))
-      ) {
-        throw new Error("Session is unavailable for this principal.");
-      }
-      const error = authorizePreparedSessionMutation(
-        { cfg: getConfig(), client, agentId: params.agentId, sessionKey: params.sessionKey },
-        facts,
-        { policy: readRole(), aliases: identity.readCurrentFacts().aliases },
-      );
-      if (error) {
-        throw new Error(error.message);
-      }
-    };
-    const sharingSource = withPreparedSessionSharingSource({
-      targets: [
-        {
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          resolved: initialTarget,
-          sessionId: params.sessionId,
-          lifecycleRevision: initialTarget.entry.lifecycleRevision,
-        },
-      ],
-      sourceConfig: getConfig(),
-      request: { client, method: "chat.send", context: { getRuntimeConfig: getConfig } },
-      talk: undefined,
-      assertTalkTargetCurrent: () => undefined,
-      assertTargetCurrent: (_target, _expected, _cfg, _caches, _ensured, prepared) =>
-        assertFactsCurrent(
-          prepared
-            ? {
-                ...initialFacts,
-                target: prepared.target,
-                membership: new Set(prepared.members),
-              }
-            : preparedSharing.readCurrent(getConfig()),
-        ),
+    const resolved = await resolveSessionMutationAuthorizationAsync({
+      client,
+      context: params.context,
+      method: "chat.send",
+      requestParams: { agentId: params.agentId, sessionKey: params.sessionKey },
+      assertInvocationCurrent: assertPrincipalCurrent,
+      assertPrincipalTargetCurrent: (target) => {
+        if (
+          !target ||
+          target.agentId !== params.agentId ||
+          target.entry.archivedAt !== undefined ||
+          (params.storePath !== undefined &&
+            target.storePath !== params.storePath &&
+            !sameSessionTranscriptStorePath(params.storePath, target.readSource?.path))
+        ) {
+          throw new Error("Session is unavailable for this principal.");
+        }
+      },
     });
-    const assertCurrent = composeSessionSourceAssertion([sharingSource], (assertSource) => {
-      assertPrincipalCurrent();
-      assertSource();
-    });
+    sharing = resolved.authorization;
+    if (resolved.error) {
+      throw new Error(resolved.error.message);
+    }
+    if (!sharing || sharing.admittedTarget?.sessionId !== params.sessionId) {
+      throw new Error("Session is unavailable for this principal.");
+    }
+    const assertCurrent = composeSessionSourceAssertion(
+      [sharing.assertAdmittedInputCurrent ?? sharing.assertCurrent],
+      (assertSource) => {
+        assertPrincipalCurrent();
+        assertSource();
+      },
+    );
     assertCurrent();
     return {
       client,

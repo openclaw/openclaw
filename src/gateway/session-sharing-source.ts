@@ -308,6 +308,7 @@ export function withPreparedSessionSharingSource(params: {
 export function createAdmittedSessionSharingAuthority(params: {
   target: AuthorizedSessionMutationTarget | undefined;
   request: SessionMutationAuthorizationParams;
+  ownSessionProfileId?: string;
   consumeSharing: ReturnType<typeof createSessionSharingConsumption>["consume"];
   assertTargetCurrent: Parameters<
     typeof withPreparedSessionSharingSource
@@ -351,6 +352,7 @@ export function createAdmittedSessionSharingAuthority(params: {
   const assertAdmittedTargetCurrent = (
     selected: AuthorizedSessionMutationTarget,
     cfg: OpenClawConfig,
+    prepared?: Parameters<typeof params.assertTargetCurrent>[5],
   ) => {
     if (selected === target && isAdoptingEffectActive && !isAdoptingEffectActive()) {
       throw params.changed(selected.sessionKey);
@@ -361,7 +363,7 @@ export function createAdmittedSessionSharingAuthority(params: {
       cfg,
       undefined,
       undefined,
-      undefined,
+      prepared,
       undefined,
       false,
     );
@@ -382,14 +384,27 @@ export function createAdmittedSessionSharingAuthority(params: {
           }),
         )
     : undefined;
+  const assertAdmittedInputCurrent =
+    target && !isIncognitoSessionKey(target.sessionKey)
+      ? withPreparedSessionSharingSource({
+          targets: [target],
+          sourceConfig: params.getConfig(),
+          request: params.request,
+          ownSessionProfileId: params.ownSessionProfileId,
+          talk: undefined,
+          assertTalkTargetCurrent: () => undefined,
+          assertTargetCurrent: (_selected, _expected, cfg, _caches, _ensured, prepared) =>
+            params.withStorage(() => {
+              assertAdmittedTargetCurrent(target, cfg, prepared);
+              bindCurrentEffect();
+            }),
+        })
+      : undefined;
   return {
     bindCurrentEffect,
     assertAdmittedTargetCurrent,
     withCurrentSessionSource,
-    assertAdmittedInputCurrent:
-      target && !isIncognitoSessionKey(target.sessionKey)
-        ? () => params.withStorage(() => assertAdmittedTargetCurrent(target, params.getConfig()))
-        : undefined,
+    assertAdmittedInputCurrent,
   };
 }
 
