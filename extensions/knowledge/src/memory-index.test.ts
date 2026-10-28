@@ -1,7 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { expect, it, vi } from "vitest";
 import { buildMemoryIndex, promptLabel } from "./memory-index.js";
 import type { LoadedRecord } from "./model.js";
+import { KnowledgeStorage } from "./storage.js";
+import { createVault, plainAccess, useTestTempDirs } from "./test-support.js";
 
+const tempDirs = useTestTempDirs();
 const AS_OF = Date.parse("2026-10-23T06:00:00Z");
 let serial = 0;
 // Minimal loaded record: only the fields the index reads are meaningful.
@@ -150,4 +154,27 @@ it("gives leftover space back to unfiled claims when every page fits", () => {
   const text = buildMemoryIndex([page, ...claims], AS_OF);
   expect(text.match(/^- fact /gmu)).toHaveLength(12);
   expect(text).toContain("All pages are listed.");
+});
+
+it("keeps a long user-authored page label well-formed when the clip lands inside an emoji", async () => {
+  const { config } = await createVault(tempDirs.make("knowledge-index-label-"));
+  const storage = new KnowledgeStorage(config);
+  // 78 ASCII units then a 2-unit emoji: the 80-unit label cap falls between its halves.
+  const longTitle = `${"p".repeat(78)}🎯 review`;
+  await storage.save(
+    { requestId: randomUUID(), title: longTitle, type: "note", body: "A useful page." },
+    plainAccess(),
+    "agent",
+  );
+  await storage.save(
+    { requestId: randomUUID(), title: "Budget 🎯", type: "note", body: "A useful page." },
+    plainAccess(),
+    "agent",
+  );
+  const { text } = await storage.memoryIndex({ asOf: Date.now() + 1_000 }, plainAccess());
+  // The clip stops one unit before the cap instead of keeping half of the pair.
+  expect(text).toContain(`- note: ${"p".repeat(78)}…`);
+  expect(text).toContain("- note: Budget 🎯");
+  expect(text.isWellFormed()).toBe(true);
+  expect(JSON.stringify(text)).not.toContain("\\ud8");
 });
