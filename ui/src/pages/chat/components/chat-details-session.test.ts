@@ -153,21 +153,15 @@ it("keeps immutable creator, mutable owner and participants distinct without cla
       participantCount: 3,
     },
   });
-  expect(element.querySelector(".chat-details__creator")?.textContent).toContain(
-    "Original creator",
-  );
-  expect(element.querySelector(".chat-details__creator")?.textContent).not.toContain(
-    "Current owner",
-  );
-  expect(element.querySelector(".chat-details__participants")?.textContent).toContain(
-    "Current owner",
-  );
+  const creatorText = () => element.querySelector(".chat-details__creator")?.textContent;
+  const participants = element.querySelector<HTMLDetailsElement>(".chat-details__participants")!;
+  expect(creatorText()).toContain("Original creator");
+  expect(creatorText()).not.toContain("Current owner");
+  expect(participants.textContent).toContain("Current owner");
   expect(element.textContent).toContain("3 participants");
   expect(element.textContent).toContain("2 more participants");
   expect(element.textContent).not.toMatch(/online|viewers/i);
-  expect(element.querySelector<HTMLDetailsElement>(".chat-details__participants")?.open).toBe(
-    false,
-  );
+  expect(participants.open).toBe(false);
   const replaceOwner = async (actor: NonNullable<GatewaySessionRow["owner"]>["actor"]) => {
     await updateDetails(element, {
       selectedSession: { ...element.props!.selectedSession!, owner: { actor } },
@@ -191,9 +185,7 @@ it("keeps immutable creator, mutable owner and participants distinct without cla
       expect(element.querySelector(".chat-details__person")?.textContent).toBe(
         `Owner${actor.label || actor.id || actor.type}`,
       );
-      expect(element.querySelector(".chat-details__creator")?.textContent).toContain(
-        "Original creator",
-      );
+      expect(creatorText()).toContain("Original creator");
     }
   }
   await replaceOwner({
@@ -482,11 +474,6 @@ it("demands mobile changes only while presented and retires native navigation ca
     key: "agent:main:details",
     kind: "direct",
     placement: createActiveSessionPlacement({
-      createdAtMs: 100_000,
-      updatedAtMs: 300_000,
-      stateChangedAtMs: 300_000,
-      workspaceBaseManifestRef: "base-manifest",
-      remoteWorkspaceDir: "/worker/repo",
       runner: { kind: "device", status: "available" },
     }),
   });
