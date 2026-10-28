@@ -106,7 +106,7 @@ describe("channel ingress monitor admission", () => {
   );
 
   it.each(["outcome-unknown", "retryable"] as const)(
-    "settles %s append failure without duplicate acknowledgment",
+    "settles %s append failure after a failed prune without duplicate acknowledgment",
     async (kind) => {
       const queue = createQueue();
       const failure =
@@ -125,9 +125,15 @@ describe("channel ingress monitor admission", () => {
           throw failure;
         })
         .mockImplementation(append);
+      // Retention is maintenance; a locked database must not cost the event its admission.
+      const pruneFailure = new Error("database is locked");
+      vi.spyOn(queue, "prune").mockRejectedValueOnce(pruneFailure);
       const admissions: boolean[] = [];
+      const errors: unknown[] = [];
       const monitor = createMonitor(queue, {
         appendRetryDelaysMs: kind === "outcome-unknown" ? [0, 0, 0] : [0, 0],
+        retention: { pruneIntervalMs: 0 },
+        onError: (error) => errors.push(error),
         onDurableAdmission: (_raw, { isNew }) => {
           admissions.push(isNew);
         },
@@ -143,36 +149,13 @@ describe("channel ingress monitor admission", () => {
           expect(enqueue).toHaveBeenCalledTimes(3);
         }
         expect(admissions).toEqual(kind === "outcome-unknown" ? [] : [true, false]);
+        expect(errors[0]).toBe(pruneFailure);
         expect((await queue.listPending()).map((row) => row.id)).toEqual(["event"]);
       } finally {
         await monitor.stop();
       }
     },
   );
-
-  it("persists the event when retention pruning before admission fails", async () => {
-    const queue = createQueue();
-    const lockError = new Error("database is locked");
-    const prune = queue.prune.bind(queue);
-    const pruneSpy = vi
-      .spyOn(queue, "prune")
-      .mockRejectedValueOnce(lockError)
-      .mockImplementation(prune);
-    const errors: unknown[] = [];
-    const monitor = createMonitor(queue, {
-      retention: { pruneIntervalMs: 0 },
-      onError: (error) => errors.push(error),
-    });
-    try {
-      await monitor.admit({ id: "first", text: "one" });
-      await monitor.admit({ id: "second", text: "two" });
-      expect((await queue.listPending()).map((row) => row.id)).toEqual(["first", "second"]);
-      expect(pruneSpy).toHaveBeenCalledTimes(2);
-      expect(errors).toEqual([lockError]);
-    } finally {
-      await monitor.stop();
-    }
-  });
 
   it("keeps delayed inspection in FIFO admission and joins it on stop", async () => {
     const queue = createQueue();
