@@ -14,6 +14,7 @@ import { testing } from "./session-controller.test-support.js";
 import {
   SESSION_WATCHDOG_CLEANUP_MS,
   SESSION_WATCHDOG_QUIET_TOOL_MS,
+  SESSION_WATCHDOG_WARNING_MS,
 } from "./session-controller.watchdog-state.js";
 import {
   createSessionControllerWatchdog,
@@ -326,6 +327,30 @@ describe("operation-owned watchdog through controller admission", () => {
       expect(cancel).toHaveBeenCalledOnce();
     },
   );
+
+  it("starts the semantic horizon when a native runtime-owned wait releases, never retroactively", async () => {
+    const { operation, cancel } = running();
+    let live = true;
+    operation.watchdog.beginWait({
+      kind: "runtime_owned",
+      releaseStartsSemanticWindow: true,
+      isCurrent: () => live,
+    });
+    const releasedAt = abortMs * 4;
+    await tickAt(operation.watchdog, releasedAt);
+    expect(cancel).not.toHaveBeenCalled();
+    live = false; // The native turn completed and released liveness.
+    await operation.watchdog.tick();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(operation.watchdog.decide().action).toBe("observe");
+    await tickAt(operation.watchdog, releasedAt + SESSION_WATCHDOG_WARNING_MS);
+    expect(operation.watchdog.decide().action).toBe("warn");
+    await tickAt(operation.watchdog, releasedAt + abortMs - 1);
+    expect(cancel).not.toHaveBeenCalled();
+    // A finalization that then makes no semantic progress is still stopped.
+    await tickAt(operation.watchdog, releasedAt + abortMs);
+    expectStalled(operation, cancel);
+  });
 
   it("uses actual approval expiry and revocation, without a second timeout", async () => {
     const { operation, cancel } = running();
