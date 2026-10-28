@@ -9,7 +9,7 @@ import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import { createGatewayTool } from "../../agents/tools/gateway-tool.js";
+import * as inProcessGateway from "../../agents/tools/in-process-gateway.js";
 import { resolveAttemptWorkspaceSandbox } from "../../agents/workspace-sandbox.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -886,18 +886,63 @@ it.for(["owner", "guest", "revoked-owner"] as const)(
       }
       let senderIsOwner: boolean | undefined;
       let restart: unknown;
+      // Only the Gateway transport is replaced; the restart request it receives is the effect.
+      const gatewayContext = vi
+        .spyOn(inProcessGateway, "getInProcessGatewayToolContext")
+        .mockReturnValue({} as ReturnType<typeof inProcessGateway.getInProcessGatewayToolContext>);
+      const gatewayCall = vi
+        .spyOn(inProcessGateway, "callInProcessGatewayTool")
+        .mockResolvedValue({ ok: true, restart: "scheduled" });
+      onTestFinished(() => {
+        gatewayContext.mockRestore();
+        gatewayCall.mockRestore();
+      });
       runEmbeddedAgentMock
         .mockReset()
         .mockImplementation(async (params: RunEmbeddedAgentParams) => {
-          await startEmbeddedTurn(params, "completion admission");
+          const admittedRunContext = await startEmbeddedTurn(params, "completion admission");
           senderIsOwner = params.senderIsOwner;
-          // The real owner-only gateway action; no in-process Gateway exists to restart here.
-          restart = await createGatewayTool({ senderIsOwner: params.senderIsOwner })
-            .execute("owner-only-restart", { action: "restart" })
-            .then(
+          const workspace = await resolveAttemptWorkspaceSandbox({ ...params, admittedRunContext });
+          const host = createAgentHarnessHostCapabilities({
+            attempt: {
+              admittedRunContext,
+              runId: params.runId,
+              abortSignal: params.abortSignal,
+              config: params.config,
+              agentId: params.agentId,
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+              sessionTarget: params.sessionTarget,
+              permissionMode: params.permissionMode,
+              requireWorkspaceOnly: params.requireWorkspaceOnly,
+              sessionRoot: workspace.sessionPermissionRoot,
+              workspaceDir: params.workspaceDir,
+              cwd: params.cwd,
+              toolExecutionAllow: params.toolExecutionAllow,
+              toolsAllow: params.toolsAllow,
+              trigger: params.trigger,
+              senderIsOwner: params.senderIsOwner,
+            },
+            pluginId: "openclaw",
+          });
+          try {
+            // The turn's assembled surface owns the owner-only gate for the model's call.
+            const gateway = expectDefined(
+              createEventManagedTools(
+                params,
+                workspace,
+                expectDefined(host.capabilities.createToolSurface, "managed tool surface"),
+                { includeOpenClawTools: true },
+              ).find((tool) => tool.name === "gateway"),
+              "gateway tool",
+            );
+            restart = await gateway.execute("owner-only-restart", { action: "restart" }).then(
               (result) => result.details,
               (error: unknown) => (error instanceof Error ? error.message : String(error)),
             );
+          } finally {
+            host.close();
+          }
           return { payloads: [{ text: "Completion observed" }], meta: { durationMs: 1 } };
         });
       const receipt = enqueueSessionEventForHost("Background command finished.", {
@@ -911,12 +956,15 @@ it.for(["owner", "guest", "revoked-owner"] as const)(
       const outcome = await receipt.settled;
       expect(outcome.status, outcome.error).toBe("completed");
       expect(senderIsOwner).toBe(requester === "owner");
-      // An owner passes the owner gate and reaches the Gateway boundary; others stop before it.
-      expect(restart).toEqual(
-        requester === "owner"
-          ? "Gateway instance unavailable for restart"
-          : expect.objectContaining({ ok: false, code: "owner_required" }),
-      );
+      if (requester === "owner") {
+        expect(restart).toMatchObject({ ok: true, restart: "scheduled" });
+        expect(gatewayCall).toHaveBeenCalledOnce();
+        expect(gatewayCall.mock.calls[0]?.[0]).toBe("gateway.restart.request");
+      } else {
+        // Guests and revoked owners are refused before any Gateway request.
+        expect(restart).toEqual({ gated: true });
+        expect(gatewayCall).not.toHaveBeenCalled();
+      }
     });
   },
 );

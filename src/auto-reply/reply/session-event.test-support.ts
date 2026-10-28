@@ -62,6 +62,7 @@ export function createEventManagedTools(
   params: RunEmbeddedAgentParams,
   workspace: Awaited<ReturnType<typeof resolveAttemptWorkspaceSandbox>>,
   createToolSurface: NonNullable<AgentHarnessHostCapabilities["createToolSurface"]>,
+  options: { includeOpenClawTools?: boolean } = {},
 ) {
   const toolRunContext = buildEmbeddedAttemptToolRunContext({
     ...params,
@@ -85,7 +86,7 @@ export function createEventManagedTools(
         ...construction.codingToolConstructionPlan,
         includeShellTools: false,
         includeChannelTools: false,
-        includeOpenClawTools: false,
+        includeOpenClawTools: options.includeOpenClawTools === true,
         includePluginTools: false,
       },
     }),
