@@ -242,28 +242,6 @@ describe("Talk client agent consult admission", () => {
     expect(transcripts).toEqual([history, [], []]);
   });
 
-  it("hands the consult its caller's live authority for the session reset", async () => {
-    let active = true;
-    let resetCheck: (() => void) | undefined;
-    mockConsult(async (params) => {
-      resetCheck = params.assertSourceCurrent;
-    });
-    const runner = createConsultRunner({
-      runAuthority: {
-        assertCurrent: () => {
-          if (!active) {
-            throw new Error("Talk caller source authority is no longer active");
-          }
-        },
-      } as never,
-    });
-
-    await expect(runner.runPrompt({ prompt: "task" })).resolves.toEqual({ text: "done" });
-    expect(() => resetCheck?.()).not.toThrow();
-    active = false;
-    expect(() => resetCheck?.()).toThrow("no longer active");
-  });
-
   it.each(["runOwnedArgs", "runPrompt"] as const)(
     "steers and claims the registered owner through %s",
     async (entrypoint) =>

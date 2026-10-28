@@ -5,7 +5,7 @@ import { createExecTool } from "../../agents/bash-tools.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
 import { projectEffectiveExecPolicy } from "../../agents/session-permission-exec-mode.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -38,6 +38,21 @@ import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 const model = vi.hoisted(() => ({ run: vi.fn() }));
 // mock-isolation: replace inference while exercising real source guards and native effects.
 vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: model.run }));
+const freshness = vi.hoisted(() => ({ afterStaleCheck: undefined as (() => void) | undefined }));
+// mock-isolation: pause a voice consult between its reset-freshness check and the reset write.
+vi.mock("../../config/sessions/entry-freshness.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions/entry-freshness.js")>();
+  return {
+    ...actual,
+    resolveSessionEntryResetFreshnessAsync: async (
+      ...args: Parameters<typeof actual.resolveSessionEntryResetFreshnessAsync>
+    ) => {
+      const resolved = await actual.resolveSessionEntryResetFreshnessAsync(...args);
+      freshness.afterStaleCheck?.();
+      return resolved;
+    },
+  };
+});
 
 describe("authenticated Talk permission parity", () => {
   let state: OpenClawTestState;
@@ -231,6 +246,58 @@ describe("authenticated Talk permission parity", () => {
       source.release();
     }
   });
+  // #185942: a voice consult on a stale session resets it in place. The reset commits only while the
+  // caller's authenticated source is current; a real revocation between the freshness check and the
+  // write leaves the session untouched and starts no run.
+  it.each([
+    { name: "allowed", revoke: false },
+    { name: "revoked during preparation", revoke: true },
+  ])("commits a consult's daily reset only for a current caller ($name)", async ({ revoke }) => {
+    const twoDaysAgo = Date.now() - 2 * 24 * 60 * 60 * 1000;
+    await writeSession({
+      lifecycleRevision: "before-reset",
+      sessionStartedAt: twoDaysAgo,
+      lastInteractionAt: twoDaysAgo,
+    });
+    const { context, source, retained } = await retainSource();
+    const previousSession = config.session;
+    config.session = { reset: { mode: "daily", atHour: 4 } };
+    let staleChecks = 0;
+    freshness.afterStaleCheck = () => {
+      staleChecks += 1;
+      if (revoke) {
+        invalidateGatewayDeviceRevocation(context, "parity-caller", "operator");
+      }
+    };
+    model.run.mockResolvedValueOnce({ payloads: [{ text: "Answered." }], meta: {} });
+    const target = { agentId: "main", sessionKey, storePath: sessionTarget.storePath };
+    try {
+      const runner = createRunner({ context, runAuthority: retained });
+      const result = runner.runArgs({ question: "What did I say yesterday?" });
+      if (revoke) {
+        const error = await result.then(
+          () => undefined,
+          (reason: unknown) => reason,
+        );
+        // Persistence first: the reset never committed for the revoked caller.
+        expect(loadSessionEntry(target)?.lifecycleRevision).toBe("before-reset");
+        expect(String(error)).toContain("Talk caller source authority is no longer active");
+        expect(model.run).not.toHaveBeenCalled();
+      } else {
+        await expect(result).resolves.toEqual({ text: "Answered." });
+        expect(loadSessionEntry(target)?.lifecycleRevision).not.toBe("before-reset");
+      }
+      // The revocation landed at the pause point, after the stale-session check.
+      expect(staleChecks).toBe(1);
+    } finally {
+      freshness.afterStaleCheck = undefined;
+      config.session = previousSession;
+      model.run.mockReset();
+      retained.release();
+      source.release();
+    }
+  });
+
   it("retains but does not accept a pending voice-creation request", async () => {
     let pendingCurrent = true;
     const { source, retained } = await retainSource(() => pendingCurrent);
