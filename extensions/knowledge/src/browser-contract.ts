@@ -21,6 +21,7 @@ export const browserContract = {
     evidence_read: { kind: "query" },
     attachment: { kind: "query" },
     edit_body: { kind: "action" },
+    extract_section: { kind: "action" },
     save_page: { kind: "action" },
     remember: { kind: "action" },
     relink: { kind: "action" },

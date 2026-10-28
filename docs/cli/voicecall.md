@@ -211,6 +211,8 @@ whose basename is not `calls.jsonl`, prints the last `--since` nonempty complete
 lines on start, then streams new complete lines. Partial lines wait for a newline;
 file replacement or observed truncation starts a fresh stream. Slow output pipes
 pause reading instead of accumulating the rest of the log in memory.
+SIGINT or SIGTERM stops either tail source, settles any active history read,
+and exits with status 130 or 143 without printing later records.
 
 | Flag            | Default                    | Description                    |
 | --------------- | -------------------------- | ------------------------------ |

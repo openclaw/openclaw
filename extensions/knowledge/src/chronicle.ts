@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { Check } from "typebox/value";
 import { type ChronicleOutput, TimelineInput, DayInput } from "./chronicle-contract.js";
 import { reconcileChronicle, chronologicalIds } from "./chronicle-index.js";
@@ -32,7 +33,7 @@ function item(
     date,
     dateField: field,
     precision: date.length === 10 ? "day" : "instant",
-    summary: record.body.trim().slice(0, 1000),
+    summary: truncateUtf16Safe(record.body.trim(), 1000),
     entities: (record.metadata.entities ?? []).filter((id) => visible.has(id)),
     ...(record.metadata.source_page && visible.has(record.metadata.source_page)
       ? { sourcePage: record.metadata.source_page }

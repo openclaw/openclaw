@@ -104,16 +104,17 @@ optional.
 }
 ```
 
-| Key                    | Type     | Default           | Meaning                                                                                                                    |
-| ---------------------- | -------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `operatorRead`         | boolean  | `true`            | Let authenticated operators with `operator.read` (or higher) inspect stores in the Control UI and operator RPC.            |
-| `writesEnabled`        | boolean  | `true`            | Allow agent writes. When `false`, write tools reject, the memory prompt omits save guidance, and no flush plan is offered. |
-| `stores`               | object   | `{}`              | Named shared stores. Keys match `^[a-z][a-z0-9-]{0,47}$`. Agents not listed use their own isolated store.                  |
-| `stores.<name>.label`  | string   | the store key     | Display name in the Control UI (1–80 characters). Not a path or identity.                                                  |
-| `stores.<name>.agents` | string[] | required          | Agent IDs that use this store (at most 100). An empty list keeps the store without members.                                |
-| `maintenance.enabled`  | boolean  | `true`            | Run the scheduled maintenance pass.                                                                                        |
-| `maintenance.schedule` | string   | `"30 3 * * *"`    | Five-field cron expression for the pass.                                                                                   |
-| `maintenance.timezone` | string   | Gateway host zone | IANA time zone for the schedule.                                                                                           |
+| Key                         | Type     | Default           | Meaning                                                                                                                                      |
+| --------------------------- | -------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `operatorRead`              | boolean  | `true`            | Let authenticated operators with `operator.read` (or higher) inspect stores in the Control UI and operator RPC.                              |
+| `writesEnabled`             | boolean  | `true`            | Allow agent writes. When `false`, write tools reject, the memory prompt omits save guidance, and no flush plan is offered.                   |
+| `stores`                    | object   | `{}`              | Named shared stores. Keys match `^[a-z][a-z0-9-]{0,47}$`. Agents not listed use their own isolated store.                                    |
+| `stores.<name>.label`       | string   | the store key     | Display name in the Control UI (1–80 characters). Not a path or identity.                                                                    |
+| `stores.<name>.agents`      | string[] | required          | Agent IDs that use this store (at most 100). An empty list keeps the store without members.                                                  |
+| `pageBudgets.hubPercentile` | number   | `90`              | Link-degree percentile at which a page is a hub and gets the smaller body budget. See [Page budgets](/plugins/knowledge/tools#page-budgets). |
+| `maintenance.enabled`       | boolean  | `true`            | Run the scheduled maintenance pass.                                                                                                          |
+| `maintenance.schedule`      | string   | `"30 3 * * *"`    | Five-field cron expression for the pass.                                                                                                     |
+| `maintenance.timezone`      | string   | Gateway host zone | IANA time zone for the schedule.                                                                                                             |
 
 `operatorRead` and `writesEnabled` are plugin-wide gates. Changes to
 `plugins.entries.knowledge.config.stores` do not reload the plugin; Knowledge
@@ -168,6 +169,9 @@ Markdown-only or Git-only copy is not a complete backup.
   and exact-retry semantics. A `published` receipt means files were written.
 - Claims and relationships require retained, hash-verified evidence. Pages may
   omit it.
+- Page bodies have a size budget sized to one or two default reads. Writes that
+  would grow a page past it save nothing and explain how to split the page;
+  claims are never limited. See [Page budgets](/plugins/knowledge/tools#page-budgets).
 - Saved records are immediately available. There is no approval or acceptance
   step.
 - Corrections, withdrawals, supersessions, and identity merges are explicit
@@ -179,20 +183,20 @@ Markdown-only or Git-only copy is not a complete backup.
 
 ## Tools
 
-Knowledge registers 36 `knowledge_*` agent tools. Each tool acts only on the
+Knowledge registers 38 `knowledge_*` agent tools. Each tool acts only on the
 caller's authorized store and partition.
 
-| Area                  | Tools                                                                                                                                               |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Status and vocabulary | `knowledge_status`, `knowledge_ontology`, `knowledge_diagnostics`                                                                                   |
-| Find and read         | `knowledge_lookup`, `knowledge_grep`, `knowledge_records`, `knowledge_record`, `knowledge_connections`, `knowledge_evidence_read`                   |
-| Dates                 | `knowledge_timeline`, `knowledge_chronicle_day`, `knowledge_chronicle_since`, `knowledge_chronicle_last_seen`                                       |
-| Remember and author   | `knowledge_remember`, `knowledge_save_page`, `knowledge_edit_body`, `knowledge_create_claim`, `knowledge_create_relationship`, `knowledge_annotate` |
-| Evidence files        | `knowledge_attach_file`, `knowledge_attach`, `knowledge_attachment`, `knowledge_reconcile_evidence`                                                 |
-| Ingestion             | `knowledge_publish_batch`, `knowledge_verify`, `knowledge_source_check`                                                                             |
-| Lifecycle             | `knowledge_correct`, `knowledge_withdraw`, `knowledge_supersede`, `knowledge_merge`, `knowledge_unmerge`, `knowledge_relink`                        |
-| Automatic recall      | `knowledge_recall`                                                                                                                                  |
-| History and recovery  | `knowledge_history`, `knowledge_revision`, `knowledge_mutation`, `knowledge_resume`                                                                 |
+| Area                  | Tools                                                                                                                                                                            |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Status and vocabulary | `knowledge_status`, `knowledge_ontology`, `knowledge_diagnostics`                                                                                                                |
+| Find and read         | `knowledge_lookup`, `knowledge_grep`, `knowledge_records`, `knowledge_record`, `knowledge_connections`, `knowledge_evidence_read`                                                |
+| Dates                 | `knowledge_timeline`, `knowledge_chronicle_day`, `knowledge_chronicle_since`, `knowledge_chronicle_last_seen`                                                                    |
+| Remember and author   | `knowledge_remember`, `knowledge_save_page`, `knowledge_edit_body`, `knowledge_extract_section`, `knowledge_create_claim`, `knowledge_create_relationship`, `knowledge_annotate` |
+| Evidence files        | `knowledge_attach_file`, `knowledge_attach`, `knowledge_attachment`, `knowledge_reconcile_evidence`                                                                              |
+| Ingestion             | `knowledge_publish_batch`, `knowledge_verify`, `knowledge_source_check`                                                                                                          |
+| Lifecycle             | `knowledge_correct`, `knowledge_withdraw`, `knowledge_supersede`, `knowledge_merge`, `knowledge_unmerge`, `knowledge_relink`                                                     |
+| Automatic recall      | `knowledge_recall`                                                                                                                                                               |
+| History and recovery  | `knowledge_history`, `knowledge_revision`, `knowledge_mutation`, `knowledge_resume`                                                                                              |
 
 See [Tools](/plugins/knowledge/tools) for inputs, limits, and pagination.
 

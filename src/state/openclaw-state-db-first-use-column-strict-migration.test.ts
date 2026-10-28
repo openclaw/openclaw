@@ -12,6 +12,7 @@ import {
 import { OPENCLAW_STATE_SCHEMA_SQL as SCHEMA_SQL } from "./openclaw-state-schema.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "./openclaw-state-schema.test-support.js";
 
@@ -26,6 +27,7 @@ function legacyFixture(tableName: string) {
   const { DatabaseSync } = requireNodeSqlite();
   using legacy = new DatabaseSync(databasePath);
   const version = tableName === "user_profile_identities" ? 6 : 2;
+  restorePreTemplateStateIdentifiersForTest(legacy);
   addPreCutoverClientCredentialTablesForTest(legacy);
   legacy.exec(`
     DROP INDEX idx_worker_session_placements_environment;

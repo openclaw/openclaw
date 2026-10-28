@@ -114,7 +114,7 @@ The saved sidebar also retains unread marks, activity and attention glyphs, pull
 
 Message reactions share the message footer. Desktop Chat Details lists automations after session information and task progress so arriving automation results keep those sections in place. The mobile composer reserves one activity row so arriving task and subagent status does not move the transcript.
 
-A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen. While older messages load, **Show earlier** keeps keyboard focus and ignores repeated activation.
+A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen. A reader action checks up to three consecutive pages when entries are empty, overlapping, or hidden by display preferences; longer hidden intervals remain available through another action. Transient read failures retry within the existing one-minute history-recovery budget, honoring the server’s backoff. Permission denials are not automatically retried. The touch-friendly history control keeps keyboard focus during loading and ignores repeated activation. Failed reads show **Retry earlier messages** at that same boundary without removing the loaded conversation. While disconnected, the control shows **Waiting for connection…** instead of accepting a click that cannot load history.
 
 GitHub item URLs and repository-qualified references such as `owner/repo#126` render as compact links. Use `PR owner/repo#126` for a pull request or `issue owner/repo#126` for an issue. References identified by keywords, such as `PR #126`, remain plain text without a repository qualifier. Project display names, the checkout, the project catalog, and other messages do not supply a destination. A standalone hash token that is also a valid hexadecimal color, such as `#126`, retains its color preview without a GitHub link.
 
@@ -411,6 +411,10 @@ Opening a file collapses the file tree to make room for its preview. Use **Toggl
 file tree** to browse another file, or **Show in Files** to reveal the current file
 in its folder with the **All** filter.
 
+The **Review** file menu offers **Edit file** when the file reader confirms editing
+is available. Readable files keep **Open File** and their supported Markdown and
+source views when editing is unavailable; downloads remain available from the preview.
+
 If the **Files** panel shows a listing error, select **Retry** to load the current
 folder or search again. This keeps the session and query in place; access checks
 still apply, and a failed retry displays its error.
@@ -514,15 +518,15 @@ Local onboarding generates a Gateway secret in token mode by default, without a 
 
 <a id="agents-home" />
 
-## Agents and Claws
+## Agents and Templates
 
 Use the agent selector to open an agent's chat or its settings gear to configure
 that agent. Per-agent settings remain at `/settings/agents/<id>`.
 
-Open **Claws** in **Pages**, or visit `/claws`, to discover official Claws.
-This page contains Claws discovery only. Enable **Claws** in **Settings → Labs**
+Open **Templates** in **Pages**, or visit `/templates`, to discover official Templates.
+This page contains Templates discovery only. Enable **Templates** in **Settings → Labs**
 to make it available; when disabled, both the Pages entry and direct visits to
-Claws discovery or details are unavailable. The former `/agents` overview is removed.
+Templates discovery or details are unavailable. The former `/agents` overview is removed.
 
 To browse sessions across agents, choose the **Show all** tile in the agent
 switcher. It appears with two or more agents and groups their own avatars: two

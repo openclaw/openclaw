@@ -125,7 +125,7 @@ async function seedWorkspaceBootstrapOwned(
     }
     if (!Buffer.from(existing.content, "utf8").equals(params.content)) {
       throw new WorkspaceBootstrapSeedConflictError(
-        "Existing BOOTSTRAP.md differs from the consented Claw bootstrap.",
+        "Existing BOOTSTRAP.md differs from the consented Template bootstrap.",
       );
     }
   }

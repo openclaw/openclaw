@@ -44,6 +44,11 @@ import {
   WORKSPACE_CAS_TABLES,
 } from "./openclaw-state-db-schema-v35-workspace-cas.js";
 import {
+  TEMPLATE_STATE_POSTGRES_MIGRATION_SQL,
+  withLegacyTemplateStateSchema,
+  legacyTemplateStateIdentifier,
+} from "./openclaw-state-db-schema-v36-template-names.js";
+import {
   admitStateSchemaFacts,
   PostgresSchemaAdmissionUnavailableError,
 } from "./openclaw-state-db-schema-version.js";
@@ -182,9 +187,17 @@ function statePostgresVersionSql(version: number): string {
 }
 
 function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
-  const statePostgresSchemaV33 = {
-    postgres: withLegacyLocalWorkspaceCas(statePostgresSchema.postgres),
+  const statePostgresSchemaV35 = {
+    postgres: withLegacyTemplateStateSchema(statePostgresSchema.postgres),
     postgresFragments: statePostgresSchema.postgresFragments.map((fragment) => ({
+      ...fragment,
+      tables: fragment.tables.map(legacyTemplateStateIdentifier),
+      sql: withLegacyTemplateStateSchema(fragment.sql),
+    })),
+  };
+  const statePostgresSchemaV33 = {
+    postgres: withLegacyLocalWorkspaceCas(statePostgresSchemaV35.postgres),
+    postgresFragments: statePostgresSchemaV35.postgresFragments.map((fragment) => ({
       ...fragment,
       tables: fragment.tables.filter(
         (table) => !WORKSPACE_CAS_TABLES.some((name) => name === table),
@@ -345,8 +358,14 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
     {
       version: 35,
       fromSchema: statePostgresSchemaV33,
-      schema: statePostgresSchema,
+      schema: statePostgresSchemaV35,
       sql: `${runtime.workspaceCasV35Sql}\n${statePostgresVersionSql(35)}`,
+    },
+    {
+      version: 36,
+      fromSchema: statePostgresSchemaV35,
+      schema: statePostgresSchema,
+      sql: `${TEMPLATE_STATE_POSTGRES_MIGRATION_SQL}\n${statePostgresVersionSql(36)}`,
     },
   ];
 }
@@ -414,7 +433,9 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
     throw new Error("PostgreSQL state fragments require the owner's transaction");
   }
   invalidateLocalSqliteSchemaAdmissions(db);
-  const fragmentSql = facts.version < 35 ? withLegacyLocalWorkspaceCas(fragment.sql) : fragment.sql;
+  const templateSql =
+    facts.version < 36 ? withLegacyTemplateStateSchema(fragment.sql) : fragment.sql;
+  const fragmentSql = facts.version < 35 ? withLegacyLocalWorkspaceCas(templateSql) : templateSql;
   // Lazy fragments can be created before Doctor upgrades a predecessor's index ordering.
   // sqlite-allow-raw: The schema owner installs a verified fragment under its transaction.
   db.exec(

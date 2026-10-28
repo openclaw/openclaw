@@ -21,11 +21,13 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { getOpenClawAgentMigrationSchema } from "../state/openclaw-agent-schema-history.js";
 import { preflightOpenClawDatabaseSchemas } from "../state/openclaw-database-preflight.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { ensureGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { restorePreTemplateStateIdentifiersForTest } from "../state/openclaw-state-schema.test-support.js";
 import { resolveSchemaMigrationBackupTables } from "../state/schema-migration-backup-scope.js";
 import { assertSqliteMigrationScopePreserved } from "../state/sqlite-migration-scope.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -573,7 +575,8 @@ it.each([
         using database = new DatabaseSync(sharedPath);
         database.exec("ALTER TABLE github_publication_requests DROP COLUMN draft");
         if (versionPhase) {
-          // v35 only changes absent first-use workspace tables in this fixture.
+          // The v34 source predates Template names; workspace CAS tables stay absent.
+          restorePreTemplateStateIdentifiersForTest(database);
           database.exec(
             "PRAGMA user_version = 34; UPDATE schema_meta SET schema_version = 34 WHERE meta_key = 'primary'",
           );
@@ -615,7 +618,12 @@ it.each([
             pendingDatabasePaths: versionPhase ? [sharedPath, pathname] : [],
             pendingMigrations: versionPhase
               ? [
-                  { kind: "state", path: sharedPath, foundVersion: 34, supportedVersion: 35 },
+                  {
+                    kind: "state",
+                    path: sharedPath,
+                    foundVersion: 34,
+                    supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+                  },
                   {
                     kind: "agent",
                     path: pathname,

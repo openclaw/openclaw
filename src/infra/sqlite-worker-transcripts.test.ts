@@ -210,7 +210,7 @@ it("keeps cold transcript reads on the canonical worker and preserves store crea
       await store.readLatestEntry(),
       await store.readSession("missing"),
       await executeOpenClawStateWorker(captureOpenClawStateWorkerContext({ env }), {
-        type: "claws.install-schema-versions",
+        type: "templates.install-schema-versions",
         input: { artifactPreservingReadOnly: true },
       }),
     ]).toEqual([

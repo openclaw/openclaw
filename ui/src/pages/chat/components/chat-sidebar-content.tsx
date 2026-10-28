@@ -322,6 +322,7 @@ export function SidebarPanel(props: SidebarPanelProps) {
                     }
                     active={props.active ?? content().presentation?.active ?? true}
                     openFileView={content().presentation?.openFileView ?? null}
+                    canEditFile={content().canEditFile ?? null}
                     onOpenMobilePage={content().presentation?.onOpenMobilePage ?? null}
                     scopeRequest={content().presentation?.scopeRequest ?? null}
                     onResult={content().onResult ?? null}

@@ -135,9 +135,6 @@ it.each([
       ));
       try {
         flush();
-        await waitForSolid(() =>
-          expect(view.container.textContent).toContain("Final visible answer."),
-        );
         const visibleText = () =>
           [...view.container.querySelectorAll<HTMLElement>(".chat-text")].map((node) =>
             node.textContent?.trim(),
@@ -145,12 +142,15 @@ it.each([
         const summaries = () => [
           ...view.container.querySelectorAll<HTMLButtonElement>(".chat-work-group > button"),
         ];
-        expect(visibleText()).toEqual([
-          "Inspect the synthetic inputs.",
-          "First visible narration.",
-          "Second visible narration.",
-          "Final visible answer.",
-        ]);
+        await waitForSolid(() =>
+          expect(visibleText()).toEqual([
+            "Inspect the synthetic inputs.",
+            "First visible narration.",
+            "Second visible narration.",
+            "Final visible answer.",
+          ]),
+        );
+        expect(view.container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(1);
         expect(summaries()).toHaveLength(2);
         const order = [
           ...view.container.querySelectorAll<HTMLElement>(".chat-text, .chat-work-group"),

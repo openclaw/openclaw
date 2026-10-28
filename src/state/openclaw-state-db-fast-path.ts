@@ -16,7 +16,6 @@ import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js
 import { hasLegacyCronRunLogs } from "../infra/state-legacy-cron-presence.js";
 import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-attribution.js";
 import { readAgentDatabaseLeaseProvenance } from "./openclaw-agent-db-lease-provenance.js";
-import { CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "./openclaw-state-db-additive-columns.js";
 import {
   getStateRuntimeSchemaAdmission,
   publishStateRuntimeSchemaAdmission,
@@ -32,7 +31,10 @@ import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
-import { STATE_RUNTIME_SCHEMA_COMPATIBILITY } from "./openclaw-state-schema-compatibility.js";
+import {
+  findMissingLazyStateStartupColumn,
+  STATE_RUNTIME_SCHEMA_COMPATIBILITY,
+} from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 export function needsOpenClawStateDatabaseSchemaRepair(
@@ -78,16 +80,11 @@ export function assertCurrentStateRuntimeSchema(
   pathname: string,
   readTable: SqliteTableContractReader = createSqliteTableContractReader(database),
 ): void {
-  // Lazy tables may be absent, but present tables still need their startup columns.
-  // Share the cold admission reader; warm handles retain the published facts.
-  for (const { tableName, columnName } of CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
-    if (!STATE_RUNTIME_SCHEMA_COMPATIBILITY.excludedTables?.includes(tableName)) {
-      continue;
-    }
-    const table = readTable(tableName);
-    if (table && !table.columns.some((column) => column.name === columnName)) {
-      throwSqliteSchemaMismatches(pathname, [`missing column ${tableName}.${columnName}`]);
-    }
+  const missing = findMissingLazyStateStartupColumn(readTable);
+  if (missing) {
+    throwSqliteSchemaMismatches(pathname, [
+      "missing column " + missing.tableName + "." + missing.columnName,
+    ]);
   }
   assertCanonicalStateSchemaShape(database, pathname);
   assertOpenClawStateDatabaseForMaintenance(database, { pathname }, readTable);

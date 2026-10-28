@@ -73,6 +73,10 @@ operator source, including continuations after subagent announcements or
 requester-settle yields.
 If interrupted mid-tool, they resume through normal startup recovery under current
 permissions. The saved goal and its transcript do not grant authority on their own.
+A recovered active Goal in the built-in runtime uses the ordinary conversation reply owner: a normal final
+that leaves the Goal active is followed by another Goal turn. Stop, current
+permissions, session identity, and Goal budget checks still apply. This does not
+enable automatic Goal pursuit for unrelated standalone agent commands.
 
 An accepted child continuation, including a child created with `sessions_spawn`
 or an interrupted child resumed with `sessions_send`,

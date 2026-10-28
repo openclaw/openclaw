@@ -48,6 +48,8 @@ const PUBLIC_CODES = new Set<string>([
   "unexpected-error",
   "host-owned-plugin-link",
   "update-failed",
+  "file_lock_timeout",
+  "file_lock_stale",
   "repair-failed",
   "update-recovery-pending",
   "update-executor-settlement-failed",

@@ -43,6 +43,18 @@
         },
         "additionalProperties": false
       },
+      "pageBudgets": {
+        "type": "object",
+        "properties": {
+          "hubPercentile": {
+            "type": "number",
+            "minimum": 50,
+            "maximum": 99.9,
+            "description": "Authored-link degree percentile, within each store partition, at which a page counts as a hub and gets the smaller body budget. Default 90."
+          }
+        },
+        "additionalProperties": false
+      },
       "maintenance": {
         "type": "object",
         "properties": {
@@ -99,6 +111,7 @@
       "knowledge_diagnostics",
       "knowledge_edit_body",
       "knowledge_evidence_read",
+      "knowledge_extract_section",
       "knowledge_grep",
       "knowledge_history",
       "knowledge_lookup",
@@ -139,6 +152,7 @@
     "knowledge_diagnostics": { "profiles": ["coding"] },
     "knowledge_edit_body": { "profiles": ["coding"] },
     "knowledge_evidence_read": { "profiles": ["coding"] },
+    "knowledge_extract_section": { "profiles": ["coding"] },
     "knowledge_grep": { "profiles": ["coding"] },
     "knowledge_history": { "profiles": ["coding"] },
     "knowledge_lookup": { "profiles": ["coding"] },
