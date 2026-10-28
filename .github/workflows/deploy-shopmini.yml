@@ -25,8 +25,10 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Checkout repository
+      - name: Checkout only the demo files
         uses: actions/checkout@v4
+        with:
+          sparse-checkout: projects/shopmini
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
